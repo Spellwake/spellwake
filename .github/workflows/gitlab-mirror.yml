@@ -1,0 +1,104 @@
+name: GitLab mirror
+
+on:
+  push:
+  create:
+  delete:
+  workflow_dispatch:
+  schedule:
+    - cron: '23 */6 * * *'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: gitlab-mirror
+  cancel-in-progress: false
+
+jobs:
+  mirror:
+    if: vars.GITLAB_MIRROR_ENABLED == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPOSITORY: ${{ github.repository }}
+      GH_REPOSITORY_ID: ${{ github.repository_id }}
+      EXPECTED_SOURCE_ID: ${{ vars.GITLAB_MIRROR_SOURCE_ID }}
+      GL_PROJECT_ID: ${{ vars.GITLAB_MIRROR_PROJECT_ID }}
+      GL_PROJECT_PATH: ${{ vars.GITLAB_MIRROR_PROJECT_PATH }}
+      GL_SSH_KEY: ${{ secrets.GITLAB_MIRROR_SSH_KEY }}
+    steps:
+      # No checkout: source repository code and hooks are never executed.
+      - name: Validate destination, mirror branches and tags, verify hashes
+        shell: bash
+        run: |
+          set -euo pipefail
+          umask 077
+          : "${GH_TOKEN:?}" "${GL_SSH_KEY:?}"
+          : "${EXPECTED_SOURCE_ID:?}" "${GL_PROJECT_ID:?}" "${GL_PROJECT_PATH:?}"
+          [[ "$EXPECTED_SOURCE_ID" =~ ^[0-9]+$ ]]
+          [[ "$GL_PROJECT_ID" =~ ^[0-9]+$ ]]
+          [[ "$GH_REPOSITORY_ID" == "$EXPECTED_SOURCE_ID" ]]
+          [[ "$GH_REPOSITORY" =~ ^Spellwake/[a-z0-9-]+$ ]]
+          [[ "$GL_PROJECT_PATH" =~ ^[A-Za-z0-9_.-]+(/[A-Za-z0-9_.-]+)+$ ]]
+          [[ "${GL_PROJECT_PATH##*/}" == "${GH_REPOSITORY##*/}" ]]
+
+          scratch=$(mktemp -d)
+          trap 'rm -rf "$scratch"' EXIT
+          printf 'header = "Authorization: Bearer %s"\n' "$GH_TOKEN" > "$scratch/github.curl"
+          printf '%s\n' "$GL_SSH_KEY" > "$scratch/key"
+          # GitLab.com ED25519 key from its official instance documentation.
+          printf '%s\n' 'gitlab.com ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIAfuCHKVTjquxvt6CM6tdG4SLp1Btn/nOeHHE5UOzRdf' > "$scratch/known_hosts"
+          export GIT_SSH_COMMAND="ssh -i $scratch/key -o IdentitiesOnly=yes -o BatchMode=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile=$scratch/known_hosts"
+          export GIT_TERMINAL_PROMPT=0 GIT_LFS_SKIP_SMUDGE=1
+
+          validate_visibility() {
+            curl --fail --silent --show-error --retry 3 --config "$scratch/github.curl" \
+              "https://api.github.com/repos/$GH_REPOSITORY" > "$scratch/source.json"
+            # Public metadata must be readable without credentials. Private projects
+            # must return 404; a dedicated project key separately verifies Git access.
+            target_status=$(curl --silent --show-error --retry 3 --output "$scratch/target.json" \
+              --write-out '%{http_code}' "https://gitlab.com/api/v4/projects/$GL_PROJECT_ID")
+            jq -e --arg id "$EXPECTED_SOURCE_ID" --arg path "$GH_REPOSITORY" \
+              '(.id|tostring) == $id and .full_name == $path and (.private|type) == "boolean"' \
+              "$scratch/source.json" > /dev/null
+            visibility=$(jq -r 'if .private then "private" else "public" end' "$scratch/source.json")
+            if [[ "$visibility" == private ]]; then
+              [[ "$target_status" == 404 ]]
+            else
+              [[ "$target_status" == 200 ]]
+              jq -e --arg id "$GL_PROJECT_ID" --arg path "$GL_PROJECT_PATH" \
+                '(.id|tostring) == $id and .path_with_namespace == $path and .visibility == "public" and .archived == false' \
+                "$scratch/target.json" > /dev/null
+            fi
+          }
+          validate_visibility
+
+          git init --bare "$scratch/repository.git"
+          cd "$scratch/repository.git"
+          git remote add source "https://github.com/$GH_REPOSITORY.git"
+          git remote add target "git@gitlab.com:$GL_PROJECT_PATH.git"
+          # Each key is enabled only for its recorded GitLab project. A missing,
+          # replaced, or inaccessible destination fails before sending objects.
+          git ls-remote --refs target > /dev/null
+          github_auth=$(printf 'x-access-token:%s' "$GH_TOKEN" | base64 -w0)
+          echo "::add-mask::$github_auth"
+          source_git() {
+            GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=http.https://github.com/.extraheader \
+              GIT_CONFIG_VALUE_0="Authorization: basic $github_auth" git "$@"
+          }
+          source_git fetch --prune --no-tags source \
+            '+refs/heads/*:refs/heads/*' '+refs/tags/*:refs/tags/*'
+          git for-each-ref --format='%(objectname) %(refname)' refs/heads refs/tags | LC_ALL=C sort > "$scratch/expected"
+          # Refuse an empty source, rather than accidentally deleting a whole mirror.
+          test -s "$scratch/expected"
+          git lfs version
+          source_git lfs fetch --all source
+          validate_visibility
+          git lfs push --all target
+          git push --atomic --prune target '+refs/heads/*:refs/heads/*' '+refs/tags/*:refs/tags/*'
+          git ls-remote --refs target 'refs/heads/*' 'refs/tags/*' | \
+            awk '{print $1 " " $2}' | LC_ALL=C sort > "$scratch/actual"
+          cmp "$scratch/expected" "$scratch/actual"
+          echo 'GitLab mirror branches and tags verified.'
