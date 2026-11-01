@@ -1,0 +1,81 @@
+# Loaded by private mirror projects from an immutable public-source commit URL.
+# Repository webhooks trigger this pipeline; mirrored pushes never trigger it.
+workflow:
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "trigger" || $CI_PIPELINE_SOURCE == "api" || $CI_PIPELINE_SOURCE == "schedule" || $CI_PIPELINE_SOURCE == "web"'
+    - when: never
+
+variables:
+  GIT_STRATEGY: none
+
+mirror:
+  image: alpine:3.22@sha256:2e0b81d60597f449baa56dc25d355367869d2dca4cd57e866f1e2b52af3eb55f
+  tags: [saas-linux-small-amd64]
+  resource_group: github-mirror
+  interruptible: false
+  timeout: 45 minutes
+  before_script:
+    - apk add --no-cache bash curl git git-lfs jq openssh-client
+  script:
+    - |
+      bash <<'BASH'
+      set -euo pipefail
+      umask 077
+      : "${MIRROR_SOURCE_PATH:?}" "${MIRROR_TARGET_PATH:?}" "${MIRROR_TARGET_ID:?}"
+      : "${GITHUB_SOURCE_KEY_B64:?}" "${GITLAB_TARGET_KEY_B64:?}"
+      [[ "$MIRROR_SOURCE_PATH" =~ ^Spellwake/[a-z0-9-]+$ ]]
+      [[ "$MIRROR_TARGET_PATH" =~ ^aaron3cassar/[a-z0-9-]+$ ]]
+      [[ "$CI_PROJECT_ID" == "$MIRROR_TARGET_ID" ]]
+      [[ "$CI_PROJECT_PATH" == "$MIRROR_TARGET_PATH" ]]
+      [[ "$CI_PROJECT_VISIBILITY" == private ]]
+      [[ "${MIRROR_SOURCE_PATH##*/}" == "${MIRROR_TARGET_PATH##*/}" ]]
+      scratch=$(mktemp -d)
+      trap 'rm -rf "$scratch"' EXIT
+      printf '%s' "$GITHUB_SOURCE_KEY_B64" | base64 -d > "$scratch/source-key"
+      printf '%s' "$GITLAB_TARGET_KEY_B64" | base64 -d > "$scratch/target-key"
+      unset GITHUB_SOURCE_KEY_B64 GITLAB_TARGET_KEY_B64
+      # Host fingerprints are pinned to the providers' published ED25519 keys.
+      cat > "$scratch/known_hosts" <<'HOSTS'
+      github.com ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6UOoqKLsabgH5C9okWi0dh2l9GKJl
+      gitlab.com ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIAfuCHKVTjquxvt6CM6tdG4SLp1Btn/nOeHHE5UOzRdf
+      HOSTS
+      export GIT_TERMINAL_PROMPT=0 GIT_LFS_SKIP_SMUDGE=1
+      source_git() {
+        GIT_SSH_COMMAND="ssh -i $scratch/source-key -o IdentitiesOnly=yes -o BatchMode=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile=$scratch/known_hosts" git "$@"
+      }
+      target_git() {
+        GIT_SSH_COMMAND="ssh -i $scratch/target-key -o IdentitiesOnly=yes -o BatchMode=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile=$scratch/known_hosts" git "$@"
+      }
+      validate_visibility() {
+        # Dedicated keys separately prove access to their original repositories.
+        # Stop before transferring objects if either private replica becomes public.
+        local source_status target_status
+        source_status=$(curl --silent --show-error --retry 3 --output /dev/null --write-out '%{http_code}' "https://api.github.com/repos/$MIRROR_SOURCE_PATH") || return 1
+        target_status=$(curl --silent --show-error --retry 3 --output /dev/null --write-out '%{http_code}' "https://gitlab.com/api/v4/projects/$MIRROR_TARGET_ID") || return 1
+        [[ "$source_status" == 404 && "$target_status" == 404 ]]
+      }
+      validate_visibility || { echo 'Private repository exposure check failed.' >&2; exit 1; }
+      git init --bare "$scratch/mirror.git"
+      cd "$scratch/mirror.git"
+      git config remote.source.url "git@github.com:$MIRROR_SOURCE_PATH.git"
+      git config remote.target.url "git@gitlab.com:$MIRROR_TARGET_PATH.git"
+      source_git ls-remote --refs source 'refs/heads/*' 'refs/tags/*' | awk '{print $1 " " $2}' | LC_ALL=C sort > "$scratch/source-refs"
+      target_git ls-remote --refs target 'refs/heads/*' 'refs/tags/*' | awk '{print $1 " " $2}' | LC_ALL=C sort > "$scratch/target-refs"
+      test -s "$scratch/source-refs"
+      if cmp -s "$scratch/source-refs" "$scratch/target-refs"; then
+        echo 'All branch and tag hashes already match.'
+        exit 0
+      fi
+      # Seed existing Git objects from GitLab to avoid a full GitHub download.
+      target_git fetch --no-tags target '+refs/heads/*:refs/heads/*' '+refs/tags/*:refs/tags/*'
+      source_git fetch --prune --no-tags source '+refs/heads/*:refs/heads/*' '+refs/tags/*:refs/tags/*'
+      git for-each-ref --format='%(objectname) %(refname)' refs/heads refs/tags | LC_ALL=C sort > "$scratch/expected"
+      test -s "$scratch/expected"
+      source_git lfs fetch --all source
+      validate_visibility || { echo 'Private repository exposure check failed.' >&2; exit 1; }
+      target_git lfs push --all target
+      target_git push --atomic --prune target '+refs/heads/*:refs/heads/*' '+refs/tags/*:refs/tags/*'
+      target_git ls-remote --refs target 'refs/heads/*' 'refs/tags/*' | awk '{print $1 " " $2}' | LC_ALL=C sort > "$scratch/actual"
+      cmp "$scratch/expected" "$scratch/actual"
+      echo 'GitLab mirror branches and tags verified.'
+      BASH
