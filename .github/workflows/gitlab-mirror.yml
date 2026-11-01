@@ -18,7 +18,7 @@ concurrency:
 jobs:
   mirror:
     if: vars.GITLAB_MIRROR_ENABLED == 'true'
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(vars.GITLAB_MIRROR_RUNNER || '"ubuntu-latest"') }}
     timeout-minutes: 45
     env:
       GH_TOKEN: ${{ github.token }}
@@ -82,7 +82,7 @@ jobs:
           # Each key is enabled only for its recorded GitLab project. A missing,
           # replaced, or inaccessible destination fails before sending objects.
           git ls-remote --refs target > /dev/null
-          github_auth=$(printf 'x-access-token:%s' "$GH_TOKEN" | base64 -w0)
+          github_auth=$(printf 'x-access-token:%s' "$GH_TOKEN" | base64 | tr -d '\n')
           echo "::add-mask::$github_auth"
           source_git() {
             GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=http.https://github.com/.extraheader \
