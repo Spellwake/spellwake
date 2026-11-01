@@ -69,7 +69,7 @@ jobs:
             else
               [[ "$target_status" == 200 ]] || return 1
               jq -e --arg id "$GL_PROJECT_ID" --arg path "$GL_PROJECT_PATH" \
-                '(.id|tostring) == $id and .path_with_namespace == $path and .visibility == "public" and .archived == false' \
+                '(.id|tostring) == $id and .path_with_namespace == $path and .visibility == "public" and .archived != true' \
                 "$scratch/target.json" > /dev/null || return 1
             fi
           }
