@@ -1,0 +1,337 @@
+{
+  "version": 1,
+  "source": "https://media.wizards.com/2026/downloads/MagicCompRules%2020260925.txt",
+  "rule": "601.2d (casting-time division only; Arc Lightning-inspired inputs, no full-card execution)",
+  "cases": [
+    {
+      "revision": 7,
+      "expectedRevision": 7,
+      "total": "3",
+      "minimumTargets": 1,
+      "maximumTargets": 3,
+      "eligibleTargets": [
+        1,
+        2,
+        3
+      ],
+      "name": "all-three-to-one",
+      "allocations": [
+        {
+          "target": 1,
+          "amount": "3"
+        }
+      ],
+      "expected": {
+        "kind": "valid"
+      }
+    },
+    {
+      "revision": 7,
+      "expectedRevision": 7,
+      "total": "3",
+      "minimumTargets": 1,
+      "maximumTargets": 3,
+      "eligibleTargets": [
+        1,
+        2,
+        3
+      ],
+      "name": "two-plus-one",
+      "allocations": [
+        {
+          "target": 1,
+          "amount": "2"
+        },
+        {
+          "target": 2,
+          "amount": "1"
+        }
+      ],
+      "expected": {
+        "kind": "valid"
+      }
+    },
+    {
+      "revision": 7,
+      "expectedRevision": 7,
+      "total": "3",
+      "minimumTargets": 1,
+      "maximumTargets": 3,
+      "eligibleTargets": [
+        1,
+        2,
+        3
+      ],
+      "name": "one-each",
+      "allocations": [
+        {
+          "target": 1,
+          "amount": "1"
+        },
+        {
+          "target": 2,
+          "amount": "1"
+        },
+        {
+          "target": 3,
+          "amount": "1"
+        }
+      ],
+      "expected": {
+        "kind": "valid"
+      }
+    },
+    {
+      "revision": 7,
+      "expectedRevision": 7,
+      "total": "3",
+      "minimumTargets": 1,
+      "maximumTargets": 3,
+      "eligibleTargets": [
+        1,
+        2,
+        3
+      ],
+      "name": "zero-targets",
+      "allocations": [],
+      "expected": {
+        "kind": "rejected",
+        "code": "target-count"
+      }
+    },
+    {
+      "revision": 7,
+      "expectedRevision": 7,
+      "total": "3",
+      "minimumTargets": 1,
+      "maximumTargets": 3,
+      "eligibleTargets": [
+        1,
+        2,
+        3
+      ],
+      "name": "four-targets",
+      "allocations": [
+        {
+          "target": 1,
+          "amount": "1"
+        },
+        {
+          "target": 2,
+          "amount": "1"
+        },
+        {
+          "target": 3,
+          "amount": "1"
+        },
+        {
+          "target": 4,
+          "amount": "1"
+        }
+      ],
+      "expected": {
+        "kind": "rejected",
+        "code": "target-count"
+      }
+    },
+    {
+      "revision": 7,
+      "expectedRevision": 7,
+      "total": "3",
+      "minimumTargets": 1,
+      "maximumTargets": 3,
+      "eligibleTargets": [
+        1,
+        2,
+        3
+      ],
+      "name": "zero-assignment",
+      "allocations": [
+        {
+          "target": 1,
+          "amount": "3"
+        },
+        {
+          "target": 2,
+          "amount": "0"
+        }
+      ],
+      "expected": {
+        "kind": "rejected",
+        "code": "nonpositive-amount"
+      }
+    },
+    {
+      "revision": 7,
+      "expectedRevision": 7,
+      "total": "3",
+      "minimumTargets": 1,
+      "maximumTargets": 3,
+      "eligibleTargets": [
+        1,
+        2,
+        3
+      ],
+      "name": "negative-assignment",
+      "allocations": [
+        {
+          "target": 1,
+          "amount": "4"
+        },
+        {
+          "target": 2,
+          "amount": "-1"
+        }
+      ],
+      "expected": {
+        "kind": "rejected",
+        "code": "nonpositive-amount"
+      }
+    },
+    {
+      "revision": 7,
+      "expectedRevision": 7,
+      "total": "3",
+      "minimumTargets": 1,
+      "maximumTargets": 3,
+      "eligibleTargets": [
+        1,
+        2,
+        3
+      ],
+      "name": "duplicate-target",
+      "allocations": [
+        {
+          "target": 1,
+          "amount": "2"
+        },
+        {
+          "target": 1,
+          "amount": "1"
+        }
+      ],
+      "expected": {
+        "kind": "rejected",
+        "code": "duplicate-target"
+      }
+    },
+    {
+      "revision": 7,
+      "expectedRevision": 7,
+      "total": "3",
+      "minimumTargets": 1,
+      "maximumTargets": 3,
+      "eligibleTargets": [
+        1,
+        2,
+        3
+      ],
+      "name": "foreign-target",
+      "allocations": [
+        {
+          "target": 4,
+          "amount": "3"
+        }
+      ],
+      "expected": {
+        "kind": "rejected",
+        "code": "ineligible-target"
+      }
+    },
+    {
+      "revision": 7,
+      "expectedRevision": 7,
+      "total": "3",
+      "minimumTargets": 1,
+      "maximumTargets": 3,
+      "eligibleTargets": [
+        1,
+        2,
+        3
+      ],
+      "name": "wrong-sum",
+      "allocations": [
+        {
+          "target": 1,
+          "amount": "2"
+        }
+      ],
+      "expected": {
+        "kind": "rejected",
+        "code": "incorrect-total"
+      }
+    },
+    {
+      "revision": 7,
+      "expectedRevision": 6,
+      "total": "3",
+      "minimumTargets": 1,
+      "maximumTargets": 3,
+      "eligibleTargets": [
+        1,
+        2,
+        3
+      ],
+      "name": "stale-choice",
+      "allocations": [
+        {
+          "target": 1,
+          "amount": "3"
+        }
+      ],
+      "expected": {
+        "kind": "rejected",
+        "code": "stale-revision"
+      }
+    },
+    {
+      "revision": 7,
+      "expectedRevision": 7,
+      "total": "900719925474099312345678901234567890",
+      "minimumTargets": 1,
+      "maximumTargets": 3,
+      "eligibleTargets": [
+        1,
+        2,
+        3
+      ],
+      "name": "large-exact-choice",
+      "allocations": [
+        {
+          "target": 1,
+          "amount": "900719925474099312345678901234567889"
+        },
+        {
+          "target": 2,
+          "amount": "1"
+        }
+      ],
+      "expected": {
+        "kind": "valid"
+      }
+    },
+    {
+      "revision": 7,
+      "expectedRevision": 7,
+      "total": "3",
+      "minimumTargets": 0,
+      "maximumTargets": 3,
+      "eligibleTargets": [
+        1,
+        2,
+        3
+      ],
+      "name": "invalid-domain",
+      "allocations": [
+        {
+          "target": 1,
+          "amount": "3"
+        }
+      ],
+      "expected": {
+        "kind": "rejected",
+        "code": "invalid-decision"
+      }
+    }
+  ]
+}

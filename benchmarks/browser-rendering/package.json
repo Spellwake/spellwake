@@ -1,0 +1,36 @@
+{
+  "name": "spellwake-renderer-benchmark",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "bun build src/main.ts src/visual.ts src/card-study.ts src/play-area-entry.ts --outdir public/build --target browser --minify --external /wasm/*",
+    "serve": "bun server.ts",
+    "dice:build": "bun build src/dice-study.ts --outdir public/build --target browser --minify && cp node_modules/dddice-js/LICENSE public/build/dddice-LICENSE.txt && cp node_modules/dddice-js/dddice-latest.js.LICENSE.txt public/build/dddice-latest.web.mjs.LICENSE.txt",
+    "dice:serve": "bun dice-study-server.ts",
+    "dice:test": "bun test src/dice",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint src server.ts",
+    "format:check": "prettier --check src server.ts package.json tsconfig.json eslint.config.js",
+    "visual:assets": "uv run --with pillow python generate_visual_assets.py && bun generate-visual-models.ts"
+  },
+  "dependencies": {
+    "cannon-es": "0.20.0",
+    "dddice-js": "0.19.34-974",
+    "three": "0.186.0",
+    "zod": "4.6.7"
+  },
+  "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "@types/bun": "latest",
+    "@types/three": "latest",
+    "eslint": "^10.13.0",
+    "eslint-config-prettier": "^10.1.8",
+    "prettier": "^3.9.10",
+    "typescript": "5.9.3",
+    "typescript-eslint": "^8.72.1"
+  },
+  "exports": {
+    "./play-area": "./src/play-area.ts",
+    "./play-setup": "./src/play-setup.ts"
+  }
+}

@@ -1,0 +1,101 @@
+{
+  "version": 1,
+  "skills": {
+    "after-effects": {
+      "source": "Quzzar/skills",
+      "sourceType": "github",
+      "skillPath": "skills/after-effects/SKILL.md",
+      "computedHash": "f9624c632cc877550057298f75d57ed4bb0740a786f474c5aa6a6a774979a692"
+    },
+    "animation-principles": {
+      "source": "Quzzar/skills",
+      "sourceType": "github",
+      "skillPath": "skills/animation-principles/SKILL.md",
+      "computedHash": "a23564f25c4cc88d46c33e7167b9c013bfcf796287235428e8eaa17c426a3970"
+    },
+    "beat-sync-editing": {
+      "source": "Quzzar/skills",
+      "sourceType": "github",
+      "skillPath": "skills/beat-sync-editing/SKILL.md",
+      "computedHash": "49eb9a854d2d9b81b1105be08a155016a80d0fe384e1bdf633e38c49d87b496e"
+    },
+    "color-motion": {
+      "source": "Quzzar/skills",
+      "sourceType": "github",
+      "skillPath": "skills/color-motion/SKILL.md",
+      "computedHash": "f3860c0b696509501eca4fb46177be565b84d751eb9935c2ea094812c2552863"
+    },
+    "illustrated-svg": {
+      "source": "Quzzar/skills",
+      "sourceType": "github",
+      "skillPath": "skills/illustrated-svg/SKILL.md",
+      "computedHash": "16c74a50ed53e2a1fb9ad9a0017198eaca76f712f631f77f0d68d6641141790e"
+    },
+    "logo-animation": {
+      "source": "Quzzar/skills",
+      "sourceType": "github",
+      "skillPath": "skills/logo-animation/SKILL.md",
+      "computedHash": "df1134a86dcd1a68f5cd2b5d6059bb11b55e8fc6ec439ba2e7dec2d85b01db87"
+    },
+    "motion-art-direction": {
+      "source": "Quzzar/skills",
+      "sourceType": "github",
+      "skillPath": "skills/motion-art-direction/SKILL.md",
+      "computedHash": "eee60a63bb541fed3e2733227837ce207aad05ed2d2558b9377ceff457c54790"
+    },
+    "motion-background": {
+      "source": "Quzzar/skills",
+      "sourceType": "github",
+      "skillPath": "skills/motion-background/SKILL.md",
+      "computedHash": "da94fe3e0d1213c9b08bf82da0e33c1bd0bc48e3a2c877a226a63f2fdd85b3d2"
+    },
+    "quzzar-backend": {
+      "source": "Quzzar/skills",
+      "sourceType": "github",
+      "skillPath": "skills/quzzar-backend/SKILL.md",
+      "computedHash": "d6c23fb0a6dfa16771d38e7941ee497202c507ae9cf63ce6d23f5e7e8c25dbd5"
+    },
+    "quzzar-design": {
+      "source": "Quzzar/skills",
+      "sourceType": "github",
+      "skillPath": "skills/quzzar-design/SKILL.md",
+      "computedHash": "27e2cf2d96e11f82d52e547980cfd1fb565240726e7e7dbec7b21461bb90d305"
+    },
+    "quzzar-frontend": {
+      "source": "Quzzar/skills",
+      "sourceType": "github",
+      "skillPath": "skills/quzzar-frontend/SKILL.md",
+      "computedHash": "dc57b4fa40a2a90ce2f58dece59b0d9d9cccedd13b9d40e9a9eaa1627eb6ac92"
+    },
+    "quzzar-system-design": {
+      "source": "Quzzar/skills",
+      "sourceType": "github",
+      "skillPath": "skills/quzzar-system-design/SKILL.md",
+      "computedHash": "a7dd9b2a2c5a9a0246280266cef3b0275604ef39351440db73df9923d7e5f6c3"
+    },
+    "quzzar-workplace": {
+      "source": "Quzzar/skills",
+      "sourceType": "github",
+      "skillPath": "skills/quzzar-workplace/SKILL.md",
+      "computedHash": "012a7a8295b6264a1486148dd7c89ad023f248dab9db36829412d143a6a84e82"
+    },
+    "remotion-video": {
+      "source": "Quzzar/skills",
+      "sourceType": "github",
+      "skillPath": "skills/remotion-video/SKILL.md",
+      "computedHash": "d9990e8300d55add0afa8ada16f38fb15ed3b19cdf960111e628a4ae331f6e02"
+    },
+    "setup": {
+      "source": "Quzzar/skills",
+      "sourceType": "github",
+      "skillPath": "skills/setup/SKILL.md",
+      "computedHash": "82aaae12075470d33a466339ffb582e470c674784ffb312e6c2db357acfb7eea"
+    },
+    "shot-composition": {
+      "source": "Quzzar/skills",
+      "sourceType": "github",
+      "skillPath": "skills/shot-composition/SKILL.md",
+      "computedHash": "72b5d3e16c95cbf63560f868aa1b490359d617f60b0ebc49d1eacaae2074d310"
+    }
+  }
+}

@@ -1,0 +1,16 @@
+[package]
+name = "spellwake-card-programs"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[dependencies]
+spellwake-engine.workspace = true
+spellwake-contracts.workspace = true
+spellwake-content = { path = "../content" }
+serde.workspace = true
+serde_json.workspace = true
+sha2 = "0.10"
+
+[lints]
+workspace = true

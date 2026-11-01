@@ -1,0 +1,646 @@
+{
+  "schema_version": 1,
+  "kind": "source-grounded-projection-expectations",
+  "review_status": "reviewed",
+  "rules": {
+    "edition": "2026-09-25",
+    "url": "https://media.wizards.com/2026/downloads/MagicCompRules%2020260925.txt",
+    "sha256": "8d860e451f20f38865b725b42d82feb714c725373dd8f3b32b8652b3eeb070ca"
+  },
+  "oracle_snapshot_sha256": "c1c9dc28fa9a7a4bae61c02330ba5a1190205aab1a93361e590ff5d9a146af08",
+  "authorship": "AI-assisted expectation and rationale grounded in pinned rules and card text; model confidence is not evidence.",
+  "observation_disclosure": "Rust and XMage results were already known. These expectations were written before the author viewed the new Forge run results; this is not a blind three-engine experiment.",
+  "scope": "Only the selected fixed-world stack/card projections; no casting/payment/priority-schedule, life or full-card qualification.",
+  "cards": {
+    "bolt": {
+      "name": "Lightning Bolt",
+      "oracle_id": "4457ed35-7c10-48c8-9776-456485fdf070",
+      "text": "Lightning Bolt deals 3 damage to any target."
+    },
+    "bounce": {
+      "name": "Unsummon",
+      "oracle_id": "837182db-1bf3-4a2c-bd01-1af9d9873561",
+      "text": "Return target creature to its owner's hand."
+    },
+    "counter": {
+      "name": "Counterspell",
+      "oracle_id": "cc187110-1148-4090-bbb8-e205694a39f5",
+      "text": "Counter target spell."
+    },
+    "lion": {
+      "name": "Silvercoat Lion",
+      "oracle_id": "e3c0b11e-7340-4e0a-98b7-91b38439d4f9",
+      "power": "2",
+      "toughness": "2",
+      "text": ""
+    }
+  },
+  "cases": [
+    {
+      "scenario": "bolt-control",
+      "rules": [
+        "120.3e",
+        "120.6",
+        "608.2n",
+        "704.5g"
+      ],
+      "reasoning": "Bolt marks three damage on the vanilla two-toughness Lion. The instant goes to its owner's graveyard after resolution. Before priority, lethal-damage state-based actions put Lion into its owner's graveyard. The final checkpoint is after these checks, not the transient damaged battlefield state.",
+      "observations": [
+        {
+          "checkpoint": "bolt-on-stack",
+          "stack_bottom_first": [
+            {
+              "card": "bolt",
+              "targets": [
+                "lion"
+              ]
+            }
+          ],
+          "cards": [
+            {
+              "alias": "bolt",
+              "owner": "A",
+              "zone": "STACK",
+              "damage": null,
+              "power": null,
+              "toughness": null
+            },
+            {
+              "alias": "lion",
+              "owner": "B",
+              "zone": "BATTLEFIELD",
+              "damage": "0",
+              "power": "2",
+              "toughness": "2"
+            }
+          ]
+        },
+        {
+          "checkpoint": "after-bolt",
+          "stack_bottom_first": [],
+          "cards": [
+            {
+              "alias": "bolt",
+              "owner": "A",
+              "zone": "GRAVEYARD",
+              "damage": null,
+              "power": null,
+              "toughness": null
+            },
+            {
+              "alias": "lion",
+              "owner": "B",
+              "zone": "GRAVEYARD",
+              "damage": null,
+              "power": null,
+              "toughness": null
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "scenario": "target-bounce",
+      "rules": [
+        "117.4",
+        "400.7",
+        "608.2b",
+        "608.2n"
+      ],
+      "reasoning": "Unsummon is above Bolt and returns the chosen Lion to its owner's hand first. The departed battlefield object is no longer Bolt's legal target. With its only target illegal, Bolt does not resolve and goes to its owner's graveyard; it cannot damage or follow the card in hand.",
+      "observations": [
+        {
+          "checkpoint": "bolt-on-stack",
+          "stack_bottom_first": [
+            {
+              "card": "bolt",
+              "targets": [
+                "lion"
+              ]
+            }
+          ],
+          "cards": [
+            {
+              "alias": "bolt",
+              "owner": "A",
+              "zone": "STACK",
+              "damage": null,
+              "power": null,
+              "toughness": null
+            },
+            {
+              "alias": "bounce",
+              "owner": "B",
+              "zone": "HAND",
+              "damage": null,
+              "power": null,
+              "toughness": null
+            },
+            {
+              "alias": "lion",
+              "owner": "B",
+              "zone": "BATTLEFIELD",
+              "damage": "0",
+              "power": "2",
+              "toughness": "2"
+            }
+          ]
+        },
+        {
+          "checkpoint": "response-on-stack",
+          "stack_bottom_first": [
+            {
+              "card": "bolt",
+              "targets": [
+                "lion"
+              ]
+            },
+            {
+              "card": "bounce",
+              "targets": [
+                "lion"
+              ]
+            }
+          ],
+          "cards": [
+            {
+              "alias": "bolt",
+              "owner": "A",
+              "zone": "STACK",
+              "damage": null,
+              "power": null,
+              "toughness": null
+            },
+            {
+              "alias": "bounce",
+              "owner": "B",
+              "zone": "STACK",
+              "damage": null,
+              "power": null,
+              "toughness": null
+            },
+            {
+              "alias": "lion",
+              "owner": "B",
+              "zone": "BATTLEFIELD",
+              "damage": "0",
+              "power": "2",
+              "toughness": "2"
+            }
+          ]
+        },
+        {
+          "checkpoint": "after-response",
+          "stack_bottom_first": [
+            {
+              "card": "bolt",
+              "targets": [
+                "lion"
+              ]
+            }
+          ],
+          "cards": [
+            {
+              "alias": "bolt",
+              "owner": "A",
+              "zone": "STACK",
+              "damage": null,
+              "power": null,
+              "toughness": null
+            },
+            {
+              "alias": "bounce",
+              "owner": "B",
+              "zone": "GRAVEYARD",
+              "damage": null,
+              "power": null,
+              "toughness": null
+            },
+            {
+              "alias": "lion",
+              "owner": "B",
+              "zone": "HAND",
+              "damage": null,
+              "power": null,
+              "toughness": null
+            }
+          ]
+        },
+        {
+          "checkpoint": "after-bolt",
+          "stack_bottom_first": [],
+          "cards": [
+            {
+              "alias": "bolt",
+              "owner": "A",
+              "zone": "GRAVEYARD",
+              "damage": null,
+              "power": null,
+              "toughness": null
+            },
+            {
+              "alias": "bounce",
+              "owner": "B",
+              "zone": "GRAVEYARD",
+              "damage": null,
+              "power": null,
+              "toughness": null
+            },
+            {
+              "alias": "lion",
+              "owner": "B",
+              "zone": "HAND",
+              "damage": null,
+              "power": null,
+              "toughness": null
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "scenario": "counter-bolt",
+      "rules": [
+        "117.4",
+        "608.2n",
+        "701.6a"
+      ],
+      "reasoning": "Counterspell resolves above Bolt and removes Bolt from the stack into its owner's graveyard without any Bolt effect. Counterspell completes into its owner's graveyard. Lion stays on the battlefield with zero marked damage.",
+      "observations": [
+        {
+          "checkpoint": "bolt-on-stack",
+          "stack_bottom_first": [
+            {
+              "card": "bolt",
+              "targets": [
+                "lion"
+              ]
+            }
+          ],
+          "cards": [
+            {
+              "alias": "bolt",
+              "owner": "A",
+              "zone": "STACK",
+              "damage": null,
+              "power": null,
+              "toughness": null
+            },
+            {
+              "alias": "counter",
+              "owner": "B",
+              "zone": "HAND",
+              "damage": null,
+              "power": null,
+              "toughness": null
+            },
+            {
+              "alias": "lion",
+              "owner": "B",
+              "zone": "BATTLEFIELD",
+              "damage": "0",
+              "power": "2",
+              "toughness": "2"
+            }
+          ]
+        },
+        {
+          "checkpoint": "counter-on-stack",
+          "stack_bottom_first": [
+            {
+              "card": "bolt",
+              "targets": [
+                "lion"
+              ]
+            },
+            {
+              "card": "counter",
+              "targets": [
+                "bolt"
+              ]
+            }
+          ],
+          "cards": [
+            {
+              "alias": "bolt",
+              "owner": "A",
+              "zone": "STACK",
+              "damage": null,
+              "power": null,
+              "toughness": null
+            },
+            {
+              "alias": "counter",
+              "owner": "B",
+              "zone": "STACK",
+              "damage": null,
+              "power": null,
+              "toughness": null
+            },
+            {
+              "alias": "lion",
+              "owner": "B",
+              "zone": "BATTLEFIELD",
+              "damage": "0",
+              "power": "2",
+              "toughness": "2"
+            }
+          ]
+        },
+        {
+          "checkpoint": "after-counter",
+          "stack_bottom_first": [],
+          "cards": [
+            {
+              "alias": "bolt",
+              "owner": "A",
+              "zone": "GRAVEYARD",
+              "damage": null,
+              "power": null,
+              "toughness": null
+            },
+            {
+              "alias": "counter",
+              "owner": "B",
+              "zone": "GRAVEYARD",
+              "damage": null,
+              "power": null,
+              "toughness": null
+            },
+            {
+              "alias": "lion",
+              "owner": "B",
+              "zone": "BATTLEFIELD",
+              "damage": "0",
+              "power": "2",
+              "toughness": "2"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "scenario": "counter-counter",
+      "rules": [
+        "117.4",
+        "120.3e",
+        "120.6",
+        "608.2n",
+        "701.6a",
+        "704.5g"
+      ],
+      "reasoning": "The top Counterspell targets the first Counterspell and removes it before it can counter Bolt. Both physical counters end in their respective owners' graveyards. Bolt remains on the stack, resolves against the still-present Lion, and lethal-damage checks remove Lion before the final checkpoint.",
+      "observations": [
+        {
+          "checkpoint": "bolt-on-stack",
+          "stack_bottom_first": [
+            {
+              "card": "bolt",
+              "targets": [
+                "lion"
+              ]
+            }
+          ],
+          "cards": [
+            {
+              "alias": "bolt",
+              "owner": "A",
+              "zone": "STACK",
+              "damage": null,
+              "power": null,
+              "toughness": null
+            },
+            {
+              "alias": "counter",
+              "owner": "B",
+              "zone": "HAND",
+              "damage": null,
+              "power": null,
+              "toughness": null
+            },
+            {
+              "alias": "rescue",
+              "owner": "A",
+              "zone": "HAND",
+              "damage": null,
+              "power": null,
+              "toughness": null
+            },
+            {
+              "alias": "lion",
+              "owner": "B",
+              "zone": "BATTLEFIELD",
+              "damage": "0",
+              "power": "2",
+              "toughness": "2"
+            }
+          ]
+        },
+        {
+          "checkpoint": "counter-on-stack",
+          "stack_bottom_first": [
+            {
+              "card": "bolt",
+              "targets": [
+                "lion"
+              ]
+            },
+            {
+              "card": "counter",
+              "targets": [
+                "bolt"
+              ]
+            }
+          ],
+          "cards": [
+            {
+              "alias": "bolt",
+              "owner": "A",
+              "zone": "STACK",
+              "damage": null,
+              "power": null,
+              "toughness": null
+            },
+            {
+              "alias": "counter",
+              "owner": "B",
+              "zone": "STACK",
+              "damage": null,
+              "power": null,
+              "toughness": null
+            },
+            {
+              "alias": "rescue",
+              "owner": "A",
+              "zone": "HAND",
+              "damage": null,
+              "power": null,
+              "toughness": null
+            },
+            {
+              "alias": "lion",
+              "owner": "B",
+              "zone": "BATTLEFIELD",
+              "damage": "0",
+              "power": "2",
+              "toughness": "2"
+            }
+          ]
+        },
+        {
+          "checkpoint": "rescue-on-stack",
+          "stack_bottom_first": [
+            {
+              "card": "bolt",
+              "targets": [
+                "lion"
+              ]
+            },
+            {
+              "card": "counter",
+              "targets": [
+                "bolt"
+              ]
+            },
+            {
+              "card": "rescue",
+              "targets": [
+                "counter"
+              ]
+            }
+          ],
+          "cards": [
+            {
+              "alias": "bolt",
+              "owner": "A",
+              "zone": "STACK",
+              "damage": null,
+              "power": null,
+              "toughness": null
+            },
+            {
+              "alias": "counter",
+              "owner": "B",
+              "zone": "STACK",
+              "damage": null,
+              "power": null,
+              "toughness": null
+            },
+            {
+              "alias": "rescue",
+              "owner": "A",
+              "zone": "STACK",
+              "damage": null,
+              "power": null,
+              "toughness": null
+            },
+            {
+              "alias": "lion",
+              "owner": "B",
+              "zone": "BATTLEFIELD",
+              "damage": "0",
+              "power": "2",
+              "toughness": "2"
+            }
+          ]
+        },
+        {
+          "checkpoint": "after-rescue",
+          "stack_bottom_first": [
+            {
+              "card": "bolt",
+              "targets": [
+                "lion"
+              ]
+            }
+          ],
+          "cards": [
+            {
+              "alias": "bolt",
+              "owner": "A",
+              "zone": "STACK",
+              "damage": null,
+              "power": null,
+              "toughness": null
+            },
+            {
+              "alias": "counter",
+              "owner": "B",
+              "zone": "GRAVEYARD",
+              "damage": null,
+              "power": null,
+              "toughness": null
+            },
+            {
+              "alias": "rescue",
+              "owner": "A",
+              "zone": "GRAVEYARD",
+              "damage": null,
+              "power": null,
+              "toughness": null
+            },
+            {
+              "alias": "lion",
+              "owner": "B",
+              "zone": "BATTLEFIELD",
+              "damage": "0",
+              "power": "2",
+              "toughness": "2"
+            }
+          ]
+        },
+        {
+          "checkpoint": "after-bolt",
+          "stack_bottom_first": [],
+          "cards": [
+            {
+              "alias": "bolt",
+              "owner": "A",
+              "zone": "GRAVEYARD",
+              "damage": null,
+              "power": null,
+              "toughness": null
+            },
+            {
+              "alias": "counter",
+              "owner": "B",
+              "zone": "GRAVEYARD",
+              "damage": null,
+              "power": null,
+              "toughness": null
+            },
+            {
+              "alias": "rescue",
+              "owner": "A",
+              "zone": "GRAVEYARD",
+              "damage": null,
+              "power": null,
+              "toughness": null
+            },
+            {
+              "alias": "lion",
+              "owner": "B",
+              "zone": "GRAVEYARD",
+              "damage": null,
+              "power": null,
+              "toughness": null
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "review_date": "2026-10-29",
+  "review_records": [
+    {
+      "kind": "independent-coverage-and-source-review",
+      "path": ".quzzar-system-design/architecture-proposed/reviews/forge-baseline-coverage.md",
+      "scope": "Four fixed-world cases / 14 common projection checkpoints; pinned CR and Oracle checked."
+    },
+    {
+      "kind": "independent-flow-and-source-review",
+      "path": ".quzzar-system-design/architecture-proposed/reviews/forge-baseline-flow.md",
+      "scope": "Four fixed-world cases / 14 common projection checkpoints; source reasoning and actual evidence flow checked."
+    }
+  ]
+}

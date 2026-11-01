@@ -1,0 +1,15 @@
+# Foundation API only. The React app and marketing site have no build target yet.
+services:
+  - type: web
+    name: spellwake-foundation
+    runtime: rust
+    plan: free
+    region: virginia
+    branch: main
+    autoDeployTrigger: checksPass
+    buildCommand: cargo build --locked --release -p spellwake-platform
+    startCommand: ./target/release/spellwake-platform
+    healthCheckPath: /health
+    envVars:
+      - key: SPELLWAKE_BIND
+        value: 0.0.0.0:10000

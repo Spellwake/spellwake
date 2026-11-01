@@ -1,0 +1,8 @@
+{
+  "object": "bulk_data",
+  "id": "synthetic-spellwake-registry-test-subset-v2",
+  "type": "oracle_cards",
+  "updated_at": "synthetic-fixture-from-2026-10-29-snapshot",
+  "jsonl_download_uri": "https://data.scryfall.io/oracle-cards/fixture-not-a-provider-export.jsonl.gz",
+  "compressed_size": 729
+}

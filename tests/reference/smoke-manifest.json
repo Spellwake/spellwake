@@ -1,0 +1,25 @@
+{
+  "version": 1,
+  "engines": [
+    {
+      "name": "xmage",
+      "checkout": "work/reference-research/mage",
+      "commit": "81c2f6d806dbec8eb79ad2a511cb686dff8361e7",
+      "log": "work/reference-research/mage-smoke.log",
+      "cases": [
+        {"id": "xmage.vines-target-recheck", "report": "Mage.Tests/target/surefire-reports/TEST-org.mage.test.cards.rules.CantBeTargetTest.xml", "class": "org.mage.test.cards.rules.CantBeTargetTest", "method": "testVinesofVastwood"},
+        {"id": "xmage.copied-counterspell", "report": "Mage.Tests/target/surefire-reports/TEST-org.mage.test.cards.abilities.oneshot.counterspell.CounterspellTest.xml", "class": "org.mage.test.cards.abilities.oneshot.counterspell.CounterspellTest", "method": "testCopyCounterToCounterGraveyard"}
+      ]
+    },
+    {
+      "name": "forge",
+      "checkout": "work/reference-research/forge",
+      "commit": "3ead7e68d54bf95c6f778fd6aa7c604c036e0736",
+      "log": "work/reference-research/forge-smoke.log",
+      "cases": [
+        {"id": "forge.reject-untargeted-cast", "report": "forge-gui-desktop/target/surefire-reports/TEST-forge.ai.MagicStackIllegalTargetTest.xml", "class": "forge.ai.MagicStackIllegalTargetTest", "method": "spellWithoutLegalTargetGoesBackToHand"},
+        {"id": "forge.accept-targeted-cast", "report": "forge-gui-desktop/target/surefire-reports/TEST-forge.ai.MagicStackIllegalTargetTest.xml", "class": "forge.ai.MagicStackIllegalTargetTest", "method": "aLegalTargetedCastStillWorksWithTheSafetyNet"}
+      ]
+    }
+  ]
+}

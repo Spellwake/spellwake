@@ -1,0 +1,39 @@
+{
+  "reference": "xmage",
+  "commit": "81c2f6d806dbec8eb79ad2a511cb686dff8361e7",
+  "test_class": "org.mage.test.reference.CounterspellReferenceTest",
+  "tests": 2,
+  "failures": 0,
+  "errors": 0,
+  "skipped": 0,
+  "testcases": [
+    "counterBolt",
+    "counterCounter"
+  ],
+  "files": [
+    {
+      "path": "work/reference-research/counterspell/run.log",
+      "sha256": "2adbc9dd849dab5cbbe75ade19a397e99cc088fd2ff34a38d13d818a9631d290"
+    },
+    {
+      "path": "work/reference-research/counterspell/TEST-org.mage.test.reference.CounterspellReferenceTest.xml",
+      "sha256": "faea57802f4927cd04ab2dffb555eddf881e5c4917317f320837e9250269c278"
+    },
+    {
+      "path": "work/reference-research/counterspell/counter-bolt.json",
+      "sha256": "d9487ecb569d148c5c86470ad3ad3fe5ed31ec6ef5746c16409ebe0231939ecf"
+    },
+    {
+      "path": "work/reference-research/counterspell/counter-counter.json",
+      "sha256": "336d20bfeca00443b31aefac9d2a95f9770f68abc43cd104c78d0b28fe9d6c9c"
+    },
+    {
+      "path": "tests/reference/xmage/CounterspellReferenceTest.java",
+      "sha256": "5953fac3a75996b09bddef8f2a5240acfbcd2fa7ad372569688afca7720e5154"
+    },
+    {
+      "path": "work/reference-research/mage/Mage.Tests/target/test-classes/org/mage/test/reference/CounterspellReferenceTest.class",
+      "sha256": "fbbb57ead635bf94d5598dccdecf9b3f0bdbf57be95101820e767bbab7b77e5c"
+    }
+  ]
+}

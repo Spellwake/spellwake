@@ -1,0 +1,151 @@
+name: Linux packaged application qualification
+
+on:
+  workflow_dispatch:
+    inputs:
+      artifact_run_id:
+        description: Trusted repository application run with a successful Linux artifact (empty selects latest completed main)
+        type: string
+        required: false
+  pull_request:
+    paths:
+      - .github/workflows/linux-packages.yml
+      - scripts/qualify-linux-package.py
+      - benchmarks/browser-rendering/src/table-overview.ts
+      - benchmarks/browser-rendering/public/play-area.html
+      - apps/play/vite.config.ts
+      - src-tauri/tauri.conf.json
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  qualify:
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - name: Select trusted application artifact
+        id: artifact
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REQUESTED_RUN: ${{ inputs.artifact_run_id }}
+          EXPECTED_REVISION: ${{ github.event.pull_request.head.sha }}
+        run: |
+          python3 - <<'PY'
+          import json, os, re, subprocess, time
+          from pathlib import Path
+
+          repository = os.environ['GITHUB_REPOSITORY']
+          expected = os.environ.get('EXPECTED_REVISION', '')
+          requested = os.environ.get('REQUESTED_RUN', '')
+          if requested and not requested.isdecimal():
+              raise SystemExit('Artifact run ID must contain only digits.')
+          if expected and not re.fullmatch('[a-f0-9]{40}', expected):
+              raise SystemExit('Invalid expected PR revision.')
+
+          def api(path):
+              return json.loads(subprocess.check_output(['gh', 'api', path], text=True))
+
+          deadline = time.monotonic() + (900 if expected else 0)
+          selected = None
+          while selected is None:
+              query = ['gh', 'run', 'list', '--repo', repository, '--workflow', 'tauri.yml',
+                       '--limit', '10', '--json', 'databaseId']
+              query += ['--commit', expected] if expected else ['--branch', 'main', '--status', 'completed']
+              candidates = [int(requested)] if requested else [run['databaseId'] for run in json.loads(subprocess.check_output(query, text=True))]
+              for run_id in candidates:
+                  run = api(f'repos/{repository}/actions/runs/{run_id}')
+                  if (run['repository']['full_name'] != repository or run['head_repository']['full_name'] != repository
+                      or run['path'] != '.github/workflows/tauri.yml' or not re.fullmatch('[a-f0-9]{40}', run['head_sha'])):
+                      raise SystemExit('Artifact must come from this repository application workflow.')
+                  if expected:
+                      if run['head_sha'] != expected or run['event'] != 'pull_request':
+                          raise SystemExit('PR qualification requires the exact same-repository PR revision.')
+                  elif requested:
+                      if run['head_branch'] != 'main' and run['event'] != 'pull_request':
+                          raise SystemExit('Explicit qualification accepts only main or same-repository PR application runs.')
+                  elif run['head_branch'] != 'main' or run['status'] != 'completed':
+                      raise SystemExit('Automatic selection requires a completed main application run.')
+                  jobs = api(f'repos/{repository}/actions/runs/{run_id}/jobs')['jobs']
+                  if any(job['name'] == 'Desktop linux-x64' and job['conclusion'] == 'failure' for job in jobs):
+                      if expected or requested:
+                          raise SystemExit('The source Linux build failed; no package can be qualified.')
+                      continue
+                  if not any(job['name'] == 'Desktop linux-x64' and job['conclusion'] == 'success' for job in jobs):
+                      continue
+                  artifacts = api(f'repos/{repository}/actions/runs/{run_id}/artifacts')['artifacts']
+                  if any(artifact['name'] == 'spellwake-linux-x64' and not artifact['expired'] for artifact in artifacts):
+                      selected = run
+                      break
+              if selected is None:
+                  if time.monotonic() >= deadline:
+                      raise SystemExit('No successful, unexpired Linux artifact found for the required revision.')
+                  print('Waiting for the exact PR Linux build artifact.', flush=True)
+                  time.sleep(30)
+          Path('qualification').mkdir()
+          Path('qualification/provenance.json').write_text(json.dumps({
+              'runId': selected['id'], 'sourceRevision': selected['head_sha'], 'url': selected['html_url'],
+              'environment': 'Ubuntu 24.04 x86-64 VM, Xvfb, Mesa software rendering',
+          }, indent=2) + '\n')
+          with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
+              output.write(f'run_id={selected["id"]}\n')
+          print(f'Qualifying Linux artifact from revision {selected["head_sha"]}, run {selected["id"]}')
+          PY
+      - uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0
+        with:
+          name: spellwake-linux-x64
+          path: linux-package
+          run-id: ${{ steps.artifact.outputs.run_id }}
+          github-token: ${{ github.token }}
+      - name: Install native test runtime
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y xvfb xauth dbus-x11 webkit2gtk-driver libgl1-mesa-dri libfuse2t64
+          cargo install tauri-driver --version 2.1.0 --locked
+      - name: Install and exercise packaged applications
+        env:
+          LIBGL_ALWAYS_SOFTWARE: "1"
+        run: |
+          mapfile -t debs < <(find "$PWD/linux-package" -name '*.deb' -type f)
+          mapfile -t images < <(find "$PWD/linux-package" -name '*.AppImage' -type f)
+          [[ ${#debs[@]} -eq 1 && ${#images[@]} -eq 1 ]]
+          deb="${debs[0]}"
+          image="${images[0]}"
+          sha256sum "$deb" "$image" > qualification/packages.sha256
+          sudo apt-get install -y "$deb"
+          dpkg-query -W spellwake > qualification/installed-package.txt
+          version="$(dpkg-deb -f "$deb" Version)"
+          chmod +x "$image"
+          ldd /usr/bin/spellwake-app > qualification/dependencies.txt
+          if grep -q 'not found' qualification/dependencies.txt; then exit 1; fi
+          failed=0
+          for format in deb appimage appimage-extracted; do
+            application="$image"
+            arguments=()
+            if [[ "$format" == deb ]]; then application=/usr/bin/spellwake-app; fi
+            if [[ "$format" == appimage-extracted ]]; then arguments+=(--extract-and-run); fi
+            if ! timeout 180s xvfb-run -a -s '-screen 0 1440x960x24' dbus-run-session -- \
+              python3 scripts/qualify-linux-package.py --application "$application" \
+                --output "qualification/$format" --version "$version" "${arguments[@]}"; then
+              failed=1
+            fi
+          done
+          exit "$failed"
+      - name: Preserve private qualification evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: spellwake-linux-qualification
+          retention-days: 7
+          path: |
+            qualification/provenance.json
+            qualification/packages.sha256
+            qualification/*.txt
+            qualification/*/*.png
+            qualification/*/result.json
+            qualification/*/webdriver.log

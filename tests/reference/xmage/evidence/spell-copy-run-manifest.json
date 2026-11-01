@@ -1,0 +1,59 @@
+{
+  "reference": "xmage",
+  "commit": "81c2f6d806dbec8eb79ad2a511cb686dff8361e7",
+  "test_class": "org.mage.test.reference.SpellCopyReferenceTest",
+  "tests": 6,
+  "failures": 0,
+  "errors": 0,
+  "skipped": 0,
+  "testcases": [
+    "copyRedirect",
+    "copyRetainMissingTarget",
+    "copyRetargetMissingTarget",
+    "copyTargetDeparts",
+    "counterCopy",
+    "counterOriginal"
+  ],
+  "files": [
+    {
+      "path": "work/reference-research/spell-copy-xmage/run.log",
+      "sha256": "26e390d52f144d8e81f22d8d16e83a875ef76679d28febc75e3f44a699fe53a6"
+    },
+    {
+      "path": "work/reference-research/spell-copy-xmage/TEST-org.mage.test.reference.SpellCopyReferenceTest.xml",
+      "sha256": "74390fa02eedcb9ecaae46d7f88dde3b68edb6ae14d251c0968a22b124a731c7"
+    },
+    {
+      "path": "work/reference-research/spell-copy-xmage/copy-redirect.json",
+      "sha256": "ca1acf8045cfe5e11bdcc2eadb56bd7a3248e46dfe77f5bfa8cc6a3fa827ec4b"
+    },
+    {
+      "path": "work/reference-research/spell-copy-xmage/copy-retain-missing-target.json",
+      "sha256": "365d55cd305b0f2cc6899344d8c0bcd95d546409f0a245f010d5d8d6e10c34f9"
+    },
+    {
+      "path": "work/reference-research/spell-copy-xmage/copy-retarget-missing-target.json",
+      "sha256": "20280a70d961be05fc6b44146c6d6e3424d7a5c4e53fa31e5d9a31b120406210"
+    },
+    {
+      "path": "work/reference-research/spell-copy-xmage/copy-target-departs.json",
+      "sha256": "a91c602821facafd875c3cbef2ffa54166424eca65df2130d36120b6906018d6"
+    },
+    {
+      "path": "work/reference-research/spell-copy-xmage/counter-copy.json",
+      "sha256": "d14c834b9338f12dfe71fb9ca3dc4335da2a56853fa1d6f8c195cd3cbd563a2b"
+    },
+    {
+      "path": "work/reference-research/spell-copy-xmage/counter-original.json",
+      "sha256": "c26ccbfed6239629399265c500458a8381c5236478ea83655876c65ea49ea97f"
+    },
+    {
+      "path": "tests/reference/xmage/SpellCopyReferenceTest.java",
+      "sha256": "13cc58c536c8612b85f44e3416f3f31bb37d1dec1792d51cf8fc1697e6e93073"
+    },
+    {
+      "path": "work/reference-research/mage/Mage.Tests/target/test-classes/org/mage/test/reference/SpellCopyReferenceTest.class",
+      "sha256": "f9798d539bf28945d7c6ce15ddf0d69faf694bed9c62978e83afd7a4ac520c32"
+    }
+  ]
+}

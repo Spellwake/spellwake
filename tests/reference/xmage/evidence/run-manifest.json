@@ -1,0 +1,39 @@
+{
+  "reference": "xmage",
+  "commit": "81c2f6d806dbec8eb79ad2a511cb686dff8361e7",
+  "test_class": "org.mage.test.reference.TargetBounceReferenceTest",
+  "tests": 2,
+  "failures": 0,
+  "errors": 0,
+  "skipped": 0,
+  "testcases": [
+    "boltTargetLeavesBeforeResolution",
+    "boltAloneKillsLion"
+  ],
+  "files": [
+    {
+      "path": "work/reference-research/target-bounce/run.log",
+      "sha256": "404a4cf856f5ed6783b2a6333ae7a52d077d05db8813f68899124bf28c660085"
+    },
+    {
+      "path": "work/reference-research/target-bounce/TEST-org.mage.test.reference.TargetBounceReferenceTest.xml",
+      "sha256": "9d9ffdc01f77e6e06ebf2f54fd1546167786a911c3aafd4db578e555fead9c3a"
+    },
+    {
+      "path": "work/reference-research/target-bounce/target-bounce.json",
+      "sha256": "3d1cc2296189011293477fb629ca3a11bb997ebb3de3e28ced932f6a2ae4e607"
+    },
+    {
+      "path": "work/reference-research/target-bounce/bolt-control.json",
+      "sha256": "4776d4d7cf23e949df234fd4a5f0f1aae8f42e4b837f4ac168e0a10c98da0e07"
+    },
+    {
+      "path": "tests/reference/xmage/TargetBounceReferenceTest.java",
+      "sha256": "1d33c2cd206fd9452f78b8a0af0f955f889524e22b56d129d89fd80130cd1bb2"
+    },
+    {
+      "path": "work/reference-research/mage/Mage.Tests/target/test-classes/org/mage/test/reference/TargetBounceReferenceTest.class",
+      "sha256": "f263e19f3d7ba7d0654937c80e2f54fa71c243616e3290319201fca0d51a4c06"
+    }
+  ]
+}

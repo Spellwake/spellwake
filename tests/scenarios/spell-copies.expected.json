@@ -1,0 +1,3019 @@
+{
+  "schema_version": 1,
+  "kind": "source-grounded-projection-expectations",
+  "review_status": "reviewed",
+  "rules": {
+    "edition": "2026-09-25",
+    "url": "https://media.wizards.com/2026/downloads/MagicCompRules%2020260925.txt",
+    "path": "work/rules/MagicCompRules-20260925.txt",
+    "sha256": "8d860e451f20f38865b725b42d82feb714c725373dd8f3b32b8652b3eeb070ca"
+  },
+  "oracle_snapshot_sha256": "c1c9dc28fa9a7a4bae61c02330ba5a1190205aab1a93361e590ff5d9a146af08",
+  "oracle_snapshot_path": "work/catalogue/oracle-cards-20261029210158.jsonl.gz",
+  "authorship": "AI-assisted expectations independently derived from pinned rule bytes and saved Oracle text; model confidence and agreement between engines are not evidence.",
+  "observation_disclosure": "The author derived and froze these projections without viewing any new spell-copy native, Forge or XMage outputs. The six scenario sequences and aliases were coordinated before projection authorship. Prior instant-interaction expectations were read for format only. Two independent source/implementation reviewers subsequently approved these fixed projections and native boundary groups; review metadata is a manual workflow record, not a formal proof.",
+  "scope": "Six fixed-world, single-target Lightning Bolt copies made by Twincast; 38 common stable stack/card checkpoints. This is restricted resolution/target/counter/cleanup evidence, not complete casting, mana payment, priority scheduling, whole-card, full-game or performance qualification.",
+  "common_projection_contract": {
+    "cards": "Exactly the six seeded physical card aliases; a spell copy has no physical card and appears only as its own stack entry while on the stack.",
+    "stack_order": "bottom first",
+    "target_aliases": "Aliases identify the originally captured battlefield or stack object incarnation, including stale references. A matching alias in a new zone does not mean target recapture.",
+    "stable_boundary": "Every common checkpoint follows applicable state-based actions. Copy graveyard entry and subsequent cessation are separately asserted only at native boundaries.",
+    "nonbattlefield_characteristics": "Power, toughness and marked damage are intentionally null outside the battlefield in this projection; this does not assert that a creature card has no printed characteristics in other zones."
+  },
+  "setup": {
+    "players": [
+      "A",
+      "B"
+    ],
+    "physical_cards": [
+      {
+        "alias": "bolt",
+        "card": "bolt",
+        "owner": "A",
+        "zone": "HAND"
+      },
+      {
+        "alias": "twincast",
+        "card": "twincast",
+        "owner": "B",
+        "zone": "HAND"
+      },
+      {
+        "alias": "counter",
+        "card": "counter",
+        "owner": "A",
+        "zone": "HAND"
+      },
+      {
+        "alias": "bounce",
+        "card": "bounce",
+        "owner": "A",
+        "zone": "HAND"
+      },
+      {
+        "alias": "lion1",
+        "card": "lion",
+        "owner": "B",
+        "zone": "BATTLEFIELD"
+      },
+      {
+        "alias": "lion2",
+        "card": "lion",
+        "owner": "A",
+        "zone": "BATTLEFIELD"
+      }
+    ],
+    "copy_alias": "bolt-copy",
+    "initial_marked_damage": "0",
+    "unmodeled_effects": "No prevention, replacement, regeneration, indestructibility, target restrictions, triggers or other effects change these vanilla interactions."
+  },
+  "cards": {
+    "bolt": {
+      "name": "Lightning Bolt",
+      "oracle_id": "4457ed35-7c10-48c8-9776-456485fdf070",
+      "mana_cost": "{R}",
+      "text": "Lightning Bolt deals 3 damage to any target."
+    },
+    "twincast": {
+      "name": "Twincast",
+      "oracle_id": "8f878efc-850f-43d2-a6fe-5ea8d1dd5afb",
+      "mana_cost": "{U}{U}",
+      "text": "Copy target instant or sorcery spell. You may choose new targets for the copy."
+    },
+    "counter": {
+      "name": "Counterspell",
+      "oracle_id": "cc187110-1148-4090-bbb8-e205694a39f5",
+      "mana_cost": "{U}{U}",
+      "text": "Counter target spell."
+    },
+    "bounce": {
+      "name": "Unsummon",
+      "oracle_id": "837182db-1bf3-4a2c-bd01-1af9d9873561",
+      "mana_cost": "{U}",
+      "text": "Return target creature to its owner's hand."
+    },
+    "lion": {
+      "name": "Silvercoat Lion",
+      "oracle_id": "e3c0b11e-7340-4e0a-98b7-91b38439d4f9",
+      "mana_cost": "{1}{W}",
+      "text": "",
+      "power": "2",
+      "toughness": "2"
+    }
+  },
+  "semantic_expectations": [
+    {
+      "rules": [
+        "112.2",
+        "707.10"
+      ],
+      "expectation": "The created copy is an independent spell with no associated physical card, owned and controlled by B even though A owns and controls the original. It is not cast and does not initiate or pay a new casting cost."
+    },
+    {
+      "rules": [
+        "707.2",
+        "707.10",
+        "707.10c"
+      ],
+      "expectation": "Copy the Bolt characteristics, executable three-damage instruction and original target choice. Only the optional target change expressly allowed by Twincast is made anew here. Modes, X, divisions and additional/alternative-cost decisions are general rule obligations beyond the exercised Bolt payload; resolution-time choices are not copied."
+    },
+    {
+      "rules": [
+        "400.7",
+        "608.2b",
+        "707.10c"
+      ],
+      "expectation": "An unchanged inherited target may already be illegal at copy creation. A changed target must be legal at copy creation. Never replace a stale target with the card's new incarnation or choose a default target."
+    },
+    {
+      "rules": [
+        "608.2n",
+        "701.6a",
+        "704.5e",
+        "707.10",
+        "707.10a"
+      ],
+      "expectation": "Original and copy leave the stack independently. Resolution, countering and all-targets-illegal removal move this instant spell copy to its owner's graveyard. It remains present off-stack until a distinct state-based action makes it cease to exist."
+    }
+  ],
+  "negative_contract_expectations": [
+    {
+      "rules": [
+        "707.10c"
+      ],
+      "input": "Retain the inherited lion1 battlefield incarnation after Unsummon has returned lion1 to hand.",
+      "expected": "Accept copy creation with that stale inherited target; later resolution fails its all-targets-illegal check."
+    },
+    {
+      "rules": [
+        "400.7",
+        "608.2b",
+        "707.10c"
+      ],
+      "input": "Choose the lion1 card now in hand as a changed creature target, or supply the departed battlefield incarnation as a changed target.",
+      "expected": "Reject the changed target atomically; do not create a copy, pay any copy casting cost, recapture the card or change the original."
+    },
+    {
+      "rules": [
+        "707.10"
+      ],
+      "input": "Counter or resolve either original or copy while the other remains on the stack.",
+      "expected": "The surviving spell retains its own stack identity, controller, executable payload and target choices."
+    }
+  ],
+  "cases": [
+    {
+      "scenario": "copy-redirect",
+      "decisions": {
+        "copy_targets": "change to lion2"
+      },
+      "rules": [
+        "112.2",
+        "117.4",
+        "117.5",
+        "120.3e",
+        "120.6",
+        "608.2n",
+        "704.5e",
+        "704.5g",
+        "707.10",
+        "707.10a",
+        "707.10c"
+      ],
+      "reasoning": "Twincast resolves and B chooses the still-legal lion2 as the copy target. The new Bolt spell copy is owned and controlled by B; the original remains A's spell targeting lion1. The copy resolves first, marks three damage on lion2 and goes to B's graveyard as the final part of resolution. State-based actions destroy lion2 and make the off-stack copy cease to exist before the next common checkpoint. The original then resolves against lion1; its physical card and the lethally damaged lion1 finish in their owners' graveyards.",
+      "observations": [
+        {
+          "checkpoint": "bolt-on-stack",
+          "stack_bottom_first": [
+            {
+              "alias": "bolt",
+              "kind": "card-spell",
+              "owner": "A",
+              "controller": "A",
+              "targets": [
+                "lion1"
+              ]
+            }
+          ],
+          "cards": [
+            {
+              "alias": "bolt",
+              "owner": "A",
+              "zone": "STACK",
+              "power": null,
+              "toughness": null,
+              "damage": null
+            },
+            {
+              "alias": "twincast",
+              "owner": "B",
+              "zone": "HAND",
+              "power": null,
+              "toughness": null,
+              "damage": null
+            },
+            {
+              "alias": "counter",
+              "owner": "A",
+              "zone": "HAND",
+              "power": null,
+              "toughness": null,
+              "damage": null
+            },
+            {
+              "alias": "bounce",
+              "owner": "A",
+              "zone": "HAND",
+              "power": null,
+              "toughness": null,
+              "damage": null
+            },
+            {
+              "alias": "lion1",
+              "owner": "B",
+              "zone": "BATTLEFIELD",
+              "power": "2",
+              "toughness": "2",
+              "damage": "0"
+            },
+            {
+              "alias": "lion2",
+              "owner": "A",
+              "zone": "BATTLEFIELD",
+              "power": "2",
+              "toughness": "2",
+              "damage": "0"
+            }
+          ]
+        },
+        {
+          "checkpoint": "twincast-on-stack",
+          "stack_bottom_first": [
+            {
+              "alias": "bolt",
+              "kind": "card-spell",
+              "owner": "A",
+              "controller": "A",
+              "targets": [
+                "lion1"
+              ]
+            },
+            {
+              "alias": "twincast",
+              "kind": "card-spell",
+              "owner": "B",
+              "controller": "B",
+              "targets": [
+                "bolt"
+              ]
+            }
+          ],
+          "cards": [
+            {
+              "alias": "bolt",
+              "owner": "A",
+              "zone": "STACK",
+              "power": null,
+              "toughness": null,
+              "damage": null
+            },
+            {
+              "alias": "twincast",
+              "owner": "B",
+              "zone": "STACK",
+              "power": null,
+              "toughness": null,
+              "damage": null
+            },
+            {
+              "alias": "counter",
+              "owner": "A",
+              "zone": "HAND",
+              "power": null,
+              "toughness": null,
+              "damage": null
+            },
+            {
+              "alias": "bounce",
+              "owner": "A",
+              "zone": "HAND",
+              "power": null,
+              "toughness": null,
+              "damage": null
+            },
+            {
+              "alias": "lion1",
+              "owner": "B",
+              "zone": "BATTLEFIELD",
+              "power": "2",
+              "toughness": "2",
+              "damage": "0"
+            },
+            {
+              "alias": "lion2",
+              "owner": "A",
+              "zone": "BATTLEFIELD",
+              "power": "2",
+              "toughness": "2",
+              "damage": "0"
+            }
+          ]
+        },
+        {
+          "checkpoint": "after-copy",
+          "stack_bottom_first": [
+            {
+              "alias": "bolt",
+              "kind": "card-spell",
+              "owner": "A",
+              "controller": "A",
+              "targets": [
+                "lion1"
+              ]
+            },
+            {
+              "alias": "bolt-copy",
+              "kind": "spell-copy",
+              "owner": "B",
+              "controller": "B",
+              "targets": [
+                "lion2"
+              ]
+            }
+          ],
+          "cards": [
+            {
+              "alias": "bolt",
+              "owner": "A",
+              "zone": "STACK",
+              "power": null,
+              "toughness": null,
+              "damage": null
+            },
+            {
+              "alias": "twincast",
+              "owner": "B",
+              "zone": "GRAVEYARD",
+              "power": null,
+              "toughness": null,
+              "damage": null
+            },
+            {
+              "alias": "counter",
+              "owner": "A",
+              "zone": "HAND",
+              "power": null,
+              "toughness": null,
+              "damage": null
+            },
+            {
+              "alias": "bounce",
+              "owner": "A",
+              "zone": "HAND",
+              "power": null,
+              "toughness": null,
+              "damage": null
+            },
+            {
+              "alias": "lion1",
+              "owner": "B",
+              "zone": "BATTLEFIELD",
+              "power": "2",
+              "toughness": "2",
+              "damage": "0"
+            },
+            {
+              "alias": "lion2",
+              "owner": "A",
+              "zone": "BATTLEFIELD",
+              "power": "2",
+              "toughness": "2",
+              "damage": "0"
+            }
+          ]
+        },
+        {
+          "checkpoint": "after-copy-resolution",
+          "stack_bottom_first": [
+            {
+              "alias": "bolt",
+              "kind": "card-spell",
+              "owner": "A",
+              "controller": "A",
+              "targets": [
+                "lion1"
+              ]
+            }
+          ],
+          "cards": [
+            {
+              "alias": "bolt",
+              "owner": "A",
+              "zone": "STACK",
+              "power": null,
+              "toughness": null,
+              "damage": null
+            },
+            {
+              "alias": "twincast",
+              "owner": "B",
+              "zone": "GRAVEYARD",
+              "power": null,
+              "toughness": null,
+              "damage": null
+            },
+            {
+              "alias": "counter",
+              "owner": "A",
+              "zone": "HAND",
+              "power": null,
+              "toughness": null,
+              "damage": null
+            },
+            {
+              "alias": "bounce",
+              "owner": "A",
+              "zone": "HAND",
+              "power": null,
+              "toughness": null,
+              "damage": null
+            },
+            {
+              "alias": "lion1",
+              "owner": "B",
+              "zone": "BATTLEFIELD",
+              "power": "2",
+              "toughness": "2",
+              "damage": "0"
+            },
+            {
+              "alias": "lion2",
+              "owner": "A",
+              "zone": "GRAVEYARD",
+              "power": null,
+              "toughness": null,
+              "damage": null
+            }
+          ]
+        },
+        {
+          "checkpoint": "finished",
+          "stack_bottom_first": [],
+          "cards": [
+            {
+              "alias": "bolt",
+              "owner": "A",
+              "zone": "GRAVEYARD",
+              "power": null,
+              "toughness": null,
+              "damage": null
+            },
+            {
+              "alias": "twincast",
+              "owner": "B",
+              "zone": "GRAVEYARD",
+              "power": null,
+              "toughness": null,
+              "damage": null
+            },
+            {
+              "alias": "counter",
+              "owner": "A",
+              "zone": "HAND",
+              "power": null,
+              "toughness": null,
+              "damage": null
+            },
+            {
+              "alias": "bounce",
+              "owner": "A",
+              "zone": "HAND",
+              "power": null,
+              "toughness": null,
+              "damage": null
+            },
+            {
+              "alias": "lion1",
+              "owner": "B",
+              "zone": "GRAVEYARD",
+              "power": null,
+              "toughness": null,
+              "damage": null
+            },
+            {
+              "alias": "lion2",
+              "owner": "A",
+              "zone": "GRAVEYARD",
+              "power": null,
+              "toughness": null,
+              "damage": null
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "scenario": "counter-original",
+      "decisions": {
+        "copy_targets": "change to lion2",
+        "counter_target": "bolt"
+      },
+      "rules": [
+        "112.2",
+        "117.4",
+        "117.5",
+        "120.3e",
+        "120.6",
+        "608.2n",
+        "701.6a",
+        "704.5e",
+        "704.5g",
+        "707.10",
+        "707.10a",
+        "707.10c"
+      ],
+      "reasoning": "After B creates a copy targeting lion2, A's Counterspell targets only the original Bolt. Counterspell removes the original without any original Bolt effect, so lion1 remains undamaged. This does not remove or alter the already created independent copy. The copy resolves against lion2 and then ceases to exist at the subsequent state-based checks; lion2 is destroyed for lethal damage. The physical original Bolt and Counterspell are in A's graveyard, and Twincast is in B's graveyard.",
+      "observations": [
+        {
+          "checkpoint": "bolt-on-stack",
+          "stack_bottom_first": [
+            {
+              "alias": "bolt",
+              "kind": "card-spell",
+              "owner": "A",
+              "controller": "A",
+              "targets": [
+                "lion1"
+              ]
+            }
+          ],
+          "cards": [
+            {
+              "alias": "bolt",
+              "owner": "A",
+              "zone": "STACK",
+              "power": null,
+              "toughness": null,
+              "damage": null
+            },
+            {
+              "alias": "twincast",
+              "owner": "B",
+              "zone": "HAND",
+              "power": null,
+              "toughness": null,
+              "damage": null
+            },
+            {
+              "alias": "counter",
+              "owner": "A",
+              "zone": "HAND",
+              "power": null,
+              "toughness": null,
+              "damage": null
+            },
+            {
+              "alias": "bounce",
+              "owner": "A",
+              "zone": "HAND",
+              "power": null,
+              "toughness": null,
+              "damage": null
+            },
+            {
+              "alias": "lion1",
+              "owner": "B",
+              "zone": "BATTLEFIELD",
+              "power": "2",
+              "toughness": "2",
+              "damage": "0"
+            },
+            {
+              "alias": "lion2",
+              "owner": "A",
+              "zone": "BATTLEFIELD",
+              "power": "2",
+              "toughness": "2",
+              "damage": "0"
+            }
+          ]
+        },
+        {
+          "checkpoint": "twincast-on-stack",
+          "stack_bottom_first": [
+            {
+              "alias": "bolt",
+              "kind": "card-spell",
+              "owner": "A",
+              "controller": "A",
+              "targets": [
+                "lion1"
+              ]
+            },
+            {
+              "alias": "twincast",
+              "kind": "card-spell",
+              "owner": "B",
+              "controller": "B",
+              "targets": [
+                "bolt"
+              ]
+            }
+          ],
+          "cards": [
+            {
+              "alias": "bolt",
+              "owner": "A",
+              "zone": "STACK",
+              "power": null,
+              "toughness": null,
+              "damage": null
+            },
+            {
+              "alias": "twincast",
+              "owner": "B",
+              "zone": "STACK",
+              "power": null,
+              "toughness": null,
+              "damage": null
+            },
+            {
+              "alias": "counter",
+              "owner": "A",
+              "zone": "HAND",
+              "power": null,
+              "toughness": null,
+              "damage": null
+            },
+            {
+              "alias": "bounce",
+              "owner": "A",
+              "zone": "HAND",
+              "power": null,
+              "toughness": null,
+              "damage": null
+            },
+            {
+              "alias": "lion1",
+              "owner": "B",
+              "zone": "BATTLEFIELD",
+              "power": "2",
+              "toughness": "2",
+              "damage": "0"
+            },
+            {
+              "alias": "lion2",
+              "owner": "A",
+              "zone": "BATTLEFIELD",
+              "power": "2",
+              "toughness": "2",
+              "damage": "0"
+            }
+          ]
+        },
+        {
+          "checkpoint": "after-copy",
+          "stack_bottom_first": [
+            {
+              "alias": "bolt",
+              "kind": "card-spell",
+              "owner": "A",
+              "controller": "A",
+              "targets": [
+                "lion1"
+              ]
+            },
+            {
+              "alias": "bolt-copy",
+              "kind": "spell-copy",
+              "owner": "B",
+              "controller": "B",
+              "targets": [
+                "lion2"
+              ]
+            }
+          ],
+          "cards": [
+            {
+              "alias": "bolt",
+              "owner": "A",
+              "zone": "STACK",
+              "power": null,
+              "toughness": null,
+              "damage": null
+            },
+            {
+              "alias": "twincast",
+              "owner": "B",
+              "zone": "GRAVEYARD",
+              "power": null,
+              "toughness": null,
+              "damage": null
+            },
+            {
+              "alias": "counter",
+              "owner": "A",
+              "zone": "HAND",
+              "power": null,
+              "toughness": null,
+              "damage": null
+            },
+            {
+              "alias": "bounce",
+              "owner": "A",
+              "zone": "HAND",
+              "power": null,
+              "toughness": null,
+              "damage": null
+            },
+            {
+              "alias": "lion1",
+              "owner": "B",
+              "zone": "BATTLEFIELD",
+              "power": "2",
+              "toughness": "2",
+              "damage": "0"
+            },
+            {
+              "alias": "lion2",
+              "owner": "A",
+              "zone": "BATTLEFIELD",
+              "power": "2",
+              "toughness": "2",
+              "damage": "0"
+            }
+          ]
+        },
+        {
+          "checkpoint": "counter-on-stack",
+          "stack_bottom_first": [
+            {
+              "alias": "bolt",
+              "kind": "card-spell",
+              "owner": "A",
+              "controller": "A",
+              "targets": [
+                "lion1"
+              ]
+            },
+            {
+              "alias": "bolt-copy",
+              "kind": "spell-copy",
+              "owner": "B",
+              "controller": "B",
+              "targets": [
+                "lion2"
+              ]
+            },
+            {
+              "alias": "counter",
+              "kind": "card-spell",
+              "owner": "A",
+              "controller": "A",
+              "targets": [
+                "bolt"
+              ]
+            }
+          ],
+          "cards": [
+            {
+              "alias": "bolt",
+              "owner": "A",
+              "zone": "STACK",
+              "power": null,
+              "toughness": null,
+              "damage": null
+            },
+            {
+              "alias": "twincast",
+              "owner": "B",
+              "zone": "GRAVEYARD",
+              "power": null,
+              "toughness": null,
+              "damage": null
+            },
+            {
+              "alias": "counter",
+              "owner": "A",
+              "zone": "STACK",
+              "power": null,
+              "toughness": null,
+              "damage": null
+            },
+            {
+              "alias": "bounce",
+              "owner": "A",
+              "zone": "HAND",
+              "power": null,
+              "toughness": null,
+              "damage": null
+            },
+            {
+              "alias": "lion1",
+              "owner": "B",
+              "zone": "BATTLEFIELD",
+              "power": "2",
+              "toughness": "2",
+              "damage": "0"
+            },
+            {
+              "alias": "lion2",
+              "owner": "A",
+              "zone": "BATTLEFIELD",
+              "power": "2",
+              "toughness": "2",
+              "damage": "0"
+            }
+          ]
+        },
+        {
+          "checkpoint": "after-counter",
+          "stack_bottom_first": [
+            {
+              "alias": "bolt-copy",
+              "kind": "spell-copy",
+              "owner": "B",
+              "controller": "B",
+              "targets": [
+                "lion2"
+              ]
+            }
+          ],
+          "cards": [
+            {
+              "alias": "bolt",
+              "owner": "A",
+              "zone": "GRAVEYARD",
+              "power": null,
+              "toughness": null,
+              "damage": null
+            },
+            {
+              "alias": "twincast",
+              "owner": "B",
+              "zone": "GRAVEYARD",
+              "power": null,
+              "toughness": null,
+              "damage": null
+            },
+            {
+              "alias": "counter",
+              "owner": "A",
+              "zone": "GRAVEYARD",
+              "power": null,
+              "toughness": null,
+              "damage": null
+            },
+            {
+              "alias": "bounce",
+              "owner": "A",
+              "zone": "HAND",
+              "power": null,
+              "toughness": null,
+              "damage": null
+            },
+            {
+              "alias": "lion1",
+              "owner": "B",
+              "zone": "BATTLEFIELD",
+              "power": "2",
+              "toughness": "2",
+              "damage": "0"
+            },
+            {
+              "alias": "lion2",
+              "owner": "A",
+              "zone": "BATTLEFIELD",
+              "power": "2",
+              "toughness": "2",
+              "damage": "0"
+            }
+          ]
+        },
+        {
+          "checkpoint": "finished",
+          "stack_bottom_first": [],
+          "cards": [
+            {
+              "alias": "bolt",
+              "owner": "A",
+              "zone": "GRAVEYARD",
+              "power": null,
+              "toughness": null,
+              "damage": null
+            },
+            {
+              "alias": "twincast",
+              "owner": "B",
+              "zone": "GRAVEYARD",
+              "power": null,
+              "toughness": null,
+              "damage": null
+            },
+            {
+              "alias": "counter",
+              "owner": "A",
+              "zone": "GRAVEYARD",
+              "power": null,
+              "toughness": null,
+              "damage": null
+            },
+            {
+              "alias": "bounce",
+              "owner": "A",
+              "zone": "HAND",
+              "power": null,
+              "toughness": null,
+              "damage": null
+            },
+            {
+              "alias": "lion1",
+              "owner": "B",
+              "zone": "BATTLEFIELD",
+              "power": "2",
+              "toughness": "2",
+              "damage": "0"
+            },
+            {
+              "alias": "lion2",
+              "owner": "A",
+              "zone": "GRAVEYARD",
+              "power": null,
+              "toughness": null,
+              "damage": null
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "scenario": "counter-copy",
+      "decisions": {
+        "copy_targets": "change to lion2",
+        "counter_target": "bolt-copy"
+      },
+      "rules": [
+        "112.2",
+        "117.4",
+        "117.5",
+        "120.3e",
+        "120.6",
+        "608.2n",
+        "701.6a",
+        "704.5e",
+        "704.5g",
+        "707.10",
+        "707.10a",
+        "707.10c"
+      ],
+      "reasoning": "Counterspell may target the copy because a copy of a spell is itself a spell. It removes only that copy without any copy effect. The copy goes to its owner B's graveyard and ceases to exist as a later state-based action. The original Bolt remains on the stack and resolves against lion1. Thus lion1 dies, lion2 stays on the battlefield with no damage, and the two physical A spells finish in A's graveyard.",
+      "observations": [
+        {
+          "checkpoint": "bolt-on-stack",
+          "stack_bottom_first": [
+            {
+              "alias": "bolt",
+              "kind": "card-spell",
+              "owner": "A",
+              "controller": "A",
+              "targets": [
+                "lion1"
+              ]
+            }
+          ],
+          "cards": [
+            {
+              "alias": "bolt",
+              "owner": "A",
+              "zone": "STACK",
+              "power": null,
+              "toughness": null,
+              "damage": null
+            },
+            {
+              "alias": "twincast",
+              "owner": "B",
+              "zone": "HAND",
+              "power": null,
+              "toughness": null,
+              "damage": null
+            },
+            {
+              "alias": "counter",
+              "owner": "A",
+              "zone": "HAND",
+              "power": null,
+              "toughness": null,
+              "damage": null
+            },
+            {
+              "alias": "bounce",
+              "owner": "A",
+              "zone": "HAND",
+              "power": null,
+              "toughness": null,
+              "damage": null
+            },
+            {
+              "alias": "lion1",
+              "owner": "B",
+              "zone": "BATTLEFIELD",
+              "power": "2",
+              "toughness": "2",
+              "damage": "0"
+            },
+            {
+              "alias": "lion2",
+              "owner": "A",
+              "zone": "BATTLEFIELD",
+              "power": "2",
+              "toughness": "2",
+              "damage": "0"
+            }
+          ]
+        },
+        {
+          "checkpoint": "twincast-on-stack",
+          "stack_bottom_first": [
+            {
+              "alias": "bolt",
+              "kind": "card-spell",
+              "owner": "A",
+              "controller": "A",
+              "targets": [
+                "lion1"
+              ]
+            },
+            {
+              "alias": "twincast",
+              "kind": "card-spell",
+              "owner": "B",
+              "controller": "B",
+              "targets": [
+                "bolt"
+              ]
+            }
+          ],
+          "cards": [
+            {
+              "alias": "bolt",
+              "owner": "A",
+              "zone": "STACK",
+              "power": null,
+              "toughness": null,
+              "damage": null
+            },
+            {
+              "alias": "twincast",
+              "owner": "B",
+              "zone": "STACK",
+              "power": null,
+              "toughness": null,
+              "damage": null
+            },
+            {
+              "alias": "counter",
+              "owner": "A",
+              "zone": "HAND",
+              "power": null,
+              "toughness": null,
+              "damage": null
+            },
+            {
+              "alias": "bounce",
+              "owner": "A",
+              "zone": "HAND",
+              "power": null,
+              "toughness": null,
+              "damage": null
+            },
+            {
+              "alias": "lion1",
+              "owner": "B",
+              "zone": "BATTLEFIELD",
+              "power": "2",
+              "toughness": "2",
+              "damage": "0"
+            },
+            {
+              "alias": "lion2",
+              "owner": "A",
+              "zone": "BATTLEFIELD",
+              "power": "2",
+              "toughness": "2",
+              "damage": "0"
+            }
+          ]
+        },
+        {
+          "checkpoint": "after-copy",
+          "stack_bottom_first": [
+            {
+              "alias": "bolt",
+              "kind": "card-spell",
+              "owner": "A",
+              "controller": "A",
+              "targets": [
+                "lion1"
+              ]
+            },
+            {
+              "alias": "bolt-copy",
+              "kind": "spell-copy",
+              "owner": "B",
+              "controller": "B",
+              "targets": [
+                "lion2"
+              ]
+            }
+          ],
+          "cards": [
+            {
+              "alias": "bolt",
+              "owner": "A",
+              "zone": "STACK",
+              "power": null,
+              "toughness": null,
+              "damage": null
+            },
+            {
+              "alias": "twincast",
+              "owner": "B",
+              "zone": "GRAVEYARD",
+              "power": null,
+              "toughness": null,
+              "damage": null
+            },
+            {
+              "alias": "counter",
+              "owner": "A",
+              "zone": "HAND",
+              "power": null,
+              "toughness": null,
+              "damage": null
+            },
+            {
+              "alias": "bounce",
+              "owner": "A",
+              "zone": "HAND",
+              "power": null,
+              "toughness": null,
+              "damage": null
+            },
+            {
+              "alias": "lion1",
+              "owner": "B",
+              "zone": "BATTLEFIELD",
+              "power": "2",
+              "toughness": "2",
+              "damage": "0"
+            },
+            {
+              "alias": "lion2",
+              "owner": "A",
+              "zone": "BATTLEFIELD",
+              "power": "2",
+              "toughness": "2",
+              "damage": "0"
+            }
+          ]
+        },
+        {
+          "checkpoint": "counter-on-stack",
+          "stack_bottom_first": [
+            {
+              "alias": "bolt",
+              "kind": "card-spell",
+              "owner": "A",
+              "controller": "A",
+              "targets": [
+                "lion1"
+              ]
+            },
+            {
+              "alias": "bolt-copy",
+              "kind": "spell-copy",
+              "owner": "B",
+              "controller": "B",
+              "targets": [
+                "lion2"
+              ]
+            },
+            {
+              "alias": "counter",
+              "kind": "card-spell",
+              "owner": "A",
+              "controller": "A",
+              "targets": [
+                "bolt-copy"
+              ]
+            }
+          ],
+          "cards": [
+            {
+              "alias": "bolt",
+              "owner": "A",
+              "zone": "STACK",
+              "power": null,
+              "toughness": null,
+              "damage": null
+            },
+            {
+              "alias": "twincast",
+              "owner": "B",
+              "zone": "GRAVEYARD",
+              "power": null,
+              "toughness": null,
+              "damage": null
+            },
+            {
+              "alias": "counter",
+              "owner": "A",
+              "zone": "STACK",
+              "power": null,
+              "toughness": null,
+              "damage": null
+            },
+            {
+              "alias": "bounce",
+              "owner": "A",
+              "zone": "HAND",
+              "power": null,
+              "toughness": null,
+              "damage": null
+            },
+            {
+              "alias": "lion1",
+              "owner": "B",
+              "zone": "BATTLEFIELD",
+              "power": "2",
+              "toughness": "2",
+              "damage": "0"
+            },
+            {
+              "alias": "lion2",
+              "owner": "A",
+              "zone": "BATTLEFIELD",
+              "power": "2",
+              "toughness": "2",
+              "damage": "0"
+            }
+          ]
+        },
+        {
+          "checkpoint": "after-counter",
+          "stack_bottom_first": [
+            {
+              "alias": "bolt",
+              "kind": "card-spell",
+              "owner": "A",
+              "controller": "A",
+              "targets": [
+                "lion1"
+              ]
+            }
+          ],
+          "cards": [
+            {
+              "alias": "bolt",
+              "owner": "A",
+              "zone": "STACK",
+              "power": null,
+              "toughness": null,
+              "damage": null
+            },
+            {
+              "alias": "twincast",
+              "owner": "B",
+              "zone": "GRAVEYARD",
+              "power": null,
+              "toughness": null,
+              "damage": null
+            },
+            {
+              "alias": "counter",
+              "owner": "A",
+              "zone": "GRAVEYARD",
+              "power": null,
+              "toughness": null,
+              "damage": null
+            },
+            {
+              "alias": "bounce",
+              "owner": "A",
+              "zone": "HAND",
+              "power": null,
+              "toughness": null,
+              "damage": null
+            },
+            {
+              "alias": "lion1",
+              "owner": "B",
+              "zone": "BATTLEFIELD",
+              "power": "2",
+              "toughness": "2",
+              "damage": "0"
+            },
+            {
+              "alias": "lion2",
+              "owner": "A",
+              "zone": "BATTLEFIELD",
+              "power": "2",
+              "toughness": "2",
+              "damage": "0"
+            }
+          ]
+        },
+        {
+          "checkpoint": "finished",
+          "stack_bottom_first": [],
+          "cards": [
+            {
+              "alias": "bolt",
+              "owner": "A",
+              "zone": "GRAVEYARD",
+              "power": null,
+              "toughness": null,
+              "damage": null
+            },
+            {
+              "alias": "twincast",
+              "owner": "B",
+              "zone": "GRAVEYARD",
+              "power": null,
+              "toughness": null,
+              "damage": null
+            },
+            {
+              "alias": "counter",
+              "owner": "A",
+              "zone": "GRAVEYARD",
+              "power": null,
+              "toughness": null,
+              "damage": null
+            },
+            {
+              "alias": "bounce",
+              "owner": "A",
+              "zone": "HAND",
+              "power": null,
+              "toughness": null,
+              "damage": null
+            },
+            {
+              "alias": "lion1",
+              "owner": "B",
+              "zone": "GRAVEYARD",
+              "power": null,
+              "toughness": null,
+              "damage": null
+            },
+            {
+              "alias": "lion2",
+              "owner": "A",
+              "zone": "BATTLEFIELD",
+              "power": "2",
+              "toughness": "2",
+              "damage": "0"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "scenario": "copy-retain-missing-target",
+      "decisions": {
+        "bounce_target": "lion1 before Twincast resolves",
+        "copy_targets": "retain original lion1 battlefield incarnation"
+      },
+      "rules": [
+        "112.2",
+        "117.4",
+        "117.5",
+        "400.7",
+        "608.2b",
+        "608.2n",
+        "704.5e",
+        "707.10",
+        "707.10a",
+        "707.10c"
+      ],
+      "reasoning": "Unsummon resolves above Twincast and returns lion1 to B's hand. Twincast still legally targets the Bolt spell on the stack. CR 707.10c permits B to leave the inherited lion1 target unchanged even though its battlefield incarnation is already gone. The copy is created rather than rejected, and it retains that old target incarnation rather than following lion1 into hand. On its resolution check the copy's only target is illegal, so it does not resolve, goes to B's graveyard, and later ceases to exist. The original also does not resolve against its illegal target. Neither Bolt damages either Lion.",
+      "observations": [
+        {
+          "checkpoint": "bolt-on-stack",
+          "stack_bottom_first": [
+            {
+              "alias": "bolt",
+              "kind": "card-spell",
+              "owner": "A",
+              "controller": "A",
+              "targets": [
+                "lion1"
+              ]
+            }
+          ],
+          "cards": [
+            {
+              "alias": "bolt",
+              "owner": "A",
+              "zone": "STACK",
+              "power": null,
+              "toughness": null,
+              "damage": null
+            },
+            {
+              "alias": "twincast",
+              "owner": "B",
+              "zone": "HAND",
+              "power": null,
+              "toughness": null,
+              "damage": null
+            },
+            {
+              "alias": "counter",
+              "owner": "A",
+              "zone": "HAND",
+              "power": null,
+              "toughness": null,
+              "damage": null
+            },
+            {
+              "alias": "bounce",
+              "owner": "A",
+              "zone": "HAND",
+              "power": null,
+              "toughness": null,
+              "damage": null
+            },
+            {
+              "alias": "lion1",
+              "owner": "B",
+              "zone": "BATTLEFIELD",
+              "power": "2",
+              "toughness": "2",
+              "damage": "0"
+            },
+            {
+              "alias": "lion2",
+              "owner": "A",
+              "zone": "BATTLEFIELD",
+              "power": "2",
+              "toughness": "2",
+              "damage": "0"
+            }
+          ]
+        },
+        {
+          "checkpoint": "twincast-on-stack",
+          "stack_bottom_first": [
+            {
+              "alias": "bolt",
+              "kind": "card-spell",
+              "owner": "A",
+              "controller": "A",
+              "targets": [
+                "lion1"
+              ]
+            },
+            {
+              "alias": "twincast",
+              "kind": "card-spell",
+              "owner": "B",
+              "controller": "B",
+              "targets": [
+                "bolt"
+              ]
+            }
+          ],
+          "cards": [
+            {
+              "alias": "bolt",
+              "owner": "A",
+              "zone": "STACK",
+              "power": null,
+              "toughness": null,
+              "damage": null
+            },
+            {
+              "alias": "twincast",
+              "owner": "B",
+              "zone": "STACK",
+              "power": null,
+              "toughness": null,
+              "damage": null
+            },
+            {
+              "alias": "counter",
+              "owner": "A",
+              "zone": "HAND",
+              "power": null,
+              "toughness": null,
+              "damage": null
+            },
+            {
+              "alias": "bounce",
+              "owner": "A",
+              "zone": "HAND",
+              "power": null,
+              "toughness": null,
+              "damage": null
+            },
+            {
+              "alias": "lion1",
+              "owner": "B",
+              "zone": "BATTLEFIELD",
+              "power": "2",
+              "toughness": "2",
+              "damage": "0"
+            },
+            {
+              "alias": "lion2",
+              "owner": "A",
+              "zone": "BATTLEFIELD",
+              "power": "2",
+              "toughness": "2",
+              "damage": "0"
+            }
+          ]
+        },
+        {
+          "checkpoint": "bounce-on-stack",
+          "stack_bottom_first": [
+            {
+              "alias": "bolt",
+              "kind": "card-spell",
+              "owner": "A",
+              "controller": "A",
+              "targets": [
+                "lion1"
+              ]
+            },
+            {
+              "alias": "twincast",
+              "kind": "card-spell",
+              "owner": "B",
+              "controller": "B",
+              "targets": [
+                "bolt"
+              ]
+            },
+            {
+              "alias": "bounce",
+              "kind": "card-spell",
+              "owner": "A",
+              "controller": "A",
+              "targets": [
+                "lion1"
+              ]
+            }
+          ],
+          "cards": [
+            {
+              "alias": "bolt",
+              "owner": "A",
+              "zone": "STACK",
+              "power": null,
+              "toughness": null,
+              "damage": null
+            },
+            {
+              "alias": "twincast",
+              "owner": "B",
+              "zone": "STACK",
+              "power": null,
+              "toughness": null,
+              "damage": null
+            },
+            {
+              "alias": "counter",
+              "owner": "A",
+              "zone": "HAND",
+              "power": null,
+              "toughness": null,
+              "damage": null
+            },
+            {
+              "alias": "bounce",
+              "owner": "A",
+              "zone": "STACK",
+              "power": null,
+              "toughness": null,
+              "damage": null
+            },
+            {
+              "alias": "lion1",
+              "owner": "B",
+              "zone": "BATTLEFIELD",
+              "power": "2",
+              "toughness": "2",
+              "damage": "0"
+            },
+            {
+              "alias": "lion2",
+              "owner": "A",
+              "zone": "BATTLEFIELD",
+              "power": "2",
+              "toughness": "2",
+              "damage": "0"
+            }
+          ]
+        },
+        {
+          "checkpoint": "after-bounce",
+          "stack_bottom_first": [
+            {
+              "alias": "bolt",
+              "kind": "card-spell",
+              "owner": "A",
+              "controller": "A",
+              "targets": [
+                "lion1"
+              ]
+            },
+            {
+              "alias": "twincast",
+              "kind": "card-spell",
+              "owner": "B",
+              "controller": "B",
+              "targets": [
+                "bolt"
+              ]
+            }
+          ],
+          "cards": [
+            {
+              "alias": "bolt",
+              "owner": "A",
+              "zone": "STACK",
+              "power": null,
+              "toughness": null,
+              "damage": null
+            },
+            {
+              "alias": "twincast",
+              "owner": "B",
+              "zone": "STACK",
+              "power": null,
+              "toughness": null,
+              "damage": null
+            },
+            {
+              "alias": "counter",
+              "owner": "A",
+              "zone": "HAND",
+              "power": null,
+              "toughness": null,
+              "damage": null
+            },
+            {
+              "alias": "bounce",
+              "owner": "A",
+              "zone": "GRAVEYARD",
+              "power": null,
+              "toughness": null,
+              "damage": null
+            },
+            {
+              "alias": "lion1",
+              "owner": "B",
+              "zone": "HAND",
+              "power": null,
+              "toughness": null,
+              "damage": null
+            },
+            {
+              "alias": "lion2",
+              "owner": "A",
+              "zone": "BATTLEFIELD",
+              "power": "2",
+              "toughness": "2",
+              "damage": "0"
+            }
+          ]
+        },
+        {
+          "checkpoint": "after-copy",
+          "stack_bottom_first": [
+            {
+              "alias": "bolt",
+              "kind": "card-spell",
+              "owner": "A",
+              "controller": "A",
+              "targets": [
+                "lion1"
+              ]
+            },
+            {
+              "alias": "bolt-copy",
+              "kind": "spell-copy",
+              "owner": "B",
+              "controller": "B",
+              "targets": [
+                "lion1"
+              ]
+            }
+          ],
+          "cards": [
+            {
+              "alias": "bolt",
+              "owner": "A",
+              "zone": "STACK",
+              "power": null,
+              "toughness": null,
+              "damage": null
+            },
+            {
+              "alias": "twincast",
+              "owner": "B",
+              "zone": "GRAVEYARD",
+              "power": null,
+              "toughness": null,
+              "damage": null
+            },
+            {
+              "alias": "counter",
+              "owner": "A",
+              "zone": "HAND",
+              "power": null,
+              "toughness": null,
+              "damage": null
+            },
+            {
+              "alias": "bounce",
+              "owner": "A",
+              "zone": "GRAVEYARD",
+              "power": null,
+              "toughness": null,
+              "damage": null
+            },
+            {
+              "alias": "lion1",
+              "owner": "B",
+              "zone": "HAND",
+              "power": null,
+              "toughness": null,
+              "damage": null
+            },
+            {
+              "alias": "lion2",
+              "owner": "A",
+              "zone": "BATTLEFIELD",
+              "power": "2",
+              "toughness": "2",
+              "damage": "0"
+            }
+          ]
+        },
+        {
+          "checkpoint": "after-copy-resolution",
+          "stack_bottom_first": [
+            {
+              "alias": "bolt",
+              "kind": "card-spell",
+              "owner": "A",
+              "controller": "A",
+              "targets": [
+                "lion1"
+              ]
+            }
+          ],
+          "cards": [
+            {
+              "alias": "bolt",
+              "owner": "A",
+              "zone": "STACK",
+              "power": null,
+              "toughness": null,
+              "damage": null
+            },
+            {
+              "alias": "twincast",
+              "owner": "B",
+              "zone": "GRAVEYARD",
+              "power": null,
+              "toughness": null,
+              "damage": null
+            },
+            {
+              "alias": "counter",
+              "owner": "A",
+              "zone": "HAND",
+              "power": null,
+              "toughness": null,
+              "damage": null
+            },
+            {
+              "alias": "bounce",
+              "owner": "A",
+              "zone": "GRAVEYARD",
+              "power": null,
+              "toughness": null,
+              "damage": null
+            },
+            {
+              "alias": "lion1",
+              "owner": "B",
+              "zone": "HAND",
+              "power": null,
+              "toughness": null,
+              "damage": null
+            },
+            {
+              "alias": "lion2",
+              "owner": "A",
+              "zone": "BATTLEFIELD",
+              "power": "2",
+              "toughness": "2",
+              "damage": "0"
+            }
+          ]
+        },
+        {
+          "checkpoint": "finished",
+          "stack_bottom_first": [],
+          "cards": [
+            {
+              "alias": "bolt",
+              "owner": "A",
+              "zone": "GRAVEYARD",
+              "power": null,
+              "toughness": null,
+              "damage": null
+            },
+            {
+              "alias": "twincast",
+              "owner": "B",
+              "zone": "GRAVEYARD",
+              "power": null,
+              "toughness": null,
+              "damage": null
+            },
+            {
+              "alias": "counter",
+              "owner": "A",
+              "zone": "HAND",
+              "power": null,
+              "toughness": null,
+              "damage": null
+            },
+            {
+              "alias": "bounce",
+              "owner": "A",
+              "zone": "GRAVEYARD",
+              "power": null,
+              "toughness": null,
+              "damage": null
+            },
+            {
+              "alias": "lion1",
+              "owner": "B",
+              "zone": "HAND",
+              "power": null,
+              "toughness": null,
+              "damage": null
+            },
+            {
+              "alias": "lion2",
+              "owner": "A",
+              "zone": "BATTLEFIELD",
+              "power": "2",
+              "toughness": "2",
+              "damage": "0"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "scenario": "copy-retarget-missing-target",
+      "decisions": {
+        "bounce_target": "lion1 before Twincast resolves",
+        "copy_targets": "change to legal lion2 battlefield incarnation"
+      },
+      "rules": [
+        "112.2",
+        "117.4",
+        "117.5",
+        "120.3e",
+        "120.6",
+        "400.7",
+        "608.2b",
+        "608.2n",
+        "704.5e",
+        "704.5g",
+        "707.10",
+        "707.10a",
+        "707.10c"
+      ],
+      "reasoning": "Unsummon removes lion1 before Twincast resolves, but Bolt itself remains a legal Twincast target. The copy may be created despite the original's now-illegal creature target. B uses the permission to change that target to the still-legal lion2. The copy resolves, kills lion2 through lethal-damage state-based actions, and ceases to exist after leaving the stack. The original retains the old lion1 incarnation and does not resolve. lion1 stays in B's hand; no target is silently captured again.",
+      "observations": [
+        {
+          "checkpoint": "bolt-on-stack",
+          "stack_bottom_first": [
+            {
+              "alias": "bolt",
+              "kind": "card-spell",
+              "owner": "A",
+              "controller": "A",
+              "targets": [
+                "lion1"
+              ]
+            }
+          ],
+          "cards": [
+            {
+              "alias": "bolt",
+              "owner": "A",
+              "zone": "STACK",
+              "power": null,
+              "toughness": null,
+              "damage": null
+            },
+            {
+              "alias": "twincast",
+              "owner": "B",
+              "zone": "HAND",
+              "power": null,
+              "toughness": null,
+              "damage": null
+            },
+            {
+              "alias": "counter",
+              "owner": "A",
+              "zone": "HAND",
+              "power": null,
+              "toughness": null,
+              "damage": null
+            },
+            {
+              "alias": "bounce",
+              "owner": "A",
+              "zone": "HAND",
+              "power": null,
+              "toughness": null,
+              "damage": null
+            },
+            {
+              "alias": "lion1",
+              "owner": "B",
+              "zone": "BATTLEFIELD",
+              "power": "2",
+              "toughness": "2",
+              "damage": "0"
+            },
+            {
+              "alias": "lion2",
+              "owner": "A",
+              "zone": "BATTLEFIELD",
+              "power": "2",
+              "toughness": "2",
+              "damage": "0"
+            }
+          ]
+        },
+        {
+          "checkpoint": "twincast-on-stack",
+          "stack_bottom_first": [
+            {
+              "alias": "bolt",
+              "kind": "card-spell",
+              "owner": "A",
+              "controller": "A",
+              "targets": [
+                "lion1"
+              ]
+            },
+            {
+              "alias": "twincast",
+              "kind": "card-spell",
+              "owner": "B",
+              "controller": "B",
+              "targets": [
+                "bolt"
+              ]
+            }
+          ],
+          "cards": [
+            {
+              "alias": "bolt",
+              "owner": "A",
+              "zone": "STACK",
+              "power": null,
+              "toughness": null,
+              "damage": null
+            },
+            {
+              "alias": "twincast",
+              "owner": "B",
+              "zone": "STACK",
+              "power": null,
+              "toughness": null,
+              "damage": null
+            },
+            {
+              "alias": "counter",
+              "owner": "A",
+              "zone": "HAND",
+              "power": null,
+              "toughness": null,
+              "damage": null
+            },
+            {
+              "alias": "bounce",
+              "owner": "A",
+              "zone": "HAND",
+              "power": null,
+              "toughness": null,
+              "damage": null
+            },
+            {
+              "alias": "lion1",
+              "owner": "B",
+              "zone": "BATTLEFIELD",
+              "power": "2",
+              "toughness": "2",
+              "damage": "0"
+            },
+            {
+              "alias": "lion2",
+              "owner": "A",
+              "zone": "BATTLEFIELD",
+              "power": "2",
+              "toughness": "2",
+              "damage": "0"
+            }
+          ]
+        },
+        {
+          "checkpoint": "bounce-on-stack",
+          "stack_bottom_first": [
+            {
+              "alias": "bolt",
+              "kind": "card-spell",
+              "owner": "A",
+              "controller": "A",
+              "targets": [
+                "lion1"
+              ]
+            },
+            {
+              "alias": "twincast",
+              "kind": "card-spell",
+              "owner": "B",
+              "controller": "B",
+              "targets": [
+                "bolt"
+              ]
+            },
+            {
+              "alias": "bounce",
+              "kind": "card-spell",
+              "owner": "A",
+              "controller": "A",
+              "targets": [
+                "lion1"
+              ]
+            }
+          ],
+          "cards": [
+            {
+              "alias": "bolt",
+              "owner": "A",
+              "zone": "STACK",
+              "power": null,
+              "toughness": null,
+              "damage": null
+            },
+            {
+              "alias": "twincast",
+              "owner": "B",
+              "zone": "STACK",
+              "power": null,
+              "toughness": null,
+              "damage": null
+            },
+            {
+              "alias": "counter",
+              "owner": "A",
+              "zone": "HAND",
+              "power": null,
+              "toughness": null,
+              "damage": null
+            },
+            {
+              "alias": "bounce",
+              "owner": "A",
+              "zone": "STACK",
+              "power": null,
+              "toughness": null,
+              "damage": null
+            },
+            {
+              "alias": "lion1",
+              "owner": "B",
+              "zone": "BATTLEFIELD",
+              "power": "2",
+              "toughness": "2",
+              "damage": "0"
+            },
+            {
+              "alias": "lion2",
+              "owner": "A",
+              "zone": "BATTLEFIELD",
+              "power": "2",
+              "toughness": "2",
+              "damage": "0"
+            }
+          ]
+        },
+        {
+          "checkpoint": "after-bounce",
+          "stack_bottom_first": [
+            {
+              "alias": "bolt",
+              "kind": "card-spell",
+              "owner": "A",
+              "controller": "A",
+              "targets": [
+                "lion1"
+              ]
+            },
+            {
+              "alias": "twincast",
+              "kind": "card-spell",
+              "owner": "B",
+              "controller": "B",
+              "targets": [
+                "bolt"
+              ]
+            }
+          ],
+          "cards": [
+            {
+              "alias": "bolt",
+              "owner": "A",
+              "zone": "STACK",
+              "power": null,
+              "toughness": null,
+              "damage": null
+            },
+            {
+              "alias": "twincast",
+              "owner": "B",
+              "zone": "STACK",
+              "power": null,
+              "toughness": null,
+              "damage": null
+            },
+            {
+              "alias": "counter",
+              "owner": "A",
+              "zone": "HAND",
+              "power": null,
+              "toughness": null,
+              "damage": null
+            },
+            {
+              "alias": "bounce",
+              "owner": "A",
+              "zone": "GRAVEYARD",
+              "power": null,
+              "toughness": null,
+              "damage": null
+            },
+            {
+              "alias": "lion1",
+              "owner": "B",
+              "zone": "HAND",
+              "power": null,
+              "toughness": null,
+              "damage": null
+            },
+            {
+              "alias": "lion2",
+              "owner": "A",
+              "zone": "BATTLEFIELD",
+              "power": "2",
+              "toughness": "2",
+              "damage": "0"
+            }
+          ]
+        },
+        {
+          "checkpoint": "after-copy",
+          "stack_bottom_first": [
+            {
+              "alias": "bolt",
+              "kind": "card-spell",
+              "owner": "A",
+              "controller": "A",
+              "targets": [
+                "lion1"
+              ]
+            },
+            {
+              "alias": "bolt-copy",
+              "kind": "spell-copy",
+              "owner": "B",
+              "controller": "B",
+              "targets": [
+                "lion2"
+              ]
+            }
+          ],
+          "cards": [
+            {
+              "alias": "bolt",
+              "owner": "A",
+              "zone": "STACK",
+              "power": null,
+              "toughness": null,
+              "damage": null
+            },
+            {
+              "alias": "twincast",
+              "owner": "B",
+              "zone": "GRAVEYARD",
+              "power": null,
+              "toughness": null,
+              "damage": null
+            },
+            {
+              "alias": "counter",
+              "owner": "A",
+              "zone": "HAND",
+              "power": null,
+              "toughness": null,
+              "damage": null
+            },
+            {
+              "alias": "bounce",
+              "owner": "A",
+              "zone": "GRAVEYARD",
+              "power": null,
+              "toughness": null,
+              "damage": null
+            },
+            {
+              "alias": "lion1",
+              "owner": "B",
+              "zone": "HAND",
+              "power": null,
+              "toughness": null,
+              "damage": null
+            },
+            {
+              "alias": "lion2",
+              "owner": "A",
+              "zone": "BATTLEFIELD",
+              "power": "2",
+              "toughness": "2",
+              "damage": "0"
+            }
+          ]
+        },
+        {
+          "checkpoint": "after-copy-resolution",
+          "stack_bottom_first": [
+            {
+              "alias": "bolt",
+              "kind": "card-spell",
+              "owner": "A",
+              "controller": "A",
+              "targets": [
+                "lion1"
+              ]
+            }
+          ],
+          "cards": [
+            {
+              "alias": "bolt",
+              "owner": "A",
+              "zone": "STACK",
+              "power": null,
+              "toughness": null,
+              "damage": null
+            },
+            {
+              "alias": "twincast",
+              "owner": "B",
+              "zone": "GRAVEYARD",
+              "power": null,
+              "toughness": null,
+              "damage": null
+            },
+            {
+              "alias": "counter",
+              "owner": "A",
+              "zone": "HAND",
+              "power": null,
+              "toughness": null,
+              "damage": null
+            },
+            {
+              "alias": "bounce",
+              "owner": "A",
+              "zone": "GRAVEYARD",
+              "power": null,
+              "toughness": null,
+              "damage": null
+            },
+            {
+              "alias": "lion1",
+              "owner": "B",
+              "zone": "HAND",
+              "power": null,
+              "toughness": null,
+              "damage": null
+            },
+            {
+              "alias": "lion2",
+              "owner": "A",
+              "zone": "GRAVEYARD",
+              "power": null,
+              "toughness": null,
+              "damage": null
+            }
+          ]
+        },
+        {
+          "checkpoint": "finished",
+          "stack_bottom_first": [],
+          "cards": [
+            {
+              "alias": "bolt",
+              "owner": "A",
+              "zone": "GRAVEYARD",
+              "power": null,
+              "toughness": null,
+              "damage": null
+            },
+            {
+              "alias": "twincast",
+              "owner": "B",
+              "zone": "GRAVEYARD",
+              "power": null,
+              "toughness": null,
+              "damage": null
+            },
+            {
+              "alias": "counter",
+              "owner": "A",
+              "zone": "HAND",
+              "power": null,
+              "toughness": null,
+              "damage": null
+            },
+            {
+              "alias": "bounce",
+              "owner": "A",
+              "zone": "GRAVEYARD",
+              "power": null,
+              "toughness": null,
+              "damage": null
+            },
+            {
+              "alias": "lion1",
+              "owner": "B",
+              "zone": "HAND",
+              "power": null,
+              "toughness": null,
+              "damage": null
+            },
+            {
+              "alias": "lion2",
+              "owner": "A",
+              "zone": "GRAVEYARD",
+              "power": null,
+              "toughness": null,
+              "damage": null
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "scenario": "copy-target-departs",
+      "decisions": {
+        "copy_targets": "retain original legal lion1 battlefield incarnation",
+        "bounce_target": "lion1 after the copy is created"
+      },
+      "rules": [
+        "112.2",
+        "117.4",
+        "117.5",
+        "400.7",
+        "608.2b",
+        "608.2n",
+        "704.5e",
+        "707.10",
+        "707.10a",
+        "707.10c"
+      ],
+      "reasoning": "B creates a copy retaining the currently legal lion1 target. A then resolves Unsummon above that copy, returning lion1 to B's hand. Both the copy and original retain the departed battlefield incarnation, so each has no legal target when checked in order. Neither resolves or deals damage. The copy first goes to B's graveyard and then ceases to exist under state-based actions; the physical original finishes in A's graveyard. lion2 remains undamaged on the battlefield.",
+      "observations": [
+        {
+          "checkpoint": "bolt-on-stack",
+          "stack_bottom_first": [
+            {
+              "alias": "bolt",
+              "kind": "card-spell",
+              "owner": "A",
+              "controller": "A",
+              "targets": [
+                "lion1"
+              ]
+            }
+          ],
+          "cards": [
+            {
+              "alias": "bolt",
+              "owner": "A",
+              "zone": "STACK",
+              "power": null,
+              "toughness": null,
+              "damage": null
+            },
+            {
+              "alias": "twincast",
+              "owner": "B",
+              "zone": "HAND",
+              "power": null,
+              "toughness": null,
+              "damage": null
+            },
+            {
+              "alias": "counter",
+              "owner": "A",
+              "zone": "HAND",
+              "power": null,
+              "toughness": null,
+              "damage": null
+            },
+            {
+              "alias": "bounce",
+              "owner": "A",
+              "zone": "HAND",
+              "power": null,
+              "toughness": null,
+              "damage": null
+            },
+            {
+              "alias": "lion1",
+              "owner": "B",
+              "zone": "BATTLEFIELD",
+              "power": "2",
+              "toughness": "2",
+              "damage": "0"
+            },
+            {
+              "alias": "lion2",
+              "owner": "A",
+              "zone": "BATTLEFIELD",
+              "power": "2",
+              "toughness": "2",
+              "damage": "0"
+            }
+          ]
+        },
+        {
+          "checkpoint": "twincast-on-stack",
+          "stack_bottom_first": [
+            {
+              "alias": "bolt",
+              "kind": "card-spell",
+              "owner": "A",
+              "controller": "A",
+              "targets": [
+                "lion1"
+              ]
+            },
+            {
+              "alias": "twincast",
+              "kind": "card-spell",
+              "owner": "B",
+              "controller": "B",
+              "targets": [
+                "bolt"
+              ]
+            }
+          ],
+          "cards": [
+            {
+              "alias": "bolt",
+              "owner": "A",
+              "zone": "STACK",
+              "power": null,
+              "toughness": null,
+              "damage": null
+            },
+            {
+              "alias": "twincast",
+              "owner": "B",
+              "zone": "STACK",
+              "power": null,
+              "toughness": null,
+              "damage": null
+            },
+            {
+              "alias": "counter",
+              "owner": "A",
+              "zone": "HAND",
+              "power": null,
+              "toughness": null,
+              "damage": null
+            },
+            {
+              "alias": "bounce",
+              "owner": "A",
+              "zone": "HAND",
+              "power": null,
+              "toughness": null,
+              "damage": null
+            },
+            {
+              "alias": "lion1",
+              "owner": "B",
+              "zone": "BATTLEFIELD",
+              "power": "2",
+              "toughness": "2",
+              "damage": "0"
+            },
+            {
+              "alias": "lion2",
+              "owner": "A",
+              "zone": "BATTLEFIELD",
+              "power": "2",
+              "toughness": "2",
+              "damage": "0"
+            }
+          ]
+        },
+        {
+          "checkpoint": "after-copy",
+          "stack_bottom_first": [
+            {
+              "alias": "bolt",
+              "kind": "card-spell",
+              "owner": "A",
+              "controller": "A",
+              "targets": [
+                "lion1"
+              ]
+            },
+            {
+              "alias": "bolt-copy",
+              "kind": "spell-copy",
+              "owner": "B",
+              "controller": "B",
+              "targets": [
+                "lion1"
+              ]
+            }
+          ],
+          "cards": [
+            {
+              "alias": "bolt",
+              "owner": "A",
+              "zone": "STACK",
+              "power": null,
+              "toughness": null,
+              "damage": null
+            },
+            {
+              "alias": "twincast",
+              "owner": "B",
+              "zone": "GRAVEYARD",
+              "power": null,
+              "toughness": null,
+              "damage": null
+            },
+            {
+              "alias": "counter",
+              "owner": "A",
+              "zone": "HAND",
+              "power": null,
+              "toughness": null,
+              "damage": null
+            },
+            {
+              "alias": "bounce",
+              "owner": "A",
+              "zone": "HAND",
+              "power": null,
+              "toughness": null,
+              "damage": null
+            },
+            {
+              "alias": "lion1",
+              "owner": "B",
+              "zone": "BATTLEFIELD",
+              "power": "2",
+              "toughness": "2",
+              "damage": "0"
+            },
+            {
+              "alias": "lion2",
+              "owner": "A",
+              "zone": "BATTLEFIELD",
+              "power": "2",
+              "toughness": "2",
+              "damage": "0"
+            }
+          ]
+        },
+        {
+          "checkpoint": "bounce-on-stack",
+          "stack_bottom_first": [
+            {
+              "alias": "bolt",
+              "kind": "card-spell",
+              "owner": "A",
+              "controller": "A",
+              "targets": [
+                "lion1"
+              ]
+            },
+            {
+              "alias": "bolt-copy",
+              "kind": "spell-copy",
+              "owner": "B",
+              "controller": "B",
+              "targets": [
+                "lion1"
+              ]
+            },
+            {
+              "alias": "bounce",
+              "kind": "card-spell",
+              "owner": "A",
+              "controller": "A",
+              "targets": [
+                "lion1"
+              ]
+            }
+          ],
+          "cards": [
+            {
+              "alias": "bolt",
+              "owner": "A",
+              "zone": "STACK",
+              "power": null,
+              "toughness": null,
+              "damage": null
+            },
+            {
+              "alias": "twincast",
+              "owner": "B",
+              "zone": "GRAVEYARD",
+              "power": null,
+              "toughness": null,
+              "damage": null
+            },
+            {
+              "alias": "counter",
+              "owner": "A",
+              "zone": "HAND",
+              "power": null,
+              "toughness": null,
+              "damage": null
+            },
+            {
+              "alias": "bounce",
+              "owner": "A",
+              "zone": "STACK",
+              "power": null,
+              "toughness": null,
+              "damage": null
+            },
+            {
+              "alias": "lion1",
+              "owner": "B",
+              "zone": "BATTLEFIELD",
+              "power": "2",
+              "toughness": "2",
+              "damage": "0"
+            },
+            {
+              "alias": "lion2",
+              "owner": "A",
+              "zone": "BATTLEFIELD",
+              "power": "2",
+              "toughness": "2",
+              "damage": "0"
+            }
+          ]
+        },
+        {
+          "checkpoint": "after-bounce",
+          "stack_bottom_first": [
+            {
+              "alias": "bolt",
+              "kind": "card-spell",
+              "owner": "A",
+              "controller": "A",
+              "targets": [
+                "lion1"
+              ]
+            },
+            {
+              "alias": "bolt-copy",
+              "kind": "spell-copy",
+              "owner": "B",
+              "controller": "B",
+              "targets": [
+                "lion1"
+              ]
+            }
+          ],
+          "cards": [
+            {
+              "alias": "bolt",
+              "owner": "A",
+              "zone": "STACK",
+              "power": null,
+              "toughness": null,
+              "damage": null
+            },
+            {
+              "alias": "twincast",
+              "owner": "B",
+              "zone": "GRAVEYARD",
+              "power": null,
+              "toughness": null,
+              "damage": null
+            },
+            {
+              "alias": "counter",
+              "owner": "A",
+              "zone": "HAND",
+              "power": null,
+              "toughness": null,
+              "damage": null
+            },
+            {
+              "alias": "bounce",
+              "owner": "A",
+              "zone": "GRAVEYARD",
+              "power": null,
+              "toughness": null,
+              "damage": null
+            },
+            {
+              "alias": "lion1",
+              "owner": "B",
+              "zone": "HAND",
+              "power": null,
+              "toughness": null,
+              "damage": null
+            },
+            {
+              "alias": "lion2",
+              "owner": "A",
+              "zone": "BATTLEFIELD",
+              "power": "2",
+              "toughness": "2",
+              "damage": "0"
+            }
+          ]
+        },
+        {
+          "checkpoint": "after-copy-resolution",
+          "stack_bottom_first": [
+            {
+              "alias": "bolt",
+              "kind": "card-spell",
+              "owner": "A",
+              "controller": "A",
+              "targets": [
+                "lion1"
+              ]
+            }
+          ],
+          "cards": [
+            {
+              "alias": "bolt",
+              "owner": "A",
+              "zone": "STACK",
+              "power": null,
+              "toughness": null,
+              "damage": null
+            },
+            {
+              "alias": "twincast",
+              "owner": "B",
+              "zone": "GRAVEYARD",
+              "power": null,
+              "toughness": null,
+              "damage": null
+            },
+            {
+              "alias": "counter",
+              "owner": "A",
+              "zone": "HAND",
+              "power": null,
+              "toughness": null,
+              "damage": null
+            },
+            {
+              "alias": "bounce",
+              "owner": "A",
+              "zone": "GRAVEYARD",
+              "power": null,
+              "toughness": null,
+              "damage": null
+            },
+            {
+              "alias": "lion1",
+              "owner": "B",
+              "zone": "HAND",
+              "power": null,
+              "toughness": null,
+              "damage": null
+            },
+            {
+              "alias": "lion2",
+              "owner": "A",
+              "zone": "BATTLEFIELD",
+              "power": "2",
+              "toughness": "2",
+              "damage": "0"
+            }
+          ]
+        },
+        {
+          "checkpoint": "finished",
+          "stack_bottom_first": [],
+          "cards": [
+            {
+              "alias": "bolt",
+              "owner": "A",
+              "zone": "GRAVEYARD",
+              "power": null,
+              "toughness": null,
+              "damage": null
+            },
+            {
+              "alias": "twincast",
+              "owner": "B",
+              "zone": "GRAVEYARD",
+              "power": null,
+              "toughness": null,
+              "damage": null
+            },
+            {
+              "alias": "counter",
+              "owner": "A",
+              "zone": "HAND",
+              "power": null,
+              "toughness": null,
+              "damage": null
+            },
+            {
+              "alias": "bounce",
+              "owner": "A",
+              "zone": "GRAVEYARD",
+              "power": null,
+              "toughness": null,
+              "damage": null
+            },
+            {
+              "alias": "lion1",
+              "owner": "B",
+              "zone": "HAND",
+              "power": null,
+              "toughness": null,
+              "damage": null
+            },
+            {
+              "alias": "lion2",
+              "owner": "A",
+              "zone": "BATTLEFIELD",
+              "power": "2",
+              "toughness": "2",
+              "damage": "0"
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "native_boundary_expectations": [
+    {
+      "exit_reason": "resolved",
+      "scenarios": [
+        "copy-redirect",
+        "counter-original",
+        "copy-retarget-missing-target"
+      ],
+      "rules": [
+        "109.4",
+        "608.2n",
+        "117.5",
+        "704.3",
+        "704.5e",
+        "707.10a",
+        "120.3e",
+        "120.6",
+        "704.5g"
+      ],
+      "after_stack_exit_before_state_based_actions": {
+        "alias": "bolt-copy",
+        "exists": true,
+        "zone": "GRAVEYARD",
+        "owner": "B",
+        "controller": null,
+        "has_physical_card": false,
+        "creature": {
+          "alias": "lion2",
+          "zone": "BATTLEFIELD",
+          "power": "2",
+          "toughness": "2",
+          "damage": "3"
+        }
+      },
+      "after_state_based_actions": {
+        "alias": "bolt-copy",
+        "exists": false,
+        "zone": null,
+        "owner": null,
+        "controller": null,
+        "has_physical_card": false,
+        "creature": {
+          "alias": "lion2",
+          "zone": "GRAVEYARD",
+          "power": null,
+          "toughness": null,
+          "damage": null
+        }
+      }
+    },
+    {
+      "exit_reason": "countered",
+      "scenarios": [
+        "counter-copy"
+      ],
+      "rules": [
+        "109.4",
+        "701.6a",
+        "117.5",
+        "704.3",
+        "704.5e",
+        "707.10a"
+      ],
+      "after_stack_exit_before_state_based_actions": {
+        "alias": "bolt-copy",
+        "exists": true,
+        "zone": "GRAVEYARD",
+        "owner": "B",
+        "controller": null,
+        "has_physical_card": false
+      },
+      "after_state_based_actions": {
+        "alias": "bolt-copy",
+        "exists": false,
+        "zone": null,
+        "owner": null,
+        "controller": null,
+        "has_physical_card": false
+      }
+    },
+    {
+      "exit_reason": "all-targets-illegal",
+      "scenarios": [
+        "copy-retain-missing-target",
+        "copy-target-departs"
+      ],
+      "rules": [
+        "109.4",
+        "608.2b",
+        "117.5",
+        "704.3",
+        "704.5e",
+        "707.10a"
+      ],
+      "after_stack_exit_before_state_based_actions": {
+        "alias": "bolt-copy",
+        "exists": true,
+        "zone": "GRAVEYARD",
+        "owner": "B",
+        "controller": null,
+        "has_physical_card": false
+      },
+      "after_state_based_actions": {
+        "alias": "bolt-copy",
+        "exists": false,
+        "zone": null,
+        "owner": null,
+        "controller": null,
+        "has_physical_card": false
+      }
+    }
+  ],
+  "review_records": [
+    ".quzzar-system-design/architecture-proposed/reviews/spell-copy-coverage.md",
+    ".quzzar-system-design/architecture-proposed/reviews/spell-copy-flow.md"
+  ],
+  "review_date": "2026-10-30"
+}

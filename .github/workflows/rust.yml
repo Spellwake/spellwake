@@ -1,0 +1,38 @@
+name: Rust foundation
+on:
+  push:
+    branches: [dev, staging, main]
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: rust-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  check:
+    name: Rust foundation checks
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - name: Install pinned toolchain
+        run: rustup show
+      - name: Format
+        run: cargo fmt --all --check
+      - name: Lint
+        run: cargo clippy --locked --workspace --all-targets -- -D warnings
+      - name: Test
+        run: cargo test --locked --workspace
+      - name: Build deployable service
+        run: cargo build --locked --release -p spellwake-platform
+      - name: Run rules fixtures
+        run: cargo run --locked -p spellwake-reference-tools
+      - name: Run native interaction trace
+        run: cargo run --locked -p spellwake-reference-tools --bin interaction-trace
+      - name: Run native copied-spell trace
+        run: cargo run --locked -p spellwake-reference-tools --bin interaction-trace -- --copies
+      - name: Test reference evidence and comparison guards
+        run: python3 -m unittest discover -s tests/reference -p 'test_*.py'

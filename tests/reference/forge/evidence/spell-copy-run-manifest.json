@@ -1,0 +1,74 @@
+{
+  "schema_version": 2,
+  "reference": "forge",
+  "commit": "3ead7e68d54bf95c6f778fd6aa7c604c036e0736",
+  "test_class": "forge.ai.SpellCopyReferenceTest",
+  "tests": 6,
+  "failures": 0,
+  "errors": 0,
+  "skipped": 0,
+  "testcases": [
+    "copyRedirect",
+    "copyRetainMissingTarget",
+    "copyRetargetMissingTarget",
+    "copyTargetDeparts",
+    "counterCopy",
+    "counterOriginal"
+  ],
+  "strict_choices": true,
+  "mana_auto_payment": false,
+  "direct_stack_admission": true,
+  "casting_scope": "direct-stack-admission-no-payment",
+  "observation_scope": "settled-resolution-boundaries",
+  "pre_sba_copy_exit_observed": false,
+  "files": [
+    {
+      "path": "work/reference-research/forge-spell-copies/run.log",
+      "sha256": "ddb6a3a8d6cf42316a878bdd773bcc7045750df7353ca7daaed677cfe69bf0b7"
+    },
+    {
+      "path": "work/reference-research/forge-spell-copies/TEST-forge.ai.SpellCopyReferenceTest.xml",
+      "sha256": "9037d1617707a2e35ef7bed5c9b19c059f1957d98d22565e00820f14380b3335"
+    },
+    {
+      "path": "work/reference-research/forge-spell-copies/copy-redirect.json",
+      "sha256": "559cd746683fa44b8009d573f54206519554b7a255523cab4d2e02c49322c60b"
+    },
+    {
+      "path": "work/reference-research/forge-spell-copies/counter-original.json",
+      "sha256": "f8f8883133bdfd9a71f38e5c982796031f41b4b55b8c9c201b460868e784908f"
+    },
+    {
+      "path": "work/reference-research/forge-spell-copies/counter-copy.json",
+      "sha256": "400f76ce796f3d0737c18340bafd73866a998d30f3ae99bddff85bb932ea0307"
+    },
+    {
+      "path": "work/reference-research/forge-spell-copies/copy-retain-missing-target.json",
+      "sha256": "40c9cc218602204fff450aec4a1a666d28a63b57e2abeb1897c5f8568de507a0"
+    },
+    {
+      "path": "work/reference-research/forge-spell-copies/copy-retarget-missing-target.json",
+      "sha256": "5b98cd7e8cfb020b01fac3977582ad3d1e35c96df95e687c416a3ffaa1f63fca"
+    },
+    {
+      "path": "work/reference-research/forge-spell-copies/copy-target-departs.json",
+      "sha256": "cadf2ccee1ae0bb98545b279ca1829a642c8b1bc2682d7b416601c58f1873cfd"
+    },
+    {
+      "path": "tests/reference/forge/SpellCopyReferenceTest.java",
+      "sha256": "b75f7902c8ed9f1961f2379beec1e55795d04997a1f323b77588704569021eb3"
+    },
+    {
+      "path": "work/reference-research/forge/forge-gui-desktop/src/test/java/forge/ai/SpellCopyReferenceTest.java",
+      "sha256": "b75f7902c8ed9f1961f2379beec1e55795d04997a1f323b77588704569021eb3"
+    },
+    {
+      "path": "work/reference-research/forge/forge-gui-desktop/target/test-classes/forge/ai/SpellCopyReferenceTest.class",
+      "sha256": "e66876fc323bc8185ccbf175eb3912bc96d641a7220f6e8087e854085a01b91f"
+    },
+    {
+      "path": "work/reference-research/forge/forge-gui-desktop/target/test-classes/forge/ai/SpellCopyReferenceTest$StrictController.class",
+      "sha256": "31d48afbe2a511dfbe506e079b3a71e19a879e3394862e7ba90ef51c60a7d364"
+    }
+  ]
+}

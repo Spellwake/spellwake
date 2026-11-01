@@ -1,0 +1,22 @@
+name: Set up Spellwake
+description: Install the shared locked Bun workspace and pinned Rust toolchain.
+inputs:
+  assets-token:
+    description: Read-only token for the private Spellwake assets repository
+    required: true
+runs:
+  using: composite
+  steps:
+    - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6
+      with:
+        bun-version: 1.3.11
+    - shell: bash
+      run: rustup show
+    - shell: bash
+      run: bun install --frozen-lockfile
+    - shell: bash
+      run: cargo metadata --locked --no-deps --manifest-path src-tauri/Cargo.toml --format-version 1 > /dev/null
+    - shell: bash
+      run: bun run release:assets
+      env:
+        SPELLWAKE_ASSETS_TOKEN: ${{ inputs.assets-token }}

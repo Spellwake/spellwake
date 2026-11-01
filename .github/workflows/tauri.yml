@@ -1,0 +1,400 @@
+name: Spellwake application and release
+on:
+  push:
+    branches: [dev, staging, main]
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      signed:
+        description: Build signed distribution packages (requires release credentials)
+        type: boolean
+        default: false
+      publish:
+        description: Publish desktop draft, web, TestFlight and Google Play internal draft from main
+        type: boolean
+        default: false
+permissions:
+  contents: read
+concurrency:
+  group: spellwake-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name != 'workflow_dispatch' }}
+
+env:
+  CARGO_TERM_COLOR: always
+  SPELLWAKE_RELEASE_ASSETS: "true"
+  SIGNED_RELEASE: ${{ github.event_name == 'workflow_dispatch' && inputs.signed || false }}
+
+jobs:
+  validate:
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    name: Shared source and release preflight
+    runs-on: ubuntu-24.04
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - name: Enforce release promotion policy
+        env:
+          PUBLISH: ${{ inputs.publish || false }}
+        run: |
+          if [[ ( "$SIGNED_RELEASE" == "true" || "$PUBLISH" == "true" ) && "$GITHUB_REF" != "refs/heads/main" ]]; then
+            echo 'Signed releases and publication require main after dev and staging promotion.' >&2
+            exit 1
+          fi
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/setup-spellwake
+        with:
+          assets-token: ${{ secrets.SPELLWAKE_ASSETS_TOKEN }}
+      - name: Validate release inputs
+        if: github.event_name == 'workflow_dispatch'
+        env:
+          PUBLISH: ${{ inputs.publish || false }}
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+          APPLE_API_PRIVATE_KEY: ${{ secrets.APPLE_API_PRIVATE_KEY }}
+          APPLE_DEVELOPMENT_TEAM: ${{ secrets.APPLE_DEVELOPMENT_TEAM }}
+          IOS_CERTIFICATE: ${{ secrets.IOS_CERTIFICATE }}
+          IOS_CERTIFICATE_PASSWORD: ${{ secrets.IOS_CERTIFICATE_PASSWORD }}
+          IOS_MOBILE_PROVISION: ${{ secrets.IOS_MOBILE_PROVISION }}
+          WINDOWS_AZURE_CLIENT_ID: ${{ vars.WINDOWS_AZURE_CLIENT_ID }}
+          WINDOWS_AZURE_TENANT_ID: ${{ vars.WINDOWS_AZURE_TENANT_ID }}
+          WINDOWS_AZURE_SUBSCRIPTION_ID: ${{ vars.WINDOWS_AZURE_SUBSCRIPTION_ID }}
+          WINDOWS_SIGNING_ENDPOINT: ${{ vars.WINDOWS_SIGNING_ENDPOINT }}
+          WINDOWS_SIGNING_ACCOUNT: ${{ vars.WINDOWS_SIGNING_ACCOUNT }}
+          WINDOWS_SIGNING_PROFILE: ${{ vars.WINDOWS_SIGNING_PROFILE }}
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          ANDROID_STORE_PASSWORD: ${{ secrets.ANDROID_STORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+          GOOGLE_PLAY_SERVICE_ACCOUNT: ${{ secrets.GOOGLE_PLAY_SERVICE_ACCOUNT }}
+          RENDER_WEB_DEPLOY_HOOK: ${{ secrets.RENDER_WEB_DEPLOY_HOOK }}
+          WEB_RELEASE_URL: ${{ vars.WEB_RELEASE_URL }}
+          RELEASE_ASSETS_APPROVED: ${{ vars.RELEASE_ASSETS_APPROVED }}
+        run: bun apps/play/scripts/release-preflight.ts
+      - name: Read canonical release version
+        id: version
+        run: bun run release:config
+      - run: bun run release:test
+      - run: bun run ui:check
+      - run: bun run ui:build
+      - run: bun run play:check
+      - run: bun run play:test
+      - run: bun run web:build
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: spellwake-web
+          path: apps/play/dist/
+          if-no-files-found: error
+          retention-days: 14
+
+  desktop:
+    name: Desktop ${{ matrix.name }}
+    needs: validate
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      WINDOWS_SIGNING_ENDPOINT: ${{ vars.WINDOWS_SIGNING_ENDPOINT }}
+      WINDOWS_SIGNING_ACCOUNT: ${{ vars.WINDOWS_SIGNING_ACCOUNT }}
+      WINDOWS_SIGNING_PROFILE: ${{ vars.WINDOWS_SIGNING_PROFILE }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: macos-arm64
+            os: macos-15
+            target: aarch64-apple-darwin
+            bundles: app,dmg
+          - name: macos-x64
+            os: macos-15
+            target: x86_64-apple-darwin
+            bundles: app,dmg
+          - name: windows-x64
+            os: windows-2022
+            target: x86_64-pc-windows-msvc
+            bundles: nsis
+          - name: linux-x64
+            os: ubuntu-24.04
+            target: x86_64-unknown-linux-gnu
+            bundles: deb,appimage
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/setup-spellwake
+        with:
+          assets-token: ${{ secrets.SPELLWAKE_ASSETS_TOKEN }}
+      - name: Install Linux native dependencies
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libwebkit2gtk-4.1-dev build-essential libssl-dev librsvg2-dev libayatana-appindicator3-dev patchelf libfuse2t64
+      - run: rustup target add '${{ matrix.target }}'
+      - run: bun run release:config
+      - name: Format native host
+        run: cargo fmt --manifest-path src-tauri/Cargo.toml --all --check
+      - name: Lint native host
+        run: bun run app:check
+      - name: Test native host
+        run: cargo test --locked --manifest-path src-tauri/Cargo.toml
+      # GitHub's Intel runners lose Apple's HTTP/3 ticket connection (runner-images#14924).
+      # This disposable runner must use TCP before Tauri's own app stapling runs, too.
+      - name: Route Intel Mac notarization tickets over TCP
+        if: matrix.name == 'macos-x64' && inputs.signed
+        run: |
+          printf '%s\n' 'block return out quick proto udp from any to any port 443' | sudo pfctl -f -
+          sudo pfctl -E
+      - name: Prepare macOS signing
+        if: runner.os == 'macOS' && env.SIGNED_RELEASE == 'true'
+        env:
+          APPLE_API_PRIVATE_KEY: ${{ secrets.APPLE_API_PRIVATE_KEY }}
+          APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
+        run: |
+          bun apps/play/scripts/prepare-apple-key.ts
+      - name: Validate Windows signing adapter
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          Install-Module -Name ArtifactSigning -RequiredVersion 0.1.20 -Force -Repository PSGallery
+          Import-Module ArtifactSigning -RequiredVersion 0.1.20
+          $null = Get-Command Invoke-ArtifactSigning -ErrorAction Stop
+          $syntaxErrors = $null
+          $null = [System.Management.Automation.Language.Parser]::ParseFile(
+            (Join-Path $env:GITHUB_WORKSPACE 'apps/play/scripts/sign-windows.ps1'),
+            [ref]$null, [ref]$syntaxErrors)
+          if ($syntaxErrors.Count -ne 0) { throw ($syntaxErrors | Out-String) }
+      - name: Authenticate Windows release signing
+        if: runner.os == 'Windows' && env.SIGNED_RELEASE == 'true'
+        uses: azure/login@7184910d9eb2b1c5e48f7073824a90609bb9b6d6
+        with:
+          client-id: ${{ vars.WINDOWS_AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.WINDOWS_AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.WINDOWS_AZURE_SUBSCRIPTION_ID }}
+      - name: Prepare Windows signing
+        if: runner.os == 'Windows' && env.SIGNED_RELEASE == 'true'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $config = Get-Content src-tauri/release.generated.json | ConvertFrom-Json
+          $command = @{
+            cmd = 'pwsh'
+            args = @('-NoLogo', '-NoProfile', '-File',
+              (Join-Path $env:GITHUB_WORKSPACE 'apps/play/scripts/sign-windows.ps1'), '%1')
+          }
+          $config.bundle | Add-Member -NotePropertyName windows -NotePropertyValue @{signCommand=$command}
+          $config | ConvertTo-Json -Depth 8 | Set-Content src-tauri/release.generated.json
+      - name: Build platform packages
+        env:
+          APPLE_CERTIFICATE: ${{ runner.os == 'macOS' && inputs.signed && secrets.APPLE_CERTIFICATE || '' }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ runner.os == 'macOS' && inputs.signed && secrets.APPLE_CERTIFICATE_PASSWORD || '' }}
+          APPLE_SIGNING_IDENTITY: ${{ runner.os == 'macOS' && inputs.signed && secrets.APPLE_SIGNING_IDENTITY || '-' }}
+          APPLE_API_KEY: ${{ runner.os == 'macOS' && inputs.signed && secrets.APPLE_API_KEY || '' }}
+          APPLE_API_ISSUER: ${{ runner.os == 'macOS' && inputs.signed && secrets.APPLE_API_ISSUER || '' }}
+        run: |
+          if [[ "$SIGNED_RELEASE" != "true" || "$RUNNER_OS" != "macOS" ]]; then
+            unset APPLE_CERTIFICATE APPLE_CERTIFICATE_PASSWORD APPLE_API_KEY APPLE_API_ISSUER APPLE_API_KEY_PATH
+          fi
+          bun run app:build --target '${{ matrix.target }}' --bundles '${{ matrix.bundles }}' --config src-tauri/release.generated.json -- --locked
+      - name: Notarize and verify the Mac installer
+        if: runner.os == 'macOS' && env.SIGNED_RELEASE == 'true'
+        env:
+          APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+        run: |
+          found=false
+          while IFS= read -r -d '' dmg; do
+            found=true
+            xcrun notarytool submit "$dmg" --key "$APPLE_API_KEY_PATH" --key-id "$APPLE_API_KEY" --issuer "$APPLE_API_ISSUER" --wait
+            xcrun stapler staple "$dmg"
+            xcrun stapler validate "$dmg"
+            codesign --verify --strict "$dmg"
+            spctl --assess --type open --context context:primary-signature "$dmg"
+          done < <(find 'src-tauri/target/${{ matrix.target }}/release/bundle/dmg' -name '*.dmg' -print0)
+          if [[ "$found" != true ]]; then
+            echo 'No Mac installer was produced.' >&2
+            exit 1
+          fi
+      - name: Verify installed Windows payload and signatures
+        if: runner.os == 'Windows'
+        shell: pwsh
+        timeout-minutes: 5
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $installers = @(Get-ChildItem 'src-tauri/target/${{ matrix.target }}/release/bundle/nsis/*.exe')
+          if ($installers.Count -ne 1) { throw 'Expected one Windows installer.' }
+          $installation = Join-Path $env:RUNNER_TEMP 'spellwake-install-check'
+          $process = Start-Process -FilePath $installers[0].FullName -ArgumentList "/S /D=$installation" -Wait -PassThru
+          if ($process.ExitCode -ne 0) { throw 'Windows installer smoke test failed.' }
+          $uninstaller = Join-Path $installation 'uninstall.exe'
+          if (-not (Test-Path -LiteralPath $uninstaller)) { throw 'The installed uninstaller is missing.' }
+          $executables = @(Get-ChildItem -LiteralPath $installation -File -Filter '*.exe')
+          if ($executables.Count -ne 2) { throw 'Expected installed application and uninstaller executables.' }
+          if ($env:SIGNED_RELEASE -eq 'true') {
+            # NSIS can ignore !uninstfinalize failures. Check the extracted payload before artifact upload.
+            foreach ($file in @($installers[0]) + $executables) {
+              $signature = Get-AuthenticodeSignature -LiteralPath $file.FullName
+              if ($signature.Status -ne 'Valid' -or $null -eq $signature.TimeStamperCertificate) {
+                throw "A Windows release payload lacks a valid timestamped signature: $($file.Name)"
+              }
+            }
+          }
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: spellwake-${{ matrix.name }}
+          path: |
+            src-tauri/target/${{ matrix.target }}/release/bundle/dmg/*.dmg
+            src-tauri/target/${{ matrix.target }}/release/bundle/nsis/*.exe
+            src-tauri/target/${{ matrix.target }}/release/bundle/deb/*.deb
+            src-tauri/target/${{ matrix.target }}/release/bundle/appimage/*.AppImage
+          if-no-files-found: error
+          retention-days: 14
+
+  android:
+    name: Android
+    needs: validate
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/setup-spellwake
+        with:
+          assets-token: ${{ secrets.SPELLWAKE_ASSETS_TOKEN }}
+      - uses: actions/setup-java@cf277c60eb25467037889841efdb72551f06f6c3
+        with:
+          distribution: temurin
+          java-version: "21"
+      - uses: android-actions/setup-android@9fc6c4e9069bf8d3d10b2204b1fb8f6ef7065407
+        with:
+          cmdline-tools-version: "16111833"
+          packages: platform-tools
+          log-accepted-android-sdk-licenses: "false"
+      - name: Install pinned Android NDK
+        run: |
+          sdkmanager 'ndk;27.2.12479018' 'platforms;android-37.0' 'build-tools;36.0.0'
+          echo "NDK_HOME=$ANDROID_HOME/ndk/27.2.12479018" >> "$GITHUB_ENV"
+      - run: bun run app:android:init
+      - run: bun run release:config
+      - name: Prepare Android signing
+        if: env.SIGNED_RELEASE == 'true'
+        env:
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+        run: bun apps/play/scripts/prepare-android-key.ts
+      - name: Build Android packages
+        env:
+          ANDROID_STORE_PASSWORD: ${{ inputs.signed && secrets.ANDROID_STORE_PASSWORD || '' }}
+          ANDROID_KEY_ALIAS: ${{ inputs.signed && secrets.ANDROID_KEY_ALIAS || '' }}
+          ANDROID_KEY_PASSWORD: ${{ inputs.signed && secrets.ANDROID_KEY_PASSWORD || '' }}
+        run: bun run app:android:build --ci --apk --aab --config src-tauri/release.generated.json
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: spellwake-android
+          path: |
+            src-tauri/gen/android/app/build/outputs/apk/**/*.apk
+            src-tauri/gen/android/app/build/outputs/bundle/**/*.aab
+          if-no-files-found: error
+          retention-days: 14
+
+  ios:
+    name: iPhone and iPad
+    needs: validate
+    runs-on: macos-15
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/setup-spellwake
+        with:
+          assets-token: ${{ secrets.SPELLWAKE_ASSETS_TOKEN }}
+      - name: Install Xcode project generator
+        run: brew install xcodegen
+      - run: bun run app:ios:init
+      - run: bun run release:config
+      - name: Build unsigned device archive
+        if: env.SIGNED_RELEASE != 'true'
+        run: bun run app:ios:build --ci --target aarch64 --no-sign --archive-only --config src-tauri/release.generated.json
+      - name: Build signed iPhone and iPad package
+        if: env.SIGNED_RELEASE == 'true'
+        env:
+          APPLE_DEVELOPMENT_TEAM: ${{ secrets.APPLE_DEVELOPMENT_TEAM }}
+          IOS_CERTIFICATE: ${{ secrets.IOS_CERTIFICATE }}
+          IOS_CERTIFICATE_PASSWORD: ${{ secrets.IOS_CERTIFICATE_PASSWORD }}
+          IOS_MOBILE_PROVISION: ${{ secrets.IOS_MOBILE_PROVISION }}
+        run: bun run app:ios:build --ci --target aarch64 --export-method app-store-connect --config src-tauri/release.generated.json
+      - name: Preserve unsigned archive as a tarball
+        if: env.SIGNED_RELEASE != 'true'
+        run: tar -czf "$RUNNER_TEMP/spellwake-ios-unsigned.tar.gz" -C src-tauri/gen/apple/build .
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: spellwake-ios
+          path: |
+            src-tauri/gen/apple/build/**/*.ipa
+            ${{ runner.temp }}/spellwake-ios-unsigned.tar.gz
+          if-no-files-found: error
+          retention-days: 14
+
+  publish:
+    name: Distribute the completed release
+    if: github.event_name == 'workflow_dispatch' && inputs.publish
+    needs: [validate, desktop, android, ios]
+    runs-on: macos-15
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/setup-spellwake
+        with:
+          assets-token: ${{ secrets.SPELLWAKE_ASSETS_TOKEN }}
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          path: release-artifacts
+          pattern: spellwake-*
+      - name: Prepare Apple upload credentials
+        env:
+          APPLE_API_PRIVATE_KEY: ${{ secrets.APPLE_API_PRIVATE_KEY }}
+          APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
+        run: bun apps/play/scripts/prepare-apple-key.ts
+      - name: Upload iPhone and iPad build to App Store Connect
+        env:
+          APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+        run: |
+          ipa=$(find release-artifacts/spellwake-ios -name '*.ipa' -print -quit)
+          test -n "$ipa"
+          xcrun altool --upload-app --type ios --file "$ipa" --apiKey "$APPLE_API_KEY" --apiIssuer "$APPLE_API_ISSUER"
+      - name: Upload Android internal testing draft
+        uses: r0adkll/upload-google-play@eb49699984a39f23558439581660aa6f088acfd6
+        with:
+          serviceAccountJsonPlainText: ${{ secrets.GOOGLE_PLAY_SERVICE_ACCOUNT }}
+          packageName: com.spellwake.client
+          releaseFiles: release-artifacts/spellwake-android/**/*.aab
+          track: internal
+          status: draft
+      - name: Create desktop draft release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_VERSION: ${{ needs.validate.outputs.version }}
+        run: |
+          tag="app-v${RELEASE_VERSION}-build-${GITHUB_RUN_NUMBER}-${GITHUB_RUN_ATTEMPT}"
+          gh release create "$tag" --target "$GITHUB_SHA" --draft --title "Spellwake $RELEASE_VERSION" --notes "Shared source revision: $GITHUB_SHA. Mobile builds uploaded separately; web deployment follows."
+          while IFS= read -r -d '' file; do
+            gh release upload "$tag" "$file" || exit 1
+          done < <(find release-artifacts -type f \( -name '*.dmg' -o -name '*.exe' -o -name '*.deb' -o -name '*.AppImage' \) -print0)
+      - name: Deploy and verify the matching web revision
+        env:
+          RENDER_WEB_DEPLOY_HOOK: ${{ secrets.RENDER_WEB_DEPLOY_HOOK }}
+          WEB_RELEASE_URL: ${{ vars.WEB_RELEASE_URL }}
+          RELEASE_ASSETS_APPROVED: ${{ vars.RELEASE_ASSETS_APPROVED }}
+        run: bun apps/play/scripts/deploy-web.ts

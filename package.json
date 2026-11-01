@@ -1,0 +1,53 @@
+{
+  "name": "spellwake-frontend",
+  "private": true,
+  "type": "module",
+  "workspaces": [
+    "packages/*",
+    "apps/*",
+    "benchmarks/browser-rendering"
+  ],
+  "scripts": {
+    "dev": "bun run app:dev",
+    "build": "bun run app:build",
+    "tauri": "tauri",
+    "app:dev": "tauri dev",
+    "app:build": "CI=true tauri build",
+    "app:check": "bun run app:icons && cargo clippy --locked --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings",
+    "app:icons": "bun apps/play/scripts/generate-icons.ts",
+    "app:frontend:dev": "bun run --cwd apps/play dev --mode tauri",
+    "app:frontend:build": "bun run app:icons && bun run play:check && bun run --cwd apps/play build --mode tauri",
+    "play:dev": "bun run --cwd apps/play dev",
+    "play:build": "bun run --cwd apps/play build",
+    "play:check": "bun run --cwd apps/play check",
+    "play:test": "bun test benchmarks/browser-rendering/src/*.test.ts",
+    "play:verify": "bun run play:check && bun run play:test && bun run play:build",
+    "ui:dev": "bun run --cwd apps/ui-workshop dev",
+    "ui:build": "bun run --cwd apps/ui-workshop build",
+    "ui:check": "tsc --noEmit -p apps/ui-workshop/tsconfig.json",
+    "ui:format": "prettier --write packages/ui/src apps/ui-workshop/src",
+    "ui:lint": "eslint packages/ui/src apps/ui-workshop/src",
+    "app:ios:init": "bun apps/play/scripts/prepare-mobile.ts ios",
+    "app:ios:dev": "tauri ios dev",
+    "app:ios:build": "tauri ios build",
+    "app:android:init": "bun apps/play/scripts/prepare-mobile.ts android",
+    "app:android:dev": "tauri android dev",
+    "app:android:build": "tauri android build",
+    "release:config": "bun apps/play/scripts/release-config.ts",
+    "web:build": "bun run --cwd apps/play build --mode web && bun apps/play/scripts/web-manifest.ts",
+    "release:test": "bun test apps/play/scripts/release-preflight.test.ts",
+    "release:assets": "bun apps/play/scripts/fetch-release-assets.ts",
+    "web:release:check": "bun apps/play/scripts/public-web-check.ts"
+  },
+  "devDependencies": {
+    "@eslint/js": "10.0.1",
+    "@tauri-apps/cli": "2.12.4",
+    "@types/react": "latest",
+    "@types/react-dom": "latest",
+    "eslint": "10.14.0",
+    "eslint-config-prettier": "10.1.8",
+    "prettier": "latest",
+    "typescript": "^5.9.3",
+    "typescript-eslint": "8.72.1"
+  }
+}

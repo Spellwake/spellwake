@@ -1,0 +1,57 @@
+{
+  "schema_version": 1,
+  "reference": "forge",
+  "commit": "3ead7e68d54bf95c6f778fd6aa7c604c036e0736",
+  "test_class": "forge.ai.InstantInteractionReferenceTest",
+  "tests": 4,
+  "failures": 0,
+  "errors": 0,
+  "skipped": 0,
+  "testcases": [
+    "boltControl",
+    "counterBolt",
+    "counterCounter",
+    "targetBounce"
+  ],
+  "strict_choices": true,
+  "mana_auto_payment": false,
+  "casting_scope": "direct-stack-admission-no-payment",
+  "files": [
+    {
+      "path": "work/reference-research/forge-interactions/run.log",
+      "sha256": "7e8863e4c11c5f9cd3ea25f753e1e8ba52d56c7c3423508f6c8c338f3a5f9bd4"
+    },
+    {
+      "path": "work/reference-research/forge-interactions/TEST-forge.ai.InstantInteractionReferenceTest.xml",
+      "sha256": "456bb09ef3f934125eea069301e47e15c3de860ab4995c27b66bc1a030cab8eb"
+    },
+    {
+      "path": "work/reference-research/forge-interactions/bolt-control.json",
+      "sha256": "ec4c3b9633310f61d7b8930a204070877c6c0753f859aa3d47fdbd191ceada53"
+    },
+    {
+      "path": "work/reference-research/forge-interactions/target-bounce.json",
+      "sha256": "2e9ecd286d43fac6b9c2809f01430e2789de38227c133a002d8486039937986f"
+    },
+    {
+      "path": "work/reference-research/forge-interactions/counter-bolt.json",
+      "sha256": "84853d89adf32f11f6cffe5a78a7692c8138fd94386e48ab5549dde15f99d3f0"
+    },
+    {
+      "path": "work/reference-research/forge-interactions/counter-counter.json",
+      "sha256": "1d1ab7f40993e7dab3b498fb6a3296577fd01f3e9647e0611245381c639ff106"
+    },
+    {
+      "path": "tests/reference/forge/InstantInteractionReferenceTest.java",
+      "sha256": "04a825b36421896e908e7a5acc3290dbdf7fe356959c7353a0b7b36f450447e3"
+    },
+    {
+      "path": "work/reference-research/forge/forge-gui-desktop/target/test-classes/forge/ai/InstantInteractionReferenceTest.class",
+      "sha256": "43e17c5c9669e83678126f58264c9fd2e4519eec0afc369ebe1cc38132a5de33"
+    },
+    {
+      "path": "work/reference-research/forge/forge-gui-desktop/target/test-classes/forge/ai/InstantInteractionReferenceTest$StrictController.class",
+      "sha256": "8b550e61c80706e60fb24686d14ff18e43a7aec97e7b16059ded210a988ed1db"
+    }
+  ]
+}

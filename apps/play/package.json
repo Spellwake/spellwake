@@ -1,0 +1,20 @@
+{
+  "name": "@spellwake/play",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "prepare-assets": "bun scripts/prepare-assets.ts",
+    "dev": "bun run prepare-assets && vite",
+    "build": "bun run prepare-assets && vite build",
+    "preview": "vite preview --host 127.0.0.1 --port 6204 --strictPort",
+    "check": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@tauri-apps/api": "2.12.4",
+    "spellwake-renderer-benchmark": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/bun": "latest",
+    "vite": "8.3.5"
+  }
+}

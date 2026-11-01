@@ -1,0 +1,25 @@
+{
+  "name": "@spellwake/ui-workshop",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview --host 127.0.0.1 --port 6202"
+  },
+  "dependencies": {
+    "@spellwake/ui": "workspace:*",
+    "@vanilla-extract/css": "1.21.3",
+    "lucide-react": "latest",
+    "radix-ui": "latest",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0",
+    "three": "0.186.0"
+  },
+  "devDependencies": {
+    "@types/three": "^0.187.0",
+    "@vanilla-extract/vite-plugin": "latest",
+    "@vitejs/plugin-react": "latest",
+    "vite": "latest"
+  }
+}

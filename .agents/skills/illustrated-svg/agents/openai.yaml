@@ -1,0 +1,4 @@
+interface:
+  display_name: "Illustrated SVG Artwork"
+  short_description: "Generate cohesive artwork and refine it into SVGs"
+  default_prompt: "Use $illustrated-svg to create a cohesive illustration set and convert the approved artwork into clean, editable SVGs."

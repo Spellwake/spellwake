@@ -1,0 +1,6 @@
+{
+  "name": "@spellwake/ui", "version": "0.1.0", "private": true, "type": "module",
+  "exports": {".": "./src/index.ts", "./theme": "./src/theme.css.ts"},
+  "dependencies": {"radix-ui": "latest", "lucide-react": "latest", "@vanilla-extract/css": "latest"},
+  "peerDependencies": {"react": "^19.0.0", "react-dom": "^19.0.0"}
+}
