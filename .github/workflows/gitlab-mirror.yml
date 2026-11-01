@@ -4,6 +4,10 @@ on:
   push:
   create:
   delete:
+  # Also reconcile older development branches when their existing CI completes.
+  workflow_run:
+    workflows: ['Rust foundation']
+    types: [completed]
   workflow_dispatch:
   schedule:
     - cron: '23 */6 * * *'
@@ -69,16 +73,22 @@ jobs:
             else
               [[ "$target_status" == 200 ]] || return 1
               jq -e --arg id "$GL_PROJECT_ID" --arg path "$GL_PROJECT_PATH" \
-                '(.id|tostring) == $id and .path_with_namespace == $path and .visibility == "public" and .archived == false' \
+                '(.id|tostring) == $id and .path_with_namespace == $path and .visibility == "public" and .archived != true' \
                 "$scratch/target.json" > /dev/null || return 1
             fi
           }
           validate_visibility || { echo 'Mirror identity or visibility check failed.' >&2; exit 1; }
 
-          git init --bare "$scratch/repository.git"
-          cd "$scratch/repository.git"
-          git remote add source "https://github.com/$GH_REPOSITORY.git"
-          git remote add target "git@gitlab.com:$GL_PROJECT_PATH.git"
+          # Retain Git objects on dedicated runners so artwork updates fetch deltas.
+          # Authentication stays in ephemeral files/environment, never in this cache.
+          : "${RUNNER_TOOL_CACHE:?}"
+          mirror_cache="$RUNNER_TOOL_CACHE/spellwake-mirror/$GH_REPOSITORY_ID.git"
+          mkdir -p "$(dirname "$mirror_cache")"
+          git init --bare "$mirror_cache"
+          cd "$mirror_cache"
+          [[ "$(git rev-parse --is-bare-repository)" == true ]]
+          git config remote.source.url "https://github.com/$GH_REPOSITORY.git"
+          git config remote.target.url "git@gitlab.com:$GL_PROJECT_PATH.git"
           # Each key is enabled only for its recorded GitLab project. A missing,
           # replaced, or inaccessible destination fails before sending objects.
           git ls-remote --refs target > /dev/null
