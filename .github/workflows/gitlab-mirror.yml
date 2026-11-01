@@ -4,6 +4,10 @@ on:
   push:
   create:
   delete:
+  # Also reconcile older development branches when their existing CI completes.
+  workflow_run:
+    workflows: ['Rust foundation']
+    types: [completed]
   workflow_dispatch:
   schedule:
     - cron: '23 */6 * * *'
