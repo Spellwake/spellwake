@@ -1,4 +1,4 @@
-# Foundation API only. The React app and marketing site have no build target yet.
+# Foundation API only; the app preview has its separate render-play.yaml host.
 services:
   - type: web
     name: spellwake-foundation

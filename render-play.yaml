@@ -6,7 +6,7 @@ services:
     branch: main
     domains:
       - app.spellwake.com
-    autoDeployTrigger: off
+    autoDeployTrigger: checksPass
     buildCommand: bun install --frozen-lockfile && bun run web:release:check && bun run release:assets && bun run web:build
     staticPublishPath: ./apps/play/dist
     envVars:
