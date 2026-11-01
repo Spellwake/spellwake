@@ -60,3 +60,42 @@ Skills are installed in `.agents/skills/`. For system architecture work, read
 `quzzar-system-design` before proposing or implementing the design.
 
 Built-in image generation is available in Codex for future design work.
+
+## Rust workflow
+
+Before writing, reviewing, or refactoring Rust, read
+`.agents/skills/rust-skills/SKILL.md`, then open the rule files relevant to the task.
+Use its rule IDs when explaining findings. Project conventions take precedence over
+generic recommendations: preserve typed domain errors, deterministic ordering,
+atomic rejected transitions, and explicit qualification boundaries. Profile before
+changing snapshot ownership or adding optimization dependencies.
+
+Use the edition declared by each manifest and the toolchain pinned in
+`rust-toolchain.toml`. The pinned compiler is not a declared minimum supported Rust
+version; no MSRV is currently promised. Preserve the unsafe-code prohibition.
+Return recoverable failures through `Result`; reserve production `expect` for
+documented internal invariants. Test assertions may use `unwrap`/`expect`.
+Keep underlying errors available through `Error::source()` where an error implements
+`std::error::Error`; expose only safe messages at public boundaries. Document public
+APIs and their error conditions. Explain scoped Clippy allowances at their source.
+
+After a coherent batch of Rust edits, run `cargo check --locked` for the affected
+workspace. Before handing off Rust changes, run formatting, warnings-denied all-target
+Clippy, and relevant tests. Root-workspace commands do not cover the independent
+`services/application`, `src-tauri`, or `benchmarks/browser-rendering/rust` workspaces;
+use `--manifest-path <directory>/Cargo.toml` when touching them. Use each workspace's
+lockfile. Root-workspace checks:
+
+```sh
+cargo fmt --all --check
+cargo clippy --locked --workspace --all-targets -- -D warnings
+cargo test --locked --workspace
+```
+
+When a qualification task requires retained source inputs, report missing inputs
+and blocked qualification checks. Synthetic fallback data cannot qualify the engine.
+
+Claude Code also discovers the same Rust skill through `.claude/skills/rust-skills`.
+Its Rust edit hook runs a compiler check for the nearest manifest; shell-based edits
+and other agents still follow the explicit check workflow above. Compiler and lint
+success supplement behavioral and reference tests; they do not certify game rules.

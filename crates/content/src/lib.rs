@@ -144,7 +144,14 @@ impl std::fmt::Display for CatalogError {
         }
     }
 }
-impl std::error::Error for CatalogError {}
+impl std::error::Error for CatalogError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Io(error) => Some(error),
+            Self::Invalid(_) => None,
+        }
+    }
+}
 
 pub fn inventory(
     reader: impl BufRead,
@@ -320,6 +327,27 @@ pub fn inventory(
 mod tests {
     use super::*;
     use std::io::Cursor;
+    #[test]
+    fn catalog_error_preserves_io_source_and_kind() {
+        use std::error::Error;
+        let error = CatalogError::Io(std::io::Error::new(
+            std::io::ErrorKind::PermissionDenied,
+            "fixture read denied",
+        ));
+        let source = error
+            .source()
+            .unwrap()
+            .downcast_ref::<std::io::Error>()
+            .unwrap();
+        assert_eq!(source.kind(), std::io::ErrorKind::PermissionDenied);
+        assert_eq!(source.to_string(), "fixture read denied");
+        assert!(
+            CatalogError::Invalid("invalid fixture".into())
+                .source()
+                .is_none()
+        );
+    }
+
     fn metadata() -> BulkMetadata {
         BulkMetadata {
             object: "bulk_data".into(),
