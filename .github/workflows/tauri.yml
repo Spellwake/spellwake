@@ -246,6 +246,32 @@ jobs:
               }
             }
           }
+          $application = @($executables | Where-Object { $_.Name -ne 'uninstall.exe' })[0]
+          $app = Start-Process -FilePath $application.FullName -WorkingDirectory $installation -PassThru
+          try {
+            $deadline = (Get-Date).AddSeconds(30)
+            do {
+              Start-Sleep -Milliseconds 500
+              $app.Refresh()
+              if ($app.HasExited) { throw 'The installed Windows app exited during startup.' }
+            } while ($app.MainWindowHandle -eq 0 -and (Get-Date) -lt $deadline)
+            if ($app.MainWindowHandle -eq 0) { throw 'The installed Windows app did not create a window.' }
+            Start-Sleep -Seconds 5
+            $app.Refresh()
+            if ($app.HasExited) { throw 'The installed Windows app exited after creating its window.' }
+            if (-not $app.CloseMainWindow()) { throw 'The installed Windows app could not close its window.' }
+            if (-not $app.WaitForExit(15000)) { throw 'The installed Windows app did not exit after closing.' }
+          } finally {
+            $app.Refresh()
+            if (-not $app.HasExited) { Stop-Process -Id $app.Id -Force }
+          }
+          $removal = Start-Process -FilePath $uninstaller -ArgumentList '/S' -Wait -PassThru
+          if ($removal.ExitCode -ne 0) { throw 'Windows uninstaller smoke test failed.' }
+          $deadline = (Get-Date).AddSeconds(30)
+          while ((Test-Path -LiteralPath $application.FullName) -and (Get-Date) -lt $deadline) {
+            Start-Sleep -Milliseconds 500
+          }
+          if (Test-Path -LiteralPath $application.FullName) { throw 'The Windows uninstaller left the application installed.' }
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: spellwake-${{ matrix.name }}
@@ -322,6 +348,7 @@ jobs:
         run: brew install xcodegen
       - name: Verify the App Store SDK requirement
         run: |
+          sudo xcode-select --switch "$DEVELOPER_DIR"
           xcodebuild -version
           sdk_version=$(xcrun --sdk iphoneos --show-sdk-version)
           if [[ "${sdk_version%%.*}" -lt 26 ]]; then
@@ -355,6 +382,17 @@ jobs:
         run: |
           ipa=$(find src-tauri/gen/apple/build -name '*.ipa' -print -quit)
           test -n "$ipa"
+          inspection=$(mktemp -d)
+          trap 'rm -rf "$inspection"' EXIT
+          unzip -q "$ipa" -d "$inspection"
+          info=$(find "$inspection/Payload" -maxdepth 2 -name Info.plist -print -quit)
+          sdk_name=$(/usr/libexec/PlistBuddy -c 'Print :DTSDKName' "$info")
+          sdk_version=${sdk_name#iphoneos}
+          echo "Packaged iOS SDK: $sdk_name"
+          if [[ "$sdk_name" != iphoneos* || "${sdk_version%%.*}" -lt 26 ]]; then
+            echo 'The signed IPA itself must use the iOS 26 SDK or later.' >&2
+            exit 1
+          fi
           xcrun altool --validate-app --type ios --file "$ipa" --apiKey "$APPLE_API_KEY" --apiIssuer "$APPLE_API_ISSUER"
       - name: Preserve unsigned archive as a tarball
         if: env.SIGNED_RELEASE != 'true'
