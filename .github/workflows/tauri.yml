@@ -246,6 +246,32 @@ jobs:
               }
             }
           }
+          $application = @($executables | Where-Object { $_.Name -ne 'uninstall.exe' })[0]
+          $app = Start-Process -FilePath $application.FullName -WorkingDirectory $installation -PassThru
+          try {
+            $deadline = (Get-Date).AddSeconds(30)
+            do {
+              Start-Sleep -Milliseconds 500
+              $app.Refresh()
+              if ($app.HasExited) { throw 'The installed Windows app exited during startup.' }
+            } while ($app.MainWindowHandle -eq 0 -and (Get-Date) -lt $deadline)
+            if ($app.MainWindowHandle -eq 0) { throw 'The installed Windows app did not create a window.' }
+            Start-Sleep -Seconds 5
+            $app.Refresh()
+            if ($app.HasExited) { throw 'The installed Windows app exited after creating its window.' }
+            if (-not $app.CloseMainWindow()) { throw 'The installed Windows app could not close its window.' }
+            if (-not $app.WaitForExit(15000)) { throw 'The installed Windows app did not exit after closing.' }
+          } finally {
+            $app.Refresh()
+            if (-not $app.HasExited) { Stop-Process -Id $app.Id -Force }
+          }
+          $removal = Start-Process -FilePath $uninstaller -ArgumentList '/S' -Wait -PassThru
+          if ($removal.ExitCode -ne 0) { throw 'Windows uninstaller smoke test failed.' }
+          $deadline = (Get-Date).AddSeconds(30)
+          while ((Test-Path -LiteralPath $application.FullName) -and (Get-Date) -lt $deadline) {
+            Start-Sleep -Milliseconds 500
+          }
+          if (Test-Path -LiteralPath $application.FullName) { throw 'The Windows uninstaller left the application installed.' }
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: spellwake-${{ matrix.name }}
