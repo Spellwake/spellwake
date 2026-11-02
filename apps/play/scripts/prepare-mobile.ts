@@ -20,6 +20,61 @@ const result = Bun.spawnSync(
 if (result.exitCode !== 0) process.exit(result.exitCode);
 
 if (platform === "android") {
+  const activityPath = resolve(
+    root,
+    "src-tauri/gen/android/app/src/main/java/com/spellwake/client/MainActivity.kt",
+  );
+  const activity = await readFile(activityPath, "utf8");
+  const shell = await readFile(
+    resolve(root, "benchmarks/browser-rendering/public/play-area.html"),
+    "utf8",
+  );
+  const ground = shell.match(/--ground:\s*(#[\da-f]{6})\s*;/i)?.[1];
+  if (!ground) {
+    console.error(
+      "The native Android host requires the tabletop ground token.",
+    );
+    process.exit(1);
+  }
+  if (!activity.includes("WindowInsetsCompat.Type.systemBars()")) {
+    const marker = "    super.onCreate(savedInstanceState)";
+    if (activity.split(marker).length !== 2) {
+      console.error("Android activity template changed; review system insets.");
+      process.exit(1);
+    }
+    await writeFile(
+      activityPath,
+      activity
+        .replace(
+          "import android.os.Bundle",
+          `import android.os.Bundle
+import android.graphics.Color
+import android.view.View
+import androidx.core.graphics.Insets
+import androidx.core.view.ViewCompat
+import androidx.core.view.WindowCompat
+import androidx.core.view.WindowInsetsCompat`,
+        )
+        .replace(
+          marker,
+          `${marker}
+    // Keep the WebView and touch targets outside system bars and display cutouts.
+    val content = findViewById<View>(android.R.id.content)
+    content.setBackgroundColor(Color.parseColor("${ground}"))
+    WindowCompat.getInsetsController(window, content).apply {
+      isAppearanceLightStatusBars = false
+      isAppearanceLightNavigationBars = false
+    }
+    ViewCompat.setOnApplyWindowInsetsListener(content) { view, insets ->
+      val types = WindowInsetsCompat.Type.systemBars() or WindowInsetsCompat.Type.displayCutout()
+      val bars = insets.getInsets(types)
+      view.setPadding(bars.left, bars.top, bars.right, bars.bottom)
+      WindowInsetsCompat.Builder(insets).setInsets(types, Insets.NONE).build()
+    }
+    ViewCompat.requestApplyInsets(content)`,
+        ),
+    );
+  }
   const path = resolve(root, "src-tauri/gen/android/app/build.gradle.kts");
   const source = await readFile(path, "utf8");
   // The pinned Tauri template is generated, then this one signing seam is applied.
