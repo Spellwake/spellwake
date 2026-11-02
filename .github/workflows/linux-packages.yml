@@ -64,8 +64,10 @@ jobs:
                       or run['path'] != '.github/workflows/tauri.yml' or not re.fullmatch('[a-f0-9]{40}', run['head_sha'])):
                       raise SystemExit('Artifact must come from this repository application workflow.')
                   if expected:
-                      if run['head_sha'] != expected or run['event'] != 'pull_request':
+                      if run['head_sha'] != expected:
                           raise SystemExit('PR qualification requires the exact same-repository PR revision.')
+                      if run['event'] != 'pull_request':
+                          continue
                   elif requested:
                       if run['head_branch'] != 'main' and run['event'] != 'pull_request':
                           raise SystemExit('Explicit qualification accepts only main or same-repository PR application runs.')
