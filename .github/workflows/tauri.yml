@@ -144,10 +144,10 @@ jobs:
         run: bun run app:check
       - name: Test native host
         run: cargo test --locked --manifest-path src-tauri/Cargo.toml
-      # GitHub's Intel runners lose Apple's HTTP/3 ticket connection (runner-images#14924).
+      # GitHub's Mac runners lose Apple's HTTP/3 ticket connection (runner-images#14924).
       # This disposable runner must use TCP before Tauri's own app stapling runs, too.
-      - name: Route Intel Mac notarization tickets over TCP
-        if: matrix.name == 'macos-x64' && inputs.signed
+      - name: Route Mac notarization tickets over TCP
+        if: runner.os == 'macOS' && inputs.signed
         run: |
           printf '%s\n' 'block return out quick proto udp from any to any port 443' | sudo pfctl -f -
           sudo pfctl -E
