@@ -1,0 +1,22 @@
+.privacy-link {
+  --privacy-link-inset: 8px;
+  --privacy-link-padding: 4px 8px;
+  position: fixed;
+  right: var(--privacy-link-inset);
+  bottom: var(--privacy-link-inset);
+  z-index: 2;
+  padding: var(--privacy-link-padding);
+  color: var(--ink);
+  background: var(--ground);
+  font:
+    500 12px/1.5 "Albert Sans",
+    sans-serif;
+  text-underline-offset: 0.2em;
+}
+.privacy-link:hover {
+  color: var(--accent);
+}
+.privacy-link:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
