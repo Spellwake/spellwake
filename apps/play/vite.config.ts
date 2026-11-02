@@ -8,6 +8,7 @@ const shell = fileURLToPath(
     import.meta.url,
   ),
 );
+const mainEntry = fileURLToPath(new URL("./index.html", import.meta.url));
 
 /** Keep the native and study views on one renderer-owned DOM and stylesheet. */
 function tabletopShell(): Plugin {
@@ -28,7 +29,8 @@ function tabletopShell(): Plugin {
     },
     transformIndexHtml: {
       order: "pre",
-      async handler() {
+      async handler(_html, context) {
+        if (context.filename !== mainEntry) return;
         const html = await readFile(shell, "utf8");
         const entry =
           '<script type="module" src="/build/play-area-entry.js"></script>';
@@ -52,7 +54,17 @@ export default defineConfig(({ mode }) => ({
   plugins: [tabletopShell()],
   base: mode === "tauri" || mode === "web" ? "/" : "/play/",
   clearScreen: false,
-  build: { outDir: mode === "tauri" ? "dist-tauri" : "dist" },
+  build: {
+    outDir: mode === "tauri" ? "dist-tauri" : "dist",
+    rollupOptions: {
+      input: {
+        table: mainEntry,
+        privacy: fileURLToPath(
+          new URL("./privacy/index.html", import.meta.url),
+        ),
+      },
+    },
+  },
   server: {
     host: process.env.TAURI_DEV_HOST || "127.0.0.1",
     port: 6204,
