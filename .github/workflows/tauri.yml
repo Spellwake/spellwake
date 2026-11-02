@@ -309,6 +309,8 @@ jobs:
     needs: validate
     runs-on: macos-15
     timeout-minutes: 60
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_26.3.app/Contents/Developer
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
@@ -318,6 +320,14 @@ jobs:
           assets-token: ${{ secrets.SPELLWAKE_ASSETS_TOKEN }}
       - name: Install Xcode project generator
         run: brew install xcodegen
+      - name: Verify the App Store SDK requirement
+        run: |
+          xcodebuild -version
+          sdk_version=$(xcrun --sdk iphoneos --show-sdk-version)
+          if [[ "${sdk_version%%.*}" -lt 26 ]]; then
+            echo 'App Store Connect requires the iOS 26 SDK or later.' >&2
+            exit 1
+          fi
       - run: bun run app:ios:init
       - run: bun run release:config
       - name: Build unsigned device archive
@@ -331,6 +341,21 @@ jobs:
           IOS_CERTIFICATE_PASSWORD: ${{ secrets.IOS_CERTIFICATE_PASSWORD }}
           IOS_MOBILE_PROVISION: ${{ secrets.IOS_MOBILE_PROVISION }}
         run: bun run app:ios:build --ci --target aarch64 --export-method app-store-connect --config src-tauri/release.generated.json
+      - name: Prepare Apple validation credentials
+        if: env.SIGNED_RELEASE == 'true'
+        env:
+          APPLE_API_PRIVATE_KEY: ${{ secrets.APPLE_API_PRIVATE_KEY }}
+          APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
+        run: bun apps/play/scripts/prepare-apple-key.ts
+      - name: Validate the signed package with App Store Connect
+        if: env.SIGNED_RELEASE == 'true'
+        env:
+          APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+        run: |
+          ipa=$(find src-tauri/gen/apple/build -name '*.ipa' -print -quit)
+          test -n "$ipa"
+          xcrun altool --validate-app --type ios --file "$ipa" --apiKey "$APPLE_API_KEY" --apiIssuer "$APPLE_API_ISSUER"
       - name: Preserve unsigned archive as a tarball
         if: env.SIGNED_RELEASE != 'true'
         run: tar -czf "$RUNNER_TEMP/spellwake-ios-unsigned.tar.gz" -C src-tauri/gen/apple/build .
