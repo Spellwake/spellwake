@@ -1,0 +1,69 @@
+@font-face {
+  font-family: "Albert Sans";
+  src: url("/fonts/albertsans.ttf") format("truetype");
+  font-weight: 100 900;
+  font-display: swap;
+}
+:root {
+  color-scheme: dark;
+  --ground: #202322;
+  --ink: #eeeee7;
+  --accent: #e7c78d;
+  --line: #4b514b;
+  --prose-measure: 72ch;
+  --page-gutter: 24px;
+  --space-small: 12px;
+  --space-medium: 24px;
+  --space-large: 48px;
+  font:
+    400 17px/1.65 "Albert Sans",
+    sans-serif;
+  background: var(--ground);
+  color: var(--ink);
+}
+* {
+  box-sizing: border-box;
+}
+body {
+  margin: 0;
+}
+main {
+  max-width: calc(var(--prose-measure) + var(--page-gutter) * 2);
+  margin-inline: auto;
+  padding: var(--space-large) var(--page-gutter);
+}
+h1 {
+  font-size: 2.25rem;
+  line-height: 1.15;
+  margin: var(--space-large) 0 var(--space-small);
+}
+h2 {
+  font-size: 1.25rem;
+  line-height: 1.35;
+  margin: var(--space-large) 0 var(--space-small);
+}
+p {
+  margin: 0 0 var(--space-medium);
+}
+.updated {
+  margin-bottom: var(--space-large);
+}
+a {
+  color: var(--accent);
+  text-underline-offset: 0.2em;
+  overflow-wrap: anywhere;
+}
+a:hover {
+  color: var(--ink);
+}
+a:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 4px;
+}
+::selection {
+  background: var(--accent);
+  color: var(--ground);
+}
+html {
+  scrollbar-color: var(--line) var(--ground);
+}
