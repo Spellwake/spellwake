@@ -1484,6 +1484,13 @@
     ]
   },
   {
+    "name": "read_room_game",
+    "arguments": "p_room uuid",
+    "roles": [
+      "authenticated"
+    ]
+  },
+  {
     "name": "read_room_invitation_command",
     "arguments": "p_subject uuid, p_session uuid, p_kind text, p_request uuid, p_target uuid, p_expected numeric, p_token_hash text",
     "roles": [

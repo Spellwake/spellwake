@@ -683,6 +683,16 @@
     }
   },
   {
+    "relation": "countdown_dispatch_cursor",
+    "kind": "table",
+    "reads": {
+      "anon": [],
+      "authenticated": [],
+      "service_role": [],
+      "supabase_auth_admin": []
+    }
+  },
+  {
     "relation": "daily_quest_state",
     "kind": "table",
     "reads": {

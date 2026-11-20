@@ -15,6 +15,7 @@ import {
   validPublicProfileArt,
   deckLibraryPageSchema,
   roomCommandSchema,
+  roomGameResponseSchema,
   enqueueMatchmakingSchema,
   enqueueMatchmakingAckSchema,
   queuePageSchema,
@@ -314,4 +315,28 @@ test("profile acknowledgments bind the original caller", async () => {
   expect(
     validProfileArtDisposition(parsed, "22222222-2222-4222-8222-222222222222"),
   ).toBe(false);
+});
+
+
+test("room game handoff distinguishes waiting from admitted participant delivery", () => {
+  const roomId = "10000000-0000-4000-8000-000000000001";
+  const accountId = "10000000-0000-4000-8000-000000000002";
+  const matchId = "10000000-0000-4000-8000-000000000003";
+  const seatId = "10000000-0000-4000-8000-000000000004";
+  const gameId = "10000000-0000-4000-8000-000000000005";
+  const waiting = { state: "waiting", roomId, accountId, roomState: "countdown" };
+  const admitted = {
+    state: "admitted", roomId, accountId, matchId, seatId,
+    game: { id: gameId, state: "reserved", contextId: null },
+  };
+  for (const data of [waiting, admitted, { ...admitted, game: null }]) {
+    expect(roomGameResponseSchema.safeParse({ status: "success", data }).success).toBe(true);
+  }
+  for (const data of [
+    { ...waiting, matchId },
+    { ...admitted, game: { id: gameId, state: "reserved" } },
+    { ...admitted, seatId: "" },
+  ]) {
+    expect(roomGameResponseSchema.safeParse({ status: "success", data }).success).toBe(false);
+  }
 });
