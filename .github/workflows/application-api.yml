@@ -80,6 +80,15 @@ jobs:
         run: |
           cargo build --locked --release --manifest-path services/application/Cargo.toml \
             --bin application_api --bin native_match_worker --bin native_release_candidate
+      - name: Record Linux binary digests and native runtime identity
+        working-directory: services/application/target/release
+        shell: bash
+        run: |
+          sha256sum application_api native_match_worker native_release_candidate
+          shopt -s nullglob
+          manifests=(build/spellwake-application-*/out/native-runtime-inputs.json)
+          test "${#manifests[@]}" -eq 1
+          jq -er '.identity | select(test("^[0-9a-f]{64}$"))' "${manifests[0]}"
       - name: Exercise the Linux API lifecycle
         env:
           SPELLWAKE_API_BIND: 127.0.0.1:58080
