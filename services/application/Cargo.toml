@@ -1,0 +1,48 @@
+[package]
+name = "spellwake-application"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+# Own lockfile/target while the native engine's qualification work is in flight.
+[workspace]
+
+[dependencies]
+axum = "0.8"
+base64 = "=0.22.1"
+chrono = { version = "0.4", features = ["serde"] }
+flate2 = "1"
+futures = "0.3"
+hmac = "0.13"
+md-5 = "=0.11.0"
+num-bigint = "0.5"
+num-traits = "0.2"
+reqwest = { version = "0.13", default-features = false, features = ["blocking", "form", "query", "json", "rustls"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1", features = ["raw_value", "float_roundtrip"] }
+sha2 = "0.11"
+spellwake-contracts = { path = "../../crates/contracts" }
+spellwake-engine = { path = "../../crates/engine" }
+spellwake-card-programs = { path = "../../crates/card_programs" }
+spellwake-content = { path = "../../crates/content" }
+temporalio-client = { version = "=1.1.1", default-features = false, features = ["tls-ring", "vendored-protox"] }
+temporalio-common = { version = "=1.1.1", default-features = false, features = ["vendored-protox"] }
+temporalio-macros = "=1.1.1"
+temporalio-sdk = { version = "=1.1.1", default-features = false }
+temporalio-workflow = "=1.1.1"
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "net", "signal", "sync", "time"] }
+tokio-postgres = { version = "0.7", features = ["with-uuid-1", "with-serde_json-1"] }
+tower = { version = "0.5", features = ["util"] }
+tower-http = { version = "0.6", features = ["cors"] }
+uuid = { version = "1", features = ["serde", "v4"] }
+
+[lints.rust]
+unsafe_code = "forbid"
+
+[build-dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.11"
+
+[lints.clippy]
+all = "warn"

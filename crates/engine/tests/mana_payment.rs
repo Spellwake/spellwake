@@ -2,14 +2,17 @@
 //! engine-core/reviews/mana-payment-scenarios.md. Authored native programs qualify
 //! neither full casting/cards nor Forge's asymmetric per-symbol failure states.
 use spellwake_contracts::RulesInteger;
+use spellwake_engine::combat::CombatRules;
+use spellwake_engine::program::{BodyTarget, ExecutableBody, SpellTargetFilter};
+use spellwake_engine::setup::GameSeed;
 use spellwake_engine::{
-    card_identity::{CardDestination, CardId, CardObjectId, CardZone},
     effects::{CopyTargetChoice, EffectError, EffectWindow, Instruction, Program, SeedCard},
     game::{
         CandidateBase, GameCommand, GameContext, GameError, GameId, GameInput, GameState,
         NativeCandidate,
     },
     mana::{FloatingMana, ManaCost, ManaPayment, ManaPaymentError, ManaSpend, ManaType},
+    object_identity::{CardId, ObjectDestination, ObjectId, ObjectZone},
     priority::{PriorityError, PriorityPhase, SeatId},
     stack_window::{StackKind, StackWindowError, WindowPhase},
     targets::TargetRef,
@@ -38,6 +41,8 @@ fn context_fields(fields: [&str; 5]) -> GameContext {
         fields[2].into(),
         fields[3].into(),
         fields[4].into(),
+        test_vocabulary().id(),
+        spellwake_contracts::names::NameRules::literal_names().id(),
     )
     .unwrap()
 }
@@ -75,15 +80,18 @@ fn pools(player: SeatId, amounts: &[(ManaType, i64)]) -> Vec<FloatingMana> {
         .collect()
 }
 
-fn instant(id: u64, owner: SeatId, cost: ManaCost, instruction: Instruction) -> SeedCard {
+fn instant(
+    id: u64,
+    owner: SeatId,
+    cost: ManaCost,
+    instruction: Instruction,
+    body_target: BodyTarget,
+) -> SeedCard {
     SeedCard {
         card: CardId(id),
         owner,
-        destination: CardDestination::Hand,
-        program: Program::Instant {
-            cost,
-            instructions: vec![instruction],
-        },
+        destination: ObjectDestination::Hand,
+        program: Program::instant(cost, ExecutableBody::new(body_target, vec![instruction])),
     }
 }
 
@@ -91,23 +99,56 @@ fn creature(id: u64, owner: SeatId) -> SeedCard {
     SeedCard {
         card: CardId(id),
         owner,
-        destination: CardDestination::Battlefield { controller: owner },
-        program: Program::VanillaCreature {
-            power: 2.into(),
-            toughness: 100.into(),
-        },
+        destination: ObjectDestination::Battlefield { controller: owner },
+        program: Program::creature(
+            None,
+            2.into(),
+            100.into(),
+            std::collections::BTreeSet::new(),
+        ),
     }
 }
 
 fn seeds(cost: ManaCost) -> Vec<SeedCard> {
     vec![
-        instant(1, A, cost, Instruction::Damage { amount: 1.into() }),
+        instant(
+            1,
+            A,
+            cost,
+            Instruction::Damage { amount: 1.into() },
+            BodyTarget::SingleCreature,
+        ),
         creature(90, B),
     ]
 }
 
 fn initialize(cost: ManaCost, mana: Vec<FloatingMana>) -> NativeCandidate {
-    GameState::initialize(GameId(41), context(), vec![A, B], A, seeds(cost), mana).unwrap()
+    GameState::initialize(GameId(41), context(), {
+        let cards: Vec<SeedCard> = seeds(cost);
+        // Fixture premise: seeded BF timestamps follow this authored card sequence.
+        let initial_battlefield_order = cards
+            .iter()
+            .filter(|card| {
+                matches!(
+                    card.destination,
+                    spellwake_engine::object_identity::ObjectDestination::Battlefield { .. }
+                )
+            })
+            .map(|card| card.card)
+            .collect();
+        GameSeed::with_uniform_life(
+            vec![A, B],
+            A,
+            cards,
+            initial_battlefield_order,
+            mana,
+            20.into(),
+            CombatRules::UnrestrictedFreeForAll,
+            test_vocabulary(),
+            std::sync::Arc::new(spellwake_contracts::names::NameRules::literal_names()),
+        )
+    })
+    .unwrap()
 }
 
 fn setup(cost: ManaCost, mana: Vec<FloatingMana>) -> GameState {
@@ -116,7 +157,7 @@ fn setup(cost: ManaCost, mana: Vec<FloatingMana>) -> GameState {
     candidate.into_state()
 }
 
-fn object(game: &GameState, card: u64) -> CardObjectId {
+fn object(game: &GameState, card: u64) -> ObjectId {
     game.execution()
         .window()
         .cards()
@@ -124,7 +165,7 @@ fn object(game: &GameState, card: u64) -> CardObjectId {
         .unwrap()
 }
 
-fn zone(game: &GameState, card: u64) -> CardZone {
+fn zone(game: &GameState, card: u64) -> ObjectZone {
     game.execution()
         .window()
         .cards()
@@ -144,7 +185,7 @@ fn request(game: &GameState, actor: SeatId, command: GameCommand) -> GameInput {
 fn command(game: &GameState, spend: ManaPayment) -> GameCommand {
     GameCommand::CastPaid {
         spell: object(game, 1),
-        target: TargetRef::Card(object(game, 90)),
+        target: TargetRef::Object(object(game, 90)),
         payment: spend,
     }
 }
@@ -152,7 +193,7 @@ fn command(game: &GameState, spend: ManaPayment) -> GameCommand {
 fn convenience(game: &GameState) -> GameCommand {
     GameCommand::Cast {
         spell: object(game, 1),
-        target: TargetRef::Card(object(game, 90)),
+        target: TargetRef::Object(object(game, 90)),
     }
 }
 
@@ -226,7 +267,7 @@ fn receipt(candidate: &NativeCandidate, payer: SeatId, cost: &ManaCost, spend: M
             .get(*object)
             .unwrap()
             .zone(),
-        CardZone::Stack
+        ObjectZone::Stack
     );
 }
 
@@ -455,7 +496,7 @@ fn every_explicit_zero_cost_form_accepts_an_empty_payment_with_a_receipt() {
         assert_eq!(explicit, inferred);
         receipt(&explicit, A, &cost, payment(&[]));
         assert_eq!(balances(explicit.state()), balances(&game));
-        assert_eq!(zone(explicit.state(), 1), CardZone::Stack);
+        assert_eq!(zone(explicit.state(), 1), ObjectZone::Stack);
     }
 }
 
@@ -542,12 +583,31 @@ fn negative_cost_components_and_invalid_pool_seeds_reject_whole_setup() {
         cost(2, &[(ManaType::Red, -1)]),
     ] {
         assert_eq!(
-            EffectWindow::new(
-                vec![A, B],
-                A,
-                seeds(invalid),
-                pools(A, &[(ManaType::Red, 4)])
-            ),
+            EffectWindow::new({
+                let cards: Vec<SeedCard> = seeds(invalid);
+                // Fixture premise: seeded BF timestamps follow this authored card sequence.
+                let initial_battlefield_order = cards
+                    .iter()
+                    .filter(|card| {
+                        matches!(
+                            card.destination,
+                            spellwake_engine::object_identity::ObjectDestination::Battlefield { .. }
+                        )
+                    })
+                    .map(|card| card.card)
+                    .collect();
+                GameSeed::with_uniform_life(
+                    vec![A, B],
+                    A,
+                    cards,
+                    initial_battlefield_order,
+                    pools(A, &[(ManaType::Red, 4)]),
+                    20.into(),
+                    CombatRules::UnrestrictedFreeForAll,
+                    test_vocabulary(),
+                    std::sync::Arc::new(spellwake_contracts::names::NameRules::literal_names()),
+                )
+            }),
             Err(EffectError::InvalidSetup)
         );
     }
@@ -557,7 +617,31 @@ fn negative_cost_components_and_invalid_pool_seeds_reject_whole_setup() {
         pools(SeatId(99), &[(ManaType::Red, 1)]),
     ] {
         assert_eq!(
-            EffectWindow::new(vec![A, B], A, seeds(ManaCost::free()), invalid),
+            EffectWindow::new({
+                let cards: Vec<SeedCard> = seeds(ManaCost::free());
+                // Fixture premise: seeded BF timestamps follow this authored card sequence.
+                let initial_battlefield_order = cards
+                    .iter()
+                    .filter(|card| {
+                        matches!(
+                            card.destination,
+                            spellwake_engine::object_identity::ObjectDestination::Battlefield { .. }
+                        )
+                    })
+                    .map(|card| card.card)
+                    .collect();
+                GameSeed::with_uniform_life(
+                    vec![A, B],
+                    A,
+                    cards,
+                    initial_battlefield_order,
+                    invalid,
+                    20.into(),
+                    CombatRules::UnrestrictedFreeForAll,
+                    test_vocabulary(),
+                    std::sync::Arc::new(spellwake_contracts::names::NameRules::literal_names()),
+                )
+            }),
             Err(EffectError::InvalidSetup)
         );
     }
@@ -718,17 +802,44 @@ fn valid_payment_does_not_bypass_own_hand_program_target_or_holder_checks() {
         B,
         ManaCost::one(ManaType::Red),
         Instruction::Damage { amount: 1.into() },
+        BodyTarget::SingleCreature,
     ));
     let mut hand_creature = creature(3, A);
-    hand_creature.destination = CardDestination::Hand;
+    hand_creature.destination = ObjectDestination::Hand;
     cards.push(hand_creature);
     let mut mana = pools(A, &[(ManaType::Red, 4)]);
     mana.extend(pools(B, &[(ManaType::Red, 4)]));
-    let game = GameState::initialize(GameId(41), context(), vec![A, B], A, cards, mana)
-        .unwrap()
-        .into_state();
-    let target = TargetRef::Card(object(&game, 90));
-    for (spell, error) in [(2, EffectError::NotOwnHand), (3, EffectError::NotInstant)] {
+    let game = GameState::initialize(GameId(41), context(), {
+        // Fixture premise: seeded BF timestamps follow this authored card sequence.
+        let initial_battlefield_order = cards
+            .iter()
+            .filter(|card| {
+                matches!(
+                    card.destination,
+                    spellwake_engine::object_identity::ObjectDestination::Battlefield { .. }
+                )
+            })
+            .map(|card| card.card)
+            .collect();
+        GameSeed::with_uniform_life(
+            vec![A, B],
+            A,
+            cards,
+            initial_battlefield_order,
+            mana,
+            20.into(),
+            CombatRules::UnrestrictedFreeForAll,
+            test_vocabulary(),
+            std::sync::Arc::new(spellwake_contracts::names::NameRules::literal_names()),
+        )
+    })
+    .unwrap()
+    .into_state();
+    let target = TargetRef::Object(object(&game, 90));
+    for (spell, error) in [
+        (2, EffectError::NotOwnHand),
+        (3, EffectError::NotCastableSpell),
+    ] {
         reject(
             &game,
             request(
@@ -749,7 +860,7 @@ fn valid_payment_does_not_bypass_own_hand_program_target_or_holder_checks() {
     for target in [
         TargetRef::Player(A),
         TargetRef::Stack(missing_stack_entry),
-        TargetRef::Card(object(&game, 1)),
+        TargetRef::Object(object(&game, 1)),
     ] {
         reject(
             &game,
@@ -791,10 +902,17 @@ fn unknown_source_handle_cannot_use_a_valid_payment_or_current_game_basis() {
     let other = GameState::initialize(
         GameId(42),
         context(),
-        vec![A, B],
-        A,
-        vec![creature(10, B), creature(11, B), creature(12, B)],
-        vec![],
+        GameSeed::with_uniform_life(
+            vec![A, B],
+            A,
+            vec![creature(10, B), creature(11, B), creature(12, B)],
+            vec![CardId(10), CardId(11), CardId(12)],
+            vec![],
+            20.into(),
+            CombatRules::UnrestrictedFreeForAll,
+            test_vocabulary(),
+            std::sync::Arc::new(spellwake_contracts::names::NameRules::literal_names()),
+        ),
     )
     .unwrap()
     .into_state();
@@ -807,11 +925,11 @@ fn unknown_source_handle_cannot_use_a_valid_payment_or_current_game_basis() {
             A,
             GameCommand::CastPaid {
                 spell: foreign,
-                target: TargetRef::Card(object(&game, 90)),
+                target: TargetRef::Object(object(&game, 90)),
                 payment: payment(&[(ManaType::Red, 1)]),
             },
         ),
-        GameError::Effect(EffectError::UnknownCard),
+        GameError::Effect(EffectError::UnknownObject),
     );
 }
 
@@ -831,11 +949,11 @@ fn old_source_identity_is_not_retargeted_to_the_accepted_stack_incarnation() {
             A,
             GameCommand::CastPaid {
                 spell: old,
-                target: TargetRef::Card(object(&next, 90)),
+                target: TargetRef::Object(object(&next, 90)),
                 payment: payment(&[(ManaType::Red, 1)]),
             },
         ),
-        GameError::Effect(EffectError::UnknownCard),
+        GameError::Effect(EffectError::UnknownObject),
     );
     reject(
         &next,
@@ -844,7 +962,7 @@ fn old_source_identity_is_not_retargeted_to_the_accepted_stack_incarnation() {
             A,
             GameCommand::CastPaid {
                 spell: object(&next, 1),
-                target: TargetRef::Card(object(&next, 90)),
+                target: TargetRef::Object(object(&next, 90)),
                 payment: payment(&[(ManaType::Red, 1)]),
             },
         ),
@@ -860,15 +978,32 @@ fn departed_target_and_its_new_hand_incarnation_both_reject_without_payment() {
         A,
         ManaCost::free(),
         Instruction::ReturnToOwnersHand,
+        BodyTarget::SingleCreature,
     ));
-    let game = GameState::initialize(
-        GameId(41),
-        context(),
-        vec![A, B],
-        A,
-        cards,
-        pools(A, &[(ManaType::Red, 3)]),
-    )
+    let game = GameState::initialize(GameId(41), context(), {
+        // Fixture premise: seeded BF timestamps follow this authored card sequence.
+        let initial_battlefield_order = cards
+            .iter()
+            .filter(|card| {
+                matches!(
+                    card.destination,
+                    spellwake_engine::object_identity::ObjectDestination::Battlefield { .. }
+                )
+            })
+            .map(|card| card.card)
+            .collect();
+        GameSeed::with_uniform_life(
+            vec![A, B],
+            A,
+            cards,
+            initial_battlefield_order,
+            pools(A, &[(ManaType::Red, 3)]),
+            20.into(),
+            CombatRules::UnrestrictedFreeForAll,
+            test_vocabulary(),
+            std::sync::Arc::new(spellwake_contracts::names::NameRules::literal_names()),
+        )
+    })
     .unwrap()
     .into_state();
     let old = object(&game, 90);
@@ -877,11 +1012,11 @@ fn departed_target_and_its_new_hand_incarnation_both_reject_without_payment() {
         A,
         GameCommand::Cast {
             spell: object(&game, 2),
-            target: TargetRef::Card(old),
+            target: TargetRef::Object(old),
         },
     );
     let game = pass_round(cast.into_state());
-    assert_eq!(zone(&game, 90), CardZone::Hand(B));
+    assert_eq!(zone(&game, 90), ObjectZone::Hand(B));
     assert_ne!(old, object(&game, 90));
     for target in [old, object(&game, 90)] {
         reject(
@@ -891,7 +1026,7 @@ fn departed_target_and_its_new_hand_incarnation_both_reject_without_payment() {
                 A,
                 GameCommand::CastPaid {
                     spell: object(&game, 1),
-                    target: TargetRef::Card(target),
+                    target: TargetRef::Object(target),
                     payment: payment(&[(ManaType::Red, 1)]),
                 },
             ),
@@ -910,7 +1045,7 @@ fn low_level_paid_transition_and_legacy_wrapper_share_the_same_successor() {
     let state = game.execution();
     let saved = state.clone();
     let spell = object(&game, 1);
-    let target = TargetRef::Card(object(&game, 90));
+    let target = TargetRef::Object(object(&game, 90));
     let transition = state
         .cast_with_payment(
             state.revision(),
@@ -928,9 +1063,9 @@ fn low_level_paid_transition_and_legacy_wrapper_share_the_same_successor() {
         transition.state(),
         &state.cast(state.revision(), A, spell, target).unwrap()
     );
-    assert_eq!(transition.payment().cost, cost);
+    assert_eq!(transition.result().cost, cost);
     assert_eq!(
-        transition.payment().spend,
+        transition.result().spend,
         payment(&[(ManaType::Red, 1), (ManaType::Colourless, 1)]).spend
     );
     let accepted = transition.state().clone();
@@ -940,15 +1075,34 @@ fn low_level_paid_transition_and_legacy_wrapper_share_the_same_successor() {
 
 #[test]
 fn low_level_stale_revision_checks_required_and_closed_step_preserve_resources() {
-    let mut state = EffectWindow::new(
-        vec![A, B],
-        A,
-        seeds(ManaCost::one(ManaType::Red)),
-        pools(A, &[(ManaType::Red, 3)]),
-    )
+    let mut state = EffectWindow::new({
+        let cards: Vec<SeedCard> = seeds(ManaCost::one(ManaType::Red));
+        // Fixture premise: seeded BF timestamps follow this authored card sequence.
+        let initial_battlefield_order = cards
+            .iter()
+            .filter(|card| {
+                matches!(
+                    card.destination,
+                    spellwake_engine::object_identity::ObjectDestination::Battlefield { .. }
+                )
+            })
+            .map(|card| card.card)
+            .collect();
+        GameSeed::with_uniform_life(
+            vec![A, B],
+            A,
+            cards,
+            initial_battlefield_order,
+            pools(A, &[(ManaType::Red, 3)]),
+            20.into(),
+            CombatRules::UnrestrictedFreeForAll,
+            test_vocabulary(),
+            std::sync::Arc::new(spellwake_contracts::names::NameRules::literal_names()),
+        )
+    })
     .unwrap();
     let spell = state.window().cards().current_identity(CardId(1)).unwrap();
-    let target = TargetRef::Card(state.window().cards().current_identity(CardId(90)).unwrap());
+    let target = TargetRef::Object(state.window().cards().current_identity(CardId(90)).unwrap());
     let saved = state.clone();
     assert_eq!(
         state.cast_with_payment(
@@ -996,21 +1150,52 @@ fn copy_reply_and_countered_source_neither_repeat_receipts_charge_copies_nor_ref
             A,
             ManaCost::generic(1.into()),
             Instruction::Damage { amount: 1.into() },
+            BodyTarget::SingleCreature,
         ),
-        instant(2, B, ManaCost::one(ManaType::Blue), Instruction::CopySpell),
+        instant(
+            2,
+            B,
+            ManaCost::one(ManaType::Blue),
+            Instruction::CopySpell,
+            BodyTarget::SingleSpell(SpellTargetFilter::CopyableInstructionSpell),
+        ),
         instant(
             3,
             A,
             ManaCost::one(ManaType::Red),
             Instruction::CounterSpell,
+            BodyTarget::SingleSpell(SpellTargetFilter::AnySpell),
         ),
         creature(90, B),
     ];
     let mut mana = pools(A, &[(ManaType::Green, 1), (ManaType::Red, 1)]);
     mana.extend(pools(B, &[(ManaType::Blue, 1)]));
-    let game = GameState::initialize(GameId(41), context(), vec![A, B], A, cards, mana)
-        .unwrap()
-        .into_state();
+    let game = GameState::initialize(GameId(41), context(), {
+        // Fixture premise: seeded BF timestamps follow this authored card sequence.
+        let initial_battlefield_order = cards
+            .iter()
+            .filter(|card| {
+                matches!(
+                    card.destination,
+                    spellwake_engine::object_identity::ObjectDestination::Battlefield { .. }
+                )
+            })
+            .map(|card| card.card)
+            .collect();
+        GameSeed::with_uniform_life(
+            vec![A, B],
+            A,
+            cards,
+            initial_battlefield_order,
+            mana,
+            20.into(),
+            CombatRules::UnrestrictedFreeForAll,
+            test_vocabulary(),
+            std::sync::Arc::new(spellwake_contracts::names::NameRules::literal_names()),
+        )
+    })
+    .unwrap()
+    .into_state();
     let first = accept(&game, A, command(&game, payment(&[(ManaType::Green, 1)])));
     receipt(
         &first,
@@ -1065,7 +1250,7 @@ fn copy_reply_and_countered_source_neither_repeat_receipts_charge_copies_nor_ref
         },
     );
     assert_eq!(game.execution().window().spell_copies().len(), 1);
-    assert_eq!(zone(&game, 2), CardZone::Graveyard(B));
+    assert_eq!(zone(&game, 2), ObjectZone::Graveyard(B));
     let counter = accept(
         &game,
         A,
@@ -1082,18 +1267,29 @@ fn copy_reply_and_countered_source_neither_repeat_receipts_charge_copies_nor_ref
         payment(&[(ManaType::Red, 1)]),
     );
     let game = pass_round(counter.into_state());
-    assert_eq!(zone(&game, 1), CardZone::Graveyard(A));
-    assert_eq!(zone(&game, 3), CardZone::Graveyard(A));
+    assert_eq!(zone(&game, 1), ObjectZone::Graveyard(A));
+    assert_eq!(zone(&game, 3), ObjectZone::Graveyard(A));
     assert_eq!(game.execution().window().entries().len(), 1);
     let game = pass_round(game);
     assert!(game.execution().window().spell_copies().is_empty());
     assert!(game.execution().window().entries().is_empty());
     assert_eq!(
-        game.execution().creature(object(&game, 90)).unwrap().damage,
+        game.execution()
+            .creature(object(&game, 90))
+            .unwrap()
+            .unwrap()
+            .damage,
         1.into()
     );
     assert_eq!(balances(&game), vec![RulesInteger::from(0); 12]);
     let game = pass_round(game);
     assert_eq!(game.execution().window().phase(), WindowPhase::StepEnded);
     assert_eq!(balances(&game), vec![RulesInteger::from(0); 12]);
+}
+
+#[path = "support/vocabulary.rs"]
+mod synthetic_vocabulary;
+fn test_vocabulary() -> std::sync::Arc<spellwake_contracts::creature_types::CreatureTypeVocabulary>
+{
+    synthetic_vocabulary::for_rules("rules")
 }

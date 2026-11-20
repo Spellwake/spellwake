@@ -1,13 +1,16 @@
 //! Independent acceptance scenarios for the restricted, game-scoped transition driver.
 //! These observe native private state and do not qualify transport, persistence or full cards.
+use spellwake_engine::combat::CombatRules;
+use spellwake_engine::program::{BodyTarget, ExecutableBody, SpellTargetFilter};
+use spellwake_engine::setup::GameSeed;
 use spellwake_engine::{
-    card_identity::{CardDestination, CardId, CardObjectId, CardZone},
     effects::{CopyTargetChoice, EffectError, Instruction, Program, SeedCard},
     game::{
         CandidateBase, DecisionId, GameCommand, GameContext, GameError, GameId, GameInput,
         GameState, NativeCandidate, RuleFrame,
     },
     mana::{FloatingMana, ManaCost, ManaType},
+    object_identity::{CardId, ObjectDestination, ObjectId, ObjectZone},
     priority::{PriorityPhase, SeatId},
     stack_window::{StackEntryId, StackKind, WindowPhase},
     targets::TargetRef,
@@ -33,6 +36,8 @@ fn make_context(fields: [&str; 5]) -> GameContext {
         fields[2].into(),
         fields[3].into(),
         fields[4].into(),
+        test_vocabulary().id(),
+        spellwake_contracts::names::NameRules::literal_names().id(),
     )
     .unwrap()
 }
@@ -43,15 +48,16 @@ fn instant(
     mana_type: ManaType,
     amount: i64,
     instruction: Instruction,
+    body_target: BodyTarget,
 ) -> SeedCard {
     SeedCard {
         card: CardId(id),
         owner,
-        destination: CardDestination::Hand,
-        program: Program::Instant {
-            cost: ManaCost::specific(mana_type, amount.into()),
-            instructions: vec![instruction],
-        },
+        destination: ObjectDestination::Hand,
+        program: Program::instant(
+            ManaCost::specific(mana_type, amount.into()),
+            ExecutableBody::new(body_target, vec![instruction]),
+        ),
     }
 }
 
@@ -63,20 +69,39 @@ fn cards() -> Vec<SeedCard> {
             ManaType::Red,
             1,
             Instruction::Damage { amount: 3.into() },
+            BodyTarget::SingleCreature,
         ),
-        instant(2, B, ManaType::Blue, 2, Instruction::CopySpell),
-        instant(3, A, ManaType::Blue, 2, Instruction::CounterSpell),
-        instant(4, A, ManaType::Blue, 1, Instruction::ReturnToOwnersHand),
+        instant(
+            2,
+            B,
+            ManaType::Blue,
+            2,
+            Instruction::CopySpell,
+            BodyTarget::SingleSpell(SpellTargetFilter::CopyableInstructionSpell),
+        ),
+        instant(
+            3,
+            A,
+            ManaType::Blue,
+            2,
+            Instruction::CounterSpell,
+            BodyTarget::SingleSpell(SpellTargetFilter::AnySpell),
+        ),
+        instant(
+            4,
+            A,
+            ManaType::Blue,
+            1,
+            Instruction::ReturnToOwnersHand,
+            BodyTarget::SingleCreature,
+        ),
     ];
     for (id, owner) in [(5, B), (6, A)] {
         cards.push(SeedCard {
             card: CardId(id),
             owner,
-            destination: CardDestination::Battlefield { controller: owner },
-            program: Program::VanillaCreature {
-                power: 2.into(),
-                toughness: 2.into(),
-            },
+            destination: ObjectDestination::Battlefield { controller: owner },
+            program: Program::creature(None, 2.into(), 2.into(), std::collections::BTreeSet::new()),
         });
     }
     cards
@@ -103,14 +128,39 @@ fn mana() -> Vec<FloatingMana> {
 }
 
 fn initialize(game: GameId, context: GameContext) -> NativeCandidate {
-    GameState::initialize(game, context, vec![A, B], A, cards(), mana()).unwrap()
+    GameState::initialize(game, context, {
+        let cards: Vec<SeedCard> = cards();
+        // Fixture premise: seeded BF timestamps follow this authored card sequence.
+        let initial_battlefield_order = cards
+            .iter()
+            .filter(|card| {
+                matches!(
+                    card.destination,
+                    spellwake_engine::object_identity::ObjectDestination::Battlefield { .. }
+                )
+            })
+            .map(|card| card.card)
+            .collect();
+        GameSeed::with_uniform_life(
+            vec![A, B],
+            A,
+            cards,
+            initial_battlefield_order,
+            mana(),
+            20.into(),
+            CombatRules::UnrestrictedFreeForAll,
+            test_vocabulary(),
+            std::sync::Arc::new(spellwake_contracts::names::NameRules::literal_names()),
+        )
+    })
+    .unwrap()
 }
 
 fn setup() -> GameState {
     initialize(GameId(10), context()).into_state()
 }
 
-fn object(game: &GameState, card: u64) -> CardObjectId {
+fn object(game: &GameState, card: u64) -> ObjectId {
     game.execution()
         .window()
         .cards()
@@ -118,7 +168,7 @@ fn object(game: &GameState, card: u64) -> CardObjectId {
         .unwrap()
 }
 
-fn zone(game: &GameState, card: u64) -> CardZone {
+fn zone(game: &GameState, card: u64) -> ObjectZone {
     game.execution()
         .window()
         .cards()
@@ -197,7 +247,7 @@ fn pass_round(game: GameState) -> GameState {
 fn stacked() -> GameState {
     let game = setup();
     let target = object(&game, 5);
-    let game = cast(game, A, 1, TargetRef::Card(target));
+    let game = cast(game, A, 1, TargetRef::Object(target));
     let original = game.execution().window().entries()[0].id();
     cast(game, B, 2, TargetRef::Stack(original))
 }
@@ -208,11 +258,11 @@ fn pending() -> GameState {
     game
 }
 
-fn missing_target() -> (GameState, CardObjectId) {
+fn missing_target() -> (GameState, ObjectId) {
     let game = stacked();
     let old = object(&game, 5);
-    let game = pass_round(cast(game, A, 4, TargetRef::Card(old)));
-    assert_eq!(zone(&game, 5), CardZone::Hand(B));
+    let game = pass_round(cast(game, A, 4, TargetRef::Object(old)));
+    assert_eq!(zone(&game, 5), ObjectZone::Hand(B));
     assert_ne!(old, object(&game, 5));
     (pass_round(game), old)
 }
@@ -233,7 +283,7 @@ fn copied() -> GameState {
     let game = pending();
     reply(
         &game,
-        CopyTargetChoice::Change(TargetRef::Card(object(&game, 6))),
+        CopyTargetChoice::Change(TargetRef::Object(object(&game, 6))),
     )
 }
 
@@ -342,7 +392,7 @@ fn pending_resolution_is_owned_exact_and_has_no_priority_window() {
         WindowPhase::Resolving(frame.entry())
     );
     assert!(game.execution().window().spell_copies().is_empty());
-    assert_eq!(zone(&game, 2), CardZone::Stack);
+    assert_eq!(zone(&game, 2), ObjectZone::Stack);
     assert_eq!(game.execution().mana(B, ManaType::Blue), 0.into());
     for actor in [A, B] {
         for command in [
@@ -363,7 +413,7 @@ fn pending_resolution_is_owned_exact_and_has_no_priority_window() {
     assert_eq!(resumed, reply(&game, CopyTargetChoice::Retain));
     assert_eq!(game, saved);
     assert!(resumed.pending_decision().is_none());
-    assert_copy_target(&resumed, TargetRef::Card(object(&game, 5)));
+    assert_copy_target(&resumed, TargetRef::Object(object(&game, 5)));
 }
 
 #[test]
@@ -422,7 +472,7 @@ fn accepted_reply_cannot_be_reused_or_replaced_with_refreshed_basis() {
             choice: (CopyTargetChoice::Retain).into(),
         },
     );
-    let selected = TargetRef::Card(object(&game, 6));
+    let selected = TargetRef::Object(object(&game, 6));
     let accepted = reply(&game, CopyTargetChoice::Change(selected));
     reject(&accepted, old_request, GameError::StaleRevision);
     for choice in [CopyTargetChoice::Retain, CopyTargetChoice::Change(selected)] {
@@ -441,21 +491,52 @@ fn accepted_reply_cannot_be_reused_or_replaced_with_refreshed_basis() {
     }
     assert_copy_target(&accepted, selected);
     assert_eq!(accepted.execution().window().spell_copies().len(), 1);
-    assert_eq!(zone(&accepted, 2), CardZone::Graveyard(B));
+    assert_eq!(zone(&accepted, 2), ObjectZone::Graveyard(B));
     assert_eq!(accepted.execution().mana(B, ManaType::Blue), 0.into());
 }
 
 #[test]
 fn a_later_pending_choice_does_not_accept_the_consumed_decision_identity() {
     let mut seeds = cards();
-    seeds.push(instant(7, B, ManaType::Blue, 2, Instruction::CopySpell));
+    seeds.push(instant(
+        7,
+        B,
+        ManaType::Blue,
+        2,
+        Instruction::CopySpell,
+        BodyTarget::SingleSpell(SpellTargetFilter::CopyableInstructionSpell),
+    ));
     let mut pools = mana();
     pools[2].amount = 4.into();
-    let game = GameState::initialize(GameId(10), context(), vec![A, B], A, seeds, pools)
-        .unwrap()
-        .into_state();
+    let game = GameState::initialize(GameId(10), context(), {
+        let cards: Vec<SeedCard> = seeds;
+        // Fixture premise: seeded BF timestamps follow this authored card sequence.
+        let initial_battlefield_order = cards
+            .iter()
+            .filter(|card| {
+                matches!(
+                    card.destination,
+                    spellwake_engine::object_identity::ObjectDestination::Battlefield { .. }
+                )
+            })
+            .map(|card| card.card)
+            .collect();
+        GameSeed::with_uniform_life(
+            vec![A, B],
+            A,
+            cards,
+            initial_battlefield_order,
+            pools,
+            20.into(),
+            CombatRules::UnrestrictedFreeForAll,
+            test_vocabulary(),
+            std::sync::Arc::new(spellwake_contracts::names::NameRules::literal_names()),
+        )
+    })
+    .unwrap()
+    .into_state();
     let target = object(&game, 5);
-    let game = cast(game, A, 1, TargetRef::Card(target));
+    let game = cast(game, A, 1, TargetRef::Object(target));
     let original = game.execution().window().entries()[0].id();
     let game = pass_round(cast(game, B, 2, TargetRef::Stack(original)));
     let first_decision = game.pending_decision().unwrap().id();
@@ -484,8 +565,8 @@ fn retain_allows_departed_target_but_changed_targets_require_current_legality() 
     let decision = game.pending_decision().unwrap().id();
     let original = game.execution().window().entries()[0].id();
     for target in [
-        TargetRef::Card(old),
-        TargetRef::Card(object(&game, 5)),
+        TargetRef::Object(old),
+        TargetRef::Object(object(&game, 5)),
         TargetRef::Player(A),
         TargetRef::Player(SeatId(99)),
         TargetRef::Stack(original),
@@ -504,28 +585,29 @@ fn retain_allows_departed_target_but_changed_targets_require_current_legality() 
         );
     }
     let retained = reply(&game, CopyTargetChoice::Retain);
-    assert_copy_target(&retained, TargetRef::Card(old));
+    assert_copy_target(&retained, TargetRef::Object(old));
     let changed = reply(
         &game,
-        CopyTargetChoice::Change(TargetRef::Card(object(&game, 6))),
+        CopyTargetChoice::Change(TargetRef::Object(object(&game, 6))),
     );
-    assert_copy_target(&changed, TargetRef::Card(object(&game, 6)));
+    assert_copy_target(&changed, TargetRef::Object(object(&game, 6)));
     let retained = pass_round(pass_round(retained));
     assert!(retained.execution().window().entries().is_empty());
     assert!(retained.execution().window().spell_copies().is_empty());
-    assert_eq!(zone(&retained, 5), CardZone::Hand(B));
-    assert_eq!(zone(&retained, 6), CardZone::Battlefield);
+    assert_eq!(zone(&retained, 5), ObjectZone::Hand(B));
+    assert_eq!(zone(&retained, 6), ObjectZone::Battlefield);
     assert_eq!(
         retained
             .execution()
             .creature(object(&retained, 6))
             .unwrap()
+            .unwrap()
             .damage,
         0.into()
     );
     let changed = pass_round(pass_round(changed));
-    assert_eq!(zone(&changed, 5), CardZone::Hand(B));
-    assert_eq!(zone(&changed, 6), CardZone::Graveyard(A));
+    assert_eq!(zone(&changed, 5), ObjectZone::Hand(B));
+    assert_eq!(zone(&changed, 6), ObjectZone::Graveyard(A));
     assert!(changed.execution().window().entries().is_empty());
     assert_eq!(changed.execution().mana(A, ManaType::Red), 0.into());
     assert_eq!(changed.execution().mana(A, ManaType::Blue), 2.into());
@@ -544,13 +626,13 @@ fn redirected_copy_is_independent_and_resolves_before_original_with_checks() {
     assert_eq!(game.execution().mana(B, ManaType::Blue), 0.into());
     assert_eq!(game.execution().mana(B, ManaType::Red), 0.into());
     let game = pass_round(game);
-    assert_eq!(zone(&game, 5), CardZone::Battlefield);
-    assert_eq!(zone(&game, 6), CardZone::Graveyard(A));
+    assert_eq!(zone(&game, 5), ObjectZone::Battlefield);
+    assert_eq!(zone(&game, 6), ObjectZone::Graveyard(A));
     assert!(game.execution().window().spell_copies().is_empty());
     assert_eq!(game.execution().window().entries().len(), 1);
     assert_eq!(holder(&game), A);
     let game = pass_round(game);
-    assert_eq!(zone(&game, 5), CardZone::Graveyard(B));
+    assert_eq!(zone(&game, 5), ObjectZone::Graveyard(B));
     assert!(game.execution().window().entries().is_empty());
 }
 
@@ -560,12 +642,12 @@ fn removing_original_after_copy_creation_retains_exact_copied_payload() {
     let original = game.execution().window().entries()[0].id();
     let copy = copy_id(&game);
     let game = pass_round(cast(game, A, 3, TargetRef::Stack(original)));
-    assert_eq!(zone(&game, 1), CardZone::Graveyard(A));
+    assert_eq!(zone(&game, 1), ObjectZone::Graveyard(A));
     assert_eq!(game.execution().window().entries()[0].id(), copy);
     let restored_native_value = game.clone();
     let game = pass_round(restored_native_value);
-    assert_eq!(zone(&game, 5), CardZone::Battlefield);
-    assert_eq!(zone(&game, 6), CardZone::Graveyard(A));
+    assert_eq!(zone(&game, 5), ObjectZone::Battlefield);
+    assert_eq!(zone(&game, 6), ObjectZone::Graveyard(A));
     assert!(game.execution().window().entries().is_empty());
     assert!(game.execution().window().spell_copies().is_empty());
     assert_eq!(game.execution().mana(A, ManaType::Blue), 1.into());
@@ -575,26 +657,48 @@ fn removing_original_after_copy_creation_retains_exact_copied_payload() {
 #[test]
 fn copied_damage_quantity_survives_original_exit_without_reloading_source() {
     let mut seeds = cards();
-    seeds[5].program = Program::VanillaCreature {
-        power: 2.into(),
-        toughness: 5.into(),
-    };
-    let game = GameState::initialize(GameId(10), context(), vec![A, B], A, seeds, mana())
-        .unwrap()
-        .into_state();
+    seeds[5].program =
+        Program::creature(None, 2.into(), 5.into(), std::collections::BTreeSet::new());
+    let game = GameState::initialize(GameId(10), context(), {
+        let cards: Vec<SeedCard> = seeds;
+        // Fixture premise: seeded BF timestamps follow this authored card sequence.
+        let initial_battlefield_order = cards
+            .iter()
+            .filter(|card| {
+                matches!(
+                    card.destination,
+                    spellwake_engine::object_identity::ObjectDestination::Battlefield { .. }
+                )
+            })
+            .map(|card| card.card)
+            .collect();
+        GameSeed::with_uniform_life(
+            vec![A, B],
+            A,
+            cards,
+            initial_battlefield_order,
+            mana(),
+            20.into(),
+            CombatRules::UnrestrictedFreeForAll,
+            test_vocabulary(),
+            std::sync::Arc::new(spellwake_contracts::names::NameRules::literal_names()),
+        )
+    })
+    .unwrap()
+    .into_state();
     let target = object(&game, 5);
-    let game = cast(game, A, 1, TargetRef::Card(target));
+    let game = cast(game, A, 1, TargetRef::Object(target));
     let original = game.execution().window().entries()[0].id();
     let game = pass_round(cast(game, B, 2, TargetRef::Stack(original)));
     let selected = object(&game, 6);
-    let game = reply(&game, CopyTargetChoice::Change(TargetRef::Card(selected)));
+    let game = reply(&game, CopyTargetChoice::Change(TargetRef::Object(selected)));
     let game = pass_round(cast(game, A, 3, TargetRef::Stack(original)));
-    assert_eq!(zone(&game, 1), CardZone::Graveyard(A));
+    assert_eq!(zone(&game, 1), ObjectZone::Graveyard(A));
     let game = pass_round(game);
-    let survivor = game.execution().creature(selected).unwrap();
+    let survivor = game.execution().creature(selected).unwrap().unwrap();
     assert_eq!(survivor.toughness, 5.into());
     assert_eq!(survivor.damage, 3.into());
-    assert_eq!(zone(&game, 5), CardZone::Battlefield);
+    assert_eq!(zone(&game, 5), ObjectZone::Battlefield);
     assert!(game.execution().window().entries().is_empty());
 }
 
@@ -608,8 +712,8 @@ fn removing_copy_leaves_original_and_never_refunds_paid_mana() {
     assert_eq!(game.execution().mana(A, ManaType::Red), 0.into());
     assert_eq!(game.execution().mana(B, ManaType::Blue), 0.into());
     let game = pass_round(game);
-    assert_eq!(zone(&game, 5), CardZone::Graveyard(B));
-    assert_eq!(zone(&game, 6), CardZone::Battlefield);
+    assert_eq!(zone(&game, 5), ObjectZone::Graveyard(B));
+    assert_eq!(zone(&game, 6), ObjectZone::Battlefield);
     assert!(game.execution().window().entries().is_empty());
 }
 
@@ -618,13 +722,17 @@ fn target_departing_after_copy_creation_invalidates_both_payloads() {
     let game = pending();
     let old = object(&game, 5);
     let game = reply(&game, CopyTargetChoice::Retain);
-    let game = pass_round(cast(game, A, 4, TargetRef::Card(old)));
+    let game = pass_round(cast(game, A, 4, TargetRef::Object(old)));
     assert_ne!(old, object(&game, 5));
     let game = pass_round(pass_round(game));
-    assert_eq!(zone(&game, 5), CardZone::Hand(B));
-    assert_eq!(zone(&game, 6), CardZone::Battlefield);
+    assert_eq!(zone(&game, 5), ObjectZone::Hand(B));
+    assert_eq!(zone(&game, 6), ObjectZone::Battlefield);
     assert_eq!(
-        game.execution().creature(object(&game, 6)).unwrap().damage,
+        game.execution()
+            .creature(object(&game, 6))
+            .unwrap()
+            .unwrap()
+            .damage,
         0.into()
     );
     assert!(game.execution().window().entries().is_empty());
@@ -636,15 +744,15 @@ fn original_removed_before_copy_resolution_creates_neither_copy_nor_decision() {
     let game = stacked();
     let original = game.execution().window().entries()[0].id();
     let game = pass_round(cast(game, A, 3, TargetRef::Stack(original)));
-    assert_eq!(zone(&game, 1), CardZone::Graveyard(A));
+    assert_eq!(zone(&game, 1), ObjectZone::Graveyard(A));
     assert!(game.pending_decision().is_none());
     let game = pass_round(game);
-    assert_eq!(zone(&game, 2), CardZone::Graveyard(B));
+    assert_eq!(zone(&game, 2), ObjectZone::Graveyard(B));
     assert!(game.pending_decision().is_none());
     assert!(game.execution().window().entries().is_empty());
     assert!(game.execution().window().spell_copies().is_empty());
-    assert_eq!(zone(&game, 5), CardZone::Battlefield);
-    assert_eq!(zone(&game, 6), CardZone::Battlefield);
+    assert_eq!(zone(&game, 5), ObjectZone::Battlefield);
+    assert_eq!(zone(&game, 6), ObjectZone::Battlefield);
     reject(
         &game,
         input(
@@ -663,7 +771,7 @@ fn original_removed_before_copy_resolution_creates_neither_copy_nor_decision() {
 fn ordinary_damage_never_accepts_a_copy_choice_and_empty_pass_round_ends_step() {
     let game = setup();
     let target = object(&game, 5);
-    let game = cast(game, A, 1, TargetRef::Card(target));
+    let game = cast(game, A, 1, TargetRef::Object(target));
     reject(
         &game,
         input(
@@ -678,7 +786,14 @@ fn ordinary_damage_never_accepts_a_copy_choice_and_empty_pass_round_ends_step() 
     );
     let game = pass_round(game);
     assert!(game.pending_decision().is_none());
-    assert_eq!(zone(&game, 5), CardZone::Graveyard(B));
+    assert_eq!(zone(&game, 5), ObjectZone::Graveyard(B));
     let game = pass_round(game);
     assert_eq!(game.execution().window().phase(), WindowPhase::StepEnded);
+}
+
+#[path = "support/vocabulary.rs"]
+mod synthetic_vocabulary;
+fn test_vocabulary() -> std::sync::Arc<spellwake_contracts::creature_types::CreatureTypeVocabulary>
+{
+    synthetic_vocabulary::for_rules("rules-1")
 }

@@ -38,3 +38,13 @@ __pycache__/
 
 /.release-assets/
 /.release-assets-*/
+
+# Private card and rules qualification inputs
+/crates/card_programs/tests/fixtures/interaction-cards.expected.json
+/crates/card_programs/tests/fixtures/interaction-cards.jsonl.gz
+/crates/card_programs/tests/fixtures/mandatory-cards.expected.json
+/crates/card_programs/tests/fixtures/mandatory-cards.jsonl.gz
+/crates/card_programs/tests/fixtures/optional-payment-new-six.jsonl.gz
+/crates/content/tests/fixtures/creature-section.input.txt
+/tests/catalogue/teaching-cards.expected.json
+/tests/catalogue/teaching-cards.jsonl.gz

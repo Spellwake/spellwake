@@ -1,0 +1,82 @@
+{
+  "qualification": "Synthetic compatibility/protocol fixture, not a live OAuth response.",
+  "flow": {
+    "requestId": "51234567-1234-4234-9234-123456789abc",
+    "stateKey": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+  },
+  "complete": {
+    "requestId": "51234567-1234-4234-9234-123456789abc",
+    "stateKey": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+    "code": "patreon_test_code/+=?&"
+  },
+  "status": {
+    "accountId": "61234567-1234-4234-9234-123456789abc",
+    "requestId": "51234567-1234-4234-9234-123456789abc",
+    "phase": "linked",
+    "expiresAt": "2030-01-01T00:10:00.123456Z",
+    "associationId": "71234567-1234-4234-9234-123456789abc"
+  },
+  "internal": {
+    "accountId": "61234567-1234-4234-9234-123456789abc",
+    "requestId": "51234567-1234-4234-9234-123456789abc",
+    "phase": "issued",
+    "expiresAt": "2030-01-01T00:10:00.123456Z",
+    "associationId": null,
+    "generation": "1",
+    "serverTerms": {
+      "version": 1,
+      "campaignId": "123",
+      "clientId": "client_test",
+      "redirectUri": "https://spellwake.example.invalid/auth/patreon"
+    }
+  },
+  "start": {
+    "accountId": "61234567-1234-4234-9234-123456789abc",
+    "requestId": "51234567-1234-4234-9234-123456789abc",
+    "expiresAt": "2030-01-01T00:10:00.123456Z",
+    "authorizationUrl": "https://www.patreon.com/oauth2/authorize?response_type=code&client_id=client_test&redirect_uri=https%3A%2F%2Fspellwake.example.invalid%2Fauth%2Fpatreon&scope=identity&state=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+  },
+  "identity": {
+    "data": {
+      "type": "user",
+      "id": "456",
+      "relationships": {
+        "memberships": {
+          "data": [
+            {
+              "type": "member",
+              "id": "member-abc"
+            }
+          ]
+        }
+      }
+    },
+    "included": [
+      {
+        "type": "member",
+        "id": "member-abc",
+        "relationships": {
+          "campaign": {
+            "data": {
+              "type": "campaign",
+              "id": "123"
+            }
+          },
+          "user": {
+            "data": {
+              "type": "user",
+              "id": "456"
+            }
+          }
+        }
+      }
+    ]
+  },
+  "token": {
+    "access_token": "patreon_test_user_synthetic",
+    "refresh_token": "patreon_test_discarded_refresh",
+    "expires_in": 3600,
+    "scope": "identity",
+    "token_type": "Bearer"
+  }
+}

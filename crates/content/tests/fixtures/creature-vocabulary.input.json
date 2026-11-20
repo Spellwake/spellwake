@@ -1,0 +1,1357 @@
+{
+  "schema_version": 1,
+  "kind": "input-only-creature-vocabulary-candidate-and-identity-vector",
+  "status": "Source-enumerated candidate; native contract/compiler implementation and independent publication review have not run.",
+  "recorded_utc": "2026-10-31T19:45:32.532461+00:00",
+  "source": {
+    "path": "work/rules/MagicCompRules-20260925.txt",
+    "sha256": "8d860e451f20f38865b725b42d82feb714c725373dd8f3b32b8652b3eeb070ca",
+    "rules_revision": "CR-20260925",
+    "section": "205.3m",
+    "source_enumeration_path": "work/resolution-value-choices/name-source-research-v2/creature-type-source-enumeration.json",
+    "source_enumeration_sha256": "43023a8f436c734aa1a1b7a360a27546fec5b8176b7fa06237ea1a1fd252e2e9"
+  },
+  "identity_contract": {
+    "domain_prefix_hex": "7370656c6c77616b652e63726561747572652d74797065732e763100",
+    "byte_framing": "prefix; raw rulesSHA32; u32be revisionUtf8Len+revision; u32be count; repeated u32be canonicalLabelUtf8Len+labelUtf8",
+    "canonical_sort": "UTF-8 byte lexical order, no normalization",
+    "identity_payload_bytes": 3423,
+    "sha256": "39721c01eef9fd3f869588b097651bb6115f9cdde5d61bf822d65a8e5435c792"
+  },
+  "entries": [
+    {
+      "ordinal": "0",
+      "canonical_label": "Advisor"
+    },
+    {
+      "ordinal": "1",
+      "canonical_label": "Aetherborn"
+    },
+    {
+      "ordinal": "2",
+      "canonical_label": "Alien"
+    },
+    {
+      "ordinal": "3",
+      "canonical_label": "Ally"
+    },
+    {
+      "ordinal": "4",
+      "canonical_label": "Angel"
+    },
+    {
+      "ordinal": "5",
+      "canonical_label": "Antelope"
+    },
+    {
+      "ordinal": "6",
+      "canonical_label": "Ape"
+    },
+    {
+      "ordinal": "7",
+      "canonical_label": "Archer"
+    },
+    {
+      "ordinal": "8",
+      "canonical_label": "Archon"
+    },
+    {
+      "ordinal": "9",
+      "canonical_label": "Armadillo"
+    },
+    {
+      "ordinal": "10",
+      "canonical_label": "Army"
+    },
+    {
+      "ordinal": "11",
+      "canonical_label": "Artificer"
+    },
+    {
+      "ordinal": "12",
+      "canonical_label": "Assassin"
+    },
+    {
+      "ordinal": "13",
+      "canonical_label": "Assembly-Worker"
+    },
+    {
+      "ordinal": "14",
+      "canonical_label": "Astartes"
+    },
+    {
+      "ordinal": "15",
+      "canonical_label": "Atog"
+    },
+    {
+      "ordinal": "16",
+      "canonical_label": "Aurochs"
+    },
+    {
+      "ordinal": "17",
+      "canonical_label": "Avatar"
+    },
+    {
+      "ordinal": "18",
+      "canonical_label": "Azra"
+    },
+    {
+      "ordinal": "19",
+      "canonical_label": "Badger"
+    },
+    {
+      "ordinal": "20",
+      "canonical_label": "Balloon"
+    },
+    {
+      "ordinal": "21",
+      "canonical_label": "Barbarian"
+    },
+    {
+      "ordinal": "22",
+      "canonical_label": "Bard"
+    },
+    {
+      "ordinal": "23",
+      "canonical_label": "Basilisk"
+    },
+    {
+      "ordinal": "24",
+      "canonical_label": "Bat"
+    },
+    {
+      "ordinal": "25",
+      "canonical_label": "Bear"
+    },
+    {
+      "ordinal": "26",
+      "canonical_label": "Beast"
+    },
+    {
+      "ordinal": "27",
+      "canonical_label": "Beaver"
+    },
+    {
+      "ordinal": "28",
+      "canonical_label": "Beeble"
+    },
+    {
+      "ordinal": "29",
+      "canonical_label": "Beholder"
+    },
+    {
+      "ordinal": "30",
+      "canonical_label": "Berserker"
+    },
+    {
+      "ordinal": "31",
+      "canonical_label": "Bird"
+    },
+    {
+      "ordinal": "32",
+      "canonical_label": "Bison"
+    },
+    {
+      "ordinal": "33",
+      "canonical_label": "Blinkmoth"
+    },
+    {
+      "ordinal": "34",
+      "canonical_label": "Boar"
+    },
+    {
+      "ordinal": "35",
+      "canonical_label": "Bringer"
+    },
+    {
+      "ordinal": "36",
+      "canonical_label": "Brushwagg"
+    },
+    {
+      "ordinal": "37",
+      "canonical_label": "Camarid"
+    },
+    {
+      "ordinal": "38",
+      "canonical_label": "Camel"
+    },
+    {
+      "ordinal": "39",
+      "canonical_label": "Capybara"
+    },
+    {
+      "ordinal": "40",
+      "canonical_label": "Caribou"
+    },
+    {
+      "ordinal": "41",
+      "canonical_label": "Carrier"
+    },
+    {
+      "ordinal": "42",
+      "canonical_label": "Cat"
+    },
+    {
+      "ordinal": "43",
+      "canonical_label": "Centaur"
+    },
+    {
+      "ordinal": "44",
+      "canonical_label": "Child"
+    },
+    {
+      "ordinal": "45",
+      "canonical_label": "Chimera"
+    },
+    {
+      "ordinal": "46",
+      "canonical_label": "Citizen"
+    },
+    {
+      "ordinal": "47",
+      "canonical_label": "Cleric"
+    },
+    {
+      "ordinal": "48",
+      "canonical_label": "Clown"
+    },
+    {
+      "ordinal": "49",
+      "canonical_label": "Cockatrice"
+    },
+    {
+      "ordinal": "50",
+      "canonical_label": "Construct"
+    },
+    {
+      "ordinal": "51",
+      "canonical_label": "Coward"
+    },
+    {
+      "ordinal": "52",
+      "canonical_label": "Coyote"
+    },
+    {
+      "ordinal": "53",
+      "canonical_label": "Crab"
+    },
+    {
+      "ordinal": "54",
+      "canonical_label": "Crocodile"
+    },
+    {
+      "ordinal": "55",
+      "canonical_label": "Custodes"
+    },
+    {
+      "ordinal": "56",
+      "canonical_label": "Cyberman"
+    },
+    {
+      "ordinal": "57",
+      "canonical_label": "Cyclops"
+    },
+    {
+      "ordinal": "58",
+      "canonical_label": "C’tan"
+    },
+    {
+      "ordinal": "59",
+      "canonical_label": "Dalek"
+    },
+    {
+      "ordinal": "60",
+      "canonical_label": "Dauthi"
+    },
+    {
+      "ordinal": "61",
+      "canonical_label": "Demigod"
+    },
+    {
+      "ordinal": "62",
+      "canonical_label": "Demon"
+    },
+    {
+      "ordinal": "63",
+      "canonical_label": "Deserter"
+    },
+    {
+      "ordinal": "64",
+      "canonical_label": "Detective"
+    },
+    {
+      "ordinal": "65",
+      "canonical_label": "Devil"
+    },
+    {
+      "ordinal": "66",
+      "canonical_label": "Dinosaur"
+    },
+    {
+      "ordinal": "67",
+      "canonical_label": "Djinn"
+    },
+    {
+      "ordinal": "68",
+      "canonical_label": "Doctor"
+    },
+    {
+      "ordinal": "69",
+      "canonical_label": "Dog"
+    },
+    {
+      "ordinal": "70",
+      "canonical_label": "Dragon"
+    },
+    {
+      "ordinal": "71",
+      "canonical_label": "Drake"
+    },
+    {
+      "ordinal": "72",
+      "canonical_label": "Dreadnought"
+    },
+    {
+      "ordinal": "73",
+      "canonical_label": "Drix"
+    },
+    {
+      "ordinal": "74",
+      "canonical_label": "Drone"
+    },
+    {
+      "ordinal": "75",
+      "canonical_label": "Druid"
+    },
+    {
+      "ordinal": "76",
+      "canonical_label": "Dryad"
+    },
+    {
+      "ordinal": "77",
+      "canonical_label": "Dwarf"
+    },
+    {
+      "ordinal": "78",
+      "canonical_label": "Echidna"
+    },
+    {
+      "ordinal": "79",
+      "canonical_label": "Efreet"
+    },
+    {
+      "ordinal": "80",
+      "canonical_label": "Egg"
+    },
+    {
+      "ordinal": "81",
+      "canonical_label": "Elder"
+    },
+    {
+      "ordinal": "82",
+      "canonical_label": "Eldrazi"
+    },
+    {
+      "ordinal": "83",
+      "canonical_label": "Elemental"
+    },
+    {
+      "ordinal": "84",
+      "canonical_label": "Elephant"
+    },
+    {
+      "ordinal": "85",
+      "canonical_label": "Elf"
+    },
+    {
+      "ordinal": "86",
+      "canonical_label": "Elk"
+    },
+    {
+      "ordinal": "87",
+      "canonical_label": "Employee"
+    },
+    {
+      "ordinal": "88",
+      "canonical_label": "Eternal"
+    },
+    {
+      "ordinal": "89",
+      "canonical_label": "Eye"
+    },
+    {
+      "ordinal": "90",
+      "canonical_label": "Faerie"
+    },
+    {
+      "ordinal": "91",
+      "canonical_label": "Ferret"
+    },
+    {
+      "ordinal": "92",
+      "canonical_label": "Fish"
+    },
+    {
+      "ordinal": "93",
+      "canonical_label": "Flagbearer"
+    },
+    {
+      "ordinal": "94",
+      "canonical_label": "Fox"
+    },
+    {
+      "ordinal": "95",
+      "canonical_label": "Fractal"
+    },
+    {
+      "ordinal": "96",
+      "canonical_label": "Frog"
+    },
+    {
+      "ordinal": "97",
+      "canonical_label": "Fungus"
+    },
+    {
+      "ordinal": "98",
+      "canonical_label": "Gamer"
+    },
+    {
+      "ordinal": "99",
+      "canonical_label": "Gamma"
+    },
+    {
+      "ordinal": "100",
+      "canonical_label": "Gargoyle"
+    },
+    {
+      "ordinal": "101",
+      "canonical_label": "Germ"
+    },
+    {
+      "ordinal": "102",
+      "canonical_label": "Giant"
+    },
+    {
+      "ordinal": "103",
+      "canonical_label": "Giraffe"
+    },
+    {
+      "ordinal": "104",
+      "canonical_label": "Gith"
+    },
+    {
+      "ordinal": "105",
+      "canonical_label": "Glimmer"
+    },
+    {
+      "ordinal": "106",
+      "canonical_label": "Gnoll"
+    },
+    {
+      "ordinal": "107",
+      "canonical_label": "Gnome"
+    },
+    {
+      "ordinal": "108",
+      "canonical_label": "Goat"
+    },
+    {
+      "ordinal": "109",
+      "canonical_label": "Goblin"
+    },
+    {
+      "ordinal": "110",
+      "canonical_label": "God"
+    },
+    {
+      "ordinal": "111",
+      "canonical_label": "Golem"
+    },
+    {
+      "ordinal": "112",
+      "canonical_label": "Gorgon"
+    },
+    {
+      "ordinal": "113",
+      "canonical_label": "Graveborn"
+    },
+    {
+      "ordinal": "114",
+      "canonical_label": "Gremlin"
+    },
+    {
+      "ordinal": "115",
+      "canonical_label": "Griffin"
+    },
+    {
+      "ordinal": "116",
+      "canonical_label": "Guest"
+    },
+    {
+      "ordinal": "117",
+      "canonical_label": "Hag"
+    },
+    {
+      "ordinal": "118",
+      "canonical_label": "Halfling"
+    },
+    {
+      "ordinal": "119",
+      "canonical_label": "Hamster"
+    },
+    {
+      "ordinal": "120",
+      "canonical_label": "Harpy"
+    },
+    {
+      "ordinal": "121",
+      "canonical_label": "Hedgehog"
+    },
+    {
+      "ordinal": "122",
+      "canonical_label": "Hellion"
+    },
+    {
+      "ordinal": "123",
+      "canonical_label": "Hero"
+    },
+    {
+      "ordinal": "124",
+      "canonical_label": "Hippo"
+    },
+    {
+      "ordinal": "125",
+      "canonical_label": "Hippogriff"
+    },
+    {
+      "ordinal": "126",
+      "canonical_label": "Homarid"
+    },
+    {
+      "ordinal": "127",
+      "canonical_label": "Homunculus"
+    },
+    {
+      "ordinal": "128",
+      "canonical_label": "Horror"
+    },
+    {
+      "ordinal": "129",
+      "canonical_label": "Horse"
+    },
+    {
+      "ordinal": "130",
+      "canonical_label": "Human"
+    },
+    {
+      "ordinal": "131",
+      "canonical_label": "Hydra"
+    },
+    {
+      "ordinal": "132",
+      "canonical_label": "Hyena"
+    },
+    {
+      "ordinal": "133",
+      "canonical_label": "Illusion"
+    },
+    {
+      "ordinal": "134",
+      "canonical_label": "Imp"
+    },
+    {
+      "ordinal": "135",
+      "canonical_label": "Incarnation"
+    },
+    {
+      "ordinal": "136",
+      "canonical_label": "Inhuman"
+    },
+    {
+      "ordinal": "137",
+      "canonical_label": "Inkling"
+    },
+    {
+      "ordinal": "138",
+      "canonical_label": "Inquisitor"
+    },
+    {
+      "ordinal": "139",
+      "canonical_label": "Insect"
+    },
+    {
+      "ordinal": "140",
+      "canonical_label": "Jackal"
+    },
+    {
+      "ordinal": "141",
+      "canonical_label": "Jellyfish"
+    },
+    {
+      "ordinal": "142",
+      "canonical_label": "Juggernaut"
+    },
+    {
+      "ordinal": "143",
+      "canonical_label": "Kangaroo"
+    },
+    {
+      "ordinal": "144",
+      "canonical_label": "Kavu"
+    },
+    {
+      "ordinal": "145",
+      "canonical_label": "Kirin"
+    },
+    {
+      "ordinal": "146",
+      "canonical_label": "Kithkin"
+    },
+    {
+      "ordinal": "147",
+      "canonical_label": "Knight"
+    },
+    {
+      "ordinal": "148",
+      "canonical_label": "Kobold"
+    },
+    {
+      "ordinal": "149",
+      "canonical_label": "Kor"
+    },
+    {
+      "ordinal": "150",
+      "canonical_label": "Kraken"
+    },
+    {
+      "ordinal": "151",
+      "canonical_label": "Kree"
+    },
+    {
+      "ordinal": "152",
+      "canonical_label": "Lamia"
+    },
+    {
+      "ordinal": "153",
+      "canonical_label": "Lammasu"
+    },
+    {
+      "ordinal": "154",
+      "canonical_label": "Leech"
+    },
+    {
+      "ordinal": "155",
+      "canonical_label": "Lemur"
+    },
+    {
+      "ordinal": "156",
+      "canonical_label": "Leviathan"
+    },
+    {
+      "ordinal": "157",
+      "canonical_label": "Lhurgoyf"
+    },
+    {
+      "ordinal": "158",
+      "canonical_label": "Licid"
+    },
+    {
+      "ordinal": "159",
+      "canonical_label": "Lizard"
+    },
+    {
+      "ordinal": "160",
+      "canonical_label": "Llama"
+    },
+    {
+      "ordinal": "161",
+      "canonical_label": "Lobster"
+    },
+    {
+      "ordinal": "162",
+      "canonical_label": "Manticore"
+    },
+    {
+      "ordinal": "163",
+      "canonical_label": "Masticore"
+    },
+    {
+      "ordinal": "164",
+      "canonical_label": "Mercenary"
+    },
+    {
+      "ordinal": "165",
+      "canonical_label": "Merfolk"
+    },
+    {
+      "ordinal": "166",
+      "canonical_label": "Metathran"
+    },
+    {
+      "ordinal": "167",
+      "canonical_label": "Minion"
+    },
+    {
+      "ordinal": "168",
+      "canonical_label": "Minotaur"
+    },
+    {
+      "ordinal": "169",
+      "canonical_label": "Mite"
+    },
+    {
+      "ordinal": "170",
+      "canonical_label": "Mole"
+    },
+    {
+      "ordinal": "171",
+      "canonical_label": "Monger"
+    },
+    {
+      "ordinal": "172",
+      "canonical_label": "Mongoose"
+    },
+    {
+      "ordinal": "173",
+      "canonical_label": "Monk"
+    },
+    {
+      "ordinal": "174",
+      "canonical_label": "Monkey"
+    },
+    {
+      "ordinal": "175",
+      "canonical_label": "Moogle"
+    },
+    {
+      "ordinal": "176",
+      "canonical_label": "Moonfolk"
+    },
+    {
+      "ordinal": "177",
+      "canonical_label": "Mount"
+    },
+    {
+      "ordinal": "178",
+      "canonical_label": "Mouse"
+    },
+    {
+      "ordinal": "179",
+      "canonical_label": "Mutant"
+    },
+    {
+      "ordinal": "180",
+      "canonical_label": "Myr"
+    },
+    {
+      "ordinal": "181",
+      "canonical_label": "Mystic"
+    },
+    {
+      "ordinal": "182",
+      "canonical_label": "Nautilus"
+    },
+    {
+      "ordinal": "183",
+      "canonical_label": "Necron"
+    },
+    {
+      "ordinal": "184",
+      "canonical_label": "Nephilim"
+    },
+    {
+      "ordinal": "185",
+      "canonical_label": "Nightmare"
+    },
+    {
+      "ordinal": "186",
+      "canonical_label": "Nightstalker"
+    },
+    {
+      "ordinal": "187",
+      "canonical_label": "Ninja"
+    },
+    {
+      "ordinal": "188",
+      "canonical_label": "Noble"
+    },
+    {
+      "ordinal": "189",
+      "canonical_label": "Noggle"
+    },
+    {
+      "ordinal": "190",
+      "canonical_label": "Nomad"
+    },
+    {
+      "ordinal": "191",
+      "canonical_label": "Nymph"
+    },
+    {
+      "ordinal": "192",
+      "canonical_label": "Octopus"
+    },
+    {
+      "ordinal": "193",
+      "canonical_label": "Ogre"
+    },
+    {
+      "ordinal": "194",
+      "canonical_label": "Ooze"
+    },
+    {
+      "ordinal": "195",
+      "canonical_label": "Orb"
+    },
+    {
+      "ordinal": "196",
+      "canonical_label": "Orc"
+    },
+    {
+      "ordinal": "197",
+      "canonical_label": "Orgg"
+    },
+    {
+      "ordinal": "198",
+      "canonical_label": "Otter"
+    },
+    {
+      "ordinal": "199",
+      "canonical_label": "Ouphe"
+    },
+    {
+      "ordinal": "200",
+      "canonical_label": "Ox"
+    },
+    {
+      "ordinal": "201",
+      "canonical_label": "Oyster"
+    },
+    {
+      "ordinal": "202",
+      "canonical_label": "Pangolin"
+    },
+    {
+      "ordinal": "203",
+      "canonical_label": "Peasant"
+    },
+    {
+      "ordinal": "204",
+      "canonical_label": "Pegasus"
+    },
+    {
+      "ordinal": "205",
+      "canonical_label": "Pentavite"
+    },
+    {
+      "ordinal": "206",
+      "canonical_label": "Performer"
+    },
+    {
+      "ordinal": "207",
+      "canonical_label": "Pest"
+    },
+    {
+      "ordinal": "208",
+      "canonical_label": "Phelddagrif"
+    },
+    {
+      "ordinal": "209",
+      "canonical_label": "Phoenix"
+    },
+    {
+      "ordinal": "210",
+      "canonical_label": "Phyrexian"
+    },
+    {
+      "ordinal": "211",
+      "canonical_label": "Pilot"
+    },
+    {
+      "ordinal": "212",
+      "canonical_label": "Pincher"
+    },
+    {
+      "ordinal": "213",
+      "canonical_label": "Pirate"
+    },
+    {
+      "ordinal": "214",
+      "canonical_label": "Plant"
+    },
+    {
+      "ordinal": "215",
+      "canonical_label": "Platypus"
+    },
+    {
+      "ordinal": "216",
+      "canonical_label": "Porcupine"
+    },
+    {
+      "ordinal": "217",
+      "canonical_label": "Possum"
+    },
+    {
+      "ordinal": "218",
+      "canonical_label": "Praetor"
+    },
+    {
+      "ordinal": "219",
+      "canonical_label": "Primarch"
+    },
+    {
+      "ordinal": "220",
+      "canonical_label": "Prism"
+    },
+    {
+      "ordinal": "221",
+      "canonical_label": "Processor"
+    },
+    {
+      "ordinal": "222",
+      "canonical_label": "Qu"
+    },
+    {
+      "ordinal": "223",
+      "canonical_label": "Rabbit"
+    },
+    {
+      "ordinal": "224",
+      "canonical_label": "Raccoon"
+    },
+    {
+      "ordinal": "225",
+      "canonical_label": "Ranger"
+    },
+    {
+      "ordinal": "226",
+      "canonical_label": "Rat"
+    },
+    {
+      "ordinal": "227",
+      "canonical_label": "Rebel"
+    },
+    {
+      "ordinal": "228",
+      "canonical_label": "Reflection"
+    },
+    {
+      "ordinal": "229",
+      "canonical_label": "Rhino"
+    },
+    {
+      "ordinal": "230",
+      "canonical_label": "Rigger"
+    },
+    {
+      "ordinal": "231",
+      "canonical_label": "Robot"
+    },
+    {
+      "ordinal": "232",
+      "canonical_label": "Rogue"
+    },
+    {
+      "ordinal": "233",
+      "canonical_label": "Sable"
+    },
+    {
+      "ordinal": "234",
+      "canonical_label": "Salamander"
+    },
+    {
+      "ordinal": "235",
+      "canonical_label": "Samurai"
+    },
+    {
+      "ordinal": "236",
+      "canonical_label": "Sand"
+    },
+    {
+      "ordinal": "237",
+      "canonical_label": "Saproling"
+    },
+    {
+      "ordinal": "238",
+      "canonical_label": "Satyr"
+    },
+    {
+      "ordinal": "239",
+      "canonical_label": "Scarecrow"
+    },
+    {
+      "ordinal": "240",
+      "canonical_label": "Scientist"
+    },
+    {
+      "ordinal": "241",
+      "canonical_label": "Scion"
+    },
+    {
+      "ordinal": "242",
+      "canonical_label": "Scorpion"
+    },
+    {
+      "ordinal": "243",
+      "canonical_label": "Scout"
+    },
+    {
+      "ordinal": "244",
+      "canonical_label": "Sculpture"
+    },
+    {
+      "ordinal": "245",
+      "canonical_label": "Seal"
+    },
+    {
+      "ordinal": "246",
+      "canonical_label": "Serf"
+    },
+    {
+      "ordinal": "247",
+      "canonical_label": "Serpent"
+    },
+    {
+      "ordinal": "248",
+      "canonical_label": "Servo"
+    },
+    {
+      "ordinal": "249",
+      "canonical_label": "Shade"
+    },
+    {
+      "ordinal": "250",
+      "canonical_label": "Shaman"
+    },
+    {
+      "ordinal": "251",
+      "canonical_label": "Shapeshifter"
+    },
+    {
+      "ordinal": "252",
+      "canonical_label": "Shark"
+    },
+    {
+      "ordinal": "253",
+      "canonical_label": "Sheep"
+    },
+    {
+      "ordinal": "254",
+      "canonical_label": "Shi’ar"
+    },
+    {
+      "ordinal": "255",
+      "canonical_label": "Siren"
+    },
+    {
+      "ordinal": "256",
+      "canonical_label": "Skeleton"
+    },
+    {
+      "ordinal": "257",
+      "canonical_label": "Skrull"
+    },
+    {
+      "ordinal": "258",
+      "canonical_label": "Skunk"
+    },
+    {
+      "ordinal": "259",
+      "canonical_label": "Slith"
+    },
+    {
+      "ordinal": "260",
+      "canonical_label": "Sliver"
+    },
+    {
+      "ordinal": "261",
+      "canonical_label": "Sloth"
+    },
+    {
+      "ordinal": "262",
+      "canonical_label": "Slug"
+    },
+    {
+      "ordinal": "263",
+      "canonical_label": "Snail"
+    },
+    {
+      "ordinal": "264",
+      "canonical_label": "Snake"
+    },
+    {
+      "ordinal": "265",
+      "canonical_label": "Soldier"
+    },
+    {
+      "ordinal": "266",
+      "canonical_label": "Soltari"
+    },
+    {
+      "ordinal": "267",
+      "canonical_label": "Sorcerer"
+    },
+    {
+      "ordinal": "268",
+      "canonical_label": "Spawn"
+    },
+    {
+      "ordinal": "269",
+      "canonical_label": "Specter"
+    },
+    {
+      "ordinal": "270",
+      "canonical_label": "Spellshaper"
+    },
+    {
+      "ordinal": "271",
+      "canonical_label": "Sphinx"
+    },
+    {
+      "ordinal": "272",
+      "canonical_label": "Spider"
+    },
+    {
+      "ordinal": "273",
+      "canonical_label": "Spike"
+    },
+    {
+      "ordinal": "274",
+      "canonical_label": "Spirit"
+    },
+    {
+      "ordinal": "275",
+      "canonical_label": "Splinter"
+    },
+    {
+      "ordinal": "276",
+      "canonical_label": "Sponge"
+    },
+    {
+      "ordinal": "277",
+      "canonical_label": "Spy"
+    },
+    {
+      "ordinal": "278",
+      "canonical_label": "Squid"
+    },
+    {
+      "ordinal": "279",
+      "canonical_label": "Squirrel"
+    },
+    {
+      "ordinal": "280",
+      "canonical_label": "Starfish"
+    },
+    {
+      "ordinal": "281",
+      "canonical_label": "Surrakar"
+    },
+    {
+      "ordinal": "282",
+      "canonical_label": "Survivor"
+    },
+    {
+      "ordinal": "283",
+      "canonical_label": "Symbiote"
+    },
+    {
+      "ordinal": "284",
+      "canonical_label": "Synth"
+    },
+    {
+      "ordinal": "285",
+      "canonical_label": "Tentacle"
+    },
+    {
+      "ordinal": "286",
+      "canonical_label": "Tetravite"
+    },
+    {
+      "ordinal": "287",
+      "canonical_label": "Thalakos"
+    },
+    {
+      "ordinal": "288",
+      "canonical_label": "Thopter"
+    },
+    {
+      "ordinal": "289",
+      "canonical_label": "Thrull"
+    },
+    {
+      "ordinal": "290",
+      "canonical_label": "Tiefling"
+    },
+    {
+      "ordinal": "291",
+      "canonical_label": "Time Lord"
+    },
+    {
+      "ordinal": "292",
+      "canonical_label": "Toy"
+    },
+    {
+      "ordinal": "293",
+      "canonical_label": "Treefolk"
+    },
+    {
+      "ordinal": "294",
+      "canonical_label": "Trilobite"
+    },
+    {
+      "ordinal": "295",
+      "canonical_label": "Triskelavite"
+    },
+    {
+      "ordinal": "296",
+      "canonical_label": "Troll"
+    },
+    {
+      "ordinal": "297",
+      "canonical_label": "Turtle"
+    },
+    {
+      "ordinal": "298",
+      "canonical_label": "Tyranid"
+    },
+    {
+      "ordinal": "299",
+      "canonical_label": "Unicorn"
+    },
+    {
+      "ordinal": "300",
+      "canonical_label": "Utrom"
+    },
+    {
+      "ordinal": "301",
+      "canonical_label": "Vampire"
+    },
+    {
+      "ordinal": "302",
+      "canonical_label": "Varmint"
+    },
+    {
+      "ordinal": "303",
+      "canonical_label": "Vedalken"
+    },
+    {
+      "ordinal": "304",
+      "canonical_label": "Villain"
+    },
+    {
+      "ordinal": "305",
+      "canonical_label": "Volver"
+    },
+    {
+      "ordinal": "306",
+      "canonical_label": "Wall"
+    },
+    {
+      "ordinal": "307",
+      "canonical_label": "Walrus"
+    },
+    {
+      "ordinal": "308",
+      "canonical_label": "Warlock"
+    },
+    {
+      "ordinal": "309",
+      "canonical_label": "Warrior"
+    },
+    {
+      "ordinal": "310",
+      "canonical_label": "Weasel"
+    },
+    {
+      "ordinal": "311",
+      "canonical_label": "Weird"
+    },
+    {
+      "ordinal": "312",
+      "canonical_label": "Werewolf"
+    },
+    {
+      "ordinal": "313",
+      "canonical_label": "Whale"
+    },
+    {
+      "ordinal": "314",
+      "canonical_label": "Wizard"
+    },
+    {
+      "ordinal": "315",
+      "canonical_label": "Wolf"
+    },
+    {
+      "ordinal": "316",
+      "canonical_label": "Wolverine"
+    },
+    {
+      "ordinal": "317",
+      "canonical_label": "Wombat"
+    },
+    {
+      "ordinal": "318",
+      "canonical_label": "Worm"
+    },
+    {
+      "ordinal": "319",
+      "canonical_label": "Wraith"
+    },
+    {
+      "ordinal": "320",
+      "canonical_label": "Wurm"
+    },
+    {
+      "ordinal": "321",
+      "canonical_label": "Yeti"
+    },
+    {
+      "ordinal": "322",
+      "canonical_label": "Zombie"
+    },
+    {
+      "ordinal": "323",
+      "canonical_label": "Zubera"
+    }
+  ],
+  "known_ids": {
+    "Elf": {
+      "vocabulary": "39721c01eef9fd3f869588b097651bb6115f9cdde5d61bf822d65a8e5435c792",
+      "ordinal": "85"
+    },
+    "Goblin": {
+      "vocabulary": "39721c01eef9fd3f869588b097651bb6115f9cdde5d61bf822d65a8e5435c792",
+      "ordinal": "109"
+    },
+    "Time Lord": {
+      "vocabulary": "39721c01eef9fd3f869588b097651bb6115f9cdde5d61bf822d65a8e5435c792",
+      "ordinal": "291"
+    },
+    "Child": {
+      "vocabulary": "39721c01eef9fd3f869588b097651bb6115f9cdde5d61bf822d65a8e5435c792",
+      "ordinal": "44"
+    },
+    "Wall": {
+      "vocabulary": "39721c01eef9fd3f869588b097651bb6115f9cdde5d61bf822d65a8e5435c792",
+      "ordinal": "306"
+    },
+    "C’tan": {
+      "vocabulary": "39721c01eef9fd3f869588b097651bb6115f9cdde5d61bf822d65a8e5435c792",
+      "ordinal": "58"
+    },
+    "Shi’ar": {
+      "vocabulary": "39721c01eef9fd3f869588b097651bb6115f9cdde5d61bf822d65a8e5435c792",
+      "ordinal": "254"
+    }
+  },
+  "scoped_provider_subtype_aliases": {
+    "C'tan": "C’tan",
+    "Shi'ar": "Shi’ar"
+  },
+  "no_native_expected_results": true,
+  "native_or_reference_execution": false,
+  "complete_native_vocabulary_publication": false,
+  "full_card_or_engine_qualification": false
+}

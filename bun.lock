@@ -64,6 +64,13 @@
         "typescript-eslint": "^8.72.1",
       },
     },
+    "packages/application-contracts": {
+      "name": "@spellwake/application-contracts",
+      "version": "0.1.0",
+      "dependencies": {
+        "zod": "4.6.7",
+      },
+    },
     "packages/ui": {
       "name": "@spellwake/ui",
       "version": "0.1.0",
@@ -378,6 +385,8 @@
     "@rolldown/binding-win32-x64-msvc": ["@rolldown/binding-win32-x64-msvc@1.2.16", "", { "os": "win32", "cpu": "x64" }, "sha512-1lv1KvX0Z871zfk7vw+dnXMMnHNyDwMzWG8Kv3HxDXMOhzCX4SHc7HK319fInP0i+0p9D8brkfzL7pJOaGl+tw=="],
 
     "@rolldown/pluginutils": ["@rolldown/pluginutils@1.0.1", "", {}, "sha512-2j9bGt5Jh8hj+vPtgzPtl72j0yRxHAyumoo6TNfAjsLB04UtpSvPbPcDcBMxz7n+9CYB0c1GxQFxYRg2jimqGw=="],
+
+    "@spellwake/application-contracts": ["@spellwake/application-contracts@workspace:packages/application-contracts"],
 
     "@spellwake/play": ["@spellwake/play@workspace:apps/play"],
 

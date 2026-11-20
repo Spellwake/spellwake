@@ -1,9 +1,12 @@
-//! Exact unrestricted payment and authored fixed noncreature tap-mana definitions.
-//! EffectWindow owns production and pools. No restrictions, hybrid/snow/Phyrexian/X,
-//! payment-time activation or turn cleanup.
-use crate::{card_identity::CardObjectId, priority::SeatId, stack_window::StackEntryId};
-use spellwake_contracts::RulesInteger;
-use std::collections::BTreeMap;
+//! Exact unrestricted payment and authored tap-mana definitions.
+//! EffectWindow owns production, pools and resolution-time mana permission.
+//! Restricted mana, hybrid/snow/Phyrexian/X and broader costs remain separate work.
+use crate::{
+    characteristics::PermanentSelector, object_identity::ObjectId, priority::SeatId,
+    stack_window::StackEntryId,
+};
+use spellwake_contracts::{RulesInteger, creature_types::CreatureTypeVocabulary};
+use std::collections::{BTreeMap, BTreeSet};
 
 /// Colorless is a sixth mana type, not a sixth color.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -76,7 +79,8 @@ pub struct ManaSpend {
 pub struct ManaPayment {
     pub spend: Vec<ManaSpend>,
 }
-/// Current accepted cast evidence, not a pool store or durable receipt.
+/// One actual normalized payment for a cast, activation or resolving instruction.
+/// Resolution outcomes retain their instruction separately; this is not a pool store.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ManaPaymentRecord {
     pub source: StackEntryId,
@@ -88,23 +92,56 @@ pub struct ManaPaymentRecord {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub struct ManaAbilityId(pub u64);
 
-/// Closed noncreature-land ability: tap this source, add these fixed unrestricted
-/// amounts to its controller's pool. No targets, choices, other costs or triggers.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct FixedManaAbility {
-    pub id: ManaAbilityId,
-    pub produced: BTreeMap<ManaType, RulesInteger>,
+/// Current mana activation selection. Authored IDs and rule-derived basic
+/// abilities occupy disjoint domains, including authored IDs zero and u64::MAX.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum ManaAbilityRef {
+    Printed(ManaAbilityId),
+    BasicLand(crate::land::BasicLandType),
 }
-impl FixedManaAbility {
-    pub(crate) fn valid(&self) -> bool {
-        !self.produced.is_empty() && self.produced.values().all(RulesInteger::is_positive)
+
+/// Authored tap mana ability; ordinary creature tap history is checked by the
+/// enclosing executor. Output can be fixed, counted or chosen on resolution.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ManaAbility {
+    pub id: ManaAbilityId,
+    pub output: ManaOutput,
+}
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ManaOutput {
+    /// Add one mana of this type per matching current battlefield permanent.
+    /// The selector's source/controller are bound by the actual ability activation.
+    Counted {
+        mana_type: ManaType,
+        permanents: PermanentSelector,
+    },
+    Fixed(BTreeMap<ManaType, RulesInteger>),
+    ChooseColor {
+        amount: RulesInteger,
+        colors: BTreeSet<ManaType>,
+    },
+}
+impl ManaAbility {
+    pub(crate) fn valid(&self, vocabulary: &CreatureTypeVocabulary) -> bool {
+        match &self.output {
+            ManaOutput::Counted { permanents, .. } => permanents.validate(vocabulary).is_ok(),
+            ManaOutput::Fixed(produced) => {
+                !produced.is_empty() && produced.values().all(RulesInteger::is_positive)
+            }
+            ManaOutput::ChooseColor { amount, colors } => {
+                amount.is_positive()
+                    && !colors.is_empty()
+                    && !colors.contains(&ManaType::Colourless)
+            }
+        }
     }
 }
 /// Current native activation evidence, not an archive or durable acceptance.
+/// `produced` is empty when a counted ability resolves with a zero count.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ManaProductionRecord {
-    pub source: CardObjectId,
-    pub ability: ManaAbilityId,
+    pub source: ObjectId,
+    pub ability: ManaAbilityRef,
     pub controller: SeatId,
     pub produced: BTreeMap<ManaType, RulesInteger>,
 }
