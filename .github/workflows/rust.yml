@@ -62,6 +62,10 @@ jobs:
         run: |
           vocabulary="$RUNNER_TEMP/spellwake-creature-vocabulary.input.json"
           python3 tests/support/prepare_ci_vocabulary.py "$vocabulary"
+          # The reference replay can run for several minutes without emitting test output.
+          (while sleep 20; do echo "Reference replay is still running."; done) &
+          progress_pid=$!
+          trap 'kill "$progress_pid" 2>/dev/null || true' EXIT
           SPELLWAKE_CREATURE_VOCABULARY_INPUT="$vocabulary" \
             cargo test --locked -p spellwake-reference-tools --lib \
             ordinary_game::record::staged::tests::complete_existing_fixture_uses_finalized_delivery_and_preserves_report_bytes -- --exact | tee "$RUNNER_TEMP/reference-report.log"
