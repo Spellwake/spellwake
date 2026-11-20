@@ -1,18 +1,23 @@
 //! Independently derived cases frozen in damage-replacement-scenarios.md before
 //! test authoring or new implementation output. This is a bounded native slice.
+use spellwake_engine::program::{BodyTarget, ExecutableBody, SpellTargetFilter};
+#[path = "support/damage.rs"]
+pub mod damage_support;
 use spellwake_contracts::RulesInteger;
+use spellwake_engine::combat::CombatRules;
+use spellwake_engine::setup::GameSeed;
 use spellwake_engine::{
-    card_identity::{CardDestination, CardId, CardObjectId, CardZone},
     damage::{
         DamageEffectId, DamageError, DamageJournal, DamageMultiplier, DamageOutcome,
-        PreventionShield,
+        DamageRecipient, PreventionShield,
     },
-    effects::{CopyTargetChoice, EffectError, Instruction, Program, SeedCard},
+    effects::{CopyTargetChoice, EffectDecision, EffectError, Instruction, Program, SeedCard},
     game::{
         CandidateBase, DecisionReply, GameCommand, GameContext, GameError, GameId, GameInput,
         GameState, NativeCandidate, RuleFrame,
     },
     mana::{FloatingMana, ManaCost, ManaType},
+    object_identity::{CardId, ObjectDestination, ObjectId, ObjectZone},
     priority::{PriorityPhase, SeatId},
     stack_window::{StackEntryId, StackWindowError, WindowPhase},
     targets::TargetRef,
@@ -51,12 +56,21 @@ fn prevention(amount: i64) -> Instruction {
 
 fn context(labels: [&str; 5]) -> GameContext {
     let [release, rules, catalogue, programs, profile] = labels.map(String::from);
-    GameContext::new(release, rules, catalogue, programs, profile).unwrap()
+    GameContext::new(
+        release,
+        rules,
+        catalogue,
+        programs,
+        profile,
+        test_vocabulary().id(),
+        spellwake_contracts::names::NameRules::literal_names().id(),
+    )
+    .unwrap()
 }
 
 fn initialize(
     toughness: RulesInteger,
-    instructions: Vec<(u64, SeatId, Instruction)>,
+    instructions: Vec<(u64, SeatId, ExecutableBody)>,
     mana: i64,
 ) -> Result<NativeCandidate, GameError> {
     let mut cards = Vec::new();
@@ -64,11 +78,13 @@ fn initialize(
         cards.push(SeedCard {
             card: CardId(card),
             owner: A,
-            destination: CardDestination::Battlefield { controller },
-            program: Program::VanillaCreature {
-                power: 1.into(),
-                toughness: toughness.clone(),
-            },
+            destination: ObjectDestination::Battlefield { controller },
+            program: Program::creature(
+                None,
+                1.into(),
+                toughness.clone(),
+                std::collections::BTreeSet::new(),
+            ),
         });
     }
     cards.extend(
@@ -77,11 +93,8 @@ fn initialize(
             .map(|(card, owner, instruction)| SeedCard {
                 card: CardId(card),
                 owner,
-                destination: CardDestination::Hand,
-                program: Program::Instant {
-                    cost: ManaCost::one(ManaType::Blue),
-                    instructions: vec![instruction],
-                },
+                destination: ObjectDestination::Hand,
+                program: Program::instant(ManaCost::one(ManaType::Blue), instruction),
             }),
     );
     GameState::initialize(
@@ -93,27 +106,47 @@ fn initialize(
             "literal-multipliers",
             "individual-turn",
         ]),
-        vec![A, B],
-        A,
-        cards,
-        [A, B]
-            .into_iter()
-            .map(|player| FloatingMana {
-                player,
-                mana_type: ManaType::Blue,
-                amount: mana.into(),
-            })
-            .collect(),
+        {
+            // Fixture premise: seeded BF timestamps follow this authored card sequence.
+            let initial_battlefield_order = cards
+                .iter()
+                .filter(|card| {
+                    matches!(
+                        card.destination,
+                        spellwake_engine::object_identity::ObjectDestination::Battlefield { .. }
+                    )
+                })
+                .map(|card| card.card)
+                .collect();
+            GameSeed::with_uniform_life(
+                vec![A, B],
+                A,
+                cards,
+                initial_battlefield_order,
+                [A, B]
+                    .into_iter()
+                    .map(|player| FloatingMana {
+                        player,
+                        mana_type: ManaType::Blue,
+                        amount: mana.into(),
+                    })
+                    .collect(),
+                20.into(),
+                CombatRules::UnrestrictedFreeForAll,
+                test_vocabulary(),
+                std::sync::Arc::new(spellwake_contracts::names::NameRules::literal_names()),
+            )
+        },
     )
 }
 
-fn world(toughness: i64, instructions: Vec<(u64, SeatId, Instruction)>) -> GameState {
+fn world(toughness: i64, instructions: Vec<(u64, SeatId, ExecutableBody)>) -> GameState {
     let candidate = initialize(toughness.into(), instructions, 100).unwrap();
     assert_eq!(candidate.damage_journal(), &DamageJournal::default());
     candidate.into_state()
 }
 
-fn object(game: &GameState, card: u64) -> CardObjectId {
+fn object(game: &GameState, card: u64) -> ObjectId {
     game.execution()
         .window()
         .cards()
@@ -121,7 +154,7 @@ fn object(game: &GameState, card: u64) -> CardObjectId {
         .unwrap()
 }
 
-fn zone(game: &GameState, card: u64) -> CardZone {
+fn zone(game: &GameState, card: u64) -> ObjectZone {
     game.execution()
         .window()
         .cards()
@@ -130,8 +163,8 @@ fn zone(game: &GameState, card: u64) -> CardZone {
         .zone()
 }
 
-fn marked(game: &GameState, target: CardObjectId) -> RulesInteger {
-    game.execution().creature(target).unwrap().damage
+fn marked(game: &GameState, target: ObjectId) -> RulesInteger {
+    game.execution().creature(target).unwrap().unwrap().damage
 }
 
 fn input(game: &GameState, actor: SeatId, command: GameCommand) -> GameInput {
@@ -145,6 +178,7 @@ fn input(game: &GameState, actor: SeatId, command: GameCommand) -> GameInput {
 fn accept(game: &GameState, actor: SeatId, command: GameCommand) -> NativeCandidate {
     let saved = game.clone();
     let candidate = game.advance(input(game, actor, command)).unwrap();
+    damage_support::assert_transition_damage(game, &candidate);
     assert_eq!(game, &saved);
     assert_eq!(
         candidate.base(),
@@ -209,26 +243,29 @@ fn resolve(game: &GameState) -> NativeCandidate {
     accept(first.state(), holder(first.state()), GameCommand::Pass)
 }
 
-fn execute(game: &GameState, card: u64, target: CardObjectId) -> (NativeCandidate, StackEntryId) {
-    let (game, source) = cast(game, A, card, TargetRef::Card(target));
+fn execute(game: &GameState, card: u64, target: ObjectId) -> (NativeCandidate, StackEntryId) {
+    let (game, source) = cast(game, A, card, TargetRef::Object(target));
     (resolve(&game), source)
 }
 
 fn create_multiplier(
     game: &GameState,
     card: u64,
-    target: CardObjectId,
+    target: ObjectId,
 ) -> (GameState, DamageMultiplier) {
     let (candidate, source) = execute(game, card, target);
     let record = candidate
         .state()
         .execution()
         .damage_multipliers()
-        .find(|record| record.source == source)
+        .find(|record| record.creator == source)
         .unwrap()
         .clone();
-    assert_eq!(record.target, target);
-    assert_eq!(zone(candidate.state(), card), CardZone::Graveyard(A));
+    assert_eq!(
+        record.target,
+        spellwake_engine::damage::DamageEffectTarget::Permanent(target)
+    );
+    assert_eq!(zone(candidate.state(), card), ObjectZone::Graveyard(A));
     assert_eq!(
         candidate.damage_journal(),
         &DamageJournal {
@@ -242,17 +279,13 @@ fn create_multiplier(
     (candidate.into_state(), record)
 }
 
-fn create_shield(
-    game: &GameState,
-    card: u64,
-    target: CardObjectId,
-) -> (GameState, PreventionShield) {
+fn create_shield(game: &GameState, card: u64, target: ObjectId) -> (GameState, PreventionShield) {
     let (candidate, source) = execute(game, card, target);
     let record = candidate
         .state()
         .execution()
         .prevention_shields()
-        .find(|record| record.source == source)
+        .find(|record| record.creator == source)
         .unwrap()
         .clone();
     assert_eq!(
@@ -275,7 +308,7 @@ fn choose(game: &GameState, effect: impl Into<DamageEffectId>) -> NativeCandidat
         pending.chooser(),
         GameCommand::Reply {
             decision: pending.id(),
-            choice: DecisionReply::DamageOrder(effect.into()),
+            choice: DecisionReply::DamageOrder(damage_support::application(game, effect)),
         },
     )
 }
@@ -283,14 +316,15 @@ fn choose(game: &GameState, effect: impl Into<DamageEffectId>) -> NativeCandidat
 fn assert_dealt(
     journal: &DamageJournal,
     source: StackEntryId,
-    target: CardObjectId,
+    target: ObjectId,
     amount: RulesInteger,
 ) {
     assert_eq!(journal.applied.len(), 1);
     let applied = &journal.applied[0];
+    damage_support::assert_started_origin(journal, source);
     assert_eq!(
-        (applied.source, applied.target, &applied.amount),
-        (source, target, &amount)
+        (applied.target, &applied.amount),
+        (DamageRecipient::Creature(target), &amount)
     );
     assert_eq!(journal.completions.len(), 1);
     assert_eq!(journal.completions[0].attempt, applied.attempt);
@@ -302,9 +336,21 @@ fn first_shield_and_multiplier_have_distinct_typed_options_and_order_changes_dam
     let game = world(
         100,
         vec![
-            (1, A, prevention(4)),
-            (2, A, multiplier(2)),
-            (3, A, damage(3)),
+            (
+                1,
+                A,
+                ExecutableBody::new(BodyTarget::SingleCreature, vec![prevention(4)]),
+            ),
+            (
+                2,
+                A,
+                ExecutableBody::new(BodyTarget::SingleCreature, vec![multiplier(2)]),
+            ),
+            (
+                3,
+                A,
+                ExecutableBody::new(BodyTarget::SingleCreature, vec![damage(3)]),
+            ),
         ],
     );
     let target = object(&game, FIRST);
@@ -316,15 +362,27 @@ fn first_shield_and_multiplier_have_distinct_typed_options_and_order_changes_dam
     let (start, source) = execute(&game, 3, target);
     let pending = start.state();
     let decision = pending.pending_decision().unwrap();
-    let RuleFrame::DamageOrder(frame) = decision.frame() else {
+    let RuleFrame::Damage(spellwake_engine::effects::DamageDecision::Order(frame)) =
+        decision.frame()
+    else {
         panic!("expected damage choice")
     };
     assert_eq!(decision.chooser(), B);
     assert_eq!(frame.chooser(), B);
-    assert_eq!(frame.source(), source);
-    assert_eq!(frame.options().len(), 2);
-    assert!(frame.options().contains(&shield_id));
-    assert!(frame.options().contains(&multiplier_id));
+    assert_eq!(damage_support::resolution_origin(frame).0, source);
+    assert_eq!(frame.applications().len(), 2);
+    assert!(
+        frame
+            .applications()
+            .iter()
+            .any(|application| application.effect == shield_id)
+    );
+    assert!(
+        frame
+            .applications()
+            .iter()
+            .any(|application| application.effect == multiplier_id)
+    );
     assert_eq!(start.damage_journal().attempts.len(), 1);
     assert_eq!(start.damage_journal().attempts[0].amount, 3.into());
 
@@ -334,13 +392,13 @@ fn first_shield_and_multiplier_have_distinct_typed_options_and_order_changes_dam
     assert_eq!(journal.multiplications.len(), 1);
     let fact = &journal.multiplications[0];
     assert_eq!(
+        (fact.multiplier, fact.creator, fact.target, fact.stage),
         (
-            fact.multiplier,
-            fact.multiplier_source,
-            fact.target,
-            fact.stage
-        ),
-        (multiplier.id, multiplier.source, target, 1)
+            multiplier.id,
+            multiplier.creator,
+            DamageRecipient::Creature(target),
+            1
+        )
     );
     assert_eq!(
         (&fact.before, &fact.factor, &fact.after),
@@ -351,7 +409,7 @@ fn first_shield_and_multiplier_have_distinct_typed_options_and_order_changes_dam
         (
             journal.preventions[0].stage,
             &journal.preventions[0].amount,
-            &journal.preventions[0].damage_remaining
+            damage_support::prevention_remaining(&journal.preventions[0])
         ),
         (2, &4.into(), &2.into())
     );
@@ -375,7 +433,10 @@ fn first_shield_and_multiplier_have_distinct_typed_options_and_order_changes_dam
     assert!(journal.applied.is_empty());
     assert_eq!(journal.preventions.len(), 1);
     assert_eq!(journal.preventions[0].stage, 1);
-    assert_eq!(journal.preventions[0].damage_remaining, 0.into());
+    assert_eq!(
+        damage_support::prevention_remaining(&journal.preventions[0]).clone(),
+        0.into()
+    );
     assert_eq!(journal.completions.len(), 1);
     assert_eq!(
         journal.completions[0].outcome,
@@ -406,9 +467,21 @@ fn two_multipliers_each_apply_once_and_keep_the_original_attempt_amount() {
     let game = world(
         100,
         vec![
-            (1, A, multiplier(2)),
-            (2, A, multiplier(3)),
-            (3, A, damage(5)),
+            (
+                1,
+                A,
+                ExecutableBody::new(BodyTarget::SingleCreature, vec![multiplier(2)]),
+            ),
+            (
+                2,
+                A,
+                ExecutableBody::new(BodyTarget::SingleCreature, vec![multiplier(3)]),
+            ),
+            (
+                3,
+                A,
+                ExecutableBody::new(BodyTarget::SingleCreature, vec![damage(5)]),
+            ),
         ],
     );
     let target = object(&game, FIRST);
@@ -462,9 +535,21 @@ fn factor_one_is_an_application_even_without_numeric_change_and_terminates() {
         let game = world(
             100,
             vec![
-                (1, A, multiplier(1)),
-                (2, A, multiplier(1)),
-                (3, A, damage(7)),
+                (
+                    1,
+                    A,
+                    ExecutableBody::new(BodyTarget::SingleCreature, vec![multiplier(1)]),
+                ),
+                (
+                    2,
+                    A,
+                    ExecutableBody::new(BodyTarget::SingleCreature, vec![multiplier(1)]),
+                ),
+                (
+                    3,
+                    A,
+                    ExecutableBody::new(BodyTarget::SingleCreature, vec![damage(7)]),
+                ),
             ],
         );
         let target = object(&game, FIRST);
@@ -500,10 +585,26 @@ fn fully_prevented_event_does_not_consume_multiplier_for_a_new_attempt() {
     let game = world(
         100,
         vec![
-            (1, A, multiplier(2)),
-            (2, A, prevention(4)),
-            (3, A, damage(3)),
-            (4, A, damage(3)),
+            (
+                1,
+                A,
+                ExecutableBody::new(BodyTarget::SingleCreature, vec![multiplier(2)]),
+            ),
+            (
+                2,
+                A,
+                ExecutableBody::new(BodyTarget::SingleCreature, vec![prevention(4)]),
+            ),
+            (
+                3,
+                A,
+                ExecutableBody::new(BodyTarget::SingleCreature, vec![damage(3)]),
+            ),
+            (
+                4,
+                A,
+                ExecutableBody::new(BodyTarget::SingleCreature, vec![damage(3)]),
+            ),
         ],
     );
     let target = object(&game, FIRST);
@@ -523,7 +624,7 @@ fn fully_prevented_event_does_not_consume_multiplier_for_a_new_attempt() {
     assert_ne!(next_attempt.id, first_attempt.id);
     assert_eq!(next_attempt.amount, 3.into());
     let active = next.state().execution().pending_damage().unwrap();
-    assert!(active.used_effects().is_empty());
+    assert!(damage_support::used_effects(active).is_empty());
     assert_eq!(active.stage(), 0);
     let dealt = choose(next.state(), multiplier.id);
     assert_eq!(dealt.damage_journal().multiplications[0].stage, 1);
@@ -545,7 +646,23 @@ fn fully_prevented_event_does_not_consume_multiplier_for_a_new_attempt() {
 fn persistent_multiplier_applies_again_to_a_later_positive_attempt() {
     let game = world(
         100,
-        vec![(1, A, multiplier(2)), (2, A, damage(3)), (3, A, damage(3))],
+        vec![
+            (
+                1,
+                A,
+                ExecutableBody::new(BodyTarget::SingleCreature, vec![multiplier(2)]),
+            ),
+            (
+                2,
+                A,
+                ExecutableBody::new(BodyTarget::SingleCreature, vec![damage(3)]),
+            ),
+            (
+                3,
+                A,
+                ExecutableBody::new(BodyTarget::SingleCreature, vec![damage(3)]),
+            ),
+        ],
     );
     let target = object(&game, FIRST);
     let (game, multiplier) = create_multiplier(&game, 1, target);
@@ -585,20 +702,48 @@ struct Mixed {
     unrelated_multiplier: DamageMultiplier,
     unrelated_shield: PreventionShield,
     source: StackEntryId,
-    target: CardObjectId,
+    target: ObjectId,
 }
 
 fn mixed(toughness: i64) -> Mixed {
     let game = world(
         toughness,
         vec![
-            (1, A, multiplier(2)),
-            (2, A, multiplier(2)),
-            (3, A, prevention(4)),
-            (4, A, damage(5)),
-            (5, A, multiplier(7)),
-            (6, A, prevention(9)),
-            (7, A, damage(1)),
+            (
+                1,
+                A,
+                ExecutableBody::new(BodyTarget::SingleCreature, vec![multiplier(2)]),
+            ),
+            (
+                2,
+                A,
+                ExecutableBody::new(BodyTarget::SingleCreature, vec![multiplier(2)]),
+            ),
+            (
+                3,
+                A,
+                ExecutableBody::new(BodyTarget::SingleCreature, vec![prevention(4)]),
+            ),
+            (
+                4,
+                A,
+                ExecutableBody::new(BodyTarget::SingleCreature, vec![damage(5)]),
+            ),
+            (
+                5,
+                A,
+                ExecutableBody::new(BodyTarget::SingleCreature, vec![multiplier(7)]),
+            ),
+            (
+                6,
+                A,
+                ExecutableBody::new(BodyTarget::SingleCreature, vec![prevention(9)]),
+            ),
+            (
+                7,
+                A,
+                ExecutableBody::new(BodyTarget::SingleCreature, vec![damage(1)]),
+            ),
         ],
     );
     let target = object(&game, FIRST);
@@ -645,11 +790,11 @@ fn mixed_partial_replies_preserve_one_attempt_and_order_selected_then_automatic_
     );
     let pending = accepted.state();
     let active = pending.execution().pending_damage().unwrap();
-    assert_eq!(active.attempt(), &attempt);
-    assert_eq!(active.remaining(), &10.into());
+    assert_eq!(damage_support::singleton(active).attempt(), &attempt);
+    assert_eq!(damage_support::singleton(active).remaining(), &10.into());
     assert_eq!(active.stage(), 1);
     assert_eq!(
-        active.used_effects().iter().copied().collect::<Vec<_>>(),
+        damage_support::used_effects(active),
         vec![case.first.id.into()]
     );
     assert_eq!(pending.execution().window().revision(), window_revision);
@@ -660,16 +805,28 @@ fn mixed_partial_replies_preserve_one_attempt_and_order_selected_then_automatic_
     let decision = pending.pending_decision().unwrap();
     assert_ne!(decision.id(), old_decision.id());
     assert_eq!(decision.basis(), pending.basis());
-    let RuleFrame::DamageOrder(frame) = decision.frame() else {
+    let RuleFrame::Damage(spellwake_engine::effects::DamageDecision::Order(frame)) =
+        decision.frame()
+    else {
         panic!("expected damage choice")
     };
-    assert_eq!(frame.attempt(), attempt.id);
-    assert_eq!(frame.source(), case.source);
-    assert_eq!(frame.options().len(), 2);
-    assert!(frame.options().contains(&case.second.id.into()));
-    assert!(frame.options().contains(&case.shield.id.into()));
+    assert_eq!(frame.batch(), attempt.batch);
+    assert_eq!(damage_support::resolution_origin(frame).0, case.source);
+    assert_eq!(frame.applications().len(), 2);
+    assert!(
+        frame
+            .applications()
+            .iter()
+            .any(|application| application.effect == case.second.id.into())
+    );
+    assert!(
+        frame
+            .applications()
+            .iter()
+            .any(|application| application.effect == case.shield.id.into())
+    );
     assert_eq!(marked(pending, case.target), 0.into());
-    assert_eq!(zone(pending, 4), CardZone::Stack);
+    assert_eq!(zone(pending, 4), ObjectZone::Stack);
 
     let done = choose(pending, case.shield.id);
     let journal = done.damage_journal();
@@ -677,10 +834,10 @@ fn mixed_partial_replies_preserve_one_attempt_and_order_selected_then_automatic_
     assert_eq!(journal.preventions.len(), 1);
     assert_eq!(
         (
-            journal.preventions[0].attempt,
+            journal.preventions[0].allocations[0].attempt,
             journal.preventions[0].stage,
             &journal.preventions[0].amount,
-            &journal.preventions[0].damage_remaining
+            damage_support::prevention_remaining(&journal.preventions[0])
         ),
         (attempt.id, 2, &4.into(), &6.into())
     );
@@ -690,15 +847,15 @@ fn mixed_partial_replies_preserve_one_attempt_and_order_selected_then_automatic_
         (
             fact.attempt,
             fact.multiplier,
-            fact.multiplier_source,
+            fact.creator,
             fact.target,
             fact.stage
         ),
         (
             attempt.id,
             case.second.id,
-            case.second.source,
-            case.target,
+            case.second.creator,
+            DamageRecipient::Creature(case.target),
             3
         )
     );
@@ -734,19 +891,19 @@ fn mixed_pending_rejects_stale_foreign_and_wrong_kind_inputs_without_losing_prio
     let decision = game.pending_decision().unwrap();
     let command = GameCommand::Reply {
         decision: decision.id(),
-        choice: DecisionReply::DamageOrder(case.shield.id.into()),
+        choice: DecisionReply::DamageOrder(damage_support::application(game, case.shield.id)),
     };
     for effect in [
-        case.first.id.into(),
-        case.unrelated_multiplier.id.into(),
-        case.unrelated_shield.id.into(),
+        DamageEffectId::from(case.first.id),
+        DamageEffectId::from(case.unrelated_multiplier.id),
+        DamageEffectId::from(case.unrelated_shield.id),
     ] {
         let request = input(
             game,
             B,
             GameCommand::Reply {
                 decision: decision.id(),
-                choice: DecisionReply::DamageOrder(effect),
+                choice: DecisionReply::DamageOrder(damage_support::application(game, effect)),
             },
         );
         reject(
@@ -779,7 +936,10 @@ fn mixed_pending_rejects_stale_foreign_and_wrong_kind_inputs_without_losing_prio
             B,
             GameCommand::Reply {
                 decision: old_decision.id(),
-                choice: DecisionReply::DamageOrder(case.shield.id.into()),
+                choice: DecisionReply::DamageOrder(damage_support::application(
+                    game,
+                    case.shield.id,
+                )),
             },
         ),
         GameError::WrongDecision,
@@ -820,28 +980,44 @@ fn mixed_pending_rejects_stale_foreign_and_wrong_kind_inputs_without_losing_prio
             A,
             GameCommand::Cast {
                 spell: object(game, 7),
-                target: TargetRef::Card(case.target),
+                target: TargetRef::Object(case.target),
             },
         ),
         GameError::DecisionRequired,
     );
     let execution = game.execution();
     let saved = execution.clone();
+    let RuleFrame::Damage(spellwake_engine::effects::DamageDecision::Order(old_frame)) =
+        old_decision.frame()
+    else {
+        panic!("expected damage frame")
+    };
+    let RuleFrame::Damage(spellwake_engine::effects::DamageDecision::Order(current_frame)) =
+        decision.frame()
+    else {
+        panic!("expected damage frame")
+    };
     assert_eq!(
-        execution.resume_resolution(
+        execution.resume_rule(
             execution.revision(),
-            old_decision.frame(),
+            &EffectDecision::Damage(spellwake_engine::effects::DamageDecision::Order(
+                old_frame.clone()
+            )),
             B,
-            DecisionReply::DamageOrder(case.shield.id.into())
+            DecisionReply::DamageOrder(damage_support::application(game, case.shield.id)),
+            None
         ),
-        Err(EffectError::WrongResolutionFrame)
+        Err(EffectError::WrongDamageFrame)
     );
     assert_eq!(
-        execution.resume_resolution(
+        execution.resume_rule(
             first.execution().revision(),
-            decision.frame(),
+            &EffectDecision::Damage(spellwake_engine::effects::DamageDecision::Order(
+                current_frame.clone()
+            )),
             B,
-            DecisionReply::DamageOrder(case.shield.id.into())
+            DecisionReply::DamageOrder(damage_support::application(game, case.shield.id)),
+            None
         ),
         Err(EffectError::Window(StackWindowError::StaleRevision))
     );
@@ -855,7 +1031,16 @@ fn mixed_pending_rejects_stale_foreign_and_wrong_kind_inputs_without_losing_prio
     );
     assert_eq!(execution, &saved);
     assert_eq!(execution.pending_damage().unwrap().stage(), 1);
-    assert_eq!(execution.pending_damage().unwrap().remaining(), &10.into());
+    assert_eq!(
+        execution
+            .pending_damage()
+            .unwrap()
+            .components()
+            .next()
+            .unwrap()
+            .remaining(),
+        &10.into()
+    );
     assert_eq!(accepted.damage_journal().multiplications.len(), 1);
     assert_dealt(
         choose(game, case.shield.id).damage_journal(),
@@ -870,20 +1055,30 @@ fn huge_products_and_following_prevention_never_narrow_or_round() {
     let game = world(
         100,
         vec![
-            (1, A, multiplier(3)),
+            (
+                1,
+                A,
+                ExecutableBody::new(BodyTarget::SingleCreature, vec![multiplier(3)]),
+            ),
             (
                 2,
                 A,
-                Instruction::CreatePreventionShield {
-                    amount: exact(PRODUCT_MINUS_SEVEN),
-                },
+                ExecutableBody::new(
+                    BodyTarget::SingleCreature,
+                    vec![Instruction::CreatePreventionShield {
+                        amount: exact(PRODUCT_MINUS_SEVEN),
+                    }],
+                ),
             ),
             (
                 3,
                 A,
-                Instruction::Damage {
-                    amount: exact(HUGE),
-                },
+                ExecutableBody::new(
+                    BodyTarget::SingleCreature,
+                    vec![Instruction::Damage {
+                        amount: exact(HUGE),
+                    }],
+                ),
             ),
         ],
     );
@@ -901,7 +1096,10 @@ fn huge_products_and_following_prevention_never_narrow_or_round() {
     );
     assert_eq!(fact.stage, 1);
     assert_eq!(journal.preventions[0].amount, exact(PRODUCT_MINUS_SEVEN));
-    assert_eq!(journal.preventions[0].damage_remaining, 7.into());
+    assert_eq!(
+        damage_support::prevention_remaining(&journal.preventions[0]).clone(),
+        7.into()
+    );
     assert_eq!(journal.preventions[0].stage, 2);
     assert!(
         done.state()
@@ -921,11 +1119,18 @@ fn huge_factor_is_persistent_exact_data_rather_than_a_machine_integer() {
             (
                 1,
                 A,
-                Instruction::CreateDamageMultiplier {
-                    factor: exact(HUGE),
-                },
+                ExecutableBody::new(
+                    BodyTarget::SingleCreature,
+                    vec![Instruction::CreateDamageMultiplier {
+                        factor: exact(HUGE),
+                    }],
+                ),
             ),
-            (2, A, damage(3)),
+            (
+                2,
+                A,
+                ExecutableBody::new(BodyTarget::SingleCreature, vec![damage(3)]),
+            ),
         ],
         100,
     )
@@ -955,10 +1160,26 @@ fn fixed_target_multipliers_do_not_modify_another_live_creature() {
     let game = world(
         100,
         vec![
-            (1, A, multiplier(9)),
-            (2, A, prevention(2)),
-            (3, A, damage(5)),
-            (4, A, damage(1)),
+            (
+                1,
+                A,
+                ExecutableBody::new(BodyTarget::SingleCreature, vec![multiplier(9)]),
+            ),
+            (
+                2,
+                A,
+                ExecutableBody::new(BodyTarget::SingleCreature, vec![prevention(2)]),
+            ),
+            (
+                3,
+                A,
+                ExecutableBody::new(BodyTarget::SingleCreature, vec![damage(5)]),
+            ),
+            (
+                4,
+                A,
+                ExecutableBody::new(BodyTarget::SingleCreature, vec![damage(1)]),
+            ),
         ],
     );
     let first = object(&game, FIRST);
@@ -989,9 +1210,24 @@ fn target_departure_prunes_only_its_multipliers_and_step_end_is_not_expiry() {
     let game = world(
         100,
         vec![
-            (1, A, multiplier(2)),
-            (2, A, multiplier(3)),
-            (3, A, Instruction::ReturnToOwnersHand),
+            (
+                1,
+                A,
+                ExecutableBody::new(BodyTarget::SingleCreature, vec![multiplier(2)]),
+            ),
+            (
+                2,
+                A,
+                ExecutableBody::new(BodyTarget::SingleCreature, vec![multiplier(3)]),
+            ),
+            (
+                3,
+                A,
+                ExecutableBody::new(
+                    BodyTarget::SingleCreature,
+                    vec![Instruction::ReturnToOwnersHand],
+                ),
+            ),
         ],
     );
     let first = object(&game, FIRST);
@@ -1000,7 +1236,7 @@ fn target_departure_prunes_only_its_multipliers_and_step_end_is_not_expiry() {
     let (game, other_multiplier) = create_multiplier(&game, 2, other);
     let (done, _) = execute(&game, 3, first);
     assert_eq!(done.damage_journal(), &DamageJournal::default());
-    assert_eq!(zone(done.state(), FIRST), CardZone::Hand(A));
+    assert_eq!(zone(done.state(), FIRST), ObjectZone::Hand(A));
     assert_ne!(object(done.state(), FIRST), first);
     assert!(
         done.state()
@@ -1035,19 +1271,41 @@ fn copied_multiplier_records_survive_copy_cessation_and_original_countering() {
         let game = world(
             100,
             vec![
-                (1, A, multiplier(3)),
-                (2, B, Instruction::CopySpell),
-                (3, A, Instruction::CounterSpell),
-                (4, A, damage(2)),
+                (
+                    1,
+                    A,
+                    ExecutableBody::new(BodyTarget::SingleCreature, vec![multiplier(3)]),
+                ),
+                (
+                    2,
+                    B,
+                    ExecutableBody::new(
+                        BodyTarget::SingleSpell(SpellTargetFilter::CopyableInstructionSpell),
+                        vec![Instruction::CopySpell],
+                    ),
+                ),
+                (
+                    3,
+                    A,
+                    ExecutableBody::new(
+                        BodyTarget::SingleSpell(SpellTargetFilter::AnySpell),
+                        vec![Instruction::CounterSpell],
+                    ),
+                ),
+                (
+                    4,
+                    A,
+                    ExecutableBody::new(BodyTarget::SingleCreature, vec![damage(2)]),
+                ),
             ],
         );
         let target = object(&game, FIRST);
         let other = object(&game, SECOND);
-        let (game, original) = cast(&game, A, 1, TargetRef::Card(target));
+        let (game, original) = cast(&game, A, 1, TargetRef::Object(target));
         let (game, _) = cast(&game, B, 2, TargetRef::Stack(original));
         let pending = resolve(&game);
         let choice = if counter_original {
-            CopyTargetChoice::Change(TargetRef::Card(other))
+            CopyTargetChoice::Change(TargetRef::Object(other))
         } else {
             CopyTargetChoice::Retain
         };
@@ -1082,7 +1340,7 @@ fn copied_multiplier_records_survive_copy_cessation_and_original_countering() {
             .state()
             .execution()
             .damage_multipliers()
-            .find(|effect| effect.source == copy)
+            .find(|effect| effect.creator == copy)
             .unwrap()
             .clone();
         assert_eq!(
@@ -1107,24 +1365,28 @@ fn copied_multiplier_records_survive_copy_cessation_and_original_countering() {
             .state()
             .execution()
             .damage_multipliers()
-            .find(|record| record.source == copy)
+            .find(|record| record.creator == copy)
             .unwrap()
             .clone();
         assert_eq!(copy_multiplier.factor, 3.into());
         assert_eq!(
             copy_multiplier.target,
-            if counter_original { other } else { target }
+            spellwake_engine::damage::DamageEffectTarget::Permanent(if counter_original {
+                other
+            } else {
+                target
+            })
         );
         let game = if counter_original {
             resolved_copy.into_state()
         } else {
             resolve(resolved_copy.state()).into_state()
         };
-        assert_eq!(zone(&game, 1), CardZone::Graveyard(A));
+        assert_eq!(zone(&game, 1), ObjectZone::Graveyard(A));
         let original_multiplier = game
             .execution()
             .damage_multipliers()
-            .find(|record| record.source == original)
+            .find(|record| record.creator == original)
             .cloned();
         assert_eq!(original_multiplier.is_some(), !counter_original);
         if let Some(record) = &original_multiplier {
@@ -1152,10 +1414,7 @@ fn copied_multiplier_records_survive_copy_cessation_and_original_countering() {
             done.damage_journal().multiplications.len(),
             if counter_original { 1 } else { 2 }
         );
-        assert_eq!(
-            done.damage_journal().multiplications[0].multiplier_source,
-            copy
-        );
+        assert_eq!(done.damage_journal().multiplications[0].creator, copy);
         assert_eq!(
             done.state()
                 .execution()
@@ -1169,23 +1428,51 @@ fn copied_multiplier_records_survive_copy_cessation_and_original_countering() {
 fn countered_and_all_illegal_multiplier_creations_allocate_no_effect_or_attempt() {
     let game = world(
         100,
-        vec![(1, A, multiplier(2)), (2, A, Instruction::CounterSpell)],
+        vec![
+            (
+                1,
+                A,
+                ExecutableBody::new(BodyTarget::SingleCreature, vec![multiplier(2)]),
+            ),
+            (
+                2,
+                A,
+                ExecutableBody::new(
+                    BodyTarget::SingleSpell(SpellTargetFilter::AnySpell),
+                    vec![Instruction::CounterSpell],
+                ),
+            ),
+        ],
     );
     let target = object(&game, FIRST);
-    let (game, original) = cast(&game, A, 1, TargetRef::Card(target));
+    let (game, original) = cast(&game, A, 1, TargetRef::Object(target));
     let (game, _) = cast(&game, A, 2, TargetRef::Stack(original));
     let done = resolve(&game);
     assert_eq!(done.damage_journal(), &DamageJournal::default());
     assert_eq!(done.state().execution().damage_multipliers().count(), 0);
-    assert_eq!(zone(done.state(), 1), CardZone::Graveyard(A));
+    assert_eq!(zone(done.state(), 1), ObjectZone::Graveyard(A));
     for instruction in [multiplier(2), damage(5)] {
         let game = world(
             100,
-            vec![(1, A, instruction), (2, A, Instruction::ReturnToOwnersHand)],
+            vec![
+                (
+                    1,
+                    A,
+                    ExecutableBody::new(BodyTarget::SingleCreature, vec![instruction]),
+                ),
+                (
+                    2,
+                    A,
+                    ExecutableBody::new(
+                        BodyTarget::SingleCreature,
+                        vec![Instruction::ReturnToOwnersHand],
+                    ),
+                ),
+            ],
         );
         let target = object(&game, FIRST);
-        let (game, _) = cast(&game, A, 1, TargetRef::Card(target));
-        let (game, _) = cast(&game, A, 2, TargetRef::Card(target));
+        let (game, _) = cast(&game, A, 1, TargetRef::Object(target));
+        let (game, _) = cast(&game, A, 2, TargetRef::Object(target));
         let bounced = resolve(&game);
         assert_ne!(object(bounced.state(), FIRST), target);
         let done = resolve(bounced.state());
@@ -1193,7 +1480,7 @@ fn countered_and_all_illegal_multiplier_creations_allocate_no_effect_or_attempt(
         assert_eq!(done.state().execution().damage_multipliers().count(), 0);
         assert!(done.state().execution().pending_damage().is_none());
         assert!(done.state().pending_decision().is_none());
-        assert_eq!(zone(done.state(), 1), CardZone::Graveyard(A));
+        assert_eq!(zone(done.state(), 1), ObjectZone::Graveyard(A));
         assert_eq!(done.state().execution().mana(A, ManaType::Blue), 98.into());
     }
 }
@@ -1202,16 +1489,36 @@ fn countered_and_all_illegal_multiplier_creations_allocate_no_effect_or_attempt(
 fn invalid_factors_and_invalid_casts_preserve_the_full_native_state() {
     for factor in [0, -1] {
         assert_eq!(
-            initialize(100.into(), vec![(1, A, multiplier(factor))], 100),
+            initialize(
+                100.into(),
+                vec![(
+                    1,
+                    A,
+                    ExecutableBody::new(BodyTarget::SingleCreature, vec![multiplier(factor)])
+                )],
+                100
+            ),
             Err(GameError::Effect(EffectError::InvalidSetup))
         );
     }
     let game = world(
         100,
         vec![
-            (1, A, multiplier(2)),
-            (2, B, multiplier(2)),
-            (3, A, damage(1)),
+            (
+                1,
+                A,
+                ExecutableBody::new(BodyTarget::SingleCreature, vec![multiplier(2)]),
+            ),
+            (
+                2,
+                B,
+                ExecutableBody::new(BodyTarget::SingleCreature, vec![multiplier(2)]),
+            ),
+            (
+                3,
+                A,
+                ExecutableBody::new(BodyTarget::SingleCreature, vec![damage(1)]),
+            ),
         ],
     );
     let target = object(&game, FIRST);
@@ -1222,7 +1529,7 @@ fn invalid_factors_and_invalid_casts_preserve_the_full_native_state() {
             B,
             GameCommand::Cast {
                 spell: object(&game, 1),
-                target: TargetRef::Card(target),
+                target: TargetRef::Object(target),
             },
         ),
         GameError::Effect(EffectError::NotOwnHand),
@@ -1234,12 +1541,12 @@ fn invalid_factors_and_invalid_casts_preserve_the_full_native_state() {
             A,
             GameCommand::Cast {
                 spell: object(&game, 1),
-                target: TargetRef::Card(object(&game, 3)),
+                target: TargetRef::Object(object(&game, 3)),
             },
         ),
         GameError::Effect(EffectError::IllegalTarget),
     );
-    let (stacked, entry) = cast(&game, A, 3, TargetRef::Card(target));
+    let (stacked, entry) = cast(&game, A, 3, TargetRef::Object(target));
     reject(
         &stacked,
         input(
@@ -1252,9 +1559,17 @@ fn invalid_factors_and_invalid_casts_preserve_the_full_native_state() {
         ),
         GameError::Effect(EffectError::IllegalTarget),
     );
-    let empty = initialize(100.into(), vec![(1, A, multiplier(2))], 0)
-        .unwrap()
-        .into_state();
+    let empty = initialize(
+        100.into(),
+        vec![(
+            1,
+            A,
+            ExecutableBody::new(BodyTarget::SingleCreature, vec![multiplier(2)]),
+        )],
+        0,
+    )
+    .unwrap()
+    .into_state();
     reject(
         &empty,
         input(
@@ -1262,7 +1577,7 @@ fn invalid_factors_and_invalid_casts_preserve_the_full_native_state() {
             A,
             GameCommand::Cast {
                 spell: object(&empty, 1),
-                target: TargetRef::Card(object(&empty, FIRST)),
+                target: TargetRef::Object(object(&empty, FIRST)),
             },
         ),
         GameError::Effect(EffectError::InsufficientMana),
@@ -1274,15 +1589,24 @@ fn lethal_completion_retains_old_incarnation_facts_after_multiplier_pruning() {
     let case = mixed(12);
     let accepted = choose(case.start.state(), case.first.id);
     assert_eq!(marked(accepted.state(), case.target), 0.into());
-    assert_eq!(zone(accepted.state(), FIRST), CardZone::Battlefield);
+    assert_eq!(zone(accepted.state(), FIRST), ObjectZone::Battlefield);
     let old_decision = accepted.state().pending_decision().unwrap().clone();
     let done = choose(accepted.state(), case.shield.id);
     assert_dealt(done.damage_journal(), case.source, case.target, 12.into());
     assert_eq!(done.damage_journal().multiplications[0].after, 12.into());
-    assert_eq!(done.damage_journal().multiplications[0].target, case.target);
-    assert_eq!(zone(done.state(), FIRST), CardZone::Graveyard(A));
+    assert_eq!(
+        done.damage_journal().multiplications[0].target,
+        DamageRecipient::Creature(case.target)
+    );
+    assert_eq!(zone(done.state(), FIRST), ObjectZone::Graveyard(A));
     assert_ne!(object(done.state(), FIRST), case.target);
-    assert!(done.state().execution().creature(case.target).is_none());
+    assert!(
+        done.state()
+            .execution()
+            .creature(case.target)
+            .unwrap()
+            .is_none()
+    );
     assert!(
         done.state()
             .execution()
@@ -1308,12 +1632,25 @@ fn lethal_completion_retains_old_incarnation_facts_after_multiplier_pruning() {
             B,
             GameCommand::Reply {
                 decision: old_decision.id(),
-                choice: DecisionReply::DamageOrder(case.shield.id.into()),
+                choice: DecisionReply::DamageOrder(damage_support::application(
+                    accepted.state(),
+                    case.shield.id,
+                )),
             },
         ),
         GameError::NoDecision,
     );
     let later = accept(done.state(), holder(done.state()), GameCommand::Pass);
     assert_eq!(later.damage_journal(), &DamageJournal::default());
-    assert_eq!(done.damage_journal().applied[0].target, case.target);
+    assert_eq!(
+        done.damage_journal().applied[0].target,
+        DamageRecipient::Creature(case.target)
+    );
+}
+
+#[path = "support/vocabulary.rs"]
+mod synthetic_vocabulary;
+fn test_vocabulary() -> std::sync::Arc<spellwake_contracts::creature_types::CreatureTypeVocabulary>
+{
+    synthetic_vocabulary::for_rules("rules-20260925")
 }

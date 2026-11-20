@@ -1,12 +1,17 @@
 //! Restricted spell-copy behavior, including boundaries hidden by settled reference snapshots.
+use spellwake_engine::combat::CombatRules;
+use spellwake_engine::program::{BodyTarget, ExecutableBody, SpellTargetFilter};
+use spellwake_engine::program::{CardType, Supertype};
+use spellwake_engine::setup::GameSeed;
 use spellwake_engine::{
-    card_identity::{CardDestination, CardId, CardObjectId, CardZone},
     effects::{CopyTargetChoice, EffectError, EffectWindow, Instruction, Program, SeedCard},
     mana::{FloatingMana, ManaCost, ManaType},
+    object_identity::{CardId, ObjectDestination, ObjectId, ObjectZone},
     priority::{PriorityPhase, SeatId},
     stack_window::{StackEntryId, StackWindowError, WindowPhase},
     targets::TargetRef,
 };
+use std::collections::BTreeSet;
 const A: SeatId = SeatId(0);
 const B: SeatId = SeatId(1);
 fn instant(
@@ -15,18 +20,38 @@ fn instant(
     mana_type: ManaType,
     amount: i64,
     instruction: Instruction,
+    body_target: BodyTarget,
 ) -> SeedCard {
     SeedCard {
         card: CardId(id),
         owner,
-        destination: CardDestination::Hand,
-        program: Program::Instant {
-            cost: ManaCost::specific(mana_type, amount.into()),
-            instructions: vec![instruction],
-        },
+        destination: ObjectDestination::Hand,
+        program: Program::instant(
+            ManaCost::specific(mana_type, amount.into()),
+            ExecutableBody::new(body_target, vec![instruction]),
+        ),
     }
 }
 fn setup() -> EffectWindow {
+    setup_with_cards(vec![])
+}
+fn setup_with_cards(extra: Vec<SeedCard>) -> EffectWindow {
+    setup_with_traits(extra, BTreeSet::new())
+}
+fn setup_with_traits(extra: Vec<SeedCard>, supertypes: BTreeSet<Supertype>) -> EffectWindow {
+    setup_with_card_types(
+        extra,
+        supertypes,
+        BTreeSet::from([CardType::Instant]),
+        BTreeSet::new(),
+    )
+}
+fn setup_with_card_types(
+    extra: Vec<SeedCard>,
+    supertypes: BTreeSet<Supertype>,
+    card_types: BTreeSet<CardType>,
+    subtypes: BTreeSet<spellwake_contracts::creature_types::CreatureTypeId>,
+) -> EffectWindow {
     let mut cards = vec![
         instant(
             1,
@@ -34,49 +59,93 @@ fn setup() -> EffectWindow {
             ManaType::Red,
             1,
             Instruction::Damage { amount: 3.into() },
+            BodyTarget::SingleCreature,
         ),
-        instant(2, B, ManaType::Blue, 2, Instruction::CopySpell),
-        instant(3, A, ManaType::Blue, 2, Instruction::CounterSpell),
-        instant(4, A, ManaType::Blue, 1, Instruction::ReturnToOwnersHand),
+        instant(
+            2,
+            B,
+            ManaType::Blue,
+            2,
+            Instruction::CopySpell,
+            BodyTarget::SingleSpell(SpellTargetFilter::CopyableInstructionSpell),
+        ),
+        instant(
+            3,
+            A,
+            ManaType::Blue,
+            2,
+            Instruction::CounterSpell,
+            BodyTarget::SingleSpell(SpellTargetFilter::AnySpell),
+        ),
+        instant(
+            4,
+            A,
+            ManaType::Blue,
+            1,
+            Instruction::ReturnToOwnersHand,
+            BodyTarget::SingleCreature,
+        ),
     ];
+    cards.extend(extra);
+    cards[0].program.supertypes = supertypes;
+    cards[0].program.card_types = card_types;
+    cards[0].program.creature_subtypes = subtypes;
+    cards[0].program.names = spellwake_contracts::names::ObjectNames::single(
+        spellwake_contracts::names::EnglishCardName::new("Lightning Bolt".into()).unwrap(),
+    );
     for (id, owner) in [(5, B), (6, A)] {
         cards.push(SeedCard {
             card: CardId(id),
             owner,
-            destination: CardDestination::Battlefield { controller: owner },
-            program: Program::VanillaCreature {
-                power: 2.into(),
-                toughness: 2.into(),
-            },
+            destination: ObjectDestination::Battlefield { controller: owner },
+            program: Program::creature(None, 2.into(), 2.into(), std::collections::BTreeSet::new()),
         });
     }
     ready(
-        EffectWindow::new(
-            vec![A, B],
-            A,
-            cards,
-            vec![
-                FloatingMana {
-                    player: A,
-                    mana_type: ManaType::Red,
-                    amount: 1.into(),
-                },
-                FloatingMana {
-                    player: A,
-                    mana_type: ManaType::Blue,
-                    amount: 3.into(),
-                },
-                FloatingMana {
-                    player: B,
-                    mana_type: ManaType::Blue,
-                    amount: 2.into(),
-                },
-            ],
-        )
+        EffectWindow::new({
+            // Fixture premise: seeded BF timestamps follow this authored card sequence.
+            let initial_battlefield_order = cards
+                .iter()
+                .filter(|card| {
+                    matches!(
+                        card.destination,
+                        spellwake_engine::object_identity::ObjectDestination::Battlefield { .. }
+                    )
+                })
+                .map(|card| card.card)
+                .collect();
+            GameSeed::with_uniform_life(
+                vec![A, B],
+                A,
+                cards,
+                initial_battlefield_order,
+                vec![
+                    FloatingMana {
+                        player: A,
+                        mana_type: ManaType::Red,
+                        amount: 1.into(),
+                    },
+                    FloatingMana {
+                        player: A,
+                        mana_type: ManaType::Blue,
+                        amount: 3.into(),
+                    },
+                    FloatingMana {
+                        player: B,
+                        mana_type: ManaType::Blue,
+                        amount: 2.into(),
+                    },
+                ],
+                20.into(),
+                CombatRules::UnrestrictedFreeForAll,
+                test_vocabulary(),
+                std::sync::Arc::new(spellwake_contracts::names::NameRules::literal_names()),
+            )
+        })
         .unwrap(),
     )
 }
-fn object(s: &EffectWindow, id: u64) -> CardObjectId {
+fn object(s: &EffectWindow, id: u64) -> ObjectId {
     s.window().cards().current_identity(CardId(id)).unwrap()
 }
 fn ready(s: EffectWindow) -> EffectWindow {
@@ -127,9 +196,12 @@ fn resolve(s: EffectWindow) -> EffectWindow {
     s.resolve_top(s.revision()).unwrap()
 }
 fn stacked() -> EffectWindow {
-    let s = setup();
+    stacked_with_traits(BTreeSet::new())
+}
+fn stacked_with_traits(supertypes: BTreeSet<Supertype>) -> EffectWindow {
+    let s = setup_with_traits(vec![], supertypes);
     let target = object(&s, 5);
-    let s = cast(s, A, 1, TargetRef::Card(target));
+    let s = cast(s, A, 1, TargetRef::Object(target));
     let bolt = s.window().entries()[0].id();
     cast(s, B, 2, TargetRef::Stack(bolt))
 }
@@ -140,7 +212,7 @@ fn copied() -> EffectWindow {
         .resolve_top_with_copy_choice(
             s.revision(),
             B,
-            CopyTargetChoice::Change(TargetRef::Card(target)),
+            CopyTargetChoice::Change(TargetRef::Object(target)),
         )
         .unwrap();
     ready(s)
@@ -159,10 +231,10 @@ fn copy_has_independent_identity_owner_payload_and_no_physical_card_or_mana_char
     assert_eq!(s.mana(B, ManaType::Blue), 0.into());
     assert_eq!(s.mana(B, ManaType::Red), 0.into());
     let s = resolve(s);
-    assert_eq!(s.creature(object(&s, 6)).unwrap().damage, 3.into());
+    assert_eq!(s.creature(object(&s, 6)).unwrap().unwrap().damage, 3.into());
     assert_eq!(
         s.window().spell_copies()[&copy].zone,
-        CardZone::Graveyard(B)
+        ObjectZone::Graveyard(B)
     );
     assert_eq!(s.window().spell_copies()[&copy].controller, None);
     assert_eq!(s.window().entries().len(), 1);
@@ -174,12 +246,12 @@ fn copy_has_independent_identity_owner_payload_and_no_physical_card_or_mana_char
     assert!(s.window().spell_copies().is_empty());
     assert_eq!(
         s.window().cards().get(object(&s, 6)).unwrap().zone(),
-        CardZone::Graveyard(A)
+        ObjectZone::Graveyard(A)
     );
     let s = ready(resolve(s));
     assert_eq!(
         s.window().cards().get(object(&s, 5)).unwrap().zone(),
-        CardZone::Graveyard(B)
+        ObjectZone::Graveyard(B)
     );
 }
 #[test]
@@ -193,11 +265,11 @@ fn countering_original_leaves_copied_payload_executable() {
     assert!(s.window().entries().is_empty());
     assert_eq!(
         s.window().cards().get(object(&s, 5)).unwrap().zone(),
-        CardZone::Battlefield
+        ObjectZone::Battlefield
     );
     assert_eq!(
         s.window().cards().get(object(&s, 6)).unwrap().zone(),
-        CardZone::Graveyard(A)
+        ObjectZone::Graveyard(A)
     );
 }
 #[test]
@@ -207,7 +279,7 @@ fn countered_copy_exits_before_sba_without_removing_or_refunding_original() {
     let s = resolve(cast(s, A, 3, TargetRef::Stack(copy)));
     assert_eq!(
         s.window().spell_copies()[&copy].zone,
-        CardZone::Graveyard(B)
+        ObjectZone::Graveyard(B)
     );
     assert_eq!(s.window().entries().len(), 1);
     assert_eq!(s.mana(A, ManaType::Red), 0.into());
@@ -217,17 +289,17 @@ fn countered_copy_exits_before_sba_without_removing_or_refunding_original() {
     let s = ready(resolve(s));
     assert_eq!(
         s.window().cards().get(object(&s, 5)).unwrap().zone(),
-        CardZone::Graveyard(B)
+        ObjectZone::Graveyard(B)
     );
     assert_eq!(
         s.window().cards().get(object(&s, 6)).unwrap().zone(),
-        CardZone::Battlefield
+        ObjectZone::Battlefield
     );
 }
-fn missing() -> (EffectWindow, CardObjectId) {
+fn missing() -> (EffectWindow, ObjectId) {
     let s = stacked();
     let old = object(&s, 5);
-    let s = ready(resolve(cast(s, A, 4, TargetRef::Card(old))));
+    let s = ready(resolve(cast(s, A, 4, TargetRef::Object(old))));
     (pending(s), old)
 }
 #[test]
@@ -243,20 +315,20 @@ fn copy_may_retain_already_illegal_target_but_never_follows_returned_card() {
         s.window().entries().last().unwrap().targets().targets()[0]
             .choice()
             .target,
-        TargetRef::Card(old)
+        TargetRef::Object(old)
     );
     let s = resolve(s);
     assert_eq!(
         s.window().spell_copies()[&copy].zone,
-        CardZone::Graveyard(B)
+        ObjectZone::Graveyard(B)
     );
     let s = ready(resolve(ready(s)));
     assert!(s.window().entries().is_empty());
     assert_eq!(
         s.window().cards().get(object(&s, 5)).unwrap().zone(),
-        CardZone::Hand(B)
+        ObjectZone::Hand(B)
     );
-    assert_eq!(s.creature(object(&s, 6)).unwrap().damage, 0.into());
+    assert_eq!(s.creature(object(&s, 6)).unwrap().unwrap().damage, 0.into());
 }
 #[test]
 fn illegal_new_target_wrong_chooser_stale_revision_and_missing_choice_are_atomic() {
@@ -271,8 +343,8 @@ fn illegal_new_target_wrong_chooser_stale_revision_and_missing_choice_are_atomic
         Err(EffectError::WrongChooser)
     );
     for target in [
-        TargetRef::Card(old),
-        TargetRef::Card(object(&s, 5)),
+        TargetRef::Object(old),
+        TargetRef::Object(object(&s, 5)),
         TargetRef::Player(A),
     ] {
         assert_eq!(
@@ -290,14 +362,14 @@ fn illegal_new_target_wrong_chooser_stale_revision_and_missing_choice_are_atomic
         s.resolve_top_with_copy_choice(
             s.revision(),
             B,
-            CopyTargetChoice::Change(TargetRef::Card(target)),
+            CopyTargetChoice::Change(TargetRef::Object(target)),
         )
         .unwrap(),
     );
     let s = ready(resolve(s));
     assert_eq!(
         s.window().cards().get(object(&s, 6)).unwrap().zone(),
-        CardZone::Graveyard(A)
+        ObjectZone::Graveyard(A)
     );
 }
 #[test]
@@ -308,21 +380,21 @@ fn target_departing_after_copy_creation_invalidates_both_spells() {
             .unwrap(),
     );
     let old = object(&s, 5);
-    let s = ready(resolve(cast(s, A, 4, TargetRef::Card(old))));
+    let s = ready(resolve(cast(s, A, 4, TargetRef::Object(old))));
     let s = ready(resolve(s));
     let s = ready(resolve(s));
     assert!(s.window().entries().is_empty());
     assert_eq!(
         s.window().cards().get(object(&s, 5)).unwrap().zone(),
-        CardZone::Hand(B)
+        ObjectZone::Hand(B)
     );
-    assert_eq!(s.creature(object(&s, 6)).unwrap().damage, 0.into());
+    assert_eq!(s.creature(object(&s, 6)).unwrap().unwrap().damage, 0.into());
 }
 #[test]
 fn copy_decision_is_not_accepted_for_an_ordinary_damage_spell() {
     let s = setup();
     let target = object(&s, 5);
-    let s = pending(cast(s, A, 1, TargetRef::Card(target)));
+    let s = pending(cast(s, A, 1, TargetRef::Object(target)));
     let saved = s.clone();
     assert_eq!(
         s.resolve_top_with_copy_choice(s.revision(), A, CopyTargetChoice::Retain),
@@ -339,5 +411,213 @@ fn departed_copy_source_target_does_not_request_or_create_a_copy() {
     let s = ready(resolve(s));
     assert!(s.window().entries().is_empty());
     assert!(s.window().spell_copies().is_empty());
-    assert_eq!(s.creature(object(&s, 5)).unwrap().damage, 0.into());
+    assert_eq!(s.creature(object(&s, 5)).unwrap().unwrap().damage, 0.into());
+}
+
+#[path = "support/vocabulary.rs"]
+mod synthetic_vocabulary;
+fn test_vocabulary() -> std::sync::Arc<spellwake_contracts::creature_types::CreatureTypeVocabulary>
+{
+    synthetic_vocabulary::for_rules("synthetic-only-tests")
+}
+
+#[test]
+fn copy_of_copy_keeps_owned_traits_after_original_is_countered() {
+    let expected_supertypes = BTreeSet::from([Supertype::Snow]);
+    let expected_types = BTreeSet::from([CardType::Kindred, CardType::Instant]);
+    let expected_subtypes = BTreeSet::from([test_vocabulary().resolve_label("Elf").unwrap()]);
+    let s = setup_with_card_types(
+        vec![instant(
+            7,
+            A,
+            ManaType::Blue,
+            0,
+            Instruction::CopySpell,
+            BodyTarget::SingleSpell(SpellTargetFilter::CopyableInstructionSpell),
+        )],
+        expected_supertypes.clone(),
+        expected_types.clone(),
+        expected_subtypes.clone(),
+    );
+    let target = object(&s, 5);
+    let s = cast(s, A, 1, TargetRef::Object(target));
+    let original = s.window().entries()[0].id();
+    let expected = s.stack_copiable_names(original).unwrap().clone();
+    assert_eq!(s.stack_copiable_card_types(original), Some(&expected_types));
+    assert_eq!(
+        s.stack_copiable_creature_subtypes(original),
+        Some(&expected_subtypes)
+    );
+    assert_eq!(expected.iter().next().unwrap().as_str(), "Lightning Bolt");
+    let s = pending(cast(s, B, 2, TargetRef::Stack(original)));
+    let s = ready(
+        s.resolve_top_with_copy_choice(s.revision(), B, CopyTargetChoice::Retain)
+            .unwrap(),
+    );
+    let first = copy_id(&s);
+    assert_eq!(s.stack_copiable_names(first), Some(&expected));
+    assert_eq!(s.stack_copiable_card_types(first), Some(&expected_types));
+    assert_eq!(
+        s.stack_copiable_creature_subtypes(first),
+        Some(&expected_subtypes)
+    );
+    assert_eq!(
+        s.stack_copiable_supertypes(first),
+        Some(&expected_supertypes)
+    );
+    let s = ready(resolve(cast(s, A, 3, TargetRef::Stack(original))));
+    assert_eq!(s.stack_copiable_names(original), None);
+    assert_eq!(s.stack_copiable_card_types(original), None);
+    assert_eq!(s.stack_copiable_creature_subtypes(original), None);
+    assert_eq!(s.stack_copiable_supertypes(original), None);
+    let s = pending(cast(s, A, 7, TargetRef::Stack(first)));
+    let s = ready(
+        s.resolve_top_with_copy_choice(s.revision(), A, CopyTargetChoice::Retain)
+            .unwrap(),
+    );
+    let second = s.window().entries().last().unwrap().id();
+    assert_ne!(first, second);
+    assert_eq!(s.stack_copiable_names(second), Some(&expected));
+    assert_eq!(s.stack_copiable_card_types(second), Some(&expected_types));
+    assert_eq!(
+        s.stack_copiable_creature_subtypes(second),
+        Some(&expected_subtypes)
+    );
+    assert_eq!(
+        s.stack_copiable_supertypes(second),
+        Some(&expected_supertypes)
+    );
+    assert_eq!(s.stack_copiable_names(original), None);
+    assert_eq!(s.stack_copiable_card_types(original), None);
+    assert_eq!(s.stack_copiable_creature_subtypes(original), None);
+    assert_eq!(s.stack_copiable_names(first), Some(&expected));
+    assert_eq!(s.stack_copiable_card_types(first), Some(&expected_types));
+    assert_eq!(
+        s.stack_copiable_creature_subtypes(first),
+        Some(&expected_subtypes)
+    );
+    assert_eq!(s.stack_copiable_names(second), Some(&expected));
+    assert_eq!(s.stack_copiable_card_types(second), Some(&expected_types));
+    assert_eq!(
+        s.stack_copiable_creature_subtypes(second),
+        Some(&expected_subtypes)
+    );
+    assert_eq!(s.stack_body(first), s.stack_body(second));
+    let s = ready(resolve(s));
+    assert_eq!(s.stack_copiable_names(second), None);
+    assert_eq!(s.stack_copiable_card_types(second), None);
+    assert_eq!(s.stack_copiable_creature_subtypes(second), None);
+    assert_eq!(s.stack_copiable_supertypes(second), None);
+    assert_eq!(
+        s.stack_copiable_supertypes(first),
+        Some(&expected_supertypes)
+    );
+    assert_eq!(s.stack_copiable_names(first), Some(&expected));
+    assert_eq!(s.stack_copiable_card_types(first), Some(&expected_types));
+    assert_eq!(
+        s.stack_copiable_creature_subtypes(first),
+        Some(&expected_subtypes)
+    );
+}
+
+#[test]
+fn suspended_retarget_keeps_traits_atomic_and_emits_the_captured_copy_traits() {
+    use spellwake_engine::{
+        effects::RuleResult,
+        game::DecisionReply,
+        occurrence::{RulesOccurrence, RulesRecord},
+    };
+    let expected_supertypes = BTreeSet::from([Supertype::Snow]);
+    let s = pending(stacked_with_traits(expected_supertypes.clone()));
+    let original = s.window().entries()[0].id();
+    let expected = s.stack_copiable_names(original).unwrap().clone();
+    let progress = s.begin_resolution(s.revision()).unwrap();
+    let RuleResult::Pending { frame, .. } = progress.result() else {
+        panic!("expected copy target choice")
+    };
+    let state = progress.state();
+    assert_eq!(state.stack_copiable_names(original), Some(&expected));
+    assert_eq!(
+        state.stack_copiable_supertypes(original),
+        Some(&expected_supertypes)
+    );
+    assert!(state.window().spell_copies().is_empty());
+    let saved = state.clone();
+    assert!(
+        state
+            .resume_rule(
+                state.revision(),
+                frame,
+                A,
+                DecisionReply::CopyTargets(CopyTargetChoice::Retain),
+                None
+            )
+            .is_err()
+    );
+    assert_eq!(state, &saved);
+    let target = object(state, 6);
+    let done = state
+        .resume_rule(
+            state.revision(),
+            frame,
+            B,
+            DecisionReply::CopyTargets(CopyTargetChoice::Change(TargetRef::Object(target))),
+            None,
+        )
+        .unwrap();
+    let copy = copy_id(done.state());
+    assert_eq!(done.state().stack_copiable_names(copy), Some(&expected));
+    assert_eq!(
+        done.state().stack_copiable_supertypes(copy),
+        Some(&expected_supertypes)
+    );
+    assert_eq!(
+        done.state()
+            .window()
+            .entries()
+            .last()
+            .unwrap()
+            .targets()
+            .targets()[0]
+            .choice()
+            .target,
+        TargetRef::Object(target)
+    );
+    let facts: Vec<_> = done
+        .append()
+        .records
+        .iter()
+        .filter_map(|record| match record {
+            RulesRecord::Event(event) => Some(&event.occurrences),
+            _ => None,
+        })
+        .flatten()
+        .filter_map(|event| match &event.value {
+            RulesOccurrence::CopyCreated {
+                entry,
+                copiable_names,
+                copiable_supertypes,
+                copiable_card_types,
+                copiable_creature_subtypes,
+                ..
+            } => Some((
+                *entry,
+                copiable_names,
+                copiable_supertypes,
+                copiable_card_types,
+                copiable_creature_subtypes,
+            )),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        facts,
+        vec![(
+            copy,
+            &expected,
+            &expected_supertypes,
+            &BTreeSet::from([CardType::Instant]),
+            &BTreeSet::new()
+        )]
+    );
 }

@@ -1,0 +1,44 @@
+{
+  "products": {
+    "accountId": "00000001-1111-4111-8111-111111111111",
+    "items": [
+      {
+        "id": "00000002-1111-4111-8111-111111111111",
+        "productId": "00000003-1111-4111-8111-111111111111",
+        "setId": "00000004-1111-4111-8111-111111111111",
+        "name": "Test-only pack",
+        "setName": "Test set",
+        "revisionRef": "fixture-v1"
+      }
+    ],
+    "nextCursor": null
+  },
+  "purchase": {
+    "accountId": "00000001-1111-4111-8111-111111111111",
+    "quote": {
+      "recipeId": "00000002-1111-4111-8111-111111111111",
+      "productId": "00000003-1111-4111-8111-111111111111",
+      "policyId": "00000005-1111-4111-8111-111111111111",
+      "revision": "1",
+      "remaining": "10",
+      "unitPrice": "1000",
+      "quantity": "2",
+      "total": "2100",
+      "purpose": "purchase"
+    }
+  },
+  "valuation": {
+    "accountId": "00000001-1111-4111-8111-111111111111",
+    "quote": {
+      "recipeId": "00000002-1111-4111-8111-111111111111",
+      "productId": "00000003-1111-4111-8111-111111111111",
+      "policyId": "00000005-1111-4111-8111-111111111111",
+      "revision": "1",
+      "remaining": "10",
+      "unitPrice": "1000",
+      "quantity": "11",
+      "total": null,
+      "purpose": "valuation_only"
+    }
+  }
+}

@@ -4,6 +4,13 @@ use std::{fmt, str::FromStr};
 use num_bigint::BigInt;
 use serde::{Deserialize, Serialize};
 
+#[cfg(test)]
+extern crate self as spellwake_contracts;
+
+pub mod creature_types;
+pub mod names;
+pub mod teaching_profile;
+
 /// Standard response envelope shared by HTTP and command-line consumers.
 #[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(tag = "status", rename_all = "lowercase", deny_unknown_fields)]
@@ -52,6 +59,20 @@ impl From<i64> for RulesInteger {
     }
 }
 impl RulesInteger {
+    /// Convert a cardinality exactly, without narrowing to a signed machine integer.
+    pub fn from_usize(value: usize) -> Self {
+        Self(BigInt::from(value))
+    }
+
+    /// Convert an exact nonnegative quantity into a machine-sized cardinality.
+    ///
+    /// Returns `None` for negative values or values greater than [`usize::MAX`].
+    /// Rules operations that do as much as possible must first bound their
+    /// amount by the available domain instead of treating a large amount as zero.
+    pub fn to_usize(&self) -> Option<usize> {
+        usize::try_from(&self.0).ok()
+    }
+
     /// Add without machine-integer overflow or floating-point rounding.
     pub fn plus(&self, other: &Self) -> Self {
         Self(&self.0 + &other.0)
@@ -75,6 +96,45 @@ impl RulesInteger {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn converts_cardinalities_exactly() {
+        assert_eq!(String::from(RulesInteger::from_usize(0)), "0");
+        assert_eq!(String::from(RulesInteger::from_usize(324)), "324");
+    }
+
+    #[test]
+    fn converts_nonnegative_cardinalities_through_machine_maximum() {
+        for value in [0, 1, 324, usize::MAX] {
+            assert_eq!(RulesInteger::from_usize(value).to_usize(), Some(value));
+        }
+    }
+
+    #[test]
+    fn rejects_negative_and_out_of_range_cardinalities_without_truncation() {
+        let above_max = RulesInteger::from_usize(usize::MAX).plus(&1.into());
+        let huge: RulesInteger =
+            "100000000000000000000000000000000000000000000000000000000000000000000000000000000"
+                .to_owned()
+                .try_into()
+                .unwrap();
+        for value in [RulesInteger::from(-1), above_max, huge] {
+            assert_eq!(value.to_usize(), None);
+        }
+    }
+
+    #[cfg(target_pointer_width = "64")]
+    #[test]
+    fn converts_large_64_bit_cardinalities_without_narrowing() {
+        assert_eq!(
+            String::from(RulesInteger::from_usize(9_007_199_254_740_993)),
+            "9007199254740993"
+        );
+        assert_eq!(
+            String::from(RulesInteger::from_usize(usize::MAX)),
+            "18446744073709551615"
+        );
+    }
 
     #[test]
     fn preserves_numbers_far_beyond_javascript_precision() {

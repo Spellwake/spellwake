@@ -1,0 +1,26 @@
+{
+  "command": {
+    "kind": "publish_market",
+    "command": {
+      "requestId": "00000002-1111-4111-8111-111111111111",
+      "printingId": "00000003-1111-4111-8111-111111111111",
+      "probeId": "00000004-1111-4111-8111-111111111111",
+      "targetUsd": "10.00",
+      "condition": "reached_by",
+      "tradingClosesAt": "2030-01-01T00:00:00Z",
+      "observationStartsAt": "2030-01-02T12:00:00Z",
+      "deadline": "2030-01-03T13:00:00Z"
+    }
+  },
+  "source": {
+    "accountId": "00000001-1111-4111-8111-111111111111",
+    "source": {
+      "printingId": "00000003-1111-4111-8111-111111111111",
+      "probeId": "00000004-1111-4111-8111-111111111111",
+      "priceMetric": "scryfall:usd",
+      "currentUsd": "2.37",
+      "acquiredAt": "2026-11-02T12:00:00.123456Z",
+      "usableUntil": "2026-11-03T12:00:00.123456Z"
+    }
+  }
+}

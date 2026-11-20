@@ -1,12 +1,15 @@
 //! Native observations for synthetic, literal layer-7 programs, not complete cards.
 use serde::Serialize;
 use spellwake_contracts::{ApiResponse, RulesInteger};
+use spellwake_engine::combat::CombatRules;
+use spellwake_engine::program::{BodyTarget, ExecutableBody};
+use spellwake_engine::setup::GameSeed;
 use spellwake_engine::{
-    card_identity::{CardDestination, CardId, CardObjectId, CardZone},
-    characteristics::{PowerToughness, PowerToughnessCounters, PowerToughnessOperation},
+    characteristics::{PowerToughness, PowerToughnessCounters, ResolvedPartSpec},
     effects::{EffectError, Instruction, Program, SeedCard},
     game::{GameCommand, GameContext, GameError, GameId, GameInput, GameState},
     mana::{FloatingMana, ManaCost, ManaType},
+    object_identity::{CardId, ObjectDestination, ObjectId, ObjectZone},
     priority::{PriorityPhase, SeatId},
     stack_window::WindowPhase,
     targets::TargetRef,
@@ -34,7 +37,7 @@ impl From<PowerToughness> for NumericPair {
 #[derive(Serialize)]
 struct EvaluationView {
     object: String,
-    copiable: NumericPair,
+    copiable: Option<serde_json::Value>,
     base: NumericPair,
     derived: NumericPair,
     applied_effect_ids: Vec<String>,
@@ -42,6 +45,12 @@ struct EvaluationView {
 
 #[derive(Serialize)]
 struct Observation {
+    #[serde(
+        rename = "__current_capture_point",
+        skip_serializing_if = "Option::is_none"
+    )]
+    capture_point: Option<String>,
+
     checkpoint: &'static str,
     power: RulesInteger,
     toughness: RulesInteger,
@@ -89,34 +98,34 @@ struct Source {
     instruction: Instruction,
 }
 
-fn identity(state: &GameState, card: CardId) -> Result<CardObjectId, GameError> {
+fn identity(state: &GameState, card: CardId) -> Result<ObjectId, GameError> {
     state
         .execution()
         .window()
         .cards()
         .current_identity(card)
-        .ok_or(EffectError::UnknownCard.into())
+        .ok_or(EffectError::UnknownObject.into())
 }
 
-fn zone(state: &GameState, card: CardId) -> Result<CardZone, GameError> {
+fn zone(state: &GameState, card: CardId) -> Result<ObjectZone, GameError> {
     state
         .execution()
         .window()
         .cards()
         .get(identity(state, card)?)
         .map(|object| object.zone())
-        .ok_or(EffectError::UnknownCard.into())
+        .ok_or(EffectError::UnknownObject.into())
 }
 
-fn zone_name(zone: CardZone) -> &'static str {
+fn zone_name(zone: ObjectZone) -> &'static str {
     match zone {
-        CardZone::Library(_) => "LIBRARY",
-        CardZone::Hand(_) => "HAND",
-        CardZone::Graveyard(_) => "GRAVEYARD",
-        CardZone::Battlefield => "BATTLEFIELD",
-        CardZone::Stack => "STACK",
-        CardZone::Exile => "EXILE",
-        CardZone::Command => "COMMAND",
+        ObjectZone::Library(_) => "LIBRARY",
+        ObjectZone::Hand(_) => "HAND",
+        ObjectZone::Graveyard(_) => "GRAVEYARD",
+        ObjectZone::Battlefield => "BATTLEFIELD",
+        ObjectZone::Stack => "STACK",
+        ObjectZone::Exile => "EXILE",
+        ObjectZone::Command => "COMMAND",
     }
 }
 
@@ -127,14 +136,16 @@ fn observe(
 ) -> Result<Observation, GameError> {
     let object = identity(state, SUBJECT)?;
     let execution = state.execution();
-    let evaluation = execution
-        .power_toughness(object)
+    let evaluated = execution.evaluated_characteristics()?;
+    let evaluation = evaluated
+        .get(object)
+        .and_then(|current| current.power_toughness.clone())
         .ok_or(EffectError::InconsistentProgram)?;
     let counters = execution
         .power_toughness_counters(object)
         .ok_or(EffectError::InconsistentProgram)?;
-    let creature = execution
-        .creature(object)
+    let damage = execution
+        .battlefield_marked_damage(object)
         .ok_or(EffectError::InconsistentProgram)?;
     let mut source_zones = BTreeMap::new();
     let mut source_exit = BTreeMap::new();
@@ -142,22 +153,31 @@ fn observe(
         let current_zone = zone(state, source.card)?;
         source_zones.insert(source.alias, zone_name(current_zone));
         // These checkpoints are initial or settled after successful resolution.
-        source_exit.insert(source.alias, current_zone == CardZone::Graveyard(A));
+        source_exit.insert(source.alias, current_zone == ObjectZone::Graveyard(A));
     }
     Ok(Observation {
+        capture_point: spellwake_reference_tools::capture_points::token(
+            concat!(file!(), "::observe"),
+            spellwake_reference_tools::current_profile::SnapshotOwner::GameState(state),
+            &spellwake_reference_tools::packet::AliasContext::default(),
+        )
+        .expect("current native observation point"),
         checkpoint,
         power: evaluation.derived.power.clone(),
         toughness: evaluation.derived.toughness.clone(),
         plus_one_counters: counters.plus_one,
         minus_one_counters: counters.minus_one,
         zone: zone_name(zone(state, SUBJECT)?),
-        damage: creature.damage,
+        damage,
         stack_size: execution.window().entries().len(),
         source_zones,
         source_exit,
         native_evaluation: EvaluationView {
             object: format!("{:?}", evaluation.object),
-            copiable: evaluation.copiable.into(),
+            copiable: evaluation
+                .copiable
+                .as_ref()
+                .map(spellwake_reference_tools::program::printed_pt),
             base: evaluation.base.into(),
             derived: evaluation.derived.into(),
             applied_effect_ids: evaluation
@@ -171,13 +191,15 @@ fn observe(
 }
 
 fn advance(state: GameState, actor: SeatId, command: GameCommand) -> Result<GameState, GameError> {
-    Ok(state
-        .advance(GameInput {
+    Ok(spellwake_reference_tools::current_capture::advance(
+        &state,
+        GameInput {
             basis: state.basis().clone(),
             actor,
             command,
-        })?
-        .into_state())
+        },
+    )?
+    .into_state())
 }
 
 fn resolve_top(mut state: GameState) -> Result<GameState, GameError> {
@@ -212,6 +234,7 @@ fn resolve_top(mut state: GameState) -> Result<GameState, GameError> {
 }
 
 fn run_scenario(
+    vocabulary: &std::sync::Arc<spellwake_contracts::creature_types::CreatureTypeVocabulary>,
     game: GameId,
     profile: &'static str,
     operations: [(&'static str, &'static str, Instruction); 2],
@@ -237,45 +260,60 @@ fn run_scenario(
     let mut cards = vec![SeedCard {
         card: SUBJECT,
         owner: B,
-        destination: CardDestination::Battlefield { controller: B },
-        program: Program::VanillaCreature {
-            power: 1.into(),
-            toughness: 3.into(),
-        },
+        destination: ObjectDestination::Battlefield { controller: B },
+        program: Program::creature(None, 1.into(), 3.into(), std::collections::BTreeSet::new()),
     }];
     for source in &sources {
         cards.push(SeedCard {
             card: source.card,
             owner: A,
-            destination: CardDestination::Hand,
-            program: Program::Instant {
-                cost: ManaCost::one(ManaType::Red),
-                instructions: vec![source.instruction.clone()],
-            },
+            destination: ObjectDestination::Hand,
+            program: Program::instant(
+                ManaCost::one(ManaType::Red),
+                ExecutableBody::new(BodyTarget::SingleCreature, vec![source.instruction.clone()]),
+            ),
         });
     }
     // Context labels describe this synthetic input, without claiming source qualification.
     let context = GameContext::new(
         "native-power-toughness-foundation-v1".into(),
-        "magic-cr-20260925-literal-layer-7-subset".into(),
+        vocabulary.rules_revision().to_owned(),
         "no-catalogue-synthetic-seeds".into(),
         "synthetic-literal-pt-programs-v1".into(),
         profile.into(),
+        vocabulary.id(),
+        spellwake_contracts::names::NameRules::literal_names().id(),
     )?;
-    let mut state = GameState::initialize(
-        game,
-        context,
-        vec![A, B],
-        A,
-        cards,
-        vec![FloatingMana {
-            player: A,
-            mana_type: ManaType::Red,
-            amount: 2.into(),
-        }],
-    )?
+    let mut state = spellwake_reference_tools::current_capture::initialize(game, context, {
+        // Fixture premise: seeded BF timestamps follow this authored card sequence.
+        let initial_battlefield_order = cards
+            .iter()
+            .filter(|card| {
+                matches!(
+                    card.destination,
+                    spellwake_engine::object_identity::ObjectDestination::Battlefield { .. }
+                )
+            })
+            .map(|card| card.card)
+            .collect();
+        GameSeed::with_uniform_life(
+            vec![A, B],
+            A,
+            cards,
+            initial_battlefield_order,
+            vec![FloatingMana {
+                player: A,
+                mana_type: ManaType::Red,
+                amount: 2.into(),
+            }],
+            20.into(),
+            CombatRules::UnrestrictedFreeForAll,
+            vocabulary.clone(),
+            std::sync::Arc::new(spellwake_contracts::names::NameRules::literal_names()),
+        )
+    })?
     .into_state();
-    let target = TargetRef::Card(identity(&state, SUBJECT)?);
+    let target = TargetRef::Object(identity(&state, SUBJECT)?);
     let mut observations = vec![observe(&state, "initial", &sources)?];
     for source in &sources {
         let spell = identity(&state, source.card)?;
@@ -295,8 +333,11 @@ fn run_scenario(
     Ok((observations, descriptions))
 }
 
-fn continuous(operation: PowerToughnessOperation) -> Instruction {
-    Instruction::ContinuousPowerToughness { operation }
+fn continuous(operation: ResolvedPartSpec) -> Instruction {
+    Instruction::CreateContinuousEffect {
+        parts: spellwake_engine::characteristics::ResolvedPartsSpec(vec![operation]),
+        duration: spellwake_engine::characteristics::ResolvedDuration::NoStatedDuration,
+    }
 }
 
 fn pair(power: i64, toughness: i64) -> PowerToughness {
@@ -306,7 +347,9 @@ fn pair(power: i64, toughness: i64) -> PowerToughness {
     }
 }
 
-fn run() -> Result<Report, GameError> {
+fn run(
+    vocabulary: &std::sync::Arc<spellwake_contracts::creature_types::CreatureTypeVocabulary>,
+) -> Result<Report, GameError> {
     let scenarios = [
         (
             "set-after-boost",
@@ -314,12 +357,12 @@ fn run() -> Result<Report, GameError> {
                 (
                     "growth",
                     "after-growth",
-                    continuous(PowerToughnessOperation::Modify(pair(3, 3))),
+                    continuous(ResolvedPartSpec::ModifyPT(pair(3, 3))),
                 ),
                 (
                     "diminish",
                     "after-diminish",
-                    continuous(PowerToughnessOperation::Set(pair(1, 1))),
+                    continuous(ResolvedPartSpec::SetPT(pair(1, 1))),
                 ),
             ],
         ),
@@ -329,12 +372,12 @@ fn run() -> Result<Report, GameError> {
                 (
                     "switch",
                     "after-switch",
-                    continuous(PowerToughnessOperation::Switch),
+                    continuous(ResolvedPartSpec::SwitchPT),
                 ),
                 (
                     "fists",
                     "after-fists",
-                    continuous(PowerToughnessOperation::Modify(pair(4, 0))),
+                    continuous(ResolvedPartSpec::ModifyPT(pair(4, 0))),
                 ),
             ],
         ),
@@ -354,7 +397,7 @@ fn run() -> Result<Report, GameError> {
                 (
                     "switch",
                     "after-switch",
-                    continuous(PowerToughnessOperation::Switch),
+                    continuous(ResolvedPartSpec::SwitchPT),
                 ),
             ],
         ),
@@ -362,12 +405,12 @@ fn run() -> Result<Report, GameError> {
     let mut scenario_observations = BTreeMap::new();
     let mut scenario_programs = BTreeMap::new();
     for (game, (name, operations)) in (1_u128..).zip(scenarios) {
-        let (observations, programs) = run_scenario(GameId(game), name, operations)?;
+        let (observations, programs) = run_scenario(vocabulary, GameId(game), name, operations)?;
         scenario_observations.insert(name, observations);
         scenario_programs.insert(name, programs);
     }
     Ok(Report {
-        schema_version: 1,
+        schema_version: 2,
         kind: "restricted-power-toughness-interactions",
         native_driver: "game-state-initialize-advance-v1",
         program_source: "synthetic-authored-programs-v1; no Oracle registry bindings",
@@ -385,7 +428,34 @@ fn run() -> Result<Report, GameError> {
 }
 
 fn main() -> ExitCode {
-    let (response, success): (ApiResponse<Report>, bool) = match run() {
+    let vocabulary = match spellwake_reference_tools::creature_types::selected_vocabulary() {
+        Ok(value) => value,
+        Err(error) => {
+            eprintln!("invalid qualification input: {error}");
+            std::process::exit(1);
+        }
+    };
+
+    let native_arguments = spellwake_reference_tools::creature_types::qualification_args()
+        .unwrap_or_else(|error| {
+            eprintln!("invalid qualification input: {error}");
+            std::process::exit(1)
+        });
+    if !native_arguments.is_empty() {
+        eprintln!("unsupported qualification arguments");
+        std::process::exit(1);
+    }
+
+    let profile_token = "pt";
+    if let Err(error) = spellwake_reference_tools::current_capture::start(
+        profile_token,
+        &[spellwake_reference_tools::current_capture::repository().join(file!())],
+        None,
+    ) {
+        eprintln!("current capture source unavailable: {error}");
+        return ExitCode::FAILURE;
+    }
+    let (response, success): (ApiResponse<Report>, bool) = match run(&vocabulary) {
         Ok(data) => (ApiResponse::Success { data }, true),
         Err(error) => {
             eprintln!("native power/toughness interaction failed: {error:?}");
@@ -396,6 +466,16 @@ fn main() -> ExitCode {
                 },
                 false,
             )
+        }
+    };
+    let response = match spellwake_reference_tools::current_capture::finish_serializable(
+        profile_token,
+        &response,
+    ) {
+        Ok(value) => value,
+        Err(error) => {
+            eprintln!("current capture incomplete: {error}");
+            return ExitCode::FAILURE;
         }
     };
     if let Err(error) = serde_json::to_writer(std::io::stdout(), &response) {

@@ -1,0 +1,5199 @@
+{
+  "schema_version": 1,
+  "profile": "optional-payment-v1",
+  "epochs": {
+    "registry": 8,
+    "report": 4,
+    "aggregate": 1,
+    "current": 10,
+    "witness": 8,
+    "record_codec": 2,
+    "vocabulary": 1
+  },
+  "authorities": [
+    {
+      "path": ".quzzar-system-design/architecture-proposed/work-planning-20261103/planning/optional-payment-v1/plan-acceptance-v1.json",
+      "sha256": "0c3e64a6b61b0e0a2617d1442f6827c46ae4a5d18c51fb3ba1d14ca8a8334783",
+      "bytes": 12755
+    },
+    {
+      "path": "work/engine-milestones/optional-payment-v1/source-preparation/selected19.full-inventory.json",
+      "sha256": "9663d30ddf315d49c9d155b5ddfdde7b74d377dcc8993a2cc2230420b941568f",
+      "bytes": 169671
+    },
+    {
+      "path": "work/engine-milestones/optional-payment-v1/source-preparation/full-game-recipes-v1.json",
+      "sha256": "c1f7a7f3ecc6cc9dfadc4b43fc238b3bd6afeafe1a81598296325e9e59831f7c",
+      "bytes": 99673
+    },
+    {
+      "path": ".quzzar-system-design/architecture-proposed/work-planning-20261103/planning/optional-payment-v1/design-notes/legacy-deck-pool-candidate-v1.json",
+      "sha256": "7c37f6079e63ee10560bae72e4728a695268714fbf7b84221b4014dbab8f6072",
+      "bytes": 13434
+    }
+  ],
+  "definitions": [
+    {
+      "name": "Blood Artist",
+      "oracleId": "310f141c-7f37-4729-aed6-dd9c09db448d",
+      "scryfallId": "b5275d76-2947-4219-be21-614c7421614a",
+      "sourceLineOneBased": 7413,
+      "rawLineSha256IncludingLf": "ac366a8a788f98ac71dc204fbf3f0ada9f0cf209838ae30efeecd1f1d03e6c47",
+      "registrySignatureV1Sha256": "499c3ca6bcd5fba7b91df444ad98480850a323b638214f95744b27fb8a93d993",
+      "set": "soc",
+      "collector": "209",
+      "language": "en"
+    },
+    {
+      "name": "Coral Merfolk",
+      "oracleId": "4ed27607-21a8-4bc3-997e-6d2242313f6d",
+      "scryfallId": "97a74ccf-8165-4db1-a87c-52c2d8ea0058",
+      "sourceLineOneBased": 11983,
+      "rawLineSha256IncludingLf": "2c80e78b3198c80d7f7da699b6bc72bc5b2501c6d4802148981ccbb3ca29963a",
+      "registrySignatureV1Sha256": "0c13cdd633dcfbe902341a2659cf746b4cca825de9c9ce8b2a31fe9574e46210",
+      "set": "m20",
+      "collector": "315",
+      "language": "en"
+    },
+    {
+      "name": "Counterspell",
+      "oracleId": "cc187110-1148-4090-bbb8-e205694a39f5",
+      "scryfallId": "4f616706-ec97-4923-bb1e-11a69fbaa1f8",
+      "sourceLineOneBased": 31149,
+      "rawLineSha256IncludingLf": "e1e36ac8b02f2c8a8ff570f5500d8c023ae44a00251af158b01427803dfbe230",
+      "registrySignatureV1Sha256": "8dd9ff6c912af8eb9a730364572c57f239e176ed54f46c16c80807c09c452866",
+      "set": "dsc",
+      "collector": "114",
+      "language": "en"
+    },
+    {
+      "name": "Divination",
+      "oracleId": "273b339c-964b-4a18-8eb5-ceb8abcdfd9e",
+      "scryfallId": "cb3b35b8-f321-46d8-a441-6b9a6efa9021",
+      "sourceLineOneBased": 5961,
+      "rawLineSha256IncludingLf": "a9134e13ce74c689fab6633071a077fdf35a67ed08d4c23c080b92b14d25d1ea",
+      "registrySignatureV1Sha256": "25acc2bd4a79ed98073615493b9ecbed52641a7831df57eb5c54c6fb7e013637",
+      "set": "m19",
+      "collector": "51",
+      "language": "en"
+    },
+    {
+      "name": "Doomed Dissenter",
+      "oracleId": "11cb509d-21af-48f1-b355-135ebd3e4bd1",
+      "scryfallId": "f7c0cf16-81ea-45e3-99cc-4424d59bb44b",
+      "sourceLineOneBased": 2741,
+      "rawLineSha256IncludingLf": "7608edb2c954c49cc8b6f9fde6d0f340ae8813f8e1f2b045e5447405e7314b4d",
+      "registrySignatureV1Sha256": "f9f376142e4a525b39cf867940d430c083d2581aa04454f69e59ffcd472ff795",
+      "set": "vow",
+      "collector": "106",
+      "language": "en"
+    },
+    {
+      "name": "Elite Vanguard",
+      "oracleId": "b3b9a87d-cb95-435c-90b6-037406cab32e",
+      "scryfallId": "28a5c350-2ed1-4a25-9626-0f8da5d1aef7",
+      "sourceLineOneBased": 27405,
+      "rawLineSha256IncludingLf": "df9584f60ea6a3b650d69152adddce3e2d37f25f62413cab106bfc7022a7290b",
+      "registrySignatureV1Sha256": "622b486c8bcd120a35c58071b7cbcaee71bfa1b1dc5f15e07f3403d4c5ce61a6",
+      "set": "ema",
+      "collector": "8",
+      "language": "en"
+    },
+    {
+      "name": "Island",
+      "oracleId": "b2c6aa39-2d2a-459c-a555-fb48ba993373",
+      "scryfallId": "1335d293-3dd2-4f13-bd2c-22181f4528ee",
+      "sourceLineOneBased": 27256,
+      "rawLineSha256IncludingLf": "a5365e49cba1ca36f32f871fefeeea86ee366480b71c34485f306b744cfcf938",
+      "registrySignatureV1Sha256": "f7794b130f48b16234927c7fb97a10e5ea44b2ec064d8d8856aeedc7904ac678",
+      "set": "mdd",
+      "collector": "294",
+      "language": "en"
+    },
+    {
+      "name": "Mana Leak",
+      "oracleId": "c61fe162-2202-4e56-9ba0-393547f9875f",
+      "scryfallId": "179236d9-6fe2-4db6-bdfb-f851e8d531a2",
+      "sourceLineOneBased": 30204,
+      "rawLineSha256IncludingLf": "93fef5c4fa9e42d40b0c7a734889f220b807643381ff6cbb616f6c54da8f846a",
+      "registrySignatureV1Sha256": "653ea8d8eed65379bd3315e25dbb9248e9771a13fa8172c8813bde35f7183f59",
+      "set": "2x2",
+      "collector": "58",
+      "language": "en"
+    },
+    {
+      "name": "Manalith",
+      "oracleId": "bd9e416a-89b3-4912-be9b-49fce6a93dc9",
+      "scryfallId": "f0d7d904-f29b-4524-9223-27910d748bdb",
+      "sourceLineOneBased": 28900,
+      "rawLineSha256IncludingLf": "e9d2bf034ee8e2e9c9b6e2927c1a1ab956816523af427e57832bf41f7e9bc4c6",
+      "registrySignatureV1Sha256": "ba75e97362735a0d6f35a8b660cd85f64338d42486ef3264d543960780f384cd",
+      "set": "gnt",
+      "collector": "54",
+      "language": "en"
+    },
+    {
+      "name": "Novice Occultist",
+      "oracleId": "e51f5b41-5465-4b1d-b96a-544762657ca5",
+      "scryfallId": "a541ac79-a969-42b4-b989-f6e37572ec90",
+      "sourceLineOneBased": 35001,
+      "rawLineSha256IncludingLf": "63d64b90e053dd312a66344cf225ce27aa948cac4bd7318d508c3909bf245d47",
+      "registrySignatureV1Sha256": "0626ecd5fa076e3523a59f42cba1f72f4ba1e10cd0cd6876e4fed0c2bfabe8fc",
+      "set": "mid",
+      "collector": "117",
+      "language": "en"
+    },
+    {
+      "name": "Oculus",
+      "oracleId": "e793ede9-044a-44e9-bc9c-99b0034503eb",
+      "scryfallId": "673bebb4-9c82-40ca-8552-b9030e961005",
+      "sourceLineOneBased": 35363,
+      "rawLineSha256IncludingLf": "a4a40f05dc2841234222ee8399a1ae89ead90b8a2428ea4e0855c72c9a05f5da",
+      "registrySignatureV1Sha256": "d4708fe83f5421ba17b0e7cef28872534ecbc1a5be064424d8bf05b9486fa74a",
+      "set": "mbs",
+      "collector": "29",
+      "language": "en"
+    },
+    {
+      "name": "Phyrexian Rager",
+      "oracleId": "e409c9be-0c9a-43c3-adb4-8c47afc1d551",
+      "scryfallId": "a9861fb3-6722-43b8-bf0a-af6dd166e59d",
+      "sourceLineOneBased": 34815,
+      "rawLineSha256IncludingLf": "9df3b5ed3d38fa9e5245a1035b72413fd134231b07fe4ca03d491b7eab21794e",
+      "registrySignatureV1Sha256": "4030c872bf513674d741e5d9860964a0cf65573c9f99eed4ae54809844097ec5",
+      "set": "moc",
+      "collector": "265",
+      "language": "en"
+    },
+    {
+      "name": "Plains",
+      "oracleId": "bc71ebf6-2056-41f7-be35-b2e5c34afa99",
+      "scryfallId": "09ac862f-0a51-44dd-b86f-9412b8218b13",
+      "sourceLineOneBased": 28694,
+      "rawLineSha256IncludingLf": "62d89ba7d073949c430c4edbd94c2ca4f77c52e5f277048c466cb933030d12e8",
+      "registrySignatureV1Sha256": "c4511685fb2da8e920d2da7ae6217aa981fb64c3670788582dee723013e0c7c6",
+      "set": "mdd",
+      "collector": "292",
+      "language": "en"
+    },
+    {
+      "name": "Raise the Alarm",
+      "oracleId": "5b2364d7-a811-4595-a1b4-224c70555ffa",
+      "scryfallId": "6c7c8527-55f6-494d-b4f7-c427a5735053",
+      "sourceLineOneBased": 13868,
+      "rawLineSha256IncludingLf": "495b615dc6de83baec52786c1b8d345726e15db3320dcd11f8175e2a72ce3bad",
+      "registrySignatureV1Sha256": "e1130e72e141cee5b5bfc368b04325703c344a4d6f0860eef07fc018835d0a25",
+      "set": "cmr",
+      "collector": "41",
+      "language": "en"
+    },
+    {
+      "name": "Rhystic Study",
+      "oracleId": "53236dd7-845a-444c-96d5-f41ed7325d8f",
+      "scryfallId": "9f37c5b6-a59c-45cd-9a99-e9357fe9ea1b",
+      "sourceLineOneBased": 12668,
+      "rawLineSha256IncludingLf": "a86bf31a2fb6978a50804d1851ac0e38f61a4e294abf4e530c6e80563b337704",
+      "registrySignatureV1Sha256": "7b2adc43b0b9000a710f9ed5d180265093f757f69db011cfefe753eeb103c882",
+      "set": "j22",
+      "collector": "114",
+      "language": "en"
+    },
+    {
+      "name": "Soul's Attendant",
+      "oracleId": "045a9d3d-c20d-427f-a77b-0bffc6f55526",
+      "scryfallId": "3223c0ac-cc22-4886-8919-11273b477cc7",
+      "sourceLineOneBased": 701,
+      "rawLineSha256IncludingLf": "6bd7488bb64111bfd8f0a40336cd932035fa5a7744ec74e9a149a1cd9dd80235",
+      "registrySignatureV1Sha256": "638f0c27192128f333716edbe2ab65f3d2ab0334b1fd24365c8bfc07a7fb57da",
+      "set": "roe",
+      "collector": "44",
+      "language": "en"
+    },
+    {
+      "name": "Swamp",
+      "oracleId": "56719f6a-1a6c-4c0a-8d21-18f7d7350b68",
+      "scryfallId": "b233b117-9369-45c1-80c5-cc857386b6be",
+      "sourceLineOneBased": 13152,
+      "rawLineSha256IncludingLf": "916287ac46c937685adf05728f04157b4af7b081542042df7746e48135151dd6",
+      "registrySignatureV1Sha256": "99c053ff97b10a5083056f046942b7716a7b6e882e3639e8608dee57d3f6aad4",
+      "set": "mdd",
+      "collector": "296",
+      "language": "en"
+    },
+    {
+      "name": "Twincast",
+      "oracleId": "8f878efc-850f-43d2-a6fe-5ea8d1dd5afb",
+      "scryfallId": "f38eec33-a40e-4739-ad2c-2f57008cef4e",
+      "sourceLineOneBased": 21893,
+      "rawLineSha256IncludingLf": "7cd5411421e067c0be5eae2aa8f565406f2dd2151b46461a73b271493a7378f7",
+      "registrySignatureV1Sha256": "9c88af9fbbd8480a9ccc1ac871c3bd2d8406c0e7c02a092b9a6f0272d91c2637",
+      "set": "m10",
+      "collector": "78",
+      "language": "en"
+    },
+    {
+      "name": "Unsummon",
+      "oracleId": "837182db-1bf3-4a2c-bd01-1af9d9873561",
+      "scryfallId": "ddad9f16-52d5-49de-82b0-b1a5294a9c44",
+      "sourceLineOneBased": 20016,
+      "rawLineSha256IncludingLf": "0dc9f4d8269f1ae167f0d3431c41ce01b846feb9803345fcf93c7ed6a57cd66e",
+      "registrySignatureV1Sha256": "bcb64c816134bb131be2c02e1245ce7e3c7b8a53bf865151777091dc5dcbd0f9",
+      "set": "fra",
+      "collector": "46",
+      "language": "en"
+    }
+  ],
+  "decks": [
+    {
+      "role": "P0",
+      "card_count": 60,
+      "entries": [
+        {
+          "name": "Plains",
+          "oracle_id": "bc71ebf6-2056-41f7-be35-b2e5c34afa99",
+          "count": 12
+        },
+        {
+          "name": "Island",
+          "oracle_id": "b2c6aa39-2d2a-459c-a555-fb48ba993373",
+          "count": 12
+        },
+        {
+          "name": "Soul's Attendant",
+          "oracle_id": "045a9d3d-c20d-427f-a77b-0bffc6f55526",
+          "count": 4
+        },
+        {
+          "name": "Rhystic Study",
+          "oracle_id": "53236dd7-845a-444c-96d5-f41ed7325d8f",
+          "count": 4
+        },
+        {
+          "name": "Manalith",
+          "oracle_id": "bd9e416a-89b3-4912-be9b-49fce6a93dc9",
+          "count": 4
+        },
+        {
+          "name": "Mana Leak",
+          "oracle_id": "c61fe162-2202-4e56-9ba0-393547f9875f",
+          "count": 4
+        },
+        {
+          "name": "Divination",
+          "oracle_id": "273b339c-964b-4a18-8eb5-ceb8abcdfd9e",
+          "count": 4
+        },
+        {
+          "name": "Raise the Alarm",
+          "oracle_id": "5b2364d7-a811-4595-a1b4-224c70555ffa",
+          "count": 4
+        },
+        {
+          "name": "Unsummon",
+          "oracle_id": "837182db-1bf3-4a2c-bd01-1af9d9873561",
+          "count": 4
+        },
+        {
+          "name": "Counterspell",
+          "oracle_id": "cc187110-1148-4090-bbb8-e205694a39f5",
+          "count": 4
+        },
+        {
+          "name": "Elite Vanguard",
+          "oracle_id": "b3b9a87d-cb95-435c-90b6-037406cab32e",
+          "count": 4
+        }
+      ],
+      "sideboard": []
+    },
+    {
+      "role": "P1",
+      "card_count": 60,
+      "entries": [
+        {
+          "name": "Island",
+          "oracle_id": "b2c6aa39-2d2a-459c-a555-fb48ba993373",
+          "count": 12
+        },
+        {
+          "name": "Swamp",
+          "oracle_id": "56719f6a-1a6c-4c0a-8d21-18f7d7350b68",
+          "count": 12
+        },
+        {
+          "name": "Oculus",
+          "oracle_id": "e793ede9-044a-44e9-bc9c-99b0034503eb",
+          "count": 4
+        },
+        {
+          "name": "Mana Leak",
+          "oracle_id": "c61fe162-2202-4e56-9ba0-393547f9875f",
+          "count": 4
+        },
+        {
+          "name": "Manalith",
+          "oracle_id": "bd9e416a-89b3-4912-be9b-49fce6a93dc9",
+          "count": 4
+        },
+        {
+          "name": "Novice Occultist",
+          "oracle_id": "e51f5b41-5465-4b1d-b96a-544762657ca5",
+          "count": 4
+        },
+        {
+          "name": "Phyrexian Rager",
+          "oracle_id": "e409c9be-0c9a-43c3-adb4-8c47afc1d551",
+          "count": 4
+        },
+        {
+          "name": "Doomed Dissenter",
+          "oracle_id": "11cb509d-21af-48f1-b355-135ebd3e4bd1",
+          "count": 4
+        },
+        {
+          "name": "Blood Artist",
+          "oracle_id": "310f141c-7f37-4729-aed6-dd9c09db448d",
+          "count": 4
+        },
+        {
+          "name": "Divination",
+          "oracle_id": "273b339c-964b-4a18-8eb5-ceb8abcdfd9e",
+          "count": 4
+        },
+        {
+          "name": "Coral Merfolk",
+          "oracle_id": "4ed27607-21a8-4bc3-997e-6d2242313f6d",
+          "count": 4
+        }
+      ],
+      "sideboard": []
+    }
+  ],
+  "physical_inventory": [
+    {
+      "alias": "P0.p1",
+      "card_id": "10001",
+      "owner": 41,
+      "name": "Plains",
+      "oracle_id": "bc71ebf6-2056-41f7-be35-b2e5c34afa99",
+      "role": "P0",
+      "copy": 1
+    },
+    {
+      "alias": "P0.p2",
+      "card_id": "10002",
+      "owner": 41,
+      "name": "Plains",
+      "oracle_id": "bc71ebf6-2056-41f7-be35-b2e5c34afa99",
+      "role": "P0",
+      "copy": 2
+    },
+    {
+      "alias": "P0.p3",
+      "card_id": "10003",
+      "owner": 41,
+      "name": "Plains",
+      "oracle_id": "bc71ebf6-2056-41f7-be35-b2e5c34afa99",
+      "role": "P0",
+      "copy": 3
+    },
+    {
+      "alias": "P0.p4",
+      "card_id": "10004",
+      "owner": 41,
+      "name": "Plains",
+      "oracle_id": "bc71ebf6-2056-41f7-be35-b2e5c34afa99",
+      "role": "P0",
+      "copy": 4
+    },
+    {
+      "alias": "P0.p5",
+      "card_id": "10005",
+      "owner": 41,
+      "name": "Plains",
+      "oracle_id": "bc71ebf6-2056-41f7-be35-b2e5c34afa99",
+      "role": "P0",
+      "copy": 5
+    },
+    {
+      "alias": "P0.p6",
+      "card_id": "10006",
+      "owner": 41,
+      "name": "Plains",
+      "oracle_id": "bc71ebf6-2056-41f7-be35-b2e5c34afa99",
+      "role": "P0",
+      "copy": 6
+    },
+    {
+      "alias": "P0.p7",
+      "card_id": "10007",
+      "owner": 41,
+      "name": "Plains",
+      "oracle_id": "bc71ebf6-2056-41f7-be35-b2e5c34afa99",
+      "role": "P0",
+      "copy": 7
+    },
+    {
+      "alias": "P0.p8",
+      "card_id": "10008",
+      "owner": 41,
+      "name": "Plains",
+      "oracle_id": "bc71ebf6-2056-41f7-be35-b2e5c34afa99",
+      "role": "P0",
+      "copy": 8
+    },
+    {
+      "alias": "P0.p9",
+      "card_id": "10009",
+      "owner": 41,
+      "name": "Plains",
+      "oracle_id": "bc71ebf6-2056-41f7-be35-b2e5c34afa99",
+      "role": "P0",
+      "copy": 9
+    },
+    {
+      "alias": "P0.p10",
+      "card_id": "10010",
+      "owner": 41,
+      "name": "Plains",
+      "oracle_id": "bc71ebf6-2056-41f7-be35-b2e5c34afa99",
+      "role": "P0",
+      "copy": 10
+    },
+    {
+      "alias": "P0.p11",
+      "card_id": "10011",
+      "owner": 41,
+      "name": "Plains",
+      "oracle_id": "bc71ebf6-2056-41f7-be35-b2e5c34afa99",
+      "role": "P0",
+      "copy": 11
+    },
+    {
+      "alias": "P0.p12",
+      "card_id": "10012",
+      "owner": 41,
+      "name": "Plains",
+      "oracle_id": "bc71ebf6-2056-41f7-be35-b2e5c34afa99",
+      "role": "P0",
+      "copy": 12
+    },
+    {
+      "alias": "P0.i1",
+      "card_id": "10013",
+      "owner": 41,
+      "name": "Island",
+      "oracle_id": "b2c6aa39-2d2a-459c-a555-fb48ba993373",
+      "role": "P0",
+      "copy": 1
+    },
+    {
+      "alias": "P0.i2",
+      "card_id": "10014",
+      "owner": 41,
+      "name": "Island",
+      "oracle_id": "b2c6aa39-2d2a-459c-a555-fb48ba993373",
+      "role": "P0",
+      "copy": 2
+    },
+    {
+      "alias": "P0.i3",
+      "card_id": "10015",
+      "owner": 41,
+      "name": "Island",
+      "oracle_id": "b2c6aa39-2d2a-459c-a555-fb48ba993373",
+      "role": "P0",
+      "copy": 3
+    },
+    {
+      "alias": "P0.i4",
+      "card_id": "10016",
+      "owner": 41,
+      "name": "Island",
+      "oracle_id": "b2c6aa39-2d2a-459c-a555-fb48ba993373",
+      "role": "P0",
+      "copy": 4
+    },
+    {
+      "alias": "P0.i5",
+      "card_id": "10017",
+      "owner": 41,
+      "name": "Island",
+      "oracle_id": "b2c6aa39-2d2a-459c-a555-fb48ba993373",
+      "role": "P0",
+      "copy": 5
+    },
+    {
+      "alias": "P0.i6",
+      "card_id": "10018",
+      "owner": 41,
+      "name": "Island",
+      "oracle_id": "b2c6aa39-2d2a-459c-a555-fb48ba993373",
+      "role": "P0",
+      "copy": 6
+    },
+    {
+      "alias": "P0.i7",
+      "card_id": "10019",
+      "owner": 41,
+      "name": "Island",
+      "oracle_id": "b2c6aa39-2d2a-459c-a555-fb48ba993373",
+      "role": "P0",
+      "copy": 7
+    },
+    {
+      "alias": "P0.i8",
+      "card_id": "10020",
+      "owner": 41,
+      "name": "Island",
+      "oracle_id": "b2c6aa39-2d2a-459c-a555-fb48ba993373",
+      "role": "P0",
+      "copy": 8
+    },
+    {
+      "alias": "P0.i9",
+      "card_id": "10021",
+      "owner": 41,
+      "name": "Island",
+      "oracle_id": "b2c6aa39-2d2a-459c-a555-fb48ba993373",
+      "role": "P0",
+      "copy": 9
+    },
+    {
+      "alias": "P0.i10",
+      "card_id": "10022",
+      "owner": 41,
+      "name": "Island",
+      "oracle_id": "b2c6aa39-2d2a-459c-a555-fb48ba993373",
+      "role": "P0",
+      "copy": 10
+    },
+    {
+      "alias": "P0.i11",
+      "card_id": "10023",
+      "owner": 41,
+      "name": "Island",
+      "oracle_id": "b2c6aa39-2d2a-459c-a555-fb48ba993373",
+      "role": "P0",
+      "copy": 11
+    },
+    {
+      "alias": "P0.i12",
+      "card_id": "10024",
+      "owner": 41,
+      "name": "Island",
+      "oracle_id": "b2c6aa39-2d2a-459c-a555-fb48ba993373",
+      "role": "P0",
+      "copy": 12
+    },
+    {
+      "alias": "P0.a1",
+      "card_id": "10025",
+      "owner": 41,
+      "name": "Soul's Attendant",
+      "oracle_id": "045a9d3d-c20d-427f-a77b-0bffc6f55526",
+      "role": "P0",
+      "copy": 1
+    },
+    {
+      "alias": "P0.a2",
+      "card_id": "10026",
+      "owner": 41,
+      "name": "Soul's Attendant",
+      "oracle_id": "045a9d3d-c20d-427f-a77b-0bffc6f55526",
+      "role": "P0",
+      "copy": 2
+    },
+    {
+      "alias": "P0.a3",
+      "card_id": "10027",
+      "owner": 41,
+      "name": "Soul's Attendant",
+      "oracle_id": "045a9d3d-c20d-427f-a77b-0bffc6f55526",
+      "role": "P0",
+      "copy": 3
+    },
+    {
+      "alias": "P0.a4",
+      "card_id": "10028",
+      "owner": 41,
+      "name": "Soul's Attendant",
+      "oracle_id": "045a9d3d-c20d-427f-a77b-0bffc6f55526",
+      "role": "P0",
+      "copy": 4
+    },
+    {
+      "alias": "P0.r1",
+      "card_id": "10029",
+      "owner": 41,
+      "name": "Rhystic Study",
+      "oracle_id": "53236dd7-845a-444c-96d5-f41ed7325d8f",
+      "role": "P0",
+      "copy": 1
+    },
+    {
+      "alias": "P0.r2",
+      "card_id": "10030",
+      "owner": 41,
+      "name": "Rhystic Study",
+      "oracle_id": "53236dd7-845a-444c-96d5-f41ed7325d8f",
+      "role": "P0",
+      "copy": 2
+    },
+    {
+      "alias": "P0.r3",
+      "card_id": "10031",
+      "owner": 41,
+      "name": "Rhystic Study",
+      "oracle_id": "53236dd7-845a-444c-96d5-f41ed7325d8f",
+      "role": "P0",
+      "copy": 3
+    },
+    {
+      "alias": "P0.r4",
+      "card_id": "10032",
+      "owner": 41,
+      "name": "Rhystic Study",
+      "oracle_id": "53236dd7-845a-444c-96d5-f41ed7325d8f",
+      "role": "P0",
+      "copy": 4
+    },
+    {
+      "alias": "P0.m1",
+      "card_id": "10033",
+      "owner": 41,
+      "name": "Manalith",
+      "oracle_id": "bd9e416a-89b3-4912-be9b-49fce6a93dc9",
+      "role": "P0",
+      "copy": 1
+    },
+    {
+      "alias": "P0.m2",
+      "card_id": "10034",
+      "owner": 41,
+      "name": "Manalith",
+      "oracle_id": "bd9e416a-89b3-4912-be9b-49fce6a93dc9",
+      "role": "P0",
+      "copy": 2
+    },
+    {
+      "alias": "P0.m3",
+      "card_id": "10035",
+      "owner": 41,
+      "name": "Manalith",
+      "oracle_id": "bd9e416a-89b3-4912-be9b-49fce6a93dc9",
+      "role": "P0",
+      "copy": 3
+    },
+    {
+      "alias": "P0.m4",
+      "card_id": "10036",
+      "owner": 41,
+      "name": "Manalith",
+      "oracle_id": "bd9e416a-89b3-4912-be9b-49fce6a93dc9",
+      "role": "P0",
+      "copy": 4
+    },
+    {
+      "alias": "P0.l1",
+      "card_id": "10037",
+      "owner": 41,
+      "name": "Mana Leak",
+      "oracle_id": "c61fe162-2202-4e56-9ba0-393547f9875f",
+      "role": "P0",
+      "copy": 1
+    },
+    {
+      "alias": "P0.l2",
+      "card_id": "10038",
+      "owner": 41,
+      "name": "Mana Leak",
+      "oracle_id": "c61fe162-2202-4e56-9ba0-393547f9875f",
+      "role": "P0",
+      "copy": 2
+    },
+    {
+      "alias": "P0.l3",
+      "card_id": "10039",
+      "owner": 41,
+      "name": "Mana Leak",
+      "oracle_id": "c61fe162-2202-4e56-9ba0-393547f9875f",
+      "role": "P0",
+      "copy": 3
+    },
+    {
+      "alias": "P0.l4",
+      "card_id": "10040",
+      "owner": 41,
+      "name": "Mana Leak",
+      "oracle_id": "c61fe162-2202-4e56-9ba0-393547f9875f",
+      "role": "P0",
+      "copy": 4
+    },
+    {
+      "alias": "P0.d1",
+      "card_id": "10041",
+      "owner": 41,
+      "name": "Divination",
+      "oracle_id": "273b339c-964b-4a18-8eb5-ceb8abcdfd9e",
+      "role": "P0",
+      "copy": 1
+    },
+    {
+      "alias": "P0.d2",
+      "card_id": "10042",
+      "owner": 41,
+      "name": "Divination",
+      "oracle_id": "273b339c-964b-4a18-8eb5-ceb8abcdfd9e",
+      "role": "P0",
+      "copy": 2
+    },
+    {
+      "alias": "P0.d3",
+      "card_id": "10043",
+      "owner": 41,
+      "name": "Divination",
+      "oracle_id": "273b339c-964b-4a18-8eb5-ceb8abcdfd9e",
+      "role": "P0",
+      "copy": 3
+    },
+    {
+      "alias": "P0.d4",
+      "card_id": "10044",
+      "owner": 41,
+      "name": "Divination",
+      "oracle_id": "273b339c-964b-4a18-8eb5-ceb8abcdfd9e",
+      "role": "P0",
+      "copy": 4
+    },
+    {
+      "alias": "P0.t1",
+      "card_id": "10045",
+      "owner": 41,
+      "name": "Raise the Alarm",
+      "oracle_id": "5b2364d7-a811-4595-a1b4-224c70555ffa",
+      "role": "P0",
+      "copy": 1
+    },
+    {
+      "alias": "P0.t2",
+      "card_id": "10046",
+      "owner": 41,
+      "name": "Raise the Alarm",
+      "oracle_id": "5b2364d7-a811-4595-a1b4-224c70555ffa",
+      "role": "P0",
+      "copy": 2
+    },
+    {
+      "alias": "P0.t3",
+      "card_id": "10047",
+      "owner": 41,
+      "name": "Raise the Alarm",
+      "oracle_id": "5b2364d7-a811-4595-a1b4-224c70555ffa",
+      "role": "P0",
+      "copy": 3
+    },
+    {
+      "alias": "P0.t4",
+      "card_id": "10048",
+      "owner": 41,
+      "name": "Raise the Alarm",
+      "oracle_id": "5b2364d7-a811-4595-a1b4-224c70555ffa",
+      "role": "P0",
+      "copy": 4
+    },
+    {
+      "alias": "P0.u1",
+      "card_id": "10049",
+      "owner": 41,
+      "name": "Unsummon",
+      "oracle_id": "837182db-1bf3-4a2c-bd01-1af9d9873561",
+      "role": "P0",
+      "copy": 1
+    },
+    {
+      "alias": "P0.u2",
+      "card_id": "10050",
+      "owner": 41,
+      "name": "Unsummon",
+      "oracle_id": "837182db-1bf3-4a2c-bd01-1af9d9873561",
+      "role": "P0",
+      "copy": 2
+    },
+    {
+      "alias": "P0.u3",
+      "card_id": "10051",
+      "owner": 41,
+      "name": "Unsummon",
+      "oracle_id": "837182db-1bf3-4a2c-bd01-1af9d9873561",
+      "role": "P0",
+      "copy": 3
+    },
+    {
+      "alias": "P0.u4",
+      "card_id": "10052",
+      "owner": 41,
+      "name": "Unsummon",
+      "oracle_id": "837182db-1bf3-4a2c-bd01-1af9d9873561",
+      "role": "P0",
+      "copy": 4
+    },
+    {
+      "alias": "P0.k1",
+      "card_id": "10053",
+      "owner": 41,
+      "name": "Counterspell",
+      "oracle_id": "cc187110-1148-4090-bbb8-e205694a39f5",
+      "role": "P0",
+      "copy": 1
+    },
+    {
+      "alias": "P0.k2",
+      "card_id": "10054",
+      "owner": 41,
+      "name": "Counterspell",
+      "oracle_id": "cc187110-1148-4090-bbb8-e205694a39f5",
+      "role": "P0",
+      "copy": 2
+    },
+    {
+      "alias": "P0.k3",
+      "card_id": "10055",
+      "owner": 41,
+      "name": "Counterspell",
+      "oracle_id": "cc187110-1148-4090-bbb8-e205694a39f5",
+      "role": "P0",
+      "copy": 3
+    },
+    {
+      "alias": "P0.k4",
+      "card_id": "10056",
+      "owner": 41,
+      "name": "Counterspell",
+      "oracle_id": "cc187110-1148-4090-bbb8-e205694a39f5",
+      "role": "P0",
+      "copy": 4
+    },
+    {
+      "alias": "P0.v1",
+      "card_id": "10057",
+      "owner": 41,
+      "name": "Elite Vanguard",
+      "oracle_id": "b3b9a87d-cb95-435c-90b6-037406cab32e",
+      "role": "P0",
+      "copy": 1
+    },
+    {
+      "alias": "P0.v2",
+      "card_id": "10058",
+      "owner": 41,
+      "name": "Elite Vanguard",
+      "oracle_id": "b3b9a87d-cb95-435c-90b6-037406cab32e",
+      "role": "P0",
+      "copy": 2
+    },
+    {
+      "alias": "P0.v3",
+      "card_id": "10059",
+      "owner": 41,
+      "name": "Elite Vanguard",
+      "oracle_id": "b3b9a87d-cb95-435c-90b6-037406cab32e",
+      "role": "P0",
+      "copy": 3
+    },
+    {
+      "alias": "P0.v4",
+      "card_id": "10060",
+      "owner": 41,
+      "name": "Elite Vanguard",
+      "oracle_id": "b3b9a87d-cb95-435c-90b6-037406cab32e",
+      "role": "P0",
+      "copy": 4
+    },
+    {
+      "alias": "P1.i1",
+      "card_id": "20001",
+      "owner": 3,
+      "name": "Island",
+      "oracle_id": "b2c6aa39-2d2a-459c-a555-fb48ba993373",
+      "role": "P1",
+      "copy": 1
+    },
+    {
+      "alias": "P1.i2",
+      "card_id": "20002",
+      "owner": 3,
+      "name": "Island",
+      "oracle_id": "b2c6aa39-2d2a-459c-a555-fb48ba993373",
+      "role": "P1",
+      "copy": 2
+    },
+    {
+      "alias": "P1.i3",
+      "card_id": "20003",
+      "owner": 3,
+      "name": "Island",
+      "oracle_id": "b2c6aa39-2d2a-459c-a555-fb48ba993373",
+      "role": "P1",
+      "copy": 3
+    },
+    {
+      "alias": "P1.i4",
+      "card_id": "20004",
+      "owner": 3,
+      "name": "Island",
+      "oracle_id": "b2c6aa39-2d2a-459c-a555-fb48ba993373",
+      "role": "P1",
+      "copy": 4
+    },
+    {
+      "alias": "P1.i5",
+      "card_id": "20005",
+      "owner": 3,
+      "name": "Island",
+      "oracle_id": "b2c6aa39-2d2a-459c-a555-fb48ba993373",
+      "role": "P1",
+      "copy": 5
+    },
+    {
+      "alias": "P1.i6",
+      "card_id": "20006",
+      "owner": 3,
+      "name": "Island",
+      "oracle_id": "b2c6aa39-2d2a-459c-a555-fb48ba993373",
+      "role": "P1",
+      "copy": 6
+    },
+    {
+      "alias": "P1.i7",
+      "card_id": "20007",
+      "owner": 3,
+      "name": "Island",
+      "oracle_id": "b2c6aa39-2d2a-459c-a555-fb48ba993373",
+      "role": "P1",
+      "copy": 7
+    },
+    {
+      "alias": "P1.i8",
+      "card_id": "20008",
+      "owner": 3,
+      "name": "Island",
+      "oracle_id": "b2c6aa39-2d2a-459c-a555-fb48ba993373",
+      "role": "P1",
+      "copy": 8
+    },
+    {
+      "alias": "P1.i9",
+      "card_id": "20009",
+      "owner": 3,
+      "name": "Island",
+      "oracle_id": "b2c6aa39-2d2a-459c-a555-fb48ba993373",
+      "role": "P1",
+      "copy": 9
+    },
+    {
+      "alias": "P1.i10",
+      "card_id": "20010",
+      "owner": 3,
+      "name": "Island",
+      "oracle_id": "b2c6aa39-2d2a-459c-a555-fb48ba993373",
+      "role": "P1",
+      "copy": 10
+    },
+    {
+      "alias": "P1.i11",
+      "card_id": "20011",
+      "owner": 3,
+      "name": "Island",
+      "oracle_id": "b2c6aa39-2d2a-459c-a555-fb48ba993373",
+      "role": "P1",
+      "copy": 11
+    },
+    {
+      "alias": "P1.i12",
+      "card_id": "20012",
+      "owner": 3,
+      "name": "Island",
+      "oracle_id": "b2c6aa39-2d2a-459c-a555-fb48ba993373",
+      "role": "P1",
+      "copy": 12
+    },
+    {
+      "alias": "P1.s1",
+      "card_id": "20013",
+      "owner": 3,
+      "name": "Swamp",
+      "oracle_id": "56719f6a-1a6c-4c0a-8d21-18f7d7350b68",
+      "role": "P1",
+      "copy": 1
+    },
+    {
+      "alias": "P1.s2",
+      "card_id": "20014",
+      "owner": 3,
+      "name": "Swamp",
+      "oracle_id": "56719f6a-1a6c-4c0a-8d21-18f7d7350b68",
+      "role": "P1",
+      "copy": 2
+    },
+    {
+      "alias": "P1.s3",
+      "card_id": "20015",
+      "owner": 3,
+      "name": "Swamp",
+      "oracle_id": "56719f6a-1a6c-4c0a-8d21-18f7d7350b68",
+      "role": "P1",
+      "copy": 3
+    },
+    {
+      "alias": "P1.s4",
+      "card_id": "20016",
+      "owner": 3,
+      "name": "Swamp",
+      "oracle_id": "56719f6a-1a6c-4c0a-8d21-18f7d7350b68",
+      "role": "P1",
+      "copy": 4
+    },
+    {
+      "alias": "P1.s5",
+      "card_id": "20017",
+      "owner": 3,
+      "name": "Swamp",
+      "oracle_id": "56719f6a-1a6c-4c0a-8d21-18f7d7350b68",
+      "role": "P1",
+      "copy": 5
+    },
+    {
+      "alias": "P1.s6",
+      "card_id": "20018",
+      "owner": 3,
+      "name": "Swamp",
+      "oracle_id": "56719f6a-1a6c-4c0a-8d21-18f7d7350b68",
+      "role": "P1",
+      "copy": 6
+    },
+    {
+      "alias": "P1.s7",
+      "card_id": "20019",
+      "owner": 3,
+      "name": "Swamp",
+      "oracle_id": "56719f6a-1a6c-4c0a-8d21-18f7d7350b68",
+      "role": "P1",
+      "copy": 7
+    },
+    {
+      "alias": "P1.s8",
+      "card_id": "20020",
+      "owner": 3,
+      "name": "Swamp",
+      "oracle_id": "56719f6a-1a6c-4c0a-8d21-18f7d7350b68",
+      "role": "P1",
+      "copy": 8
+    },
+    {
+      "alias": "P1.s9",
+      "card_id": "20021",
+      "owner": 3,
+      "name": "Swamp",
+      "oracle_id": "56719f6a-1a6c-4c0a-8d21-18f7d7350b68",
+      "role": "P1",
+      "copy": 9
+    },
+    {
+      "alias": "P1.s10",
+      "card_id": "20022",
+      "owner": 3,
+      "name": "Swamp",
+      "oracle_id": "56719f6a-1a6c-4c0a-8d21-18f7d7350b68",
+      "role": "P1",
+      "copy": 10
+    },
+    {
+      "alias": "P1.s11",
+      "card_id": "20023",
+      "owner": 3,
+      "name": "Swamp",
+      "oracle_id": "56719f6a-1a6c-4c0a-8d21-18f7d7350b68",
+      "role": "P1",
+      "copy": 11
+    },
+    {
+      "alias": "P1.s12",
+      "card_id": "20024",
+      "owner": 3,
+      "name": "Swamp",
+      "oracle_id": "56719f6a-1a6c-4c0a-8d21-18f7d7350b68",
+      "role": "P1",
+      "copy": 12
+    },
+    {
+      "alias": "P1.o1",
+      "card_id": "20025",
+      "owner": 3,
+      "name": "Oculus",
+      "oracle_id": "e793ede9-044a-44e9-bc9c-99b0034503eb",
+      "role": "P1",
+      "copy": 1
+    },
+    {
+      "alias": "P1.o2",
+      "card_id": "20026",
+      "owner": 3,
+      "name": "Oculus",
+      "oracle_id": "e793ede9-044a-44e9-bc9c-99b0034503eb",
+      "role": "P1",
+      "copy": 2
+    },
+    {
+      "alias": "P1.o3",
+      "card_id": "20027",
+      "owner": 3,
+      "name": "Oculus",
+      "oracle_id": "e793ede9-044a-44e9-bc9c-99b0034503eb",
+      "role": "P1",
+      "copy": 3
+    },
+    {
+      "alias": "P1.o4",
+      "card_id": "20028",
+      "owner": 3,
+      "name": "Oculus",
+      "oracle_id": "e793ede9-044a-44e9-bc9c-99b0034503eb",
+      "role": "P1",
+      "copy": 4
+    },
+    {
+      "alias": "P1.l1",
+      "card_id": "20029",
+      "owner": 3,
+      "name": "Mana Leak",
+      "oracle_id": "c61fe162-2202-4e56-9ba0-393547f9875f",
+      "role": "P1",
+      "copy": 1
+    },
+    {
+      "alias": "P1.l2",
+      "card_id": "20030",
+      "owner": 3,
+      "name": "Mana Leak",
+      "oracle_id": "c61fe162-2202-4e56-9ba0-393547f9875f",
+      "role": "P1",
+      "copy": 2
+    },
+    {
+      "alias": "P1.l3",
+      "card_id": "20031",
+      "owner": 3,
+      "name": "Mana Leak",
+      "oracle_id": "c61fe162-2202-4e56-9ba0-393547f9875f",
+      "role": "P1",
+      "copy": 3
+    },
+    {
+      "alias": "P1.l4",
+      "card_id": "20032",
+      "owner": 3,
+      "name": "Mana Leak",
+      "oracle_id": "c61fe162-2202-4e56-9ba0-393547f9875f",
+      "role": "P1",
+      "copy": 4
+    },
+    {
+      "alias": "P1.m1",
+      "card_id": "20033",
+      "owner": 3,
+      "name": "Manalith",
+      "oracle_id": "bd9e416a-89b3-4912-be9b-49fce6a93dc9",
+      "role": "P1",
+      "copy": 1
+    },
+    {
+      "alias": "P1.m2",
+      "card_id": "20034",
+      "owner": 3,
+      "name": "Manalith",
+      "oracle_id": "bd9e416a-89b3-4912-be9b-49fce6a93dc9",
+      "role": "P1",
+      "copy": 2
+    },
+    {
+      "alias": "P1.m3",
+      "card_id": "20035",
+      "owner": 3,
+      "name": "Manalith",
+      "oracle_id": "bd9e416a-89b3-4912-be9b-49fce6a93dc9",
+      "role": "P1",
+      "copy": 3
+    },
+    {
+      "alias": "P1.m4",
+      "card_id": "20036",
+      "owner": 3,
+      "name": "Manalith",
+      "oracle_id": "bd9e416a-89b3-4912-be9b-49fce6a93dc9",
+      "role": "P1",
+      "copy": 4
+    },
+    {
+      "alias": "P1.n1",
+      "card_id": "20037",
+      "owner": 3,
+      "name": "Novice Occultist",
+      "oracle_id": "e51f5b41-5465-4b1d-b96a-544762657ca5",
+      "role": "P1",
+      "copy": 1
+    },
+    {
+      "alias": "P1.n2",
+      "card_id": "20038",
+      "owner": 3,
+      "name": "Novice Occultist",
+      "oracle_id": "e51f5b41-5465-4b1d-b96a-544762657ca5",
+      "role": "P1",
+      "copy": 2
+    },
+    {
+      "alias": "P1.n3",
+      "card_id": "20039",
+      "owner": 3,
+      "name": "Novice Occultist",
+      "oracle_id": "e51f5b41-5465-4b1d-b96a-544762657ca5",
+      "role": "P1",
+      "copy": 3
+    },
+    {
+      "alias": "P1.n4",
+      "card_id": "20040",
+      "owner": 3,
+      "name": "Novice Occultist",
+      "oracle_id": "e51f5b41-5465-4b1d-b96a-544762657ca5",
+      "role": "P1",
+      "copy": 4
+    },
+    {
+      "alias": "P1.g1",
+      "card_id": "20041",
+      "owner": 3,
+      "name": "Phyrexian Rager",
+      "oracle_id": "e409c9be-0c9a-43c3-adb4-8c47afc1d551",
+      "role": "P1",
+      "copy": 1
+    },
+    {
+      "alias": "P1.g2",
+      "card_id": "20042",
+      "owner": 3,
+      "name": "Phyrexian Rager",
+      "oracle_id": "e409c9be-0c9a-43c3-adb4-8c47afc1d551",
+      "role": "P1",
+      "copy": 2
+    },
+    {
+      "alias": "P1.g3",
+      "card_id": "20043",
+      "owner": 3,
+      "name": "Phyrexian Rager",
+      "oracle_id": "e409c9be-0c9a-43c3-adb4-8c47afc1d551",
+      "role": "P1",
+      "copy": 3
+    },
+    {
+      "alias": "P1.g4",
+      "card_id": "20044",
+      "owner": 3,
+      "name": "Phyrexian Rager",
+      "oracle_id": "e409c9be-0c9a-43c3-adb4-8c47afc1d551",
+      "role": "P1",
+      "copy": 4
+    },
+    {
+      "alias": "P1.z1",
+      "card_id": "20045",
+      "owner": 3,
+      "name": "Doomed Dissenter",
+      "oracle_id": "11cb509d-21af-48f1-b355-135ebd3e4bd1",
+      "role": "P1",
+      "copy": 1
+    },
+    {
+      "alias": "P1.z2",
+      "card_id": "20046",
+      "owner": 3,
+      "name": "Doomed Dissenter",
+      "oracle_id": "11cb509d-21af-48f1-b355-135ebd3e4bd1",
+      "role": "P1",
+      "copy": 2
+    },
+    {
+      "alias": "P1.z3",
+      "card_id": "20047",
+      "owner": 3,
+      "name": "Doomed Dissenter",
+      "oracle_id": "11cb509d-21af-48f1-b355-135ebd3e4bd1",
+      "role": "P1",
+      "copy": 3
+    },
+    {
+      "alias": "P1.z4",
+      "card_id": "20048",
+      "owner": 3,
+      "name": "Doomed Dissenter",
+      "oracle_id": "11cb509d-21af-48f1-b355-135ebd3e4bd1",
+      "role": "P1",
+      "copy": 4
+    },
+    {
+      "alias": "P1.b1",
+      "card_id": "20049",
+      "owner": 3,
+      "name": "Blood Artist",
+      "oracle_id": "310f141c-7f37-4729-aed6-dd9c09db448d",
+      "role": "P1",
+      "copy": 1
+    },
+    {
+      "alias": "P1.b2",
+      "card_id": "20050",
+      "owner": 3,
+      "name": "Blood Artist",
+      "oracle_id": "310f141c-7f37-4729-aed6-dd9c09db448d",
+      "role": "P1",
+      "copy": 2
+    },
+    {
+      "alias": "P1.b3",
+      "card_id": "20051",
+      "owner": 3,
+      "name": "Blood Artist",
+      "oracle_id": "310f141c-7f37-4729-aed6-dd9c09db448d",
+      "role": "P1",
+      "copy": 3
+    },
+    {
+      "alias": "P1.b4",
+      "card_id": "20052",
+      "owner": 3,
+      "name": "Blood Artist",
+      "oracle_id": "310f141c-7f37-4729-aed6-dd9c09db448d",
+      "role": "P1",
+      "copy": 4
+    },
+    {
+      "alias": "P1.d1",
+      "card_id": "20053",
+      "owner": 3,
+      "name": "Divination",
+      "oracle_id": "273b339c-964b-4a18-8eb5-ceb8abcdfd9e",
+      "role": "P1",
+      "copy": 1
+    },
+    {
+      "alias": "P1.d2",
+      "card_id": "20054",
+      "owner": 3,
+      "name": "Divination",
+      "oracle_id": "273b339c-964b-4a18-8eb5-ceb8abcdfd9e",
+      "role": "P1",
+      "copy": 2
+    },
+    {
+      "alias": "P1.d3",
+      "card_id": "20055",
+      "owner": 3,
+      "name": "Divination",
+      "oracle_id": "273b339c-964b-4a18-8eb5-ceb8abcdfd9e",
+      "role": "P1",
+      "copy": 3
+    },
+    {
+      "alias": "P1.d4",
+      "card_id": "20056",
+      "owner": 3,
+      "name": "Divination",
+      "oracle_id": "273b339c-964b-4a18-8eb5-ceb8abcdfd9e",
+      "role": "P1",
+      "copy": 4
+    },
+    {
+      "alias": "P1.c1",
+      "card_id": "20057",
+      "owner": 3,
+      "name": "Coral Merfolk",
+      "oracle_id": "4ed27607-21a8-4bc3-997e-6d2242313f6d",
+      "role": "P1",
+      "copy": 1
+    },
+    {
+      "alias": "P1.c2",
+      "card_id": "20058",
+      "owner": 3,
+      "name": "Coral Merfolk",
+      "oracle_id": "4ed27607-21a8-4bc3-997e-6d2242313f6d",
+      "role": "P1",
+      "copy": 2
+    },
+    {
+      "alias": "P1.c3",
+      "card_id": "20059",
+      "owner": 3,
+      "name": "Coral Merfolk",
+      "oracle_id": "4ed27607-21a8-4bc3-997e-6d2242313f6d",
+      "role": "P1",
+      "copy": 3
+    },
+    {
+      "alias": "P1.c4",
+      "card_id": "20060",
+      "owner": 3,
+      "name": "Coral Merfolk",
+      "oracle_id": "4ed27607-21a8-4bc3-997e-6d2242313f6d",
+      "role": "P1",
+      "copy": 4
+    }
+  ],
+  "token_templates": [
+    {
+      "source_oracle_id": "5b2364d7-a811-4595-a1b4-224c70555ffa",
+      "triggered_ability_id": null,
+      "instruction": 0,
+      "creation": 0
+    },
+    {
+      "source_oracle_id": "11cb509d-21af-48f1-b355-135ebd3e4bd1",
+      "triggered_ability_id": 1,
+      "instruction": 0,
+      "creation": 0
+    }
+  ],
+  "full_game_recipes": {
+    "kind": "PRIMARY_PLANNED_INPUTS_AND_TERMINAL_ARITHMETIC_NOT_EXECUTED",
+    "candidate_sha256": "7c37f6079e63ee10560bae72e4728a695268714fbf7b84221b4014dbab8f6072",
+    "participants": [
+      {
+        "role": "P0",
+        "seat": 41
+      },
+      {
+        "role": "P1",
+        "seat": 3
+      }
+    ],
+    "first_player": "P0",
+    "life_each": "20",
+    "format": "saved Legacy BO1 finite profile",
+    "opening": "shuffle both complete libraries in participant order, deal7 each; both Keep0; no bottom",
+    "shuffle_basis": "crates/engine/src/shuffle.rs fisher-yates-u64-tail-v1; explicit input permutation arithmetic only",
+    "card_order_basis": "crates/engine/src/object_identity.rs::library/draw_first: index0 is top",
+    "policy_defaults": [
+      "Bind actual basis/DecisionId/actor/entry/source from native reached frame; never supply expected IDs as authority.",
+      "At every real Ready priority holder, perform only next intent at exact listed turn/phase/stack identity, else Pass.",
+      "No other spells or abilities; listed funding taps occur immediately before named cast/offer; pay exact printed/quoted cost.",
+      "All listed casts occur precombat main except explicit Mana Leak response. Do not skip any priority pass/check.",
+      "Use exact listed attackers at DeclareAttackers. P1 has no attackers. P1 blocks nobody except two explicit FG02 trades.",
+      "Assign each creature's full represented power as legal combat damage to its sole blocker/defender; use actual issued singleton domains.",
+      "Every real trigger is placed normally; accept sole legal order where singleton; actual optional/payment choices are explicitly listed.",
+      "Unexpected frame, extra trigger, missing intent/card/domain, cleanup discard, budget exhaustion or later turn is failure, never auto-corrected.",
+      "No direct state edits, preloaded mana, prepared turn setup, concessions, ignored source clauses or fabricated replay facts."
+    ],
+    "checkpoint_policy": [
+      "initial opening frame; every accepted input and full journal; both Keep receipts; first main of every turn",
+      "each actual cast/target/source entry; each trigger discovery/placement; every optional/payment/color parent and child",
+      "every mana prefix and normalized debit/outcome; every combat declaration/damage/death; final loss and complete state replay"
+    ],
+    "expected_worlds": null,
+    "limits": "Input recipes and source-derived arithmetic only. No native signatures/profile/game/Forge result, exact accepted input count, dynamic IDs or world snapshots are claimed.",
+    "cases": [
+      {
+        "id": "OP-FG01",
+        "decks": [
+          {
+            "role": "P0",
+            "physical_cards": [
+              {
+                "alias": "P0.p1",
+                "card_id": "10001",
+                "owner": 41,
+                "name": "Plains",
+                "oracle_id": "bc71ebf6-2056-41f7-be35-b2e5c34afa99"
+              },
+              {
+                "alias": "P0.p2",
+                "card_id": "10002",
+                "owner": 41,
+                "name": "Plains",
+                "oracle_id": "bc71ebf6-2056-41f7-be35-b2e5c34afa99"
+              },
+              {
+                "alias": "P0.p3",
+                "card_id": "10003",
+                "owner": 41,
+                "name": "Plains",
+                "oracle_id": "bc71ebf6-2056-41f7-be35-b2e5c34afa99"
+              },
+              {
+                "alias": "P0.p4",
+                "card_id": "10004",
+                "owner": 41,
+                "name": "Plains",
+                "oracle_id": "bc71ebf6-2056-41f7-be35-b2e5c34afa99"
+              },
+              {
+                "alias": "P0.p5",
+                "card_id": "10005",
+                "owner": 41,
+                "name": "Plains",
+                "oracle_id": "bc71ebf6-2056-41f7-be35-b2e5c34afa99"
+              },
+              {
+                "alias": "P0.p6",
+                "card_id": "10006",
+                "owner": 41,
+                "name": "Plains",
+                "oracle_id": "bc71ebf6-2056-41f7-be35-b2e5c34afa99"
+              },
+              {
+                "alias": "P0.p7",
+                "card_id": "10007",
+                "owner": 41,
+                "name": "Plains",
+                "oracle_id": "bc71ebf6-2056-41f7-be35-b2e5c34afa99"
+              },
+              {
+                "alias": "P0.p8",
+                "card_id": "10008",
+                "owner": 41,
+                "name": "Plains",
+                "oracle_id": "bc71ebf6-2056-41f7-be35-b2e5c34afa99"
+              },
+              {
+                "alias": "P0.p9",
+                "card_id": "10009",
+                "owner": 41,
+                "name": "Plains",
+                "oracle_id": "bc71ebf6-2056-41f7-be35-b2e5c34afa99"
+              },
+              {
+                "alias": "P0.p10",
+                "card_id": "10010",
+                "owner": 41,
+                "name": "Plains",
+                "oracle_id": "bc71ebf6-2056-41f7-be35-b2e5c34afa99"
+              },
+              {
+                "alias": "P0.p11",
+                "card_id": "10011",
+                "owner": 41,
+                "name": "Plains",
+                "oracle_id": "bc71ebf6-2056-41f7-be35-b2e5c34afa99"
+              },
+              {
+                "alias": "P0.p12",
+                "card_id": "10012",
+                "owner": 41,
+                "name": "Plains",
+                "oracle_id": "bc71ebf6-2056-41f7-be35-b2e5c34afa99"
+              },
+              {
+                "alias": "P0.i1",
+                "card_id": "10013",
+                "owner": 41,
+                "name": "Island",
+                "oracle_id": "b2c6aa39-2d2a-459c-a555-fb48ba993373"
+              },
+              {
+                "alias": "P0.i2",
+                "card_id": "10014",
+                "owner": 41,
+                "name": "Island",
+                "oracle_id": "b2c6aa39-2d2a-459c-a555-fb48ba993373"
+              },
+              {
+                "alias": "P0.i3",
+                "card_id": "10015",
+                "owner": 41,
+                "name": "Island",
+                "oracle_id": "b2c6aa39-2d2a-459c-a555-fb48ba993373"
+              },
+              {
+                "alias": "P0.i4",
+                "card_id": "10016",
+                "owner": 41,
+                "name": "Island",
+                "oracle_id": "b2c6aa39-2d2a-459c-a555-fb48ba993373"
+              },
+              {
+                "alias": "P0.i5",
+                "card_id": "10017",
+                "owner": 41,
+                "name": "Island",
+                "oracle_id": "b2c6aa39-2d2a-459c-a555-fb48ba993373"
+              },
+              {
+                "alias": "P0.i6",
+                "card_id": "10018",
+                "owner": 41,
+                "name": "Island",
+                "oracle_id": "b2c6aa39-2d2a-459c-a555-fb48ba993373"
+              },
+              {
+                "alias": "P0.i7",
+                "card_id": "10019",
+                "owner": 41,
+                "name": "Island",
+                "oracle_id": "b2c6aa39-2d2a-459c-a555-fb48ba993373"
+              },
+              {
+                "alias": "P0.i8",
+                "card_id": "10020",
+                "owner": 41,
+                "name": "Island",
+                "oracle_id": "b2c6aa39-2d2a-459c-a555-fb48ba993373"
+              },
+              {
+                "alias": "P0.i9",
+                "card_id": "10021",
+                "owner": 41,
+                "name": "Island",
+                "oracle_id": "b2c6aa39-2d2a-459c-a555-fb48ba993373"
+              },
+              {
+                "alias": "P0.i10",
+                "card_id": "10022",
+                "owner": 41,
+                "name": "Island",
+                "oracle_id": "b2c6aa39-2d2a-459c-a555-fb48ba993373"
+              },
+              {
+                "alias": "P0.i11",
+                "card_id": "10023",
+                "owner": 41,
+                "name": "Island",
+                "oracle_id": "b2c6aa39-2d2a-459c-a555-fb48ba993373"
+              },
+              {
+                "alias": "P0.i12",
+                "card_id": "10024",
+                "owner": 41,
+                "name": "Island",
+                "oracle_id": "b2c6aa39-2d2a-459c-a555-fb48ba993373"
+              },
+              {
+                "alias": "P0.a1",
+                "card_id": "10025",
+                "owner": 41,
+                "name": "Soul's Attendant",
+                "oracle_id": "045a9d3d-c20d-427f-a77b-0bffc6f55526"
+              },
+              {
+                "alias": "P0.a2",
+                "card_id": "10026",
+                "owner": 41,
+                "name": "Soul's Attendant",
+                "oracle_id": "045a9d3d-c20d-427f-a77b-0bffc6f55526"
+              },
+              {
+                "alias": "P0.a3",
+                "card_id": "10027",
+                "owner": 41,
+                "name": "Soul's Attendant",
+                "oracle_id": "045a9d3d-c20d-427f-a77b-0bffc6f55526"
+              },
+              {
+                "alias": "P0.a4",
+                "card_id": "10028",
+                "owner": 41,
+                "name": "Soul's Attendant",
+                "oracle_id": "045a9d3d-c20d-427f-a77b-0bffc6f55526"
+              },
+              {
+                "alias": "P0.r1",
+                "card_id": "10029",
+                "owner": 41,
+                "name": "Rhystic Study",
+                "oracle_id": "53236dd7-845a-444c-96d5-f41ed7325d8f"
+              },
+              {
+                "alias": "P0.r2",
+                "card_id": "10030",
+                "owner": 41,
+                "name": "Rhystic Study",
+                "oracle_id": "53236dd7-845a-444c-96d5-f41ed7325d8f"
+              },
+              {
+                "alias": "P0.r3",
+                "card_id": "10031",
+                "owner": 41,
+                "name": "Rhystic Study",
+                "oracle_id": "53236dd7-845a-444c-96d5-f41ed7325d8f"
+              },
+              {
+                "alias": "P0.r4",
+                "card_id": "10032",
+                "owner": 41,
+                "name": "Rhystic Study",
+                "oracle_id": "53236dd7-845a-444c-96d5-f41ed7325d8f"
+              },
+              {
+                "alias": "P0.m1",
+                "card_id": "10033",
+                "owner": 41,
+                "name": "Manalith",
+                "oracle_id": "bd9e416a-89b3-4912-be9b-49fce6a93dc9"
+              },
+              {
+                "alias": "P0.m2",
+                "card_id": "10034",
+                "owner": 41,
+                "name": "Manalith",
+                "oracle_id": "bd9e416a-89b3-4912-be9b-49fce6a93dc9"
+              },
+              {
+                "alias": "P0.m3",
+                "card_id": "10035",
+                "owner": 41,
+                "name": "Manalith",
+                "oracle_id": "bd9e416a-89b3-4912-be9b-49fce6a93dc9"
+              },
+              {
+                "alias": "P0.m4",
+                "card_id": "10036",
+                "owner": 41,
+                "name": "Manalith",
+                "oracle_id": "bd9e416a-89b3-4912-be9b-49fce6a93dc9"
+              },
+              {
+                "alias": "P0.l1",
+                "card_id": "10037",
+                "owner": 41,
+                "name": "Mana Leak",
+                "oracle_id": "c61fe162-2202-4e56-9ba0-393547f9875f"
+              },
+              {
+                "alias": "P0.l2",
+                "card_id": "10038",
+                "owner": 41,
+                "name": "Mana Leak",
+                "oracle_id": "c61fe162-2202-4e56-9ba0-393547f9875f"
+              },
+              {
+                "alias": "P0.l3",
+                "card_id": "10039",
+                "owner": 41,
+                "name": "Mana Leak",
+                "oracle_id": "c61fe162-2202-4e56-9ba0-393547f9875f"
+              },
+              {
+                "alias": "P0.l4",
+                "card_id": "10040",
+                "owner": 41,
+                "name": "Mana Leak",
+                "oracle_id": "c61fe162-2202-4e56-9ba0-393547f9875f"
+              },
+              {
+                "alias": "P0.d1",
+                "card_id": "10041",
+                "owner": 41,
+                "name": "Divination",
+                "oracle_id": "273b339c-964b-4a18-8eb5-ceb8abcdfd9e"
+              },
+              {
+                "alias": "P0.d2",
+                "card_id": "10042",
+                "owner": 41,
+                "name": "Divination",
+                "oracle_id": "273b339c-964b-4a18-8eb5-ceb8abcdfd9e"
+              },
+              {
+                "alias": "P0.d3",
+                "card_id": "10043",
+                "owner": 41,
+                "name": "Divination",
+                "oracle_id": "273b339c-964b-4a18-8eb5-ceb8abcdfd9e"
+              },
+              {
+                "alias": "P0.d4",
+                "card_id": "10044",
+                "owner": 41,
+                "name": "Divination",
+                "oracle_id": "273b339c-964b-4a18-8eb5-ceb8abcdfd9e"
+              },
+              {
+                "alias": "P0.t1",
+                "card_id": "10045",
+                "owner": 41,
+                "name": "Raise the Alarm",
+                "oracle_id": "5b2364d7-a811-4595-a1b4-224c70555ffa"
+              },
+              {
+                "alias": "P0.t2",
+                "card_id": "10046",
+                "owner": 41,
+                "name": "Raise the Alarm",
+                "oracle_id": "5b2364d7-a811-4595-a1b4-224c70555ffa"
+              },
+              {
+                "alias": "P0.t3",
+                "card_id": "10047",
+                "owner": 41,
+                "name": "Raise the Alarm",
+                "oracle_id": "5b2364d7-a811-4595-a1b4-224c70555ffa"
+              },
+              {
+                "alias": "P0.t4",
+                "card_id": "10048",
+                "owner": 41,
+                "name": "Raise the Alarm",
+                "oracle_id": "5b2364d7-a811-4595-a1b4-224c70555ffa"
+              },
+              {
+                "alias": "P0.u1",
+                "card_id": "10049",
+                "owner": 41,
+                "name": "Unsummon",
+                "oracle_id": "837182db-1bf3-4a2c-bd01-1af9d9873561"
+              },
+              {
+                "alias": "P0.u2",
+                "card_id": "10050",
+                "owner": 41,
+                "name": "Unsummon",
+                "oracle_id": "837182db-1bf3-4a2c-bd01-1af9d9873561"
+              },
+              {
+                "alias": "P0.u3",
+                "card_id": "10051",
+                "owner": 41,
+                "name": "Unsummon",
+                "oracle_id": "837182db-1bf3-4a2c-bd01-1af9d9873561"
+              },
+              {
+                "alias": "P0.u4",
+                "card_id": "10052",
+                "owner": 41,
+                "name": "Unsummon",
+                "oracle_id": "837182db-1bf3-4a2c-bd01-1af9d9873561"
+              },
+              {
+                "alias": "P0.k1",
+                "card_id": "10053",
+                "owner": 41,
+                "name": "Counterspell",
+                "oracle_id": "cc187110-1148-4090-bbb8-e205694a39f5"
+              },
+              {
+                "alias": "P0.k2",
+                "card_id": "10054",
+                "owner": 41,
+                "name": "Counterspell",
+                "oracle_id": "cc187110-1148-4090-bbb8-e205694a39f5"
+              },
+              {
+                "alias": "P0.k3",
+                "card_id": "10055",
+                "owner": 41,
+                "name": "Counterspell",
+                "oracle_id": "cc187110-1148-4090-bbb8-e205694a39f5"
+              },
+              {
+                "alias": "P0.k4",
+                "card_id": "10056",
+                "owner": 41,
+                "name": "Counterspell",
+                "oracle_id": "cc187110-1148-4090-bbb8-e205694a39f5"
+              },
+              {
+                "alias": "P0.v1",
+                "card_id": "10057",
+                "owner": 41,
+                "name": "Elite Vanguard",
+                "oracle_id": "b3b9a87d-cb95-435c-90b6-037406cab32e"
+              },
+              {
+                "alias": "P0.v2",
+                "card_id": "10058",
+                "owner": 41,
+                "name": "Elite Vanguard",
+                "oracle_id": "b3b9a87d-cb95-435c-90b6-037406cab32e"
+              },
+              {
+                "alias": "P0.v3",
+                "card_id": "10059",
+                "owner": 41,
+                "name": "Elite Vanguard",
+                "oracle_id": "b3b9a87d-cb95-435c-90b6-037406cab32e"
+              },
+              {
+                "alias": "P0.v4",
+                "card_id": "10060",
+                "owner": 41,
+                "name": "Elite Vanguard",
+                "oracle_id": "b3b9a87d-cb95-435c-90b6-037406cab32e"
+              }
+            ],
+            "before_card_ids": [
+              "10001",
+              "10002",
+              "10003",
+              "10004",
+              "10005",
+              "10006",
+              "10007",
+              "10008",
+              "10009",
+              "10010",
+              "10011",
+              "10012",
+              "10013",
+              "10014",
+              "10015",
+              "10016",
+              "10017",
+              "10018",
+              "10019",
+              "10020",
+              "10021",
+              "10022",
+              "10023",
+              "10024",
+              "10025",
+              "10026",
+              "10027",
+              "10028",
+              "10029",
+              "10030",
+              "10031",
+              "10032",
+              "10033",
+              "10034",
+              "10035",
+              "10036",
+              "10037",
+              "10038",
+              "10039",
+              "10040",
+              "10041",
+              "10042",
+              "10043",
+              "10044",
+              "10045",
+              "10046",
+              "10047",
+              "10048",
+              "10049",
+              "10050",
+              "10051",
+              "10052",
+              "10053",
+              "10054",
+              "10055",
+              "10056",
+              "10057",
+              "10058",
+              "10059",
+              "10060"
+            ],
+            "after_card_ids": [
+              "10001",
+              "10013",
+              "10057",
+              "10025",
+              "10033",
+              "10037",
+              "10029",
+              "10014",
+              "10015",
+              "10002",
+              "10041",
+              "10016",
+              "10003",
+              "10017",
+              "10004",
+              "10018",
+              "10005",
+              "10006",
+              "10007",
+              "10008",
+              "10009",
+              "10010",
+              "10011",
+              "10012",
+              "10019",
+              "10020",
+              "10021",
+              "10022",
+              "10023",
+              "10024",
+              "10026",
+              "10027",
+              "10028",
+              "10030",
+              "10031",
+              "10032",
+              "10034",
+              "10035",
+              "10036",
+              "10038",
+              "10039",
+              "10040",
+              "10042",
+              "10043",
+              "10044",
+              "10045",
+              "10046",
+              "10047",
+              "10048",
+              "10049",
+              "10050",
+              "10051",
+              "10052",
+              "10053",
+              "10054",
+              "10055",
+              "10056",
+              "10058",
+              "10059",
+              "10060"
+            ],
+            "after_aliases_top_first": [
+              "P0.p1",
+              "P0.i1",
+              "P0.v1",
+              "P0.a1",
+              "P0.m1",
+              "P0.l1",
+              "P0.r1",
+              "P0.i2",
+              "P0.i3",
+              "P0.p2",
+              "P0.d1",
+              "P0.i4",
+              "P0.p3",
+              "P0.i5",
+              "P0.p4",
+              "P0.i6",
+              "P0.p5",
+              "P0.p6",
+              "P0.p7",
+              "P0.p8",
+              "P0.p9",
+              "P0.p10",
+              "P0.p11",
+              "P0.p12",
+              "P0.i7",
+              "P0.i8",
+              "P0.i9",
+              "P0.i10",
+              "P0.i11",
+              "P0.i12",
+              "P0.a2",
+              "P0.a3",
+              "P0.a4",
+              "P0.r2",
+              "P0.r3",
+              "P0.r4",
+              "P0.m2",
+              "P0.m3",
+              "P0.m4",
+              "P0.l2",
+              "P0.l3",
+              "P0.l4",
+              "P0.d2",
+              "P0.d3",
+              "P0.d4",
+              "P0.t1",
+              "P0.t2",
+              "P0.t3",
+              "P0.t4",
+              "P0.u1",
+              "P0.u2",
+              "P0.u3",
+              "P0.u4",
+              "P0.k1",
+              "P0.k2",
+              "P0.k3",
+              "P0.k4",
+              "P0.v2",
+              "P0.v3",
+              "P0.v4"
+            ],
+            "opening_hand_aliases": [
+              "P0.p1",
+              "P0.i1",
+              "P0.v1",
+              "P0.a1",
+              "P0.m1",
+              "P0.l1",
+              "P0.r1"
+            ],
+            "entropy_words": [
+              59,
+              58,
+              57,
+              55,
+              54,
+              53,
+              52,
+              51,
+              50,
+              49,
+              48,
+              47,
+              46,
+              45,
+              44,
+              43,
+              42,
+              41,
+              39,
+              38,
+              37,
+              35,
+              34,
+              33,
+              31,
+              30,
+              29,
+              27,
+              26,
+              25,
+              23,
+              22,
+              21,
+              20,
+              19,
+              18,
+              11,
+              10,
+              9,
+              8,
+              7,
+              6,
+              5,
+              4,
+              5,
+              3,
+              4,
+              2,
+              5,
+              8,
+              1,
+              3,
+              4,
+              3,
+              5,
+              1,
+              3,
+              1,
+              1
+            ],
+            "algorithm": "fisher-yates-u64-tail-v1",
+            "entropy_words_consumed": 59,
+            "qualification": "PREPARED_INPUT_PERMUTATION_ONLY_NOT_NATIVE_SHUFFLE_EVIDENCE"
+          },
+          {
+            "role": "P1",
+            "physical_cards": [
+              {
+                "alias": "P1.i1",
+                "card_id": "20001",
+                "owner": 3,
+                "name": "Island",
+                "oracle_id": "b2c6aa39-2d2a-459c-a555-fb48ba993373"
+              },
+              {
+                "alias": "P1.i2",
+                "card_id": "20002",
+                "owner": 3,
+                "name": "Island",
+                "oracle_id": "b2c6aa39-2d2a-459c-a555-fb48ba993373"
+              },
+              {
+                "alias": "P1.i3",
+                "card_id": "20003",
+                "owner": 3,
+                "name": "Island",
+                "oracle_id": "b2c6aa39-2d2a-459c-a555-fb48ba993373"
+              },
+              {
+                "alias": "P1.i4",
+                "card_id": "20004",
+                "owner": 3,
+                "name": "Island",
+                "oracle_id": "b2c6aa39-2d2a-459c-a555-fb48ba993373"
+              },
+              {
+                "alias": "P1.i5",
+                "card_id": "20005",
+                "owner": 3,
+                "name": "Island",
+                "oracle_id": "b2c6aa39-2d2a-459c-a555-fb48ba993373"
+              },
+              {
+                "alias": "P1.i6",
+                "card_id": "20006",
+                "owner": 3,
+                "name": "Island",
+                "oracle_id": "b2c6aa39-2d2a-459c-a555-fb48ba993373"
+              },
+              {
+                "alias": "P1.i7",
+                "card_id": "20007",
+                "owner": 3,
+                "name": "Island",
+                "oracle_id": "b2c6aa39-2d2a-459c-a555-fb48ba993373"
+              },
+              {
+                "alias": "P1.i8",
+                "card_id": "20008",
+                "owner": 3,
+                "name": "Island",
+                "oracle_id": "b2c6aa39-2d2a-459c-a555-fb48ba993373"
+              },
+              {
+                "alias": "P1.i9",
+                "card_id": "20009",
+                "owner": 3,
+                "name": "Island",
+                "oracle_id": "b2c6aa39-2d2a-459c-a555-fb48ba993373"
+              },
+              {
+                "alias": "P1.i10",
+                "card_id": "20010",
+                "owner": 3,
+                "name": "Island",
+                "oracle_id": "b2c6aa39-2d2a-459c-a555-fb48ba993373"
+              },
+              {
+                "alias": "P1.i11",
+                "card_id": "20011",
+                "owner": 3,
+                "name": "Island",
+                "oracle_id": "b2c6aa39-2d2a-459c-a555-fb48ba993373"
+              },
+              {
+                "alias": "P1.i12",
+                "card_id": "20012",
+                "owner": 3,
+                "name": "Island",
+                "oracle_id": "b2c6aa39-2d2a-459c-a555-fb48ba993373"
+              },
+              {
+                "alias": "P1.s1",
+                "card_id": "20013",
+                "owner": 3,
+                "name": "Swamp",
+                "oracle_id": "56719f6a-1a6c-4c0a-8d21-18f7d7350b68"
+              },
+              {
+                "alias": "P1.s2",
+                "card_id": "20014",
+                "owner": 3,
+                "name": "Swamp",
+                "oracle_id": "56719f6a-1a6c-4c0a-8d21-18f7d7350b68"
+              },
+              {
+                "alias": "P1.s3",
+                "card_id": "20015",
+                "owner": 3,
+                "name": "Swamp",
+                "oracle_id": "56719f6a-1a6c-4c0a-8d21-18f7d7350b68"
+              },
+              {
+                "alias": "P1.s4",
+                "card_id": "20016",
+                "owner": 3,
+                "name": "Swamp",
+                "oracle_id": "56719f6a-1a6c-4c0a-8d21-18f7d7350b68"
+              },
+              {
+                "alias": "P1.s5",
+                "card_id": "20017",
+                "owner": 3,
+                "name": "Swamp",
+                "oracle_id": "56719f6a-1a6c-4c0a-8d21-18f7d7350b68"
+              },
+              {
+                "alias": "P1.s6",
+                "card_id": "20018",
+                "owner": 3,
+                "name": "Swamp",
+                "oracle_id": "56719f6a-1a6c-4c0a-8d21-18f7d7350b68"
+              },
+              {
+                "alias": "P1.s7",
+                "card_id": "20019",
+                "owner": 3,
+                "name": "Swamp",
+                "oracle_id": "56719f6a-1a6c-4c0a-8d21-18f7d7350b68"
+              },
+              {
+                "alias": "P1.s8",
+                "card_id": "20020",
+                "owner": 3,
+                "name": "Swamp",
+                "oracle_id": "56719f6a-1a6c-4c0a-8d21-18f7d7350b68"
+              },
+              {
+                "alias": "P1.s9",
+                "card_id": "20021",
+                "owner": 3,
+                "name": "Swamp",
+                "oracle_id": "56719f6a-1a6c-4c0a-8d21-18f7d7350b68"
+              },
+              {
+                "alias": "P1.s10",
+                "card_id": "20022",
+                "owner": 3,
+                "name": "Swamp",
+                "oracle_id": "56719f6a-1a6c-4c0a-8d21-18f7d7350b68"
+              },
+              {
+                "alias": "P1.s11",
+                "card_id": "20023",
+                "owner": 3,
+                "name": "Swamp",
+                "oracle_id": "56719f6a-1a6c-4c0a-8d21-18f7d7350b68"
+              },
+              {
+                "alias": "P1.s12",
+                "card_id": "20024",
+                "owner": 3,
+                "name": "Swamp",
+                "oracle_id": "56719f6a-1a6c-4c0a-8d21-18f7d7350b68"
+              },
+              {
+                "alias": "P1.o1",
+                "card_id": "20025",
+                "owner": 3,
+                "name": "Oculus",
+                "oracle_id": "e793ede9-044a-44e9-bc9c-99b0034503eb"
+              },
+              {
+                "alias": "P1.o2",
+                "card_id": "20026",
+                "owner": 3,
+                "name": "Oculus",
+                "oracle_id": "e793ede9-044a-44e9-bc9c-99b0034503eb"
+              },
+              {
+                "alias": "P1.o3",
+                "card_id": "20027",
+                "owner": 3,
+                "name": "Oculus",
+                "oracle_id": "e793ede9-044a-44e9-bc9c-99b0034503eb"
+              },
+              {
+                "alias": "P1.o4",
+                "card_id": "20028",
+                "owner": 3,
+                "name": "Oculus",
+                "oracle_id": "e793ede9-044a-44e9-bc9c-99b0034503eb"
+              },
+              {
+                "alias": "P1.l1",
+                "card_id": "20029",
+                "owner": 3,
+                "name": "Mana Leak",
+                "oracle_id": "c61fe162-2202-4e56-9ba0-393547f9875f"
+              },
+              {
+                "alias": "P1.l2",
+                "card_id": "20030",
+                "owner": 3,
+                "name": "Mana Leak",
+                "oracle_id": "c61fe162-2202-4e56-9ba0-393547f9875f"
+              },
+              {
+                "alias": "P1.l3",
+                "card_id": "20031",
+                "owner": 3,
+                "name": "Mana Leak",
+                "oracle_id": "c61fe162-2202-4e56-9ba0-393547f9875f"
+              },
+              {
+                "alias": "P1.l4",
+                "card_id": "20032",
+                "owner": 3,
+                "name": "Mana Leak",
+                "oracle_id": "c61fe162-2202-4e56-9ba0-393547f9875f"
+              },
+              {
+                "alias": "P1.m1",
+                "card_id": "20033",
+                "owner": 3,
+                "name": "Manalith",
+                "oracle_id": "bd9e416a-89b3-4912-be9b-49fce6a93dc9"
+              },
+              {
+                "alias": "P1.m2",
+                "card_id": "20034",
+                "owner": 3,
+                "name": "Manalith",
+                "oracle_id": "bd9e416a-89b3-4912-be9b-49fce6a93dc9"
+              },
+              {
+                "alias": "P1.m3",
+                "card_id": "20035",
+                "owner": 3,
+                "name": "Manalith",
+                "oracle_id": "bd9e416a-89b3-4912-be9b-49fce6a93dc9"
+              },
+              {
+                "alias": "P1.m4",
+                "card_id": "20036",
+                "owner": 3,
+                "name": "Manalith",
+                "oracle_id": "bd9e416a-89b3-4912-be9b-49fce6a93dc9"
+              },
+              {
+                "alias": "P1.n1",
+                "card_id": "20037",
+                "owner": 3,
+                "name": "Novice Occultist",
+                "oracle_id": "e51f5b41-5465-4b1d-b96a-544762657ca5"
+              },
+              {
+                "alias": "P1.n2",
+                "card_id": "20038",
+                "owner": 3,
+                "name": "Novice Occultist",
+                "oracle_id": "e51f5b41-5465-4b1d-b96a-544762657ca5"
+              },
+              {
+                "alias": "P1.n3",
+                "card_id": "20039",
+                "owner": 3,
+                "name": "Novice Occultist",
+                "oracle_id": "e51f5b41-5465-4b1d-b96a-544762657ca5"
+              },
+              {
+                "alias": "P1.n4",
+                "card_id": "20040",
+                "owner": 3,
+                "name": "Novice Occultist",
+                "oracle_id": "e51f5b41-5465-4b1d-b96a-544762657ca5"
+              },
+              {
+                "alias": "P1.g1",
+                "card_id": "20041",
+                "owner": 3,
+                "name": "Phyrexian Rager",
+                "oracle_id": "e409c9be-0c9a-43c3-adb4-8c47afc1d551"
+              },
+              {
+                "alias": "P1.g2",
+                "card_id": "20042",
+                "owner": 3,
+                "name": "Phyrexian Rager",
+                "oracle_id": "e409c9be-0c9a-43c3-adb4-8c47afc1d551"
+              },
+              {
+                "alias": "P1.g3",
+                "card_id": "20043",
+                "owner": 3,
+                "name": "Phyrexian Rager",
+                "oracle_id": "e409c9be-0c9a-43c3-adb4-8c47afc1d551"
+              },
+              {
+                "alias": "P1.g4",
+                "card_id": "20044",
+                "owner": 3,
+                "name": "Phyrexian Rager",
+                "oracle_id": "e409c9be-0c9a-43c3-adb4-8c47afc1d551"
+              },
+              {
+                "alias": "P1.z1",
+                "card_id": "20045",
+                "owner": 3,
+                "name": "Doomed Dissenter",
+                "oracle_id": "11cb509d-21af-48f1-b355-135ebd3e4bd1"
+              },
+              {
+                "alias": "P1.z2",
+                "card_id": "20046",
+                "owner": 3,
+                "name": "Doomed Dissenter",
+                "oracle_id": "11cb509d-21af-48f1-b355-135ebd3e4bd1"
+              },
+              {
+                "alias": "P1.z3",
+                "card_id": "20047",
+                "owner": 3,
+                "name": "Doomed Dissenter",
+                "oracle_id": "11cb509d-21af-48f1-b355-135ebd3e4bd1"
+              },
+              {
+                "alias": "P1.z4",
+                "card_id": "20048",
+                "owner": 3,
+                "name": "Doomed Dissenter",
+                "oracle_id": "11cb509d-21af-48f1-b355-135ebd3e4bd1"
+              },
+              {
+                "alias": "P1.b1",
+                "card_id": "20049",
+                "owner": 3,
+                "name": "Blood Artist",
+                "oracle_id": "310f141c-7f37-4729-aed6-dd9c09db448d"
+              },
+              {
+                "alias": "P1.b2",
+                "card_id": "20050",
+                "owner": 3,
+                "name": "Blood Artist",
+                "oracle_id": "310f141c-7f37-4729-aed6-dd9c09db448d"
+              },
+              {
+                "alias": "P1.b3",
+                "card_id": "20051",
+                "owner": 3,
+                "name": "Blood Artist",
+                "oracle_id": "310f141c-7f37-4729-aed6-dd9c09db448d"
+              },
+              {
+                "alias": "P1.b4",
+                "card_id": "20052",
+                "owner": 3,
+                "name": "Blood Artist",
+                "oracle_id": "310f141c-7f37-4729-aed6-dd9c09db448d"
+              },
+              {
+                "alias": "P1.d1",
+                "card_id": "20053",
+                "owner": 3,
+                "name": "Divination",
+                "oracle_id": "273b339c-964b-4a18-8eb5-ceb8abcdfd9e"
+              },
+              {
+                "alias": "P1.d2",
+                "card_id": "20054",
+                "owner": 3,
+                "name": "Divination",
+                "oracle_id": "273b339c-964b-4a18-8eb5-ceb8abcdfd9e"
+              },
+              {
+                "alias": "P1.d3",
+                "card_id": "20055",
+                "owner": 3,
+                "name": "Divination",
+                "oracle_id": "273b339c-964b-4a18-8eb5-ceb8abcdfd9e"
+              },
+              {
+                "alias": "P1.d4",
+                "card_id": "20056",
+                "owner": 3,
+                "name": "Divination",
+                "oracle_id": "273b339c-964b-4a18-8eb5-ceb8abcdfd9e"
+              },
+              {
+                "alias": "P1.c1",
+                "card_id": "20057",
+                "owner": 3,
+                "name": "Coral Merfolk",
+                "oracle_id": "4ed27607-21a8-4bc3-997e-6d2242313f6d"
+              },
+              {
+                "alias": "P1.c2",
+                "card_id": "20058",
+                "owner": 3,
+                "name": "Coral Merfolk",
+                "oracle_id": "4ed27607-21a8-4bc3-997e-6d2242313f6d"
+              },
+              {
+                "alias": "P1.c3",
+                "card_id": "20059",
+                "owner": 3,
+                "name": "Coral Merfolk",
+                "oracle_id": "4ed27607-21a8-4bc3-997e-6d2242313f6d"
+              },
+              {
+                "alias": "P1.c4",
+                "card_id": "20060",
+                "owner": 3,
+                "name": "Coral Merfolk",
+                "oracle_id": "4ed27607-21a8-4bc3-997e-6d2242313f6d"
+              }
+            ],
+            "before_card_ids": [
+              "20001",
+              "20002",
+              "20003",
+              "20004",
+              "20005",
+              "20006",
+              "20007",
+              "20008",
+              "20009",
+              "20010",
+              "20011",
+              "20012",
+              "20013",
+              "20014",
+              "20015",
+              "20016",
+              "20017",
+              "20018",
+              "20019",
+              "20020",
+              "20021",
+              "20022",
+              "20023",
+              "20024",
+              "20025",
+              "20026",
+              "20027",
+              "20028",
+              "20029",
+              "20030",
+              "20031",
+              "20032",
+              "20033",
+              "20034",
+              "20035",
+              "20036",
+              "20037",
+              "20038",
+              "20039",
+              "20040",
+              "20041",
+              "20042",
+              "20043",
+              "20044",
+              "20045",
+              "20046",
+              "20047",
+              "20048",
+              "20049",
+              "20050",
+              "20051",
+              "20052",
+              "20053",
+              "20054",
+              "20055",
+              "20056",
+              "20057",
+              "20058",
+              "20059",
+              "20060"
+            ],
+            "after_card_ids": [
+              "20001",
+              "20002",
+              "20013",
+              "20025",
+              "20057",
+              "20029",
+              "20053",
+              "20003",
+              "20014",
+              "20054",
+              "20045",
+              "20049",
+              "20033",
+              "20026",
+              "20037",
+              "20041",
+              "20004",
+              "20005",
+              "20006",
+              "20007",
+              "20008",
+              "20009",
+              "20010",
+              "20011",
+              "20012",
+              "20015",
+              "20016",
+              "20017",
+              "20018",
+              "20019",
+              "20020",
+              "20021",
+              "20022",
+              "20023",
+              "20024",
+              "20027",
+              "20028",
+              "20030",
+              "20031",
+              "20032",
+              "20034",
+              "20035",
+              "20036",
+              "20038",
+              "20039",
+              "20040",
+              "20042",
+              "20043",
+              "20044",
+              "20046",
+              "20047",
+              "20048",
+              "20050",
+              "20051",
+              "20052",
+              "20055",
+              "20056",
+              "20058",
+              "20059",
+              "20060"
+            ],
+            "after_aliases_top_first": [
+              "P1.i1",
+              "P1.i2",
+              "P1.s1",
+              "P1.o1",
+              "P1.c1",
+              "P1.l1",
+              "P1.d1",
+              "P1.i3",
+              "P1.s2",
+              "P1.d2",
+              "P1.z1",
+              "P1.b1",
+              "P1.m1",
+              "P1.o2",
+              "P1.n1",
+              "P1.g1",
+              "P1.i4",
+              "P1.i5",
+              "P1.i6",
+              "P1.i7",
+              "P1.i8",
+              "P1.i9",
+              "P1.i10",
+              "P1.i11",
+              "P1.i12",
+              "P1.s3",
+              "P1.s4",
+              "P1.s5",
+              "P1.s6",
+              "P1.s7",
+              "P1.s8",
+              "P1.s9",
+              "P1.s10",
+              "P1.s11",
+              "P1.s12",
+              "P1.o3",
+              "P1.o4",
+              "P1.l2",
+              "P1.l3",
+              "P1.l4",
+              "P1.m2",
+              "P1.m3",
+              "P1.m4",
+              "P1.n2",
+              "P1.n3",
+              "P1.n4",
+              "P1.g2",
+              "P1.g3",
+              "P1.g4",
+              "P1.z2",
+              "P1.z3",
+              "P1.z4",
+              "P1.b2",
+              "P1.b3",
+              "P1.b4",
+              "P1.d3",
+              "P1.d4",
+              "P1.c2",
+              "P1.c3",
+              "P1.c4"
+            ],
+            "opening_hand_aliases": [
+              "P1.i1",
+              "P1.i2",
+              "P1.s1",
+              "P1.o1",
+              "P1.c1",
+              "P1.l1",
+              "P1.d1"
+            ],
+            "entropy_words": [
+              59,
+              58,
+              57,
+              55,
+              54,
+              51,
+              50,
+              49,
+              47,
+              46,
+              45,
+              43,
+              42,
+              41,
+              39,
+              38,
+              37,
+              35,
+              34,
+              33,
+              31,
+              30,
+              29,
+              27,
+              26,
+              23,
+              22,
+              21,
+              20,
+              19,
+              18,
+              17,
+              16,
+              15,
+              14,
+              11,
+              10,
+              9,
+              8,
+              7,
+              6,
+              5,
+              4,
+              3,
+              9,
+              3,
+              3,
+              8,
+              5,
+              6,
+              6,
+              3,
+              2,
+              2,
+              4,
+              2,
+              2,
+              2,
+              1
+            ],
+            "algorithm": "fisher-yates-u64-tail-v1",
+            "entropy_words_consumed": 59,
+            "qualification": "PREPARED_INPUT_PERMUTATION_ONLY_NOT_NATIVE_SHUFFLE_EVIDENCE"
+          }
+        ],
+        "turns": [
+          {
+            "role": "P0",
+            "own_turn": 1,
+            "global_turn": 1,
+            "precombat_main_land": "P0.p1",
+            "precombat_main_casts": [
+              {
+                "spell": "P0.v1",
+                "funding_taps_in_order": [
+                  "P0.p1"
+                ],
+                "allocation": "exact printed cost; generic from remaining generated colors; no leftover pool"
+              }
+            ],
+            "attackers": []
+          },
+          {
+            "role": "P1",
+            "own_turn": 1,
+            "global_turn": 2,
+            "precombat_main_land": "P1.i1",
+            "precombat_main_casts": [],
+            "attackers": []
+          },
+          {
+            "role": "P0",
+            "own_turn": 2,
+            "global_turn": 3,
+            "precombat_main_land": "P0.i1",
+            "precombat_main_casts": [
+              {
+                "spell": "P0.a1",
+                "funding_taps_in_order": [
+                  "P0.p1"
+                ],
+                "allocation": "exact printed cost; generic from remaining generated colors; no leftover pool"
+              }
+            ],
+            "attackers": [
+              "P0.v1"
+            ]
+          },
+          {
+            "role": "P1",
+            "own_turn": 2,
+            "global_turn": 4,
+            "precombat_main_land": "P1.i2",
+            "precombat_main_casts": [
+              {
+                "spell": "P1.o1",
+                "funding_taps_in_order": [
+                  "P1.i1",
+                  "P1.i2"
+                ],
+                "allocation": "exact printed cost; generic from remaining generated colors; no leftover pool"
+              }
+            ],
+            "attackers": []
+          },
+          {
+            "role": "P0",
+            "own_turn": 3,
+            "global_turn": 5,
+            "precombat_main_land": "P0.i2",
+            "precombat_main_casts": [
+              {
+                "spell": "P0.m1",
+                "funding_taps_in_order": [
+                  "P0.p1",
+                  "P0.i1",
+                  "P0.i2"
+                ],
+                "allocation": "exact printed cost; generic from remaining generated colors; no leftover pool"
+              }
+            ],
+            "attackers": [
+              "P0.v1"
+            ]
+          },
+          {
+            "role": "P1",
+            "own_turn": 3,
+            "global_turn": 6,
+            "precombat_main_land": "P1.s1",
+            "precombat_main_casts": [
+              {
+                "spell": "P1.d1",
+                "funding_taps_in_order": [
+                  "P1.i1",
+                  "P1.i2",
+                  "P1.s1"
+                ],
+                "allocation": "exact printed cost; generic from remaining generated colors; no leftover pool"
+              }
+            ],
+            "attackers": []
+          },
+          {
+            "role": "P0",
+            "own_turn": 4,
+            "global_turn": 7,
+            "precombat_main_land": "P0.i3",
+            "precombat_main_casts": [],
+            "attackers": [
+              "P0.v1"
+            ]
+          },
+          {
+            "role": "P1",
+            "own_turn": 4,
+            "global_turn": 8,
+            "precombat_main_land": "P1.s2",
+            "precombat_main_casts": [],
+            "attackers": []
+          },
+          {
+            "role": "P0",
+            "own_turn": 5,
+            "global_turn": 9,
+            "precombat_main_land": "P0.p2",
+            "precombat_main_casts": [
+              {
+                "spell": "P0.r1",
+                "funding_taps_in_order": [
+                  "P0.p1",
+                  "P0.p2",
+                  "P0.i1"
+                ],
+                "allocation": "exact printed cost; generic from remaining generated colors; no leftover pool"
+              }
+            ],
+            "attackers": [
+              "P0.v1"
+            ]
+          },
+          {
+            "role": "P1",
+            "own_turn": 5,
+            "global_turn": 10,
+            "precombat_main_land": "P1.i3",
+            "precombat_main_casts": [
+              {
+                "spell": "P1.d2",
+                "funding_taps_in_order": [
+                  "P1.i1",
+                  "P1.i2",
+                  "P1.s1"
+                ],
+                "allocation": "exact printed cost; generic from remaining generated colors; no leftover pool"
+              }
+            ],
+            "attackers": []
+          },
+          {
+            "role": "P0",
+            "own_turn": 6,
+            "global_turn": 11,
+            "precombat_main_land": "P0.i4",
+            "precombat_main_casts": [],
+            "attackers": [
+              "P0.v1"
+            ]
+          },
+          {
+            "role": "P1",
+            "own_turn": 6,
+            "global_turn": 12,
+            "precombat_main_land": "P1.i4",
+            "precombat_main_casts": [],
+            "attackers": []
+          },
+          {
+            "role": "P0",
+            "own_turn": 7,
+            "global_turn": 13,
+            "precombat_main_land": "P0.p3",
+            "precombat_main_casts": [],
+            "attackers": [
+              "P0.v1"
+            ]
+          },
+          {
+            "role": "P1",
+            "own_turn": 7,
+            "global_turn": 14,
+            "precombat_main_land": "P1.i5",
+            "precombat_main_casts": [],
+            "attackers": []
+          },
+          {
+            "role": "P0",
+            "own_turn": 8,
+            "global_turn": 15,
+            "precombat_main_land": "P0.i5",
+            "precombat_main_casts": [],
+            "attackers": [
+              "P0.v1"
+            ]
+          },
+          {
+            "role": "P1",
+            "own_turn": 8,
+            "global_turn": 16,
+            "precombat_main_land": "P1.i6",
+            "precombat_main_casts": [],
+            "attackers": []
+          },
+          {
+            "role": "P0",
+            "own_turn": 9,
+            "global_turn": 17,
+            "precombat_main_land": "P0.p4",
+            "precombat_main_casts": [],
+            "attackers": [
+              "P0.v1"
+            ]
+          },
+          {
+            "role": "P1",
+            "own_turn": 9,
+            "global_turn": 18,
+            "precombat_main_land": "P1.i7",
+            "precombat_main_casts": [],
+            "attackers": []
+          },
+          {
+            "role": "P0",
+            "own_turn": 10,
+            "global_turn": 19,
+            "precombat_main_land": "P0.i6",
+            "precombat_main_casts": [],
+            "attackers": [
+              "P0.v1"
+            ]
+          },
+          {
+            "role": "P1",
+            "own_turn": 10,
+            "global_turn": 20,
+            "precombat_main_land": "P1.i8",
+            "precombat_main_casts": [],
+            "attackers": []
+          },
+          {
+            "role": "P0",
+            "own_turn": 11,
+            "global_turn": 21,
+            "precombat_main_land": "P0.p5",
+            "precombat_main_casts": [],
+            "attackers": [
+              "P0.v1"
+            ]
+          }
+        ],
+        "draw_plan": {
+          "P0": [
+            "own-turn2..11, one next top card each; no own-turn1 draw"
+          ],
+          "P1": [
+            "own-turn1:i3",
+            "own-turn2:s2",
+            "own-turn3:d2",
+            "Divination d1:z1,b1",
+            "own-turn4:m1",
+            "own-turn5:o2",
+            "Divination d2:n1,g1",
+            "own-turn6..10:i4,i5,i6,i7,i8"
+          ]
+        },
+        "responses_and_choices": [
+          {
+            "when": "P1.o1 enters on P1 own-turn2",
+            "required": "actual Soul a1 trigger placed then OptionalEffect P0 Take; gain1"
+          },
+          {
+            "when": "P0.r1 cast on own-turn5 after P0 passes priority",
+            "required": "P1 casts l1 targeting exact r1 spell entry",
+            "funding_taps_in_order": [
+              "P1.i1",
+              "P1.i2"
+            ],
+            "casting_spend": {
+              "Blue": "2"
+            }
+          },
+          {
+            "when": "actual l1 resolution payment offer to P0",
+            "required": "initial pool0; ActivateMana P0.i2, P0.m1 choose Blue, P0.i3; Pay Blue3",
+            "cost": "generic3",
+            "result": "Paid; r1 survives and resolves; no counter event"
+          },
+          {
+            "when": "P1 casts d2 on own-turn5",
+            "required": "actual Rhystic r1 cast trigger payerP1; ActivateMana P1.s2; Pay Black1",
+            "cost": "generic1",
+            "result": "Paid; no P0 may-draw frame; d2 later draws n1,g1"
+          }
+        ],
+        "primary_expected": {
+          "winner": "P0",
+          "loser": "P1",
+          "terminal_global_turn": 21,
+          "terminal_step": "CombatDamage postdamage state-based loss before priority",
+          "life": {
+            "P0": "21",
+            "P1": "0"
+          },
+          "combat_damage_to_P1": "20",
+          "unblocked_vanguard_hits": 10,
+          "casts": 8,
+          "ordinary_trigger_entries": 2,
+          "resolution_payments": {
+            "Paid": 2,
+            "Declined": 0
+          },
+          "resolution_paid_mana": {
+            "P0": "3",
+            "P1": "1"
+          },
+          "optional_outcomes": {
+            "Take": 1,
+            "Decline": 0
+          },
+          "mana_color_replies": 1,
+          "successful_draws_excluding_opening": {
+            "P0": 10,
+            "P1": 14
+          },
+          "remaining_library_cards": {
+            "P0": 43,
+            "P1": 39
+          },
+          "physical_graveyard_aliases": [
+            "P1.l1",
+            "P1.d1",
+            "P1.d2"
+          ],
+          "draw_failures": 0,
+          "mulligans": 0,
+          "cleanup_discards": 0
+        },
+        "global_entropy_words": [
+          59,
+          58,
+          57,
+          55,
+          54,
+          53,
+          52,
+          51,
+          50,
+          49,
+          48,
+          47,
+          46,
+          45,
+          44,
+          43,
+          42,
+          41,
+          39,
+          38,
+          37,
+          35,
+          34,
+          33,
+          31,
+          30,
+          29,
+          27,
+          26,
+          25,
+          23,
+          22,
+          21,
+          20,
+          19,
+          18,
+          11,
+          10,
+          9,
+          8,
+          7,
+          6,
+          5,
+          4,
+          5,
+          3,
+          4,
+          2,
+          5,
+          8,
+          1,
+          3,
+          4,
+          3,
+          5,
+          1,
+          3,
+          1,
+          1,
+          59,
+          58,
+          57,
+          55,
+          54,
+          51,
+          50,
+          49,
+          47,
+          46,
+          45,
+          43,
+          42,
+          41,
+          39,
+          38,
+          37,
+          35,
+          34,
+          33,
+          31,
+          30,
+          29,
+          27,
+          26,
+          23,
+          22,
+          21,
+          20,
+          19,
+          18,
+          17,
+          16,
+          15,
+          14,
+          11,
+          10,
+          9,
+          8,
+          7,
+          6,
+          5,
+          4,
+          3,
+          9,
+          3,
+          3,
+          8,
+          5,
+          6,
+          6,
+          3,
+          2,
+          2,
+          4,
+          2,
+          2,
+          2,
+          1
+        ],
+        "budgets": {
+          "accepted_inputs_max": 4096,
+          "reached_rejection_probes_max": 256,
+          "global_turns_max": 21
+        }
+      },
+      {
+        "id": "OP-FG02",
+        "decks": [
+          {
+            "role": "P0",
+            "physical_cards": [
+              {
+                "alias": "P0.p1",
+                "card_id": "10001",
+                "owner": 41,
+                "name": "Plains",
+                "oracle_id": "bc71ebf6-2056-41f7-be35-b2e5c34afa99"
+              },
+              {
+                "alias": "P0.p2",
+                "card_id": "10002",
+                "owner": 41,
+                "name": "Plains",
+                "oracle_id": "bc71ebf6-2056-41f7-be35-b2e5c34afa99"
+              },
+              {
+                "alias": "P0.p3",
+                "card_id": "10003",
+                "owner": 41,
+                "name": "Plains",
+                "oracle_id": "bc71ebf6-2056-41f7-be35-b2e5c34afa99"
+              },
+              {
+                "alias": "P0.p4",
+                "card_id": "10004",
+                "owner": 41,
+                "name": "Plains",
+                "oracle_id": "bc71ebf6-2056-41f7-be35-b2e5c34afa99"
+              },
+              {
+                "alias": "P0.p5",
+                "card_id": "10005",
+                "owner": 41,
+                "name": "Plains",
+                "oracle_id": "bc71ebf6-2056-41f7-be35-b2e5c34afa99"
+              },
+              {
+                "alias": "P0.p6",
+                "card_id": "10006",
+                "owner": 41,
+                "name": "Plains",
+                "oracle_id": "bc71ebf6-2056-41f7-be35-b2e5c34afa99"
+              },
+              {
+                "alias": "P0.p7",
+                "card_id": "10007",
+                "owner": 41,
+                "name": "Plains",
+                "oracle_id": "bc71ebf6-2056-41f7-be35-b2e5c34afa99"
+              },
+              {
+                "alias": "P0.p8",
+                "card_id": "10008",
+                "owner": 41,
+                "name": "Plains",
+                "oracle_id": "bc71ebf6-2056-41f7-be35-b2e5c34afa99"
+              },
+              {
+                "alias": "P0.p9",
+                "card_id": "10009",
+                "owner": 41,
+                "name": "Plains",
+                "oracle_id": "bc71ebf6-2056-41f7-be35-b2e5c34afa99"
+              },
+              {
+                "alias": "P0.p10",
+                "card_id": "10010",
+                "owner": 41,
+                "name": "Plains",
+                "oracle_id": "bc71ebf6-2056-41f7-be35-b2e5c34afa99"
+              },
+              {
+                "alias": "P0.p11",
+                "card_id": "10011",
+                "owner": 41,
+                "name": "Plains",
+                "oracle_id": "bc71ebf6-2056-41f7-be35-b2e5c34afa99"
+              },
+              {
+                "alias": "P0.p12",
+                "card_id": "10012",
+                "owner": 41,
+                "name": "Plains",
+                "oracle_id": "bc71ebf6-2056-41f7-be35-b2e5c34afa99"
+              },
+              {
+                "alias": "P0.i1",
+                "card_id": "10013",
+                "owner": 41,
+                "name": "Island",
+                "oracle_id": "b2c6aa39-2d2a-459c-a555-fb48ba993373"
+              },
+              {
+                "alias": "P0.i2",
+                "card_id": "10014",
+                "owner": 41,
+                "name": "Island",
+                "oracle_id": "b2c6aa39-2d2a-459c-a555-fb48ba993373"
+              },
+              {
+                "alias": "P0.i3",
+                "card_id": "10015",
+                "owner": 41,
+                "name": "Island",
+                "oracle_id": "b2c6aa39-2d2a-459c-a555-fb48ba993373"
+              },
+              {
+                "alias": "P0.i4",
+                "card_id": "10016",
+                "owner": 41,
+                "name": "Island",
+                "oracle_id": "b2c6aa39-2d2a-459c-a555-fb48ba993373"
+              },
+              {
+                "alias": "P0.i5",
+                "card_id": "10017",
+                "owner": 41,
+                "name": "Island",
+                "oracle_id": "b2c6aa39-2d2a-459c-a555-fb48ba993373"
+              },
+              {
+                "alias": "P0.i6",
+                "card_id": "10018",
+                "owner": 41,
+                "name": "Island",
+                "oracle_id": "b2c6aa39-2d2a-459c-a555-fb48ba993373"
+              },
+              {
+                "alias": "P0.i7",
+                "card_id": "10019",
+                "owner": 41,
+                "name": "Island",
+                "oracle_id": "b2c6aa39-2d2a-459c-a555-fb48ba993373"
+              },
+              {
+                "alias": "P0.i8",
+                "card_id": "10020",
+                "owner": 41,
+                "name": "Island",
+                "oracle_id": "b2c6aa39-2d2a-459c-a555-fb48ba993373"
+              },
+              {
+                "alias": "P0.i9",
+                "card_id": "10021",
+                "owner": 41,
+                "name": "Island",
+                "oracle_id": "b2c6aa39-2d2a-459c-a555-fb48ba993373"
+              },
+              {
+                "alias": "P0.i10",
+                "card_id": "10022",
+                "owner": 41,
+                "name": "Island",
+                "oracle_id": "b2c6aa39-2d2a-459c-a555-fb48ba993373"
+              },
+              {
+                "alias": "P0.i11",
+                "card_id": "10023",
+                "owner": 41,
+                "name": "Island",
+                "oracle_id": "b2c6aa39-2d2a-459c-a555-fb48ba993373"
+              },
+              {
+                "alias": "P0.i12",
+                "card_id": "10024",
+                "owner": 41,
+                "name": "Island",
+                "oracle_id": "b2c6aa39-2d2a-459c-a555-fb48ba993373"
+              },
+              {
+                "alias": "P0.a1",
+                "card_id": "10025",
+                "owner": 41,
+                "name": "Soul's Attendant",
+                "oracle_id": "045a9d3d-c20d-427f-a77b-0bffc6f55526"
+              },
+              {
+                "alias": "P0.a2",
+                "card_id": "10026",
+                "owner": 41,
+                "name": "Soul's Attendant",
+                "oracle_id": "045a9d3d-c20d-427f-a77b-0bffc6f55526"
+              },
+              {
+                "alias": "P0.a3",
+                "card_id": "10027",
+                "owner": 41,
+                "name": "Soul's Attendant",
+                "oracle_id": "045a9d3d-c20d-427f-a77b-0bffc6f55526"
+              },
+              {
+                "alias": "P0.a4",
+                "card_id": "10028",
+                "owner": 41,
+                "name": "Soul's Attendant",
+                "oracle_id": "045a9d3d-c20d-427f-a77b-0bffc6f55526"
+              },
+              {
+                "alias": "P0.r1",
+                "card_id": "10029",
+                "owner": 41,
+                "name": "Rhystic Study",
+                "oracle_id": "53236dd7-845a-444c-96d5-f41ed7325d8f"
+              },
+              {
+                "alias": "P0.r2",
+                "card_id": "10030",
+                "owner": 41,
+                "name": "Rhystic Study",
+                "oracle_id": "53236dd7-845a-444c-96d5-f41ed7325d8f"
+              },
+              {
+                "alias": "P0.r3",
+                "card_id": "10031",
+                "owner": 41,
+                "name": "Rhystic Study",
+                "oracle_id": "53236dd7-845a-444c-96d5-f41ed7325d8f"
+              },
+              {
+                "alias": "P0.r4",
+                "card_id": "10032",
+                "owner": 41,
+                "name": "Rhystic Study",
+                "oracle_id": "53236dd7-845a-444c-96d5-f41ed7325d8f"
+              },
+              {
+                "alias": "P0.m1",
+                "card_id": "10033",
+                "owner": 41,
+                "name": "Manalith",
+                "oracle_id": "bd9e416a-89b3-4912-be9b-49fce6a93dc9"
+              },
+              {
+                "alias": "P0.m2",
+                "card_id": "10034",
+                "owner": 41,
+                "name": "Manalith",
+                "oracle_id": "bd9e416a-89b3-4912-be9b-49fce6a93dc9"
+              },
+              {
+                "alias": "P0.m3",
+                "card_id": "10035",
+                "owner": 41,
+                "name": "Manalith",
+                "oracle_id": "bd9e416a-89b3-4912-be9b-49fce6a93dc9"
+              },
+              {
+                "alias": "P0.m4",
+                "card_id": "10036",
+                "owner": 41,
+                "name": "Manalith",
+                "oracle_id": "bd9e416a-89b3-4912-be9b-49fce6a93dc9"
+              },
+              {
+                "alias": "P0.l1",
+                "card_id": "10037",
+                "owner": 41,
+                "name": "Mana Leak",
+                "oracle_id": "c61fe162-2202-4e56-9ba0-393547f9875f"
+              },
+              {
+                "alias": "P0.l2",
+                "card_id": "10038",
+                "owner": 41,
+                "name": "Mana Leak",
+                "oracle_id": "c61fe162-2202-4e56-9ba0-393547f9875f"
+              },
+              {
+                "alias": "P0.l3",
+                "card_id": "10039",
+                "owner": 41,
+                "name": "Mana Leak",
+                "oracle_id": "c61fe162-2202-4e56-9ba0-393547f9875f"
+              },
+              {
+                "alias": "P0.l4",
+                "card_id": "10040",
+                "owner": 41,
+                "name": "Mana Leak",
+                "oracle_id": "c61fe162-2202-4e56-9ba0-393547f9875f"
+              },
+              {
+                "alias": "P0.d1",
+                "card_id": "10041",
+                "owner": 41,
+                "name": "Divination",
+                "oracle_id": "273b339c-964b-4a18-8eb5-ceb8abcdfd9e"
+              },
+              {
+                "alias": "P0.d2",
+                "card_id": "10042",
+                "owner": 41,
+                "name": "Divination",
+                "oracle_id": "273b339c-964b-4a18-8eb5-ceb8abcdfd9e"
+              },
+              {
+                "alias": "P0.d3",
+                "card_id": "10043",
+                "owner": 41,
+                "name": "Divination",
+                "oracle_id": "273b339c-964b-4a18-8eb5-ceb8abcdfd9e"
+              },
+              {
+                "alias": "P0.d4",
+                "card_id": "10044",
+                "owner": 41,
+                "name": "Divination",
+                "oracle_id": "273b339c-964b-4a18-8eb5-ceb8abcdfd9e"
+              },
+              {
+                "alias": "P0.t1",
+                "card_id": "10045",
+                "owner": 41,
+                "name": "Raise the Alarm",
+                "oracle_id": "5b2364d7-a811-4595-a1b4-224c70555ffa"
+              },
+              {
+                "alias": "P0.t2",
+                "card_id": "10046",
+                "owner": 41,
+                "name": "Raise the Alarm",
+                "oracle_id": "5b2364d7-a811-4595-a1b4-224c70555ffa"
+              },
+              {
+                "alias": "P0.t3",
+                "card_id": "10047",
+                "owner": 41,
+                "name": "Raise the Alarm",
+                "oracle_id": "5b2364d7-a811-4595-a1b4-224c70555ffa"
+              },
+              {
+                "alias": "P0.t4",
+                "card_id": "10048",
+                "owner": 41,
+                "name": "Raise the Alarm",
+                "oracle_id": "5b2364d7-a811-4595-a1b4-224c70555ffa"
+              },
+              {
+                "alias": "P0.u1",
+                "card_id": "10049",
+                "owner": 41,
+                "name": "Unsummon",
+                "oracle_id": "837182db-1bf3-4a2c-bd01-1af9d9873561"
+              },
+              {
+                "alias": "P0.u2",
+                "card_id": "10050",
+                "owner": 41,
+                "name": "Unsummon",
+                "oracle_id": "837182db-1bf3-4a2c-bd01-1af9d9873561"
+              },
+              {
+                "alias": "P0.u3",
+                "card_id": "10051",
+                "owner": 41,
+                "name": "Unsummon",
+                "oracle_id": "837182db-1bf3-4a2c-bd01-1af9d9873561"
+              },
+              {
+                "alias": "P0.u4",
+                "card_id": "10052",
+                "owner": 41,
+                "name": "Unsummon",
+                "oracle_id": "837182db-1bf3-4a2c-bd01-1af9d9873561"
+              },
+              {
+                "alias": "P0.k1",
+                "card_id": "10053",
+                "owner": 41,
+                "name": "Counterspell",
+                "oracle_id": "cc187110-1148-4090-bbb8-e205694a39f5"
+              },
+              {
+                "alias": "P0.k2",
+                "card_id": "10054",
+                "owner": 41,
+                "name": "Counterspell",
+                "oracle_id": "cc187110-1148-4090-bbb8-e205694a39f5"
+              },
+              {
+                "alias": "P0.k3",
+                "card_id": "10055",
+                "owner": 41,
+                "name": "Counterspell",
+                "oracle_id": "cc187110-1148-4090-bbb8-e205694a39f5"
+              },
+              {
+                "alias": "P0.k4",
+                "card_id": "10056",
+                "owner": 41,
+                "name": "Counterspell",
+                "oracle_id": "cc187110-1148-4090-bbb8-e205694a39f5"
+              },
+              {
+                "alias": "P0.v1",
+                "card_id": "10057",
+                "owner": 41,
+                "name": "Elite Vanguard",
+                "oracle_id": "b3b9a87d-cb95-435c-90b6-037406cab32e"
+              },
+              {
+                "alias": "P0.v2",
+                "card_id": "10058",
+                "owner": 41,
+                "name": "Elite Vanguard",
+                "oracle_id": "b3b9a87d-cb95-435c-90b6-037406cab32e"
+              },
+              {
+                "alias": "P0.v3",
+                "card_id": "10059",
+                "owner": 41,
+                "name": "Elite Vanguard",
+                "oracle_id": "b3b9a87d-cb95-435c-90b6-037406cab32e"
+              },
+              {
+                "alias": "P0.v4",
+                "card_id": "10060",
+                "owner": 41,
+                "name": "Elite Vanguard",
+                "oracle_id": "b3b9a87d-cb95-435c-90b6-037406cab32e"
+              }
+            ],
+            "before_card_ids": [
+              "10001",
+              "10002",
+              "10003",
+              "10004",
+              "10005",
+              "10006",
+              "10007",
+              "10008",
+              "10009",
+              "10010",
+              "10011",
+              "10012",
+              "10013",
+              "10014",
+              "10015",
+              "10016",
+              "10017",
+              "10018",
+              "10019",
+              "10020",
+              "10021",
+              "10022",
+              "10023",
+              "10024",
+              "10025",
+              "10026",
+              "10027",
+              "10028",
+              "10029",
+              "10030",
+              "10031",
+              "10032",
+              "10033",
+              "10034",
+              "10035",
+              "10036",
+              "10037",
+              "10038",
+              "10039",
+              "10040",
+              "10041",
+              "10042",
+              "10043",
+              "10044",
+              "10045",
+              "10046",
+              "10047",
+              "10048",
+              "10049",
+              "10050",
+              "10051",
+              "10052",
+              "10053",
+              "10054",
+              "10055",
+              "10056",
+              "10057",
+              "10058",
+              "10059",
+              "10060"
+            ],
+            "after_card_ids": [
+              "10001",
+              "10013",
+              "10057",
+              "10058",
+              "10029",
+              "10033",
+              "10041",
+              "10014",
+              "10015",
+              "10002",
+              "10059",
+              "10016",
+              "10003",
+              "10017",
+              "10004",
+              "10018",
+              "10005",
+              "10006",
+              "10007",
+              "10008",
+              "10009",
+              "10010",
+              "10011",
+              "10012",
+              "10019",
+              "10020",
+              "10021",
+              "10022",
+              "10023",
+              "10024",
+              "10025",
+              "10026",
+              "10027",
+              "10028",
+              "10030",
+              "10031",
+              "10032",
+              "10034",
+              "10035",
+              "10036",
+              "10037",
+              "10038",
+              "10039",
+              "10040",
+              "10042",
+              "10043",
+              "10044",
+              "10045",
+              "10046",
+              "10047",
+              "10048",
+              "10049",
+              "10050",
+              "10051",
+              "10052",
+              "10053",
+              "10054",
+              "10055",
+              "10056",
+              "10060"
+            ],
+            "after_aliases_top_first": [
+              "P0.p1",
+              "P0.i1",
+              "P0.v1",
+              "P0.v2",
+              "P0.r1",
+              "P0.m1",
+              "P0.d1",
+              "P0.i2",
+              "P0.i3",
+              "P0.p2",
+              "P0.v3",
+              "P0.i4",
+              "P0.p3",
+              "P0.i5",
+              "P0.p4",
+              "P0.i6",
+              "P0.p5",
+              "P0.p6",
+              "P0.p7",
+              "P0.p8",
+              "P0.p9",
+              "P0.p10",
+              "P0.p11",
+              "P0.p12",
+              "P0.i7",
+              "P0.i8",
+              "P0.i9",
+              "P0.i10",
+              "P0.i11",
+              "P0.i12",
+              "P0.a1",
+              "P0.a2",
+              "P0.a3",
+              "P0.a4",
+              "P0.r2",
+              "P0.r3",
+              "P0.r4",
+              "P0.m2",
+              "P0.m3",
+              "P0.m4",
+              "P0.l1",
+              "P0.l2",
+              "P0.l3",
+              "P0.l4",
+              "P0.d2",
+              "P0.d3",
+              "P0.d4",
+              "P0.t1",
+              "P0.t2",
+              "P0.t3",
+              "P0.t4",
+              "P0.u1",
+              "P0.u2",
+              "P0.u3",
+              "P0.u4",
+              "P0.k1",
+              "P0.k2",
+              "P0.k3",
+              "P0.k4",
+              "P0.v4"
+            ],
+            "opening_hand_aliases": [
+              "P0.p1",
+              "P0.i1",
+              "P0.v1",
+              "P0.v2",
+              "P0.r1",
+              "P0.m1",
+              "P0.d1"
+            ],
+            "entropy_words": [
+              59,
+              55,
+              54,
+              53,
+              52,
+              51,
+              50,
+              49,
+              48,
+              47,
+              46,
+              45,
+              44,
+              43,
+              42,
+              41,
+              39,
+              38,
+              37,
+              36,
+              35,
+              34,
+              33,
+              31,
+              30,
+              29,
+              27,
+              26,
+              25,
+              24,
+              23,
+              22,
+              21,
+              20,
+              19,
+              18,
+              11,
+              10,
+              9,
+              8,
+              7,
+              6,
+              5,
+              4,
+              5,
+              3,
+              4,
+              2,
+              5,
+              6,
+              1,
+              3,
+              4,
+              4,
+              3,
+              4,
+              3,
+              1,
+              1
+            ],
+            "algorithm": "fisher-yates-u64-tail-v1",
+            "entropy_words_consumed": 59,
+            "qualification": "PREPARED_INPUT_PERMUTATION_ONLY_NOT_NATIVE_SHUFFLE_EVIDENCE"
+          },
+          {
+            "role": "P1",
+            "physical_cards": [
+              {
+                "alias": "P1.i1",
+                "card_id": "20001",
+                "owner": 3,
+                "name": "Island",
+                "oracle_id": "b2c6aa39-2d2a-459c-a555-fb48ba993373"
+              },
+              {
+                "alias": "P1.i2",
+                "card_id": "20002",
+                "owner": 3,
+                "name": "Island",
+                "oracle_id": "b2c6aa39-2d2a-459c-a555-fb48ba993373"
+              },
+              {
+                "alias": "P1.i3",
+                "card_id": "20003",
+                "owner": 3,
+                "name": "Island",
+                "oracle_id": "b2c6aa39-2d2a-459c-a555-fb48ba993373"
+              },
+              {
+                "alias": "P1.i4",
+                "card_id": "20004",
+                "owner": 3,
+                "name": "Island",
+                "oracle_id": "b2c6aa39-2d2a-459c-a555-fb48ba993373"
+              },
+              {
+                "alias": "P1.i5",
+                "card_id": "20005",
+                "owner": 3,
+                "name": "Island",
+                "oracle_id": "b2c6aa39-2d2a-459c-a555-fb48ba993373"
+              },
+              {
+                "alias": "P1.i6",
+                "card_id": "20006",
+                "owner": 3,
+                "name": "Island",
+                "oracle_id": "b2c6aa39-2d2a-459c-a555-fb48ba993373"
+              },
+              {
+                "alias": "P1.i7",
+                "card_id": "20007",
+                "owner": 3,
+                "name": "Island",
+                "oracle_id": "b2c6aa39-2d2a-459c-a555-fb48ba993373"
+              },
+              {
+                "alias": "P1.i8",
+                "card_id": "20008",
+                "owner": 3,
+                "name": "Island",
+                "oracle_id": "b2c6aa39-2d2a-459c-a555-fb48ba993373"
+              },
+              {
+                "alias": "P1.i9",
+                "card_id": "20009",
+                "owner": 3,
+                "name": "Island",
+                "oracle_id": "b2c6aa39-2d2a-459c-a555-fb48ba993373"
+              },
+              {
+                "alias": "P1.i10",
+                "card_id": "20010",
+                "owner": 3,
+                "name": "Island",
+                "oracle_id": "b2c6aa39-2d2a-459c-a555-fb48ba993373"
+              },
+              {
+                "alias": "P1.i11",
+                "card_id": "20011",
+                "owner": 3,
+                "name": "Island",
+                "oracle_id": "b2c6aa39-2d2a-459c-a555-fb48ba993373"
+              },
+              {
+                "alias": "P1.i12",
+                "card_id": "20012",
+                "owner": 3,
+                "name": "Island",
+                "oracle_id": "b2c6aa39-2d2a-459c-a555-fb48ba993373"
+              },
+              {
+                "alias": "P1.s1",
+                "card_id": "20013",
+                "owner": 3,
+                "name": "Swamp",
+                "oracle_id": "56719f6a-1a6c-4c0a-8d21-18f7d7350b68"
+              },
+              {
+                "alias": "P1.s2",
+                "card_id": "20014",
+                "owner": 3,
+                "name": "Swamp",
+                "oracle_id": "56719f6a-1a6c-4c0a-8d21-18f7d7350b68"
+              },
+              {
+                "alias": "P1.s3",
+                "card_id": "20015",
+                "owner": 3,
+                "name": "Swamp",
+                "oracle_id": "56719f6a-1a6c-4c0a-8d21-18f7d7350b68"
+              },
+              {
+                "alias": "P1.s4",
+                "card_id": "20016",
+                "owner": 3,
+                "name": "Swamp",
+                "oracle_id": "56719f6a-1a6c-4c0a-8d21-18f7d7350b68"
+              },
+              {
+                "alias": "P1.s5",
+                "card_id": "20017",
+                "owner": 3,
+                "name": "Swamp",
+                "oracle_id": "56719f6a-1a6c-4c0a-8d21-18f7d7350b68"
+              },
+              {
+                "alias": "P1.s6",
+                "card_id": "20018",
+                "owner": 3,
+                "name": "Swamp",
+                "oracle_id": "56719f6a-1a6c-4c0a-8d21-18f7d7350b68"
+              },
+              {
+                "alias": "P1.s7",
+                "card_id": "20019",
+                "owner": 3,
+                "name": "Swamp",
+                "oracle_id": "56719f6a-1a6c-4c0a-8d21-18f7d7350b68"
+              },
+              {
+                "alias": "P1.s8",
+                "card_id": "20020",
+                "owner": 3,
+                "name": "Swamp",
+                "oracle_id": "56719f6a-1a6c-4c0a-8d21-18f7d7350b68"
+              },
+              {
+                "alias": "P1.s9",
+                "card_id": "20021",
+                "owner": 3,
+                "name": "Swamp",
+                "oracle_id": "56719f6a-1a6c-4c0a-8d21-18f7d7350b68"
+              },
+              {
+                "alias": "P1.s10",
+                "card_id": "20022",
+                "owner": 3,
+                "name": "Swamp",
+                "oracle_id": "56719f6a-1a6c-4c0a-8d21-18f7d7350b68"
+              },
+              {
+                "alias": "P1.s11",
+                "card_id": "20023",
+                "owner": 3,
+                "name": "Swamp",
+                "oracle_id": "56719f6a-1a6c-4c0a-8d21-18f7d7350b68"
+              },
+              {
+                "alias": "P1.s12",
+                "card_id": "20024",
+                "owner": 3,
+                "name": "Swamp",
+                "oracle_id": "56719f6a-1a6c-4c0a-8d21-18f7d7350b68"
+              },
+              {
+                "alias": "P1.o1",
+                "card_id": "20025",
+                "owner": 3,
+                "name": "Oculus",
+                "oracle_id": "e793ede9-044a-44e9-bc9c-99b0034503eb"
+              },
+              {
+                "alias": "P1.o2",
+                "card_id": "20026",
+                "owner": 3,
+                "name": "Oculus",
+                "oracle_id": "e793ede9-044a-44e9-bc9c-99b0034503eb"
+              },
+              {
+                "alias": "P1.o3",
+                "card_id": "20027",
+                "owner": 3,
+                "name": "Oculus",
+                "oracle_id": "e793ede9-044a-44e9-bc9c-99b0034503eb"
+              },
+              {
+                "alias": "P1.o4",
+                "card_id": "20028",
+                "owner": 3,
+                "name": "Oculus",
+                "oracle_id": "e793ede9-044a-44e9-bc9c-99b0034503eb"
+              },
+              {
+                "alias": "P1.l1",
+                "card_id": "20029",
+                "owner": 3,
+                "name": "Mana Leak",
+                "oracle_id": "c61fe162-2202-4e56-9ba0-393547f9875f"
+              },
+              {
+                "alias": "P1.l2",
+                "card_id": "20030",
+                "owner": 3,
+                "name": "Mana Leak",
+                "oracle_id": "c61fe162-2202-4e56-9ba0-393547f9875f"
+              },
+              {
+                "alias": "P1.l3",
+                "card_id": "20031",
+                "owner": 3,
+                "name": "Mana Leak",
+                "oracle_id": "c61fe162-2202-4e56-9ba0-393547f9875f"
+              },
+              {
+                "alias": "P1.l4",
+                "card_id": "20032",
+                "owner": 3,
+                "name": "Mana Leak",
+                "oracle_id": "c61fe162-2202-4e56-9ba0-393547f9875f"
+              },
+              {
+                "alias": "P1.m1",
+                "card_id": "20033",
+                "owner": 3,
+                "name": "Manalith",
+                "oracle_id": "bd9e416a-89b3-4912-be9b-49fce6a93dc9"
+              },
+              {
+                "alias": "P1.m2",
+                "card_id": "20034",
+                "owner": 3,
+                "name": "Manalith",
+                "oracle_id": "bd9e416a-89b3-4912-be9b-49fce6a93dc9"
+              },
+              {
+                "alias": "P1.m3",
+                "card_id": "20035",
+                "owner": 3,
+                "name": "Manalith",
+                "oracle_id": "bd9e416a-89b3-4912-be9b-49fce6a93dc9"
+              },
+              {
+                "alias": "P1.m4",
+                "card_id": "20036",
+                "owner": 3,
+                "name": "Manalith",
+                "oracle_id": "bd9e416a-89b3-4912-be9b-49fce6a93dc9"
+              },
+              {
+                "alias": "P1.n1",
+                "card_id": "20037",
+                "owner": 3,
+                "name": "Novice Occultist",
+                "oracle_id": "e51f5b41-5465-4b1d-b96a-544762657ca5"
+              },
+              {
+                "alias": "P1.n2",
+                "card_id": "20038",
+                "owner": 3,
+                "name": "Novice Occultist",
+                "oracle_id": "e51f5b41-5465-4b1d-b96a-544762657ca5"
+              },
+              {
+                "alias": "P1.n3",
+                "card_id": "20039",
+                "owner": 3,
+                "name": "Novice Occultist",
+                "oracle_id": "e51f5b41-5465-4b1d-b96a-544762657ca5"
+              },
+              {
+                "alias": "P1.n4",
+                "card_id": "20040",
+                "owner": 3,
+                "name": "Novice Occultist",
+                "oracle_id": "e51f5b41-5465-4b1d-b96a-544762657ca5"
+              },
+              {
+                "alias": "P1.g1",
+                "card_id": "20041",
+                "owner": 3,
+                "name": "Phyrexian Rager",
+                "oracle_id": "e409c9be-0c9a-43c3-adb4-8c47afc1d551"
+              },
+              {
+                "alias": "P1.g2",
+                "card_id": "20042",
+                "owner": 3,
+                "name": "Phyrexian Rager",
+                "oracle_id": "e409c9be-0c9a-43c3-adb4-8c47afc1d551"
+              },
+              {
+                "alias": "P1.g3",
+                "card_id": "20043",
+                "owner": 3,
+                "name": "Phyrexian Rager",
+                "oracle_id": "e409c9be-0c9a-43c3-adb4-8c47afc1d551"
+              },
+              {
+                "alias": "P1.g4",
+                "card_id": "20044",
+                "owner": 3,
+                "name": "Phyrexian Rager",
+                "oracle_id": "e409c9be-0c9a-43c3-adb4-8c47afc1d551"
+              },
+              {
+                "alias": "P1.z1",
+                "card_id": "20045",
+                "owner": 3,
+                "name": "Doomed Dissenter",
+                "oracle_id": "11cb509d-21af-48f1-b355-135ebd3e4bd1"
+              },
+              {
+                "alias": "P1.z2",
+                "card_id": "20046",
+                "owner": 3,
+                "name": "Doomed Dissenter",
+                "oracle_id": "11cb509d-21af-48f1-b355-135ebd3e4bd1"
+              },
+              {
+                "alias": "P1.z3",
+                "card_id": "20047",
+                "owner": 3,
+                "name": "Doomed Dissenter",
+                "oracle_id": "11cb509d-21af-48f1-b355-135ebd3e4bd1"
+              },
+              {
+                "alias": "P1.z4",
+                "card_id": "20048",
+                "owner": 3,
+                "name": "Doomed Dissenter",
+                "oracle_id": "11cb509d-21af-48f1-b355-135ebd3e4bd1"
+              },
+              {
+                "alias": "P1.b1",
+                "card_id": "20049",
+                "owner": 3,
+                "name": "Blood Artist",
+                "oracle_id": "310f141c-7f37-4729-aed6-dd9c09db448d"
+              },
+              {
+                "alias": "P1.b2",
+                "card_id": "20050",
+                "owner": 3,
+                "name": "Blood Artist",
+                "oracle_id": "310f141c-7f37-4729-aed6-dd9c09db448d"
+              },
+              {
+                "alias": "P1.b3",
+                "card_id": "20051",
+                "owner": 3,
+                "name": "Blood Artist",
+                "oracle_id": "310f141c-7f37-4729-aed6-dd9c09db448d"
+              },
+              {
+                "alias": "P1.b4",
+                "card_id": "20052",
+                "owner": 3,
+                "name": "Blood Artist",
+                "oracle_id": "310f141c-7f37-4729-aed6-dd9c09db448d"
+              },
+              {
+                "alias": "P1.d1",
+                "card_id": "20053",
+                "owner": 3,
+                "name": "Divination",
+                "oracle_id": "273b339c-964b-4a18-8eb5-ceb8abcdfd9e"
+              },
+              {
+                "alias": "P1.d2",
+                "card_id": "20054",
+                "owner": 3,
+                "name": "Divination",
+                "oracle_id": "273b339c-964b-4a18-8eb5-ceb8abcdfd9e"
+              },
+              {
+                "alias": "P1.d3",
+                "card_id": "20055",
+                "owner": 3,
+                "name": "Divination",
+                "oracle_id": "273b339c-964b-4a18-8eb5-ceb8abcdfd9e"
+              },
+              {
+                "alias": "P1.d4",
+                "card_id": "20056",
+                "owner": 3,
+                "name": "Divination",
+                "oracle_id": "273b339c-964b-4a18-8eb5-ceb8abcdfd9e"
+              },
+              {
+                "alias": "P1.c1",
+                "card_id": "20057",
+                "owner": 3,
+                "name": "Coral Merfolk",
+                "oracle_id": "4ed27607-21a8-4bc3-997e-6d2242313f6d"
+              },
+              {
+                "alias": "P1.c2",
+                "card_id": "20058",
+                "owner": 3,
+                "name": "Coral Merfolk",
+                "oracle_id": "4ed27607-21a8-4bc3-997e-6d2242313f6d"
+              },
+              {
+                "alias": "P1.c3",
+                "card_id": "20059",
+                "owner": 3,
+                "name": "Coral Merfolk",
+                "oracle_id": "4ed27607-21a8-4bc3-997e-6d2242313f6d"
+              },
+              {
+                "alias": "P1.c4",
+                "card_id": "20060",
+                "owner": 3,
+                "name": "Coral Merfolk",
+                "oracle_id": "4ed27607-21a8-4bc3-997e-6d2242313f6d"
+              }
+            ],
+            "before_card_ids": [
+              "20001",
+              "20002",
+              "20003",
+              "20004",
+              "20005",
+              "20006",
+              "20007",
+              "20008",
+              "20009",
+              "20010",
+              "20011",
+              "20012",
+              "20013",
+              "20014",
+              "20015",
+              "20016",
+              "20017",
+              "20018",
+              "20019",
+              "20020",
+              "20021",
+              "20022",
+              "20023",
+              "20024",
+              "20025",
+              "20026",
+              "20027",
+              "20028",
+              "20029",
+              "20030",
+              "20031",
+              "20032",
+              "20033",
+              "20034",
+              "20035",
+              "20036",
+              "20037",
+              "20038",
+              "20039",
+              "20040",
+              "20041",
+              "20042",
+              "20043",
+              "20044",
+              "20045",
+              "20046",
+              "20047",
+              "20048",
+              "20049",
+              "20050",
+              "20051",
+              "20052",
+              "20053",
+              "20054",
+              "20055",
+              "20056",
+              "20057",
+              "20058",
+              "20059",
+              "20060"
+            ],
+            "after_card_ids": [
+              "20001",
+              "20002",
+              "20013",
+              "20025",
+              "20037",
+              "20041",
+              "20029",
+              "20003",
+              "20014",
+              "20004",
+              "20015",
+              "20005",
+              "20006",
+              "20045",
+              "20049",
+              "20007",
+              "20008",
+              "20009",
+              "20010",
+              "20011",
+              "20012",
+              "20016",
+              "20017",
+              "20018",
+              "20019",
+              "20020",
+              "20021",
+              "20022",
+              "20023",
+              "20024",
+              "20026",
+              "20027",
+              "20028",
+              "20030",
+              "20031",
+              "20032",
+              "20033",
+              "20034",
+              "20035",
+              "20036",
+              "20038",
+              "20039",
+              "20040",
+              "20042",
+              "20043",
+              "20044",
+              "20046",
+              "20047",
+              "20048",
+              "20050",
+              "20051",
+              "20052",
+              "20053",
+              "20054",
+              "20055",
+              "20056",
+              "20057",
+              "20058",
+              "20059",
+              "20060"
+            ],
+            "after_aliases_top_first": [
+              "P1.i1",
+              "P1.i2",
+              "P1.s1",
+              "P1.o1",
+              "P1.n1",
+              "P1.g1",
+              "P1.l1",
+              "P1.i3",
+              "P1.s2",
+              "P1.i4",
+              "P1.s3",
+              "P1.i5",
+              "P1.i6",
+              "P1.z1",
+              "P1.b1",
+              "P1.i7",
+              "P1.i8",
+              "P1.i9",
+              "P1.i10",
+              "P1.i11",
+              "P1.i12",
+              "P1.s4",
+              "P1.s5",
+              "P1.s6",
+              "P1.s7",
+              "P1.s8",
+              "P1.s9",
+              "P1.s10",
+              "P1.s11",
+              "P1.s12",
+              "P1.o2",
+              "P1.o3",
+              "P1.o4",
+              "P1.l2",
+              "P1.l3",
+              "P1.l4",
+              "P1.m1",
+              "P1.m2",
+              "P1.m3",
+              "P1.m4",
+              "P1.n2",
+              "P1.n3",
+              "P1.n4",
+              "P1.g2",
+              "P1.g3",
+              "P1.g4",
+              "P1.z2",
+              "P1.z3",
+              "P1.z4",
+              "P1.b2",
+              "P1.b3",
+              "P1.b4",
+              "P1.d1",
+              "P1.d2",
+              "P1.d3",
+              "P1.d4",
+              "P1.c1",
+              "P1.c2",
+              "P1.c3",
+              "P1.c4"
+            ],
+            "opening_hand_aliases": [
+              "P1.i1",
+              "P1.i2",
+              "P1.s1",
+              "P1.o1",
+              "P1.n1",
+              "P1.g1",
+              "P1.l1"
+            ],
+            "entropy_words": [
+              59,
+              58,
+              57,
+              56,
+              55,
+              54,
+              53,
+              52,
+              51,
+              50,
+              49,
+              47,
+              46,
+              45,
+              43,
+              42,
+              41,
+              39,
+              38,
+              37,
+              35,
+              34,
+              33,
+              32,
+              31,
+              30,
+              29,
+              27,
+              26,
+              25,
+              23,
+              22,
+              21,
+              20,
+              19,
+              18,
+              17,
+              16,
+              15,
+              11,
+              10,
+              9,
+              8,
+              7,
+              6,
+              10,
+              11,
+              5,
+              4,
+              10,
+              3,
+              4,
+              2,
+              2,
+              4,
+              2,
+              3,
+              2,
+              1
+            ],
+            "algorithm": "fisher-yates-u64-tail-v1",
+            "entropy_words_consumed": 59,
+            "qualification": "PREPARED_INPUT_PERMUTATION_ONLY_NOT_NATIVE_SHUFFLE_EVIDENCE"
+          }
+        ],
+        "turns": [
+          {
+            "role": "P0",
+            "own_turn": 1,
+            "global_turn": 1,
+            "precombat_main_land": "P0.p1",
+            "precombat_main_casts": [
+              {
+                "spell": "P0.v1",
+                "funding_taps_in_order": [
+                  "P0.p1"
+                ],
+                "allocation": "exact printed cost; generic from remaining generated colors; no leftover pool"
+              }
+            ],
+            "attackers": []
+          },
+          {
+            "role": "P1",
+            "own_turn": 1,
+            "global_turn": 2,
+            "precombat_main_land": "P1.i1",
+            "precombat_main_casts": [],
+            "attackers": []
+          },
+          {
+            "role": "P0",
+            "own_turn": 2,
+            "global_turn": 3,
+            "precombat_main_land": "P0.i1",
+            "precombat_main_casts": [
+              {
+                "spell": "P0.v2",
+                "funding_taps_in_order": [
+                  "P0.p1"
+                ],
+                "allocation": "exact printed cost; generic from remaining generated colors; no leftover pool"
+              }
+            ],
+            "attackers": [
+              "P0.v1"
+            ]
+          },
+          {
+            "role": "P1",
+            "own_turn": 2,
+            "global_turn": 4,
+            "precombat_main_land": "P1.i2",
+            "precombat_main_casts": [
+              {
+                "spell": "P1.o1",
+                "funding_taps_in_order": [
+                  "P1.i1",
+                  "P1.i2"
+                ],
+                "allocation": "exact printed cost; generic from remaining generated colors; no leftover pool"
+              }
+            ],
+            "attackers": []
+          },
+          {
+            "role": "P0",
+            "own_turn": 3,
+            "global_turn": 5,
+            "precombat_main_land": "P0.i2",
+            "precombat_main_casts": [],
+            "attackers": [
+              "P0.v1",
+              "P0.v2"
+            ]
+          },
+          {
+            "role": "P1",
+            "own_turn": 3,
+            "global_turn": 6,
+            "precombat_main_land": "P1.s1",
+            "precombat_main_casts": [],
+            "attackers": []
+          },
+          {
+            "role": "P0",
+            "own_turn": 4,
+            "global_turn": 7,
+            "precombat_main_land": "P0.i3",
+            "precombat_main_casts": [
+              {
+                "spell": "P0.m1",
+                "funding_taps_in_order": [
+                  "P0.p1",
+                  "P0.i1",
+                  "P0.i2"
+                ],
+                "allocation": "exact printed cost; generic from remaining generated colors; no leftover pool"
+              }
+            ],
+            "attackers": [
+              "P0.v2"
+            ]
+          },
+          {
+            "role": "P1",
+            "own_turn": 4,
+            "global_turn": 8,
+            "precombat_main_land": "P1.s2",
+            "precombat_main_casts": [],
+            "attackers": []
+          },
+          {
+            "role": "P0",
+            "own_turn": 5,
+            "global_turn": 9,
+            "precombat_main_land": "P0.p2",
+            "precombat_main_casts": [
+              {
+                "spell": "P0.r1",
+                "funding_taps_in_order": [
+                  "P0.p1",
+                  "P0.p2",
+                  "P0.i1"
+                ],
+                "allocation": "exact printed cost; generic from remaining generated colors; no leftover pool"
+              }
+            ],
+            "attackers": [
+              "P0.v2"
+            ]
+          },
+          {
+            "role": "P1",
+            "own_turn": 5,
+            "global_turn": 10,
+            "precombat_main_land": "P1.i3",
+            "precombat_main_casts": [
+              {
+                "spell": "P1.n1",
+                "funding_taps_in_order": [
+                  "P1.s1",
+                  "P1.i1"
+                ],
+                "allocation": "exact printed cost; generic from remaining generated colors; no leftover pool"
+              }
+            ],
+            "attackers": []
+          },
+          {
+            "role": "P0",
+            "own_turn": 6,
+            "global_turn": 11,
+            "precombat_main_land": "P0.p3",
+            "precombat_main_casts": [
+              {
+                "spell": "P0.v3",
+                "funding_taps_in_order": [
+                  "P0.p1"
+                ],
+                "allocation": "exact printed cost; generic from remaining generated colors; no leftover pool"
+              }
+            ],
+            "attackers": [
+              "P0.v2"
+            ]
+          },
+          {
+            "role": "P1",
+            "own_turn": 6,
+            "global_turn": 12,
+            "precombat_main_land": "P1.s3",
+            "precombat_main_casts": [
+              {
+                "spell": "P1.g1",
+                "funding_taps_in_order": [
+                  "P1.s1",
+                  "P1.i1",
+                  "P1.i2"
+                ],
+                "allocation": "exact printed cost; generic from remaining generated colors; no leftover pool"
+              }
+            ],
+            "attackers": []
+          },
+          {
+            "role": "P0",
+            "own_turn": 7,
+            "global_turn": 13,
+            "precombat_main_land": "P0.i4",
+            "precombat_main_casts": [],
+            "attackers": [
+              "P0.v2",
+              "P0.v3"
+            ]
+          },
+          {
+            "role": "P1",
+            "own_turn": 7,
+            "global_turn": 14,
+            "precombat_main_land": "P1.i4",
+            "precombat_main_casts": [],
+            "attackers": []
+          },
+          {
+            "role": "P0",
+            "own_turn": 8,
+            "global_turn": 15,
+            "precombat_main_land": "P0.i5",
+            "precombat_main_casts": [],
+            "attackers": [
+              "P0.v3"
+            ]
+          },
+          {
+            "role": "P1",
+            "own_turn": 8,
+            "global_turn": 16,
+            "precombat_main_land": "P1.i5",
+            "precombat_main_casts": [],
+            "attackers": []
+          },
+          {
+            "role": "P0",
+            "own_turn": 9,
+            "global_turn": 17,
+            "precombat_main_land": "P0.p4",
+            "precombat_main_casts": [],
+            "attackers": [
+              "P0.v3"
+            ]
+          },
+          {
+            "role": "P1",
+            "own_turn": 9,
+            "global_turn": 18,
+            "precombat_main_land": "P1.i6",
+            "precombat_main_casts": [],
+            "attackers": []
+          },
+          {
+            "role": "P0",
+            "own_turn": 10,
+            "global_turn": 19,
+            "precombat_main_land": "P0.i6",
+            "precombat_main_casts": [],
+            "attackers": [
+              "P0.v3"
+            ]
+          }
+        ],
+        "draw_plan": {
+          "P0": [
+            "own-turn2:i2",
+            "own-turn3:i3",
+            "own-turn4:p2",
+            "own-turn5:v3",
+            "Rhystic after P1.n1 cast:i4",
+            "own-turn6:p3",
+            "own-turn7:i5",
+            "own-turn8:p4",
+            "own-turn9:i6",
+            "own-turn10:p5"
+          ],
+          "P1": [
+            "own-turn1:i3",
+            "own-turn2:s2",
+            "own-turn3:i4",
+            "own-turn4:s3",
+            "own-turn5:i5",
+            "own-turn6:i6",
+            "Rager g1 entry:z1 then lose1",
+            "Novice n1 death on P0 own-turn7:b1 then lose1",
+            "own-turn7:i7",
+            "own-turn8:i8",
+            "own-turn9:i9"
+          ]
+        },
+        "responses_and_choices": [
+          {
+            "when": "P0 own-turn3 blockers",
+            "required": "P1.o1 blocks P0.v1 only; v2 unblocked; v1 and o1 die simultaneously; actual Oculus optional draw Decline"
+          },
+          {
+            "when": "P0.m1 cast on own-turn4 after P0 passes priority",
+            "required": "P1 casts l1 targeting actual m1 spell entry",
+            "funding_taps_in_order": [
+              "P1.i1",
+              "P1.i2"
+            ],
+            "casting_spend": {
+              "Blue": "2"
+            }
+          },
+          {
+            "when": "actual l1 payment offer",
+            "required": "P0 explicitly Decline even with untapped i3; m1 countered to owner graveyard; paid casting cost not refunded"
+          },
+          {
+            "when": "P1.n1 cast on own-turn5",
+            "required": "Rhystic payerP1 explicitly Decline despite remaining mana sources; P0 OptionalEffect Take draws P0.i4 before n1 resolves"
+          },
+          {
+            "when": "P1.g1 cast on own-turn6",
+            "required": "Rhystic payerP1 explicitly Decline despite remaining mana sources; P0 OptionalEffect Decline; then g1 enters and mandatory draw z1 precedes lose1"
+          },
+          {
+            "when": "P0 own-turn7 blockers",
+            "required": "P1.n1 blocks P0.v2 only; v3 unblocked; v2 and n1 die simultaneously; actual Novice mandatory draw b1 precedes lose1"
+          }
+        ],
+        "primary_expected": {
+          "winner": "P0",
+          "loser": "P1",
+          "terminal_global_turn": 19,
+          "terminal_step": "CombatDamage postdamage state-based loss before priority",
+          "life": {
+            "P0": "20",
+            "P1": "0"
+          },
+          "combat_damage_to_P1": "18",
+          "mandatory_life_loss_P1": "2",
+          "unblocked_vanguard_hits": 9,
+          "casts": 9,
+          "ordinary_trigger_entries": 5,
+          "resolution_payments": {
+            "Paid": 0,
+            "Declined": 3
+          },
+          "resolution_paid_mana": {
+            "P0": "0",
+            "P1": "0"
+          },
+          "optional_outcomes": {
+            "Take": 1,
+            "Decline": 2
+          },
+          "mana_color_replies": 0,
+          "successful_draws_excluding_opening": {
+            "P0": 10,
+            "P1": 11
+          },
+          "remaining_library_cards": {
+            "P0": 43,
+            "P1": 42
+          },
+          "physical_graveyard_aliases": [
+            "P0.v1",
+            "P0.v2",
+            "P0.m1",
+            "P1.o1",
+            "P1.l1",
+            "P1.n1"
+          ],
+          "draw_failures": 0,
+          "mulligans": 0,
+          "cleanup_discards": 0
+        },
+        "global_entropy_words": [
+          59,
+          55,
+          54,
+          53,
+          52,
+          51,
+          50,
+          49,
+          48,
+          47,
+          46,
+          45,
+          44,
+          43,
+          42,
+          41,
+          39,
+          38,
+          37,
+          36,
+          35,
+          34,
+          33,
+          31,
+          30,
+          29,
+          27,
+          26,
+          25,
+          24,
+          23,
+          22,
+          21,
+          20,
+          19,
+          18,
+          11,
+          10,
+          9,
+          8,
+          7,
+          6,
+          5,
+          4,
+          5,
+          3,
+          4,
+          2,
+          5,
+          6,
+          1,
+          3,
+          4,
+          4,
+          3,
+          4,
+          3,
+          1,
+          1,
+          59,
+          58,
+          57,
+          56,
+          55,
+          54,
+          53,
+          52,
+          51,
+          50,
+          49,
+          47,
+          46,
+          45,
+          43,
+          42,
+          41,
+          39,
+          38,
+          37,
+          35,
+          34,
+          33,
+          32,
+          31,
+          30,
+          29,
+          27,
+          26,
+          25,
+          23,
+          22,
+          21,
+          20,
+          19,
+          18,
+          17,
+          16,
+          15,
+          11,
+          10,
+          9,
+          8,
+          7,
+          6,
+          10,
+          11,
+          5,
+          4,
+          10,
+          3,
+          4,
+          2,
+          2,
+          4,
+          2,
+          3,
+          2,
+          1
+        ],
+        "budgets": {
+          "accepted_inputs_max": 4096,
+          "reached_rejection_probes_max": 256,
+          "global_turns_max": 19
+        }
+      }
+    ]
+  }
+}

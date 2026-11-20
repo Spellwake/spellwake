@@ -1,0 +1,8 @@
+{
+  "object": "bulk_data",
+  "id": "unit-only-spellwake-mandatory-subset-v1",
+  "type": "oracle_cards",
+  "updated_at": "unit-only-subset-from-2026-10-29-source",
+  "jsonl_download_uri": "https://data.scryfall.io/oracle-cards/fixture-not-a-provider-export.jsonl.gz",
+  "compressed_size": 12293
+}
