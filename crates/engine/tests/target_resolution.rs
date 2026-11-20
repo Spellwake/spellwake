@@ -1,7 +1,7 @@
 //! Public native target-gate scenarios, not complete Magic card execution.
 use spellwake_engine::{
     TargetId,
-    card_identity::{CardDestination, CardId, CardObjectId, CardObjects, CardZone},
+    object_identity::{CardId, GameObjects, ObjectDestination, ObjectId, ObjectZone},
     priority::{PriorityPhase, SeatId},
     stack_window::{StackWindow, StackWindowError, WindowPhase},
     targets::{
@@ -14,14 +14,14 @@ const B: SeatId = SeatId(1);
 const C: SeatId = SeatId(2);
 struct Setup {
     window: StackWindow,
-    spell: CardObjectId,
-    first: CardObjectId,
-    second: CardObjectId,
-    response: CardObjectId,
+    spell: ObjectId,
+    first: ObjectId,
+    second: ObjectId,
+    response: ObjectId,
 }
 fn setup() -> Setup {
-    let spell = CardObjects::new(0)
-        .seed_card(0, CardId(1), A, CardDestination::Hand)
+    let spell = GameObjects::new(0)
+        .seed_card(0, CardId(1), A, ObjectDestination::Hand)
         .unwrap();
     let first = spell
         .next
@@ -29,7 +29,7 @@ fn setup() -> Setup {
             1,
             CardId(2),
             B,
-            CardDestination::Battlefield { controller: B },
+            ObjectDestination::Battlefield { controller: B },
         )
         .unwrap();
     let second = first
@@ -38,12 +38,12 @@ fn setup() -> Setup {
             2,
             CardId(3),
             C,
-            CardDestination::Battlefield { controller: C },
+            ObjectDestination::Battlefield { controller: C },
         )
         .unwrap();
     let response = second
         .next
-        .seed_card(3, CardId(4), B, CardDestination::Hand)
+        .seed_card(3, CardId(4), B, ObjectDestination::Hand)
         .unwrap();
     Setup {
         window: StackWindow::new(vec![A, B, C], A, response.next).unwrap(),
@@ -101,7 +101,7 @@ fn response(s: &Setup, w: StackWindow) -> StackWindow {
 fn finish_response(w: StackWindow) -> StackWindow {
     let id = w.resolving().unwrap().id();
     let w = w
-        .finish_resolution(w.revision(), id, Some(CardDestination::Graveyard))
+        .finish_resolution(w.revision(), id, Some(ObjectDestination::Graveyard))
         .unwrap();
     passes(w, &[A, B, C])
 }
@@ -115,18 +115,18 @@ fn a_departed_and_returned_card_stays_illegal_even_if_additional_checks_say_lega
     let w = targeted(
         &s,
         vec![clause(1, 1, 1)],
-        vec![choice(1, 1, TargetRef::Card(s.first))],
+        vec![choice(1, 1, TargetRef::Object(s.first))],
     );
     let w = response(&s, w);
     let w = w
-        .record_resolution_move(w.revision(), s.first, CardDestination::Exile)
+        .record_resolution_move(w.revision(), s.first, ObjectDestination::Exile)
         .unwrap();
     let exiled = w.cards().current_identity(CardId(2)).unwrap();
     let w = w
         .record_resolution_move(
             w.revision(),
             exiled,
-            CardDestination::Battlefield { controller: B },
+            ObjectDestination::Battlefield { controller: B },
         )
         .unwrap();
     let returned = w.cards().current_identity(CardId(2)).unwrap();
@@ -134,7 +134,7 @@ fn a_departed_and_returned_card_stays_illegal_even_if_additional_checks_say_lega
     let entry = checking_id(&w);
     let saved = w.clone();
     assert_eq!(
-        w.record_resolution_move(w.revision(), s.second, CardDestination::Graveyard),
+        w.record_resolution_move(w.revision(), s.second, ObjectDestination::Graveyard),
         Err(StackWindowError::NotResolving)
     );
     assert_eq!(w, saved);
@@ -147,26 +147,26 @@ fn a_departed_and_returned_card_stays_illegal_even_if_additional_checks_say_lega
         TargetLegality::ObjectGone
     );
     assert_eq!(
-        w.finish_resolution(w.revision(), entry, Some(CardDestination::Graveyard)),
+        w.finish_resolution(w.revision(), entry, Some(ObjectDestination::Graveyard)),
         Err(StackWindowError::NotResolving)
     );
     assert_eq!(
-        w.record_resolution_move(w.revision(), s.second, CardDestination::Graveyard),
+        w.record_resolution_move(w.revision(), s.second, ObjectDestination::Graveyard),
         Err(StackWindowError::NotResolving)
     );
     let w = w
-        .finish_unresolved(w.revision(), entry, Some(CardDestination::Graveyard))
+        .finish_unresolved(w.revision(), entry, Some(ObjectDestination::Graveyard))
         .unwrap();
     assert_eq!(
         w.cards().get(returned).unwrap().zone(),
-        CardZone::Battlefield
+        ObjectZone::Battlefield
     );
     assert_eq!(
         w.cards()
             .get(w.cards().current_identity(CardId(1)).unwrap())
             .unwrap()
             .zone(),
-        CardZone::Graveyard(A)
+        ObjectZone::Graveyard(A)
     );
     assert_eq!(
         w.phase(),
@@ -180,13 +180,13 @@ fn one_remaining_target_resolves_even_when_casting_required_two_targets() {
         &s,
         vec![clause(1, 2, 2)],
         vec![
-            choice(1, 1, TargetRef::Card(s.first)),
-            choice(2, 1, TargetRef::Card(s.second)),
+            choice(1, 1, TargetRef::Object(s.first)),
+            choice(2, 1, TargetRef::Object(s.second)),
         ],
     );
     let w = response(&s, w);
     let w = w
-        .record_resolution_move(w.revision(), s.second, CardDestination::Exile)
+        .record_resolution_move(w.revision(), s.second, ObjectDestination::Exile)
         .unwrap();
     let w = finish_response(w);
     let entry = checking_id(&w);
@@ -202,29 +202,29 @@ fn one_remaining_target_resolves_even_when_casting_required_two_targets() {
     assert_eq!(report.results()[1].legality, TargetLegality::ObjectGone);
     let saved = w.clone();
     assert_eq!(
-        w.record_targeted_resolution_move(w.revision(), TargetId(2), CardDestination::Graveyard),
+        w.record_targeted_resolution_move(w.revision(), TargetId(2), ObjectDestination::Graveyard),
         Err(StackWindowError::IllegalTarget)
     );
     assert_eq!(w, saved);
     let w = w
-        .record_targeted_resolution_move(w.revision(), TargetId(1), CardDestination::Graveyard)
+        .record_targeted_resolution_move(w.revision(), TargetId(1), ObjectDestination::Graveyard)
         .unwrap();
     assert_eq!(
         w.cards()
             .get(w.cards().current_identity(CardId(2)).unwrap())
             .unwrap()
             .zone(),
-        CardZone::Graveyard(B)
+        ObjectZone::Graveyard(B)
     );
     assert_eq!(
         w.cards()
             .get(w.cards().current_identity(CardId(3)).unwrap())
             .unwrap()
             .zone(),
-        CardZone::Exile
+        ObjectZone::Exile
     );
     let w = w
-        .finish_resolution(w.revision(), entry, Some(CardDestination::Graveyard))
+        .finish_resolution(w.revision(), entry, Some(ObjectDestination::Graveyard))
         .unwrap();
     assert!(w.entries().is_empty());
 }
@@ -235,8 +235,8 @@ fn the_same_object_in_two_target_clauses_is_assessed_per_occurrence() {
         &s,
         vec![clause(1, 1, 1), clause(2, 1, 1)],
         vec![
-            choice(1, 1, TargetRef::Card(s.first)),
-            choice(2, 2, TargetRef::Card(s.first)),
+            choice(1, 1, TargetRef::Object(s.first)),
+            choice(2, 2, TargetRef::Object(s.first)),
         ],
     );
     let w = passes(w, &[A, B, C]);
@@ -253,11 +253,11 @@ fn the_same_object_in_two_target_clauses_is_assessed_per_occurrence() {
         TargetLegality::Legal
     );
     assert_eq!(
-        w.record_targeted_resolution_move(w.revision(), TargetId(1), CardDestination::Graveyard),
+        w.record_targeted_resolution_move(w.revision(), TargetId(1), ObjectDestination::Graveyard),
         Err(StackWindowError::IllegalTarget)
     );
     let w = w
-        .record_targeted_resolution_move(w.revision(), TargetId(2), CardDestination::Graveyard)
+        .record_targeted_resolution_move(w.revision(), TargetId(2), ObjectDestination::Graveyard)
         .unwrap();
     assert!(w.cards().get(s.first).is_none());
 }
@@ -281,7 +281,7 @@ fn malformed_selections_leave_the_source_card_and_stack_unchanged() {
     let s = setup();
     let w = ready(s.window);
     let saved = w.clone();
-    let valid = choice(1, 1, TargetRef::Card(s.first));
+    let valid = choice(1, 1, TargetRef::Object(s.first));
     let cases = vec![
         (vec![clause(1, 2, 1)], vec![], TargetError::InvalidClause),
         (
@@ -302,7 +302,7 @@ fn malformed_selections_leave_the_source_card_and_stack_unchanged() {
         ),
         (
             vec![clause(1, 1, 2)],
-            vec![valid, choice(2, 1, TargetRef::Card(s.first))],
+            vec![valid, choice(2, 1, TargetRef::Object(s.first))],
             TargetError::RepeatedTarget,
         ),
         (
@@ -318,7 +318,7 @@ fn malformed_selections_leave_the_source_card_and_stack_unchanged() {
         );
         assert_eq!(w, saved);
     }
-    assert_eq!(w.cards().get(s.spell).unwrap().zone(), CardZone::Hand(A));
+    assert_eq!(w.cards().get(s.spell).unwrap().zone(), ObjectZone::Hand(A));
     assert!(w.entries().is_empty());
 }
 #[test]
@@ -327,7 +327,7 @@ fn resolution_checks_must_cover_exactly_the_bound_keys_once_and_cannot_be_replay
     let w = targeted(
         &s,
         vec![clause(1, 1, 1)],
-        vec![choice(1, 1, TargetRef::Card(s.first))],
+        vec![choice(1, 1, TargetRef::Object(s.first))],
     );
     let w = passes(w, &[A, B, C]);
     let entry = checking_id(&w);
@@ -358,7 +358,7 @@ fn resolution_checks_must_cover_exactly_the_bound_keys_once_and_cannot_be_replay
         Err(StackWindowError::TargetChecksNotPending)
     );
     assert_eq!(
-        w.finish_unresolved(w.revision(), entry, Some(CardDestination::Graveyard)),
+        w.finish_unresolved(w.revision(), entry, Some(ObjectDestination::Graveyard)),
         Err(StackWindowError::TargetsNotRejected)
     );
 }
@@ -383,14 +383,14 @@ fn targeted_abilities_with_all_illegal_targets_leave_the_source_untouched() {
         .unwrap();
     assert_eq!(w.phase(), WindowPhase::AllTargetsIllegal(entry));
     assert_eq!(
-        w.finish_unresolved(w.revision(), entry, Some(CardDestination::Graveyard)),
+        w.finish_unresolved(w.revision(), entry, Some(ObjectDestination::Graveyard)),
         Err(StackWindowError::UnexpectedSpellExit)
     );
     let w = w.finish_unresolved(w.revision(), entry, None).unwrap();
     assert!(w.entries().is_empty());
     assert_eq!(
         w.cards().get(s.first).unwrap().zone(),
-        CardZone::Battlefield
+        ObjectZone::Battlefield
     );
 }
 #[test]
@@ -411,7 +411,7 @@ fn stack_card_references_have_one_representation_and_a_removed_entry_becomes_ill
             A,
             source.clone(),
             vec![clause(1, 1, 1)],
-            vec![choice(1, 1, TargetRef::Card(spell_object))]
+            vec![choice(1, 1, TargetRef::Object(spell_object))]
         ),
         Err(StackWindowError::Targets(TargetError::UseStackReference))
     );
@@ -429,10 +429,10 @@ fn stack_card_references_have_one_representation_and_a_removed_entry_becomes_ill
     let w = passes(w, &[B, C, A]);
     let response = w.resolving().unwrap().id();
     let w = w
-        .record_resolution_move(w.revision(), spell_object, CardDestination::Graveyard)
+        .record_resolution_move(w.revision(), spell_object, ObjectDestination::Graveyard)
         .unwrap();
     let w = w
-        .finish_resolution(w.revision(), response, Some(CardDestination::Graveyard))
+        .finish_resolution(w.revision(), response, Some(ObjectDestination::Graveyard))
         .unwrap();
     let w = passes(w, &[A, B, C]);
     let entry = checking_id(&w);

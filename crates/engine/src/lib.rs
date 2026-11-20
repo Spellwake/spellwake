@@ -1,12 +1,32 @@
 //! Pure rules mechanisms. No accounts, persistence, networking or full card execution.
-pub mod card_identity;
+#[cfg(test)]
+extern crate self as spellwake_engine;
+#[cfg(test)]
+#[path = "../test_support/mod.rs"]
+pub(crate) mod test_support;
+
+pub mod actions;
+pub mod activated;
 pub mod characteristics;
+pub mod checks;
+pub mod combat;
 pub mod damage;
+pub mod draw;
 pub mod game;
+pub mod land;
+pub mod life;
 pub mod mana;
+pub mod object_identity;
+pub mod occurrence;
+pub mod opening;
 pub mod priority;
+pub mod program;
+pub mod setup;
+pub mod shuffle;
 pub mod stack_window;
 pub mod targets;
+pub mod token;
+pub mod turn;
 
 use spellwake_contracts::RulesInteger;
 use std::collections::BTreeSet;

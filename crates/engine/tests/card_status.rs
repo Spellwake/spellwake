@@ -1,8 +1,8 @@
 //! Independent physical-status acceptance from the preimplementation
 //! mana-abilities/reviews/native-scenarios.md matrix, N25–N30.
 use spellwake_engine::{
-    card_identity::{
-        CardDestination, CardId, CardIdentityError, CardObjectId, CardObjects, CardZone,
+    object_identity::{
+        CardId, GameObjects, ObjectDestination, ObjectId, ObjectIdentityError, ObjectZone,
     },
     priority::SeatId,
     stack_window::{StackWindow, StackWindowError},
@@ -11,20 +11,20 @@ use spellwake_engine::{
 const OWNER: SeatId = SeatId(0);
 const OTHER: SeatId = SeatId(1);
 
-fn destinations() -> [CardDestination; 7] {
+fn destinations() -> [ObjectDestination; 7] {
     [
-        CardDestination::Library,
-        CardDestination::Hand,
-        CardDestination::Graveyard,
-        CardDestination::Battlefield { controller: OWNER },
-        CardDestination::Stack { controller: OWNER },
-        CardDestination::Exile,
-        CardDestination::Command,
+        ObjectDestination::LibraryBottom,
+        ObjectDestination::Hand,
+        ObjectDestination::Graveyard,
+        ObjectDestination::Battlefield { controller: OWNER },
+        ObjectDestination::Stack { controller: OWNER },
+        ObjectDestination::Exile,
+        ObjectDestination::Command,
     ]
 }
 
-fn seeded(destination: CardDestination) -> (CardObjects, CardObjectId) {
-    let change = CardObjects::new(0)
+fn seeded(destination: ObjectDestination) -> (GameObjects, ObjectId) {
+    let change = GameObjects::new(0)
         .seed_card(0, CardId(9), OWNER, destination)
         .unwrap();
     (change.next, change.after.id())
@@ -36,11 +36,11 @@ fn status_exists_exactly_on_battlefield_including_stack_with_a_controller() {
         let (cards, id) = seeded(destination);
         let card = cards.get(id).unwrap();
         let expected = match destination {
-            CardDestination::Battlefield { .. } => Some(false),
+            ObjectDestination::Battlefield { .. } => Some(false),
             _ => None,
         };
         assert_eq!(card.tapped(), expected);
-        if matches!(destination, CardDestination::Stack { .. }) {
+        if matches!(destination, ObjectDestination::Stack { .. }) {
             assert_eq!(card.controller(), Some(OWNER));
             assert_eq!(card.tapped(), None);
         }
@@ -49,16 +49,19 @@ fn status_exists_exactly_on_battlefield_including_stack_with_a_controller() {
 
 #[test]
 fn tap_and_untap_change_status_and_revision_without_replacing_the_object() {
-    let (cards, id) = seeded(CardDestination::Battlefield { controller: OWNER });
+    let (cards, id) = seeded(ObjectDestination::Battlefield { controller: OWNER });
     let untapped = cards.get(id).unwrap().clone();
     let saved = cards.clone();
     let tapped = cards.set_tapped(cards.revision(), id, true).unwrap();
     assert_eq!(cards, saved);
     assert_eq!(tapped.before, Some(untapped));
     assert_eq!(tapped.after.id(), id);
-    assert_eq!(tapped.after.card(), CardId(9));
+    assert_eq!(
+        tapped.after.card_id().expect("physical fixture card"),
+        CardId(9)
+    );
     assert_eq!(tapped.after.owner(), OWNER);
-    assert_eq!(tapped.after.zone(), CardZone::Battlefield);
+    assert_eq!(tapped.after.zone(), ObjectZone::Battlefield);
     assert_eq!(tapped.after.controller(), Some(OWNER));
     assert_eq!(tapped.after.tapped(), Some(true));
     assert_eq!(tapped.next.revision(), cards.revision() + 1);
@@ -79,7 +82,7 @@ fn tap_and_untap_change_status_and_revision_without_replacing_the_object() {
 
 #[test]
 fn changing_control_preserves_tapped_status_and_same_incarnation() {
-    let (cards, id) = seeded(CardDestination::Battlefield { controller: OWNER });
+    let (cards, id) = seeded(ObjectDestination::Battlefield { controller: OWNER });
     let tapped = cards.set_tapped(cards.revision(), id, true).unwrap();
     let stolen = tapped
         .next
@@ -96,13 +99,15 @@ fn changing_control_preserves_tapped_status_and_same_incarnation() {
 fn departing_tapped_permanent_has_no_status_and_returns_untapped_with_fresh_identity() {
     for destination in destinations()
         .into_iter()
-        .filter(|destination| !matches!(destination, CardDestination::Battlefield { .. }))
+        .filter(|destination| !matches!(destination, ObjectDestination::Battlefield { .. }))
     {
-        let (cards, id) = seeded(CardDestination::Battlefield { controller: OWNER });
+        let (cards, id) = seeded(ObjectDestination::Battlefield { controller: OWNER });
         let tapped = cards.set_tapped(cards.revision(), id, true).unwrap();
         let departed = tapped
             .next
             .apply_zone_move(tapped.next.revision(), id, destination)
+            .unwrap()
+            .require_moved()
             .unwrap();
         assert_eq!(departed.before, Some(tapped.after));
         assert_eq!(departed.after.tapped(), None);
@@ -113,8 +118,10 @@ fn departing_tapped_permanent_has_no_status_and_returns_untapped_with_fresh_iden
             .apply_zone_move(
                 departed.next.revision(),
                 departed.after.id(),
-                CardDestination::Battlefield { controller: OTHER },
+                ObjectDestination::Battlefield { controller: OTHER },
             )
+            .unwrap()
+            .require_moved()
             .unwrap();
         assert_eq!(returned.after.tapped(), Some(false));
         assert_eq!(returned.after.owner(), OWNER);
@@ -131,7 +138,7 @@ fn every_supported_zone_transition_reinitializes_only_battlefield_status() {
     for source in destinations() {
         for destination in destinations() {
             let (mut cards, id) = seeded(source);
-            if matches!(source, CardDestination::Battlefield { .. }) {
+            if matches!(source, ObjectDestination::Battlefield { .. }) {
                 cards = cards.set_tapped(cards.revision(), id, true).unwrap().next;
             }
             let before = cards.get(id).unwrap().clone();
@@ -140,18 +147,18 @@ fn every_supported_zone_transition_reinitializes_only_battlefield_status() {
             if source == destination
                 && !matches!(
                     destination,
-                    CardDestination::Exile | CardDestination::Command
+                    ObjectDestination::Exile | ObjectDestination::Command
                 )
             {
-                assert_eq!(changed, Err(CardIdentityError::SameZone));
+                assert_eq!(changed, Err(ObjectIdentityError::SameZone));
             } else {
-                let changed = changed.unwrap();
+                let changed = changed.unwrap().require_moved().unwrap();
                 assert_eq!(changed.before, Some(before));
                 assert_ne!(changed.after.id(), id);
                 assert_eq!(
                     changed.after.tapped(),
                     match destination {
-                        CardDestination::Battlefield { .. } => Some(false),
+                        ObjectDestination::Battlefield { .. } => Some(false),
                         _ => None,
                     }
                 );
@@ -166,49 +173,53 @@ fn nonpermanent_unchanged_stale_revision_and_stale_object_updates_are_atomic() {
     for destination in destinations() {
         let (cards, id) = seeded(destination);
         let saved = cards.clone();
-        if matches!(destination, CardDestination::Battlefield { .. }) {
+        if matches!(destination, ObjectDestination::Battlefield { .. }) {
             assert_eq!(
                 cards.set_tapped(cards.revision(), id, false),
-                Err(CardIdentityError::StatusUnchanged)
+                Err(ObjectIdentityError::StatusUnchanged)
             );
             let tapped = cards.set_tapped(cards.revision(), id, true).unwrap();
             let saved_tapped = tapped.next.clone();
             assert_eq!(
                 tapped.next.set_tapped(tapped.next.revision(), id, true),
-                Err(CardIdentityError::StatusUnchanged)
+                Err(ObjectIdentityError::StatusUnchanged)
             );
             assert_eq!(tapped.next, saved_tapped);
         } else {
             for status in [false, true] {
                 assert_eq!(
                     cards.set_tapped(cards.revision(), id, status),
-                    Err(CardIdentityError::NotPermanent)
+                    Err(ObjectIdentityError::NotPermanent)
                 );
             }
         }
         assert_eq!(cards, saved);
         assert_eq!(
             cards.set_tapped(cards.revision() - 1, id, true),
-            Err(CardIdentityError::StaleRevision)
+            Err(ObjectIdentityError::StaleRevision)
         );
         assert_eq!(cards, saved);
     }
-    let (cards, id) = seeded(CardDestination::Battlefield { controller: OWNER });
+    let (cards, id) = seeded(ObjectDestination::Battlefield { controller: OWNER });
     let departed = cards
-        .apply_zone_move(cards.revision(), id, CardDestination::Hand)
+        .apply_zone_move(cards.revision(), id, ObjectDestination::Hand)
+        .unwrap()
+        .require_moved()
         .unwrap();
     let returned = departed
         .next
         .apply_zone_move(
             departed.next.revision(),
             departed.after.id(),
-            CardDestination::Battlefield { controller: OWNER },
+            ObjectDestination::Battlefield { controller: OWNER },
         )
+        .unwrap()
+        .require_moved()
         .unwrap();
     let saved = returned.next.clone();
     assert_eq!(
         returned.next.set_tapped(returned.next.revision(), id, true),
-        Err(CardIdentityError::UnknownObject)
+        Err(ObjectIdentityError::UnknownObject)
     );
     assert_eq!(returned.next, saved);
     assert_eq!(returned.after.tapped(), Some(false));
@@ -216,24 +227,30 @@ fn nonpermanent_unchanged_stale_revision_and_stale_object_updates_are_atomic() {
 
 #[test]
 fn tap_action_never_follows_a_stable_card_key_to_a_returned_incarnation() {
-    let (cards, old) = seeded(CardDestination::Battlefield { controller: OWNER });
+    let (cards, old) = seeded(ObjectDestination::Battlefield { controller: OWNER });
     let hand = cards
-        .apply_zone_move(cards.revision(), old, CardDestination::Hand)
+        .apply_zone_move(cards.revision(), old, ObjectDestination::Hand)
+        .unwrap()
+        .require_moved()
         .unwrap();
     let returned = hand
         .next
         .apply_zone_move(
             hand.next.revision(),
             hand.after.id(),
-            CardDestination::Battlefield { controller: OWNER },
+            ObjectDestination::Battlefield { controller: OWNER },
         )
+        .unwrap()
+        .require_moved()
         .unwrap();
     let window = StackWindow::new(vec![OWNER, OTHER], OWNER, returned.next).unwrap();
     let window = window.finish_checks(window.revision()).unwrap();
     let saved = window.clone();
     assert_eq!(
         window.record_tap_action(window.revision(), OWNER, old),
-        Err(StackWindowError::Cards(CardIdentityError::UnknownObject))
+        Err(StackWindowError::Objects(
+            ObjectIdentityError::UnknownObject
+        ))
     );
     assert_eq!(window, saved);
     assert_eq!(

@@ -3,7 +3,7 @@
 //! input, not computed here. No client may provide those legality assessments.
 use crate::{
     TargetId,
-    card_identity::{CardObjectId, CardZone},
+    object_identity::{ObjectId, ObjectZone},
     priority::SeatId,
     stack_window::StackEntryId,
 };
@@ -14,7 +14,7 @@ use std::collections::{BTreeMap, BTreeSet};
 pub struct TargetClauseId(pub u32);
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum TargetRef {
-    Card(CardObjectId),
+    Object(ObjectId),
     Player(SeatId),
     Stack(StackEntryId),
 }
@@ -34,7 +34,7 @@ pub struct TargetChoice {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BoundTarget {
     choice: TargetChoice,
-    zone: Option<CardZone>,
+    zone: Option<ObjectZone>,
 }
 impl BoundTarget {
     pub fn choice(&self) -> TargetChoice {
@@ -48,7 +48,7 @@ pub struct TargetPlan {
 
 /// Same-window lookup owned by the native stack. Not a browser-supplied registry.
 pub(crate) trait TargetWorld {
-    fn card_zone(&self, card: CardObjectId) -> Option<CardZone>;
+    fn object_zone(&self, card: ObjectId) -> Option<ObjectZone>;
     fn player_exists(&self, player: SeatId) -> bool;
     fn stack_exists(&self, entry: StackEntryId) -> bool;
     fn stack_precedes(&self, target: StackEntryId, source: StackEntryId) -> bool;
@@ -152,9 +152,9 @@ impl TargetPlan {
                 return Err(TargetError::RepeatedTarget);
             }
             let zone = match choice.target {
-                TargetRef::Card(card) => {
-                    let zone = world.card_zone(card).ok_or(TargetError::MissingTarget)?;
-                    if zone == CardZone::Stack {
+                TargetRef::Object(card) => {
+                    let zone = world.object_zone(card).ok_or(TargetError::MissingTarget)?;
+                    if zone == ObjectZone::Stack {
                         return Err(TargetError::UseStackReference);
                     }
                     Some(zone)
@@ -258,7 +258,7 @@ impl TargetPlan {
         let mut results = Vec::new();
         for target in &self.targets {
             let identity = match target.choice.target {
-                TargetRef::Card(card) => match world.card_zone(card) {
+                TargetRef::Object(card) => match world.object_zone(card) {
                     None => TargetLegality::ObjectGone,
                     Some(zone) if Some(zone) != target.zone => TargetLegality::ZoneChanged,
                     _ => TargetLegality::Legal,

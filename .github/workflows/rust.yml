@@ -10,8 +10,8 @@ concurrency:
   group: rust-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 jobs:
-  check:
-    name: Rust foundation checks
+  workspace:
+    name: Rust workspace and fixtures
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -22,17 +22,64 @@ jobs:
         run: rustup show
       - name: Format
         run: cargo fmt --all --check
+      - name: Prepare the pinned CI vocabulary
+        run: |
+          vocabulary="$RUNNER_TEMP/spellwake-creature-vocabulary.input.json"
+          python3 tests/support/prepare_ci_vocabulary.py "$vocabulary"
+          echo "SPELLWAKE_CREATURE_VOCABULARY_INPUT=$vocabulary" >> "$GITHUB_ENV"
       - name: Lint
         run: cargo clippy --locked --workspace --all-targets -- -D warnings
       - name: Test
-        run: cargo test --locked --workspace
+        run: >
+          cargo test --locked --workspace -- --skip
+          ordinary_game::record::staged::tests::complete_existing_fixture_uses_finalized_delivery_and_preserves_report_bytes
       - name: Build deployable service
         run: cargo build --locked --release -p spellwake-platform
       - name: Run rules fixtures
         run: cargo run --locked -p spellwake-reference-tools
-      - name: Run native interaction trace
-        run: cargo run --locked -p spellwake-reference-tools --bin interaction-trace
-      - name: Run native copied-spell trace
-        run: cargo run --locked -p spellwake-reference-tools --bin interaction-trace -- --copies
+      # Native interaction captures also require the privately retained D06 publication.
+      # The release qualification runs both captures with that original publication.
       - name: Test reference evidence and comparison guards
         run: python3 -m unittest discover -s tests/reference -p 'test_*.py'
+
+  reference-report:
+    name: Reference report replay
+    # Ubuntu runners repeatedly shut down while replaying this full capture.
+    runs-on: macos-15
+    timeout-minutes: 55
+    env:
+      CARGO_PROFILE_TEST_OPT_LEVEL: "3"
+      CARGO_PROFILE_TEST_DEBUG: "0"
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - name: Install pinned toolchain
+        run: rustup show
+      - name: Build the optimized reference test binary
+        run: cargo test --locked -p spellwake-reference-tools --lib --no-run
+      - name: Replay the full report with the pinned vocabulary
+        shell: bash
+        run: |
+          vocabulary="$RUNNER_TEMP/spellwake-creature-vocabulary.input.json"
+          python3 tests/support/prepare_ci_vocabulary.py "$vocabulary"
+          # The reference replay can run for several minutes without emitting test output.
+          (while sleep 20; do echo "Reference replay is still running."; done) &
+          progress_pid=$!
+          trap 'kill "$progress_pid" 2>/dev/null || true' EXIT
+          SPELLWAKE_CREATURE_VOCABULARY_INPUT="$vocabulary" \
+            cargo test --locked -p spellwake-reference-tools --lib \
+            ordinary_game::record::staged::tests::complete_existing_fixture_uses_finalized_delivery_and_preserves_report_bytes -- --exact --nocapture | tee "$RUNNER_TEMP/reference-report.log"
+          grep -Fq "test result: ok. 1 passed; 0 failed" "$RUNNER_TEMP/reference-report.log"
+
+  check:
+    name: Rust foundation checks
+    needs: [workspace, reference-report]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require both Rust jobs
+        env:
+          WORKSPACE_RESULT: ${{ needs.workspace.result }}
+          REPORT_RESULT: ${{ needs.reference-report.result }}
+        run: test "$WORKSPACE_RESULT" = success && test "$REPORT_RESULT" = success

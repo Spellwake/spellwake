@@ -1,0 +1,44 @@
+{
+  "scope": "synthetic-official-sdk-delivery-vectors-not-live-provider-evidence",
+  "sdkVersion": "23.1.0",
+  "sdkGitHead": "6d5ed967d602224ac3056dc3f0befbb55487ee50",
+  "sdkIntegrity": "sha512-fVUfMSfTPoukfoV//MUKAx2+YxyKmYaYtnAL9VkfnHfaPNQylFdWZMD+zgUFerI8rjbaiER8Vzj2XEUQ2AhAsQ==",
+  "sdkFiles": {
+    "esm/Webhooks.js": "a139361642d23a0219e9f95c347ca1f6a29790e6afe39f981a910c07605dd2a2",
+    "esm/crypto/SubtleCryptoProvider.js": "cf3bab65516068a6204b9161f0fdec167a74c2dc20fe60caa273baf4e9252741"
+  },
+  "generatorSha256": "9f8dbb16e0f2f8d599fcb54ab632f00f4d34e9f05ce27a8f4fcf1af4e74bf717",
+  "timestamp": 1793534400,
+  "secret": "whsec_spellwake_synthetic_fixture_only_v1",
+  "apiVersion": "2026-10-28.endive",
+  "vectors": [
+    {
+      "name": "official-sdk-1",
+      "body": "{\"id\":\"evt_spellwakeSynthetic1\",\"object\":\"event\",\"type\":\"checkout.session.completed\",\"created\":1,\"livemode\":false,\"api_version\":\"2026-10-28.endive\",\"data\":{\"object\":{\"id\":\"cs_test_spellwakeSynthetic\",\"object\":\"checkout.session\",\"metadata\":{\"fixtureOnly\":true}}}}",
+      "header": "t=1793534400,v1=1ecabf02698ac91a859a336103b6ec712a8e81de82b9f9d80592e99acd25ac1d",
+      "bodySha256": "497e2d99263f8868d93b647591e00b0f8989b31ecb59cd79bfd0e3a86ba350ec",
+      "sdkAccepted": true
+    },
+    {
+      "name": "official-sdk-2",
+      "body": "{\r\n  \"id\": \"evt_spellwakeSynthetic2\",\r\n  \"object\": \"event\",\r\n  \"type\": \"checkout.session.completed\",\r\n  \"created\": 1,\r\n  \"livemode\": false,\r\n  \"api_version\": \"2026-10-28.endive\",\r\n  \"data\": {\r\n    \"object\": {\r\n      \"id\": \"cs_test_spellwakeSynthetic\",\r\n      \"object\": \"checkout.session\",\r\n      \"metadata\": {\r\n        \"ignored\": \"café / 雪\"\r\n      }\r\n    }\r\n  }\r\n}\r\n",
+      "header": "t=1793534400,v1=b7e8db549fd6ec26af0f560a34c095b5dbe20f1e890f6a4fc432c28f190bf22b",
+      "bodySha256": "c69ce0b4449911147bfd15f252a56b2158a7e7d257ff66856cb4b5c021041bf0",
+      "sdkAccepted": true
+    },
+    {
+      "name": "official-sdk-3",
+      "body": "{\"id\":\"evt_spellwakeSynthetic3\",\"object\":\"event\",\"type\":\"charge.refunded\",\"created\":1,\"livemode\":true,\"api_version\":\"2026-10-28.endive\",\"data\":{\"object\":{\"id\":\"ch_spellwakeSynthetic\",\"object\":\"charge\"}}}",
+      "header": "t=1793534400,v1=99d23dc59fb8027c5f160281bc05112a3e289283c90eab6020e90c97248f6f8e",
+      "bodySha256": "a5738c8809852e8a2520d6ec9ea6ef3df54b766f81ec056967ff3316e44dfcde",
+      "sdkAccepted": true
+    },
+    {
+      "name": "official-sdk-4",
+      "body": "{\"id\":\"evt_spellwakeSynthetic4\",\"object\":\"event\",\"type\":\"balance.available\",\"created\":1,\"livemode\":false,\"api_version\":\"2026-10-28.endive\",\"data\":{\"object\":{\"object\":\"balance\",\"available\":[]}}}",
+      "header": "t=1793534400,v1=1579c781f896fdec52c431f18df42a160330e1c017a279e2b8044f4fe6355e57",
+      "bodySha256": "49e680c49a1458448c6dfaf937131b5f36c382a468f7d0d9876f5d3afebd6c14",
+      "sdkAccepted": true
+    }
+  ]
+}

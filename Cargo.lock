@@ -568,6 +568,7 @@ dependencies = [
 name = "spellwake-card-programs"
 version = "0.1.0"
 dependencies = [
+ "flate2",
  "serde",
  "serde_json",
  "sha2",
@@ -594,12 +595,16 @@ dependencies = [
  "num-bigint",
  "serde",
  "serde_json",
+ "sha2",
 ]
 
 [[package]]
 name = "spellwake-engine"
 version = "0.1.0"
 dependencies = [
+ "serde",
+ "serde_json",
+ "sha2",
  "spellwake-contracts",
 ]
 
@@ -622,6 +627,7 @@ dependencies = [
  "flate2",
  "serde",
  "serde_json",
+ "sha2",
  "spellwake-card-programs",
  "spellwake-content",
  "spellwake-contracts",

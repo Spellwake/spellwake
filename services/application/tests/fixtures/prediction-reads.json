@@ -1,0 +1,91 @@
+{
+  "market": {
+    "accountId": "00000001-1111-4111-8111-111111111111",
+    "market": {
+      "terms": {
+        "id": "00000002-1111-4111-8111-111111111111",
+        "printingId": "00000003-1111-4111-8111-111111111111",
+        "priceMetric": "scryfall:usd",
+        "targetUsd": "10.00",
+        "condition": "reached_by",
+        "deadline": "2030-01-03T13:00:00Z",
+        "tradingClosesAt": "2030-01-01T00:00:00Z",
+        "observationStartsAt": "2030-01-02T12:00:00Z",
+        "samplingPolicy": "scryfall-daily-12-13-utc-v1",
+        "terminalSlot": "2030-01-03",
+        "rulesRevision": "scryfall-sampled-gte-v1",
+        "payoutCoins": "100",
+        "state": "open",
+        "acceptingOrders": true,
+        "outcome": null,
+        "resolvedAt": null
+      },
+      "book": [
+        {
+          "side": "yes",
+          "limitCost": "60",
+          "quantity": "1000000000000000000000000000000000000000000000000000000000000000000000000000000"
+        }
+      ]
+    }
+  },
+  "markets": {
+    "accountId": "00000001-1111-4111-8111-111111111111",
+    "items": [
+      {
+        "id": "00000002-1111-4111-8111-111111111111",
+        "printingId": "00000003-1111-4111-8111-111111111111",
+        "priceMetric": "scryfall:usd",
+        "targetUsd": "10.00",
+        "condition": "reached_by",
+        "deadline": "2030-01-03T13:00:00Z",
+        "tradingClosesAt": "2030-01-01T00:00:00Z",
+        "observationStartsAt": "2030-01-02T12:00:00Z",
+        "samplingPolicy": "scryfall-daily-12-13-utc-v1",
+        "terminalSlot": "2030-01-03",
+        "rulesRevision": "scryfall-sampled-gte-v1",
+        "payoutCoins": "100",
+        "state": "open",
+        "acceptingOrders": true,
+        "outcome": null,
+        "resolvedAt": null
+      }
+    ],
+    "nextCursor": null
+  },
+  "orders": {
+    "accountId": "00000001-1111-4111-8111-111111111111",
+    "items": [
+      {
+        "id": "00000004-1111-4111-8111-111111111111",
+        "marketId": "00000002-1111-4111-8111-111111111111",
+        "side": "yes",
+        "limitCost": "60",
+        "quantity": "3",
+        "filledQuantity": "2",
+        "actualFilledCost": "120",
+        "unfilledReservation": "60",
+        "state": "open",
+        "acceptedSequence": "1",
+        "acceptedAt": "2026-11-02T12:00:00Z"
+      }
+    ],
+    "nextCursor": null
+  },
+  "positions": {
+    "accountId": "00000001-1111-4111-8111-111111111111",
+    "items": [
+      {
+        "id": "00000005-1111-4111-8111-111111111111",
+        "marketId": "00000002-1111-4111-8111-111111111111",
+        "orderId": "00000004-1111-4111-8111-111111111111",
+        "side": "yes",
+        "quantity": "2",
+        "actualCost": "120",
+        "fixedPayout": "100",
+        "matchedAt": "2026-11-02T12:01:00Z"
+      }
+    ],
+    "nextCursor": null
+  }
+}

@@ -70,6 +70,54 @@ impl PriorityRound {
         self.consecutive_passes
     }
 
+    /// Remove departed players without replaying surviving players' passes.
+    /// The current recipient, or their next survivor, must undergo fresh checks.
+    pub(crate) fn remove_players(&self, players: &BTreeSet<SeatId>) -> Result<Self, PriorityError> {
+        let revision = self.next_revision(self.revision)?;
+        let recipient = match self.phase {
+            PriorityPhase::Ready { holder } => holder,
+            PriorityPhase::RequiresChecks { candidate } => candidate,
+            PriorityPhase::AllPassed => return Err(PriorityError::RoundClosed),
+        };
+        let start = self
+            .order
+            .iter()
+            .position(|seat| *seat == recipient)
+            .ok_or(PriorityError::InvalidOrder)?;
+        let order: Vec<_> = self
+            .order
+            .iter()
+            .copied()
+            .filter(|seat| !players.contains(seat))
+            .collect();
+        if order.len() < 2 {
+            return Err(PriorityError::InvalidOrder);
+        }
+        let consecutive_passes = (1..=self.consecutive_passes)
+            .map(|offset| self.order[(start + self.order.len() - offset) % self.order.len()])
+            .filter(|seat| !players.contains(seat))
+            .count();
+        let candidate = self
+            .order
+            .iter()
+            .cycle()
+            .skip(start)
+            .take(self.order.len())
+            .copied()
+            .find(|seat| !players.contains(seat))
+            .ok_or(PriorityError::InvalidOrder)?;
+        // Leaving is not a pass. CR 800.4a gives the next survivor priority,
+        // even when that survivor had passed before the departing holder.
+        let consecutive_passes = consecutive_passes.min(order.len() - 1);
+        let phase = PriorityPhase::RequiresChecks { candidate };
+        Ok(Self {
+            order,
+            revision,
+            consecutive_passes,
+            phase,
+        })
+    }
+
     fn next_revision(&self, expected: u64) -> Result<u64, PriorityError> {
         if expected != self.revision {
             return Err(PriorityError::StaleRevision);
@@ -94,7 +142,7 @@ impl PriorityRound {
         })
     }
 
-    fn validate_holder(&self, player: SeatId) -> Result<(), PriorityError> {
+    pub(crate) fn validate_holder(&self, player: SeatId) -> Result<(), PriorityError> {
         match self.phase {
             PriorityPhase::RequiresChecks { .. } => Err(PriorityError::ChecksRequired),
             PriorityPhase::AllPassed => Err(PriorityError::RoundClosed),
@@ -153,6 +201,35 @@ mod tests {
     }
     fn checked(round: &PriorityRound) -> PriorityRound {
         round.finish_checks(round.revision()).unwrap()
+    }
+
+    #[test]
+    fn departure_passes_priority_to_next_survivor_without_counting_as_a_pass() {
+        let mut round = checked(&open(4, 0));
+        for actor in [0, 1, 2] {
+            round = checked(&round.pass(round.revision(), SeatId(actor)).unwrap());
+        }
+        let next = round
+            .remove_players(&BTreeSet::from([SeatId(1), SeatId(3)]))
+            .unwrap();
+        assert_eq!(
+            next.phase(),
+            PriorityPhase::RequiresChecks {
+                candidate: SeatId(0)
+            }
+        );
+        assert_eq!(next.consecutive_passes(), 1);
+        let next = checked(&next)
+            .record_action(next.revision() + 1, SeatId(0))
+            .unwrap();
+        assert_eq!(next.consecutive_passes(), 0);
+        assert_eq!(
+            next.phase(),
+            PriorityPhase::RequiresChecks {
+                candidate: SeatId(0)
+            }
+        );
+        assert_eq!(round.phase(), PriorityPhase::Ready { holder: SeatId(3) });
     }
 
     #[test]

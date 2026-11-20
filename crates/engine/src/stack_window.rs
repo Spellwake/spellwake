@@ -1,13 +1,24 @@
 //! Native individual-turn stack/priority boundary (CR 117, 405, 608).
 //!
 //! These are trusted post-legality continuations, not player commands. No card
-//! program, costs, complete target-legality predicates, state-based actions or trigger discovery/APNAP ordering,
-//! turn progression or persistence is implemented here. Identities are window-local;
-//! the eventual host scopes them to a game and serializes accepted successors.
+//! program, mana payment/general costs, complete target-legality predicates,
+//! state-based actions or trigger discovery/APNAP ordering,
+//! general turn actions or persistence is implemented here. GameState's scheduler
+//! reuses this window across steps, retaining identities. The eventual host scopes
+//! them to a game and serializes accepted successors.
+#[cfg(test)]
+mod control_tests;
+mod departure;
+#[cfg(test)]
+pub(crate) mod private_qualification;
+use crate::activated::SourceCost;
+use crate::shuffle::{EntropyTape, ShuffleRecord};
 use crate::{
     TargetId,
-    card_identity::{
-        CardDestination, CardIdentityError, CardObject, CardObjectId, CardObjects, CardZone,
+    draw::{DrawEvent, DrawJournal},
+    object_identity::{
+        ControllerChange, GameObject, GameObjects, ObjectDestination, ObjectId,
+        ObjectIdentityError, ObjectMovement, ObjectStatusChange, ObjectZone,
     },
     priority::{PriorityError, PriorityPhase, PriorityRound, SeatId},
     targets::{
@@ -15,8 +26,9 @@ use crate::{
         TargetError, TargetLegality, TargetPlan, TargetRef, TargetWorld,
     },
 };
+use spellwake_contracts::RulesInteger;
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 /// One stack entry, including abilities that have no associated physical card.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -25,17 +37,17 @@ pub struct StackEntryId(u64);
 /// Minimal source evidence only, not a complete ability program or last-known state.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum StackKind {
-    CardSpell(CardObjectId),
-    /// A nonpermanent instant copy has no physical CardId. Payload is owned by the executor.
+    CardSpell(ObjectId),
+    /// A nonpermanent spell copy has no physical CardId. Payload is owned by the executor.
     SpellCopy {
         copied_from: StackEntryId,
         owner: SeatId,
     },
     ActivatedAbility {
-        source: CardObject,
+        source: GameObject,
     },
     TriggeredAbility {
-        source: CardObject,
+        source: GameObject,
     },
 }
 
@@ -61,6 +73,20 @@ impl StackEntry {
     }
 }
 
+/// One final authorized public destination for a selected library card.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct LibraryTopMove {
+    pub before: ObjectId,
+    pub destination: crate::program::PublicZoneDestination,
+}
+/// Borrowed rules-authorized partition. This grants no public wire/movement authority.
+pub(crate) struct LibraryTopCommit<'a> {
+    pub player: SeatId,
+    pub frozen: &'a [ObjectId],
+    pub top: &'a [ObjectId],
+    pub bottom: &'a [ObjectId],
+    pub moves_application: &'a [LibraryTopMove],
+}
 /// A transient non-card spell object. Its key tracks one copy's lifetime, not a
 /// physical card or a targetable object outside the stack. Permanent copies and
 /// replacement-adjusted destinations are unsupported in this narrow slice.
@@ -69,18 +95,33 @@ pub struct SpellCopyObject {
     pub id: StackEntryId,
     pub owner: SeatId,
     pub controller: Option<SeatId>,
-    pub zone: CardZone,
+    pub zone: ObjectZone,
 }
 /// A nonmana, stack-using trigger whose controller/source and APNAP position the kernel has
 /// already established. Vector order is bottom-to-top, never chosen by this module.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct OrderedTrigger {
     pub controller: SeatId,
-    pub source: CardObject,
+    pub source: GameObject,
+}
+
+/// Actual allocation identities paired to the supplied bottom-to-top triggers.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct OrderedTriggerReceipt {
+    window: StackWindow,
+    entries: Vec<StackEntryId>,
+}
+impl OrderedTriggerReceipt {
+    pub(crate) fn into_parts(self) -> (StackWindow, Vec<StackEntryId>) {
+        (self.window, self.entries)
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum WindowPhase {
+    Opening,
+    /// Mandatory turn work; players have no priority at this boundary.
+    TurnWork,
     Priority(PriorityPhase),
     Resolving(StackEntryId),
     CheckingTargets(StackEntryId),
@@ -89,6 +130,8 @@ pub enum WindowPhase {
 }
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum Status {
+    Opening,
+    TurnWork,
     Priority(PriorityRound),
     // Keep a continuation snapshot even if the resolving spell leaves the stack.
     Resolving {
@@ -110,16 +153,111 @@ pub struct StackWindow {
     revision: u64,
     next_entry: u64,
     order: Vec<SeatId>,
+    departed: BTreeSet<SeatId>,
     active: SeatId,
-    cards: CardObjects,
+    priority_start: SeatId,
+    cards: GameObjects,
     stack: Vec<StackEntry>,
     copies: BTreeMap<StackEntryId, SpellCopyObject>,
     status: Status,
 }
 
+/// One local draw call, borrowing its unchanged accepted basis. It is never
+/// retained in pending work. Only completion produces an adoptable successor.
+#[derive(Debug)]
+pub(crate) struct DrawBatch<'a> {
+    basis: &'a StackWindow,
+    revision: u64,
+    cards: GameObjects,
+    player: SeatId,
+    remaining: RulesInteger,
+    journal: DrawJournal,
+}
+
+/// A real physical cut, or the complete batch receipt. The predecessor registry
+/// lives only in this cut; occurrence discovery must happen before advancing next.
+#[derive(Debug)]
+pub(crate) enum DrawBatchProgress<'a> {
+    Drawn {
+        before: GameObjects,
+        next: DrawBatch<'a>,
+        movement: ObjectMovement,
+    },
+    Complete {
+        window: StackWindow,
+        journal: DrawJournal,
+    },
+}
+impl<'a> DrawBatch<'a> {
+    pub(crate) fn cards(&self) -> &GameObjects {
+        &self.cards
+    }
+    /// Consuming the local batch ensures an error cannot leave a finishable
+    /// tentative prefix. Nothing is published outside the enclosing transaction.
+    pub(crate) fn next_draw(mut self) -> Result<DrawBatchProgress<'a>, StackWindowError> {
+        if self.remaining > 0.into() {
+            let before = self.cards().clone();
+            if let Some(movement) = self.cards.draw_card_in_place(self.player)? {
+                self.journal.record_draw(self.player, &movement);
+                self.remaining = self.remaining.minus(&1.into());
+                return Ok(DrawBatchProgress::Drawn {
+                    before,
+                    next: self,
+                    movement,
+                });
+            }
+            self.journal.events.push(DrawEvent::EmptyLibrary {
+                player: self.player,
+                attempts: self.remaining,
+            });
+        }
+        Ok(DrawBatchProgress::Complete {
+            window: self.basis.with_cards(self.revision, self.cards),
+            journal: self.journal,
+        })
+    }
+}
+
+/// An actual exit produced by the single stack/card mutator, never inferred by CardId.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum StackExit {
+    Object(ObjectMovement),
+    Copy {
+        before: SpellCopyObject,
+        after: SpellCopyObject,
+    },
+}
+
+/// Atomic targeted ability admission and physical source-cost result.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PaidActivation {
+    state: StackWindow,
+    entry: StackEntryId,
+    source_before: GameObject,
+    source_after: GameObject,
+}
+impl PaidActivation {
+    pub fn state(&self) -> &StackWindow {
+        &self.state
+    }
+    pub fn entry(&self) -> StackEntryId {
+        self.entry
+    }
+    pub fn source_before(&self) -> &GameObject {
+        &self.source_before
+    }
+    pub fn source_after(&self) -> &GameObject {
+        &self.source_after
+    }
+    pub fn into_state(self) -> StackWindow {
+        self.state
+    }
+}
 /// Native rejection or unsupported integration, not an adjudicated game outcome.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum StackWindowError {
+    NotOwnHand,
+    NotInTurnWork,
     StaleRevision,
     RevisionExhausted,
     EntryIdentityExhausted,
@@ -128,7 +266,7 @@ pub enum StackWindowError {
     UnknownPlayer,
     UntrackedInitialStack,
     Priority(PriorityError),
-    Cards(CardIdentityError),
+    Objects(ObjectIdentityError),
     NotInPriority,
     NotResolving,
     WrongResolution,
@@ -146,17 +284,37 @@ pub enum StackWindowError {
     UnsupportedTargetOperation,
     EmptyCheckMoves,
     InvalidCheckMove,
+    /// The resolving batch wrapper requires at least one real selected movement.
+    EmptyResolutionMoves,
+    /// A selected identity, physical origin, zone, controller or uniqueness failed.
+    InvalidResolutionMove,
+    InvalidLibraryTop,
     NotSpell,
     CopyChecksRequired,
+}
+/// Checked physical source conditions for an effect-time selected-object batch.
+/// Type predicates stay in the characteristic executor, not this registry owner.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ResolutionSelectionMove {
+    Sacrifice {
+        player: SeatId,
+        object: ObjectId,
+        destination: crate::program::PublicZoneDestination,
+    },
+    Discard {
+        player: SeatId,
+        object: ObjectId,
+        destination: crate::program::PublicZoneDestination,
+    },
 }
 impl From<PriorityError> for StackWindowError {
     fn from(error: PriorityError) -> Self {
         Self::Priority(error)
     }
 }
-impl From<CardIdentityError> for StackWindowError {
-    fn from(error: CardIdentityError) -> Self {
-        Self::Cards(error)
+impl From<ObjectIdentityError> for StackWindowError {
+    fn from(error: ObjectIdentityError) -> Self {
+        Self::Objects(error)
     }
 }
 
@@ -167,8 +325,8 @@ impl From<TargetError> for StackWindowError {
 }
 
 impl TargetWorld for StackWindow {
-    fn card_zone(&self, card: CardObjectId) -> Option<CardZone> {
-        self.cards.get(card).map(CardObject::zone)
+    fn object_zone(&self, card: ObjectId) -> Option<ObjectZone> {
+        self.cards.get(card).map(GameObject::zone)
     }
     fn player_exists(&self, player: SeatId) -> bool {
         self.order.contains(&player)
@@ -194,7 +352,7 @@ impl StackWindow {
     pub fn new(
         order: Vec<SeatId>,
         active: SeatId,
-        cards: CardObjects,
+        cards: GameObjects,
     ) -> Result<Self, StackWindowError> {
         let round = PriorityRound::new(order.clone(), active, 0)?;
         for card in cards.iter() {
@@ -203,15 +361,17 @@ impl StackWindow {
             {
                 return Err(StackWindowError::UnknownPlayer);
             }
-            if card.zone() == CardZone::Stack {
+            if card.zone() == ObjectZone::Stack {
                 return Err(StackWindowError::UntrackedInitialStack);
             }
         }
         Ok(Self {
             revision: 0,
             next_entry: 1,
+            departed: BTreeSet::new(),
             order,
             active,
+            priority_start: active,
             cards,
             stack: Vec::new(),
             copies: BTreeMap::new(),
@@ -220,6 +380,25 @@ impl StackWindow {
     }
     pub fn revision(&self) -> u64 {
         self.revision
+    }
+    /// Privileged operational counter; allocation receipts identify actual entries.
+    pub fn next_entry_sequence(&self) -> u64 {
+        self.next_entry
+    }
+    /// Inspect the real retained pass prefix in reached qualification fixtures.
+    #[cfg(test)]
+    pub(crate) fn qualification_priority_pass_count(&self) -> Option<usize> {
+        match &self.status {
+            Status::Priority(round) => Some(round.consecutive_passes()),
+            _ => None,
+        }
+    }
+    /// Actual live priority owner's revision, when a priority round exists.
+    pub fn priority_revision(&self) -> Option<u64> {
+        match &self.status {
+            Status::Priority(round) => Some(round.revision()),
+            _ => None,
+        }
     }
     /// Cross-module overflow fault injection, absent from production builds.
     #[cfg(test)]
@@ -234,7 +413,37 @@ impl StackWindow {
     pub fn participants(&self) -> &[SeatId] {
         &self.order
     }
-    pub fn cards(&self) -> &CardObjects {
+    /// Historical identity is not current participation or action authority.
+    pub(crate) fn known_player(&self, player: SeatId) -> bool {
+        self.order.contains(&player) || self.departed.contains(&player)
+    }
+    /// Historical owner of this turn, retained until its completion (CR 800.4j).
+    pub fn turn_owner(&self) -> SeatId {
+        self.active
+    }
+    /// Current active participant. A departed owner's turn continues with none.
+    pub fn active_player(&self) -> Option<SeatId> {
+        self.order.contains(&self.active).then_some(self.active)
+    }
+    /// Actual stable individual-turn participant order, starting at the active
+    /// player. Placement and simultaneous graveyard grouping share this traversal.
+    pub(crate) fn apnap_players(
+        &self,
+    ) -> Result<impl Iterator<Item = SeatId> + '_, StackWindowError> {
+        let start = self
+            .order
+            .iter()
+            .position(|player| *player == self.priority_start)
+            .ok_or(StackWindowError::UnknownPlayer)?;
+        Ok(self
+            .order
+            .iter()
+            .cycle()
+            .skip(start)
+            .take(self.order.len())
+            .copied())
+    }
+    pub fn cards(&self) -> &GameObjects {
         &self.cards
     }
     /// Canonical internal entries, bottom-to-top. Not a seat-safe projection.
@@ -247,13 +456,15 @@ impl StackWindow {
     }
     pub fn spell_owner(&self, entry: &StackEntry) -> Option<SeatId> {
         match entry.kind() {
-            StackKind::CardSpell(object) => self.cards.get(*object).map(CardObject::owner),
+            StackKind::CardSpell(object) => self.cards.get(*object).map(GameObject::owner),
             StackKind::SpellCopy { owner, .. } => Some(*owner),
             _ => None,
         }
     }
     pub fn phase(&self) -> WindowPhase {
         match &self.status {
+            Status::Opening => WindowPhase::Opening,
+            Status::TurnWork => WindowPhase::TurnWork,
             Status::Priority(round) => WindowPhase::Priority(round.phase()),
             Status::Resolving { entry, .. } => WindowPhase::Resolving(entry.id),
             Status::CheckingTargets(entry) => WindowPhase::CheckingTargets(entry.id),
@@ -275,11 +486,313 @@ impl StackWindow {
             .checked_add(1)
             .ok_or(StackWindowError::RevisionExhausted)
     }
+    /// Replace the canonical registry without cloning the registry being replaced.
+    fn with_cards(&self, revision: u64, cards: GameObjects) -> Self {
+        Self {
+            revision,
+            next_entry: self.next_entry,
+            order: self.order.clone(),
+            departed: self.departed.clone(),
+            active: self.active,
+            priority_start: self.priority_start,
+            cards,
+            stack: self.stack.clone(),
+            copies: self.copies.clone(),
+            status: self.status.clone(),
+        }
+    }
+    /// Apply one already-evaluated battlefield control cut. All validation and
+    /// mutation stay on the tentative registry; failures publish no prefix.
+    pub(crate) fn reconcile_controllers(
+        &self,
+        expected: u64,
+        controllers: &BTreeMap<ObjectId, SeatId>,
+    ) -> Result<(Self, Vec<ControllerChange>), StackWindowError> {
+        let revision = self.next_revision(expected)?;
+        for (&object, &controller) in controllers {
+            self.validate_player(controller)?;
+            if self
+                .cards
+                .get(object)
+                .ok_or(ObjectIdentityError::UnknownObject)?
+                .zone()
+                != ObjectZone::Battlefield
+            {
+                return Err(ObjectIdentityError::NotPermanent.into());
+            }
+        }
+        let (cards, changes) = self
+            .cards
+            .apply_effective_controllers(self.cards.revision(), controllers)?;
+        Ok((self.with_cards(revision, cards), changes))
+    }
+    /// Native scheduler continuation. Preserve every object/entry allocator;
+    /// only a completed step, turn work, or untouched setup can open a boundary.
+    pub(crate) fn enter_turn_step(
+        &self,
+        expected: u64,
+        active: SeatId,
+        priority: bool,
+    ) -> Result<Self, StackWindowError> {
+        let revision = self.next_revision(expected)?;
+        let initial = self.revision == 0
+            && matches!(
+                self.phase(),
+                WindowPhase::Priority(PriorityPhase::RequiresChecks { .. })
+            );
+        if !self.stack.is_empty()
+            || !(initial
+                || matches!(
+                    self.status,
+                    Status::Opening | Status::StepEnded | Status::TurnWork
+                ))
+        {
+            return Err(StackWindowError::NotInTurnWork);
+        }
+        if !self.order.contains(&active) && active != self.active {
+            return Err(StackWindowError::UnknownPlayer);
+        }
+        let priority_start = if self.order.contains(&active) {
+            active
+        } else {
+            self.priority_start
+        };
+        let status = if priority {
+            Status::Priority(PriorityRound::new(self.order.clone(), priority_start, 0)?)
+        } else {
+            Status::TurnWork
+        };
+        Ok(Self {
+            revision,
+            active,
+            priority_start,
+            status,
+            ..self.clone()
+        })
+    }
+    /// Trusted actual turn-start continuation, independent from the untap action.
+    pub(crate) fn record_turn_start(&self, expected: u64) -> Result<Self, StackWindowError> {
+        let revision = self.next_revision(expected)?;
+        if !self.stack.is_empty() || !matches!(self.status, Status::TurnWork) {
+            return Err(StackWindowError::NotInTurnWork);
+        }
+        if !self.order.contains(&self.active) {
+            return Err(StackWindowError::UnknownPlayer);
+        }
+        Ok(Self {
+            revision,
+            cards: self
+                .cards
+                .record_turn_start(self.cards.revision(), self.active)?,
+            ..self.clone()
+        })
+    }
+    pub(crate) fn begin_opening(&self, expected: u64) -> Result<Self, StackWindowError> {
+        let revision = self.next_revision(expected)?;
+        if self.revision != 0 || !self.stack.is_empty() {
+            return Err(StackWindowError::NotInTurnWork);
+        }
+        Ok(Self {
+            revision,
+            status: Status::Opening,
+            ..self.clone()
+        })
+    }
+    pub(crate) fn opening_shuffle(
+        &self,
+        expected: u64,
+        player: SeatId,
+        entropy: &EntropyTape,
+    ) -> Result<(Self, EntropyTape, ShuffleRecord), StackWindowError> {
+        let revision = self.next_revision(expected)?;
+        if self.phase() != WindowPhase::Opening {
+            return Err(StackWindowError::NotInTurnWork);
+        }
+        if !self.order.contains(&player) {
+            return Err(StackWindowError::UnknownPlayer);
+        }
+        let shuffled = self
+            .cards
+            .shuffle_library(self.cards.revision(), player, entropy)?;
+        Ok((
+            Self {
+                revision,
+                cards: shuffled.next,
+                ..self.clone()
+            },
+            shuffled.entropy,
+            shuffled.record,
+        ))
+    }
+    pub(crate) fn opening_bottom_with_movements(
+        &self,
+        expected: u64,
+        player: SeatId,
+        objects: &[ObjectId],
+    ) -> Result<(Self, Vec<crate::object_identity::ObjectMovement>), StackWindowError> {
+        let revision = self.next_revision(expected)?;
+        if self.phase() != WindowPhase::Opening {
+            return Err(StackWindowError::NotInTurnWork);
+        }
+        if !self.order.contains(&player) {
+            return Err(StackWindowError::UnknownPlayer);
+        }
+        let mut next = self.clone();
+        let mut movements = Vec::with_capacity(objects.len());
+        for &object in objects {
+            if next.cards.get(object).map(GameObject::zone) != Some(ObjectZone::Hand(player)) {
+                return Err(StackWindowError::InvalidCheckMove);
+            }
+            let moved = next
+                .cards
+                .apply_zone_move(
+                    next.cards.revision(),
+                    object,
+                    ObjectDestination::LibraryBottom,
+                )?
+                .require_moved()?;
+            let before = moved.before.ok_or(StackWindowError::InvalidCheckMove)?;
+            movements.push(crate::object_identity::ObjectMovement {
+                before,
+                after: moved.after,
+            });
+            next.cards = moved.next;
+        }
+        next.revision = revision;
+        Ok((next, movements))
+    }
+    /// Receipt-dropping primitive adapter; executor publication retains status pairs.
+    #[cfg(test)]
+    pub(crate) fn untap_active(&self, expected: u64) -> Result<Self, StackWindowError> {
+        self.untap_active_with_changes(expected)
+            .map(|(state, _)| state)
+    }
+    pub(crate) fn untap_active_with_changes(
+        &self,
+        expected: u64,
+    ) -> Result<(Self, Vec<ObjectStatusChange>), StackWindowError> {
+        let revision = self.next_revision(expected)?;
+        if !matches!(self.status, Status::TurnWork) {
+            return Err(StackWindowError::NotInTurnWork);
+        }
+        let objects: Vec<_> = self
+            .cards
+            .iter()
+            .filter(|object| {
+                object.controller() == Some(self.active) && object.tapped() == Some(true)
+            })
+            .map(GameObject::id)
+            .collect();
+        let (cards, changes) =
+            self.cards
+                .set_tapped_batch(self.cards.revision(), &objects, false)?;
+        Ok((self.with_cards(revision, cards), changes))
+    }
+    /// Physical attack taps during actual mandatory work. The executor separately
+    /// establishes creature, control-history and combat-policy legality.
+    pub(crate) fn record_declaration_taps(
+        &self,
+        expected: u64,
+        actor: SeatId,
+        objects: &[ObjectId],
+    ) -> Result<(Self, Vec<ObjectStatusChange>), StackWindowError> {
+        let revision = self.next_revision(expected)?;
+        if !self.stack.is_empty() || !matches!(self.status, Status::TurnWork) {
+            return Err(StackWindowError::NotInTurnWork);
+        }
+        self.validate_player(actor)?;
+        if actor != self.active {
+            return Err(StackWindowError::WrongController);
+        }
+        for &object in objects {
+            let card = self
+                .cards
+                .get(object)
+                .ok_or(ObjectIdentityError::UnknownObject)?;
+            if card.zone() != ObjectZone::Battlefield {
+                return Err(ObjectIdentityError::NotPermanent.into());
+            }
+            if card.controller() != Some(actor) {
+                return Err(StackWindowError::WrongController);
+            }
+            if card.tapped() != Some(false) {
+                return Err(StackWindowError::SourceTapped);
+            }
+        }
+        let (cards, changes) = self
+            .cards
+            .set_tapped_batch(self.cards.revision(), objects, true)?;
+        Ok((self.with_cards(revision, cards), changes))
+    }
+    /// Trusted ordinary draw work. A player command cannot select a library or
+    /// count; the enclosing scheduler/evaluator establishes the instruction.
+    /// Test-only direct mechanism fixture; production uses the shared driver.
+    #[cfg(test)]
+    pub(crate) fn draw_cards(
+        &self,
+        expected: u64,
+        player: SeatId,
+        amount: RulesInteger,
+    ) -> Result<(Self, DrawJournal), StackWindowError> {
+        let mut batch = self.begin_draw_batch(expected, player, amount)?;
+        loop {
+            match batch.next_draw()? {
+                DrawBatchProgress::Drawn { next, .. } => batch = next,
+                DrawBatchProgress::Complete { window, journal } => return Ok((window, journal)),
+            }
+        }
+    }
+    /// Reserve the outer revision once, retaining the existing work/player/count
+    /// checks even when no physical card will move. Every advance uses the actual
+    /// one-card registry primitive, with no intermediate priority or check work.
+    pub(crate) fn begin_draw_batch(
+        &self,
+        expected: u64,
+        player: SeatId,
+        amount: RulesInteger,
+    ) -> Result<DrawBatch<'_>, StackWindowError> {
+        let revision = self.next_revision(expected)?;
+        if !matches!(
+            self.phase(),
+            WindowPhase::Opening | WindowPhase::TurnWork | WindowPhase::Resolving(_)
+        ) {
+            return Err(StackWindowError::NotInTurnWork);
+        }
+        if !self.order.contains(&player) {
+            return Err(StackWindowError::UnknownPlayer);
+        }
+        if amount < 0.into() {
+            return Err(ObjectIdentityError::NegativeDrawCount.into());
+        }
+        Ok(DrawBatch {
+            basis: self,
+            revision,
+            cards: self.cards.clone(),
+            player,
+            remaining: amount,
+            journal: DrawJournal::default(),
+        })
+    }
+    fn require_checks(&self) -> Result<(), StackWindowError> {
+        if matches!(
+            self.phase(),
+            WindowPhase::TurnWork | WindowPhase::Priority(PriorityPhase::RequiresChecks { .. })
+        ) {
+            Ok(())
+        } else {
+            Err(StackWindowError::ChecksNotPending)
+        }
+    }
     fn priority(&self) -> Result<&PriorityRound, StackWindowError> {
         match &self.status {
             Status::Priority(round) => Ok(round),
             _ => Err(StackWindowError::NotInPriority),
         }
+    }
+    /// Check action timing without recording an action or paying a source cost.
+    pub(crate) fn validate_action_actor(&self, actor: SeatId) -> Result<(), StackWindowError> {
+        self.priority()?.validate_holder(actor)?;
+        Ok(())
     }
     fn validate_player(&self, seat: SeatId) -> Result<(), StackWindowError> {
         if self.order.contains(&seat) {
@@ -288,8 +801,12 @@ impl StackWindow {
             Err(StackWindowError::UnknownPlayer)
         }
     }
-    fn validate_source(&self, source: &CardObject) -> Result<(), StackWindowError> {
-        self.validate_player(source.owner())?;
+    fn validate_source(&self, source: &GameObject) -> Result<(), StackWindowError> {
+        // A surviving controller's triggered ability can retain a source owned
+        // by a departed player as exact LKI (CR 603.6c, 800.4d).
+        if !self.known_player(source.owner()) {
+            return Err(StackWindowError::UnknownPlayer);
+        }
         if let Some(controller) = source.controller() {
             self.validate_player(controller)?;
         }
@@ -320,7 +837,7 @@ impl StackWindow {
         if self
             .copies
             .values()
-            .any(|copy| copy.zone != CardZone::Stack)
+            .any(|copy| copy.zone != ObjectZone::Stack)
         {
             return Err(StackWindowError::CopyChecksRequired);
         }
@@ -361,25 +878,12 @@ impl StackWindow {
         &self,
         expected: u64,
         actor: SeatId,
-        source: CardObjectId,
+        source: ObjectId,
     ) -> Result<Self, StackWindowError> {
         let revision = self.next_revision(expected)?;
         let round = self.priority()?;
         let round = round.record_action(round.revision(), actor)?;
-        let card = self
-            .cards
-            .get(source)
-            .ok_or(CardIdentityError::UnknownObject)?;
-        if card.zone() != CardZone::Battlefield {
-            return Err(CardIdentityError::NotPermanent.into());
-        }
-        if card.controller() != Some(actor) {
-            return Err(StackWindowError::WrongController);
-        }
-        if card.tapped() != Some(false) {
-            return Err(StackWindowError::SourceTapped);
-        }
-        let changed = self.cards.set_tapped(self.cards.revision(), source, true)?;
+        let changed = self.source_cost_change(actor, source, SourceCost::Tap)?;
         Ok(Self {
             revision,
             cards: changed.next,
@@ -387,9 +891,81 @@ impl StackWindow {
             ..self.clone()
         })
     }
+    /// Trusted resolution-time mana tap after the executor proves payment authority.
+    /// This preserves the resolving entry and does not create priority/check work.
+    ///
+    /// # Errors
+    /// Rejects a stale revision, another resolving entry or invalid physical tap
+    /// cost. The caller must separately validate the exact mana ability and payer.
+    pub(crate) fn record_resolution_tap(
+        &self,
+        expected: u64,
+        resolving: StackEntryId,
+        actor: SeatId,
+        source: ObjectId,
+    ) -> Result<Self, StackWindowError> {
+        let revision = self.next_revision(expected)?;
+        if self.resolving().map(StackEntry::id) != Some(resolving) {
+            return Err(StackWindowError::WrongResolution);
+        }
+        let changed = self.source_cost_change(actor, source, SourceCost::Tap)?;
+        Ok(Self {
+            revision,
+            cards: changed.next,
+            ..self.clone()
+        })
+    }
+    /// Trusted ordinary land special action after program, timing and allowance
+    /// validation by the enclosing owners. No stack identity is allocated.
+    pub(crate) fn record_land_play(
+        &self,
+        expected: u64,
+        actor: SeatId,
+        land: ObjectId,
+    ) -> Result<(Self, crate::actions::LandPlayRecord), StackWindowError> {
+        let revision = self.next_revision(expected)?;
+        let round = self.priority()?;
+        let round = round.record_action(round.revision(), actor)?;
+        let before = self
+            .cards
+            .get(land)
+            .ok_or(ObjectIdentityError::UnknownObject)?;
+        if before.zone() != ObjectZone::Hand(actor) {
+            return Err(StackWindowError::NotOwnHand);
+        }
+        if before.card_id().is_none() {
+            return Err(ObjectIdentityError::NotCard.into());
+        }
+        let changed = self
+            .cards
+            .apply_zone_move(
+                self.cards.revision(),
+                land,
+                ObjectDestination::Battlefield { controller: actor },
+            )?
+            .require_moved()?;
+        let record = crate::actions::LandPlayRecord {
+            player: actor,
+            before: before.clone(),
+            after: changed.after,
+        };
+        Ok((
+            Self {
+                revision,
+                cards: changed.next,
+                status: Status::Priority(round),
+                ..self.clone()
+            },
+            record,
+        ))
+    }
     #[cfg(test)]
-    pub(crate) fn set_test_card_revision(&mut self, revision: u64) {
+    pub(crate) fn set_test_object_revision(&mut self, revision: u64) {
         self.cards.set_test_revision(revision);
+    }
+    #[cfg(test)]
+    pub(crate) fn set_test_next_object_identity(&mut self, next_identity: u64) {
+        self.cards.set_test_next_identity(next_identity);
     }
     #[cfg(test)]
     pub(crate) fn set_test_priority_revision(&mut self, revision: u64) {
@@ -398,6 +974,98 @@ impl StackWindow {
         };
         round.set_test_revision(revision);
     }
+    /// Physical cost only. The caller separately establishes ability legality
+    /// and either ordinary priority action or trusted resolution payment authority.
+    fn source_cost_change(
+        &self,
+        actor: SeatId,
+        source: ObjectId,
+        cost: SourceCost,
+    ) -> Result<crate::object_identity::ObjectChange, StackWindowError> {
+        let card = self
+            .cards
+            .get(source)
+            .ok_or(ObjectIdentityError::UnknownObject)?;
+        if card.zone() != ObjectZone::Battlefield {
+            return Err(ObjectIdentityError::NotPermanent.into());
+        }
+        if card.controller() != Some(actor) {
+            return Err(StackWindowError::WrongController);
+        }
+        match cost {
+            SourceCost::None => Ok(crate::object_identity::ObjectChange {
+                next: self.cards.clone(),
+                before: Some(card.clone()),
+                after: card.clone(),
+            }),
+            SourceCost::Tap => {
+                if card.tapped() != Some(false) {
+                    return Err(StackWindowError::SourceTapped);
+                }
+                Ok(self.cards.set_tapped(self.cards.revision(), source, true)?)
+            }
+            SourceCost::Sacrifice => Ok(self
+                .cards
+                .apply_zone_move(self.cards.revision(), source, ObjectDestination::Graveyard)?
+                .require_moved()?),
+        }
+    }
+    /// Trusted native targeted activation with a source cost. No mana payment or
+    /// general ability legality is inferred here. The source snapshot precedes cost.
+    pub fn record_paid_targeted_activation(
+        &self,
+        expected: u64,
+        actor: SeatId,
+        source: ObjectId,
+        cost: SourceCost,
+        clauses: Vec<TargetClause>,
+        choices: Vec<TargetChoice>,
+    ) -> Result<PaidActivation, StackWindowError> {
+        let before = self
+            .cards
+            .get(source)
+            .ok_or(ObjectIdentityError::UnknownObject)?
+            .clone();
+        let mut next =
+            self.record_targeted_activation(expected, actor, before.clone(), clauses, choices)?;
+        let entry = next
+            .stack
+            .last()
+            .ok_or(StackWindowError::InconsistentStack)?
+            .id();
+        let (paid, after) = next.pay_announced_source_cost(entry, actor, source, cost)?;
+        next = paid;
+        Ok(PaidActivation {
+            state: next,
+            entry,
+            source_before: before,
+            source_after: after,
+        })
+    }
+    /// Physical cost continuation on the actual already-announced ability window.
+    /// Its action/window revision was reserved by admission; only the registry advances here.
+    pub(crate) fn pay_announced_source_cost(
+        &self,
+        entry: StackEntryId,
+        actor: SeatId,
+        source: ObjectId,
+        cost: SourceCost,
+    ) -> Result<(Self, GameObject), StackWindowError> {
+        let admitted = self
+            .stack
+            .last()
+            .ok_or(StackWindowError::InconsistentStack)?;
+        if admitted.id() != entry
+            || admitted.controller() != actor
+            || !matches!(admitted.kind(), StackKind::ActivatedAbility { source: origin } if origin.id() == source)
+        {
+            return Err(StackWindowError::InconsistentStack);
+        }
+        let changed = self.source_cost_change(actor, source, cost)?;
+        let mut next = self.clone();
+        next.cards = changed.next;
+        Ok((next, changed.after))
+    }
     /// Record an otherwise legal card cast with a new stack incarnation. This narrow
     /// move/push/reset is atomic in the returned native successor; it does not pay
     /// costs or implement the intervening casting procedure (CR 601).
@@ -405,16 +1073,22 @@ impl StackWindow {
         &self,
         expected: u64,
         actor: SeatId,
-        card: CardObjectId,
+        card: ObjectId,
     ) -> Result<Self, StackWindowError> {
         let revision = self.next_revision(expected)?;
         let round = self.priority()?;
         let round = round.record_action(round.revision(), actor)?;
-        let moved = self.cards.apply_zone_move(
-            self.cards.revision(),
-            card,
-            CardDestination::Stack { controller: actor },
-        )?;
+        if self.cards.get(card).is_some_and(GameObject::is_token) {
+            return Err(ObjectIdentityError::NotCard.into());
+        }
+        let moved = self
+            .cards
+            .apply_zone_move(
+                self.cards.revision(),
+                card,
+                ObjectDestination::Stack { controller: actor },
+            )?
+            .require_moved()?;
         let mut next = self.clone();
         let entry = next.allocate(actor, StackKind::CardSpell(moved.after.id()))?;
         next.stack.push(entry);
@@ -422,6 +1096,31 @@ impl StackWindow {
         next.status = Status::Priority(round);
         next.revision = revision;
         Ok(next)
+    }
+    /// Trusted batch from the actual resolving instruction, with participant creators.
+    /// This creates no stack entries, casting actions, checks or priority.
+    /// The executor adopts timestamps and one publication atomically.
+    pub(crate) fn record_token_creations(
+        &self,
+        expected: u64,
+        tokens: Vec<(SeatId, crate::program::Program)>,
+        vocabulary: &spellwake_contracts::creature_types::CreatureTypeVocabulary,
+    ) -> Result<(Self, Vec<GameObject>), StackWindowError> {
+        if expected != self.revision {
+            return Err(StackWindowError::StaleRevision);
+        }
+        self.resolving().ok_or(StackWindowError::NotResolving)?;
+        for (creator, _) in &tokens {
+            self.validate_player(*creator)?;
+        }
+        if tokens.is_empty() {
+            return Ok((self.clone(), vec![]));
+        }
+        let revision = self.next_revision(expected)?;
+        let created = self
+            .cards
+            .insert_tokens(self.cards.revision(), tokens, vocabulary)?;
+        Ok((self.with_cards(revision, created.next), created.objects))
     }
     /// Trusted resolution-only creation of a nonpermanent spell copy. This is not
     /// casting, pays no costs and grants no priority. The executor snapshots the
@@ -470,7 +1169,7 @@ impl StackWindow {
                 id: entry.id,
                 owner: controller,
                 controller: Some(controller),
-                zone: CardZone::Stack,
+                zone: ObjectZone::Stack,
             },
         );
         next.revision = revision;
@@ -480,24 +1179,54 @@ impl StackWindow {
     /// not as an instruction in the middle of resolution.
     pub fn cease_departed_copies(&self, expected: u64) -> Result<Self, StackWindowError> {
         let revision = self.next_revision(expected)?;
-        if !matches!(
-            self.priority()?.phase(),
-            PriorityPhase::RequiresChecks { .. }
-        ) {
-            return Err(StackWindowError::ChecksNotPending);
-        }
+        self.require_checks()?;
         let mut next = self.clone();
-        next.copies.retain(|_, copy| copy.zone == CardZone::Stack);
+        next.copies.retain(|_, copy| copy.zone == ObjectZone::Stack);
         next.revision = revision;
         Ok(next)
+    }
+    /// Cease only the exact frozen copy cohort from the actual check pass.
+    pub(crate) fn cease_check_copies(
+        &self,
+        expected: u64,
+        cohort: &BTreeMap<StackEntryId, SpellCopyObject>,
+    ) -> Result<Self, StackWindowError> {
+        let actual = self
+            .copies
+            .iter()
+            .filter(|(_, copy)| copy.zone != ObjectZone::Stack)
+            .map(|(id, copy)| (*id, copy.clone()))
+            .collect::<BTreeMap<_, _>>();
+        if &actual != cohort {
+            return Err(StackWindowError::InvalidCheckMove);
+        }
+        self.cease_departed_copies(expected)
+    }
+    /// Apply only the exact already-departed token cohort from one frozen check.
+    /// Newly dying tokens are outside this cohort and remain until the next check.
+    pub(crate) fn cease_tokens(
+        &self,
+        expected: u64,
+        objects: &BTreeSet<ObjectId>,
+    ) -> Result<(Self, Vec<GameObject>), StackWindowError> {
+        let revision = self.next_revision(expected)?;
+        self.require_checks()?;
+        let mut cards = self.cards.clone();
+        let mut ceased = Vec::with_capacity(objects.len());
+        for id in objects {
+            let removal = cards.cease_token(cards.revision(), *id)?;
+            cards = removal.next;
+            ceased.push(removal.object);
+        }
+        Ok((self.with_cards(revision, cards), ceased))
     }
     fn move_copy(
         &self,
         revision: u64,
         id: StackEntryId,
-        destination: CardDestination,
+        destination: ObjectDestination,
     ) -> Result<Self, StackWindowError> {
-        if destination != CardDestination::Graveyard {
+        if destination != ObjectDestination::Graveyard {
             return Err(StackWindowError::UnsupportedTargetOperation);
         }
         let mut next = self.clone();
@@ -505,10 +1234,10 @@ impl StackWindow {
             .copies
             .get_mut(&id)
             .ok_or(StackWindowError::InconsistentStack)?;
-        if copy.zone != CardZone::Stack {
+        if copy.zone != ObjectZone::Stack {
             return Err(StackWindowError::InconsistentStack);
         }
-        copy.zone = CardZone::Graveyard(copy.owner);
+        copy.zone = ObjectZone::Graveyard(copy.owner);
         copy.controller = None;
         next.stack.retain(|entry| entry.id != id);
         next.revision = revision;
@@ -516,12 +1245,13 @@ impl StackWindow {
     }
     /// Record an otherwise legal nonmana activation. The supplied source snapshot
     /// can precede costs that moved the source; it need not still be current.
-    /// Cost execution and full ability/source context are not implemented here.
+    /// This raw continuation executes no costs. The scoped paid wrapper handles
+    /// Tap/Sacrifice; full ability/source context and general costs remain absent.
     pub fn record_activation(
         &self,
         expected: u64,
         actor: SeatId,
-        source: CardObject,
+        source: GameObject,
     ) -> Result<Self, StackWindowError> {
         let revision = self.next_revision(expected)?;
         let round = self.priority()?;
@@ -542,6 +1272,16 @@ impl StackWindow {
         expected: u64,
         triggers: Vec<OrderedTrigger>,
     ) -> Result<Self, StackWindowError> {
+        // Explicitly receipt-dropping trusted convenience. Executor placement
+        // consumes the allocation receipt instead of guessing the new entries.
+        self.record_ordered_triggers_with_receipt(expected, triggers)
+            .map(|receipt| receipt.into_parts().0)
+    }
+    pub(crate) fn record_ordered_triggers_with_receipt(
+        &self,
+        expected: u64,
+        triggers: Vec<OrderedTrigger>,
+    ) -> Result<OrderedTriggerReceipt, StackWindowError> {
         let revision = self.next_revision(expected)?;
         let round = self.priority()?;
         let PriorityPhase::RequiresChecks { candidate } = round.phase() else {
@@ -555,6 +1295,7 @@ impl StackWindow {
             self.validate_source(&trigger.source)?;
         }
         let mut next = self.clone();
+        let mut entries = Vec::with_capacity(triggers.len());
         for trigger in triggers {
             let entry = next.allocate(
                 trigger.controller,
@@ -562,11 +1303,15 @@ impl StackWindow {
                     source: trigger.source,
                 },
             )?;
+            entries.push(entry.id());
             next.stack.push(entry);
         }
         next.status = Status::Priority(PriorityRound::new(self.order.clone(), candidate, 0)?);
         next.revision = revision;
-        Ok(next)
+        Ok(OrderedTriggerReceipt {
+            window: next,
+            entries,
+        })
     }
     /// One already-adjudicated resolution instruction, not an effect interpreter.
     /// Moving a card spell removes its stack entry, but a resolving continuation
@@ -575,79 +1320,283 @@ impl StackWindow {
     pub fn record_resolution_move(
         &self,
         expected: u64,
-        card: CardObjectId,
-        destination: CardDestination,
+        card: ObjectId,
+        destination: ObjectDestination,
     ) -> Result<Self, StackWindowError> {
+        Ok(self
+            .resolution_move_with_exit(expected, card, destination)?
+            .0)
+    }
+    fn resolution_move_with_exit(
+        &self,
+        expected: u64,
+        card: ObjectId,
+        destination: ObjectDestination,
+    ) -> Result<(Self, StackExit), StackWindowError> {
         let revision = self.next_revision(expected)?;
         if !matches!(self.status, Status::Resolving { .. }) {
             return Err(StackWindowError::NotResolving);
         }
         match destination {
-            CardDestination::Stack { .. } => {
+            ObjectDestination::Stack { .. } => {
                 return Err(StackWindowError::UnsupportedStackInsertion);
             }
-            CardDestination::Battlefield { controller } => self.validate_player(controller)?,
+            ObjectDestination::Battlefield { controller } => self.validate_player(controller)?,
             _ => {}
         }
         self.move_card(revision, card, destination)
     }
     /// Trusted replacement-adjusted state-based zone moves, only while CR 117.5
     /// checks are pending. No priority is granted and no triggers are discovered.
-    /// Each move is applied to the local successor; any rejection rolls back the batch.
+    /// Rows and evidence use application order; top arrivals reverse that order
+    /// within each pile. Any rejection rolls back the complete batch.
     pub fn record_check_moves(
         &self,
         expected: u64,
-        moves: Vec<(CardObjectId, CardDestination)>,
-    ) -> Result<Self, StackWindowError> {
+        moves: Vec<(ObjectId, ObjectDestination)>,
+    ) -> Result<(Self, Vec<ObjectMovement>), StackWindowError> {
         let revision = self.next_revision(expected)?;
-        let round = self.priority()?;
-        if !matches!(round.phase(), PriorityPhase::RequiresChecks { .. }) {
-            return Err(StackWindowError::ChecksNotPending);
-        }
+        self.require_checks()?;
         if moves.is_empty() {
             return Err(StackWindowError::EmptyCheckMoves);
         }
-        let mut next = self.clone();
-        for (card, destination) in moves {
-            if next.cards.get(card).map(CardObject::zone) != Some(CardZone::Battlefield) {
+        let mut sources = BTreeSet::new();
+        for &(card, destination) in &moves {
+            if self.cards.get(card).map(GameObject::zone) != Some(ObjectZone::Battlefield)
+                || !sources.insert(card)
+            {
                 return Err(StackWindowError::InvalidCheckMove);
             }
             match destination {
-                CardDestination::Stack { .. } | CardDestination::Battlefield { .. } => {
+                ObjectDestination::Stack { .. } | ObjectDestination::Battlefield { .. } => {
                     return Err(StackWindowError::InvalidCheckMove);
                 }
                 _ => {}
             }
-            next = next.move_card(revision, card, destination)?;
         }
-        Ok(next)
+        self.apply_recorded_zone_moves(revision, &moves)
+    }
+    /// Actual cleanup work after the rules layer validates the required subset.
+    /// Selection and evidence are final top-to-bottom entrant order above the old
+    /// owner graveyard; top insertion therefore applies the selected rows in reverse.
+    pub(crate) fn record_cleanup_discards(
+        &self,
+        expected: u64,
+        player: SeatId,
+        selected_top_to_bottom: &[ObjectId],
+    ) -> Result<(Self, Vec<ObjectMovement>), StackWindowError> {
+        let application = selected_top_to_bottom
+            .iter()
+            .rev()
+            .map(|id| (*id, crate::program::PublicZoneDestination::Graveyard))
+            .collect::<Vec<_>>();
+        let (window, mut movements) = self.record_cleanup_moves(expected, player, &application)?;
+        movements.reverse();
+        Ok((window, movements))
+    }
+    /// Actual rules-authorized mixed cleanup departures; uses the same atomic registry owner.
+    pub(crate) fn record_cleanup_moves(
+        &self,
+        expected: u64,
+        player: SeatId,
+        application: &[(ObjectId, crate::program::PublicZoneDestination)],
+    ) -> Result<(Self, Vec<ObjectMovement>), StackWindowError> {
+        let revision = self.next_revision(expected)?;
+        if !self.stack.is_empty() || !matches!(self.status, Status::TurnWork) {
+            return Err(StackWindowError::NotInTurnWork);
+        }
+        self.validate_player(player)?;
+        if player != self.active {
+            return Err(StackWindowError::WrongController);
+        }
+        let mut selected = BTreeSet::new();
+        for &(object, _) in application {
+            if self.cards.get(object).map(GameObject::zone) != Some(ObjectZone::Hand(player))
+                || !selected.insert(object)
+            {
+                return Err(StackWindowError::InvalidCheckMove);
+            }
+        }
+        let moves = application
+            .iter()
+            .map(|(id, destination)| (*id, destination.physical()))
+            .collect::<Vec<_>>();
+        self.apply_recorded_zone_moves(revision, &moves)
+    }
+    /// Apply one complete resolving instruction's selected batch. This never
+    /// supplies checks or cleanup authority. All source conditions and distinct
+    /// identities are checked before the registry's atomic application.
+    ///
+    /// # Errors
+    /// Rejects a stale/exhausted revision, absent or different resolving entry,
+    /// empty batch, foreign participant, repeated identity, wrong source zone,
+    /// controller or physical-card origin. Propagates atomic registry errors.
+    pub(crate) fn record_resolution_selection_moves(
+        &self,
+        expected: u64,
+        entry: StackEntryId,
+        selected: Vec<ResolutionSelectionMove>,
+    ) -> Result<(Self, Vec<ObjectMovement>), StackWindowError> {
+        let revision = self.next_revision(expected)?;
+        let resolving = self.resolving().ok_or(StackWindowError::NotResolving)?;
+        if resolving.id() != entry {
+            return Err(StackWindowError::WrongResolution);
+        }
+        if selected.is_empty() {
+            return Err(StackWindowError::EmptyResolutionMoves);
+        }
+        let mut unique = BTreeSet::new();
+        let mut moves = Vec::with_capacity(selected.len());
+        for selection in selected {
+            let (player, id, destination) = match selection {
+                ResolutionSelectionMove::Sacrifice {
+                    player,
+                    object,
+                    destination,
+                }
+                | ResolutionSelectionMove::Discard {
+                    player,
+                    object,
+                    destination,
+                } => (player, object, destination),
+            };
+            self.validate_player(player)?;
+            let object = self
+                .cards
+                .get(id)
+                .ok_or(StackWindowError::InvalidResolutionMove)?;
+            let eligible = match selection {
+                ResolutionSelectionMove::Sacrifice { .. } => {
+                    object.zone() == ObjectZone::Battlefield && object.controller() == Some(player)
+                }
+                ResolutionSelectionMove::Discard { .. } => {
+                    object.card_id().is_some() && object.zone() == ObjectZone::Hand(player)
+                }
+            };
+            if !eligible || !unique.insert(id) {
+                return Err(StackWindowError::InvalidResolutionMove);
+            }
+            moves.push((id, destination.physical()));
+        }
+        self.apply_recorded_zone_moves(revision, &moves)
+    }
+    /// Commit one rules-authorized frozen library partition through the same atomic
+    /// physical movement owner. Reordering surviving cards never renews identity.
+    pub(crate) fn record_library_top(
+        &self,
+        expected: u64,
+        entry: StackEntryId,
+        commit: LibraryTopCommit<'_>,
+    ) -> Result<(Self, Vec<ObjectMovement>), StackWindowError> {
+        let LibraryTopCommit {
+            player,
+            frozen,
+            top,
+            bottom,
+            moves_application,
+        } = commit;
+        let revision = self.next_revision(expected)?;
+        self.validate_player(player)?;
+        if self.resolving().map(|e| e.id()) != Some(entry) {
+            return Err(StackWindowError::WrongResolution);
+        }
+        let library = self.cards.library(player);
+        let partition: Vec<_> = top
+            .iter()
+            .chain(bottom)
+            .copied()
+            .chain(moves_application.iter().map(|movement| movement.before))
+            .collect();
+        if !library.starts_with(frozen)
+            || partition.len() != frozen.len()
+            || partition.iter().copied().collect::<BTreeSet<_>>().len() != partition.len()
+            || partition.iter().copied().collect::<BTreeSet<_>>()
+                != frozen.iter().copied().collect()
+            || frozen.iter().any(|id| {
+                self.cards.get(*id).is_none_or(|c| {
+                    c.zone() != ObjectZone::Library(player)
+                        || c.owner() != player
+                        || c.card_id().is_none()
+                })
+            })
+        {
+            return Err(StackWindowError::InvalidLibraryTop);
+        }
+        let order = top
+            .iter()
+            .chain(&library[frozen.len()..])
+            .chain(bottom)
+            .copied()
+            .collect();
+        let moves: Vec<_> = moves_application
+            .iter()
+            .map(|movement| (movement.before, movement.destination.physical()))
+            .collect();
+        let (next, movements) = self.apply_recorded_zone_moves(revision, &moves)?;
+        let cards = next
+            .cards
+            .reorder_library(next.cards.revision(), player, order)?;
+        Ok((next.with_cards(revision, cards), movements))
+    }
+    /// Shared physical application only. Each caller retains its own legal
+    /// phase, source, controller and empty-batch policy above this helper.
+    fn apply_recorded_zone_moves(
+        &self,
+        revision: u64,
+        moves: &[(ObjectId, ObjectDestination)],
+    ) -> Result<(Self, Vec<ObjectMovement>), StackWindowError> {
+        let (cards, movements) = self.cards.apply_zone_moves(self.cards.revision(), moves)?;
+        let movements = movements
+            .into_iter()
+            .map(crate::object_identity::ZoneMoveOutcome::into_moved)
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok((self.with_cards(revision, cards), movements))
     }
     fn move_card(
         &self,
         revision: u64,
-        card: CardObjectId,
-        destination: CardDestination,
-    ) -> Result<Self, StackWindowError> {
+        card: ObjectId,
+        destination: ObjectDestination,
+    ) -> Result<(Self, StackExit), StackWindowError> {
+        let before = self
+            .cards
+            .get(card)
+            .ok_or(ObjectIdentityError::UnknownObject)?
+            .clone();
         let moved = self
             .cards
-            .apply_zone_move(self.cards.revision(), card, destination)?;
-        let mut next = self.clone();
-        next.cards = moved.next;
-        next.revision = revision;
+            .apply_zone_move(self.cards.revision(), card, destination)?
+            .require_moved()?;
+        let mut next = self.with_cards(revision, moved.next);
         next.stack
             .retain(|entry| !matches!(entry.kind,StackKind::CardSpell(object) if object==card));
-        Ok(next)
+        Ok((
+            next,
+            StackExit::Object(ObjectMovement {
+                before,
+                after: moved.after,
+            }),
+        ))
     }
     /// Trusted completion after all resolution work/choices have finished. A card
     /// still on the stack requires its computed exit; an already departed card or
     /// an ability requires None. Never follow a stable card key to move a new object.
     /// Active-player priority is still blocked on CR 117.5 checks (CR 117.3b).
+    /// Receipt-dropping raw primitive; the executor consumes the actual exit receipt.
     pub fn finish_resolution(
         &self,
         expected: u64,
         entry: StackEntryId,
-        exit: Option<CardDestination>,
+        exit: Option<ObjectDestination>,
     ) -> Result<Self, StackWindowError> {
+        Ok(self.finish_resolution_with_exit(expected, entry, exit)?.0)
+    }
+    pub(crate) fn finish_resolution_with_exit(
+        &self,
+        expected: u64,
+        entry: StackEntryId,
+        exit: Option<ObjectDestination>,
+    ) -> Result<(Self, Option<StackExit>), StackWindowError> {
         let revision = self.next_revision(expected)?;
         let Status::Resolving { entry: pending, .. } = &self.status else {
             return Err(StackWindowError::NotResolving);
@@ -659,42 +1608,59 @@ impl StackWindow {
         revision: u64,
         pending: &StackEntry,
         entry: StackEntryId,
-        exit: Option<CardDestination>,
-    ) -> Result<Self, StackWindowError> {
+        exit: Option<ObjectDestination>,
+    ) -> Result<(Self, Option<StackExit>), StackWindowError> {
         if pending.id != entry {
             return Err(StackWindowError::WrongResolution);
         }
         let mut next = self.clone();
+        let mut receipt = None;
         match pending.kind {
             StackKind::CardSpell(object) => {
                 if let Some(card) = self.cards.get(object) {
-                    if card.zone() != CardZone::Stack {
+                    if card.zone() != ObjectZone::Stack {
                         return Err(StackWindowError::InconsistentStack);
                     }
                     let destination = exit.ok_or(StackWindowError::MissingSpellExit)?;
                     match destination {
-                        CardDestination::Stack { .. } => {
+                        ObjectDestination::Stack { .. } => {
                             return Err(StackWindowError::UnsupportedStackInsertion);
                         }
-                        CardDestination::Battlefield { controller } => {
+                        ObjectDestination::Battlefield { controller } => {
                             self.validate_player(controller)?
                         }
                         _ => {}
                     }
-                    let moved =
-                        self.cards
-                            .apply_zone_move(self.cards.revision(), object, destination)?;
+                    let moved = self
+                        .cards
+                        .apply_zone_move(self.cards.revision(), object, destination)?
+                        .require_moved()?;
+                    receipt = Some(StackExit::Object(ObjectMovement {
+                        before: card.clone(),
+                        after: moved.after,
+                    }));
                     next.cards = moved.next;
                 } else if exit.is_some() {
                     return Err(StackWindowError::UnexpectedSpellExit);
                 }
             }
             StackKind::SpellCopy { .. } => {
+                let before = self
+                    .copies
+                    .get(&entry)
+                    .ok_or(StackWindowError::InconsistentStack)?
+                    .clone();
                 next = self.move_copy(
                     revision,
                     entry,
                     exit.ok_or(StackWindowError::MissingSpellExit)?,
                 )?;
+                let after = next
+                    .copies
+                    .get(&entry)
+                    .ok_or(StackWindowError::InconsistentStack)?
+                    .clone();
+                receipt = Some(StackExit::Copy { before, after });
             }
             _ => {
                 if exit.is_some() {
@@ -703,9 +1669,13 @@ impl StackWindow {
             }
         }
         next.stack.retain(|item| item.id != entry);
-        next.status = Status::Priority(PriorityRound::new(self.order.clone(), self.active, 0)?);
+        next.status = Status::Priority(PriorityRound::new(
+            self.order.clone(),
+            self.priority_start,
+            0,
+        )?);
         next.revision = revision;
-        Ok(next)
+        Ok((next, receipt))
     }
     pub fn checking_targets(&self) -> Option<&StackEntry> {
         match &self.status {
@@ -735,13 +1705,67 @@ impl StackWindow {
             .targets = plan;
         Ok(())
     }
+    /// Guard both trusted placement operations with the same exact pending entry.
+    fn validate_unbound_trigger(&self, entry: StackEntryId) -> Result<(), StackWindowError> {
+        if !matches!(
+            self.priority()?.phase(),
+            PriorityPhase::RequiresChecks { .. }
+        ) {
+            return Err(StackWindowError::ChecksNotPending);
+        }
+        let actual = self
+            .stack
+            .last()
+            .ok_or(StackWindowError::InconsistentStack)?;
+        if actual.id() != entry
+            || !matches!(actual.kind(), StackKind::TriggeredAbility { .. })
+            || !actual.targets().targets().is_empty()
+        {
+            return Err(StackWindowError::InconsistentStack);
+        }
+        Ok(())
+    }
+    /// Trusted placement binding; the executor owns legal-domain adjudication.
+    pub(crate) fn bind_trigger_target(
+        &self,
+        expected: u64,
+        entry: StackEntryId,
+        clauses: Vec<TargetClause>,
+        choices: Vec<TargetChoice>,
+    ) -> Result<Self, StackWindowError> {
+        let revision = self.next_revision(expected)?;
+        self.validate_unbound_trigger(entry)?;
+        if clauses.len() != 1 || clauses[0].minimum != 1 || clauses[0].maximum != 1 {
+            return Err(TargetError::InvalidClause.into());
+        }
+        if choices.len() != 1 {
+            return Err(TargetError::TargetCount.into());
+        }
+        let mut next = self.clone();
+        next.bind_targets(entry, clauses, choices)?;
+        next.revision = revision;
+        Ok(next)
+    }
+    /// Trusted CR 603.3d removal, preserving the check candidate and consumed ID.
+    pub(crate) fn remove_unbound_trigger(
+        &self,
+        expected: u64,
+        entry: StackEntryId,
+    ) -> Result<Self, StackWindowError> {
+        let revision = self.next_revision(expected)?;
+        self.validate_unbound_trigger(entry)?;
+        let mut next = self.clone();
+        next.stack.pop();
+        next.revision = revision;
+        Ok(next)
+    }
     /// Post-legality target capture, not casting or legal-domain discovery. Failure
     /// leaves the original window and its card location unchanged.
     pub fn record_targeted_card_spell(
         &self,
         expected: u64,
         actor: SeatId,
-        card: CardObjectId,
+        card: ObjectId,
         clauses: Vec<TargetClause>,
         choices: Vec<TargetChoice>,
     ) -> Result<Self, StackWindowError> {
@@ -758,7 +1782,7 @@ impl StackWindow {
         &self,
         expected: u64,
         actor: SeatId,
-        source: CardObject,
+        source: GameObject,
         clauses: Vec<TargetClause>,
         choices: Vec<TargetChoice>,
     ) -> Result<Self, StackWindowError> {
@@ -808,12 +1832,21 @@ impl StackWindow {
     /// All-illegal entries do not resolve. The enclosing kernel supplies the
     /// replacement-adjusted spell exit (normally owner's graveyard), or None for an
     /// ability. This gate cannot be used to run effects or silently skip checks.
+    /// Receipt-dropping raw primitive; the executor consumes the actual exit receipt.
     pub fn finish_unresolved(
         &self,
         expected: u64,
         entry: StackEntryId,
-        exit: Option<CardDestination>,
+        exit: Option<ObjectDestination>,
     ) -> Result<Self, StackWindowError> {
+        Ok(self.finish_unresolved_with_exit(expected, entry, exit)?.0)
+    }
+    pub(crate) fn finish_unresolved_with_exit(
+        &self,
+        expected: u64,
+        entry: StackEntryId,
+        exit: Option<ObjectDestination>,
+    ) -> Result<(Self, Option<StackExit>), StackWindowError> {
         let revision = self.next_revision(expected)?;
         let Status::AllTargetsIllegal { entry: pending, .. } = &self.status else {
             return Err(StackWindowError::TargetsNotRejected);
@@ -823,12 +1856,23 @@ impl StackWindow {
     /// Minimal binding-aware card-zone instruction. Illegal target occurrences never
     /// become an untargeted move or redirect to a returned card. Player/ability effect
     /// operations and do-as-much-as-possible interpretation are not implemented here.
+    /// Receipt-dropping raw physical primitive; executor event publication uses its receipt path.
     pub fn record_targeted_resolution_move(
         &self,
         expected: u64,
         target: TargetId,
-        destination: CardDestination,
+        destination: ObjectDestination,
     ) -> Result<Self, StackWindowError> {
+        Ok(self
+            .record_targeted_resolution_move_with_exit(expected, target, destination)?
+            .0)
+    }
+    pub(crate) fn record_targeted_resolution_move_with_exit(
+        &self,
+        expected: u64,
+        target: TargetId,
+        destination: ObjectDestination,
+    ) -> Result<(Self, StackExit), StackWindowError> {
         self.next_revision(expected)?;
         let Status::Resolving { targets, .. } = &self.status else {
             return Err(StackWindowError::NotResolving);
@@ -838,7 +1882,7 @@ impl StackWindow {
             return Err(StackWindowError::IllegalTarget);
         }
         let card = match result.choice.target {
-            TargetRef::Card(card) => card,
+            TargetRef::Object(card) => card,
             TargetRef::Stack(id) => match self
                 .stack
                 .iter()
@@ -848,30 +1892,953 @@ impl StackWindow {
                 Some(StackKind::CardSpell(card)) => *card,
                 Some(StackKind::SpellCopy { .. }) => {
                     let revision = self.next_revision(expected)?;
-                    return self.move_copy(revision, id, destination);
+                    let before = self
+                        .copies
+                        .get(&id)
+                        .ok_or(StackWindowError::InconsistentStack)?
+                        .clone();
+                    let next = self.move_copy(revision, id, destination)?;
+                    let after = next
+                        .copies
+                        .get(&id)
+                        .ok_or(StackWindowError::InconsistentStack)?
+                        .clone();
+                    return Ok((next, StackExit::Copy { before, after }));
                 }
                 _ => return Err(StackWindowError::UnsupportedTargetOperation),
             },
             TargetRef::Player(_) => return Err(StackWindowError::UnsupportedTargetOperation),
         };
-        self.record_resolution_move(expected, card, destination)
+        self.resolution_move_with_exit(expected, card, destination)
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::card_identity::CardId;
+    use crate::object_identity::CardId;
     const A: SeatId = SeatId(0);
     const B: SeatId = SeatId(1);
     const C: SeatId = SeatId(2);
-    fn setup() -> (StackWindow, CardObjectId, CardObjectId) {
-        let a = CardObjects::new(0)
-            .seed_card(0, CardId(10), A, CardDestination::Hand)
+    #[test]
+    fn draw_batch_exposes_each_actual_world_before_advancing_to_the_next_card() {
+        let (window, _) = declaration_window();
+        let accepted = window.clone();
+        let mut batch = window
+            .begin_draw_batch(window.revision(), A, 2.into())
+            .unwrap();
+        let mut expected_before = window.cards.clone();
+        let mut movements = Vec::new();
+        for (index, card) in [CardId(5), CardId(6)].into_iter().enumerate() {
+            let DrawBatchProgress::Drawn {
+                before,
+                next,
+                movement,
+            } = batch.next_draw().unwrap()
+            else {
+                panic!("expected one physical draw cut");
+            };
+            assert_eq!(before, expected_before);
+            assert_eq!(
+                movement.before.card_id().expect("physical fixture card"),
+                card
+            );
+            assert_eq!(before.get(movement.before.id()), Some(&movement.before));
+            assert_eq!(before.library(A).first(), Some(&movement.before.id()));
+            assert_eq!(movement.before.zone(), ObjectZone::Library(A));
+            assert_eq!(movement.after.zone(), ObjectZone::Hand(A));
+            assert_eq!(
+                movement.after.card_id().expect("physical fixture card"),
+                card
+            );
+            assert_ne!(movement.before.id(), movement.after.id());
+            assert!(next.cards().get(movement.before.id()).is_none());
+            assert_eq!(next.cards().get(movement.after.id()), Some(&movement.after));
+            assert_eq!(
+                next.cards().revision(),
+                window.cards.revision() + index as u64 + 1
+            );
+            assert_eq!(next.cards().library(A), &before.library(A)[1..]);
+            if index == 0 {
+                let later = window.cards.current_identity(CardId(6)).unwrap();
+                assert_eq!(next.cards().get(later), window.cards.get(later));
+            }
+            assert_eq!(window, accepted);
+            expected_before = next.cards().clone();
+            movements.push(movement);
+            batch = next;
+        }
+        let DrawBatchProgress::Complete {
+            window: next,
+            journal,
+        } = batch.next_draw().unwrap()
+        else {
+            panic!("expected completed draw batch");
+        };
+        assert_eq!(window, accepted);
+        assert_eq!(next.cards, expected_before);
+        assert_eq!(next.revision(), window.revision() + 1);
+        assert_eq!(next.phase(), window.phase());
+        assert_eq!(next.active, window.active);
+        assert_eq!(next.order, window.order);
+        assert_eq!(next.stack, window.stack);
+        assert_eq!(next.copies, window.copies);
+        assert_eq!(next.next_entry, window.next_entry);
+        assert_eq!(journal.events.len(), 2);
+        for (event, movement) in journal.events.iter().zip(movements) {
+            assert_eq!(
+                event,
+                &DrawEvent::Drawn {
+                    player: A,
+                    before: movement.before,
+                    after: movement.after,
+                }
+            );
+        }
+    }
+    #[test]
+    fn draw_batch_and_bulk_preserve_physical_revisions_and_exact_empty_remainder() {
+        let (window, _) = declaration_window();
+        let accepted = window.clone();
+        let huge: RulesInteger = "100000000000000000000000000000000000000000000000000"
+            .to_owned()
+            .try_into()
+            .unwrap();
+        for amount in [0.into(), 1.into(), 2.into(), 3.into(), huge.clone()] {
+            let primitive = window
+                .cards
+                .draw_cards(window.cards.revision(), A, amount.clone())
+                .unwrap();
+            let (next, journal) = window
+                .draw_cards(window.revision(), A, amount.clone())
+                .unwrap();
+            assert_eq!(window, accepted);
+            assert_eq!(next.cards, primitive.next);
+            assert_eq!(journal, primitive.journal);
+            assert_eq!(next.revision(), window.revision() + 1);
+            let successes = if amount < 2.into() {
+                usize::from(amount == 1.into())
+            } else {
+                2
+            };
+            assert_eq!(
+                next.cards.revision(),
+                window.cards.revision() + successes as u64
+            );
+            assert_eq!(
+                journal.events.len(),
+                successes + usize::from(amount > 2.into())
+            );
+            if amount > 2.into() {
+                assert_eq!(
+                    journal.events.last(),
+                    Some(&DrawEvent::EmptyLibrary {
+                        player: A,
+                        attempts: amount.minus(&2.into()),
+                    })
+                );
+            }
+        }
+        let mut batch = window.begin_draw_batch(window.revision(), A, huge).unwrap();
+        for _ in 0..2 {
+            let DrawBatchProgress::Drawn { next, .. } = batch.next_draw().unwrap() else {
+                panic!("library still has a real card");
+            };
+            batch = next;
+        }
+        assert!(matches!(
+            batch.next_draw().unwrap(),
+            DrawBatchProgress::Complete { .. }
+        ));
+    }
+    #[test]
+    fn draw_batch_zero_and_empty_do_not_consume_exhausted_physical_allocators() {
+        let (mut window, _) = declaration_window();
+        window.cards.set_test_revision(u64::MAX);
+        window.cards.set_test_next_identity(u64::MAX);
+        let accepted = window.clone();
+        let (zero, journal) = window.draw_cards(window.revision(), A, 0.into()).unwrap();
+        assert_eq!(zero.cards, window.cards);
+        assert_eq!(zero.revision(), window.revision() + 1);
+        assert!(journal.events.is_empty());
+        let huge: RulesInteger = "999999999999999999999999999999999999999999999999999"
+            .to_owned()
+            .try_into()
+            .unwrap();
+        let (empty, journal) = window
+            .draw_cards(window.revision(), B, huge.clone())
+            .unwrap();
+        assert_eq!(window, accepted);
+        assert_eq!(empty.cards, window.cards);
+        assert_eq!(empty.revision(), window.revision() + 1);
+        assert_eq!(
+            journal.events,
+            vec![DrawEvent::EmptyLibrary {
+                player: B,
+                attempts: huge,
+            }]
+        );
+        assert_eq!(
+            window.draw_cards(window.revision(), A, 1.into()),
+            Err(StackWindowError::Objects(
+                ObjectIdentityError::RevisionExhausted
+            ))
+        );
+        assert_eq!(window, accepted);
+    }
+    #[test]
+    fn draw_batch_preserves_owner_validation_order_even_without_physical_work() {
+        let (window, _) = declaration_window();
+        let accepted = window.clone();
+        assert!(matches!(
+            window.begin_draw_batch(window.revision() - 1, A, 0.into()),
+            Err(StackWindowError::StaleRevision)
+        ));
+        assert_eq!(
+            window.draw_cards(window.revision(), SeatId(99), (-1).into()),
+            Err(StackWindowError::UnknownPlayer)
+        );
+        assert_eq!(
+            window.draw_cards(window.revision(), A, (-1).into()),
+            Err(StackWindowError::Objects(
+                ObjectIdentityError::NegativeDrawCount
+            ))
+        );
+        let priority = window.enter_turn_step(window.revision(), A, true).unwrap();
+        assert_eq!(
+            priority.draw_cards(priority.revision(), SeatId(99), (-1).into()),
+            Err(StackWindowError::NotInTurnWork)
+        );
+        let mut exhausted = window.clone();
+        exhausted.revision = u64::MAX;
+        for player in [A, B, SeatId(99)] {
+            assert_eq!(
+                exhausted.draw_cards(u64::MAX, player, 0.into()),
+                Err(StackWindowError::RevisionExhausted)
+            );
+        }
+        assert_eq!(window, accepted);
+    }
+    #[test]
+    fn draw_batch_late_fault_drops_the_prefix_and_preserves_the_accepted_window() {
+        for identity_fault in [true, false] {
+            let (mut window, _) = declaration_window();
+            if identity_fault {
+                window.cards.set_test_next_identity(u64::MAX - 1);
+            } else {
+                window.cards.set_test_revision(u64::MAX - 1);
+            }
+            let accepted = window.clone();
+            let batch = window
+                .begin_draw_batch(window.revision(), A, 2.into())
+                .unwrap();
+            let DrawBatchProgress::Drawn { next, movement, .. } = batch.next_draw().unwrap() else {
+                panic!("first physical draw must succeed before the fault");
+            };
+            assert_eq!(
+                movement.before.card_id().expect("physical fixture card"),
+                CardId(5)
+            );
+            assert_eq!(next.cards().get(movement.after.id()), Some(&movement.after));
+            let expected = StackWindowError::Objects(if identity_fault {
+                ObjectIdentityError::IdentityExhausted
+            } else {
+                ObjectIdentityError::RevisionExhausted
+            });
+            assert_eq!(next.next_draw().unwrap_err(), expected);
+            assert_eq!(window, accepted);
+            assert_eq!(
+                window.draw_cards(window.revision(), A, 2.into()),
+                Err(expected)
+            );
+            assert_eq!(window, accepted);
+        }
+    }
+    fn declaration_window() -> (StackWindow, [ObjectId; 4]) {
+        let mut cards = GameObjects::new(0);
+        for (card, owner, destination) in [
+            (1, A, ObjectDestination::Battlefield { controller: A }),
+            (2, B, ObjectDestination::Battlefield { controller: A }),
+            (3, B, ObjectDestination::Battlefield { controller: B }),
+            (4, A, ObjectDestination::Hand),
+            (5, A, ObjectDestination::LibraryBottom),
+            (6, A, ObjectDestination::LibraryBottom),
+        ] {
+            cards = cards
+                .seed_card(cards.revision(), CardId(card), owner, destination)
+                .unwrap()
+                .next;
+        }
+        cards = cards.record_turn_start(cards.revision(), A).unwrap();
+        let objects = [1, 2, 3, 4].map(|card| cards.current_identity(CardId(card)).unwrap());
+        let window = StackWindow::new(vec![A, B, C], A, cards).unwrap();
+        let window = window.enter_turn_step(window.revision(), A, false).unwrap();
+        (window, objects)
+    }
+    fn discard_window() -> (StackWindow, [ObjectId; 3]) {
+        let mut cards = GameObjects::new(0);
+        for (card, owner, destination) in [
+            (81, A, ObjectDestination::Hand),
+            (2, A, ObjectDestination::Hand),
+            (39, A, ObjectDestination::Hand),
+            (12, A, ObjectDestination::Graveyard),
+            (5, A, ObjectDestination::Graveyard),
+            (6, B, ObjectDestination::Graveyard),
+            (1, A, ObjectDestination::LibraryBottom),
+            (91, B, ObjectDestination::Battlefield { controller: A }),
+            (66, B, ObjectDestination::Hand),
+        ] {
+            cards = cards
+                .seed_card(cards.revision(), CardId(card), owner, destination)
+                .unwrap()
+                .next;
+        }
+        let selected = [81, 2, 39].map(|card| cards.current_identity(CardId(card)).unwrap());
+        let window = StackWindow::new(vec![B, A, C], A, cards).unwrap();
+        (
+            window.enter_turn_step(window.revision(), A, false).unwrap(),
+            selected,
+        )
+    }
+    fn graveyard_cards(window: &StackWindow, owner: SeatId) -> Vec<CardId> {
+        window
+            .cards
+            .graveyard(owner)
+            .iter()
+            .map(|id| {
+                window
+                    .cards
+                    .get(*id)
+                    .unwrap()
+                    .card_id()
+                    .expect("physical fixture card")
+            })
+            .collect()
+    }
+    #[test]
+    fn cleanup_subset_and_movement_records_use_selected_final_top_order() {
+        let (window, [first, retained, last]) = discard_window();
+        let selected = [last, first];
+        let before = window.clone();
+        let (next, movements) = window
+            .record_cleanup_discards(window.revision(), A, &selected)
+            .unwrap();
+        assert_eq!(window, before);
+        assert_eq!(next.revision(), window.revision() + 1);
+        assert_eq!(next.cards.revision(), window.cards.revision() + 2);
+        assert_eq!(next.phase(), WindowPhase::TurnWork);
+        assert_eq!(next.active, A);
+        assert_eq!(next.order, window.order);
+        assert_eq!(next.stack, window.stack);
+        assert_eq!(next.copies, window.copies);
+        assert_eq!(next.next_entry, window.next_entry);
+        assert_eq!(next.cards.library(A), window.cards.library(A));
+        assert_eq!(next.cards.graveyard(B), window.cards.graveyard(B));
+        assert_eq!(
+            graveyard_cards(&next, A),
+            vec![CardId(39), CardId(81), CardId(5), CardId(12)]
+        );
+        assert_eq!(&next.cards.graveyard(A)[2..], window.cards.graveyard(A));
+        assert_eq!(next.cards.get(retained), window.cards.get(retained));
+        assert_eq!(movements.len(), 2);
+        assert!(movements[0].after.id() > movements[1].after.id());
+        for (movement, selected) in movements.iter().zip(selected) {
+            assert_eq!(movement.before, *window.cards.get(selected).unwrap());
+            assert_eq!(movement.before.zone(), ObjectZone::Hand(A));
+            assert_eq!(movement.after.zone(), ObjectZone::Graveyard(A));
+            assert_eq!(movement.after.controller(), None);
+            assert_ne!(movement.after.id(), selected);
+            assert_eq!(next.cards.get(movement.after.id()), Some(&movement.after));
+            assert!(next.cards.get(selected).is_none());
+        }
+    }
+    #[test]
+    fn cleanup_all_three_card_permutations_preserve_the_old_segment() {
+        let (window, objects) = discard_window();
+        for order in [
+            [0, 1, 2],
+            [0, 2, 1],
+            [1, 0, 2],
+            [1, 2, 0],
+            [2, 0, 1],
+            [2, 1, 0],
+        ] {
+            let selected = order.map(|index| objects[index]);
+            let (next, movements) = window
+                .record_cleanup_discards(window.revision(), A, &selected)
+                .unwrap();
+            assert_eq!(&next.cards.graveyard(A)[3..], window.cards.graveyard(A));
+            assert_eq!(
+                movements
+                    .iter()
+                    .map(|movement| movement.before.id())
+                    .collect::<Vec<_>>(),
+                selected
+            );
+            assert_eq!(
+                &next.cards.graveyard(A)[..3],
+                movements
+                    .iter()
+                    .map(|movement| movement.after.id())
+                    .collect::<Vec<_>>()
+            );
+            assert_eq!(
+                graveyard_cards(&next, A)[..3],
+                selected.map(|id| window
+                    .cards
+                    .get(id)
+                    .unwrap()
+                    .card_id()
+                    .expect("physical fixture card"))
+            );
+            assert_eq!(next.cards.revision(), window.cards.revision() + 3);
+        }
+    }
+    #[test]
+    fn cleanup_rejects_wrong_work_actor_and_exact_card_domains_atomically() {
+        let (window, [first, _, last]) = discard_window();
+        let opposing = window.cards.current_identity(CardId(66)).unwrap();
+        let permanent = window.cards.current_identity(CardId(91)).unwrap();
+        let graveyard = window.cards.current_identity(CardId(5)).unwrap();
+        for (actor, selected, error) in [
+            (SeatId(99), vec![], StackWindowError::UnknownPlayer),
+            (B, vec![], StackWindowError::WrongController),
+            (A, vec![first, first], StackWindowError::InvalidCheckMove),
+            (A, vec![first, opposing], StackWindowError::InvalidCheckMove),
+            (
+                A,
+                vec![first, permanent],
+                StackWindowError::InvalidCheckMove,
+            ),
+            (
+                A,
+                vec![first, graveyard],
+                StackWindowError::InvalidCheckMove,
+            ),
+        ] {
+            let before = window.clone();
+            assert_eq!(
+                window.record_cleanup_discards(window.revision(), actor, &selected),
+                Err(error)
+            );
+            assert_eq!(window, before);
+        }
+        assert_eq!(
+            window.record_cleanup_discards(window.revision() - 1, A, &[first]),
+            Err(StackWindowError::StaleRevision)
+        );
+        let (departed, _) = window
+            .record_cleanup_discards(window.revision(), A, &[last])
+            .unwrap();
+        let before = departed.clone();
+        assert_eq!(
+            departed.record_cleanup_discards(departed.revision(), A, &[first, last]),
+            Err(StackWindowError::InvalidCheckMove)
+        );
+        assert_eq!(departed, before);
+        let priority = window.enter_turn_step(window.revision(), A, true).unwrap();
+        assert_eq!(
+            priority.record_cleanup_discards(priority.revision(), A, &[first]),
+            Err(StackWindowError::NotInTurnWork)
+        );
+        let mut stacked = stacked_two();
+        stacked.status = Status::TurnWork;
+        assert_eq!(
+            stacked.record_cleanup_discards(stacked.revision(), A, &[]),
+            Err(StackWindowError::NotInTurnWork)
+        );
+    }
+    #[test]
+    fn cleanup_late_registry_failures_and_window_exhaustion_preserve_accepted_work() {
+        for identity_fault in [true, false] {
+            let (mut window, [first, _, last]) = discard_window();
+            if identity_fault {
+                window.cards.set_test_next_identity(u64::MAX - 1);
+            } else {
+                window.cards.set_test_revision(u64::MAX - 1);
+            }
+            let before = window.clone();
+            assert_eq!(
+                window.record_cleanup_discards(window.revision(), A, &[first, last]),
+                Err(StackWindowError::Objects(if identity_fault {
+                    ObjectIdentityError::IdentityExhausted
+                } else {
+                    ObjectIdentityError::RevisionExhausted
+                }))
+            );
+            assert_eq!(window, before);
+        }
+        let (mut window, [first, _, _]) = discard_window();
+        window.revision = u64::MAX;
+        let before = window.clone();
+        assert_eq!(
+            window.record_cleanup_discards(u64::MAX, A, &[first]),
+            Err(StackWindowError::RevisionExhausted)
+        );
+        assert_eq!(window, before);
+    }
+    #[test]
+    fn empty_cleanup_batch_consumes_only_the_window_revision() {
+        let (mut window, _) = discard_window();
+        window.cards.set_test_revision(u64::MAX);
+        window.cards.set_test_next_identity(u64::MAX);
+        let before = window.clone();
+        let (next, movements) = window
+            .record_cleanup_discards(window.revision(), A, &[])
+            .unwrap();
+        assert_eq!(next.revision(), window.revision() + 1);
+        assert_eq!(next.cards, window.cards);
+        assert!(movements.is_empty());
+        assert_eq!(window, before);
+    }
+    #[test]
+    fn state_check_batch_preserves_application_order_owner_piles_and_stack_state() {
+        let (mut window, [first, second, opposing, _]) = declaration_window();
+        for (id, owner) in [(90, A), (80, B)] {
+            window.cards = window
+                .cards
+                .seed_card(
+                    window.cards.revision(),
+                    CardId(id),
+                    owner,
+                    ObjectDestination::Graveyard,
+                )
+                .unwrap()
+                .next;
+        }
+        let before = window.clone();
+        let (next, movements) = window
+            .record_check_moves(
+                window.revision(),
+                vec![
+                    (second, ObjectDestination::Graveyard),
+                    (first, ObjectDestination::Graveyard),
+                    (opposing, ObjectDestination::Graveyard),
+                ],
+            )
+            .unwrap();
+        assert_eq!(window, before);
+        assert_eq!(
+            movements
+                .iter()
+                .map(|movement| movement.before.id())
+                .collect::<Vec<_>>(),
+            [second, first, opposing]
+        );
+        assert_eq!(graveyard_cards(&next, A), vec![CardId(1), CardId(90)]);
+        assert_eq!(
+            graveyard_cards(&next, B),
+            vec![CardId(3), CardId(2), CardId(80)]
+        );
+        assert_eq!(next.revision(), window.revision() + 1);
+        assert_eq!(next.cards.revision(), window.cards.revision() + 3);
+        assert_eq!(next.cards.library(A), window.cards.library(A));
+        assert_eq!(next.stack, window.stack);
+        assert_eq!(next.copies, window.copies);
+        assert_eq!(next.phase(), window.phase());
+    }
+    #[test]
+    fn state_check_batch_rejects_invalid_late_rows_and_operational_faults_atomically() {
+        let (window, [first, second, _, hand]) = declaration_window();
+        for (last, destination, error) in [
+            (
+                hand,
+                ObjectDestination::Graveyard,
+                StackWindowError::InvalidCheckMove,
+            ),
+            (
+                second,
+                ObjectDestination::Battlefield { controller: A },
+                StackWindowError::InvalidCheckMove,
+            ),
+            (
+                second,
+                ObjectDestination::Stack { controller: A },
+                StackWindowError::InvalidCheckMove,
+            ),
+            (
+                first,
+                ObjectDestination::Exile,
+                StackWindowError::InvalidCheckMove,
+            ),
+        ] {
+            let before = window.clone();
+            assert_eq!(
+                window.record_check_moves(
+                    window.revision(),
+                    vec![(first, ObjectDestination::Graveyard), (last, destination)]
+                ),
+                Err(error)
+            );
+            assert_eq!(window, before);
+        }
+        assert_eq!(
+            window.record_check_moves(window.revision(), vec![]),
+            Err(StackWindowError::EmptyCheckMoves)
+        );
+        let priority = window
+            .enter_turn_step(window.revision(), A, true)
+            .unwrap()
+            .finish_checks(window.revision() + 1)
+            .unwrap();
+        assert_eq!(
+            priority.record_check_moves(
+                priority.revision(),
+                vec![(first, ObjectDestination::Graveyard)]
+            ),
+            Err(StackWindowError::ChecksNotPending)
+        );
+        for identity_fault in [true, false] {
+            let mut exhausted = window.clone();
+            if identity_fault {
+                exhausted.cards.set_test_next_identity(u64::MAX - 1);
+            } else {
+                exhausted.cards.set_test_revision(u64::MAX - 1);
+            }
+            let before = exhausted.clone();
+            assert_eq!(
+                exhausted.record_check_moves(
+                    exhausted.revision(),
+                    vec![
+                        (first, ObjectDestination::Graveyard),
+                        (second, ObjectDestination::Graveyard)
+                    ]
+                ),
+                Err(StackWindowError::Objects(if identity_fault {
+                    ObjectIdentityError::IdentityExhausted
+                } else {
+                    ObjectIdentityError::RevisionExhausted
+                }))
+            );
+            assert_eq!(exhausted, before);
+        }
+    }
+    #[test]
+    fn declaration_taps_are_physical_work_without_priority_or_stack_allocation() {
+        let (mut window, [first, second, _, _]) = declaration_window();
+        window.next_entry = u64::MAX;
+        window.cards.set_test_next_identity(u64::MAX);
+        let before = window.clone();
+        let (next, changes) = window
+            .record_declaration_taps(window.revision(), A, &[second, first])
+            .unwrap();
+        assert_eq!(window, before);
+        assert_eq!(next.revision(), before.revision() + 1);
+        assert_eq!(next.cards.revision(), before.cards.revision() + 2);
+        assert_eq!(next.phase(), WindowPhase::TurnWork);
+        assert_eq!(next.turn_owner(), A);
+        assert_eq!(next.participants(), before.participants());
+        assert_eq!(next.next_entry, u64::MAX);
+        assert!(next.entries().is_empty());
+        assert_eq!(next.copies, before.copies);
+        assert_eq!(next.cards.library(A), before.cards.library(A));
+        assert_eq!(changes.len(), 2);
+        for (change, object) in changes.iter().zip([second, first]) {
+            assert_eq!(change.before, *before.cards.get(object).unwrap());
+            assert_eq!(change.after.id(), object);
+            assert_eq!(change.after.owner(), change.before.owner());
+            assert_eq!(change.after.controller(), Some(A));
+            assert_eq!(change.after.tapped(), Some(true));
+            assert_eq!(change.after.control_epoch(), change.before.control_epoch());
+            assert_eq!(
+                change.after.has_continuous_control_since_turn_start(),
+                Some(true)
+            );
+            assert_eq!(next.cards.get(object), Some(&change.after));
+        }
+    }
+    #[test]
+    fn declaration_taps_reject_wrong_phase_actor_and_physical_sources_atomically() {
+        let (window, [first, second, opposing, hand]) = declaration_window();
+        for (actor, selected, expected) in [
+            (SeatId(99), vec![], StackWindowError::UnknownPlayer),
+            (B, vec![], StackWindowError::WrongController),
+            (A, vec![first, opposing], StackWindowError::WrongController),
+            (
+                A,
+                vec![first, hand],
+                StackWindowError::Objects(ObjectIdentityError::NotPermanent),
+            ),
+            (
+                A,
+                vec![first, first],
+                StackWindowError::Objects(ObjectIdentityError::StatusUnchanged),
+            ),
+        ] {
+            let before = window.clone();
+            assert_eq!(
+                window.record_declaration_taps(window.revision(), actor, &selected),
+                Err(expected)
+            );
+            assert_eq!(window, before);
+        }
+        assert_eq!(
+            window.record_declaration_taps(window.revision() - 1, A, &[first]),
+            Err(StackWindowError::StaleRevision)
+        );
+        let (tapped, _) = window
+            .record_declaration_taps(window.revision(), A, &[second])
+            .unwrap();
+        let before = tapped.clone();
+        assert_eq!(
+            tapped.record_declaration_taps(tapped.revision(), A, &[first, second]),
+            Err(StackWindowError::SourceTapped)
+        );
+        assert_eq!(tapped, before);
+        let mut departed = window.clone();
+        departed.cards = departed
+            .cards
+            .apply_zone_move(departed.cards.revision(), second, ObjectDestination::Hand)
+            .unwrap()
+            .require_moved()
+            .unwrap()
+            .next;
+        let before = departed.clone();
+        assert_eq!(
+            departed.record_declaration_taps(departed.revision(), A, &[first, second]),
+            Err(StackWindowError::Objects(
+                ObjectIdentityError::UnknownObject
+            ))
+        );
+        assert_eq!(departed, before);
+        let priority = window.enter_turn_step(window.revision(), A, true).unwrap();
+        assert_eq!(
+            priority.record_declaration_taps(priority.revision(), A, &[first]),
+            Err(StackWindowError::NotInTurnWork)
+        );
+        let mut stacked = stacked_two();
+        stacked.status = Status::TurnWork;
+        assert_eq!(
+            stacked.record_declaration_taps(stacked.revision(), A, &[]),
+            Err(StackWindowError::NotInTurnWork)
+        );
+    }
+    #[test]
+    fn declaration_second_tap_exhaustion_preserves_the_accepted_window() {
+        let (mut window, [first, second, _, _]) = declaration_window();
+        window.cards.set_test_revision(u64::MAX - 1);
+        let before = window.clone();
+        assert_eq!(
+            window.record_declaration_taps(window.revision(), A, &[first, second]),
+            Err(StackWindowError::Objects(
+                ObjectIdentityError::RevisionExhausted
+            ))
+        );
+        assert_eq!(window, before);
+        assert_eq!(window.cards.get(first).unwrap().tapped(), Some(false));
+        assert_eq!(window.cards.get(second).unwrap().tapped(), Some(false));
+        window.revision = u64::MAX;
+        let before = window.clone();
+        assert_eq!(
+            window.record_declaration_taps(u64::MAX, A, &[]),
+            Err(StackWindowError::RevisionExhausted)
+        );
+        assert_eq!(window, before);
+    }
+    #[test]
+    fn empty_declaration_and_zero_change_untap_preserve_exhausted_registry() {
+        let (mut window, _) = declaration_window();
+        window.cards.set_test_revision(u64::MAX);
+        let before = window.clone();
+        let (declared, changes) = window
+            .record_declaration_taps(window.revision(), A, &[])
+            .unwrap();
+        assert!(changes.is_empty());
+        assert_eq!(declared.cards, before.cards);
+        assert_eq!(declared.revision(), before.revision() + 1);
+        assert_eq!(declared.phase(), WindowPhase::TurnWork);
+        let untapped = window.untap_active(window.revision()).unwrap();
+        assert_eq!(untapped.cards, before.cards);
+        assert_eq!(untapped.revision(), before.revision() + 1);
+        assert_eq!(untapped.phase(), WindowPhase::TurnWork);
+        assert_eq!(window, before);
+    }
+    #[test]
+    fn untap_batch_keeps_per_card_revisions_and_controller_selection() {
+        let (window, [first, second, opposing, _]) = declaration_window();
+        let (mut tapped, _) = window
+            .record_declaration_taps(window.revision(), A, &[first, second])
+            .unwrap();
+        tapped.cards = tapped
+            .cards
+            .set_tapped(tapped.cards.revision(), opposing, true)
+            .unwrap()
+            .next;
+        let before = tapped.clone();
+        let untapped = tapped.untap_active(tapped.revision()).unwrap();
+        assert_eq!(untapped.cards.revision(), before.cards.revision() + 2);
+        assert_eq!(untapped.revision(), before.revision() + 1);
+        for object in [first, second] {
+            assert_eq!(untapped.cards.get(object).unwrap().tapped(), Some(false));
+            assert_eq!(
+                untapped.cards.get(object).unwrap().control_epoch(),
+                before.cards.get(object).unwrap().control_epoch()
+            );
+        }
+        assert_eq!(untapped.cards.get(opposing), before.cards.get(opposing));
+        assert_eq!(untapped.cards.library(A), before.cards.library(A));
+        assert_eq!(tapped, before);
+    }
+    #[test]
+    fn direct_resolution_and_state_check_moves_use_canonical_library_order() {
+        for destination in [
+            ObjectDestination::LibraryTop,
+            ObjectDestination::LibraryBottom,
+        ] {
+            let mut cards = GameObjects::new(0);
+            for (id, dest) in [
+                (1, ObjectDestination::Hand),
+                (2, ObjectDestination::LibraryBottom),
+                (3, ObjectDestination::Battlefield { controller: A }),
+            ] {
+                cards = cards
+                    .seed_card(cards.revision(), CardId(id), A, dest)
+                    .unwrap()
+                    .next;
+            }
+            let spell = cards.current_identity(CardId(1)).unwrap();
+            let permanent = cards.current_identity(CardId(3)).unwrap();
+            let initial = StackWindow::new(vec![A, B], A, cards).unwrap();
+            let (checked, movements) = initial
+                .record_check_moves(initial.revision(), vec![(permanent, destination)])
+                .unwrap();
+            assert_eq!(movements.len(), 1);
+            assert_eq!(movements[0].before.id(), permanent);
+            assert_eq!(
+                checked
+                    .cards
+                    .library(A)
+                    .iter()
+                    .map(|id| checked
+                        .cards
+                        .get(*id)
+                        .unwrap()
+                        .card_id()
+                        .expect("physical fixture card"))
+                    .collect::<Vec<_>>(),
+                if destination == ObjectDestination::LibraryTop {
+                    vec![CardId(3), CardId(2)]
+                } else {
+                    vec![CardId(2), CardId(3)]
+                }
+            );
+            let mut state = initial.finish_checks(initial.revision()).unwrap();
+            state = state.record_card_spell(state.revision(), A, spell).unwrap();
+            state = state.finish_checks(state.revision()).unwrap();
+            state = state.pass(state.revision(), A).unwrap();
+            state = state.finish_checks(state.revision()).unwrap();
+            state = state.pass(state.revision(), B).unwrap();
+            let entry = state.resolving().unwrap().id();
+            let finished = state
+                .finish_resolution(state.revision(), entry, Some(destination))
+                .unwrap();
+            assert_eq!(
+                finished
+                    .cards
+                    .library(A)
+                    .iter()
+                    .map(|id| finished
+                        .cards
+                        .get(*id)
+                        .unwrap()
+                        .card_id()
+                        .expect("physical fixture card"))
+                    .collect::<Vec<_>>(),
+                if destination == ObjectDestination::LibraryTop {
+                    vec![CardId(1), CardId(2)]
+                } else {
+                    vec![CardId(2), CardId(1)]
+                }
+            );
+        }
+    }
+
+    #[test]
+    fn lifecycle_cannot_replace_open_priority_or_a_pending_stack_entry() {
+        let (window, spell, _) = setup();
+        let ready = window.finish_checks(window.revision()).unwrap();
+        assert_eq!(
+            ready.enter_turn_step(ready.revision(), B, false),
+            Err(StackWindowError::NotInTurnWork)
+        );
+        let pending = ready.record_card_spell(ready.revision(), A, spell).unwrap();
+        let before = pending.clone();
+        assert_eq!(
+            pending.enter_turn_step(pending.revision(), B, true),
+            Err(StackWindowError::NotInTurnWork)
+        );
+        assert_eq!(pending, before);
+        let mut resolving = pending.finish_checks(pending.revision()).unwrap();
+        for actor in [A, B, C] {
+            resolving = resolving.pass(resolving.revision(), actor).unwrap();
+            if matches!(
+                resolving.phase(),
+                WindowPhase::Priority(PriorityPhase::RequiresChecks { .. })
+            ) {
+                resolving = resolving.finish_checks(resolving.revision()).unwrap();
+            }
+        }
+        assert!(matches!(resolving.phase(), WindowPhase::Resolving(_)));
+        let current = match resolving.resolving().unwrap().kind() {
+            StackKind::CardSpell(object) => *object,
+            _ => panic!("expected the real card spell"),
+        };
+        resolving = resolving
+            .record_resolution_move(resolving.revision(), current, ObjectDestination::Exile)
+            .unwrap();
+        assert!(resolving.entries().is_empty());
+        assert!(matches!(resolving.phase(), WindowPhase::Resolving(_)));
+        let before = resolving.clone();
+        assert_eq!(
+            resolving.enter_turn_step(resolving.revision(), B, false),
+            Err(StackWindowError::NotInTurnWork)
+        );
+        assert_eq!(resolving, before);
+    }
+
+    #[test]
+    fn partial_untap_failure_preserves_all_physical_status_and_identity() {
+        let mut cards = GameObjects::new(0);
+        for card in [CardId(1), CardId(2)] {
+            let added = cards
+                .seed_card(
+                    cards.revision(),
+                    card,
+                    A,
+                    ObjectDestination::Battlefield { controller: A },
+                )
+                .unwrap();
+            cards = added
+                .next
+                .set_tapped(added.next.revision(), added.after.id(), true)
+                .unwrap()
+                .next;
+        }
+        let window = StackWindow::new(vec![A, B], A, cards).unwrap();
+        let mut window = window.enter_turn_step(window.revision(), A, false).unwrap();
+        window.cards.set_test_revision(u64::MAX - 1);
+        let before = window.clone();
+        assert_eq!(
+            window.untap_active(window.revision()),
+            Err(StackWindowError::Objects(
+                ObjectIdentityError::RevisionExhausted
+            ))
+        );
+        assert_eq!(window, before);
+        assert!(
+            window
+                .cards
+                .iter()
+                .all(|object| object.tapped() == Some(true))
+        );
+    }
+    fn setup() -> (StackWindow, ObjectId, ObjectId) {
+        let a = GameObjects::new(0)
+            .seed_card(0, CardId(10), A, ObjectDestination::Hand)
             .unwrap();
         let b = a
             .next
-            .seed_card(1, CardId(20), B, CardDestination::Hand)
+            .seed_card(1, CardId(20), B, ObjectDestination::Hand)
             .unwrap();
         (
             StackWindow::new(vec![A, B, C], A, b.next).unwrap(),
@@ -914,7 +2881,7 @@ mod tests {
                 let mut window = StackWindow::new(
                     (0..count).map(SeatId).collect(),
                     active,
-                    CardObjects::new(0),
+                    GameObjects::new(0),
                 )
                 .unwrap();
                 for offset in 0..count {
@@ -957,13 +2924,13 @@ mod tests {
         };
         assert_eq!(
             window.cards().get(upper_card).unwrap().zone(),
-            CardZone::Stack
+            ObjectZone::Stack
         );
         let window = window
             .finish_resolution(
                 window.revision(),
                 upper.id(),
-                Some(CardDestination::Graveyard),
+                Some(ObjectDestination::Graveyard),
             )
             .unwrap();
         assert_eq!(
@@ -979,7 +2946,7 @@ mod tests {
             .cards()
             .get(window.cards().current_identity(CardId(20)).unwrap())
             .unwrap();
-        assert_eq!(b.zone(), CardZone::Graveyard(B));
+        assert_eq!(b.zone(), ObjectZone::Graveyard(B));
         assert_eq!(b.controller(), None);
         let window = passes(window, &[A, B, C]);
         assert_eq!(pending(&window), lower.id());
@@ -987,7 +2954,7 @@ mod tests {
             .finish_resolution(
                 window.revision(),
                 lower.id(),
-                Some(CardDestination::Battlefield { controller: C }),
+                Some(ObjectDestination::Battlefield { controller: C }),
             )
             .unwrap();
         let a = window
@@ -1001,18 +2968,18 @@ mod tests {
     }
     #[test]
     fn an_ability_retains_its_source_snapshot_after_another_spell_moves_the_source() {
-        let a = CardObjects::new(0)
+        let a = GameObjects::new(0)
             .seed_card(
                 0,
                 CardId(10),
                 A,
-                CardDestination::Battlefield { controller: A },
+                ObjectDestination::Battlefield { controller: A },
             )
             .unwrap();
         let source = a.after.clone();
         let b = a
             .next
-            .seed_card(1, CardId(20), B, CardDestination::Hand)
+            .seed_card(1, CardId(20), B, ObjectDestination::Hand)
             .unwrap();
         let window = ready(StackWindow::new(vec![A, B, C], A, b.next).unwrap());
         let window = window
@@ -1026,7 +2993,7 @@ mod tests {
         let window = passes(window, &[B, C, A]);
         let response = pending(&window);
         let window = window
-            .record_resolution_move(window.revision(), source.id(), CardDestination::Graveyard)
+            .record_resolution_move(window.revision(), source.id(), ObjectDestination::Graveyard)
             .unwrap();
         assert!(window.cards().get(source.id()).is_none());
         assert_eq!(
@@ -1039,7 +3006,7 @@ mod tests {
             .finish_resolution(
                 window.revision(),
                 response,
-                Some(CardDestination::Graveyard),
+                Some(ObjectDestination::Graveyard),
             )
             .unwrap();
         let window = passes(window, &[A, B, C]);
@@ -1054,7 +3021,7 @@ mod tests {
                 .get(window.cards().current_identity(CardId(10)).unwrap())
                 .unwrap()
                 .zone(),
-            CardZone::Graveyard(A)
+            ObjectZone::Graveyard(A)
         );
     }
     #[test]
@@ -1068,7 +3035,7 @@ mod tests {
             panic!("expected spell");
         };
         let window = window
-            .record_resolution_move(window.revision(), spell, CardDestination::Exile)
+            .record_resolution_move(window.revision(), spell, ObjectDestination::Exile)
             .unwrap();
         assert!(window.entries().is_empty());
         assert_eq!(window.phase(), WindowPhase::Resolving(entry));
@@ -1077,16 +3044,16 @@ mod tests {
             .record_resolution_move(
                 window.revision(),
                 exiled,
-                CardDestination::Battlefield { controller: A },
+                ObjectDestination::Battlefield { controller: A },
             )
             .unwrap();
         let returned = window.cards().current_identity(CardId(10)).unwrap();
         let window = window
-            .record_resolution_move(window.revision(), b, CardDestination::Graveyard)
+            .record_resolution_move(window.revision(), b, ObjectDestination::Graveyard)
             .unwrap();
         let saved = window.clone();
         assert_eq!(
-            window.finish_resolution(window.revision(), entry, Some(CardDestination::Graveyard)),
+            window.finish_resolution(window.revision(), entry, Some(ObjectDestination::Graveyard)),
             Err(StackWindowError::UnexpectedSpellExit)
         );
         assert_eq!(window, saved);
@@ -1096,7 +3063,7 @@ mod tests {
         assert_eq!(window.cards().current_identity(CardId(10)), Some(returned));
         assert_eq!(
             window.cards().get(returned).unwrap().zone(),
-            CardZone::Battlefield
+            ObjectZone::Battlefield
         );
         assert_eq!(
             window.phase(),
@@ -1111,14 +3078,68 @@ mod tests {
             panic!("expected spell");
         };
         let window = window
-            .record_resolution_move(window.revision(), lower, CardDestination::Graveyard)
+            .record_resolution_move(window.revision(), lower, ObjectDestination::Graveyard)
             .unwrap();
         assert_eq!(window.entries().len(), 1);
         assert_eq!(pending(&window), top);
         let window = window
-            .finish_resolution(window.revision(), top, Some(CardDestination::Graveyard))
+            .finish_resolution(window.revision(), top, Some(ObjectDestination::Graveyard))
             .unwrap();
         assert_eq!(passes(window, &[A, B, C]).phase(), WindowPhase::StepEnded);
+    }
+    #[test]
+    fn actual_trigger_receipt_preserves_pairing_apnap_and_the_original_priority_candidate() {
+        let (seeded, object, _) = setup();
+        let source = seeded.cards().get(object).unwrap().clone();
+        let initial = StackWindow::new(vec![C, B, A], B, seeded.cards().clone()).unwrap();
+        assert_eq!(
+            initial.apnap_players().unwrap().collect::<Vec<_>>(),
+            vec![B, A, C]
+        );
+        let ready = initial.finish_checks(initial.revision()).unwrap();
+        let checking = ready.pass(ready.revision(), B).unwrap();
+        assert_eq!(
+            checking.phase(),
+            WindowPhase::Priority(PriorityPhase::RequiresChecks { candidate: A })
+        );
+        let accepted = checking.clone();
+        let (next, entries) = checking
+            .record_ordered_triggers_with_receipt(
+                checking.revision(),
+                vec![
+                    OrderedTrigger {
+                        controller: C,
+                        source: source.clone(),
+                    },
+                    OrderedTrigger {
+                        controller: B,
+                        source: source.clone(),
+                    },
+                ],
+            )
+            .unwrap()
+            .into_parts();
+        assert_eq!(checking, accepted);
+        assert_eq!(next.revision(), checking.revision() + 1);
+        assert_eq!(next.cards(), checking.cards());
+        assert_eq!(entries.len(), 2);
+        assert_eq!(
+            entries,
+            next.entries()
+                .iter()
+                .map(StackEntry::id)
+                .collect::<Vec<_>>()
+        );
+        for (entry, controller) in next.entries().iter().zip([C, B]) {
+            assert_eq!(entry.controller(), controller);
+            assert_eq!(
+                entry.kind(),
+                &StackKind::TriggeredAbility {
+                    source: source.clone()
+                }
+            );
+        }
+        assert_eq!(next.phase(), checking.phase());
     }
     #[test]
     fn preordered_triggers_preserve_the_priority_candidate_and_require_a_fresh_pass_cycle() {
@@ -1171,17 +3192,19 @@ mod tests {
     }
     #[test]
     fn activation_accepts_a_source_snapshot_that_precedes_a_source_moving_cost() {
-        let source = CardObjects::new(0)
+        let source = GameObjects::new(0)
             .seed_card(
                 0,
                 CardId(10),
                 A,
-                CardDestination::Battlefield { controller: A },
+                ObjectDestination::Battlefield { controller: A },
             )
             .unwrap();
         let moved = source
             .next
-            .apply_zone_move(1, source.after.id(), CardDestination::Graveyard)
+            .apply_zone_move(1, source.after.id(), ObjectDestination::Graveyard)
+            .unwrap()
+            .require_moved()
             .unwrap();
         let window = ready(StackWindow::new(vec![A, B], A, moved.next).unwrap());
         let window = window
@@ -1199,7 +3222,7 @@ mod tests {
             .unwrap();
         assert_eq!(
             window.cards().get(moved.after.id()).unwrap().zone(),
-            CardZone::Graveyard(A)
+            ObjectZone::Graveyard(A)
         );
     }
     #[test]
@@ -1215,7 +3238,7 @@ mod tests {
             Err(StackWindowError::EmptyTriggerBatch)
         );
         assert_eq!(
-            initial.record_resolution_move(initial.revision(), a, CardDestination::Exile),
+            initial.record_resolution_move(initial.revision(), a, ObjectDestination::Exile),
             Err(StackWindowError::NotResolving)
         );
         assert_eq!(initial, saved);
@@ -1273,7 +3296,7 @@ mod tests {
             window.finish_resolution(
                 window.revision(),
                 entry,
-                Some(CardDestination::Battlefield {
+                Some(ObjectDestination::Battlefield {
                     controller: SeatId(99)
                 })
             ),
@@ -1283,7 +3306,7 @@ mod tests {
             window.record_resolution_move(
                 window.revision(),
                 b,
-                CardDestination::Stack { controller: B }
+                ObjectDestination::Stack { controller: B }
             ),
             Err(StackWindowError::UnsupportedStackInsertion)
         );
@@ -1301,8 +3324,8 @@ mod tests {
             Err(StackWindowError::EntryIdentityExhausted)
         );
         assert_eq!(window, saved);
-        assert_eq!(window.cards().get(a).unwrap().zone(), CardZone::Hand(A));
-        let mut window = StackWindow::new(vec![A, B], A, CardObjects::new(0)).unwrap();
+        assert_eq!(window.cards().get(a).unwrap().zone(), ObjectZone::Hand(A));
+        let mut window = StackWindow::new(vec![A, B], A, GameObjects::new(0)).unwrap();
         window.next_entry = u64::MAX - 1;
         let saved = window.clone();
         assert_eq!(
@@ -1338,15 +3361,15 @@ mod tests {
             exhausted.finish_checks(u64::MAX),
             Err(StackWindowError::RevisionExhausted)
         );
-        let card = CardObjects::new(u64::MAX - 1)
-            .seed_card(u64::MAX - 1, CardId(1), A, CardDestination::Hand)
+        let card = GameObjects::new(u64::MAX - 1)
+            .seed_card(u64::MAX - 1, CardId(1), A, ObjectDestination::Hand)
             .unwrap();
         let window = ready(StackWindow::new(vec![A, B], A, card.next).unwrap());
         let saved = window.clone();
         assert_eq!(
             window.record_card_spell(window.revision(), A, card.after.id()),
-            Err(StackWindowError::Cards(
-                CardIdentityError::RevisionExhausted
+            Err(StackWindowError::Objects(
+                ObjectIdentityError::RevisionExhausted
             ))
         );
         assert_eq!(window, saved);
@@ -1354,17 +3377,17 @@ mod tests {
     #[test]
     fn setup_rejects_unknown_seats_or_untracked_stack_objects() {
         for destination in [
-            CardDestination::Hand,
-            CardDestination::Battlefield {
+            ObjectDestination::Hand,
+            ObjectDestination::Battlefield {
                 controller: SeatId(99),
             },
         ] {
-            let owner = if destination == CardDestination::Hand {
+            let owner = if destination == ObjectDestination::Hand {
                 SeatId(99)
             } else {
                 A
             };
-            let card = CardObjects::new(0)
+            let card = GameObjects::new(0)
                 .seed_card(0, CardId(1), owner, destination)
                 .unwrap();
             assert_eq!(
@@ -1372,19 +3395,19 @@ mod tests {
                 Err(StackWindowError::UnknownPlayer)
             );
         }
-        let card = CardObjects::new(0)
-            .seed_card(0, CardId(1), A, CardDestination::Stack { controller: A })
+        let card = GameObjects::new(0)
+            .seed_card(0, CardId(1), A, ObjectDestination::Stack { controller: A })
             .unwrap();
         assert_eq!(
             StackWindow::new(vec![A, B], A, card.next),
             Err(StackWindowError::UntrackedInitialStack)
         );
         assert_eq!(
-            StackWindow::new(vec![A, A], A, CardObjects::new(0)),
+            StackWindow::new(vec![A, A], A, GameObjects::new(0)),
             Err(StackWindowError::Priority(PriorityError::InvalidOrder))
         );
         assert_eq!(
-            StackWindow::new(vec![A, B], C, CardObjects::new(0)),
+            StackWindow::new(vec![A, B], C, GameObjects::new(0)),
             Err(StackWindowError::Priority(
                 PriorityError::UnknownFirstPlayer
             ))
@@ -1394,16 +3417,16 @@ mod tests {
     fn ability_inputs_reject_foreign_seats_without_partial_updates() {
         let (checking, _, _) = setup();
         let holding = ready(checking.clone());
-        let unknown_owner = CardObjects::new(0)
-            .seed_card(0, CardId(99), SeatId(99), CardDestination::Hand)
+        let unknown_owner = GameObjects::new(0)
+            .seed_card(0, CardId(99), SeatId(99), ObjectDestination::Hand)
             .unwrap()
             .after;
-        let unknown_controller = CardObjects::new(0)
+        let unknown_controller = GameObjects::new(0)
             .seed_card(
                 0,
                 CardId(99),
                 A,
-                CardDestination::Battlefield {
+                ObjectDestination::Battlefield {
                     controller: SeatId(99),
                 },
             )
@@ -1452,7 +3475,7 @@ mod tests {
         let window = passes(window, &[A, B, C]);
         let old = pending(&window);
         assert_eq!(
-            window.finish_resolution(window.revision(), old, Some(CardDestination::Graveyard)),
+            window.finish_resolution(window.revision(), old, Some(ObjectDestination::Graveyard)),
             Err(StackWindowError::UnexpectedSpellExit)
         );
         let window = ready(
@@ -1497,5 +3520,295 @@ mod tests {
             Err(StackWindowError::Targets(TargetError::SelfTarget))
         );
         assert_eq!(window, saved);
+    }
+
+    fn unbound_placement() -> (StackWindow, StackEntryId) {
+        let (window, object, _) = setup();
+        let source = window.cards().get(object).unwrap().clone();
+        let (window, entries) = window
+            .record_ordered_triggers_with_receipt(
+                window.revision(),
+                vec![OrderedTrigger {
+                    controller: A,
+                    source,
+                }],
+            )
+            .unwrap()
+            .into_parts();
+        (window, entries[0])
+    }
+    fn single_clause() -> Vec<TargetClause> {
+        vec![TargetClause {
+            id: crate::targets::TargetClauseId(0),
+            minimum: 1,
+            maximum: 1,
+        }]
+    }
+    fn single_choice(target: TargetRef) -> Vec<TargetChoice> {
+        vec![TargetChoice {
+            id: crate::TargetId(0),
+            clause: crate::targets::TargetClauseId(0),
+            target,
+        }]
+    }
+    #[test]
+    fn trigger_bind_and_remove_preserve_checks_and_never_reuse_the_removed_identity() {
+        let (window, entry) = unbound_placement();
+        let saved = window.clone();
+        let bound = window
+            .bind_trigger_target(
+                window.revision(),
+                entry,
+                single_clause(),
+                single_choice(TargetRef::Player(B)),
+            )
+            .unwrap();
+        assert_eq!(bound.phase(), window.phase());
+        assert_eq!(
+            bound.entries().last().unwrap().targets().targets()[0]
+                .choice()
+                .target,
+            TargetRef::Player(B)
+        );
+        assert_eq!(
+            bound.remove_unbound_trigger(bound.revision(), entry),
+            Err(StackWindowError::InconsistentStack)
+        );
+        let removed = window
+            .remove_unbound_trigger(window.revision(), entry)
+            .unwrap();
+        assert!(removed.entries().is_empty());
+        assert_eq!(removed.phase(), window.phase());
+        assert_eq!(removed.next_entry, window.next_entry);
+        let object = removed.cards().iter().next().unwrap().clone();
+        let (_, entries) = removed
+            .record_ordered_triggers_with_receipt(
+                removed.revision(),
+                vec![OrderedTrigger {
+                    controller: A,
+                    source: object,
+                }],
+            )
+            .unwrap()
+            .into_parts();
+        assert_ne!(entries[0], entry);
+        assert_eq!(window, saved);
+    }
+    #[test]
+    fn trigger_bind_rejects_nonmandatory_and_malformed_targets_atomically() {
+        let (window, entry) = unbound_placement();
+        let saved = window.clone();
+        for clauses in [
+            vec![],
+            vec![TargetClause {
+                id: crate::targets::TargetClauseId(0),
+                minimum: 0,
+                maximum: 1,
+            }],
+            vec![TargetClause {
+                id: crate::targets::TargetClauseId(0),
+                minimum: 1,
+                maximum: 2,
+            }],
+        ] {
+            assert_eq!(
+                window.bind_trigger_target(
+                    window.revision(),
+                    entry,
+                    clauses,
+                    single_choice(TargetRef::Player(B))
+                ),
+                Err(StackWindowError::Targets(TargetError::InvalidClause))
+            );
+            assert_eq!(window, saved);
+        }
+        assert_eq!(
+            window.bind_trigger_target(window.revision(), entry, single_clause(), vec![]),
+            Err(StackWindowError::Targets(TargetError::TargetCount))
+        );
+        for target in [
+            TargetRef::Player(SeatId(99)),
+            TargetRef::Stack(StackEntryId(999)),
+            TargetRef::Stack(entry),
+        ] {
+            assert!(matches!(
+                window.bind_trigger_target(
+                    window.revision(),
+                    entry,
+                    single_clause(),
+                    single_choice(target)
+                ),
+                Err(StackWindowError::Targets(_))
+            ));
+            assert_eq!(window, saved);
+        }
+        let mut choices = single_choice(TargetRef::Player(B));
+        choices[0].clause = crate::targets::TargetClauseId(1);
+        assert_eq!(
+            window.bind_trigger_target(window.revision(), entry, single_clause(), choices),
+            Err(StackWindowError::Targets(TargetError::UnknownClause))
+        );
+        assert_eq!(window, saved);
+    }
+    #[test]
+    fn both_trigger_operations_share_phase_entry_and_operational_guards() {
+        let (window, entry) = unbound_placement();
+        let ready_window = window.finish_checks(window.revision()).unwrap();
+        let source = window.cards().iter().next().unwrap().clone();
+        let not_top = window
+            .record_ordered_triggers(
+                window.revision(),
+                vec![OrderedTrigger {
+                    controller: A,
+                    source,
+                }],
+            )
+            .unwrap();
+        let mut exhausted = window.clone();
+        exhausted.revision = u64::MAX;
+        for (state, id, expected, error) in [
+            (
+                &ready_window,
+                entry,
+                ready_window.revision(),
+                StackWindowError::ChecksNotPending,
+            ),
+            (
+                &not_top,
+                entry,
+                not_top.revision(),
+                StackWindowError::InconsistentStack,
+            ),
+            (
+                &window,
+                StackEntryId(999),
+                window.revision(),
+                StackWindowError::InconsistentStack,
+            ),
+            (
+                &window,
+                entry,
+                window.revision() - 1,
+                StackWindowError::StaleRevision,
+            ),
+            (
+                &exhausted,
+                entry,
+                u64::MAX,
+                StackWindowError::RevisionExhausted,
+            ),
+        ] {
+            let saved = state.clone();
+            assert_eq!(
+                state.bind_trigger_target(
+                    expected,
+                    id,
+                    single_clause(),
+                    single_choice(TargetRef::Player(B))
+                ),
+                Err(error)
+            );
+            assert_eq!(state.remove_unbound_trigger(expected, id), Err(error));
+            assert_eq!(state, &saved);
+        }
+        let (initial, card, _) = setup();
+        let ready = ready(initial);
+        let spell = ready.record_card_spell(ready.revision(), A, card).unwrap();
+        let id = spell.entries().last().unwrap().id();
+        assert_eq!(
+            spell.bind_trigger_target(
+                spell.revision(),
+                id,
+                single_clause(),
+                single_choice(TargetRef::Player(B))
+            ),
+            Err(StackWindowError::InconsistentStack)
+        );
+        assert_eq!(
+            spell.remove_unbound_trigger(spell.revision(), id),
+            Err(StackWindowError::InconsistentStack)
+        );
+    }
+
+    #[test]
+    fn trigger_plan_never_follows_a_returned_card_to_its_new_incarnation() {
+        // Trusted identity/TargetPlan probe, not a public blink trajectory or
+        // an EffectWindow characteristic/source-publication qualification.
+        let (mut window, _, _) = setup();
+        let seeded = window
+            .cards
+            .seed_card(
+                window.cards.revision(),
+                CardId(30),
+                A,
+                ObjectDestination::Battlefield { controller: A },
+            )
+            .unwrap();
+        let old = seeded.after.id();
+        window.cards = seeded.next;
+        let source = window.cards.get(old).unwrap().clone();
+        let (mut window, entries) = window
+            .record_ordered_triggers_with_receipt(
+                window.revision(),
+                vec![OrderedTrigger {
+                    controller: A,
+                    source,
+                }],
+            )
+            .unwrap()
+            .into_parts();
+        let entry = entries[0];
+        window = window
+            .bind_trigger_target(
+                window.revision(),
+                entry,
+                single_clause(),
+                single_choice(TargetRef::Object(old)),
+            )
+            .unwrap();
+        let moved = window
+            .cards
+            .apply_zone_move(window.cards.revision(), old, ObjectDestination::Hand)
+            .unwrap()
+            .require_moved()
+            .unwrap();
+        let hand = moved.after.id();
+        window.cards = moved.next;
+        let returned = window
+            .cards
+            .apply_zone_move(
+                window.cards.revision(),
+                hand,
+                ObjectDestination::Battlefield { controller: A },
+            )
+            .unwrap()
+            .require_moved()
+            .unwrap();
+        let current = returned.after.id();
+        window.cards = returned.next;
+        assert_ne!(old, current);
+        assert!(window.cards.get(old).is_none());
+        let pending = passes(ready(window), &[A, B, C]);
+        let checked = pending
+            .check_resolution_targets(
+                pending.revision(),
+                entry,
+                vec![TargetCheck {
+                    target: crate::TargetId(0),
+                    legal: true,
+                }],
+            )
+            .unwrap();
+        assert_eq!(checked.phase(), WindowPhase::AllTargetsIllegal(entry));
+        assert_eq!(
+            checked
+                .target_assessment()
+                .unwrap()
+                .get(crate::TargetId(0))
+                .unwrap()
+                .legality,
+            crate::targets::TargetLegality::ObjectGone
+        );
+        assert_eq!(checked.cards.current_identity(CardId(30)), Some(current));
     }
 }

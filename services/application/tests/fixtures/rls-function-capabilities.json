@@ -1,0 +1,1788 @@
+[
+  {
+    "name": "accept_native_opening",
+    "arguments": "p_match uuid, p_basis numeric, p_game uuid, p_owner text, p_opening jsonb, p_native_epoch text, p_runtime_id text, p_program_source_id text",
+    "roles": [
+      "service_role"
+    ]
+  },
+  {
+    "name": "ack_stripe_checkout",
+    "arguments": "p_purchase uuid, p_checkout text, p_payment text, p_url text, p_expires timestamp with time zone, p_terms_hash text",
+    "roles": [
+      "service_role"
+    ]
+  },
+  {
+    "name": "acknowledge_handoff_delivery",
+    "arguments": "p_destination text, p_handoff uuid, p_preparation uuid, p_outcome text, p_proof text, p_request uuid",
+    "roles": [
+      "service_role"
+    ]
+  },
+  {
+    "name": "active_supporter_tier",
+    "arguments": "p_account uuid",
+    "roles": [
+      "service_role"
+    ]
+  },
+  {
+    "name": "add_room_ai_slot_command",
+    "arguments": "p_subject uuid, p_session uuid, p_request uuid, p_room uuid, p_expected numeric",
+    "roles": [
+      "service_role"
+    ]
+  },
+  {
+    "name": "adopt_native_response_wait",
+    "arguments": "p_game uuid, p_checkpoint uuid, p_state text, p_owner text, p_fence numeric, p_runtime text, p_programs text, p_kind text, p_seat uuid, p_remaining uuid[]",
+    "roles": [
+      "service_role"
+    ]
+  },
+  {
+    "name": "append_catalogue_batch",
+    "arguments": "p_publication uuid, p_sequence integer, p_body text",
+    "roles": [
+      "service_role"
+    ]
+  },
+  {
+    "name": "assess_bundle",
+    "arguments": "p_lines jsonb",
+    "roles": [
+      "service_role"
+    ]
+  },
+  {
+    "name": "assess_exchange",
+    "arguments": "p_outgoing jsonb, p_incoming jsonb",
+    "roles": [
+      "service_role"
+    ]
+  },
+  {
+    "name": "associate_stripe_notification",
+    "arguments": "p_event uuid, p_purchase uuid",
+    "roles": [
+      "service_role"
+    ]
+  },
+  {
+    "name": "begin_catalogue_publication",
+    "arguments": "p_terms jsonb",
+    "roles": [
+      "service_role"
+    ]
+  },
+  {
+    "name": "begin_patreon_evidence_expiry",
+    "arguments": "p_event uuid",
+    "roles": [
+      "service_role"
+    ]
+  },
+  {
+    "name": "begin_stripe_evidence_expiry",
+    "arguments": "p_event uuid",
+    "roles": [
+      "service_role"
+    ]
+  },
+  {
+    "name": "can_read_conversation",
+    "arguments": "p_conversation uuid",
+    "roles": [
+      "authenticated"
+    ]
+  },
+  {
+    "name": "can_read_deck",
+    "arguments": "p_deck uuid",
+    "roles": [
+      "authenticated"
+    ]
+  },
+  {
+    "name": "can_read_match",
+    "arguments": "p_match uuid",
+    "roles": [
+      "authenticated"
+    ]
+  },
+  {
+    "name": "can_read_match_seat",
+    "arguments": "p_seat uuid",
+    "roles": [
+      "authenticated"
+    ]
+  },
+  {
+    "name": "cancel_deletion_work",
+    "arguments": "p_actor uuid, p_kind text, p_target uuid",
+    "roles": [
+      "service_role"
+    ]
+  },
+  {
+    "name": "cancel_matchmaking_command",
+    "arguments": "p_subject uuid, p_session uuid, p_request uuid, p_entry uuid",
+    "roles": [
+      "service_role"
+    ]
+  },
+  {
+    "name": "capture_patreon_notification",
+    "arguments": "p_delivery uuid, p_capture jsonb",
+    "roles": [
+      "service_role"
+    ]
+  },
+  {
+    "name": "capture_stripe_event",
+    "arguments": "p_external text, p_type text, p_capture jsonb, p_delivery timestamp with time zone",
+    "roles": [
+      "service_role"
+    ]
+  },
+  {
+    "name": "catalogue_source_visible",
+    "arguments": "p_receipt uuid",
+    "roles": [
+      "authenticated"
+    ]
+  },
+  {
+    "name": "change_deck_settings_command",
+    "arguments": "p_subject uuid, p_session uuid, p_request uuid, p_deck uuid, p_expected jsonb, p_settings jsonb",
+    "roles": [
+      "service_role"
+    ]
+  },
+  {
+    "name": "change_profile_art_command",
+    "arguments": "p_subject uuid, p_session uuid, p_request uuid, p_expected jsonb, p_art jsonb",
+    "roles": [
+      "service_role"
+    ]
+  },
+  {
+    "name": "change_profile_defaults_command",
+    "arguments": "p_subject uuid, p_session uuid, p_request uuid, p_expected jsonb, p_appearance jsonb",
+    "roles": [
+      "service_role"
+    ]
+  },
+  {
+    "name": "claim_matchmaking",
+    "arguments": "p_selection jsonb, p_request uuid",
+    "roles": [
+      "service_role"
+    ]
+  },
+  {
+    "name": "claim_patreon_link",
+    "arguments": "p_subject uuid, p_session uuid, p_request uuid, p_state_hash text, p_code_hash text, p_claim_hash text",
+    "roles": [
+      "service_role"
+    ]
+  },
+  {
+    "name": "claim_stripe_creation",
+    "arguments": "p_purchase uuid",
+    "roles": [
+      "service_role"
+    ]
+  },
+  {
+    "name": "close_prediction_trading",
+    "arguments": "p_market uuid",
+    "roles": [
+      "service_role"
+    ]
+  },
+  {
+    "name": "commit_ai_ready_confirmation",
+    "arguments": "p_grant uuid, p_epoch numeric, p_revision uuid, p_qualification text, p_authentication text, p_configuration uuid, p_request uuid",
+    "roles": [
+      "service_role"
+    ]
+  },
+  {
+    "name": "commit_native_host_input",
+    "arguments": "p_game uuid, p_request uuid, p_original jsonb, p_prepared jsonb",
+    "roles": [
+      "service_role"
+    ]
+  },
+  {
+    "name": "commit_patreon_refresh",
+    "arguments": "p_request uuid, p_ticket jsonb, p_proof jsonb",
+    "roles": [
+      "service_role"
+    ]
+  },
+  {
+    "name": "commit_price_slot",
+    "arguments": "p_slot date, p_artifact jsonb",
+    "roles": [
+      "service_role"
+    ]
+  },
+  {
+    "name": "commit_stripe_effect",
+    "arguments": "p_purchase uuid, p_event uuid, p_revision numeric, p_effect jsonb, p_checkout text, p_payment text",
+    "roles": [
+      "service_role"
+    ]
+  },
+  {
+    "name": "complete_patreon_link",
+    "arguments": "p_subject uuid, p_session uuid, p_request uuid, p_state_hash text, p_code_hash text, p_claim_hash text, p_proof jsonb",
+    "roles": [
+      "service_role"
+    ]
+  },
+  {
+    "name": "complete_stripe_notification",
+    "arguments": "p_event uuid, p_observation uuid",
+    "roles": [
+      "service_role"
+    ]
+  },
+  {
+    "name": "configure_room_command",
+    "arguments": "p_subject uuid, p_session uuid, p_request uuid, p_room uuid, p_expected numeric, p_profile uuid, p_structure text, p_teams jsonb",
+    "roles": [
+      "service_role"
+    ]
+  },
+  {
+    "name": "confirm_patreon_evidence",
+    "arguments": "p_event uuid, p_hash text",
+    "roles": [
+      "service_role"
+    ]
+  },
+  {
+    "name": "confirm_stripe_evidence",
+    "arguments": "p_event uuid, p_hash text",
+    "roles": [
+      "service_role"
+    ]
+  },
+  {
+    "name": "consume_game_outcome",
+    "arguments": "p_result uuid, p_expected numeric",
+    "roles": [
+      "service_role"
+    ]
+  },
+  {
+    "name": "consume_quest_game_activity",
+    "arguments": "p_game uuid, p_limit integer",
+    "roles": [
+      "service_role"
+    ]
+  },
+  {
+    "name": "contact_allowed",
+    "arguments": "p_actor uuid, p_other uuid",
+    "roles": [
+      "service_role"
+    ]
+  },
+  {
+    "name": "create_deck_command",
+    "arguments": "p_subject uuid, p_session uuid, p_request uuid, p_name text, p_mode text, p_format uuid",
+    "roles": [
+      "service_role"
+    ]
+  },
+  {
+    "name": "create_room_command",
+    "arguments": "p_subject uuid, p_session uuid, p_request uuid, p_format uuid, p_profile uuid, p_mode text, p_competitive boolean, p_visibility text",
+    "roles": [
+      "service_role"
+    ]
+  },
+  {
+    "name": "current_account_id",
+    "arguments": "",
+    "roles": [
+      "authenticated"
+    ]
+  },
+  {
+    "name": "custom_access_token_hook",
+    "arguments": "p_event jsonb",
+    "roles": [
+      "supabase_auth_admin"
+    ]
+  },
+  {
+    "name": "deliver_native_between_decision",
+    "arguments": "p_decision uuid, p_basis numeric, p_deadline numeric, p_request uuid, p_seconds integer, p_selected uuid, p_hash text, p_reply text, p_qualification text",
+    "roles": [
+      "service_role"
+    ]
+  },
+  {
+    "name": "deliver_native_match_handoff",
+    "arguments": "p_handoff uuid",
+    "roles": [
+      "service_role"
+    ]
+  },
+  {
+    "name": "enqueue_matchmaking_command",
+    "arguments": "p_subject uuid, p_session uuid, p_request uuid, p_mode text, p_competitive boolean, p_alternatives jsonb",
+    "roles": [
+      "service_role"
+    ]
+  },
+  {
+    "name": "execute_economy_command",
+    "arguments": "p_subject uuid, p_session uuid, p_input jsonb",
+    "roles": [
+      "service_role"
+    ]
+  },
+  {
+    "name": "execute_prediction_command",
+    "arguments": "p_subject uuid, p_session uuid, p_input jsonb",
+    "roles": [
+      "service_role"
+    ]
+  },
+  {
+    "name": "execute_social_command",
+    "arguments": "p_subject uuid, p_session uuid, p_input jsonb",
+    "roles": [
+      "service_role"
+    ]
+  },
+  {
+    "name": "expire_between_game_deadline",
+    "arguments": "p_decision uuid, p_deadline_revision numeric, p_revision uuid, p_reply text, p_qualification text, p_request uuid",
+    "roles": [
+      "service_role"
+    ]
+  },
+  {
+    "name": "finalize_unrecoverable_match",
+    "arguments": "p_match uuid, p_expected numeric, p_availability numeric, p_incident uuid, p_failure_ref text",
+    "roles": [
+      "service_role"
+    ]
+  },
+  {
+    "name": "finish_catalogue_publication",
+    "arguments": "p_publication uuid",
+    "roles": [
+      "service_role"
+    ]
+  },
+  {
+    "name": "finish_patreon_evidence_expiry",
+    "arguments": "p_event uuid",
+    "roles": [
+      "service_role"
+    ]
+  },
+  {
+    "name": "finish_stripe_evidence_expiry",
+    "arguments": "p_event uuid",
+    "roles": [
+      "service_role"
+    ]
+  },
+  {
+    "name": "generate_daily_quest",
+    "arguments": "p_actor uuid, p_definition uuid, p_day text, p_request uuid",
+    "roles": [
+      "service_role"
+    ]
+  },
+  {
+    "name": "human_ante_command",
+    "arguments": "p_subject uuid, p_session uuid, p_request uuid, p_kind text, p_target uuid, p_expected numeric, p_lines jsonb, p_hash text",
+    "roles": [
+      "service_role"
+    ]
+  },
+  {
+    "name": "ignore_stripe_notification",
+    "arguments": "p_event uuid",
+    "roles": [
+      "service_role"
+    ]
+  },
+  {
+    "name": "import_deck_command",
+    "arguments": "p_subject uuid, p_session uuid, p_input jsonb",
+    "roles": [
+      "service_role"
+    ]
+  },
+  {
+    "name": "issue_ai_grant",
+    "arguments": "p_binding uuid, p_epoch numeric, p_secret_ref text, p_request uuid",
+    "roles": [
+      "service_role"
+    ]
+  },
+  {
+    "name": "issue_native_cursor_source",
+    "arguments": "p_game uuid, p_context uuid, p_epoch text, p_revision text, p_viewer uuid, p_through_sequence numeric, p_purpose text, p_source_receipt uuid, p_scan jsonb",
+    "roles": [
+      "service_role"
+    ]
+  },
+  {
+    "name": "issue_room_invitation_command",
+    "arguments": "p_subject uuid, p_session uuid, p_request uuid, p_room uuid, p_expected numeric, p_token_hash text",
+    "roles": [
+      "service_role"
+    ]
+  },
+  {
+    "name": "join_room_command",
+    "arguments": "p_subject uuid, p_session uuid, p_request uuid, p_room uuid, p_token_hash text",
+    "roles": [
+      "service_role"
+    ]
+  },
+  {
+    "name": "leave_room_command",
+    "arguments": "p_subject uuid, p_session uuid, p_request uuid, p_room uuid, p_expected numeric",
+    "roles": [
+      "service_role"
+    ]
+  },
+  {
+    "name": "maintain_prediction_market",
+    "arguments": "p_market uuid",
+    "roles": [
+      "service_role"
+    ]
+  },
+  {
+    "name": "manage_ai_slot_command",
+    "arguments": "p_subject uuid, p_session uuid, p_request uuid, p_kind text, p_slot uuid, p_expected numeric, p_revision uuid",
+    "roles": [
+      "service_role"
+    ]
+  },
+  {
+    "name": "mark_direct_messages_read",
+    "arguments": "p_subject uuid, p_session uuid, p_request uuid, p_conversation uuid, p_messages uuid[]",
+    "roles": [
+      "service_role"
+    ]
+  },
+  {
+    "name": "mark_notifications_read",
+    "arguments": "p_subject uuid, p_session uuid, p_request uuid, p_notifications uuid[]",
+    "roles": [
+      "service_role"
+    ]
+  },
+  {
+    "name": "native_opening_controller_choice",
+    "arguments": "p_grant uuid, p_epoch numeric, p_secret_ref text, p_game uuid, p_play_first boolean, p_prior_chooser uuid, p_first_seat uuid",
+    "roles": [
+      "service_role"
+    ]
+  },
+  {
+    "name": "native_opening_human_choice",
+    "arguments": "p_subject uuid, p_session uuid, p_game uuid, p_play_first boolean, p_prior_chooser uuid, p_first_seat uuid",
+    "roles": [
+      "service_role"
+    ]
+  },
+  {
+    "name": "native_opening_player_choice",
+    "arguments": "p_subject uuid, p_session uuid, p_game uuid, p_play_first boolean, p_prior_chooser uuid",
+    "roles": [
+      "service_role"
+    ]
+  },
+  {
+    "name": "observe_account_deletion",
+    "arguments": "p_account uuid, p_request uuid, p_status_key_hash text",
+    "roles": [
+      "service_role"
+    ]
+  },
+  {
+    "name": "observe_ai_grant_delivery",
+    "arguments": "p_grant uuid, p_expected numeric, p_outcome text, p_proof text, p_request uuid",
+    "roles": [
+      "service_role"
+    ]
+  },
+  {
+    "name": "observe_ai_provider",
+    "arguments": "p_binding uuid, p_epoch numeric, p_start uuid, p_outcome text, p_provider_ref text, p_proof text, p_request uuid",
+    "roles": [
+      "service_role"
+    ]
+  },
+  {
+    "name": "observe_ai_stop",
+    "arguments": "p_binding uuid, p_epoch numeric, p_stop uuid, p_proof text, p_request uuid",
+    "roles": [
+      "service_role"
+    ]
+  },
+  {
+    "name": "observe_native_clock_job",
+    "arguments": "p_game uuid, p_basis jsonb, p_owner text, p_request uuid",
+    "roles": [
+      "service_role"
+    ]
+  },
+  {
+    "name": "owns_asset_owner",
+    "arguments": "p_owner uuid",
+    "roles": [
+      "authenticated"
+    ]
+  },
+  {
+    "name": "owns_match_seat",
+    "arguments": "p_seat uuid",
+    "roles": [
+      "authenticated"
+    ]
+  },
+  {
+    "name": "pause_game_incident",
+    "arguments": "p_game uuid, p_owner text, p_epoch numeric, p_operational_revision numeric, p_incident_at timestamp with time zone, p_kind text, p_proof text, p_request uuid",
+    "roles": [
+      "service_role"
+    ]
+  },
+  {
+    "name": "pause_match_between_games",
+    "arguments": "p_match uuid, p_expected numeric, p_availability numeric, p_incident_at timestamp with time zone, p_kind text, p_proof text, p_request uuid",
+    "roles": [
+      "service_role"
+    ]
+  },
+  {
+    "name": "pause_native_host_exit",
+    "arguments": "p_instance uuid, p_incident_at timestamp with time zone, p_process integer, p_status text",
+    "roles": [
+      "service_role"
+    ]
+  },
+  {
+    "name": "prepare_handoff_delivery",
+    "arguments": "p_destination text, p_handoff uuid",
+    "roles": [
+      "service_role"
+    ]
+  },
+  {
+    "name": "publish_game_replay",
+    "arguments": "p_game uuid, p_revision numeric, p_checkpoint uuid, p_through numeric, p_artifact text, p_visibility text, p_schema text, p_qualification text",
+    "roles": [
+      "service_role"
+    ]
+  },
+  {
+    "name": "publish_native_view_source",
+    "arguments": "p_game uuid, p_context uuid, p_epoch text, p_revision text, p_viewer uuid, p_disclosure text, p_view_ref text",
+    "roles": [
+      "service_role"
+    ]
+  },
+  {
+    "name": "qualify_between_game_command",
+    "arguments": "p_subject uuid, p_session uuid, p_original jsonb, p_prepared jsonb",
+    "roles": [
+      "service_role"
+    ]
+  },
+  {
+    "name": "qualify_booster_opening",
+    "arguments": "p_recipe uuid, p_plan jsonb, p_hash text",
+    "roles": [
+      "service_role"
+    ]
+  },
+  {
+    "name": "qualify_booster_recipe",
+    "arguments": "p_recipe uuid, p_manifest text",
+    "roles": [
+      "service_role"
+    ]
+  },
+  {
+    "name": "qualify_controller_between_game_command",
+    "arguments": "p_grant uuid, p_epoch numeric, p_secret_ref text, p_original jsonb, p_prepared jsonb",
+    "roles": [
+      "service_role"
+    ]
+  },
+  {
+    "name": "qualify_room_countdown_command",
+    "arguments": "p_subject uuid, p_session uuid, p_room uuid, p_original jsonb, p_prepared jsonb",
+    "roles": [
+      "service_role"
+    ]
+  },
+  {
+    "name": "qualify_room_ready_command",
+    "arguments": "p_subject uuid, p_session uuid, p_room uuid, p_original jsonb, p_prepared jsonb",
+    "roles": [
+      "service_role"
+    ]
+  },
+  {
+    "name": "quote_packs",
+    "arguments": "p_recipe uuid, p_quantity integer",
+    "roles": [
+      "service_role"
+    ]
+  },
+  {
+    "name": "read_account_command",
+    "arguments": "p_actor uuid, p_scope text, p_request uuid",
+    "roles": [
+      "service_role"
+    ]
+  },
+  {
+    "name": "read_account_deletion_status",
+    "arguments": "p_actor uuid",
+    "roles": [
+      "service_role"
+    ]
+  },
+  {
+    "name": "read_account_retirement_work",
+    "arguments": "p_account uuid",
+    "roles": [
+      "service_role"
+    ]
+  },
+  {
+    "name": "read_add_room_ai_slot_command",
+    "arguments": "p_subject uuid, p_session uuid, p_request uuid, p_room uuid, p_expected numeric",
+    "roles": [
+      "service_role"
+    ]
+  },
+  {
+    "name": "read_ai_slot_command",
+    "arguments": "p_subject uuid, p_session uuid, p_request uuid, p_kind text, p_slot uuid, p_expected numeric, p_revision uuid",
+    "roles": [
+      "service_role"
+    ]
+  },
+  {
+    "name": "read_ai_start_work",
+    "arguments": "p_binding uuid, p_epoch numeric",
+    "roles": [
+      "service_role"
+    ]
+  },
+  {
+    "name": "read_ai_stop_work_page",
+    "arguments": "p_binding uuid, p_after uuid, p_limit integer",
+    "roles": [
+      "service_role"
+    ]
+  },
+  {
+    "name": "read_controller_ai_ante_context",
+    "arguments": "p_grant uuid, p_epoch numeric, p_secret_ref text, p_match uuid",
+    "roles": [
+      "service_role"
+    ]
+  },
+  {
+    "name": "read_controller_ai_ante_original",
+    "arguments": "p_grant uuid, p_epoch numeric, p_secret_ref text, p_source jsonb",
+    "roles": [
+      "service_role"
+    ]
+  },
+  {
+    "name": "read_current_room_slots",
+    "arguments": "p_room uuid, p_after uuid, p_limit integer",
+    "roles": [
+      "authenticated"
+    ]
+  },
+  {
+    "name": "read_current_session",
+    "arguments": "",
+    "roles": [
+      "authenticated"
+    ]
+  },
+  {
+    "name": "read_deck_command",
+    "arguments": "p_subject uuid, p_session uuid, p_kind text, p_command jsonb",
+    "roles": [
+      "service_role"
+    ]
+  },
+  {
+    "name": "read_deck_import_command",
+    "arguments": "p_subject uuid, p_session uuid, p_input jsonb",
+    "roles": [
+      "service_role"
+    ]
+  },
+  {
+    "name": "read_deletion_account_page",
+    "arguments": "p_after uuid, p_limit integer",
+    "roles": [
+      "service_role"
+    ]
+  },
+  {
+    "name": "read_deletion_work",
+    "arguments": "p_actor uuid, p_limit integer",
+    "roles": [
+      "service_role"
+    ]
+  },
+  {
+    "name": "read_direct_read_command",
+    "arguments": "p_subject uuid, p_session uuid, p_input jsonb",
+    "roles": [
+      "service_role"
+    ]
+  },
+  {
+    "name": "read_due_between_game_deadlines",
+    "arguments": "p_after uuid, p_limit integer",
+    "roles": [
+      "service_role"
+    ]
+  },
+  {
+    "name": "read_economy_command",
+    "arguments": "p_subject uuid, p_session uuid, p_input jsonb",
+    "roles": [
+      "service_role"
+    ]
+  },
+  {
+    "name": "read_established_price_probe",
+    "arguments": "p_manifest uuid, p_printing uuid",
+    "roles": [
+      "service_role"
+    ]
+  },
+  {
+    "name": "read_established_price_slot",
+    "arguments": "p_slot date",
+    "roles": [
+      "service_role"
+    ]
+  },
+  {
+    "name": "read_game_message_command",
+    "arguments": "p_subject uuid, p_session uuid, p_request uuid, p_match uuid, p_body text",
+    "roles": [
+      "service_role"
+    ]
+  },
+  {
+    "name": "read_handoff_delivery_ack",
+    "arguments": "p_destination text, p_handoff uuid, p_preparation uuid, p_outcome text, p_proof text, p_request uuid",
+    "roles": [
+      "service_role"
+    ]
+  },
+  {
+    "name": "read_handoff_delivery_work",
+    "arguments": "p_destination text, p_after uuid, p_limit integer",
+    "roles": [
+      "service_role"
+    ]
+  },
+  {
+    "name": "read_host_room_configuration",
+    "arguments": "p_room uuid",
+    "roles": [
+      "authenticated"
+    ]
+  },
+  {
+    "name": "read_human_ante_command",
+    "arguments": "p_subject uuid, p_session uuid, p_request uuid, p_kind text, p_target uuid, p_expected numeric, p_lines jsonb, p_hash text",
+    "roles": [
+      "service_role"
+    ]
+  },
+  {
+    "name": "read_match_ante",
+    "arguments": "p_match uuid",
+    "roles": [
+      "authenticated"
+    ]
+  },
+  {
+    "name": "read_match_games",
+    "arguments": "p_match uuid, p_after uuid, p_limit integer",
+    "roles": [
+      "authenticated"
+    ]
+  },
+  {
+    "name": "read_match_metadata",
+    "arguments": "p_match uuid",
+    "roles": [
+      "authenticated"
+    ]
+  },
+  {
+    "name": "read_match_seats",
+    "arguments": "p_match uuid, p_after uuid, p_limit integer",
+    "roles": [
+      "authenticated"
+    ]
+  },
+  {
+    "name": "read_matchmaking_command",
+    "arguments": "p_subject uuid, p_session uuid, p_kind text, p_request uuid, p_entry uuid, p_mode text, p_competitive boolean, p_alternatives jsonb",
+    "roles": [
+      "service_role"
+    ]
+  },
+  {
+    "name": "read_my_account",
+    "arguments": "",
+    "roles": [
+      "authenticated"
+    ]
+  },
+  {
+    "name": "read_my_cards",
+    "arguments": "p_query text, p_exact boolean, p_after uuid, p_limit integer",
+    "roles": [
+      "authenticated"
+    ]
+  },
+  {
+    "name": "read_my_catalogue",
+    "arguments": "p_definitions uuid[], p_printings uuid[]",
+    "roles": [
+      "authenticated"
+    ]
+  },
+  {
+    "name": "read_my_competitive_results",
+    "arguments": "p_after uuid, p_limit integer, p_format uuid, p_season uuid",
+    "roles": [
+      "authenticated"
+    ]
+  },
+  {
+    "name": "read_my_cosmetic_catalogue",
+    "arguments": "p_after uuid, p_limit integer",
+    "roles": [
+      "authenticated"
+    ]
+  },
+  {
+    "name": "read_my_daily_wins",
+    "arguments": "p_after uuid, p_limit integer",
+    "roles": [
+      "authenticated"
+    ]
+  },
+  {
+    "name": "read_my_deck",
+    "arguments": "p_deck uuid",
+    "roles": [
+      "authenticated"
+    ]
+  },
+  {
+    "name": "read_my_deck_library",
+    "arguments": "p_after uuid, p_limit integer",
+    "roles": [
+      "authenticated"
+    ]
+  },
+  {
+    "name": "read_my_direct_messages",
+    "arguments": "p_conversation uuid, p_before_at timestamp with time zone, p_before_id uuid, p_limit integer",
+    "roles": [
+      "authenticated"
+    ]
+  },
+  {
+    "name": "read_my_formats",
+    "arguments": "p_after uuid, p_limit integer",
+    "roles": [
+      "authenticated"
+    ]
+  },
+  {
+    "name": "read_my_game_chat",
+    "arguments": "p_match uuid, p_before_at timestamp with time zone, p_before_id uuid, p_limit integer",
+    "roles": [
+      "authenticated"
+    ]
+  },
+  {
+    "name": "read_my_inventory_page",
+    "arguments": "p_after uuid, p_limit integer",
+    "roles": [
+      "authenticated"
+    ]
+  },
+  {
+    "name": "read_my_market",
+    "arguments": "p_after uuid, p_limit integer, p_owned boolean",
+    "roles": [
+      "authenticated"
+    ]
+  },
+  {
+    "name": "read_my_market_listing",
+    "arguments": "p_listing uuid",
+    "roles": [
+      "authenticated"
+    ]
+  },
+  {
+    "name": "read_my_match_decisions",
+    "arguments": "p_match uuid, p_after uuid, p_limit integer",
+    "roles": [
+      "authenticated"
+    ]
+  },
+  {
+    "name": "read_my_matches",
+    "arguments": "p_after uuid, p_limit integer",
+    "roles": [
+      "authenticated"
+    ]
+  },
+  {
+    "name": "read_my_notifications",
+    "arguments": "p_after uuid, p_limit integer",
+    "roles": [
+      "authenticated"
+    ]
+  },
+  {
+    "name": "read_my_pack_open",
+    "arguments": "p_open uuid",
+    "roles": [
+      "authenticated"
+    ]
+  },
+  {
+    "name": "read_my_pack_products",
+    "arguments": "p_after uuid, p_limit integer",
+    "roles": [
+      "authenticated"
+    ]
+  },
+  {
+    "name": "read_my_pack_quote",
+    "arguments": "p_recipe uuid, p_quantity integer",
+    "roles": [
+      "authenticated"
+    ]
+  },
+  {
+    "name": "read_my_prediction_market",
+    "arguments": "p_market uuid",
+    "roles": [
+      "authenticated"
+    ]
+  },
+  {
+    "name": "read_my_prediction_markets",
+    "arguments": "p_after uuid, p_limit integer",
+    "roles": [
+      "authenticated"
+    ]
+  },
+  {
+    "name": "read_my_prediction_orders",
+    "arguments": "p_market uuid, p_after uuid, p_limit integer",
+    "roles": [
+      "authenticated"
+    ]
+  },
+  {
+    "name": "read_my_prediction_positions",
+    "arguments": "p_market uuid, p_after uuid, p_limit integer",
+    "roles": [
+      "authenticated"
+    ]
+  },
+  {
+    "name": "read_my_prediction_probe_basis",
+    "arguments": "p_printing uuid",
+    "roles": [
+      "authenticated"
+    ]
+  },
+  {
+    "name": "read_my_prediction_publication_source",
+    "arguments": "p_printing uuid",
+    "roles": [
+      "authenticated"
+    ]
+  },
+  {
+    "name": "read_my_printings",
+    "arguments": "p_definition uuid, p_name text, p_set_code text, p_collector text, p_after uuid, p_limit integer",
+    "roles": [
+      "authenticated"
+    ]
+  },
+  {
+    "name": "read_my_profile_art",
+    "arguments": "",
+    "roles": [
+      "authenticated"
+    ]
+  },
+  {
+    "name": "read_my_purchase",
+    "arguments": "p_purchase uuid",
+    "roles": [
+      "authenticated"
+    ]
+  },
+  {
+    "name": "read_my_purchases",
+    "arguments": "p_after uuid, p_limit integer",
+    "roles": [
+      "authenticated"
+    ]
+  },
+  {
+    "name": "read_my_quests",
+    "arguments": "p_after uuid, p_limit integer",
+    "roles": [
+      "authenticated"
+    ]
+  },
+  {
+    "name": "read_my_queue",
+    "arguments": "p_intent uuid, p_after uuid, p_limit integer",
+    "roles": [
+      "authenticated"
+    ]
+  },
+  {
+    "name": "read_my_queue_intent",
+    "arguments": "p_intent uuid",
+    "roles": [
+      "authenticated"
+    ]
+  },
+  {
+    "name": "read_my_ranks",
+    "arguments": "p_after uuid, p_limit integer, p_format uuid, p_season uuid",
+    "roles": [
+      "authenticated"
+    ]
+  },
+  {
+    "name": "read_my_room_invitations",
+    "arguments": "p_room uuid, p_after uuid, p_limit integer",
+    "roles": [
+      "authenticated"
+    ]
+  },
+  {
+    "name": "read_my_seasons",
+    "arguments": "p_after uuid, p_limit integer",
+    "roles": [
+      "authenticated"
+    ]
+  },
+  {
+    "name": "read_my_sets",
+    "arguments": "p_query text, p_after uuid, p_limit integer",
+    "roles": [
+      "authenticated"
+    ]
+  },
+  {
+    "name": "read_my_social_people",
+    "arguments": "p_kind text, p_query text, p_after uuid, p_limit integer",
+    "roles": [
+      "authenticated"
+    ]
+  },
+  {
+    "name": "read_my_social_status",
+    "arguments": "p_peer uuid",
+    "roles": [
+      "authenticated"
+    ]
+  },
+  {
+    "name": "read_my_trade",
+    "arguments": "p_trade uuid",
+    "roles": [
+      "authenticated"
+    ]
+  },
+  {
+    "name": "read_my_trades",
+    "arguments": "p_after uuid, p_limit integer, p_state text",
+    "roles": [
+      "authenticated"
+    ]
+  },
+  {
+    "name": "read_native_admission_source",
+    "arguments": "p_game uuid",
+    "roles": [
+      "service_role"
+    ]
+  },
+  {
+    "name": "read_native_ai_binding_work",
+    "arguments": "p_after uuid, p_limit integer",
+    "roles": [
+      "service_role"
+    ]
+  },
+  {
+    "name": "read_native_archive_source",
+    "arguments": "p_game uuid, p_context uuid, p_viewer uuid, p_after_sequence numeric, p_limit integer, p_disclosure text, p_source_view_receipt uuid",
+    "roles": [
+      "service_role"
+    ]
+  },
+  {
+    "name": "read_native_between_source",
+    "arguments": "p_decision uuid, p_basis numeric, p_selected_revision uuid",
+    "roles": [
+      "service_role"
+    ]
+  },
+  {
+    "name": "read_native_controller_access",
+    "arguments": "p_grant uuid, p_epoch numeric, p_secret_ref text, p_game uuid, p_context uuid",
+    "roles": [
+      "service_role"
+    ]
+  },
+  {
+    "name": "read_native_controller_receipts",
+    "arguments": "p_grant uuid, p_epoch numeric, p_secret_ref text, p_query jsonb",
+    "roles": [
+      "service_role"
+    ]
+  },
+  {
+    "name": "read_native_countdown_work",
+    "arguments": "p_after uuid, p_limit integer",
+    "roles": [
+      "service_role"
+    ]
+  },
+  {
+    "name": "read_native_cursor_source",
+    "arguments": "p_game uuid, p_viewer uuid, p_token text",
+    "roles": [
+      "service_role"
+    ]
+  },
+  {
+    "name": "read_native_game_source",
+    "arguments": "p_game uuid",
+    "roles": [
+      "service_role"
+    ]
+  },
+  {
+    "name": "read_native_host_receipt",
+    "arguments": "p_game uuid, p_seat uuid, p_original jsonb",
+    "roles": [
+      "service_role"
+    ]
+  },
+  {
+    "name": "read_native_human_access",
+    "arguments": "p_subject uuid, p_session uuid, p_game uuid, p_context uuid",
+    "roles": [
+      "service_role"
+    ]
+  },
+  {
+    "name": "read_native_human_presentation",
+    "arguments": "p_subject uuid, p_session uuid, p_game uuid, p_context uuid, p_free jsonb",
+    "roles": [
+      "service_role"
+    ]
+  },
+  {
+    "name": "read_native_human_receipts",
+    "arguments": "p_subject uuid, p_session uuid, p_query jsonb",
+    "roles": [
+      "service_role"
+    ]
+  },
+  {
+    "name": "read_native_match_delivery_page",
+    "arguments": "p_owner text, p_lane text, p_after uuid, p_limit integer",
+    "roles": [
+      "service_role"
+    ]
+  },
+  {
+    "name": "read_native_match_recovery_work",
+    "arguments": "p_after uuid, p_limit integer",
+    "roles": [
+      "service_role"
+    ]
+  },
+  {
+    "name": "read_native_opening_material",
+    "arguments": "p_game uuid",
+    "roles": [
+      "service_role"
+    ]
+  },
+  {
+    "name": "read_native_opening_response_wait",
+    "arguments": "p_game uuid",
+    "roles": [
+      "service_role"
+    ]
+  },
+  {
+    "name": "read_native_opening_source",
+    "arguments": "p_game uuid",
+    "roles": [
+      "service_role"
+    ]
+  },
+  {
+    "name": "read_native_queue_intent_source",
+    "arguments": "p_intent uuid, p_after_offset numeric, p_limit integer",
+    "roles": [
+      "service_role"
+    ]
+  },
+  {
+    "name": "read_native_queue_work",
+    "arguments": "p_after uuid, p_limit integer",
+    "roles": [
+      "service_role"
+    ]
+  },
+  {
+    "name": "read_native_recovery_work",
+    "arguments": "p_after uuid, p_limit integer",
+    "roles": [
+      "service_role"
+    ]
+  },
+  {
+    "name": "read_native_restore_original",
+    "arguments": "p_game uuid, p_request uuid, p_terms jsonb",
+    "roles": [
+      "service_role"
+    ]
+  },
+  {
+    "name": "read_native_room_source",
+    "arguments": "p_room uuid, p_basis numeric, p_release uuid, p_legality uuid",
+    "roles": [
+      "service_role"
+    ]
+  },
+  {
+    "name": "read_native_system_disposition",
+    "arguments": "p_game uuid, p_request uuid, p_original jsonb",
+    "roles": [
+      "service_role"
+    ]
+  },
+  {
+    "name": "read_native_transition_sources",
+    "arguments": "p_game uuid, p_context uuid, p_anchor_checkpoint uuid, p_after_revision numeric, p_limit integer",
+    "roles": [
+      "service_role"
+    ]
+  },
+  {
+    "name": "read_native_unscheduled_decision_work",
+    "arguments": "p_after uuid, p_limit integer",
+    "roles": [
+      "service_role"
+    ]
+  },
+  {
+    "name": "read_native_view_source",
+    "arguments": "p_game uuid, p_context uuid, p_epoch text, p_revision text, p_viewer uuid, p_disclosure text",
+    "roles": [
+      "service_role"
+    ]
+  },
+  {
+    "name": "read_notifications_command",
+    "arguments": "p_subject uuid, p_session uuid, p_request uuid, p_notifications uuid[]",
+    "roles": [
+      "service_role"
+    ]
+  },
+  {
+    "name": "read_patreon_link",
+    "arguments": "p_subject uuid, p_session uuid, p_request uuid, p_state_hash text, p_code_hash text",
+    "roles": [
+      "service_role"
+    ]
+  },
+  {
+    "name": "read_patreon_notification",
+    "arguments": "p_event uuid",
+    "roles": [
+      "service_role"
+    ]
+  },
+  {
+    "name": "read_patreon_refresh",
+    "arguments": "p_association uuid",
+    "roles": [
+      "service_role"
+    ]
+  },
+  {
+    "name": "read_patreon_refresh_result",
+    "arguments": "p_association uuid, p_request uuid",
+    "roles": [
+      "service_role"
+    ]
+  },
+  {
+    "name": "read_patreon_refresh_work",
+    "arguments": "p_campaign text, p_after uuid, p_limit integer",
+    "roles": [
+      "service_role"
+    ]
+  },
+  {
+    "name": "read_patreon_work",
+    "arguments": "p_kind text, p_after uuid, p_limit integer, p_bucket text",
+    "roles": [
+      "service_role"
+    ]
+  },
+  {
+    "name": "read_prediction_command",
+    "arguments": "p_subject uuid, p_session uuid, p_input jsonb",
+    "roles": [
+      "service_role"
+    ]
+  },
+  {
+    "name": "read_prediction_extraction_page",
+    "arguments": "p_slot date, p_after uuid, p_limit integer",
+    "roles": [
+      "service_role"
+    ]
+  },
+  {
+    "name": "read_prediction_maintenance_page",
+    "arguments": "p_after uuid, p_limit integer",
+    "roles": [
+      "service_role"
+    ]
+  },
+  {
+    "name": "read_profile_art_command",
+    "arguments": "p_subject uuid, p_session uuid, p_request uuid, p_expected jsonb, p_art jsonb",
+    "roles": [
+      "service_role"
+    ]
+  },
+  {
+    "name": "read_profile_defaults_command",
+    "arguments": "p_subject uuid, p_session uuid, p_command jsonb",
+    "roles": [
+      "service_role"
+    ]
+  },
+  {
+    "name": "read_public_profile_art",
+    "arguments": "p_player uuid",
+    "roles": [
+      "authenticated"
+    ]
+  },
+  {
+    "name": "read_qualified_between_game_command",
+    "arguments": "p_subject uuid, p_session uuid, p_original jsonb",
+    "roles": [
+      "service_role"
+    ]
+  },
+  {
+    "name": "read_qualified_controller_between_game_command",
+    "arguments": "p_grant uuid, p_epoch numeric, p_secret_ref text, p_original jsonb",
+    "roles": [
+      "service_role"
+    ]
+  },
+  {
+    "name": "read_qualified_room_countdown_command",
+    "arguments": "p_subject uuid, p_session uuid, p_room uuid, p_original jsonb",
+    "roles": [
+      "service_role"
+    ]
+  },
+  {
+    "name": "read_qualified_room_ready_command",
+    "arguments": "p_subject uuid, p_session uuid, p_room uuid, p_original jsonb",
+    "roles": [
+      "service_role"
+    ]
+  },
+  {
+    "name": "read_quest_reroll_command",
+    "arguments": "p_subject uuid, p_session uuid, p_request uuid, p_assignment uuid",
+    "roles": [
+      "service_role"
+    ]
+  },
+  {
+    "name": "read_room_ai_status",
+    "arguments": "p_room uuid, p_after uuid, p_limit integer",
+    "roles": [
+      "authenticated"
+    ]
+  },
+  {
+    "name": "read_room_command",
+    "arguments": "p_subject uuid, p_session uuid, p_input jsonb",
+    "roles": [
+      "service_role"
+    ]
+  },
+  {
+    "name": "read_room_configuration_command",
+    "arguments": "p_subject uuid, p_session uuid, p_request uuid, p_room uuid, p_expected numeric, p_profile uuid, p_structure text, p_teams jsonb",
+    "roles": [
+      "service_role"
+    ]
+  },
+  {
+    "name": "read_room_invitation_command",
+    "arguments": "p_subject uuid, p_session uuid, p_kind text, p_request uuid, p_target uuid, p_expected numeric, p_token_hash text",
+    "roles": [
+      "service_role"
+    ]
+  },
+  {
+    "name": "read_social_command",
+    "arguments": "p_subject uuid, p_session uuid, p_input jsonb",
+    "roles": [
+      "service_role"
+    ]
+  },
+  {
+    "name": "read_stripe_notification",
+    "arguments": "p_event uuid",
+    "roles": [
+      "service_role"
+    ]
+  },
+  {
+    "name": "read_stripe_purchase",
+    "arguments": "p_purchase uuid",
+    "roles": [
+      "service_role"
+    ]
+  },
+  {
+    "name": "read_stripe_reservation",
+    "arguments": "p_subject uuid, p_session uuid, p_request uuid, p_cosmetic uuid",
+    "roles": [
+      "service_role"
+    ]
+  },
+  {
+    "name": "read_stripe_work",
+    "arguments": "p_kind text, p_after uuid, p_limit integer, p_bucket text",
+    "roles": [
+      "service_role"
+    ]
+  },
+  {
+    "name": "read_supply_ballot",
+    "arguments": "p_season uuid, p_after uuid, p_limit integer",
+    "roles": [
+      "authenticated"
+    ]
+  },
+  {
+    "name": "read_supply_ballot_command",
+    "arguments": "p_subject uuid, p_session uuid, p_request uuid, p_season uuid, p_sets uuid[]",
+    "roles": [
+      "service_role"
+    ]
+  },
+  {
+    "name": "read_table_profile_configurations",
+    "arguments": "p_profile uuid, p_after integer, p_limit integer",
+    "roles": [
+      "authenticated"
+    ]
+  },
+  {
+    "name": "read_table_profiles",
+    "arguments": "p_after uuid, p_limit integer",
+    "roles": [
+      "authenticated"
+    ]
+  },
+  {
+    "name": "read_unready_room_command",
+    "arguments": "p_subject uuid, p_session uuid, p_request uuid, p_room uuid, p_expected numeric",
+    "roles": [
+      "service_role"
+    ]
+  },
+  {
+    "name": "read_visible_room",
+    "arguments": "p_room uuid, p_after uuid, p_limit integer",
+    "roles": [
+      "authenticated"
+    ]
+  },
+  {
+    "name": "read_visible_rooms",
+    "arguments": "p_after uuid, p_limit integer",
+    "roles": [
+      "authenticated"
+    ]
+  },
+  {
+    "name": "rebind_ai_runner",
+    "arguments": "p_binding uuid, p_epoch numeric, p_proof text, p_request uuid",
+    "roles": [
+      "service_role"
+    ]
+  },
+  {
+    "name": "record_prediction_observation",
+    "arguments": "p_market uuid, p_manifest uuid, p_card jsonb",
+    "roles": [
+      "service_role"
+    ]
+  },
+  {
+    "name": "record_price_probe",
+    "arguments": "p_manifest uuid, p_card jsonb",
+    "roles": [
+      "service_role"
+    ]
+  },
+  {
+    "name": "register_account",
+    "arguments": "p_subject uuid, p_session uuid, p_username text, p_back uuid, p_sleeve uuid, p_dice uuid",
+    "roles": [
+      "service_role"
+    ]
+  },
+  {
+    "name": "register_account_command",
+    "arguments": "p_subject uuid, p_session uuid, p_username text, p_back uuid, p_sleeve uuid, p_dice uuid",
+    "roles": [
+      "service_role"
+    ]
+  },
+  {
+    "name": "register_native_host_watch",
+    "arguments": "p_instance uuid, p_owner text",
+    "roles": [
+      "service_role"
+    ]
+  },
+  {
+    "name": "replace_supply_ballot_command",
+    "arguments": "p_subject uuid, p_session uuid, p_request uuid, p_season uuid, p_sets uuid[]",
+    "roles": [
+      "service_role"
+    ]
+  },
+  {
+    "name": "request_account_deletion_command",
+    "arguments": "p_subject uuid, p_session uuid, p_request uuid, p_status_key_hash text",
+    "roles": [
+      "service_role"
+    ]
+  },
+  {
+    "name": "reroll_quest_command",
+    "arguments": "p_subject uuid, p_session uuid, p_request uuid, p_assignment uuid",
+    "roles": [
+      "service_role"
+    ]
+  },
+  {
+    "name": "reserve_native_entropy_seed",
+    "arguments": "p_game uuid, p_checkpoint uuid, p_owner text, p_fence numeric",
+    "roles": [
+      "service_role"
+    ]
+  },
+  {
+    "name": "reserve_stripe_purchase",
+    "arguments": "p_subject uuid, p_session uuid, p_request uuid, p_cosmetic uuid, p_terms jsonb",
+    "roles": [
+      "service_role"
+    ]
+  },
+  {
+    "name": "resolve_account_appearance",
+    "arguments": "p_actor uuid, p_back uuid, p_sleeve uuid, p_dice uuid, p_playmat uuid",
+    "roles": [
+      "service_role"
+    ]
+  },
+  {
+    "name": "resolve_prediction",
+    "arguments": "p_market uuid",
+    "roles": [
+      "service_role"
+    ]
+  },
+  {
+    "name": "restore_game_checkpoint",
+    "arguments": "p_game uuid, p_epoch numeric, p_operational_revision numeric, p_checkpoint uuid, p_new_owner text, p_restoration_ref text, p_request uuid",
+    "roles": [
+      "service_role"
+    ]
+  },
+  {
+    "name": "resume_match_between_games",
+    "arguments": "p_match uuid, p_expected numeric, p_availability numeric, p_incident uuid, p_proof text, p_request uuid",
+    "roles": [
+      "service_role"
+    ]
+  },
+  {
+    "name": "retire_account",
+    "arguments": "p_account uuid",
+    "roles": [
+      "service_role"
+    ]
+  },
+  {
+    "name": "revoke_room_invitation_command",
+    "arguments": "p_subject uuid, p_session uuid, p_request uuid, p_invitation uuid",
+    "roles": [
+      "service_role"
+    ]
+  },
+  {
+    "name": "room_visible",
+    "arguments": "p_room uuid",
+    "roles": [
+      "authenticated"
+    ]
+  },
+  {
+    "name": "save_deck_command",
+    "arguments": "p_subject uuid, p_session uuid, p_request uuid, p_deck uuid, p_expected_revision uuid, p_entries jsonb",
+    "roles": [
+      "service_role"
+    ]
+  },
+  {
+    "name": "schedule_between_game_deadline",
+    "arguments": "p_decision uuid, p_match_revision numeric, p_deadline_revision numeric, p_clock_revision numeric, p_availability_revision numeric, p_profile uuid, p_policy text, p_due timestamp with time zone, p_qualification text, p_request uuid",
+    "roles": [
+      "service_role"
+    ]
+  },
+  {
+    "name": "select_room_deck_command",
+    "arguments": "p_subject uuid, p_session uuid, p_request uuid, p_room uuid, p_expected numeric, p_revision uuid",
+    "roles": [
+      "service_role"
+    ]
+  },
+  {
+    "name": "send_game_message_command",
+    "arguments": "p_subject uuid, p_session uuid, p_request uuid, p_match uuid, p_body text",
+    "roles": [
+      "service_role"
+    ]
+  },
+  {
+    "name": "start_patreon_link",
+    "arguments": "p_subject uuid, p_session uuid, p_request uuid, p_state_hash text, p_terms jsonb",
+    "roles": [
+      "service_role"
+    ]
+  },
+  {
+    "name": "start_room_match",
+    "arguments": "p_room uuid, p_expected numeric, p_release uuid, p_legality uuid, p_qualification text, p_inputs jsonb, p_request uuid",
+    "roles": [
+      "service_role"
+    ]
+  },
+  {
+    "name": "start_validated_countdown",
+    "arguments": "p_room uuid, p_expected numeric, p_request uuid",
+    "roles": [
+      "service_role"
+    ]
+  },
+  {
+    "name": "submit_controller_ai_ante",
+    "arguments": "p_grant uuid, p_epoch numeric, p_secret_ref text, p_source jsonb",
+    "roles": [
+      "service_role"
+    ]
+  },
+  {
+    "name": "submit_native_controller_command",
+    "arguments": "p_grant uuid, p_epoch numeric, p_secret_ref text, p_original jsonb, p_prepared jsonb",
+    "roles": [
+      "service_role"
+    ]
+  },
+  {
+    "name": "submit_native_human_command",
+    "arguments": "p_subject uuid, p_session uuid, p_original jsonb, p_prepared jsonb",
+    "roles": [
+      "service_role"
+    ]
+  },
+  {
+    "name": "trade_restricted",
+    "arguments": "p_created timestamp with time zone, p_evaluated timestamp with time zone, p_games numeric",
+    "roles": [
+      "authenticated",
+      "service_role"
+    ]
+  },
+  {
+    "name": "unready_room_command",
+    "arguments": "p_subject uuid, p_session uuid, p_request uuid, p_room uuid, p_expected numeric",
+    "roles": [
+      "service_role"
+    ]
+  }
+]
