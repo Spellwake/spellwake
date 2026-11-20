@@ -44,7 +44,8 @@ jobs:
 
   reference-report:
     name: Reference report replay
-    runs-on: ubuntu-latest
+    # Ubuntu runners repeatedly shut down while replaying this full capture.
+    runs-on: macos-15
     timeout-minutes: 55
     env:
       CARGO_PROFILE_TEST_OPT_LEVEL: "3"
