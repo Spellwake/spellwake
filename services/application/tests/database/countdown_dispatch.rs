@@ -206,3 +206,140 @@ async fn due_sweep_reserves_both_qualified_paths_and_isolates_policy_drift() -> 
     assert_eq!(dispatch(&c).await?["failed"], 1);
     Ok(())
 }
+
+#[tokio::test]
+#[ignore = "requires its own migrated local Postgres database"]
+async fn opening_choice_dispatch_handles_silent_rooms_and_preserves_explicit_choices() -> TestResult
+{
+    let c = connection().await?;
+    let mut games = Vec::new();
+    for _ in 0..2 {
+        let (_, matched) = super::ante_transaction_integrity::reserve(&c, true).await?;
+        let game: Uuid = c
+            .query_one(
+                "SELECT reserved_game_id FROM app.match WHERE id=$1",
+                &[&matched],
+            )
+            .await?
+            .get(0);
+        games.push(game);
+    }
+
+    for role in [
+        "anon",
+        "authenticated",
+        "service_role",
+        "supabase_auth_admin",
+    ] {
+        let can_dispatch: bool = c
+            .query_one(
+                "SELECT has_function_privilege($1,'app.dispatch_native_opening_choices(integer)','EXECUTE')",
+                &[&role],
+            )
+            .await?
+            .get(0);
+        assert!(!can_dispatch);
+    }
+    let tick = "SELECT app.dispatch_native_opening_choices(8)";
+    assert_eq!(c.query_one(tick, &[]).await?.get::<_, i32>(0), 2);
+    assert_eq!(c.query_one(tick, &[]).await?.get::<_, i32>(0), 0);
+    for game in &games {
+        let waiting: bool = c.query_one(
+            "SELECT first_id IS NULL AND choice_expires_at>statement_timestamp()+interval '110 seconds' AND choice_timed_out_at IS NULL FROM app.native_opening_selection WHERE game_id=$1",
+            &[game],
+        ).await?.get(0);
+        assert!(waiting);
+    }
+
+    let explicit = games[0];
+    let silent = games[1];
+    let choices = "SELECT s.chooser_id, p.id FROM app.native_opening_selection s JOIN app.game g ON g.id=s.game_id JOIN app.match_seat p ON p.match_id=g.match_id AND p.id<>s.chooser_id WHERE s.game_id=$1";
+    let choose = "SELECT app.native_opening_seat_choice($1,$2,NULL,NULL,$3)";
+    let seats = c.query_one(choices, &[&explicit]).await?;
+    let chooser: Uuid = seats.get(0);
+    let other: Uuid = seats.get(1);
+    let denied: Value = c
+        .query_one(choose, &[&other, &explicit, &other])
+        .await?
+        .get(0);
+    assert_eq!(denied["status"], "fail");
+    let accepted: Value = c
+        .query_one(choose, &[&chooser, &explicit, &other])
+        .await?
+        .get(0);
+    assert_eq!(accepted["data"]["firstSeatId"], json!(other));
+
+    c.execute(
+        "UPDATE app.native_opening_selection SET choice_expires_at=clock_timestamp()-interval '1 second' WHERE game_id=ANY($1)",
+        &[&games],
+    ).await?;
+    let seats = c.query_one(choices, &[&silent]).await?;
+    let chooser: Uuid = seats.get(0);
+    let other: Uuid = seats.get(1);
+
+    // The late signed choice reaches the shared writer ahead of the next
+    // scheduler tick and still cannot replace the default.
+    let late: Value = c
+        .query_one(choose, &[&chooser, &silent, &other])
+        .await?
+        .get(0);
+    assert_eq!(
+        late,
+        json!({"status":"fail","data":{"choice":"already selected"}})
+    );
+    assert_eq!(c.query_one(tick, &[]).await?.get::<_, i32>(0), 0);
+    let material: Value = c
+        .query_one("SELECT app.read_native_opening_material($1)", &[&silent])
+        .await?
+        .get(0);
+    assert_eq!(material["ready"], true);
+    assert_eq!(material["firstSeatId"], json!(chooser));
+    assert!(c.query_one(
+        "SELECT choice_timed_out_at>=choice_expires_at AND first_id=chooser_id FROM app.native_opening_selection WHERE game_id=$1",
+        &[&silent],
+    ).await?.get::<_, bool>(0));
+    assert!(c.query_one(
+        "SELECT first_id<>chooser_id AND choice_timed_out_at IS NULL FROM app.native_opening_selection WHERE game_id=$1",
+        &[&explicit],
+    ).await?.get::<_, bool>(0));
+
+    let (_, matched) = super::ante_transaction_integrity::reserve(&c, true).await?;
+    let timer_only: Uuid = c
+        .query_one(
+            "SELECT reserved_game_id FROM app.match WHERE id=$1",
+            &[&matched],
+        )
+        .await?
+        .get(0);
+    assert_eq!(c.query_one(tick, &[]).await?.get::<_, i32>(0), 1);
+    let incident: Value = c.query_one(
+        "SELECT app.pause_match_between_games(id,revision,availability_revision,clock_timestamp(),'server_process','fixture:opening-pause',$2) FROM app.match WHERE id=$1",
+        &[&matched, &Uuid::new_v4()],
+    ).await?.get(0);
+    assert_eq!(incident["status"], "success", "{incident}");
+    assert!(c.query_one(
+        "SELECT first_id IS NULL AND choice_expires_at>choice_paused_at FROM app.native_opening_selection WHERE game_id=$1",
+        &[&timer_only],
+    ).await?.get::<_, bool>(0));
+    assert_eq!(c.query_one(tick, &[]).await?.get::<_, i32>(0), 0);
+    let restored: Value = c.query_one(
+        "SELECT app.resume_match_between_games(id,revision,availability_revision,incident_receipt_id,'fixture:opening-resume',$2) FROM app.match WHERE id=$1",
+        &[&matched, &Uuid::new_v4()],
+    ).await?.get(0);
+    assert_eq!(restored["status"], "success", "{restored}");
+    assert!(c.query_one(
+        "SELECT first_id IS NULL AND choice_paused_at IS NULL AND choice_expires_at>statement_timestamp()+interval '100 seconds' FROM app.native_opening_selection WHERE game_id=$1",
+        &[&timer_only],
+    ).await?.get::<_, bool>(0));
+    c.execute(
+        "UPDATE app.native_opening_selection SET choice_expires_at=clock_timestamp()-interval '1 second' WHERE game_id=$1",
+        &[&timer_only],
+    ).await?;
+    assert_eq!(c.query_one(tick, &[]).await?.get::<_, i32>(0), 1);
+    assert_eq!(c.query_one(tick, &[]).await?.get::<_, i32>(0), 0);
+    assert!(c.query_one(
+        "SELECT choice_timed_out_at>=choice_expires_at AND first_id=chooser_id FROM app.native_opening_selection WHERE game_id=$1",
+        &[&timer_only],
+    ).await?.get::<_, bool>(0));
+    Ok(())
+}
