@@ -16,7 +16,7 @@ async fn all_application_relations_deny_raw_mutation_and_personal_recreation() -
             .iter()
             .filter(|row| row.get::<_, String>(2) == "r")
             .count(),
-        95
+        96
     );
     assert_eq!(
         relations
