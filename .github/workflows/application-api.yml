@@ -37,6 +37,11 @@ jobs:
         with:
           persist-credentials: false
       - run: rustup show
+      - name: Prepare the pinned CI vocabulary
+        run: |
+          vocabulary="$RUNNER_TEMP/spellwake-creature-vocabulary.input.json"
+          python3 tests/support/prepare_ci_vocabulary.py "$vocabulary"
+          echo "SPELLWAKE_CREATURE_VOCABULARY_INPUT=$vocabulary" >> "$GITHUB_ENV"
       - run: cargo fmt --manifest-path services/application/Cargo.toml --all --check
       - run: cargo clippy --locked --manifest-path services/application/Cargo.toml --workspace --all-targets -- -D warnings
       - run: cargo test --locked --manifest-path services/application/Cargo.toml --workspace
