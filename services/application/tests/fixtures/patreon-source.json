@@ -1,0 +1,83 @@
+{
+  "qualification": "Synthetic shape and independently generated Python hashlib HMAC vector; not a real Patreon capture or payment proof.",
+  "secret": "patreon_webhook_synthetic_secret",
+  "webhookBody": "{\"data\":{\"type\":\"member\",\"id\":\"member-abc\",\"relationships\":{\"campaign\":{\"data\":{\"type\":\"campaign\",\"id\":\"123\"}},\"user\":{\"data\":{\"type\":\"user\",\"id\":\"456\"}}},\"attributes\":{\"full_name\":\"Synthetic private name\",\"email\":\"not-a-real-user@example.invalid\"}}}",
+  "signature": "88e844bf4f34585003bfe07276debe01",
+  "bodySha256": "9bc734ddfd9eb85511a0e5dc71e2782ef91c3eaa7211e833cd8b6f6c7b7124e0",
+  "member": {
+    "data": {
+      "type": "member",
+      "id": "member-abc",
+      "attributes": {
+        "patron_status": "active_patron",
+        "last_charge_status": "Paid",
+        "last_charge_date": "2026-11-02T12:00:00.123456Z"
+      },
+      "relationships": {
+        "campaign": {
+          "data": {
+            "type": "campaign",
+            "id": "123"
+          }
+        },
+        "user": {
+          "data": {
+            "type": "user",
+            "id": "456"
+          }
+        },
+        "currently_entitled_tiers": {
+          "data": [
+            {
+              "type": "tier",
+              "id": "789"
+            }
+          ]
+        },
+        "pledge_history": {
+          "data": [
+            {
+              "type": "pledge-event",
+              "id": "event-1"
+            }
+          ]
+        }
+      }
+    },
+    "included": [
+      {
+        "type": "pledge-event",
+        "id": "event-1",
+        "attributes": {
+          "amount_cents": 500,
+          "currency_code": "USD",
+          "date": "2026-11-02T12:00:00.123456Z",
+          "payment_status": "Paid",
+          "pledge_payment_status": "valid",
+          "tier_id": "789",
+          "type": "subscription"
+        },
+        "relationships": {
+          "campaign": {
+            "data": {
+              "type": "campaign",
+              "id": "123"
+            }
+          },
+          "patron": {
+            "data": {
+              "type": "user",
+              "id": "456"
+            }
+          },
+          "tier": {
+            "data": {
+              "type": "tier",
+              "id": "789"
+            }
+          }
+        }
+      }
+    ]
+  }
+}

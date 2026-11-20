@@ -1,131 +1,188 @@
-//! Closed, dependency-free numeric layer-7 subset (CR 613.4b–d).
+//! Exact-world evaluation for admitted copy, control, text, type, color, ability
+//! and PT buckets, including finite defining abilities in all physical zones.
 //!
-//! Only literal operations on a fixed battlefield incarnation are representable.
-//! No CDAs, dynamic expressions/selectors, copy effects, other layers or durations.
-//! This ordering is therefore not an algorithm for general layer dependencies.
-use crate::{card_identity::CardObjectId, stack_window::StackEntryId};
-use spellwake_contracts::RulesInteger;
+//! Canonical state owns physical counters, resolved records and one timestamp
+//! clock. Evaluation, generated-operation probes and ordering use only scratch
+//! values borrowed from the caller's actual physical/definition/state cut.
+mod colors;
+mod evaluation;
+#[cfg(test)]
+#[path = "characteristics/tests.rs"]
+pub(crate) mod frozen_tests;
+mod ordering;
+#[cfg(test)]
+pub(crate) mod private_qualification;
+mod text;
+pub(crate) use text::rewrite_program as rewrite_program_creature_types;
+mod types;
+mod world;
+
+pub use colors::{Color, ColorFilter, ColorOperation, StaticColorOperand};
+pub(crate) use evaluation::{count_permanents, evaluate};
+pub use types::*;
+
+pub use crate::program::CardType;
+use crate::{
+    object_identity::{CardId, GameObjects, ObjectId, ObjectZone},
+    stack_window::StackEntryId,
+};
 use std::collections::{BTreeMap, BTreeSet};
 
-/// Exact numeric pair; negative power/toughness is not clamped to zero.
+/// Nested canonical state under EffectWindow, never a final-stat cache.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct PowerToughness {
-    pub power: RulesInteger,
-    pub toughness: RulesInteger,
-}
-
-/// These literal, fixed-target operations cannot depend on another effect's
-/// applicability or generated values. Setting changes both properties only.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum PowerToughnessOperation {
-    Set(PowerToughness),
-    Modify(PowerToughness),
-    Switch,
-}
-
-/// Physical counts on one incarnation, not copiable characteristics. The same
-/// shape is used for a simultaneous placement batch; zero total is not an action.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct PowerToughnessCounters {
-    pub plus_one: RulesInteger,
-    pub minus_one: RulesInteger,
-}
-impl Default for PowerToughnessCounters {
-    fn default() -> Self {
-        Self {
-            plus_one: 0.into(),
-            minus_one: 0.into(),
-        }
-    }
-}
-impl PowerToughnessCounters {
-    pub(crate) fn valid_placement(&self) -> bool {
-        self.plus_one >= 0.into()
-            && self.minus_one >= 0.into()
-            && (self.plus_one.is_positive() || self.minus_one.is_positive())
-    }
-    fn has_opposites(&self) -> bool {
-        self.plus_one.is_positive() && self.minus_one.is_positive()
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-pub struct ContinuousEffectId(u64);
-
-/// A resolved, duration-free effect. Source exit does not remove it. Applicability
-/// ends at target incarnation departure; this is not a source-dependent static.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct PowerToughnessEffect {
-    pub id: ContinuousEffectId,
-    pub timestamp: u64,
-    pub source: StackEntryId,
-    pub target: CardObjectId,
-    pub operation: PowerToughnessOperation,
-}
-
-/// Read-only computation, never another independently mutated PT authority.
-/// Defined equals copiable in this subset. Base is after 7b (CR 208.4), not printed.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct PowerToughnessEvaluation {
-    pub object: CardObjectId,
-    pub copiable: PowerToughness,
-    pub base: PowerToughness,
-    pub derived: PowerToughness,
-    /// In actual sublayer/application order, not one global timestamp ordering.
-    pub applied_effects: Vec<ContinuousEffectId>,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum CharacteristicsError {
-    EffectIdentityExhausted,
-    InvalidCounterPlacement,
-}
-
-/// Nested canonical state under EffectWindow. Construction/mutation is private to
-/// the kernel; a renderer never supplies final stats, timestamps or applicability.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct PowerToughnessState {
+pub(crate) struct CharacteristicState {
+    departed_controllers: BTreeSet<crate::priority::SeatId>,
     next_effect: u64,
-    effects: BTreeMap<ContinuousEffectId, PowerToughnessEffect>,
-    counters: BTreeMap<CardObjectId, PowerToughnessCounters>,
+    next_timestamp: u64,
+    object_timestamps: BTreeMap<ObjectId, CharacteristicTimestamp>,
+    resolved: BTreeMap<ContinuousEffectId, ResolvedContinuousEffect>,
+    counters: BTreeMap<ObjectId, PowerToughnessCounters>,
+    next_world_tenure: u64,
+    world_tenures: BTreeMap<ObjectId, WorldTenure>,
 }
-impl Default for PowerToughnessState {
+impl Default for CharacteristicState {
     fn default() -> Self {
         Self {
+            departed_controllers: BTreeSet::new(),
             next_effect: 1,
-            effects: BTreeMap::new(),
+            next_timestamp: 1,
+            object_timestamps: BTreeMap::new(),
+            resolved: BTreeMap::new(),
             counters: BTreeMap::new(),
+            next_world_tenure: 1,
+            world_tenures: BTreeMap::new(),
         }
     }
 }
-impl PowerToughnessState {
+impl CharacteristicState {
+    pub(crate) fn copiable_definition<'a>(
+        &'a self,
+        physical: &'a crate::object_identity::GameObject,
+        programs: &'a BTreeMap<CardId, crate::program::Program>,
+    ) -> Option<(&'a crate::program::Program, Option<CharacteristicTimestamp>)> {
+        let original = physical.base_program(programs)?;
+        if physical.zone() == ObjectZone::Battlefield
+            && let Some((program, timestamp)) = self.copied_definition(physical.id())
+        {
+            return Some((program, Some(timestamp)));
+        }
+        Some((original, None))
+    }
+    /// Last independent layer-1 snapshot and its creating timestamp. The caller
+    /// supplies a live battlefield incarnation; no donor reference is retained.
+    pub(crate) fn copied_definition(
+        &self,
+        object: ObjectId,
+    ) -> Option<(&crate::program::Program, CharacteristicTimestamp)> {
+        self.resolved
+            .values()
+            .filter(|effect| effect.affected.contains(&object))
+            .filter_map(|effect| match effect.parts.0.as_slice() {
+                [ResolvedPart::Copy(program)] => Some((program.as_ref(), effect.timestamp)),
+                _ => None,
+            })
+            .max_by_key(|(_, timestamp)| *timestamp)
+    }
+    /// Admit exactly the trusted initial BF order without deriving history from
+    /// registry or definition IDs. Validate the complete batch before allocation.
+    pub(crate) fn register_initial_battlefield(
+        &mut self,
+        cards: &GameObjects,
+        order: &[CardId],
+    ) -> Result<(), CharacteristicsError> {
+        if !self.object_timestamps.is_empty() || !self.resolved.is_empty() {
+            return Err(CharacteristicsError::InitialBattlefieldAlreadyRegistered);
+        }
+        let battlefield: BTreeMap<_, _> = cards
+            .iter()
+            .filter(|object| object.zone() == ObjectZone::Battlefield)
+            .filter_map(|object| object.card_id().map(|card| (card, object.id())))
+            .collect();
+        let supplied: BTreeSet<_> = order.iter().copied().collect();
+        if supplied.len() != order.len() || supplied != battlefield.keys().copied().collect() {
+            return Err(CharacteristicsError::InvalidInitialBattlefieldOrder);
+        }
+        let order = order
+            .iter()
+            .map(|card| battlefield[card])
+            .collect::<Vec<_>>();
+        self.register_battlefield_entries(&order)
+    }
+
+    /// Trusted single entry through the same complete-order allocator.
+    pub(crate) fn register_battlefield_entry(
+        &mut self,
+        object: ObjectId,
+    ) -> Result<CharacteristicTimestamp, CharacteristicsError> {
+        let timestamp = CharacteristicTimestamp(self.next_timestamp);
+        self.register_battlefield_entries(&[object])?;
+        Ok(timestamp)
+    }
+
+    /// Allocate distinct relative timestamps in the complete selected order.
+    /// Duplicate members, prior registrations and overflow reject before mutation.
+    /// World tenure is reconciled separately at the one actual publication cut.
+    pub(crate) fn register_battlefield_entries(
+        &mut self,
+        order: &[ObjectId],
+    ) -> Result<(), CharacteristicsError> {
+        let mut seen = BTreeSet::new();
+        if order
+            .iter()
+            .any(|id| !seen.insert(*id) || self.object_timestamps.contains_key(id))
+        {
+            return Err(CharacteristicsError::DuplicateBattlefieldTimestamp);
+        }
+        let count =
+            u64::try_from(order.len()).map_err(|_| CharacteristicsError::TimestampExhausted)?;
+        let next = self
+            .next_timestamp
+            .checked_add(count)
+            .ok_or(CharacteristicsError::TimestampExhausted)?;
+        for (id, value) in order.iter().zip(self.next_timestamp..next) {
+            self.object_timestamps
+                .insert(*id, CharacteristicTimestamp(value));
+        }
+        self.next_timestamp = next;
+        Ok(())
+    }
+
     pub(crate) fn add_effect(
         &mut self,
-        source: StackEntryId,
-        target: CardObjectId,
-        operation: PowerToughnessOperation,
-    ) -> Result<(), CharacteristicsError> {
-        let next = self
+        creator: StackEntryId,
+        target: ObjectId,
+        mut parts: ResolvedParts,
+        duration: ResolvedDuration,
+    ) -> Result<ResolvedContinuousEffect, CharacteristicsError> {
+        parts
+            .validate()
+            .map_err(CharacteristicsError::InvalidParts)?;
+        parts.0.sort_by_key(ResolvedPart::bucket);
+        let next_effect = self
             .next_effect
             .checked_add(1)
             .ok_or(CharacteristicsError::EffectIdentityExhausted)?;
+        let next_timestamp = self
+            .next_timestamp
+            .checked_add(1)
+            .ok_or(CharacteristicsError::TimestampExhausted)?;
         let id = ContinuousEffectId(self.next_effect);
-        self.effects.insert(
+        let effect = ResolvedContinuousEffect {
             id,
-            PowerToughnessEffect {
-                id,
-                timestamp: self.next_effect,
-                source,
-                target,
-                operation,
-            },
-        );
-        self.next_effect = next;
-        Ok(())
+            timestamp: CharacteristicTimestamp(self.next_timestamp),
+            creator,
+            affected: BTreeSet::from([target]),
+            parts,
+            duration,
+        };
+        self.resolved.insert(id, effect.clone());
+        self.next_effect = next_effect;
+        self.next_timestamp = next_timestamp;
+        Ok(effect)
     }
     pub(crate) fn place_counters(
         &mut self,
-        target: CardObjectId,
+        target: ObjectId,
         placement: &PowerToughnessCounters,
     ) -> Result<(), CharacteristicsError> {
         if !placement.valid_placement() {
@@ -136,65 +193,70 @@ impl PowerToughnessState {
         current.minus_one = current.minus_one.plus(&placement.minus_one);
         Ok(())
     }
-    pub(crate) fn counters(&self, object: CardObjectId) -> PowerToughnessCounters {
+    pub(crate) fn counters(&self, object: ObjectId) -> PowerToughnessCounters {
         self.counters.get(&object).cloned().unwrap_or_default()
     }
-    pub(crate) fn effect(&self, id: ContinuousEffectId) -> Option<&PowerToughnessEffect> {
-        self.effects.get(&id)
+    pub(crate) fn next_effect_sequence(&self) -> u64 {
+        self.next_effect
     }
-
-    pub(crate) fn evaluate(
+    pub(crate) fn next_timestamp_sequence(&self) -> u64 {
+        self.next_timestamp
+    }
+    pub(crate) fn object_timestamp(&self, object: ObjectId) -> Option<CharacteristicTimestamp> {
+        self.object_timestamps.get(&object).copied()
+    }
+    pub(crate) fn object_timestamps(
         &self,
-        object: CardObjectId,
-        copiable: PowerToughness,
-    ) -> PowerToughnessEvaluation {
-        let effects: Vec<_> = self
-            .effects
+    ) -> impl Iterator<Item = (ObjectId, CharacteristicTimestamp)> + '_ {
+        self.object_timestamps
+            .iter()
+            .map(|(object, stamp)| (*object, *stamp))
+    }
+    pub(crate) fn effects(&self) -> impl Iterator<Item = &ResolvedContinuousEffect> {
+        self.resolved.values()
+    }
+    pub(crate) fn effect(&self, id: ContinuousEffectId) -> Option<&ResolvedContinuousEffect> {
+        self.resolved.get(&id)
+    }
+    pub(crate) fn expire_until_end_of_turn(&mut self) -> Vec<ContinuousEffectId> {
+        let expired = self
+            .resolved
             .values()
-            .filter(|effect| effect.target == object)
+            .filter(|effect| effect.duration == ResolvedDuration::UntilEndOfTurn)
+            .map(|effect| effect.id)
             .collect();
-        let mut base = copiable.clone();
-        let mut applied_effects = Vec::new();
-        // Creation identity/timestamp is monotonic in this closed sequential universe.
-        for effect in &effects {
-            if let PowerToughnessOperation::Set(values) = &effect.operation {
-                base = values.clone();
-                applied_effects.push(effect.id);
-            }
-        }
-        let mut derived = base.clone();
-        for effect in &effects {
-            if let PowerToughnessOperation::Modify(values) = &effect.operation {
-                derived.power = derived.power.plus(&values.power);
-                derived.toughness = derived.toughness.plus(&values.toughness);
-                applied_effects.push(effect.id);
-            }
-        }
-        let counters = self.counters(object);
-        let difference = counters.plus_one.minus(&counters.minus_one);
-        derived.power = derived.power.plus(&difference);
-        derived.toughness = derived.toughness.plus(&difference);
-        for effect in &effects {
-            if effect.operation == PowerToughnessOperation::Switch {
-                std::mem::swap(&mut derived.power, &mut derived.toughness);
-                applied_effects.push(effect.id);
-            }
-        }
-        PowerToughnessEvaluation {
-            object,
-            copiable,
-            base,
-            derived,
-            applied_effects,
-        }
+        self.resolved
+            .retain(|_, effect| effect.duration != ResolvedDuration::UntilEndOfTurn);
+        expired
     }
 
-    /// Compute from pre-check state; applying this result must share the SBA batch
-    /// with death checks. Eager annihilation during placement would lose evidence.
-    pub(crate) fn counter_cancellations(&self) -> Vec<(CardObjectId, PowerToughnessCounters)> {
+    /// CR 800.4a ends the entire continuous effect granting a departing player
+    /// control, including masked effects and other buckets in that same record.
+    /// Independent effects survive regardless of the creating entry's controller.
+    pub(crate) fn end_departed_control(
+        &mut self,
+        players: &BTreeSet<crate::priority::SeatId>,
+    ) -> Vec<ResolvedContinuousEffect> {
+        self.departed_controllers.extend(players);
+        let mut ended = Vec::new();
+        self.resolved.retain(|_, effect| {
+            if effect.parts.0.iter().any(
+                |part| matches!(part, ResolvedPart::Control(player) if players.contains(player)),
+            ) {
+                ended.push(effect.clone());
+                false
+            } else {
+                true
+            }
+        });
+        ended
+    }
+
+    /// Compute from pre-check state and apply in the same SBA batch as death.
+    pub(crate) fn counter_cancellations(&self) -> Vec<(ObjectId, PowerToughnessCounters)> {
         self.counters
             .iter()
-            .filter(|(_, counts)| counts.has_opposites())
+            .filter(|(_, counts)| counts.plus_one.is_positive() && counts.minus_one.is_positive())
             .map(|(object, counts)| {
                 let cancel = std::cmp::min(&counts.plus_one, &counts.minus_one);
                 (
@@ -209,7 +271,7 @@ impl PowerToughnessState {
     }
     pub(crate) fn apply_counter_cancellations(
         &mut self,
-        updates: Vec<(CardObjectId, PowerToughnessCounters)>,
+        updates: Vec<(ObjectId, PowerToughnessCounters)>,
     ) {
         for (object, counts) in updates {
             if counts.plus_one.is_positive() || counts.minus_one.is_positive() {
@@ -219,10 +281,16 @@ impl PowerToughnessState {
             }
         }
     }
-    pub(crate) fn retain_battlefield(&mut self, live: &BTreeSet<CardObjectId>) {
-        self.effects
-            .retain(|_, effect| live.contains(&effect.target));
+    pub(crate) fn retain_battlefield(&mut self, live: &BTreeSet<ObjectId>) {
+        self.resolved.retain(|_, effect| {
+            effect.affected.retain(|object| live.contains(object));
+            !effect.affected.is_empty()
+        });
         self.counters.retain(|object, _| live.contains(object));
+        self.object_timestamps
+            .retain(|object, _| live.contains(object));
+        // World departures remain until the actual publisher reconciles history
+        // and records Lost; ordinary battlefield pruning cannot erase that fact.
     }
 }
 
@@ -232,12 +300,12 @@ mod tests {
     #[test]
     fn allocation_exhaustion_and_invalid_counter_counts_never_change_owned_state() {
         use crate::{
-            card_identity::{CardDestination, CardId, CardObjects},
+            object_identity::{CardId, GameObjects, ObjectDestination},
             priority::SeatId,
             stack_window::StackWindow,
         };
-        let objects = CardObjects::new(0)
-            .seed_card(0, CardId(1), SeatId(0), CardDestination::Hand)
+        let objects = GameObjects::new(0)
+            .seed_card(0, CardId(1), SeatId(0), ObjectDestination::Hand)
             .unwrap()
             .next;
         let card = objects.current_identity(CardId(1)).unwrap();
@@ -247,13 +315,18 @@ mod tests {
             .record_card_spell(window.revision(), SeatId(0), card)
             .unwrap();
         let source = window.entries()[0].id();
-        let mut state = PowerToughnessState {
+        let mut state = CharacteristicState {
             next_effect: u64::MAX,
             ..Default::default()
         };
         let saved = state.clone();
         assert_eq!(
-            state.add_effect(source, card, PowerToughnessOperation::Switch),
+            state.add_effect(
+                source,
+                card,
+                ResolvedParts(vec![ResolvedPart::SwitchPT]),
+                ResolvedDuration::NoStatedDuration
+            ),
             Err(CharacteristicsError::EffectIdentityExhausted)
         );
         for (plus, minus) in [(-1, 2), (2, -1), (0, 0)] {

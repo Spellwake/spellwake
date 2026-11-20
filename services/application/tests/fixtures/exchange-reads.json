@@ -1,0 +1,175 @@
+{
+  "offeredTrade": {
+    "accountId": "00000001-1111-4111-8111-111111111111",
+    "trade": {
+      "id": "00000003-1111-4111-8111-111111111111",
+      "sender": {
+        "id": "00000001-1111-4111-8111-111111111111",
+        "username": "reader_user",
+        "isDeleted": false
+      },
+      "recipient": {
+        "id": "00000002-1111-4111-8111-111111111111",
+        "username": "peer_user",
+        "isDeleted": false
+      },
+      "revision": "1",
+      "state": "offered",
+      "createdAt": "2026-11-02T12:00:00Z",
+      "give": [
+        {
+          "assetId": "00000005-1111-4111-8111-111111111111",
+          "quantity": "100",
+          "asset": {
+            "kind": "coin",
+            "currencyKey": "coin"
+          }
+        }
+      ],
+      "request": [
+        {
+          "assetId": "00000005-1111-4111-8111-111111111111",
+          "quantity": "110",
+          "asset": {
+            "kind": "coin",
+            "currencyKey": "coin"
+          }
+        }
+      ],
+      "settlement": null
+    }
+  },
+  "acceptedTrade": {
+    "accountId": "00000001-1111-4111-8111-111111111111",
+    "trade": {
+      "id": "00000003-1111-4111-8111-111111111111",
+      "sender": {
+        "id": "00000001-1111-4111-8111-111111111111",
+        "username": "reader_user",
+        "isDeleted": false
+      },
+      "recipient": {
+        "id": "00000002-1111-4111-8111-111111111111",
+        "username": "peer_user",
+        "isDeleted": false
+      },
+      "revision": "1",
+      "state": "accepted",
+      "createdAt": "2026-11-02T12:00:00Z",
+      "give": [
+        {
+          "assetId": "00000005-1111-4111-8111-111111111111",
+          "quantity": "100",
+          "asset": {
+            "kind": "coin",
+            "currencyKey": "coin"
+          }
+        }
+      ],
+      "request": [
+        {
+          "assetId": "00000005-1111-4111-8111-111111111111",
+          "quantity": "110",
+          "asset": {
+            "kind": "coin",
+            "currencyKey": "coin"
+          }
+        }
+      ],
+      "settlement": {
+        "outgoing": {
+          "policyId": "00000008-1111-4111-8111-111111111111",
+          "catalogueRevision": "7",
+          "total": {
+            "numerator": "100",
+            "denominator": "1"
+          }
+        },
+        "incoming": {
+          "policyId": "00000008-1111-4111-8111-111111111111",
+          "catalogueRevision": "7",
+          "total": {
+            "numerator": "110",
+            "denominator": "1"
+          }
+        },
+        "outgoingAllowed": true,
+        "incomingAllowed": true,
+        "senderRestricted": true,
+        "recipientRestricted": true
+      }
+    }
+  },
+  "listedListing": {
+    "accountId": "00000001-1111-4111-8111-111111111111",
+    "listing": {
+      "id": "00000004-1111-4111-8111-111111111111",
+      "seller": {
+        "id": "00000002-1111-4111-8111-111111111111",
+        "username": "peer_user",
+        "isDeleted": false
+      },
+      "assetId": "00000006-1111-4111-8111-111111111111",
+      "asset": {
+        "kind": "pack",
+        "recipeId": "00000007-1111-4111-8111-111111111111"
+      },
+      "quantity": "2",
+      "totalPrice": "3000",
+      "state": "listed",
+      "revision": "1",
+      "participant": null
+    }
+  },
+  "soldListing": {
+    "accountId": "00000001-1111-4111-8111-111111111111",
+    "listing": {
+      "id": "00000004-1111-4111-8111-111111111111",
+      "seller": {
+        "id": "00000002-1111-4111-8111-111111111111",
+        "username": "peer_user",
+        "isDeleted": false
+      },
+      "assetId": "00000006-1111-4111-8111-111111111111",
+      "asset": {
+        "kind": "pack",
+        "recipeId": "00000007-1111-4111-8111-111111111111"
+      },
+      "quantity": "2",
+      "totalPrice": "3000",
+      "state": "sold",
+      "revision": "1",
+      "participant": {
+        "buyer": {
+          "id": "00000001-1111-4111-8111-111111111111",
+          "username": "reader_user",
+          "isDeleted": false
+        },
+        "paidCoins": "3000",
+        "completedAt": "2026-11-02T12:01:00Z",
+        "settlement": {
+          "outgoing": {
+            "policyId": "00000008-1111-4111-8111-111111111111",
+            "catalogueRevision": "7",
+            "total": {
+              "numerator": "3000",
+              "denominator": "1"
+            }
+          },
+          "incoming": {
+            "policyId": "00000008-1111-4111-8111-111111111111",
+            "catalogueRevision": "7",
+            "total": {
+              "numerator": "3000",
+              "denominator": "1"
+            }
+          },
+          "outgoingAllowed": true,
+          "incomingAllowed": true,
+          "senderRestricted": true,
+          "recipientRestricted": true
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,794 @@
+{
+  "kind": "PROPOSED_PLAN_PROBES_ATTACHMENTS_NOT_A_SECOND_INPUTS_OR_GAMEINPUT_CODEC",
+  "schema_version": 1,
+  "status": "NOT_IMPLEMENTED_NOT_RUN",
+  "attachments": [
+    {
+      "case": "SD04",
+      "positive_plan": "primary.select.P1",
+      "probes": [
+        {
+          "kind": "execute",
+          "obligation": {
+            "kind": "original",
+            "id": "SD04-V1"
+          },
+          "basis": {
+            "kind": "current"
+          },
+          "actor": "P0",
+          "attempt": {
+            "kind": "reply",
+            "decision": {
+              "kind": "current"
+            },
+            "choice": {
+              "kind": "select_resolution",
+              "objects": [
+                {
+                  "kind": "physical_current",
+                  "alias": "P2-BF-BEARS-1"
+                }
+              ]
+            }
+          },
+          "rejection": "wrong_chooser"
+        },
+        {
+          "kind": "execute",
+          "obligation": {
+            "kind": "original",
+            "id": "SD04-V2"
+          },
+          "basis": {
+            "kind": "current"
+          },
+          "actor": "P1",
+          "attempt": {
+            "kind": "reply",
+            "decision": {
+              "kind": "current"
+            },
+            "choice": {
+              "kind": "select_resolution",
+              "objects": [
+                {
+                  "kind": "physical_current",
+                  "alias": "P2-BF-ISLAND-1"
+                }
+              ]
+            }
+          },
+          "rejection": "selection_outside_domain"
+        },
+        {
+          "kind": "execute",
+          "obligation": {
+            "kind": "original",
+            "id": "SD04-V3"
+          },
+          "basis": {
+            "kind": "current"
+          },
+          "actor": "P1",
+          "attempt": {
+            "kind": "reply",
+            "decision": {
+              "kind": "current"
+            },
+            "choice": {
+              "kind": "select_resolution",
+              "objects": [
+                {
+                  "kind": "physical_current",
+                  "alias": "P1-BF-BEARS-1"
+                }
+              ]
+            }
+          },
+          "rejection": "selection_outside_domain"
+        },
+        {
+          "kind": "execute",
+          "obligation": {
+            "kind": "original",
+            "id": "SD04-V4"
+          },
+          "basis": {
+            "kind": "current"
+          },
+          "actor": "P1",
+          "attempt": {
+            "kind": "reply",
+            "decision": {
+              "kind": "current"
+            },
+            "choice": {
+              "kind": "select_resolution",
+              "objects": []
+            }
+          },
+          "rejection": "invalid_selection_count"
+        },
+        {
+          "kind": "execute",
+          "obligation": {
+            "kind": "original",
+            "id": "SD04-V5"
+          },
+          "basis": {
+            "kind": "current"
+          },
+          "actor": "P1",
+          "attempt": {
+            "kind": "reply",
+            "decision": {
+              "kind": "current"
+            },
+            "choice": {
+              "kind": "select_resolution",
+              "objects": [
+                {
+                  "kind": "physical_current",
+                  "alias": "P2-BF-BEARS-1"
+                },
+                {
+                  "kind": "physical_current",
+                  "alias": "P2-BF-BEARS-1"
+                }
+              ]
+            }
+          },
+          "rejection": "invalid_selection_count"
+        },
+        {
+          "kind": "execute",
+          "obligation": {
+            "kind": "original",
+            "id": "SD04-V6"
+          },
+          "basis": {
+            "kind": "current"
+          },
+          "actor": "P1",
+          "attempt": {
+            "kind": "reply",
+            "decision": {
+              "kind": "current"
+            },
+            "choice": {
+              "kind": "select_resolution",
+              "objects": [
+                {
+                  "kind": "physical_current",
+                  "alias": "P2-BF-BEARS-1"
+                },
+                {
+                  "kind": "physical_current",
+                  "alias": "P2-BF-FLESHBAG-1"
+                }
+              ]
+            }
+          },
+          "rejection": "invalid_selection_count"
+        },
+        {
+          "kind": "execute",
+          "obligation": {
+            "kind": "original",
+            "id": "SD04-V7"
+          },
+          "basis": {
+            "kind": "current"
+          },
+          "actor": "P1",
+          "attempt": {
+            "kind": "reply",
+            "decision": {
+              "kind": "current"
+            },
+            "choice": {
+              "kind": "select_resolution",
+              "objects": [
+                {
+                  "kind": "physical_current",
+                  "alias": "P1-HAND-EDICT-1"
+                }
+              ]
+            }
+          },
+          "rejection": "selection_outside_domain"
+        },
+        {
+          "kind": "execute",
+          "obligation": {
+            "kind": "original",
+            "id": "SD04-V8"
+          },
+          "basis": {
+            "kind": "current"
+          },
+          "actor": "P1",
+          "attempt": {
+            "kind": "reply",
+            "decision": {
+              "kind": "current"
+            },
+            "choice": {
+              "kind": "select_resolution",
+              "objects": [
+                {
+                  "kind": "physical_current",
+                  "alias": "P2-GY-BEARS-STALE"
+                }
+              ]
+            }
+          },
+          "rejection": "selection_outside_domain"
+        },
+        {
+          "kind": "execute",
+          "obligation": {
+            "kind": "original",
+            "id": "SD04-V9"
+          },
+          "basis": {
+            "kind": "current"
+          },
+          "actor": "P0",
+          "attempt": {
+            "kind": "activate_mana",
+            "source": {
+              "kind": "physical_current",
+              "alias": "P1-BF-ISLAND-1"
+            },
+            "ability": {
+              "kind": "basic_land",
+              "land_type": "Island"
+            }
+          },
+          "rejection": "decision_required"
+        },
+        {
+          "kind": "execute",
+          "obligation": {
+            "kind": "original",
+            "id": "SD04-V10"
+          },
+          "basis": {
+            "kind": "current"
+          },
+          "actor": "P0",
+          "attempt": {
+            "kind": "cast",
+            "spell": {
+              "kind": "physical_current",
+              "alias": "P1-HAND-EDICT-1"
+            },
+            "target": {
+              "kind": "player",
+              "role": "P1"
+            }
+          },
+          "rejection": "decision_required"
+        },
+        {
+          "kind": "execute",
+          "obligation": {
+            "kind": "original",
+            "id": "SD04-V11"
+          },
+          "basis": {
+            "kind": "initializer"
+          },
+          "actor": "P1",
+          "attempt": {
+            "kind": "reply",
+            "decision": {
+              "kind": "current"
+            },
+            "choice": {
+              "kind": "select_resolution",
+              "objects": [
+                {
+                  "kind": "physical_current",
+                  "alias": "P2-BF-BEARS-1"
+                }
+              ]
+            }
+          },
+          "rejection": "stale_revision"
+        },
+        {
+          "kind": "execute",
+          "obligation": {
+            "kind": "original",
+            "id": "SD04-V12"
+          },
+          "basis": {
+            "kind": "foreign_pending_helper",
+            "helper": "sd11_owner_order_v1"
+          },
+          "actor": "P1",
+          "attempt": {
+            "kind": "reply",
+            "decision": {
+              "kind": "current"
+            },
+            "choice": {
+              "kind": "select_resolution",
+              "objects": [
+                {
+                  "kind": "physical_current",
+                  "alias": "P2-BF-BEARS-1"
+                }
+              ]
+            }
+          },
+          "rejection": "wrong_game"
+        },
+        {
+          "kind": "pending_exact_original_history",
+          "obligation": {
+            "kind": "original",
+            "id": "SD04-V13"
+          },
+          "reason": "original_prefix_has_no_consumed_decision"
+        },
+        {
+          "kind": "execute",
+          "obligation": {
+            "kind": "original",
+            "id": "SD04-V14"
+          },
+          "basis": {
+            "kind": "current"
+          },
+          "actor": "P1",
+          "attempt": {
+            "kind": "reply",
+            "decision": {
+              "kind": "foreign_pending_helper",
+              "helper": "sd11_owner_order_v1"
+            },
+            "choice": {
+              "kind": "select_resolution",
+              "objects": [
+                {
+                  "kind": "physical_current",
+                  "alias": "P2-BF-BEARS-1"
+                }
+              ]
+            }
+          },
+          "rejection": "wrong_decision"
+        }
+      ]
+    },
+    {
+      "case": "SD14",
+      "positive_plan": "primary.select.P1",
+      "probes": [
+        {
+          "kind": "execute",
+          "obligation": {
+            "kind": "original",
+            "id": "SD14-V1"
+          },
+          "basis": {
+            "kind": "current"
+          },
+          "actor": "P0",
+          "attempt": {
+            "kind": "reply",
+            "decision": {
+              "kind": "current"
+            },
+            "choice": {
+              "kind": "select_resolution",
+              "objects": [
+                {
+                  "kind": "physical_current",
+                  "alias": "P2-HAND-BEARS-1"
+                },
+                {
+                  "kind": "physical_current",
+                  "alias": "P2-HAND-ISLAND-1"
+                }
+              ]
+            }
+          },
+          "rejection": "wrong_chooser"
+        },
+        {
+          "kind": "execute",
+          "obligation": {
+            "kind": "original",
+            "id": "SD14-V2"
+          },
+          "basis": {
+            "kind": "current"
+          },
+          "actor": "P1",
+          "attempt": {
+            "kind": "reply",
+            "decision": {
+              "kind": "current"
+            },
+            "choice": {
+              "kind": "select_resolution",
+              "objects": [
+                {
+                  "kind": "physical_current",
+                  "alias": "P2-HAND-BEARS-1"
+                }
+              ]
+            }
+          },
+          "rejection": "invalid_selection_count"
+        },
+        {
+          "kind": "execute",
+          "obligation": {
+            "kind": "original",
+            "id": "SD14-V3"
+          },
+          "basis": {
+            "kind": "current"
+          },
+          "actor": "P1",
+          "attempt": {
+            "kind": "reply",
+            "decision": {
+              "kind": "current"
+            },
+            "choice": {
+              "kind": "select_resolution",
+              "objects": [
+                {
+                  "kind": "physical_current",
+                  "alias": "P2-HAND-BEARS-1"
+                },
+                {
+                  "kind": "physical_current",
+                  "alias": "P2-HAND-ISLAND-1"
+                },
+                {
+                  "kind": "physical_current",
+                  "alias": "P2-HAND-ALARM-1"
+                }
+              ]
+            }
+          },
+          "rejection": "invalid_selection_count"
+        },
+        {
+          "kind": "execute",
+          "obligation": {
+            "kind": "original",
+            "id": "SD14-V4"
+          },
+          "basis": {
+            "kind": "current"
+          },
+          "actor": "P1",
+          "attempt": {
+            "kind": "reply",
+            "decision": {
+              "kind": "current"
+            },
+            "choice": {
+              "kind": "select_resolution",
+              "objects": [
+                {
+                  "kind": "physical_current",
+                  "alias": "P2-HAND-BEARS-1"
+                },
+                {
+                  "kind": "physical_current",
+                  "alias": "P2-HAND-BEARS-1"
+                }
+              ]
+            }
+          },
+          "rejection": "duplicate_selection"
+        },
+        {
+          "kind": "execute",
+          "obligation": {
+            "kind": "original",
+            "id": "SD14-V5"
+          },
+          "basis": {
+            "kind": "current"
+          },
+          "actor": "P1",
+          "attempt": {
+            "kind": "reply",
+            "decision": {
+              "kind": "current"
+            },
+            "choice": {
+              "kind": "select_resolution",
+              "objects": [
+                {
+                  "kind": "physical_current",
+                  "alias": "P2-HAND-BEARS-1"
+                },
+                {
+                  "kind": "physical_current",
+                  "alias": "P1-HAND-EDICT-1"
+                }
+              ]
+            }
+          },
+          "rejection": "selection_outside_domain"
+        },
+        {
+          "kind": "execute",
+          "obligation": {
+            "kind": "original",
+            "id": "SD14-V6"
+          },
+          "basis": {
+            "kind": "current"
+          },
+          "actor": "P1",
+          "attempt": {
+            "kind": "reply",
+            "decision": {
+              "kind": "current"
+            },
+            "choice": {
+              "kind": "select_resolution",
+              "objects": [
+                {
+                  "kind": "physical_current",
+                  "alias": "P2-HAND-BEARS-1"
+                },
+                {
+                  "kind": "physical_current",
+                  "alias": "P2-GY-ISLAND-STALE"
+                }
+              ]
+            }
+          },
+          "rejection": "selection_outside_domain"
+        },
+        {
+          "kind": "execute",
+          "obligation": {
+            "kind": "original",
+            "id": "SD14-V7"
+          },
+          "basis": {
+            "kind": "initializer"
+          },
+          "actor": "P1",
+          "attempt": {
+            "kind": "reply",
+            "decision": {
+              "kind": "current"
+            },
+            "choice": {
+              "kind": "select_resolution",
+              "objects": [
+                {
+                  "kind": "physical_current",
+                  "alias": "P2-HAND-BEARS-1"
+                },
+                {
+                  "kind": "physical_current",
+                  "alias": "P2-HAND-ISLAND-1"
+                }
+              ]
+            }
+          },
+          "rejection": "stale_revision"
+        },
+        {
+          "kind": "execute",
+          "obligation": {
+            "kind": "original",
+            "id": "SD14-V8"
+          },
+          "basis": {
+            "kind": "foreign_pending_helper",
+            "helper": "sd11_owner_order_v1"
+          },
+          "actor": "P1",
+          "attempt": {
+            "kind": "reply",
+            "decision": {
+              "kind": "current"
+            },
+            "choice": {
+              "kind": "select_resolution",
+              "objects": [
+                {
+                  "kind": "physical_current",
+                  "alias": "P2-HAND-BEARS-1"
+                },
+                {
+                  "kind": "physical_current",
+                  "alias": "P2-HAND-ISLAND-1"
+                }
+              ]
+            }
+          },
+          "rejection": "wrong_game"
+        },
+        {
+          "kind": "pending_exact_original_history",
+          "obligation": {
+            "kind": "original",
+            "id": "SD14-V9"
+          },
+          "reason": "original_prefix_has_no_consumed_decision"
+        },
+        {
+          "kind": "execute",
+          "obligation": {
+            "kind": "original",
+            "id": "SD14-V10"
+          },
+          "basis": {
+            "kind": "current"
+          },
+          "actor": "P1",
+          "attempt": {
+            "kind": "reply",
+            "decision": {
+              "kind": "foreign_pending_helper",
+              "helper": "sd11_owner_order_v1"
+            },
+            "choice": {
+              "kind": "select_resolution",
+              "objects": [
+                {
+                  "kind": "physical_current",
+                  "alias": "P2-HAND-BEARS-1"
+                },
+                {
+                  "kind": "physical_current",
+                  "alias": "P2-HAND-ISLAND-1"
+                }
+              ]
+            }
+          },
+          "rejection": "wrong_decision"
+        }
+      ]
+    },
+    {
+      "case": "sd04-real-history-companion",
+      "positive_plan": "primary.select.P1",
+      "probes": [
+        {
+          "kind": "execute",
+          "obligation": {
+            "kind": "companion",
+            "id": "COMPANION-SD04-GENUINE-CONSUMED-D-OLD"
+          },
+          "basis": {
+            "kind": "current"
+          },
+          "actor": "P1",
+          "attempt": {
+            "kind": "reply",
+            "decision": {
+              "kind": "consumed_plan",
+              "plan": "history.select.P1"
+            },
+            "choice": {
+              "kind": "select_resolution",
+              "objects": [
+                {
+                  "kind": "physical_current",
+                  "alias": "P2-BF-BEARS-1"
+                }
+              ]
+            }
+          },
+          "rejection": "wrong_decision"
+        },
+        {
+          "kind": "execute",
+          "obligation": {
+            "kind": "companion",
+            "id": "COMPANION-SD04-GENUINE-OBSOLETE-OBJECT"
+          },
+          "basis": {
+            "kind": "current"
+          },
+          "actor": "P1",
+          "attempt": {
+            "kind": "reply",
+            "decision": {
+              "kind": "current"
+            },
+            "choice": {
+              "kind": "select_resolution",
+              "objects": [
+                {
+                  "kind": "saved_object",
+                  "binding": "companion-stale-before-history"
+                }
+              ]
+            }
+          },
+          "rejection": "selection_outside_domain"
+        }
+      ]
+    },
+    {
+      "case": "sd14-real-history-companion",
+      "positive_plan": "primary.select.P1",
+      "probes": [
+        {
+          "kind": "execute",
+          "obligation": {
+            "kind": "companion",
+            "id": "COMPANION-SD14-GENUINE-CONSUMED-D-OLD"
+          },
+          "basis": {
+            "kind": "current"
+          },
+          "actor": "P1",
+          "attempt": {
+            "kind": "reply",
+            "decision": {
+              "kind": "consumed_plan",
+              "plan": "history.select.P1"
+            },
+            "choice": {
+              "kind": "select_resolution",
+              "objects": [
+                {
+                  "kind": "physical_current",
+                  "alias": "P2-HAND-BEARS-1"
+                },
+                {
+                  "kind": "physical_current",
+                  "alias": "P2-HAND-ISLAND-1"
+                }
+              ]
+            }
+          },
+          "rejection": "wrong_decision"
+        },
+        {
+          "kind": "execute",
+          "obligation": {
+            "kind": "companion",
+            "id": "COMPANION-SD14-GENUINE-OBSOLETE-OBJECT"
+          },
+          "basis": {
+            "kind": "current"
+          },
+          "actor": "P1",
+          "attempt": {
+            "kind": "reply",
+            "decision": {
+              "kind": "current"
+            },
+            "choice": {
+              "kind": "select_resolution",
+              "objects": [
+                {
+                  "kind": "physical_current",
+                  "alias": "P2-HAND-BEARS-1"
+                },
+                {
+                  "kind": "saved_object",
+                  "binding": "companion-stale-before-history"
+                }
+              ]
+            }
+          },
+          "rejection": "selection_outside_domain"
+        }
+      ]
+    }
+  ]
+}

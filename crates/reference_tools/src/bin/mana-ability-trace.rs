@@ -1,14 +1,18 @@
+//! This finite producer authors only physical-card seeds. Physical provenance
+//! assertions below check that fixture invariant, not a generic object fallback.
 //! Actual native fixed-tap mana activations; reference names identify authored
 //! outputs, never catalogue bindings. No expected/reference files are consumed.
 use serde::Serialize;
 use spellwake_contracts::{ApiResponse, RulesInteger};
+use spellwake_engine::combat::CombatRules;
+use spellwake_engine::setup::GameSeed;
 use spellwake_engine::{
-    card_identity::{CardDestination, CardId, CardObjectId},
     effects::{EffectError, Program, SeedCard},
     game::{
         CandidateBase, GameBasis, GameCommand, GameContext, GameError, GameId, GameInput, GameState,
     },
-    mana::{FixedManaAbility, FloatingMana, ManaAbilityId, ManaProductionRecord, ManaType},
+    mana::{FloatingMana, ManaAbility, ManaAbilityId, ManaOutput, ManaProductionRecord, ManaType},
+    object_identity::{CardId, ObjectDestination, ObjectId},
     priority::SeatId,
 };
 use std::{collections::BTreeMap, process::ExitCode};
@@ -29,6 +33,12 @@ struct SourceView {
 }
 #[derive(Clone, Serialize)]
 struct Snapshot {
+    #[serde(
+        rename = "__current_capture_point",
+        skip_serializing_if = "Option::is_none"
+    )]
+    capture_point: Option<String>,
+
     label: &'static str,
     sources: BTreeMap<&'static str, SourceView>,
     pools: BTreeMap<&'static str, Pool>,
@@ -38,7 +48,7 @@ struct Snapshot {
 #[derive(Clone, Serialize)]
 struct BasisView {
     game: String,
-    context: String,
+    context: serde_json::Value,
     epoch: u64,
     revision: u64,
 }
@@ -46,7 +56,7 @@ impl From<&GameBasis> for BasisView {
     fn from(basis: &GameBasis) -> Self {
         Self {
             game: format!("{:?}", basis.game),
-            context: format!("{:?}", basis.context),
+            context: spellwake_reference_tools::projection::context(&basis.context),
             epoch: basis.epoch,
             revision: basis.revision,
         }
@@ -69,7 +79,7 @@ struct NativeState {
 #[derive(Serialize)]
 struct ProductionView {
     source: String,
-    ability: u64,
+    ability: serde_json::Value,
     controller: &'static str,
     produced: Pool,
 }
@@ -77,7 +87,7 @@ impl From<&ManaProductionRecord> for ProductionView {
     fn from(receipt: &ManaProductionRecord) -> Self {
         Self {
             source: format!("{:?}", receipt.source),
-            ability: receipt.ability.0,
+            ability: spellwake_reference_tools::mana_ref::view(receipt.ability),
             controller: seat(receipt.controller),
             produced: amounts(&receipt.produced),
         }
@@ -89,7 +99,7 @@ struct Attempt {
     actor: &'static str,
     source_alias: &'static str,
     requested_source: String,
-    requested_ability: u64,
+    requested_ability: serde_json::Value,
     before: NativeState,
     after: NativeState,
     candidate_base: Option<BasisView>,
@@ -194,13 +204,13 @@ fn amounts(values: &BTreeMap<ManaType, RulesInteger>) -> Pool {
         })
         .collect()
 }
-fn identity(state: &GameState, card: CardId) -> Result<CardObjectId, GameError> {
+fn identity(state: &GameState, card: CardId) -> Result<ObjectId, GameError> {
     state
         .execution()
         .window()
         .cards()
         .current_identity(card)
-        .ok_or(EffectError::UnknownCard.into())
+        .ok_or(EffectError::UnknownObject.into())
 }
 fn snapshot(
     state: &GameState,
@@ -217,7 +227,7 @@ fn snapshot(
                 .window()
                 .cards()
                 .get(id)
-                .ok_or(EffectError::UnknownCard)?;
+                .ok_or(EffectError::UnknownObject)?;
             Ok((
                 source.alias,
                 SourceView {
@@ -231,6 +241,12 @@ fn snapshot(
         })
         .collect::<Result<_, GameError>>()?;
     Ok(Snapshot {
+        capture_point: spellwake_reference_tools::capture_points::token(
+            concat!(file!(), "::snapshot"),
+            spellwake_reference_tools::current_profile::SnapshotOwner::GameState(state),
+            &spellwake_reference_tools::packet::AliasContext::default(),
+        )
+        .expect("current native observation point"),
         label,
         sources,
         pools: [A, B]
@@ -266,12 +282,12 @@ fn native_state(
                     .window()
                     .cards()
                     .get(id)
-                    .ok_or(EffectError::UnknownCard)?;
+                    .ok_or(EffectError::UnknownObject)?;
                 Ok((
                     source.alias,
                     NativeSource {
                         object: format!("{:?}", object.id()),
-                        physical_card: object.card().0,
+                        physical_card: object.card_id().expect("source-authored card-only trace").0,
                     },
                 ))
             })
@@ -288,52 +304,82 @@ fn native_state(
         priority: format!("{:?}", state.execution().window().phase()),
     })
 }
-fn run_probe(index: u128, probe: Probe) -> Result<(CommonProbe, NativeProbe), GameError> {
-    let initialized = GameState::initialize(
+fn run_probe(
+    vocabulary: &std::sync::Arc<spellwake_contracts::creature_types::CreatureTypeVocabulary>,
+    index: u128,
+    probe: Probe,
+) -> Result<(CommonProbe, NativeProbe), GameError> {
+    let initialized = spellwake_reference_tools::current_capture::initialize(
         GameId(index),
         GameContext::new(
             "native-mana-abilities-v1".into(),
-            "MagicCompRules-20260925".into(),
+            vocabulary.rules_revision().to_owned(),
             "synthetic-no-catalogue-binding".into(),
             "authored-fixed-tap-land-v1".into(),
             probe.id.into(),
+            vocabulary.id(),
+            spellwake_contracts::names::NameRules::literal_names().id(),
         )?,
-        vec![A, B],
-        A,
-        probe
-            .sources
-            .iter()
-            .map(|source| SeedCard {
-                card: source.card,
-                owner: source.owner,
-                destination: CardDestination::Battlefield { controller: A },
-                program: Program::Land {
-                    abilities: source
-                        .abilities
-                        .iter()
-                        .map(|(_, id, produced)| FixedManaAbility {
-                            id: ManaAbilityId(*id),
-                            produced: produced
-                                .iter()
-                                .map(|(kind, amount)| (*kind, (*amount).into()))
-                                .collect(),
-                        })
-                        .collect(),
-                },
-            })
-            .collect(),
-        [
-            (A, ManaType::Black, 2),
-            (A, ManaType::Colourless, 1),
-            (B, ManaType::White, 1),
-        ]
-        .into_iter()
-        .map(|(player, mana_type, amount)| FloatingMana {
-            player,
-            mana_type,
-            amount: amount.into(),
-        })
-        .collect(),
+        {
+            let cards: Vec<SeedCard> = probe
+                .sources
+                .iter()
+                .map(|source| SeedCard {
+                    card: source.card,
+                    owner: source.owner,
+                    destination: ObjectDestination::Battlefield { controller: A },
+                    program: Program::land(
+                        std::collections::BTreeSet::new(),
+                        source
+                            .abilities
+                            .iter()
+                            .map(|(_, id, produced)| ManaAbility {
+                                id: ManaAbilityId(*id),
+                                output: ManaOutput::Fixed(
+                                    produced
+                                        .iter()
+                                        .map(|(kind, amount)| (*kind, (*amount).into()))
+                                        .collect(),
+                                ),
+                            })
+                            .collect(),
+                    ),
+                })
+                .collect();
+            // Fixture premise: seeded BF timestamps follow this authored card sequence.
+            let initial_battlefield_order = cards
+                .iter()
+                .filter(|card| {
+                    matches!(
+                        card.destination,
+                        spellwake_engine::object_identity::ObjectDestination::Battlefield { .. }
+                    )
+                })
+                .map(|card| card.card)
+                .collect();
+            GameSeed::with_uniform_life(
+                vec![A, B],
+                A,
+                cards,
+                initial_battlefield_order,
+                [
+                    (A, ManaType::Black, 2),
+                    (A, ManaType::Colourless, 1),
+                    (B, ManaType::White, 1),
+                ]
+                .into_iter()
+                .map(|(player, mana_type, amount)| FloatingMana {
+                    player,
+                    mana_type,
+                    amount: amount.into(),
+                })
+                .collect(),
+                20.into(),
+                CombatRules::UnrestrictedFreeForAll,
+                vocabulary.clone(),
+                std::sync::Arc::new(spellwake_contracts::names::NameRules::literal_names()),
+            )
+        },
     )?;
     let initialization_production_present = initialized.mana_production().is_some();
     let initialization_payment_present = initialized.mana_payment().is_some();
@@ -348,7 +394,7 @@ fn run_probe(index: u128, probe: Probe) -> Result<(CommonProbe, NativeProbe), Ga
             .sources
             .iter()
             .find(|source| source.alias == activation.source)
-            .ok_or(EffectError::UnknownCard)?;
+            .ok_or(EffectError::UnknownObject)?;
         let ability = source
             .abilities
             .iter()
@@ -358,14 +404,19 @@ fn run_probe(index: u128, probe: Probe) -> Result<(CommonProbe, NativeProbe), Ga
         let requested_source = identity(&state, source.card)?;
         let before = native_state(&state, &probe.sources, "before", None)?;
         let saved = state.clone();
-        let result = state.advance(GameInput {
-            basis: state.basis().clone(),
-            actor: A,
-            command: GameCommand::ActivateMana {
-                source: requested_source,
-                ability: ManaAbilityId(ability),
+        let result = spellwake_reference_tools::current_capture::advance(
+            &state,
+            GameInput {
+                basis: state.basis().clone(),
+                actor: A,
+                command: GameCommand::ActivateMana {
+                    source: requested_source,
+                    ability: spellwake_engine::mana::ManaAbilityRef::Printed(ManaAbilityId(
+                        ability,
+                    )),
+                },
             },
-        });
+        );
         let input_unchanged = state == saved;
         let (candidate_base, production, payment_receipt_present, error) = match result {
             Ok(candidate) => {
@@ -395,7 +446,9 @@ fn run_probe(index: u128, probe: Probe) -> Result<(CommonProbe, NativeProbe), Ga
             actor: seat(A),
             source_alias: activation.source,
             requested_source: format!("{requested_source:?}"),
-            requested_ability: ability,
+            requested_ability: spellwake_reference_tools::mana_ref::view(
+                spellwake_engine::mana::ManaAbilityRef::Printed(ManaAbilityId(ability)),
+            ),
             before,
             after,
             candidate_base,
@@ -409,11 +462,14 @@ fn run_probe(index: u128, probe: Probe) -> Result<(CommonProbe, NativeProbe), Ga
     // the shared Forge snapshots, whose controller loop is not driven here.
     let before = native_state(&state, &probe.sources, "before-pass", None)?;
     let saved = state.clone();
-    let candidate = state.advance(GameInput {
-        basis: state.basis().clone(),
-        actor: A,
-        command: GameCommand::Pass,
-    })?;
+    let candidate = spellwake_reference_tools::current_capture::advance(
+        &state,
+        GameInput {
+            basis: state.basis().clone(),
+            actor: A,
+            command: GameCommand::Pass,
+        },
+    )?;
     let CandidateBase::Advance(base) = candidate.base() else {
         return Err(EffectError::InconsistentProgram.into());
     };
@@ -497,7 +553,9 @@ fn one(
         }],
     }
 }
-fn run() -> Result<Report, GameError> {
+fn run(
+    vocabulary: &std::sync::Arc<spellwake_contracts::creature_types::CreatureTypeVocabulary>,
+) -> Result<Report, GameError> {
     use ManaType::{Black, Blue, Colourless, Green, Red, White};
     let mut probes = vec![
         one("basic-types", "basic-w", "Plains", "W", 11, &[(White, 1)]),
@@ -597,7 +655,7 @@ fn run() -> Result<Report, GameError> {
     let mut native_observations = Vec::new();
     for (probe, index) in probes.into_iter().zip(1..) {
         let group = probe.group;
-        let (common, native) = run_probe(index, probe)?;
+        let (common, native) = run_probe(vocabulary, index, probe)?;
         scenarios.entry(group).or_default().push(common);
         native_observations.push(native);
     }
@@ -616,7 +674,34 @@ fn run() -> Result<Report, GameError> {
     })
 }
 fn main() -> ExitCode {
-    let (response, success): (ApiResponse<Report>, bool) = match run() {
+    let vocabulary = match spellwake_reference_tools::creature_types::selected_vocabulary() {
+        Ok(value) => value,
+        Err(error) => {
+            eprintln!("invalid qualification input: {error}");
+            std::process::exit(1);
+        }
+    };
+
+    let native_arguments = spellwake_reference_tools::creature_types::qualification_args()
+        .unwrap_or_else(|error| {
+            eprintln!("invalid qualification input: {error}");
+            std::process::exit(1)
+        });
+    if !native_arguments.is_empty() {
+        eprintln!("unsupported qualification arguments");
+        std::process::exit(1);
+    }
+
+    let profile_token = "mana-abilities";
+    if let Err(error) = spellwake_reference_tools::current_capture::start(
+        profile_token,
+        &[spellwake_reference_tools::current_capture::repository().join(file!())],
+        None,
+    ) {
+        eprintln!("current capture source unavailable: {error}");
+        return ExitCode::FAILURE;
+    }
+    let (response, success): (ApiResponse<Report>, bool) = match run(&vocabulary) {
         Ok(data) => (ApiResponse::Success { data }, true),
         Err(error) => {
             eprintln!("native mana ability trace failed: {error:?}");
@@ -627,6 +712,16 @@ fn main() -> ExitCode {
                 },
                 false,
             )
+        }
+    };
+    let response = match spellwake_reference_tools::current_capture::finish_serializable(
+        profile_token,
+        &response,
+    ) {
+        Ok(value) => value,
+        Err(error) => {
+            eprintln!("current capture incomplete: {error}");
+            return ExitCode::FAILURE;
         }
     };
     if let Err(error) = serde_json::to_writer(std::io::stdout(), &response) {
