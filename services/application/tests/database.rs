@@ -45,6 +45,9 @@ mod ai_ready_integrity;
 #[path = "database/room_start_integrity.rs"]
 mod room_start_integrity;
 
+#[path = "database/countdown_dispatch.rs"]
+mod countdown_dispatch;
+
 #[path = "database/queue_intent_integrity.rs"]
 mod queue_intent_integrity;
 
@@ -353,7 +356,7 @@ async fn fixture(client: &Client) -> Result<(Uuid, Uuid, Uuid), Box<dyn Error + 
 async fn schema_permissions_and_exact_owned_quantities() -> TestResult {
     let client = connection().await?;
     let counts = client.query_one("SELECT (SELECT count(*) FROM pg_tables WHERE schemaname='app')::bigint,(SELECT count(*) FROM pg_views WHERE schemaname='app')::bigint", &[]).await?;
-    assert_eq!(counts.get::<_, i64>(0), 95);
+    assert_eq!(counts.get::<_, i64>(0), 96);
     assert_eq!(counts.get::<_, i64>(1), 10);
     let (owner, subject, asset) = fixture(&client).await?;
     let (_, other_subject) = account(&client).await?;

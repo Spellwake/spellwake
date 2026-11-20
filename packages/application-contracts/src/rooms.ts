@@ -124,6 +124,32 @@ export const roomDetailSchema = z.strictObject({
   room: roomSummarySchema,
   slots: roomSlotPageSchema,
 });
+/** A signed caller's path from a lobby seat to the current match and game. */
+export const roomGameSchema = z.discriminatedUnion("state", [
+  z.strictObject({
+    state: z.literal("waiting"),
+    accountId: identifierSchema,
+    roomId: identifierSchema,
+    roomState: z.enum(["lobby", "countdown"]),
+  }),
+  z.strictObject({
+    state: z.literal("admitted"),
+    accountId: identifierSchema,
+    roomId: identifierSchema,
+    matchId: identifierSchema,
+    seatId: identifierSchema,
+    game: z
+      .strictObject({
+        id: identifierSchema,
+        state: z.enum(["reserved", "active", "completed", "no_contest", "canceled"]),
+        contextId: identifierSchema.nullable(),
+      })
+      .nullable(),
+  }),
+]);
+
+export type RoomGame = z.infer<typeof roomGameSchema>;
+
 /** Context validation is required after shape parsing; each page is an independent snapshot. */
 export function validRoomPage(
   page: z.infer<typeof roomPageSchema>,

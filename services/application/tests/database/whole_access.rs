@@ -31,7 +31,7 @@ async fn every_relation_preserves_rls_invoker_views_and_closed_runtime_mutations
             &[],
         )
         .await?;
-    assert_eq!(relations.len(), 105);
+    assert_eq!(relations.len(), 106);
     for row in &relations {
         let name: String = row.get(1);
         let kind: String = row.get(2);
