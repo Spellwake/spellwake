@@ -2,18 +2,29 @@
 //! Reference expectations are never loaded; durations and full cards are excluded.
 use serde::Serialize;
 use spellwake_contracts::{ApiResponse, RulesInteger};
+use spellwake_engine::combat::CombatRules;
+use spellwake_engine::program::{BodyTarget, ExecutableBody};
+use spellwake_engine::setup::GameSeed;
 use spellwake_engine::{
-    card_identity::{CardDestination, CardId, CardObjectId, CardZone},
-    characteristics::{PowerToughness, PowerToughnessOperation},
-    damage::{DamageEffectCreation, DamageEffectId, DamageJournal, DamageOutcome},
-    effects::{EffectError, Instruction, Program, SeedCard},
+    characteristics::{PowerToughness, ResolvedPartSpec},
+    damage::{
+        DamageEffectCreation, DamageEffectId, DamageEffectTarget, DamageJournal, DamageOrigin,
+        DamageRecipient, DamageSource, DamageSourceId,
+    },
+    effects::{DamageDecision, EffectError, Instruction, Program, SeedCard},
     game::{
         DecisionReply, GameCommand, GameContext, GameError, GameId, GameInput, GameState, RuleFrame,
     },
     mana::{FloatingMana, ManaCost, ManaType},
+    object_identity::{CardId, ObjectDestination, ObjectId, ObjectZone},
     priority::{PriorityPhase, SeatId},
     stack_window::{StackEntryId, StackKind, WindowPhase},
     targets::TargetRef,
+};
+use spellwake_reference_tools::damage_trace::{
+    DamageApplicationView, DamageEffectTargetView, DamageJournalView, DamageOriginView,
+    DamageSourceView, EffectIdentityView, damage_application_view, damage_effect_target_view,
+    damage_effect_view, damage_journal_view, damage_origin_view, damage_source_view,
 };
 use std::{collections::BTreeMap, process::ExitCode};
 
@@ -41,6 +52,12 @@ impl TraceProfile {
 
 #[derive(Serialize)]
 struct Observation {
+    #[serde(
+        rename = "__current_capture_point",
+        skip_serializing_if = "Option::is_none"
+    )]
+    capture_point: Option<String>,
+
     #[serde(skip_serializing_if = "Option::is_none")]
     resolving: Option<bool>,
     checkpoint: &'static str,
@@ -65,85 +82,44 @@ struct SourceDescription {
 }
 
 #[derive(Serialize)]
-struct AttemptView {
-    attempt: String,
-    source: String,
-    target: String,
-    amount: RulesInteger,
-}
-
-#[derive(Serialize)]
-struct PreventionView {
-    attempt: String,
-    shield: String,
-    shield_source: String,
-    target: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    stage: Option<u64>,
-    amount: RulesInteger,
-    damage_remaining: RulesInteger,
-    shield_remaining: RulesInteger,
-}
-
-#[derive(Serialize)]
-struct MultiplicationView {
-    attempt: String,
-    multiplier: String,
-    multiplier_source: String,
-    target: String,
-    stage: u64,
-    before: RulesInteger,
-    factor: RulesInteger,
-    after: RulesInteger,
-}
-
-#[derive(Serialize)]
 struct ApplicationView {
     source: &'static str,
     effect: &'static str,
     kind: &'static str,
+    batch: String,
     attempt: String,
     stage: u64,
     before: RulesInteger,
     after: RulesInteger,
 }
 
+/// Fixture alias metadata joins the common typed creation record; it is not the
+/// damage source or a second event authority.
 #[derive(Serialize)]
-struct CompletionView {
-    attempt: String,
-    outcome: &'static str,
-    dealt: Option<RulesInteger>,
-}
-
-#[derive(Serialize)]
-struct CreationView {
+struct CreationBinding {
     effect: &'static str,
     kind: &'static str,
-    identity: String,
-    source: String,
+    identity: EffectIdentityView,
+    creator: String,
     instruction: usize,
-    target: String,
+    target: DamageEffectTargetView,
     amount: RulesInteger,
 }
 
 #[derive(Serialize)]
 struct InputJournal {
     #[serde(skip_serializing_if = "Option::is_none")]
-    created: Option<Vec<CreationView>>,
+    creation_bindings: Option<Vec<CreationBinding>>,
     input: &'static str,
     actor: Option<&'static str>,
     source: Option<&'static str>,
     game_revision: u64,
-    attempts: Vec<AttemptView>,
-    preventions: Vec<PreventionView>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    multiplications: Option<Vec<MultiplicationView>>,
+    executor_revision: u64,
+    #[serde(flatten)]
+    journal: DamageJournalView,
     #[serde(skip_serializing_if = "Option::is_none")]
     applications: Option<Vec<ApplicationView>>,
-    applied: Vec<AttemptView>,
-    completions: Vec<CompletionView>,
 }
-
 impl InputJournal {
     fn capture(
         input: &'static str,
@@ -157,18 +133,25 @@ impl InputJournal {
         let mut applications = Vec::new();
         if profile.detailed() {
             for event in &journal.preventions {
-                applications.push((
-                    event.attempt,
-                    ApplicationView {
-                        source: source.ok_or_else(inconsistent)?,
-                        effect: effect_alias(effects, event.shield.into())?,
-                        kind: "prevention",
-                        attempt: format!("{:?}", event.attempt),
-                        stage: event.stage,
-                        before: event.damage_remaining.plus(&event.amount),
-                        after: event.damage_remaining.clone(),
-                    },
-                ));
+                for allocation in &event.allocations {
+                    let after = event
+                        .damage_remaining
+                        .get(&allocation.attempt)
+                        .ok_or_else(inconsistent)?;
+                    applications.push((
+                        allocation.attempt,
+                        ApplicationView {
+                            source: source.ok_or_else(inconsistent)?,
+                            effect: effect_alias(effects, event.shield.into())?,
+                            kind: "prevention",
+                            batch: format!("{:?}", event.batch),
+                            attempt: format!("{:?}", allocation.attempt),
+                            stage: event.stage,
+                            before: after.plus(&allocation.amount),
+                            after: after.clone(),
+                        },
+                    ));
+                }
             }
             for event in &journal.multiplications {
                 applications.push((
@@ -177,6 +160,7 @@ impl InputJournal {
                         source: source.ok_or_else(inconsistent)?,
                         effect: effect_alias(effects, event.multiplier.into())?,
                         kind: "multiply",
+                        batch: format!("{:?}", event.batch),
                         attempt: format!("{:?}", event.attempt),
                         stage: event.stage,
                         before: event.before.clone(),
@@ -187,22 +171,22 @@ impl InputJournal {
             applications.sort_by_key(|(attempt, event)| (*attempt, event.stage));
         }
         Ok(Self {
-            created: profile
+            creation_bindings: profile
                 .sequences()
                 .then(|| {
                     journal
                         .created
                         .iter()
                         .map(|creation| {
-                            let (id, source, target, instruction, kind, amount) =
+                            let (id, creator, target, instruction, kind, amount) =
                                 creation_parts(creation);
-                            Ok(CreationView {
+                            Ok(CreationBinding {
                                 effect: effect_alias(effects, id)?,
                                 kind,
-                                identity: format!("{id:?}"),
-                                source: format!("{source:?}"),
+                                identity: damage_effect_view(id),
+                                creator: format!("{creator:?}"),
                                 instruction,
-                                target: format!("{target:?}"),
+                                target: damage_effect_target_view(target),
                                 amount,
                             })
                         })
@@ -213,74 +197,11 @@ impl InputJournal {
             actor: actor.map(seat_name).transpose()?,
             source,
             game_revision: state.basis().revision,
-            attempts: journal
-                .attempts
-                .iter()
-                .map(|event| AttemptView {
-                    attempt: format!("{:?}", event.id),
-                    source: format!("{:?}", event.source),
-                    target: format!("{:?}", event.target),
-                    amount: event.amount.clone(),
-                })
-                .collect(),
-            preventions: journal
-                .preventions
-                .iter()
-                .map(|event| PreventionView {
-                    attempt: format!("{:?}", event.attempt),
-                    shield: format!("{:?}", event.shield),
-                    shield_source: format!("{:?}", event.shield_source),
-                    target: format!("{:?}", event.target),
-                    stage: profile.detailed().then_some(event.stage),
-                    amount: event.amount.clone(),
-                    damage_remaining: event.damage_remaining.clone(),
-                    shield_remaining: event.shield_remaining.clone(),
-                })
-                .collect(),
-            multiplications: profile.detailed().then(|| {
-                journal
-                    .multiplications
-                    .iter()
-                    .map(|event| MultiplicationView {
-                        attempt: format!("{:?}", event.attempt),
-                        multiplier: format!("{:?}", event.multiplier),
-                        multiplier_source: format!("{:?}", event.multiplier_source),
-                        target: format!("{:?}", event.target),
-                        stage: event.stage,
-                        before: event.before.clone(),
-                        factor: event.factor.clone(),
-                        after: event.after.clone(),
-                    })
-                    .collect()
-            }),
+            executor_revision: state.execution().revision(),
+            journal: damage_journal_view(journal),
             applications: profile
                 .detailed()
                 .then(|| applications.into_iter().map(|(_, event)| event).collect()),
-            applied: journal
-                .applied
-                .iter()
-                .map(|event| AttemptView {
-                    attempt: format!("{:?}", event.attempt),
-                    source: format!("{:?}", event.source),
-                    target: format!("{:?}", event.target),
-                    amount: event.amount.clone(),
-                })
-                .collect(),
-            completions: journal
-                .completions
-                .iter()
-                .map(|event| {
-                    let (outcome, dealt) = match &event.outcome {
-                        DamageOutcome::Dealt(amount) => ("dealt", Some(amount.clone())),
-                        DamageOutcome::FullyPrevented => ("fully-prevented", None),
-                    };
-                    CompletionView {
-                        attempt: format!("{:?}", event.attempt),
-                        outcome,
-                        dealt,
-                    }
-                })
-                .collect(),
         })
     }
 }
@@ -300,6 +221,11 @@ struct NativeDecision {
     stack_size: usize,
     source_zone: &'static str,
     decision_id: String,
+    batch_id: String,
+    origin: DamageOriginView,
+    actual_source: DamageSourceView,
+    application_domain: Vec<DamageApplicationView>,
+    chosen_application: DamageApplicationView,
     attempt_id: String,
     attempt_stage: u64,
     game_revision: u64,
@@ -310,8 +236,8 @@ struct NativeDecision {
 struct ShieldView {
     source: &'static str,
     shield_id: String,
-    source_entry: String,
-    target: String,
+    creator_entry: String,
+    target: DamageEffectTargetView,
     active: bool,
     stored_remaining: Option<RulesInteger>,
 }
@@ -320,8 +246,8 @@ struct ShieldView {
 struct MultiplierView {
     source: &'static str,
     multiplier_id: String,
-    source_entry: String,
-    target: String,
+    creator_entry: String,
+    target: DamageEffectTargetView,
     active: bool,
     factor: Option<RulesInteger>,
 }
@@ -342,7 +268,14 @@ struct NativeCheckpoint {
 
 #[derive(Default, Serialize)]
 struct NativeEvidence {
+    #[serde(
+        rename = "__current_capture_point",
+        skip_serializing_if = "Option::is_none"
+    )]
+    capture_point: Option<String>,
+
     source_entries: BTreeMap<&'static str, String>,
+    source_objects: BTreeMap<&'static str, DamageSourceView>,
     decisions: Vec<NativeDecision>,
     input_journals: Vec<InputJournal>,
     checkpoints: Vec<NativeCheckpoint>,
@@ -381,8 +314,8 @@ struct Source {
 struct TrackedEffect {
     instruction: usize,
     id: DamageEffectId,
-    source: StackEntryId,
-    target: CardObjectId,
+    creator: StackEntryId,
+    target: DamageEffectTarget,
 }
 
 struct ScenarioResult {
@@ -403,34 +336,34 @@ fn seat_name(seat: SeatId) -> Result<&'static str, GameError> {
     }
 }
 
-fn identity(state: &GameState, card: CardId) -> Result<CardObjectId, GameError> {
+fn identity(state: &GameState, card: CardId) -> Result<ObjectId, GameError> {
     state
         .execution()
         .window()
         .cards()
         .current_identity(card)
-        .ok_or(EffectError::UnknownCard.into())
+        .ok_or(EffectError::UnknownObject.into())
 }
 
-fn zone(state: &GameState, card: CardId) -> Result<CardZone, GameError> {
+fn zone(state: &GameState, card: CardId) -> Result<ObjectZone, GameError> {
     state
         .execution()
         .window()
         .cards()
         .get(identity(state, card)?)
         .map(|object| object.zone())
-        .ok_or(EffectError::UnknownCard.into())
+        .ok_or(EffectError::UnknownObject.into())
 }
 
-fn zone_name(zone: CardZone) -> &'static str {
+fn zone_name(zone: ObjectZone) -> &'static str {
     match zone {
-        CardZone::Library(_) => "LIBRARY",
-        CardZone::Hand(_) => "HAND",
-        CardZone::Graveyard(_) => "GRAVEYARD",
-        CardZone::Battlefield => "BATTLEFIELD",
-        CardZone::Stack => "STACK",
-        CardZone::Exile => "EXILE",
-        CardZone::Command => "COMMAND",
+        ObjectZone::Library(_) => "LIBRARY",
+        ObjectZone::Hand(_) => "HAND",
+        ObjectZone::Graveyard(_) => "GRAVEYARD",
+        ObjectZone::Battlefield => "BATTLEFIELD",
+        ObjectZone::Stack => "STACK",
+        ObjectZone::Exile => "EXILE",
+        ObjectZone::Command => "COMMAND",
     }
 }
 
@@ -452,7 +385,7 @@ fn observe(
         .cards()
         .get(object)
         .ok_or_else(inconsistent)?;
-    let creature = execution.creature(object);
+    let creature = execution.creature(object)?;
     let raw_source_zones: BTreeMap<_, _> = sources
         .iter()
         .map(|source| Ok((source.alias, zone_name(zone(state, source.card)?))))
@@ -478,8 +411,8 @@ fn observe(
                 multiplier_instances.push(MultiplierView {
                     source: alias,
                     multiplier_id: format!("{id:?}"),
-                    source_entry: format!("{:?}", tracked.source),
-                    target: format!("{:?}", tracked.target),
+                    creator_entry: format!("{:?}", tracked.creator),
+                    target: damage_effect_target_view(tracked.target),
                     active: active.is_some(),
                     factor: active.map(|effect| effect.factor.clone()),
                 });
@@ -495,8 +428,8 @@ fn observe(
         instances.push(ShieldView {
             source: alias,
             shield_id: format!("{id:?}"),
-            source_entry: format!("{:?}", tracked.source),
-            target: format!("{:?}", tracked.target),
+            creator_entry: format!("{:?}", tracked.creator),
+            target: damage_effect_target_view(tracked.target),
             active: active.is_some(),
             stored_remaining: active.map(|shield| shield.remaining.clone()),
         });
@@ -511,6 +444,12 @@ fn observe(
         raw_source_zones: profile.detailed().then_some(raw_source_zones),
     });
     Ok(Observation {
+        capture_point: spellwake_reference_tools::capture_points::token(
+            concat!(file!(), "::observe"),
+            spellwake_reference_tools::current_profile::SnapshotOwner::GameState(state),
+            &spellwake_reference_tools::packet::AliasContext::default(),
+        )
+        .expect("current native observation point"),
         resolving: profile
             .sequences()
             .then_some(execution.window().resolving().is_some()),
@@ -518,7 +457,7 @@ fn observe(
         power: creature.as_ref().map(|creature| creature.power.clone()),
         toughness: creature.as_ref().map(|creature| creature.toughness.clone()),
         zone: zone_name(card.zone()),
-        damage: creature.map(|creature| creature.damage),
+        damage: execution.battlefield_marked_damage(object),
         owner: seat_name(card.owner())?,
         controller: card.controller().map(seat_name).transpose()?,
         stack_size: execution.window().entries().len(),
@@ -536,11 +475,14 @@ fn advance(
     effects: &mut BTreeMap<&'static str, TrackedEffect>,
     profile: TraceProfile,
 ) -> Result<GameState, GameError> {
-    let candidate = state.advance(GameInput {
-        basis: state.basis().clone(),
-        actor,
-        command,
-    })?;
+    let candidate = spellwake_reference_tools::current_capture::advance(
+        &state,
+        GameInput {
+            basis: state.basis().clone(),
+            actor,
+            command,
+        },
+    )?;
     register_creations(
         candidate.damage_journal(),
         input_and_source.1,
@@ -568,7 +510,7 @@ fn resolve_source(
     profile: TraceProfile,
 ) -> Result<GameState, GameError> {
     let spell = identity(&state, source.card)?;
-    let target = TargetRef::Card(identity(&state, WARDEN)?);
+    let target = TargetRef::Object(identity(&state, WARDEN)?);
     state = advance(
         state,
         A,
@@ -591,61 +533,112 @@ fn resolve_source(
     evidence
         .source_entries
         .insert(source.alias, format!("{entry_id:?}"));
+    let source_object = state
+        .execution()
+        .window()
+        .cards()
+        .get(identity(&state, source.card)?)
+        .ok_or_else(inconsistent)?
+        .clone();
+    evidence.source_objects.insert(
+        source.alias,
+        damage_source_view(&DamageSource::Object {
+            object: source_object,
+            controller: entry.controller(),
+        }),
+    );
     let mut chosen_count = 0;
     let input_limit = state.execution().window().participants().len() + source.choices.len();
     for _ in 0..input_limit {
         if let Some(pending) = state.pending_decision() {
-            let RuleFrame::DamageOrder(frame) = pending.frame() else {
+            let RuleFrame::Damage(DamageDecision::Order(frame)) = pending.frame() else {
                 return Err(inconsistent());
             };
             let active = state
                 .execution()
                 .pending_damage()
                 .ok_or_else(inconsistent)?;
+            let mut components = active.components();
+            let component = components.next().ok_or_else(inconsistent)?;
+            if components.next().is_some() {
+                return Err(inconsistent());
+            }
+            drop(components);
             let resolving = state
                 .execution()
                 .window()
                 .resolving()
                 .ok_or_else(inconsistent)?;
+            let DamageOrigin::Resolution {
+                entry: origin_entry,
+                instruction,
+            } = *frame.origin()
+            else {
+                return Err(inconsistent());
+            };
+            let source_object = identity(&state, source.card)?;
+            let DamageSource::Object { object, controller } = &component.attempt().source else {
+                return Err(inconsistent());
+            };
             if pending.chooser() != B
-                || frame.source() != entry_id
+                || origin_entry != entry_id
                 || resolving.id() != entry_id
-                || active.attempt().source != entry_id
-                || active.attempt().id != frame.attempt()
-                || active.attempt().target != identity(&state, WARDEN)?
-                || state.execution().instruction_index() != Some(frame.instruction_index())
+                || active.id() != frame.batch()
+                || active.origin() != *frame.origin()
+                || active.stage() != frame.stage()
+                || frame.revision() != state.execution().revision()
+                || component.attempt().source.id() != DamageSourceId::Object(source_object)
+                || object.id() != source_object
+                || *controller != resolving.controller()
+                || component.attempt().target
+                    != DamageRecipient::Creature(identity(&state, WARDEN)?)
+                || state.execution().instruction_index() != Some(instruction)
             {
                 return Err(inconsistent());
             }
             let alias = *source.choices.get(chosen_count).ok_or_else(inconsistent)?;
-            let selected = effects.get(alias).ok_or_else(inconsistent)?.id;
-            if !frame.options().contains(&selected) {
-                return Err(inconsistent());
-            }
-            let mut domain = frame
-                .options()
+            let selected_effect = effects.get(alias).ok_or_else(inconsistent)?.id;
+            let selected = *frame
+                .applications()
                 .iter()
-                .map(|id| effect_alias(effects, *id))
+                .find(|application| application.effect == selected_effect)
+                .ok_or_else(inconsistent)?;
+            let mut domain = frame
+                .applications()
+                .iter()
+                .map(|application| effect_alias(effects, application.effect))
                 .collect::<Result<Vec<_>, _>>()?;
             domain.sort_unstable();
+            let DamageRecipient::Creature(target) = component.attempt().target else {
+                return Err(inconsistent());
+            };
             evidence.decisions.push(NativeDecision {
-                instruction: profile.sequences().then_some(frame.instruction_index()),
+                instruction: profile.sequences().then_some(instruction),
                 source: source.alias,
                 domain,
                 chosen: alias,
                 damage_before: state
                     .execution()
-                    .creature(active.attempt().target)
-                    .ok_or_else(inconsistent)?
-                    .damage,
-                pending_damage: active.remaining().clone(),
+                    .battlefield_marked_damage(target)
+                    .ok_or_else(inconsistent)?,
+                pending_damage: component.remaining().clone(),
                 chooser: seat_name(pending.chooser())?,
                 target: "warden",
-                source_controller: seat_name(resolving.controller())?,
+                source_controller: seat_name(component.attempt().source.controller())?,
                 stack_size: state.execution().window().entries().len(),
                 source_zone: zone_name(zone(&state, source.card)?),
                 decision_id: format!("{:?}", pending.id()),
-                attempt_id: format!("{:?}", active.attempt().id),
+                batch_id: format!("{:?}", active.id()),
+                origin: damage_origin_view(*frame.origin()),
+                actual_source: damage_source_view(&component.attempt().source),
+                application_domain: frame
+                    .applications()
+                    .iter()
+                    .copied()
+                    .map(damage_application_view)
+                    .collect(),
+                chosen_application: damage_application_view(selected),
+                attempt_id: format!("{:?}", component.attempt().id),
                 attempt_stage: active.stage(),
                 game_revision: state.basis().revision,
                 executor_revision: state.execution().revision(),
@@ -688,7 +681,7 @@ fn resolve_source(
             .all(|entry| entry.id() != entry_id)
         {
             if chosen_count != source.choices.len()
-                || zone(&state, source.card)? != CardZone::Graveyard(A)
+                || zone(&state, source.card)? != ObjectZone::Graveyard(A)
             {
                 return Err(inconsistent());
             }
@@ -721,7 +714,7 @@ fn creation_parts(
 ) -> (
     DamageEffectId,
     StackEntryId,
-    CardObjectId,
+    DamageEffectTarget,
     usize,
     &'static str,
     RulesInteger,
@@ -732,7 +725,7 @@ fn creation_parts(
             instruction,
         } => (
             shield.id.into(),
-            shield.source,
+            shield.creator,
             shield.target,
             *instruction,
             "prevention",
@@ -743,7 +736,7 @@ fn creation_parts(
             instruction,
         } => (
             multiplier.id.into(),
-            multiplier.source,
+            multiplier.creator,
             multiplier.target,
             *instruction,
             "multiply",
@@ -757,12 +750,12 @@ fn creation_parts(
 fn register_creations(
     journal: &DamageJournal,
     source: &Source,
-    target: CardObjectId,
+    target: ObjectId,
     evidence: &NativeEvidence,
     effects: &mut BTreeMap<&'static str, TrackedEffect>,
 ) -> Result<(), GameError> {
     for creation in &journal.created {
-        let (id, creator, actual_target, instruction, _, _) = creation_parts(creation);
+        let (id, creator, created_target, instruction, _, _) = creation_parts(creation);
         let alias = source
             .creation_aliases
             .iter()
@@ -770,17 +763,17 @@ fn register_creations(
             .map(|(_, alias)| *alias)
             .ok_or_else(inconsistent)?;
         if evidence.source_entries.get(source.alias) != Some(&format!("{creator:?}"))
-            || actual_target != target
+            || created_target != DamageEffectTarget::Permanent(target)
             || effects.values().any(|effect| {
-                effect.id == id || (effect.source == creator && effect.instruction == instruction)
+                effect.id == id || (effect.creator == creator && effect.instruction == instruction)
             })
             || effects
                 .insert(
                     alias,
                     TrackedEffect {
                         id,
-                        source: creator,
-                        target,
+                        creator,
+                        target: DamageEffectTarget::Permanent(target),
                         instruction,
                     },
                 )
@@ -797,26 +790,24 @@ fn run_scenario(
     scenario: &'static str,
     sources: Vec<Source>,
     profile: TraceProfile,
+    vocabulary: std::sync::Arc<spellwake_contracts::creature_types::CreatureTypeVocabulary>,
 ) -> Result<ScenarioResult, GameError> {
     let mut cards = vec![SeedCard {
         card: WARDEN,
         owner: B,
-        destination: CardDestination::Battlefield { controller: B },
-        program: Program::VanillaCreature {
-            power: 1.into(),
-            toughness: 3.into(),
-        },
+        destination: ObjectDestination::Battlefield { controller: B },
+        program: Program::creature(None, 1.into(), 3.into(), std::collections::BTreeSet::new()),
     }];
     let mut mana: RulesInteger = 0.into();
     for source in &sources {
         cards.push(SeedCard {
             card: source.card,
             owner: A,
-            destination: CardDestination::Hand,
-            program: Program::Instant {
-                cost: ManaCost::one(ManaType::Red),
-                instructions: source.instructions.clone(),
-            },
+            destination: ObjectDestination::Hand,
+            program: Program::instant(
+                ManaCost::one(ManaType::Red),
+                ExecutableBody::new(BodyTarget::SingleCreature, source.instructions.clone()),
+            ),
         });
         mana = mana.plus(&1.into());
     }
@@ -829,14 +820,7 @@ fn run_scenario(
             "native-damage-prevention-v1"
         }
         .into(),
-        if profile.sequences() {
-            "magic-cr-20260925-ordered-primitive-resolution-subset"
-        } else if profile.multipliers() {
-            "magic-cr-20260925-literal-creature-damage-modifiers-subset"
-        } else {
-            "magic-cr-20260925-finite-creature-prevention-subset"
-        }
-        .into(),
+        vocabulary.rules_revision().to_owned(),
         "no-catalogue-synthetic-seeds".into(),
         if profile.sequences() {
             "synthetic-ordered-resolution-programs-v1"
@@ -847,19 +831,37 @@ fn run_scenario(
         }
         .into(),
         scenario.into(),
+        vocabulary.id(),
+        spellwake_contracts::names::NameRules::literal_names().id(),
     )?;
-    let candidate = GameState::initialize(
-        game,
-        context,
-        vec![A, B],
-        A,
-        cards,
-        vec![FloatingMana {
-            player: A,
-            mana_type: ManaType::Red,
-            amount: mana,
-        }],
-    )?;
+    let candidate = spellwake_reference_tools::current_capture::initialize(game, context, {
+        // Fixture premise: seeded BF timestamps follow this authored card sequence.
+        let initial_battlefield_order = cards
+            .iter()
+            .filter(|card| {
+                matches!(
+                    card.destination,
+                    spellwake_engine::object_identity::ObjectDestination::Battlefield { .. }
+                )
+            })
+            .map(|card| card.card)
+            .collect();
+        GameSeed::with_uniform_life(
+            vec![A, B],
+            A,
+            cards,
+            initial_battlefield_order,
+            vec![FloatingMana {
+                player: A,
+                mana_type: ManaType::Red,
+                amount: mana,
+            }],
+            20.into(),
+            CombatRules::UnrestrictedFreeForAll,
+            vocabulary.clone(),
+            std::sync::Arc::new(spellwake_contracts::names::NameRules::literal_names()),
+        )
+    })?;
     let mut evidence = NativeEvidence::default();
     let mut effects = BTreeMap::new();
     evidence.input_journals.push(InputJournal::capture(
@@ -907,6 +909,13 @@ fn run_scenario(
             scripted_prevention_order: source.choices,
         })
         .collect();
+    let actual = serde_json::to_value(&evidence).expect("actual native evidence serialization");
+    evidence.capture_point = spellwake_reference_tools::capture_points::token(
+        concat!(file!(), "::run_scenario::native_evidence"),
+        spellwake_reference_tools::current_profile::SnapshotOwner::PureValue(&actual),
+        &spellwake_reference_tools::packet::AliasContext::default(),
+    )
+    .expect("actual native evidence point");
     Ok(ScenarioResult {
         observations,
         programs,
@@ -983,17 +992,25 @@ fn sequence_scenarios() -> Vec<(&'static str, Vec<Source>)> {
             vec![sequence(
                 2,
                 vec![
-                    Instruction::ContinuousPowerToughness {
-                        operation: PowerToughnessOperation::Set(PowerToughness {
-                            power: 1.into(),
-                            toughness: 0.into(),
-                        }),
+                    Instruction::CreateContinuousEffect {
+                        parts: spellwake_engine::characteristics::ResolvedPartsSpec(vec![
+                            ResolvedPartSpec::SetPT(PowerToughness {
+                                power: 1.into(),
+                                toughness: 0.into(),
+                            }),
+                        ]),
+                        duration:
+                            spellwake_engine::characteristics::ResolvedDuration::NoStatedDuration,
                     },
-                    Instruction::ContinuousPowerToughness {
-                        operation: PowerToughnessOperation::Modify(PowerToughness {
-                            power: 0.into(),
-                            toughness: 2.into(),
-                        }),
+                    Instruction::CreateContinuousEffect {
+                        parts: spellwake_engine::characteristics::ResolvedPartsSpec(vec![
+                            ResolvedPartSpec::ModifyPT(PowerToughness {
+                                power: 0.into(),
+                                toughness: 2.into(),
+                            }),
+                        ]),
+                        duration:
+                            spellwake_engine::characteristics::ResolvedDuration::NoStatedDuration,
                     },
                 ],
                 &[],
@@ -1050,7 +1067,10 @@ fn sequence_scenarios() -> Vec<(&'static str, Vec<Source>)> {
     ]
 }
 
-fn run(profile: TraceProfile) -> Result<Report, GameError> {
+fn run(
+    vocabulary: &std::sync::Arc<spellwake_contracts::creature_types::CreatureTypeVocabulary>,
+    profile: TraceProfile,
+) -> Result<Report, GameError> {
     let scenarios = if profile.sequences() {
         sequence_scenarios()
     } else if profile.multipliers() {
@@ -1145,13 +1165,13 @@ fn run(profile: TraceProfile) -> Result<Report, GameError> {
     let mut scenario_observations = BTreeMap::new();
     let mut native_only_evidence = BTreeMap::new();
     for (id, (name, sources)) in (1_u128..).zip(scenarios) {
-        let result = run_scenario(GameId(id), name, sources, profile)?;
+        let result = run_scenario(GameId(id), name, sources, profile, vocabulary.clone())?;
         scenario_programs.insert(name, result.programs);
         scenario_observations.insert(name, result.observations);
         native_only_evidence.insert(name, result.evidence);
     }
     Ok(Report {
-        schema_version: 1,
+        schema_version: 3,
         kind: if profile.sequences() {
             "restricted-ordered-resolution-programs"
         } else if profile.multipliers() {
@@ -1193,24 +1213,66 @@ fn run(profile: TraceProfile) -> Result<Report, GameError> {
 }
 
 fn main() -> ExitCode {
-    let arguments: Vec<_> = std::env::args().skip(1).collect();
+    let vocabulary = match spellwake_reference_tools::creature_types::selected_vocabulary() {
+        Ok(value) => value,
+        Err(error) => {
+            eprintln!("invalid qualification input: {error}");
+            std::process::exit(1);
+        }
+    };
+
+    let arguments = match spellwake_reference_tools::creature_types::qualification_args() {
+        Ok(value) => value,
+        Err(error) => {
+            eprintln!("invalid qualification input: {error}");
+            return ExitCode::FAILURE;
+        }
+    };
     let profile = match arguments.as_slice() {
         [] => Ok(TraceProfile::Prevention),
         [flag] if flag == "--multipliers" => Ok(TraceProfile::Multipliers),
         [flag] if flag == "--sequences" => Ok(TraceProfile::Sequences),
         _ => Err(GameError::Effect(EffectError::InvalidSetup)),
     };
-    let (response, success): (ApiResponse<Report>, bool) = match profile.and_then(run) {
-        Ok(data) => (ApiResponse::Success { data }, true),
+    let profile_token = match &profile {
+        Ok(TraceProfile::Prevention) => "prevention",
+        Ok(TraceProfile::Multipliers) => "multipliers",
+        Ok(TraceProfile::Sequences) => "programs",
+        Err(_) => {
+            eprintln!("unsupported current profile arguments");
+            return ExitCode::FAILURE;
+        }
+    };
+    if let Err(error) = spellwake_reference_tools::current_capture::start(
+        profile_token,
+        &[spellwake_reference_tools::current_capture::repository().join(file!())],
+        None,
+    ) {
+        eprintln!("current capture source unavailable: {error}");
+        return ExitCode::FAILURE;
+    }
+    let (response, success): (ApiResponse<Report>, bool) =
+        match profile.and_then(|profile| run(&vocabulary, profile)) {
+            Ok(data) => (ApiResponse::Success { data }, true),
+            Err(error) => {
+                eprintln!("native damage-prevention interaction failed: {error:?}");
+                (
+                    ApiResponse::Error {
+                        message: "Native damage-prevention interaction unavailable".into(),
+                        code: "native-damage-prevention-error".into(),
+                    },
+                    false,
+                )
+            }
+        };
+    let response = match spellwake_reference_tools::current_capture::finish_serializable(
+        profile_token,
+        &response,
+    ) {
+        Ok(value) => value,
         Err(error) => {
-            eprintln!("native damage-prevention interaction failed: {error:?}");
-            (
-                ApiResponse::Error {
-                    message: "Native damage-prevention interaction unavailable".into(),
-                    code: "native-damage-prevention-error".into(),
-                },
-                false,
-            )
+            eprintln!("current capture incomplete: {error}");
+            return ExitCode::FAILURE;
         }
     };
     if let Err(error) = serde_json::to_writer(std::io::stdout(), &response) {
@@ -1248,18 +1310,19 @@ mod tests {
             "consumed-creations",
             vec![source],
             TraceProfile::Sequences,
+            spellwake_reference_tools::creature_types::synthetic_vocabulary(),
         )
         .unwrap();
         let births: Vec<_> = result
             .evidence
             .input_journals
             .iter()
-            .flat_map(|journal| journal.created.as_ref().unwrap())
+            .flat_map(|journal| journal.creation_bindings.as_ref().unwrap())
             .collect();
         assert_eq!(births.len(), 2);
         assert_eq!((births[0].effect, births[0].instruction), ("first", 0));
         assert_eq!((births[1].effect, births[1].instruction), ("second", 1));
-        assert_eq!(births[0].source, births[1].source);
+        assert_eq!(births[0].creator, births[1].creator);
         assert_ne!(births[0].identity, births[1].identity);
         let checkpoint = result.evidence.checkpoints.last().unwrap();
         assert_eq!(checkpoint.shields.len(), 2);
@@ -1270,8 +1333,8 @@ mod tests {
                 .all(|shield| !shield.active && shield.stored_remaining.is_none())
         );
         let terminal = result.evidence.input_journals.last().unwrap();
-        assert!(terminal.applied.is_empty());
-        assert_eq!(terminal.completions[0].outcome, "fully-prevented");
+        assert!(terminal.journal.applied.is_empty());
+        assert_eq!(terminal.journal.completions[0].outcome, "fully-prevented");
     }
 
     #[test]
@@ -1292,13 +1355,14 @@ mod tests {
             "ten-attempts",
             vec![source],
             TraceProfile::Sequences,
+            spellwake_reference_tools::creature_types::synthetic_vocabulary(),
         )
         .unwrap();
         let terminal = result.evidence.input_journals.last().unwrap();
         let applications = terminal.applications.as_ref().unwrap();
-        assert_eq!(terminal.attempts.len(), 10);
+        assert_eq!(terminal.journal.attempts.len(), 10);
         assert_eq!(applications.len(), 10);
-        for (attempt, application) in terminal.attempts.iter().zip(applications) {
+        for (attempt, application) in terminal.journal.attempts.iter().zip(applications) {
             assert_eq!(attempt.attempt, application.attempt);
             assert_eq!(application.stage, 1);
         }

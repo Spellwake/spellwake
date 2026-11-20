@@ -1,0 +1,79 @@
+{
+  "schema": "native-published-card-witness-v1",
+  "artifactHash": "sha256:212faafc74b0c9305381f00c91021d089e9d17a602ea86f14890e4610ad4062c",
+  "oracleSnapshotHash": "sha256:c1c9dc28fa9a7a4bae61c02330ba5a1190205aab1a93361e590ff5d9a146af08",
+  "cards": [
+    {
+      "oracleRef": "058917c1-21ab-488a-9f9c-591c55f3c596",
+      "printing": "4eabbed2-1399-4cf1-9eba-b53c56caced4",
+      "definitionHash": "sha256:c77f825beec53c5b1d80b959f70c1bb2ef61482b80993a3ac9a083b58b8f986a",
+      "rulesHash": "sha256:5fb815f56d06d7c98026a0a29fa709c29238338fbb848dbe441ad7b329efbd1c"
+    },
+    {
+      "oracleRef": "0f575f18-4606-4b85-9a90-07f8d8d46d06",
+      "printing": "7a20b5a2-8613-49ed-b5cc-7cae9d0e0850",
+      "definitionHash": "sha256:ed74986a4c2e74a2bbbc92527e7dade6489e096ff3ded21e1534fbd0c2e0cb73",
+      "rulesHash": "sha256:3a1110da2eea5060829e53cc14d2be91996d2c3e6ca5e8230f43fa30fb0d773b"
+    },
+    {
+      "oracleRef": "14c8f55d-d177-4c25-a931-ebeb9e6062a0",
+      "printing": "409f9b88-f03e-40b6-9883-68c14c37c0de",
+      "definitionHash": "sha256:2bc6e02a7ed5103a2beea999031657bd3d1e074ada804ece939053ad41d8edd1",
+      "rulesHash": "sha256:c30f08216c333abf5191edfdc9d156471a88e21395b442a54c0cd893c7f03b6b"
+    },
+    {
+      "oracleRef": "4b1bf05e-753e-4350-a913-894cf3cecc0c",
+      "printing": "fce2baa4-2976-4bbd-b6c5-a5a3c6a901be",
+      "definitionHash": "sha256:44a9aea23bf7de6d6cac8997caeedfb1dc106085accf7ba7dd8c6734a11837dd",
+      "rulesHash": "sha256:b1a06d0315cb8bf086fd33e59f1966a2c9a8148096221f7828f00e7fcba39988"
+    },
+    {
+      "oracleRef": "56719f6a-1a6c-4c0a-8d21-18f7d7350b68",
+      "printing": "b233b117-9369-45c1-80c5-cc857386b6be",
+      "definitionHash": "sha256:a68e9844136e2d61abebf2369c34e1856c4ee7e261b6af6d9cbe0791258d3ffd",
+      "rulesHash": "sha256:91f4cad131612118e849ed90373dd427cff6cde8f9e28f383d713fc41714307e"
+    },
+    {
+      "oracleRef": "5b2364d7-a811-4595-a1b4-224c70555ffa",
+      "printing": "6c7c8527-55f6-494d-b4f7-c427a5735053",
+      "definitionHash": "sha256:31d6034338901de6af69a3499043937f3fdae5aa3d53d12cd550a6f1e22609b9",
+      "rulesHash": "sha256:bd27df9d03d068bec9e833a59d928809ab3f248aea738dd4f99ac7ea5f83fd78"
+    },
+    {
+      "oracleRef": "6791ec3c-c397-4087-8c8c-84d3797df415",
+      "printing": "29184c64-03f3-4a50-ac18-e34b6c89635e",
+      "definitionHash": "sha256:3391de416295e21e54317b40c96a657005746b43178e80318dc58a9c75d88996",
+      "rulesHash": "sha256:36de26ae6f33d1371ffc3b3950260c32d8e6e5d3eb6483cf28c00e90cec4f750"
+    },
+    {
+      "oracleRef": "7397036f-8114-47cc-b52f-c532a6845d16",
+      "printing": "64b0d9e7-4a0f-4f07-99ae-31c3c9f0037a",
+      "definitionHash": "sha256:3aa77b0ece6441c6a7af59aaaea7138bdc83e3edd05242ef918425c3ce2826b6",
+      "rulesHash": "sha256:82db416c573f1e16cabf8e923cd98ffd83e8e6eb078f5738243041cdad2442e4"
+    },
+    {
+      "oracleRef": "ad44cf74-b717-48fb-9fa2-77512024d76a",
+      "printing": "833a8604-92d5-443b-9bc0-bd91c973ef07",
+      "definitionHash": "sha256:cdf8449818e062023a7ece9a4007e4c261aa9534958fcd16c567f4d9e37b56ed",
+      "rulesHash": "sha256:0ebd401c145a92e6d0b7c00214df9d603213ceda3f9554a5b8f5468884c4072a"
+    },
+    {
+      "oracleRef": "b2c6aa39-2d2a-459c-a555-fb48ba993373",
+      "printing": "1335d293-3dd2-4f13-bd2c-22181f4528ee",
+      "definitionHash": "sha256:6f30e4f7015ab8cdb7ecd3d6ebc47cbcd128d80d01a462dcc5ca1ad1c1f06ff7",
+      "rulesHash": "sha256:83326669fb616d476926c555924d40bf6fd53e4c81629863544ef5407deed86a"
+    },
+    {
+      "oracleRef": "b34bb2dc-c1af-4d77-b0b3-a0fb342a5fc6",
+      "printing": "2e781bfd-f8cb-4d20-b977-4359f3a21311",
+      "definitionHash": "sha256:0ed29a568df3e541cd720efd46daf64b3b1237d5fe86e53c974504985db3f3a9",
+      "rulesHash": "sha256:62fd181958cdf66904e66e0cbe19cd798d9e02fa8f7b580974160938411a980c"
+    },
+    {
+      "oracleRef": "bc71ebf6-2056-41f7-be35-b2e5c34afa99",
+      "printing": "09ac862f-0a51-44dd-b86f-9412b8218b13",
+      "definitionHash": "sha256:854d390c4342b4b1999d5997bcb543a7724bffbafb88b287dcc1ac9f03047751",
+      "rulesHash": "sha256:6bcd9ea508285d07185322fa87be78b3083d00ff1063d180c1e907ea801c0b39"
+    }
+  ]
+}

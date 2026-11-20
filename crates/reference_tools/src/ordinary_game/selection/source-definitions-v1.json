@@ -1,0 +1,112 @@
+{
+  "schema_version": 1,
+  "profile": "resolution-sacrifice-discard-v1",
+  "registry_version": 9,
+  "metadata_bytes": 565,
+  "metadata_sha256": "77a7ffc2250306197da78c0c4faf35fb4fae01b4dbdd50bf8eb45f502e4737ad",
+  "snapshot_bytes": 25229019,
+  "snapshot_sha256": "c1c9dc28fa9a7a4bae61c02330ba5a1190205aab1a93361e590ff5d9a146af08",
+  "source_records": 39196,
+  "creature_vocabulary_id": "39721c01eef9fd3f869588b097651bb6115f9cdde5d61bf822d65a8e5435c792",
+  "definitions": [
+    {
+      "name": "Diabolic Edict",
+      "oracleId": "058917c1-21ab-488a-9f9c-591c55f3c596",
+      "scryfallId": "4eabbed2-1399-4cf1-9eba-b53c56caced4",
+      "sourceLineOneBased": 888,
+      "rawLineSha256IncludingLf": "9b7df481a8a2c666978ae6e768adc835e5e921b52c8e834889c9f4c236ca4594",
+      "registrySignatureV1Sha256": "7ca8c8e940949dbfa844439711302de45ab8ed2f46675ca0f86b1601931422cd",
+      "set": "mh1",
+      "collector": "87",
+      "language": "en"
+    },
+    {
+      "name": "Geth's Verdict",
+      "oracleId": "0f575f18-4606-4b85-9a90-07f8d8d46d06",
+      "scryfallId": "7a20b5a2-8613-49ed-b5cc-7cae9d0e0850",
+      "sourceLineOneBased": 2333,
+      "rawLineSha256IncludingLf": "bc641160ded619a454719b8b1391de59421290fa1e29ecda9b8d38ee9e28b711",
+      "registrySignatureV1Sha256": "e127be3ef7411807dd03ecc12ea108c2347c3af67abcf28e250f93a2baf3b9eb",
+      "set": "nph",
+      "collector": "61",
+      "language": "en"
+    },
+    {
+      "name": "Grizzly Bears",
+      "oracleId": "14c8f55d-d177-4c25-a931-ebeb9e6062a0",
+      "scryfallId": "409f9b88-f03e-40b6-9883-68c14c37c0de",
+      "sourceLineOneBased": 3221,
+      "rawLineSha256IncludingLf": "3e51dcca3d60899dd6d213ace72ab7fc333b40bbb1c04b20d34de1283b5df04b",
+      "registrySignatureV1Sha256": "f0a0e899618134ff97f4c9fa6fbadc2968959374cff030528788dcd43144887b",
+      "set": "10e",
+      "collector": "268",
+      "language": "en"
+    },
+    {
+      "name": "Fleshbag Marauder",
+      "oracleId": "4b1bf05e-753e-4350-a913-894cf3cecc0c",
+      "scryfallId": "fce2baa4-2976-4bbd-b6c5-a5a3c6a901be",
+      "sourceLineOneBased": 11435,
+      "rawLineSha256IncludingLf": "cbe5abb0b9cf4493e6cd9bf9d54020e98cc49e948cb2d7022e829ed45af7fd22",
+      "registrySignatureV1Sha256": "a332d01376315034cf0c9b6a51aabc9a585fbdb657a80ba917753186d0a1594f",
+      "set": "clu",
+      "collector": "111",
+      "language": "en"
+    },
+    {
+      "name": "Raise the Alarm",
+      "oracleId": "5b2364d7-a811-4595-a1b4-224c70555ffa",
+      "scryfallId": "6c7c8527-55f6-494d-b4f7-c427a5735053",
+      "sourceLineOneBased": 13868,
+      "rawLineSha256IncludingLf": "495b615dc6de83baec52786c1b8d345726e15db3320dcd11f8175e2a72ce3bad",
+      "registrySignatureV1Sha256": "e1130e72e141cee5b5bfc368b04325703c344a4d6f0860eef07fc018835d0a25",
+      "set": "cmr",
+      "collector": "41",
+      "language": "en"
+    },
+    {
+      "name": "Innocent Blood",
+      "oracleId": "6791ec3c-c397-4087-8c8c-84d3797df415",
+      "scryfallId": "29184c64-03f3-4a50-ac18-e34b6c89635e",
+      "sourceLineOneBased": 15761,
+      "rawLineSha256IncludingLf": "7c9790e61836e1f7e4ed88fd37f14aa8dd37855b86dc5b099b343a9ee5f637a7",
+      "registrySignatureV1Sha256": "1f989956e473281c39318da00e53884b4670dc4294f5a0ab7658ab898be1cecf",
+      "set": "jmp",
+      "collector": "244",
+      "language": "en"
+    },
+    {
+      "name": "Delirium Skeins",
+      "oracleId": "7397036f-8114-47cc-b52f-c532a6845d16",
+      "scryfallId": "64b0d9e7-4a0f-4f07-99ae-31c3c9f0037a",
+      "sourceLineOneBased": 17619,
+      "rawLineSha256IncludingLf": "7eee4cbd91c6746d22cd14627895a13bddd03bb1abcc53941de60047cef3bb78",
+      "registrySignatureV1Sha256": "ea64e0fe0779eefc69f8c269ab94b7cb75ebcaf200ca3a16911b6f32fbd29fce",
+      "set": "mm3",
+      "collector": "65",
+      "language": "en"
+    },
+    {
+      "name": "Mind Rot",
+      "oracleId": "ad44cf74-b717-48fb-9fa2-77512024d76a",
+      "scryfallId": "833a8604-92d5-443b-9bc0-bd91c973ef07",
+      "sourceLineOneBased": 26417,
+      "rawLineSha256IncludingLf": "ca8ebb746b2728bec9ad33a1a0e9dc93324b7decec18c895898f212af6c381e8",
+      "registrySignatureV1Sha256": "54c8155e10628092c85972f944622a0fbcdfc692016101ffb9dfd0617b58cbb7",
+      "set": "m21",
+      "collector": "115",
+      "language": "en"
+    },
+    {
+      "name": "Island",
+      "oracleId": "b2c6aa39-2d2a-459c-a555-fb48ba993373",
+      "scryfallId": "1335d293-3dd2-4f13-bd2c-22181f4528ee",
+      "sourceLineOneBased": 27256,
+      "rawLineSha256IncludingLf": "a5365e49cba1ca36f32f871fefeeea86ee366480b71c34485f306b744cfcf938",
+      "registrySignatureV1Sha256": "f7794b130f48b16234927c7fb97a10e5ea44b2ec064d8d8856aeedc7904ac678",
+      "set": "mdd",
+      "collector": "294",
+      "language": "en"
+    }
+  ]
+}

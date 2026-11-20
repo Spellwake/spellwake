@@ -1,0 +1,260 @@
+{
+  "schema": "library-top-forge-prepared-inputs-v1",
+  "forge_commit": "3ead7e68d54bf95c6f778fd6aa7c604c036e0736",
+  "definitions": {
+    "Consider": {
+      "name": "Consider",
+      "oracle_id": "4c9bcba6-87b5-4fb3-97ee-6fe5b739337d",
+      "snapshot_printing_id": "4f28e706-c488-4525-ad8a-977a5fa77f80",
+      "edition": "TLE",
+      "collector_number": "157",
+      "source_row": {
+        "path": "/Users/quzzar/Projects/spellwake/work/engine-milestones/library-top-effects-v1/source-clause-intake-v1/consider.source.jsonl",
+        "bytes": 4986,
+        "sha256": "500dc323d0212b13cbde39c76f3e24463d617f8dbae380a0ddc55ed4404de847"
+      },
+      "script": {
+        "path": "/Users/quzzar/Projects/spellwake/work/reference-research/forge/forge-gui/res/cardsfolder/c/consider.txt",
+        "bytes": 432,
+        "sha256": "57d531271bcf335bf9160b3e0bb84116c9410f1bc6e1bd64fd754e9b73e20937"
+      },
+      "edition_file": {
+        "path": "/Users/quzzar/Projects/spellwake/work/reference-research/forge/forge-gui/res/editions/Avatar The Last Airbender Eternal.txt",
+        "bytes": 12306,
+        "sha256": "ee4738d4e0fe7fe50caf55d0eb20e2ff2f09737da38ff69b5f0a2e60b591a4b2"
+      }
+    },
+    "Opt": {
+      "name": "Opt",
+      "oracle_id": "713332c1-5bd8-400f-bfff-c1ca0697a043",
+      "snapshot_printing_id": "bbc99a51-1501-4525-a3cc-f48249b64bed",
+      "edition": "TDC",
+      "collector_number": "158",
+      "source_row": {
+        "path": "/Users/quzzar/Projects/spellwake/work/engine-milestones/library-top-effects-v1/source-clause-intake-v1/opt.source.jsonl",
+        "bytes": 4917,
+        "sha256": "af33207fec1a5976505ee423c1c2a28de665bbe1ebc6ab5baf63ca0fac691b82"
+      },
+      "script": {
+        "path": "/Users/quzzar/Projects/spellwake/work/reference-research/forge/forge-gui/res/cardsfolder/o/opt.txt",
+        "bytes": 219,
+        "sha256": "589e7822d532f94b80b469a5322d84ce02078277153c5ad3ba205105650b5dcd"
+      },
+      "edition_file": {
+        "path": "/Users/quzzar/Projects/spellwake/work/reference-research/forge/forge-gui/res/editions/Tarkir Dragonstorm Commander.txt",
+        "bytes": 17202,
+        "sha256": "9a06f1bc01217a080d67e2abe1e6c10e9dcb3d5aa4129e184105eb1364da2b9a"
+      }
+    },
+    "Thought Scour": {
+      "name": "Thought Scour",
+      "oracle_id": "83101ba8-a569-4827-8c53-9ca0dfcd59a7",
+      "snapshot_printing_id": "4afee6b3-55a4-44e5-b08c-85e0c813cd09",
+      "edition": "2X2",
+      "collector_number": "65",
+      "source_row": {
+        "path": "/Users/quzzar/Projects/spellwake/work/engine-milestones/library-top-effects-v1/source-clause-intake-v1/thought-scour.source.jsonl",
+        "bytes": 5110,
+        "sha256": "fe7f5432af54b62be16c2e85d26c51a5e27c523b95a23014c091318bf5eca33e"
+      },
+      "script": {
+        "path": "/Users/quzzar/Projects/spellwake/work/reference-research/forge/forge-gui/res/cardsfolder/t/thought_scour.txt",
+        "bytes": 247,
+        "sha256": "ae76d64b9a4f5662e41f0efc7c70f2895e881643b180e06bf3524aeec9e65b85"
+      },
+      "edition_file": {
+        "path": "/Users/quzzar/Projects/spellwake/work/reference-research/forge/forge-gui/res/editions/Double Masters 2022.txt",
+        "bytes": 31856,
+        "sha256": "8b3fe0962b9ea4fdb1e5ef9e34aaec08c4a2786d180fd598f7a254a709d1c87c"
+      }
+    },
+    "Island": {
+      "name": "Island",
+      "oracle_id": "b2c6aa39-2d2a-459c-a555-fb48ba993373",
+      "snapshot_printing_id": "1335d293-3dd2-4f13-bd2c-22181f4528ee",
+      "edition": "MDD",
+      "collector_number": "294",
+      "source_row": {
+        "path": "/Users/quzzar/Projects/spellwake/work/engine-milestones/library-top-effects-v1/source-clause-intake-v1/island.source.jsonl",
+        "bytes": 4988,
+        "sha256": "a5365e49cba1ca36f32f871fefeeea86ee366480b71c34485f306b744cfcf938"
+      },
+      "script": {
+        "path": "/Users/quzzar/Projects/spellwake/work/reference-research/forge/forge-gui/res/cardsfolder/i/island.txt",
+        "bytes": 76,
+        "sha256": "e590434de75aa3e39a03555d0c91788cdabe37f5fdf91ce7c1a189c79f4cade6"
+      },
+      "edition_file": {
+        "path": "/Users/quzzar/Projects/spellwake/work/reference-research/forge/forge-gui/res/editions/Marvel Darkhold Destiny.txt",
+        "bytes": 744,
+        "sha256": "d6baba7eb0dff1ece28b7ba93bb5b4dea5c965b121633d41fd182b96d57078e7"
+      }
+    }
+  },
+  "cases": [
+    {
+      "case_id": "LT01",
+      "source_definition": "Opt",
+      "target_player": null,
+      "a_library_top_first": [
+        "A.L1",
+        "A.L2",
+        "A.L3"
+      ],
+      "b_library_top_first": [
+        "B.L1",
+        "B.L2"
+      ],
+      "partition": {
+        "actor": "A",
+        "offered_aliases": [
+          "A.L1"
+        ],
+        "top_first": [
+          "A.L1"
+        ],
+        "other_top_first": []
+      },
+      "graveyard_movement_order": []
+    },
+    {
+      "case_id": "LT02",
+      "source_definition": "Opt",
+      "target_player": null,
+      "a_library_top_first": [
+        "A.L1",
+        "A.L2",
+        "A.L3"
+      ],
+      "b_library_top_first": [
+        "B.L1",
+        "B.L2"
+      ],
+      "partition": {
+        "actor": "A",
+        "offered_aliases": [
+          "A.L1"
+        ],
+        "top_first": [],
+        "other_top_first": [
+          "A.L1"
+        ]
+      },
+      "graveyard_movement_order": []
+    },
+    {
+      "case_id": "LT03",
+      "source_definition": "Consider",
+      "target_player": null,
+      "a_library_top_first": [
+        "A.L1",
+        "A.L2",
+        "A.L3"
+      ],
+      "b_library_top_first": [
+        "B.L1",
+        "B.L2"
+      ],
+      "partition": {
+        "actor": "A",
+        "offered_aliases": [
+          "A.L1"
+        ],
+        "top_first": [
+          "A.L1"
+        ],
+        "other_top_first": []
+      },
+      "graveyard_movement_order": []
+    },
+    {
+      "case_id": "LT04",
+      "source_definition": "Consider",
+      "target_player": null,
+      "a_library_top_first": [
+        "A.L1",
+        "A.L2",
+        "A.L3"
+      ],
+      "b_library_top_first": [
+        "B.L1",
+        "B.L2"
+      ],
+      "partition": {
+        "actor": "A",
+        "offered_aliases": [
+          "A.L1"
+        ],
+        "top_first": [],
+        "other_top_first": [
+          "A.L1"
+        ]
+      },
+      "graveyard_movement_order": []
+    },
+    {
+      "case_id": "LT05",
+      "source_definition": "Thought Scour",
+      "target_player": "A",
+      "a_library_top_first": [
+        "A.L1",
+        "A.L2",
+        "A.L3"
+      ],
+      "b_library_top_first": [
+        "B.L1",
+        "B.L2"
+      ],
+      "partition": null,
+      "graveyard_movement_order": [
+        "A.L2",
+        "A.L1"
+      ]
+    },
+    {
+      "case_id": "LT06",
+      "source_definition": "Thought Scour",
+      "target_player": "B",
+      "a_library_top_first": [
+        "A.L1",
+        "A.L2"
+      ],
+      "b_library_top_first": [
+        "B.L1",
+        "B.L2",
+        "B.L3"
+      ],
+      "partition": null,
+      "graveyard_movement_order": [
+        "B.L2",
+        "B.L1"
+      ]
+    },
+    {
+      "case_id": "LT07",
+      "source_definition": "Thought Scour",
+      "target_player": "B",
+      "a_library_top_first": [
+        "A.L1",
+        "A.L2"
+      ],
+      "b_library_top_first": [
+        "B.L1"
+      ],
+      "partition": null,
+      "graveyard_movement_order": []
+    },
+    {
+      "case_id": "LT08",
+      "source_definition": "Thought Scour",
+      "target_player": "B",
+      "a_library_top_first": [
+        "A.L1",
+        "A.L2"
+      ],
+      "b_library_top_first": [],
+      "partition": null,
+      "graveyard_movement_order": []
+    }
+  ]
+}

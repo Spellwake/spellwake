@@ -4,12 +4,19 @@ use spellwake_card_programs::{
     UNSUMMON,
 };
 use spellwake_content::{Inventory, snapshot::decode};
+use spellwake_engine::program::{BodyTarget, ExecutableBody, SpellTargetFilter};
 use spellwake_engine::{
-    card_identity::{CardDestination, CardId},
     effects::{Instruction, Program},
     mana::{ManaCost, ManaType},
+    object_identity::{CardId, ObjectDestination},
     priority::SeatId,
 };
+fn named(mut program: Program, name: &str) -> Program {
+    program.names = spellwake_contracts::names::ObjectNames::single(
+        spellwake_contracts::names::EnglishCardName::new(name.into()).unwrap(),
+    );
+    program
+}
 fn inventory() -> Inventory {
     decode(
         include_bytes!("../../../tests/catalogue/registry-cards.meta.json"),
@@ -27,7 +34,7 @@ fn absent_printed_mana_cost_never_becomes_an_authored_free_cost() {
         .find(|card| card.oracle_id.as_deref() == Some(BOLT))
         .unwrap();
     card.faces[0].mana_cost = None;
-    let registry = Registry::from_inventory(&source).unwrap();
+    let registry = Registry::from_inventory(&source, &vocabulary()).unwrap();
     assert!(registry.resolve(&id(BOLT)).is_none());
     let coverage = registry.coverage();
     let card = coverage
@@ -45,7 +52,7 @@ fn id(value: &str) -> OracleId {
 
 #[test]
 fn known_identities_bind_versioned_partial_programs_without_claiming_behavior_or_full_support() {
-    let registry = Registry::from_inventory(&inventory()).unwrap();
+    let registry = Registry::from_inventory(&inventory(), &vocabulary()).unwrap();
     let coverage = registry.coverage();
     assert_eq!(
         (
@@ -71,29 +78,41 @@ fn known_identities_bind_versioned_partial_programs_without_claiming_behavior_or
         Scope::SeededVanillaBattlefieldOnly
     );
     let bolt = registry
-        .seed(&id(BOLT), CardId(99), SeatId(1), CardDestination::Hand)
+        .seed(&id(BOLT), CardId(99), SeatId(1), ObjectDestination::Hand)
         .unwrap();
     assert_eq!(
         bolt.program,
-        Program::Instant {
-            cost: ManaCost::one(ManaType::Red),
-            instructions: vec![Instruction::Damage { amount: 3.into() }]
-        }
+        named(
+            Program::instant(
+                ManaCost::one(ManaType::Red),
+                ExecutableBody::new(
+                    BodyTarget::SingleCreature,
+                    vec![Instruction::Damage { amount: 3.into() }]
+                )
+            ),
+            "Lightning Bolt"
+        )
     );
     let counter = registry
         .seed(
             &id(COUNTERSPELL),
             CardId(100),
             SeatId(1),
-            CardDestination::Hand,
+            ObjectDestination::Hand,
         )
         .unwrap();
     assert_eq!(
         counter.program,
-        Program::Instant {
-            cost: ManaCost::specific(ManaType::Blue, 2.into()),
-            instructions: vec![Instruction::CounterSpell]
-        }
+        named(
+            Program::instant(
+                ManaCost::specific(ManaType::Blue, 2.into()),
+                ExecutableBody::new(
+                    BodyTarget::SingleSpell(SpellTargetFilter::AnySpell),
+                    vec![Instruction::CounterSpell]
+                )
+            ),
+            "Counterspell"
+        )
     );
     assert_eq!(
         registry.resolve(&id(COUNTERSPELL)).unwrap().scope(),
@@ -104,7 +123,7 @@ fn known_identities_bind_versioned_partial_programs_without_claiming_behavior_or
             &id(LION),
             CardId(2),
             SeatId(1),
-            CardDestination::Battlefield {
+            ObjectDestination::Battlefield {
                 controller: SeatId(0),
             },
         )
@@ -112,10 +131,15 @@ fn known_identities_bind_versioned_partial_programs_without_claiming_behavior_or
     assert_eq!(lion.owner, SeatId(1));
     assert_eq!(
         lion.program,
-        Program::VanillaCreature {
-            power: 2.into(),
-            toughness: 2.into()
-        }
+        named(
+            Program::creature(
+                None,
+                2.into(),
+                2.into(),
+                std::collections::BTreeSet::from([vocabulary().resolve_label("Cat").unwrap()])
+            ),
+            "Silvercoat Lion"
+        )
     );
 }
 
@@ -139,7 +163,7 @@ fn oracle_ids_are_canonical_and_distinct_from_names_or_printing_ids() {
     }
     let mut source = inventory();
     source.cards[0].oracle_id = Some("00000000-0000-0000-0000-000000000001".into());
-    let registry = Registry::from_inventory(&source).unwrap();
+    let registry = Registry::from_inventory(&source, &vocabulary()).unwrap();
     assert!(registry.resolve(&id(BOLT)).is_none());
     assert!(matches!(
         registry.coverage().cards[0].binding,
@@ -177,7 +201,7 @@ fn changed_rules_or_characteristics_block_execution_instead_of_reusing_an_old_pr
             "faces" => card.faces.clear(),
             _ => unreachable!(),
         }
-        let registry = Registry::from_inventory(&source).unwrap();
+        let registry = Registry::from_inventory(&source, &vocabulary()).unwrap();
         assert!(registry.resolve(&id(BOLT)).is_none(), "{field}");
         assert_eq!(registry.coverage().required_partial_bindings, 3);
         assert!(matches!(
@@ -187,14 +211,14 @@ fn changed_rules_or_characteristics_block_execution_instead_of_reusing_an_old_pr
             }
         ));
         assert!(matches!(
-            registry.seed(&id(BOLT), CardId(1), SeatId(0), CardDestination::Hand),
+            registry.seed(&id(BOLT), CardId(1), SeatId(0), ObjectDestination::Hand),
             Err(RegistryError::MissingBinding)
         ));
     }
     let mut source = inventory();
     source.cards[1].faces[0].power = Some("3".into());
     assert!(
-        Registry::from_inventory(&source)
+        Registry::from_inventory(&source, &vocabulary())
             .unwrap()
             .resolve(&id(LION))
             .is_none()
@@ -205,7 +229,7 @@ fn changed_rules_or_characteristics_block_execution_instead_of_reusing_an_old_pr
 fn duplicate_or_missing_oracle_identities_are_ambiguous_not_first_match_wins() {
     let mut source = inventory();
     source.cards[1].oracle_id = Some(BOLT.into());
-    let registry = Registry::from_inventory(&source).unwrap();
+    let registry = Registry::from_inventory(&source, &vocabulary()).unwrap();
     assert!(registry.resolve(&id(BOLT)).is_none());
     for card in &registry.coverage().cards[..2] {
         assert!(matches!(
@@ -218,7 +242,7 @@ fn duplicate_or_missing_oracle_identities_are_ambiguous_not_first_match_wins() {
     for invalid in [None, Some(" ".to_owned())] {
         let mut source = inventory();
         source.cards[0].oracle_id = invalid;
-        let registry = Registry::from_inventory(&source).unwrap();
+        let registry = Registry::from_inventory(&source, &vocabulary()).unwrap();
         assert!(registry.resolve(&id(BOLT)).is_none());
         assert!(matches!(
             registry.coverage().cards[0].binding,
@@ -233,11 +257,11 @@ fn duplicate_or_missing_oracle_identities_are_ambiguous_not_first_match_wins() {
 fn fingerprint_tracks_rules_data_not_printing_or_format_metadata_and_coverage_counts_only_required_rows()
  {
     let mut source = inventory();
-    let initial = Registry::from_inventory(&source).unwrap();
+    let initial = Registry::from_inventory(&source, &vocabulary()).unwrap();
     source.cards[0].scryfall_id = "different-printing".into();
     source.cards[0].legalities.clear();
     source.cards[0].required_by_base_formats = false;
-    let registry = Registry::from_inventory(&source).unwrap();
+    let registry = Registry::from_inventory(&source, &vocabulary()).unwrap();
     assert_eq!(
         initial.coverage().cards[0].binding,
         registry.coverage().cards[0].binding
@@ -254,9 +278,9 @@ fn fingerprint_tracks_rules_data_not_printing_or_format_metadata_and_coverage_co
 
 #[test]
 fn seeded_battlefield_scope_is_enforced_and_does_not_admit_creature_casting() {
-    let registry = Registry::from_inventory(&inventory()).unwrap();
+    let registry = Registry::from_inventory(&inventory(), &vocabulary()).unwrap();
     assert!(matches!(
-        registry.seed(&id(LION), CardId(1), SeatId(0), CardDestination::Hand),
+        registry.seed(&id(LION), CardId(1), SeatId(0), ObjectDestination::Hand),
         Err(RegistryError::UnsupportedPlacement)
     ));
     assert!(matches!(
@@ -264,7 +288,7 @@ fn seeded_battlefield_scope_is_enforced_and_does_not_admit_creature_casting() {
             &id("021d654e-b731-40d0-a18e-eaff43f9fdb9"),
             CardId(1),
             SeatId(0),
-            CardDestination::Hand
+            ObjectDestination::Hand
         ),
         Err(RegistryError::MissingBinding)
     )); // New Blood is not a simplified steal program.
@@ -277,23 +301,44 @@ fn twincast_guard_binds_only_its_exact_source_to_partial_supported_instant_seman
         include_bytes!("../../../tests/catalogue/spell-copy-cards.jsonl.gz").to_vec(),
     )
     .unwrap();
-    let registry = Registry::from_inventory(&source).unwrap();
+    let registry = Registry::from_inventory(&source, &vocabulary()).unwrap();
     let twincast = id(spellwake_card_programs::TWINCAST);
     assert_eq!(registry.coverage().required_partial_bindings, 5);
-    assert_eq!(registry.coverage().registry_version, 3);
+    assert_eq!(registry.coverage().fully_qualified_cards, 0);
+    for oracle in [
+        BOLT,
+        UNSUMMON,
+        LION,
+        COUNTERSPELL,
+        spellwake_card_programs::TWINCAST,
+    ] {
+        let destination = if oracle == LION {
+            ObjectDestination::Battlefield {
+                controller: SeatId(0),
+            }
+        } else {
+            ObjectDestination::Hand
+        };
+        let card = registry
+            .seed(&id(oracle), CardId(999), SeatId(0), destination)
+            .unwrap();
+        assert!(
+            card.program.supertypes.is_empty(),
+            "guarded {oracle} has no printed supertype"
+        );
+    }
+    assert_eq!(registry.coverage().registry_version, 4);
     assert_eq!(
         registry.resolve(&twincast).unwrap().key(),
         ProgramKey::TwincastSingleTargetInstantV1
     );
     let seed = registry
-        .seed(&twincast, CardId(100), SeatId(1), CardDestination::Hand)
+        .seed(&twincast, CardId(100), SeatId(1), ObjectDestination::Hand)
         .unwrap();
     assert!(matches!(
         seed.program,
-        Program::Instant {
-            instructions,
-            ..
-        } if instructions == vec![Instruction::CopySpell]
+        Program { kind: spellwake_engine::program::ProgramKind::Spell(spell), .. }
+            if spell.body.instructions == vec![Instruction::CopySpell]
     ));
     source
         .cards
@@ -303,9 +348,44 @@ fn twincast_guard_binds_only_its_exact_source_to_partial_supported_instant_seman
         .faces[0]
         .oracle_text = Some("Copy target spell.".into());
     assert!(
-        Registry::from_inventory(&source)
+        Registry::from_inventory(&source, &vocabulary())
             .unwrap()
             .resolve(&twincast)
             .is_none()
     );
+}
+
+fn vocabulary() -> spellwake_contracts::creature_types::CreatureTypeVocabulary {
+    spellwake_contracts::creature_types::CreatureTypeVocabulary::new(
+        "synthetic-registry-tests".into(),
+        [0; 32],
+        vec!["Cat".into()],
+    )
+    .unwrap()
+}
+
+#[test]
+fn lion_requires_cat_only_after_the_exact_source_signature_matches() {
+    let no_cat = spellwake_contracts::creature_types::CreatureTypeVocabulary::new(
+        "synthetic-missing-Cat-control".into(),
+        [0; 32],
+        vec!["Elf".into()],
+    )
+    .unwrap();
+    let mut source = inventory();
+    assert!(matches!(
+        Registry::from_inventory(&source, &no_cat),
+        Err(RegistryError::MissingCreatureType)
+    ));
+    source
+        .cards
+        .iter_mut()
+        .find(|card| card.oracle_id.as_deref() == Some(LION))
+        .unwrap()
+        .faces[0]
+        .power = Some("3".into());
+    let registry = Registry::from_inventory(&source, &no_cat).unwrap();
+    assert!(registry.resolve(&id(LION)).is_none());
+    assert_eq!(registry.coverage().creature_vocabulary_id, no_cat.id());
+    assert_eq!(registry.coverage().registry_version, 4);
 }

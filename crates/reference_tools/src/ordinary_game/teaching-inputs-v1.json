@@ -1,0 +1,1988 @@
+{
+  "inventory": {
+    "W.plains.1": {
+      "role": "W",
+      "oracle_id": "bc71ebf6-2056-41f7-be35-b2e5c34afa99",
+      "name": "Plains",
+      "copy": 1
+    },
+    "W.plains.2": {
+      "role": "W",
+      "oracle_id": "bc71ebf6-2056-41f7-be35-b2e5c34afa99",
+      "name": "Plains",
+      "copy": 2
+    },
+    "W.plains.3": {
+      "role": "W",
+      "oracle_id": "bc71ebf6-2056-41f7-be35-b2e5c34afa99",
+      "name": "Plains",
+      "copy": 3
+    },
+    "W.plains.4": {
+      "role": "W",
+      "oracle_id": "bc71ebf6-2056-41f7-be35-b2e5c34afa99",
+      "name": "Plains",
+      "copy": 4
+    },
+    "W.plains.5": {
+      "role": "W",
+      "oracle_id": "bc71ebf6-2056-41f7-be35-b2e5c34afa99",
+      "name": "Plains",
+      "copy": 5
+    },
+    "W.plains.6": {
+      "role": "W",
+      "oracle_id": "bc71ebf6-2056-41f7-be35-b2e5c34afa99",
+      "name": "Plains",
+      "copy": 6
+    },
+    "W.plains.7": {
+      "role": "W",
+      "oracle_id": "bc71ebf6-2056-41f7-be35-b2e5c34afa99",
+      "name": "Plains",
+      "copy": 7
+    },
+    "W.plains.8": {
+      "role": "W",
+      "oracle_id": "bc71ebf6-2056-41f7-be35-b2e5c34afa99",
+      "name": "Plains",
+      "copy": 8
+    },
+    "W.plains.9": {
+      "role": "W",
+      "oracle_id": "bc71ebf6-2056-41f7-be35-b2e5c34afa99",
+      "name": "Plains",
+      "copy": 9
+    },
+    "W.plains.10": {
+      "role": "W",
+      "oracle_id": "bc71ebf6-2056-41f7-be35-b2e5c34afa99",
+      "name": "Plains",
+      "copy": 10
+    },
+    "W.plains.11": {
+      "role": "W",
+      "oracle_id": "bc71ebf6-2056-41f7-be35-b2e5c34afa99",
+      "name": "Plains",
+      "copy": 11
+    },
+    "W.plains.12": {
+      "role": "W",
+      "oracle_id": "bc71ebf6-2056-41f7-be35-b2e5c34afa99",
+      "name": "Plains",
+      "copy": 12
+    },
+    "W.plains.13": {
+      "role": "W",
+      "oracle_id": "bc71ebf6-2056-41f7-be35-b2e5c34afa99",
+      "name": "Plains",
+      "copy": 13
+    },
+    "W.plains.14": {
+      "role": "W",
+      "oracle_id": "bc71ebf6-2056-41f7-be35-b2e5c34afa99",
+      "name": "Plains",
+      "copy": 14
+    },
+    "W.plains.15": {
+      "role": "W",
+      "oracle_id": "bc71ebf6-2056-41f7-be35-b2e5c34afa99",
+      "name": "Plains",
+      "copy": 15
+    },
+    "W.plains.16": {
+      "role": "W",
+      "oracle_id": "bc71ebf6-2056-41f7-be35-b2e5c34afa99",
+      "name": "Plains",
+      "copy": 16
+    },
+    "W.plains.17": {
+      "role": "W",
+      "oracle_id": "bc71ebf6-2056-41f7-be35-b2e5c34afa99",
+      "name": "Plains",
+      "copy": 17
+    },
+    "W.plains.18": {
+      "role": "W",
+      "oracle_id": "bc71ebf6-2056-41f7-be35-b2e5c34afa99",
+      "name": "Plains",
+      "copy": 18
+    },
+    "W.plains.19": {
+      "role": "W",
+      "oracle_id": "bc71ebf6-2056-41f7-be35-b2e5c34afa99",
+      "name": "Plains",
+      "copy": 19
+    },
+    "W.plains.20": {
+      "role": "W",
+      "oracle_id": "bc71ebf6-2056-41f7-be35-b2e5c34afa99",
+      "name": "Plains",
+      "copy": 20
+    },
+    "W.plains.21": {
+      "role": "W",
+      "oracle_id": "bc71ebf6-2056-41f7-be35-b2e5c34afa99",
+      "name": "Plains",
+      "copy": 21
+    },
+    "W.plains.22": {
+      "role": "W",
+      "oracle_id": "bc71ebf6-2056-41f7-be35-b2e5c34afa99",
+      "name": "Plains",
+      "copy": 22
+    },
+    "W.plains.23": {
+      "role": "W",
+      "oracle_id": "bc71ebf6-2056-41f7-be35-b2e5c34afa99",
+      "name": "Plains",
+      "copy": 23
+    },
+    "W.plains.24": {
+      "role": "W",
+      "oracle_id": "bc71ebf6-2056-41f7-be35-b2e5c34afa99",
+      "name": "Plains",
+      "copy": 24
+    },
+    "W.savannah-lions.1": {
+      "role": "W",
+      "oracle_id": "60ba93eb-39e6-4af2-9c66-cd38f72daff2",
+      "name": "Savannah Lions",
+      "copy": 1
+    },
+    "W.savannah-lions.2": {
+      "role": "W",
+      "oracle_id": "60ba93eb-39e6-4af2-9c66-cd38f72daff2",
+      "name": "Savannah Lions",
+      "copy": 2
+    },
+    "W.savannah-lions.3": {
+      "role": "W",
+      "oracle_id": "60ba93eb-39e6-4af2-9c66-cd38f72daff2",
+      "name": "Savannah Lions",
+      "copy": 3
+    },
+    "W.savannah-lions.4": {
+      "role": "W",
+      "oracle_id": "60ba93eb-39e6-4af2-9c66-cd38f72daff2",
+      "name": "Savannah Lions",
+      "copy": 4
+    },
+    "W.elite-vanguard.1": {
+      "role": "W",
+      "oracle_id": "b3b9a87d-cb95-435c-90b6-037406cab32e",
+      "name": "Elite Vanguard",
+      "copy": 1
+    },
+    "W.elite-vanguard.2": {
+      "role": "W",
+      "oracle_id": "b3b9a87d-cb95-435c-90b6-037406cab32e",
+      "name": "Elite Vanguard",
+      "copy": 2
+    },
+    "W.elite-vanguard.3": {
+      "role": "W",
+      "oracle_id": "b3b9a87d-cb95-435c-90b6-037406cab32e",
+      "name": "Elite Vanguard",
+      "copy": 3
+    },
+    "W.elite-vanguard.4": {
+      "role": "W",
+      "oracle_id": "b3b9a87d-cb95-435c-90b6-037406cab32e",
+      "name": "Elite Vanguard",
+      "copy": 4
+    },
+    "W.glory-seeker.1": {
+      "role": "W",
+      "oracle_id": "55c60b29-52c5-428c-9229-11ed0e26bd71",
+      "name": "Glory Seeker",
+      "copy": 1
+    },
+    "W.glory-seeker.2": {
+      "role": "W",
+      "oracle_id": "55c60b29-52c5-428c-9229-11ed0e26bd71",
+      "name": "Glory Seeker",
+      "copy": 2
+    },
+    "W.glory-seeker.3": {
+      "role": "W",
+      "oracle_id": "55c60b29-52c5-428c-9229-11ed0e26bd71",
+      "name": "Glory Seeker",
+      "copy": 3
+    },
+    "W.glory-seeker.4": {
+      "role": "W",
+      "oracle_id": "55c60b29-52c5-428c-9229-11ed0e26bd71",
+      "name": "Glory Seeker",
+      "copy": 4
+    },
+    "W.silvercoat-lion.1": {
+      "role": "W",
+      "oracle_id": "e3c0b11e-7340-4e0a-98b7-91b38439d4f9",
+      "name": "Silvercoat Lion",
+      "copy": 1
+    },
+    "W.silvercoat-lion.2": {
+      "role": "W",
+      "oracle_id": "e3c0b11e-7340-4e0a-98b7-91b38439d4f9",
+      "name": "Silvercoat Lion",
+      "copy": 2
+    },
+    "W.silvercoat-lion.3": {
+      "role": "W",
+      "oracle_id": "e3c0b11e-7340-4e0a-98b7-91b38439d4f9",
+      "name": "Silvercoat Lion",
+      "copy": 3
+    },
+    "W.silvercoat-lion.4": {
+      "role": "W",
+      "oracle_id": "e3c0b11e-7340-4e0a-98b7-91b38439d4f9",
+      "name": "Silvercoat Lion",
+      "copy": 4
+    },
+    "W.oreskos-swiftclaw.1": {
+      "role": "W",
+      "oracle_id": "014d00fc-434a-4b06-84b2-afd930677d61",
+      "name": "Oreskos Swiftclaw",
+      "copy": 1
+    },
+    "W.oreskos-swiftclaw.2": {
+      "role": "W",
+      "oracle_id": "014d00fc-434a-4b06-84b2-afd930677d61",
+      "name": "Oreskos Swiftclaw",
+      "copy": 2
+    },
+    "W.oreskos-swiftclaw.3": {
+      "role": "W",
+      "oracle_id": "014d00fc-434a-4b06-84b2-afd930677d61",
+      "name": "Oreskos Swiftclaw",
+      "copy": 3
+    },
+    "W.oreskos-swiftclaw.4": {
+      "role": "W",
+      "oracle_id": "014d00fc-434a-4b06-84b2-afd930677d61",
+      "name": "Oreskos Swiftclaw",
+      "copy": 4
+    },
+    "W.traveling-philosopher.1": {
+      "role": "W",
+      "oracle_id": "1adc4691-20cf-4f55-af85-3132fe1ff2a8",
+      "name": "Traveling Philosopher",
+      "copy": 1
+    },
+    "W.traveling-philosopher.2": {
+      "role": "W",
+      "oracle_id": "1adc4691-20cf-4f55-af85-3132fe1ff2a8",
+      "name": "Traveling Philosopher",
+      "copy": 2
+    },
+    "W.traveling-philosopher.3": {
+      "role": "W",
+      "oracle_id": "1adc4691-20cf-4f55-af85-3132fe1ff2a8",
+      "name": "Traveling Philosopher",
+      "copy": 3
+    },
+    "W.traveling-philosopher.4": {
+      "role": "W",
+      "oracle_id": "1adc4691-20cf-4f55-af85-3132fe1ff2a8",
+      "name": "Traveling Philosopher",
+      "copy": 4
+    },
+    "W.loxodon-wayfarer.1": {
+      "role": "W",
+      "oracle_id": "cd990c63-ba29-46f8-afa5-4cd5fe0b0166",
+      "name": "Loxodon Wayfarer",
+      "copy": 1
+    },
+    "W.loxodon-wayfarer.2": {
+      "role": "W",
+      "oracle_id": "cd990c63-ba29-46f8-afa5-4cd5fe0b0166",
+      "name": "Loxodon Wayfarer",
+      "copy": 2
+    },
+    "W.loxodon-wayfarer.3": {
+      "role": "W",
+      "oracle_id": "cd990c63-ba29-46f8-afa5-4cd5fe0b0166",
+      "name": "Loxodon Wayfarer",
+      "copy": 3
+    },
+    "W.loxodon-wayfarer.4": {
+      "role": "W",
+      "oracle_id": "cd990c63-ba29-46f8-afa5-4cd5fe0b0166",
+      "name": "Loxodon Wayfarer",
+      "copy": 4
+    },
+    "W.yoked-ox.1": {
+      "role": "W",
+      "oracle_id": "19b4cf0b-e1e4-4e50-80bc-673bc6ef8bb8",
+      "name": "Yoked Ox",
+      "copy": 1
+    },
+    "W.yoked-ox.2": {
+      "role": "W",
+      "oracle_id": "19b4cf0b-e1e4-4e50-80bc-673bc6ef8bb8",
+      "name": "Yoked Ox",
+      "copy": 2
+    },
+    "W.yoked-ox.3": {
+      "role": "W",
+      "oracle_id": "19b4cf0b-e1e4-4e50-80bc-673bc6ef8bb8",
+      "name": "Yoked Ox",
+      "copy": 3
+    },
+    "W.yoked-ox.4": {
+      "role": "W",
+      "oracle_id": "19b4cf0b-e1e4-4e50-80bc-673bc6ef8bb8",
+      "name": "Yoked Ox",
+      "copy": 4
+    },
+    "W.pillarfield-ox.1": {
+      "role": "W",
+      "oracle_id": "0f7c70c4-9795-4c76-8b27-043942a963c6",
+      "name": "Pillarfield Ox",
+      "copy": 1
+    },
+    "W.pillarfield-ox.2": {
+      "role": "W",
+      "oracle_id": "0f7c70c4-9795-4c76-8b27-043942a963c6",
+      "name": "Pillarfield Ox",
+      "copy": 2
+    },
+    "W.pillarfield-ox.3": {
+      "role": "W",
+      "oracle_id": "0f7c70c4-9795-4c76-8b27-043942a963c6",
+      "name": "Pillarfield Ox",
+      "copy": 3
+    },
+    "W.pillarfield-ox.4": {
+      "role": "W",
+      "oracle_id": "0f7c70c4-9795-4c76-8b27-043942a963c6",
+      "name": "Pillarfield Ox",
+      "copy": 4
+    },
+    "G.forest.1": {
+      "role": "G",
+      "oracle_id": "b34bb2dc-c1af-4d77-b0b3-a0fb342a5fc6",
+      "name": "Forest",
+      "copy": 1
+    },
+    "G.forest.2": {
+      "role": "G",
+      "oracle_id": "b34bb2dc-c1af-4d77-b0b3-a0fb342a5fc6",
+      "name": "Forest",
+      "copy": 2
+    },
+    "G.forest.3": {
+      "role": "G",
+      "oracle_id": "b34bb2dc-c1af-4d77-b0b3-a0fb342a5fc6",
+      "name": "Forest",
+      "copy": 3
+    },
+    "G.forest.4": {
+      "role": "G",
+      "oracle_id": "b34bb2dc-c1af-4d77-b0b3-a0fb342a5fc6",
+      "name": "Forest",
+      "copy": 4
+    },
+    "G.forest.5": {
+      "role": "G",
+      "oracle_id": "b34bb2dc-c1af-4d77-b0b3-a0fb342a5fc6",
+      "name": "Forest",
+      "copy": 5
+    },
+    "G.forest.6": {
+      "role": "G",
+      "oracle_id": "b34bb2dc-c1af-4d77-b0b3-a0fb342a5fc6",
+      "name": "Forest",
+      "copy": 6
+    },
+    "G.forest.7": {
+      "role": "G",
+      "oracle_id": "b34bb2dc-c1af-4d77-b0b3-a0fb342a5fc6",
+      "name": "Forest",
+      "copy": 7
+    },
+    "G.forest.8": {
+      "role": "G",
+      "oracle_id": "b34bb2dc-c1af-4d77-b0b3-a0fb342a5fc6",
+      "name": "Forest",
+      "copy": 8
+    },
+    "G.forest.9": {
+      "role": "G",
+      "oracle_id": "b34bb2dc-c1af-4d77-b0b3-a0fb342a5fc6",
+      "name": "Forest",
+      "copy": 9
+    },
+    "G.forest.10": {
+      "role": "G",
+      "oracle_id": "b34bb2dc-c1af-4d77-b0b3-a0fb342a5fc6",
+      "name": "Forest",
+      "copy": 10
+    },
+    "G.forest.11": {
+      "role": "G",
+      "oracle_id": "b34bb2dc-c1af-4d77-b0b3-a0fb342a5fc6",
+      "name": "Forest",
+      "copy": 11
+    },
+    "G.forest.12": {
+      "role": "G",
+      "oracle_id": "b34bb2dc-c1af-4d77-b0b3-a0fb342a5fc6",
+      "name": "Forest",
+      "copy": 12
+    },
+    "G.forest.13": {
+      "role": "G",
+      "oracle_id": "b34bb2dc-c1af-4d77-b0b3-a0fb342a5fc6",
+      "name": "Forest",
+      "copy": 13
+    },
+    "G.forest.14": {
+      "role": "G",
+      "oracle_id": "b34bb2dc-c1af-4d77-b0b3-a0fb342a5fc6",
+      "name": "Forest",
+      "copy": 14
+    },
+    "G.forest.15": {
+      "role": "G",
+      "oracle_id": "b34bb2dc-c1af-4d77-b0b3-a0fb342a5fc6",
+      "name": "Forest",
+      "copy": 15
+    },
+    "G.forest.16": {
+      "role": "G",
+      "oracle_id": "b34bb2dc-c1af-4d77-b0b3-a0fb342a5fc6",
+      "name": "Forest",
+      "copy": 16
+    },
+    "G.forest.17": {
+      "role": "G",
+      "oracle_id": "b34bb2dc-c1af-4d77-b0b3-a0fb342a5fc6",
+      "name": "Forest",
+      "copy": 17
+    },
+    "G.forest.18": {
+      "role": "G",
+      "oracle_id": "b34bb2dc-c1af-4d77-b0b3-a0fb342a5fc6",
+      "name": "Forest",
+      "copy": 18
+    },
+    "G.forest.19": {
+      "role": "G",
+      "oracle_id": "b34bb2dc-c1af-4d77-b0b3-a0fb342a5fc6",
+      "name": "Forest",
+      "copy": 19
+    },
+    "G.forest.20": {
+      "role": "G",
+      "oracle_id": "b34bb2dc-c1af-4d77-b0b3-a0fb342a5fc6",
+      "name": "Forest",
+      "copy": 20
+    },
+    "G.forest.21": {
+      "role": "G",
+      "oracle_id": "b34bb2dc-c1af-4d77-b0b3-a0fb342a5fc6",
+      "name": "Forest",
+      "copy": 21
+    },
+    "G.forest.22": {
+      "role": "G",
+      "oracle_id": "b34bb2dc-c1af-4d77-b0b3-a0fb342a5fc6",
+      "name": "Forest",
+      "copy": 22
+    },
+    "G.forest.23": {
+      "role": "G",
+      "oracle_id": "b34bb2dc-c1af-4d77-b0b3-a0fb342a5fc6",
+      "name": "Forest",
+      "copy": 23
+    },
+    "G.forest.24": {
+      "role": "G",
+      "oracle_id": "b34bb2dc-c1af-4d77-b0b3-a0fb342a5fc6",
+      "name": "Forest",
+      "copy": 24
+    },
+    "G.grizzly-bears.1": {
+      "role": "G",
+      "oracle_id": "14c8f55d-d177-4c25-a931-ebeb9e6062a0",
+      "name": "Grizzly Bears",
+      "copy": 1
+    },
+    "G.grizzly-bears.2": {
+      "role": "G",
+      "oracle_id": "14c8f55d-d177-4c25-a931-ebeb9e6062a0",
+      "name": "Grizzly Bears",
+      "copy": 2
+    },
+    "G.grizzly-bears.3": {
+      "role": "G",
+      "oracle_id": "14c8f55d-d177-4c25-a931-ebeb9e6062a0",
+      "name": "Grizzly Bears",
+      "copy": 3
+    },
+    "G.grizzly-bears.4": {
+      "role": "G",
+      "oracle_id": "14c8f55d-d177-4c25-a931-ebeb9e6062a0",
+      "name": "Grizzly Bears",
+      "copy": 4
+    },
+    "G.runeclaw-bear.1": {
+      "role": "G",
+      "oracle_id": "ec49dfcf-d16d-4621-af4b-4a6f09043221",
+      "name": "Runeclaw Bear",
+      "copy": 1
+    },
+    "G.runeclaw-bear.2": {
+      "role": "G",
+      "oracle_id": "ec49dfcf-d16d-4621-af4b-4a6f09043221",
+      "name": "Runeclaw Bear",
+      "copy": 2
+    },
+    "G.runeclaw-bear.3": {
+      "role": "G",
+      "oracle_id": "ec49dfcf-d16d-4621-af4b-4a6f09043221",
+      "name": "Runeclaw Bear",
+      "copy": 3
+    },
+    "G.runeclaw-bear.4": {
+      "role": "G",
+      "oracle_id": "ec49dfcf-d16d-4621-af4b-4a6f09043221",
+      "name": "Runeclaw Bear",
+      "copy": 4
+    },
+    "G.terrain-elemental.1": {
+      "role": "G",
+      "oracle_id": "3a9b9fe0-1846-41fc-b7c3-ed9abef27a6a",
+      "name": "Terrain Elemental",
+      "copy": 1
+    },
+    "G.terrain-elemental.2": {
+      "role": "G",
+      "oracle_id": "3a9b9fe0-1846-41fc-b7c3-ed9abef27a6a",
+      "name": "Terrain Elemental",
+      "copy": 2
+    },
+    "G.terrain-elemental.3": {
+      "role": "G",
+      "oracle_id": "3a9b9fe0-1846-41fc-b7c3-ed9abef27a6a",
+      "name": "Terrain Elemental",
+      "copy": 3
+    },
+    "G.terrain-elemental.4": {
+      "role": "G",
+      "oracle_id": "3a9b9fe0-1846-41fc-b7c3-ed9abef27a6a",
+      "name": "Terrain Elemental",
+      "copy": 4
+    },
+    "G.kalonian-tusker.1": {
+      "role": "G",
+      "oracle_id": "df7f697e-6886-4897-a024-61ae225c1b34",
+      "name": "Kalonian Tusker",
+      "copy": 1
+    },
+    "G.kalonian-tusker.2": {
+      "role": "G",
+      "oracle_id": "df7f697e-6886-4897-a024-61ae225c1b34",
+      "name": "Kalonian Tusker",
+      "copy": 2
+    },
+    "G.kalonian-tusker.3": {
+      "role": "G",
+      "oracle_id": "df7f697e-6886-4897-a024-61ae225c1b34",
+      "name": "Kalonian Tusker",
+      "copy": 3
+    },
+    "G.kalonian-tusker.4": {
+      "role": "G",
+      "oracle_id": "df7f697e-6886-4897-a024-61ae225c1b34",
+      "name": "Kalonian Tusker",
+      "copy": 4
+    },
+    "G.centaur-courser.1": {
+      "role": "G",
+      "oracle_id": "2f5bf099-2e01-4e1c-9ebf-0ce0ac66939e",
+      "name": "Centaur Courser",
+      "copy": 1
+    },
+    "G.centaur-courser.2": {
+      "role": "G",
+      "oracle_id": "2f5bf099-2e01-4e1c-9ebf-0ce0ac66939e",
+      "name": "Centaur Courser",
+      "copy": 2
+    },
+    "G.centaur-courser.3": {
+      "role": "G",
+      "oracle_id": "2f5bf099-2e01-4e1c-9ebf-0ce0ac66939e",
+      "name": "Centaur Courser",
+      "copy": 3
+    },
+    "G.centaur-courser.4": {
+      "role": "G",
+      "oracle_id": "2f5bf099-2e01-4e1c-9ebf-0ce0ac66939e",
+      "name": "Centaur Courser",
+      "copy": 4
+    },
+    "G.nessian-courser.1": {
+      "role": "G",
+      "oracle_id": "e876d1fc-3acd-41a3-a34b-2bfa83204393",
+      "name": "Nessian Courser",
+      "copy": 1
+    },
+    "G.nessian-courser.2": {
+      "role": "G",
+      "oracle_id": "e876d1fc-3acd-41a3-a34b-2bfa83204393",
+      "name": "Nessian Courser",
+      "copy": 2
+    },
+    "G.nessian-courser.3": {
+      "role": "G",
+      "oracle_id": "e876d1fc-3acd-41a3-a34b-2bfa83204393",
+      "name": "Nessian Courser",
+      "copy": 3
+    },
+    "G.nessian-courser.4": {
+      "role": "G",
+      "oracle_id": "e876d1fc-3acd-41a3-a34b-2bfa83204393",
+      "name": "Nessian Courser",
+      "copy": 4
+    },
+    "G.alpine-grizzly.1": {
+      "role": "G",
+      "oracle_id": "86e3c86c-d50e-4aa9-b080-f68b6afee87c",
+      "name": "Alpine Grizzly",
+      "copy": 1
+    },
+    "G.alpine-grizzly.2": {
+      "role": "G",
+      "oracle_id": "86e3c86c-d50e-4aa9-b080-f68b6afee87c",
+      "name": "Alpine Grizzly",
+      "copy": 2
+    },
+    "G.alpine-grizzly.3": {
+      "role": "G",
+      "oracle_id": "86e3c86c-d50e-4aa9-b080-f68b6afee87c",
+      "name": "Alpine Grizzly",
+      "copy": 3
+    },
+    "G.alpine-grizzly.4": {
+      "role": "G",
+      "oracle_id": "86e3c86c-d50e-4aa9-b080-f68b6afee87c",
+      "name": "Alpine Grizzly",
+      "copy": 4
+    },
+    "G.rumbling-baloth.1": {
+      "role": "G",
+      "oracle_id": "3191c6ca-4d25-4ba3-bfe1-4aeab1295573",
+      "name": "Rumbling Baloth",
+      "copy": 1
+    },
+    "G.rumbling-baloth.2": {
+      "role": "G",
+      "oracle_id": "3191c6ca-4d25-4ba3-bfe1-4aeab1295573",
+      "name": "Rumbling Baloth",
+      "copy": 2
+    },
+    "G.rumbling-baloth.3": {
+      "role": "G",
+      "oracle_id": "3191c6ca-4d25-4ba3-bfe1-4aeab1295573",
+      "name": "Rumbling Baloth",
+      "copy": 3
+    },
+    "G.rumbling-baloth.4": {
+      "role": "G",
+      "oracle_id": "3191c6ca-4d25-4ba3-bfe1-4aeab1295573",
+      "name": "Rumbling Baloth",
+      "copy": 4
+    },
+    "G.spined-wurm.1": {
+      "role": "G",
+      "oracle_id": "05425f2f-7228-4bf5-8fe1-6fe99107e8e0",
+      "name": "Spined Wurm",
+      "copy": 1
+    },
+    "G.spined-wurm.2": {
+      "role": "G",
+      "oracle_id": "05425f2f-7228-4bf5-8fe1-6fe99107e8e0",
+      "name": "Spined Wurm",
+      "copy": 2
+    },
+    "G.spined-wurm.3": {
+      "role": "G",
+      "oracle_id": "05425f2f-7228-4bf5-8fe1-6fe99107e8e0",
+      "name": "Spined Wurm",
+      "copy": 3
+    },
+    "G.spined-wurm.4": {
+      "role": "G",
+      "oracle_id": "05425f2f-7228-4bf5-8fe1-6fe99107e8e0",
+      "name": "Spined Wurm",
+      "copy": 4
+    }
+  },
+  "decks": [
+    {
+      "name": "White teaching creatures",
+      "entries": [
+        {
+          "name": "Plains",
+          "count": 24,
+          "oracleId": "bc71ebf6-2056-41f7-be35-b2e5c34afa99"
+        },
+        {
+          "name": "Savannah Lions",
+          "count": 4,
+          "oracleId": "60ba93eb-39e6-4af2-9c66-cd38f72daff2"
+        },
+        {
+          "name": "Elite Vanguard",
+          "count": 4,
+          "oracleId": "b3b9a87d-cb95-435c-90b6-037406cab32e"
+        },
+        {
+          "name": "Glory Seeker",
+          "count": 4,
+          "oracleId": "55c60b29-52c5-428c-9229-11ed0e26bd71"
+        },
+        {
+          "name": "Silvercoat Lion",
+          "count": 4,
+          "oracleId": "e3c0b11e-7340-4e0a-98b7-91b38439d4f9"
+        },
+        {
+          "name": "Oreskos Swiftclaw",
+          "count": 4,
+          "oracleId": "014d00fc-434a-4b06-84b2-afd930677d61"
+        },
+        {
+          "name": "Traveling Philosopher",
+          "count": 4,
+          "oracleId": "1adc4691-20cf-4f55-af85-3132fe1ff2a8"
+        },
+        {
+          "name": "Loxodon Wayfarer",
+          "count": 4,
+          "oracleId": "cd990c63-ba29-46f8-afa5-4cd5fe0b0166"
+        },
+        {
+          "name": "Yoked Ox",
+          "count": 4,
+          "oracleId": "19b4cf0b-e1e4-4e50-80bc-673bc6ef8bb8"
+        },
+        {
+          "name": "Pillarfield Ox",
+          "count": 4,
+          "oracleId": "0f7c70c4-9795-4c76-8b27-043942a963c6"
+        }
+      ],
+      "cardCount": 60,
+      "sideboard": []
+    },
+    {
+      "name": "Green teaching creatures",
+      "entries": [
+        {
+          "name": "Forest",
+          "count": 24,
+          "oracleId": "b34bb2dc-c1af-4d77-b0b3-a0fb342a5fc6"
+        },
+        {
+          "name": "Grizzly Bears",
+          "count": 4,
+          "oracleId": "14c8f55d-d177-4c25-a931-ebeb9e6062a0"
+        },
+        {
+          "name": "Runeclaw Bear",
+          "count": 4,
+          "oracleId": "ec49dfcf-d16d-4621-af4b-4a6f09043221"
+        },
+        {
+          "name": "Terrain Elemental",
+          "count": 4,
+          "oracleId": "3a9b9fe0-1846-41fc-b7c3-ed9abef27a6a"
+        },
+        {
+          "name": "Kalonian Tusker",
+          "count": 4,
+          "oracleId": "df7f697e-6886-4897-a024-61ae225c1b34"
+        },
+        {
+          "name": "Centaur Courser",
+          "count": 4,
+          "oracleId": "2f5bf099-2e01-4e1c-9ebf-0ce0ac66939e"
+        },
+        {
+          "name": "Nessian Courser",
+          "count": 4,
+          "oracleId": "e876d1fc-3acd-41a3-a34b-2bfa83204393"
+        },
+        {
+          "name": "Alpine Grizzly",
+          "count": 4,
+          "oracleId": "86e3c86c-d50e-4aa9-b080-f68b6afee87c"
+        },
+        {
+          "name": "Rumbling Baloth",
+          "count": 4,
+          "oracleId": "3191c6ca-4d25-4ba3-bfe1-4aeab1295573"
+        },
+        {
+          "name": "Spined Wurm",
+          "count": 4,
+          "oracleId": "05425f2f-7228-4bf5-8fe1-6fe99107e8e0"
+        }
+      ],
+      "cardCount": 60,
+      "sideboard": []
+    }
+  ],
+  "definitions": [
+    {
+      "name": "Alpine Grizzly",
+      "oracleId": "86e3c86c-d50e-4aa9-b080-f68b6afee87c",
+      "scryfallId": "38bbf983-df71-4403-86f3-2e86aa8765b8",
+      "sourceLineOneBased": 20581,
+      "rawLineSha256IncludingLf": "28e29ef00ac612de4078460778c77df255dfb1711b71077adff1a0068f90f112",
+      "registrySignatureV1Sha256": "620883890b79153a28b87d12f9f6d5afaa96f666a40bc7fe9b17e77fde650968",
+      "set": "ktk",
+      "collector": "127",
+      "language": "en"
+    },
+    {
+      "name": "Centaur Courser",
+      "oracleId": "2f5bf099-2e01-4e1c-9ebf-0ce0ac66939e",
+      "scryfallId": "e8b67ee8-3189-4426-8b1a-b540267768fd",
+      "sourceLineOneBased": 7129,
+      "rawLineSha256IncludingLf": "c6b41cc482af743c637adb7347ada6a2061a1763fb1239e1381338b7b64d3c5b",
+      "registrySignatureV1Sha256": "885fe0ae8252420d0a0d606c201a4aa28f5547753663c80471eeef3bc9e4bc6c",
+      "set": "m20",
+      "collector": "168",
+      "language": "en"
+    },
+    {
+      "name": "Elite Vanguard",
+      "oracleId": "b3b9a87d-cb95-435c-90b6-037406cab32e",
+      "scryfallId": "28a5c350-2ed1-4a25-9626-0f8da5d1aef7",
+      "sourceLineOneBased": 27405,
+      "rawLineSha256IncludingLf": "df9584f60ea6a3b650d69152adddce3e2d37f25f62413cab106bfc7022a7290b",
+      "registrySignatureV1Sha256": "622b486c8bcd120a35c58071b7cbcaee71bfa1b1dc5f15e07f3403d4c5ce61a6",
+      "set": "ema",
+      "collector": "8",
+      "language": "en"
+    },
+    {
+      "name": "Forest",
+      "oracleId": "b34bb2dc-c1af-4d77-b0b3-a0fb342a5fc6",
+      "scryfallId": "2e781bfd-f8cb-4d20-b977-4359f3a21311",
+      "sourceLineOneBased": 27346,
+      "rawLineSha256IncludingLf": "df7c145ca49a3588ef513698543d4651ab1c554161e5f2c3cc19e0937b2d9f0b",
+      "registrySignatureV1Sha256": "add8a0fda94261088dc4c292b7201ebcfadb7ea46be6b3b40ce67dd7049a8fe6",
+      "set": "mdd",
+      "collector": "301",
+      "language": "en"
+    },
+    {
+      "name": "Glory Seeker",
+      "oracleId": "55c60b29-52c5-428c-9229-11ed0e26bd71",
+      "scryfallId": "2bd51dd3-ce49-41cf-85ef-a5a1428bc71b",
+      "sourceLineOneBased": 13050,
+      "rawLineSha256IncludingLf": "d86a4032bdcfcbb9f12204f01a2c6cbf92b8f296934009beb559e13b0e440aca",
+      "registrySignatureV1Sha256": "e4a7516c28eb4a9fbc4bafc50becb3e1c983099cf0686580c7f162973d0d969c",
+      "set": "w17",
+      "collector": "2",
+      "language": "en"
+    },
+    {
+      "name": "Grizzly Bears",
+      "oracleId": "14c8f55d-d177-4c25-a931-ebeb9e6062a0",
+      "scryfallId": "409f9b88-f03e-40b6-9883-68c14c37c0de",
+      "sourceLineOneBased": 3221,
+      "rawLineSha256IncludingLf": "3e51dcca3d60899dd6d213ace72ab7fc333b40bbb1c04b20d34de1283b5df04b",
+      "registrySignatureV1Sha256": "f0a0e899618134ff97f4c9fa6fbadc2968959374cff030528788dcd43144887b",
+      "set": "10e",
+      "collector": "268",
+      "language": "en"
+    },
+    {
+      "name": "Kalonian Tusker",
+      "oracleId": "df7f697e-6886-4897-a024-61ae225c1b34",
+      "scryfallId": "135946fc-fe67-401f-821d-d7145c63f030",
+      "sourceLineOneBased": 34125,
+      "rawLineSha256IncludingLf": "e5e97000082833afb9a7330ddc4617d678d4039282a628c85dc49d70216aca30",
+      "registrySignatureV1Sha256": "3a709d89b6f82e684826ef196183dc3bcaf1337d7cfdea28310b569e8cc8c185",
+      "set": "m14",
+      "collector": "182",
+      "language": "en"
+    },
+    {
+      "name": "Loxodon Wayfarer",
+      "oracleId": "cd990c63-ba29-46f8-afa5-4cd5fe0b0166",
+      "scryfallId": "356c5e6a-c0bd-43f7-bc84-a6ae8718a7a2",
+      "sourceLineOneBased": 31382,
+      "rawLineSha256IncludingLf": "b8ef3c3d4f6a5d8ed3cb2021ac76fda23dafca60d03a26ad1e61ee414a76f14b",
+      "registrySignatureV1Sha256": "55b525e65b6cc52dfd832d7ff9f8911f5d048bf13de556a6dcccda25c6eb8e77",
+      "set": "som",
+      "collector": "15",
+      "language": "en"
+    },
+    {
+      "name": "Nessian Courser",
+      "oracleId": "e876d1fc-3acd-41a3-a34b-2bfa83204393",
+      "scryfallId": "4697f3aa-abde-4379-af82-f30115f59be0",
+      "sourceLineOneBased": 35524,
+      "rawLineSha256IncludingLf": "ec0d27edbd0cff1af3c746f5a26a68bf81d212b7036e2faca88639af39982c59",
+      "registrySignatureV1Sha256": "58af50f7c770e3a4d16c7d82346a1b0f872f7ef5a254a873843631e89a154a9e",
+      "set": "ths",
+      "collector": "165",
+      "language": "en"
+    },
+    {
+      "name": "Oreskos Swiftclaw",
+      "oracleId": "014d00fc-434a-4b06-84b2-afd930677d61",
+      "scryfallId": "0ea1dfb4-1983-41f7-956c-f2a1d1489b54",
+      "sourceLineOneBased": 213,
+      "rawLineSha256IncludingLf": "e5fead69af009b0a2ba14db114844b19993208a8500bf82f35a1057c25cdec69",
+      "registrySignatureV1Sha256": "d69765f82732208e8cd0f281ed0ce629f158869a341b6da3b4e24c7858694785",
+      "set": "m19",
+      "collector": "31",
+      "language": "en"
+    },
+    {
+      "name": "Pillarfield Ox",
+      "oracleId": "0f7c70c4-9795-4c76-8b27-043942a963c6",
+      "scryfallId": "53a5c7bd-7d08-421d-ad43-70bc0c2db4d4",
+      "sourceLineOneBased": 2356,
+      "rawLineSha256IncludingLf": "c0a1bf0a6e68a07a5252c1e10af729af8e4e7821d43dbcb301109f54fb4901d6",
+      "registrySignatureV1Sha256": "2b3db4e76e3bf257eabb1e145fb3b0d7acc201df42c8bc1e1a5f57dc4cfb8cfe",
+      "set": "cns",
+      "collector": "76",
+      "language": "en"
+    },
+    {
+      "name": "Plains",
+      "oracleId": "bc71ebf6-2056-41f7-be35-b2e5c34afa99",
+      "scryfallId": "09ac862f-0a51-44dd-b86f-9412b8218b13",
+      "sourceLineOneBased": 28694,
+      "rawLineSha256IncludingLf": "62d89ba7d073949c430c4edbd94c2ca4f77c52e5f277048c466cb933030d12e8",
+      "registrySignatureV1Sha256": "c4511685fb2da8e920d2da7ae6217aa981fb64c3670788582dee723013e0c7c6",
+      "set": "mdd",
+      "collector": "292",
+      "language": "en"
+    },
+    {
+      "name": "Rumbling Baloth",
+      "oracleId": "3191c6ca-4d25-4ba3-bfe1-4aeab1295573",
+      "scryfallId": "93a56610-482b-4ddf-88e1-e4a2edf4fa0f",
+      "sourceLineOneBased": 7482,
+      "rawLineSha256IncludingLf": "76109deca6116a7259546da85d6addb8d5099fa5837a304584f2945498cf8aa4",
+      "registrySignatureV1Sha256": "5581d51919511877fbfa3373c483e66210261eddc419691cc721a9718c713d42",
+      "set": "jmp",
+      "collector": "426",
+      "language": "en"
+    },
+    {
+      "name": "Runeclaw Bear",
+      "oracleId": "ec49dfcf-d16d-4621-af4b-4a6f09043221",
+      "scryfallId": "d1995238-79cc-4381-9595-71ef11ea1e36",
+      "sourceLineOneBased": 36133,
+      "rawLineSha256IncludingLf": "a64bb95fb9b79a8f3bf5a269a344cc994e6a81041ceafd3ad1318f14ef72b352",
+      "registrySignatureV1Sha256": "900f97cf79b565e5b5c3d212ff870b03492fa9521c69e5ca4b3ede9f99cd7b44",
+      "set": "m15",
+      "collector": "197",
+      "language": "en"
+    },
+    {
+      "name": "Savannah Lions",
+      "oracleId": "60ba93eb-39e6-4af2-9c66-cd38f72daff2",
+      "scryfallId": "9c9ac1bc-cdf3-4fa6-8319-a7ea164e9e47",
+      "sourceLineOneBased": 14711,
+      "rawLineSha256IncludingLf": "1803d36c6dec845677d0ec6d641922ca41958daa8eff47ed98e6f0d23f47c07a",
+      "registrySignatureV1Sha256": "635bdc35dc94ef79569197ab7acda7454a8d3c6f7cc0a850bbe739a1c077a8d8",
+      "set": "fdn",
+      "collector": "146",
+      "language": "en"
+    },
+    {
+      "name": "Silvercoat Lion",
+      "oracleId": "e3c0b11e-7340-4e0a-98b7-91b38439d4f9",
+      "scryfallId": "9d33e866-cfd8-44e6-8070-df8df1ce965d",
+      "sourceLineOneBased": 34782,
+      "rawLineSha256IncludingLf": "29a1553448dbecda05a8b568be52fce69abc85520f5b4b01b75b8e84c341a654",
+      "registrySignatureV1Sha256": "37af1e7ea432e6654927a5f3b422fe99469351219cc889fbf7233281901734c8",
+      "set": "m13",
+      "collector": "35",
+      "language": "en"
+    },
+    {
+      "name": "Spined Wurm",
+      "oracleId": "05425f2f-7228-4bf5-8fe1-6fe99107e8e0",
+      "scryfallId": "0de97b4e-42c7-47e5-a523-a47eadd068f7",
+      "sourceLineOneBased": 847,
+      "rawLineSha256IncludingLf": "f1faddde0c7fd59ee406a80d3c8ec52697d78766528ad8d2a58963ff1c195957",
+      "registrySignatureV1Sha256": "25d519bb24b044a0bc7c45a69dbfb17ad917daa07005bc54e09ffdcb078fb34d",
+      "set": "tpr",
+      "collector": "198",
+      "language": "en"
+    },
+    {
+      "name": "Terrain Elemental",
+      "oracleId": "3a9b9fe0-1846-41fc-b7c3-ed9abef27a6a",
+      "scryfallId": "32b89e5c-ffb4-406f-99d1-ec2797aca061",
+      "sourceLineOneBased": 8895,
+      "rawLineSha256IncludingLf": "f218b7c4f6baec154418003ac0f68371d6a8c2de1131844bbd9366541e13efb2",
+      "registrySignatureV1Sha256": "4e7256bd5ca443061022eced1eaf17c74a59b0a57e8e3ef5db837d02c968208e",
+      "set": "kld",
+      "collector": "272",
+      "language": "en"
+    },
+    {
+      "name": "Traveling Philosopher",
+      "oracleId": "1adc4691-20cf-4f55-af85-3132fe1ff2a8",
+      "scryfallId": "edad0276-45d1-45e5-a6b1-1cd2a99b4f2c",
+      "sourceLineOneBased": 4154,
+      "rawLineSha256IncludingLf": "e481a60ddeef44704ae530d9c494c21e39168692bca1c6d23f99476fa43aaad5",
+      "registrySignatureV1Sha256": "5bf2685d8f13d293fa3077e4748b7dd18aa5b576db2a64ec6121edd6a355d035",
+      "set": "ths",
+      "collector": "34",
+      "language": "en"
+    },
+    {
+      "name": "Yoked Ox",
+      "oracleId": "19b4cf0b-e1e4-4e50-80bc-673bc6ef8bb8",
+      "scryfallId": "a73f186b-c897-4a98-bc25-8e4aa348d8c9",
+      "sourceLineOneBased": 3988,
+      "rawLineSha256IncludingLf": "14dbe487c65c62453fc030bc32ba2d80d1c9b5e9a6e737eb793ece653e0a56f3",
+      "registrySignatureV1Sha256": "70cd6ae169a48be63bf94ebcff0a12bb463c81f5f81241ea48aa5bd0bf83da15",
+      "set": "m20",
+      "collector": "41",
+      "language": "en"
+    }
+  ],
+  "cases": [
+    {
+      "id": "RD01",
+      "starting_role": "W",
+      "shuffle_target_orders_top_first": {
+        "W": [
+          "W.plains.1",
+          "W.plains.2",
+          "W.savannah-lions.1",
+          "W.elite-vanguard.1",
+          "W.glory-seeker.1",
+          "W.yoked-ox.1",
+          "W.pillarfield-ox.1",
+          "W.plains.3",
+          "W.plains.4",
+          "W.plains.5",
+          "W.plains.6",
+          "W.plains.7",
+          "W.plains.8",
+          "W.plains.9",
+          "W.plains.10",
+          "W.plains.11",
+          "W.plains.12",
+          "W.plains.13",
+          "W.plains.14",
+          "W.plains.15",
+          "W.plains.16",
+          "W.plains.17",
+          "W.plains.18",
+          "W.plains.19",
+          "W.plains.20",
+          "W.plains.21",
+          "W.plains.22",
+          "W.plains.23",
+          "W.plains.24",
+          "W.savannah-lions.2",
+          "W.savannah-lions.3",
+          "W.savannah-lions.4",
+          "W.elite-vanguard.2",
+          "W.elite-vanguard.3",
+          "W.elite-vanguard.4",
+          "W.glory-seeker.2",
+          "W.glory-seeker.3",
+          "W.glory-seeker.4",
+          "W.silvercoat-lion.1",
+          "W.silvercoat-lion.2",
+          "W.silvercoat-lion.3",
+          "W.silvercoat-lion.4",
+          "W.oreskos-swiftclaw.1",
+          "W.oreskos-swiftclaw.2",
+          "W.oreskos-swiftclaw.3",
+          "W.oreskos-swiftclaw.4",
+          "W.traveling-philosopher.1",
+          "W.traveling-philosopher.2",
+          "W.traveling-philosopher.3",
+          "W.traveling-philosopher.4",
+          "W.loxodon-wayfarer.1",
+          "W.loxodon-wayfarer.2",
+          "W.loxodon-wayfarer.3",
+          "W.loxodon-wayfarer.4",
+          "W.yoked-ox.2",
+          "W.yoked-ox.3",
+          "W.yoked-ox.4",
+          "W.pillarfield-ox.2",
+          "W.pillarfield-ox.3",
+          "W.pillarfield-ox.4"
+        ],
+        "G": [
+          "G.forest.1",
+          "G.forest.2",
+          "G.forest.3",
+          "G.grizzly-bears.1",
+          "G.runeclaw-bear.1",
+          "G.terrain-elemental.1",
+          "G.kalonian-tusker.1",
+          "G.forest.4",
+          "G.forest.5",
+          "G.forest.6",
+          "G.forest.7",
+          "G.forest.8",
+          "G.forest.9",
+          "G.forest.10",
+          "G.forest.11",
+          "G.forest.12",
+          "G.forest.13",
+          "G.forest.14",
+          "G.forest.15",
+          "G.forest.16",
+          "G.forest.17",
+          "G.forest.18",
+          "G.forest.19",
+          "G.forest.20",
+          "G.forest.21",
+          "G.forest.22",
+          "G.forest.23",
+          "G.forest.24",
+          "G.grizzly-bears.2",
+          "G.grizzly-bears.3",
+          "G.grizzly-bears.4",
+          "G.runeclaw-bear.2",
+          "G.runeclaw-bear.3",
+          "G.runeclaw-bear.4",
+          "G.terrain-elemental.2",
+          "G.terrain-elemental.3",
+          "G.terrain-elemental.4",
+          "G.kalonian-tusker.2",
+          "G.kalonian-tusker.3",
+          "G.kalonian-tusker.4",
+          "G.centaur-courser.1",
+          "G.centaur-courser.2",
+          "G.centaur-courser.3",
+          "G.centaur-courser.4",
+          "G.nessian-courser.1",
+          "G.nessian-courser.2",
+          "G.nessian-courser.3",
+          "G.nessian-courser.4",
+          "G.alpine-grizzly.1",
+          "G.alpine-grizzly.2",
+          "G.alpine-grizzly.3",
+          "G.alpine-grizzly.4",
+          "G.rumbling-baloth.1",
+          "G.rumbling-baloth.2",
+          "G.rumbling-baloth.3",
+          "G.rumbling-baloth.4",
+          "G.spined-wurm.1",
+          "G.spined-wurm.2",
+          "G.spined-wurm.3",
+          "G.spined-wurm.4"
+        ]
+      },
+      "opening_declarations": [
+        {
+          "role": "W",
+          "taken": 0,
+          "choice": "keep"
+        },
+        {
+          "role": "G",
+          "taken": 0,
+          "choice": "keep"
+        }
+      ],
+      "actions": [
+        {
+          "role": "W",
+          "own_turn": 1,
+          "step": "precombat_main",
+          "kind": "play_land",
+          "card": "W.plains.1"
+        },
+        {
+          "role": "W",
+          "own_turn": 1,
+          "step": "precombat_main",
+          "kind": "activate_intrinsic_mana",
+          "card": "W.plains.1"
+        },
+        {
+          "role": "W",
+          "own_turn": 1,
+          "step": "precombat_main",
+          "kind": "cast_creature",
+          "card": "W.savannah-lions.1",
+          "mana_units_paid": "1",
+          "required_cost": "{W}",
+          "targets": []
+        },
+        {
+          "role": "G",
+          "own_turn": 1,
+          "step": "precombat_main",
+          "kind": "play_land",
+          "card": "G.forest.1"
+        },
+        {
+          "role": "W",
+          "own_turn": 2,
+          "step": "precombat_main",
+          "kind": "play_land",
+          "card": "W.plains.2"
+        },
+        {
+          "role": "W",
+          "own_turn": 2,
+          "step": "precombat_main",
+          "kind": "activate_intrinsic_mana",
+          "card": "W.plains.1"
+        },
+        {
+          "role": "W",
+          "own_turn": 2,
+          "step": "precombat_main",
+          "kind": "activate_intrinsic_mana",
+          "card": "W.plains.2"
+        },
+        {
+          "role": "W",
+          "own_turn": 2,
+          "step": "precombat_main",
+          "kind": "cast_creature",
+          "card": "W.elite-vanguard.1",
+          "mana_units_paid": "1",
+          "required_cost": "{W}",
+          "targets": []
+        },
+        {
+          "role": "G",
+          "own_turn": 2,
+          "step": "precombat_main",
+          "kind": "play_land",
+          "card": "G.forest.2"
+        },
+        {
+          "role": "G",
+          "own_turn": 2,
+          "step": "precombat_main",
+          "kind": "activate_intrinsic_mana",
+          "card": "G.forest.1"
+        },
+        {
+          "role": "G",
+          "own_turn": 2,
+          "step": "precombat_main",
+          "kind": "activate_intrinsic_mana",
+          "card": "G.forest.2"
+        },
+        {
+          "role": "G",
+          "own_turn": 2,
+          "step": "precombat_main",
+          "kind": "cast_creature",
+          "card": "G.grizzly-bears.1",
+          "mana_units_paid": "2",
+          "required_cost": "{1}{G}",
+          "targets": []
+        },
+        {
+          "role": "W",
+          "own_turn": 3,
+          "step": "precombat_main",
+          "kind": "play_land",
+          "card": "W.plains.3"
+        },
+        {
+          "role": "W",
+          "own_turn": 3,
+          "step": "precombat_main",
+          "kind": "activate_intrinsic_mana",
+          "card": "W.plains.1"
+        },
+        {
+          "role": "W",
+          "own_turn": 3,
+          "step": "precombat_main",
+          "kind": "activate_intrinsic_mana",
+          "card": "W.plains.2"
+        },
+        {
+          "role": "W",
+          "own_turn": 3,
+          "step": "precombat_main",
+          "kind": "cast_creature",
+          "card": "W.glory-seeker.1",
+          "mana_units_paid": "2",
+          "required_cost": "{1}{W}",
+          "targets": []
+        },
+        {
+          "role": "G",
+          "own_turn": 3,
+          "step": "precombat_main",
+          "kind": "play_land",
+          "card": "G.forest.3"
+        },
+        {
+          "role": "W",
+          "own_turn": 4,
+          "step": "precombat_main",
+          "kind": "play_land",
+          "card": "W.plains.4"
+        },
+        {
+          "role": "G",
+          "own_turn": 4,
+          "step": "precombat_main",
+          "kind": "play_land",
+          "card": "G.forest.4"
+        },
+        {
+          "role": "W",
+          "own_turn": 5,
+          "step": "precombat_main",
+          "kind": "play_land",
+          "card": "W.plains.5"
+        },
+        {
+          "role": "G",
+          "own_turn": 5,
+          "step": "precombat_main",
+          "kind": "play_land",
+          "card": "G.forest.5"
+        },
+        {
+          "role": "W",
+          "own_turn": 6,
+          "step": "precombat_main",
+          "kind": "play_land",
+          "card": "W.plains.6"
+        },
+        {
+          "role": "G",
+          "own_turn": 6,
+          "step": "precombat_main",
+          "kind": "play_land",
+          "card": "G.forest.6"
+        },
+        {
+          "role": "W",
+          "own_turn": 7,
+          "step": "precombat_main",
+          "kind": "play_land",
+          "card": "W.plains.7"
+        }
+      ],
+      "combat": [
+        {
+          "active_role": "W",
+          "own_turn": 2,
+          "attackers": [
+            "W.savannah-lions.1"
+          ],
+          "blockers": [],
+          "defender_role": "G"
+        },
+        {
+          "active_role": "W",
+          "own_turn": 3,
+          "attackers": [
+            "W.savannah-lions.1",
+            "W.elite-vanguard.1"
+          ],
+          "blockers": [
+            {
+              "blocker": "G.grizzly-bears.1",
+              "attacker": "W.savannah-lions.1"
+            }
+          ],
+          "defender_role": "G"
+        },
+        {
+          "active_role": "W",
+          "own_turn": 4,
+          "attackers": [
+            "W.elite-vanguard.1",
+            "W.glory-seeker.1"
+          ],
+          "blockers": [],
+          "defender_role": "G"
+        },
+        {
+          "active_role": "W",
+          "own_turn": 5,
+          "attackers": [
+            "W.elite-vanguard.1",
+            "W.glory-seeker.1"
+          ],
+          "blockers": [],
+          "defender_role": "G"
+        },
+        {
+          "active_role": "W",
+          "own_turn": 6,
+          "attackers": [
+            "W.elite-vanguard.1",
+            "W.glory-seeker.1"
+          ],
+          "blockers": [],
+          "defender_role": "G"
+        },
+        {
+          "active_role": "W",
+          "own_turn": 7,
+          "attackers": [
+            "W.elite-vanguard.1",
+            "W.glory-seeker.1"
+          ],
+          "blockers": [],
+          "defender_role": "G"
+        }
+      ],
+      "cleanup_discards": []
+    },
+    {
+      "id": "RD02",
+      "starting_role": "G",
+      "shuffle_target_orders_top_first": {
+        "W": [
+          "W.plains.1",
+          "W.plains.2",
+          "W.yoked-ox.1",
+          "W.elite-vanguard.1",
+          "W.glory-seeker.1",
+          "W.silvercoat-lion.1",
+          "W.pillarfield-ox.1",
+          "W.plains.3",
+          "W.plains.4",
+          "W.plains.5",
+          "W.plains.6",
+          "W.plains.7",
+          "W.plains.8",
+          "W.plains.9",
+          "W.plains.10",
+          "W.plains.11",
+          "W.plains.12",
+          "W.plains.13",
+          "W.plains.14",
+          "W.plains.15",
+          "W.plains.16",
+          "W.plains.17",
+          "W.plains.18",
+          "W.plains.19",
+          "W.plains.20",
+          "W.plains.21",
+          "W.plains.22",
+          "W.plains.23",
+          "W.plains.24",
+          "W.savannah-lions.1",
+          "W.savannah-lions.2",
+          "W.savannah-lions.3",
+          "W.savannah-lions.4",
+          "W.elite-vanguard.2",
+          "W.elite-vanguard.3",
+          "W.elite-vanguard.4",
+          "W.glory-seeker.2",
+          "W.glory-seeker.3",
+          "W.glory-seeker.4",
+          "W.silvercoat-lion.2",
+          "W.silvercoat-lion.3",
+          "W.silvercoat-lion.4",
+          "W.oreskos-swiftclaw.1",
+          "W.oreskos-swiftclaw.2",
+          "W.oreskos-swiftclaw.3",
+          "W.oreskos-swiftclaw.4",
+          "W.traveling-philosopher.1",
+          "W.traveling-philosopher.2",
+          "W.traveling-philosopher.3",
+          "W.traveling-philosopher.4",
+          "W.loxodon-wayfarer.1",
+          "W.loxodon-wayfarer.2",
+          "W.loxodon-wayfarer.3",
+          "W.loxodon-wayfarer.4",
+          "W.yoked-ox.2",
+          "W.yoked-ox.3",
+          "W.yoked-ox.4",
+          "W.pillarfield-ox.2",
+          "W.pillarfield-ox.3",
+          "W.pillarfield-ox.4"
+        ],
+        "G": [
+          "G.forest.1",
+          "G.forest.2",
+          "G.forest.3",
+          "G.grizzly-bears.1",
+          "G.runeclaw-bear.1",
+          "G.terrain-elemental.1",
+          "G.nessian-courser.1",
+          "G.forest.4",
+          "G.forest.5",
+          "G.forest.6",
+          "G.forest.7",
+          "G.forest.8",
+          "G.forest.9",
+          "G.forest.10",
+          "G.forest.11",
+          "G.forest.12",
+          "G.forest.13",
+          "G.forest.14",
+          "G.forest.15",
+          "G.forest.16",
+          "G.forest.17",
+          "G.forest.18",
+          "G.forest.19",
+          "G.forest.20",
+          "G.forest.21",
+          "G.forest.22",
+          "G.forest.23",
+          "G.forest.24",
+          "G.grizzly-bears.2",
+          "G.grizzly-bears.3",
+          "G.grizzly-bears.4",
+          "G.runeclaw-bear.2",
+          "G.runeclaw-bear.3",
+          "G.runeclaw-bear.4",
+          "G.terrain-elemental.2",
+          "G.terrain-elemental.3",
+          "G.terrain-elemental.4",
+          "G.kalonian-tusker.1",
+          "G.kalonian-tusker.2",
+          "G.kalonian-tusker.3",
+          "G.kalonian-tusker.4",
+          "G.centaur-courser.1",
+          "G.centaur-courser.2",
+          "G.centaur-courser.3",
+          "G.centaur-courser.4",
+          "G.nessian-courser.2",
+          "G.nessian-courser.3",
+          "G.nessian-courser.4",
+          "G.alpine-grizzly.1",
+          "G.alpine-grizzly.2",
+          "G.alpine-grizzly.3",
+          "G.alpine-grizzly.4",
+          "G.rumbling-baloth.1",
+          "G.rumbling-baloth.2",
+          "G.rumbling-baloth.3",
+          "G.rumbling-baloth.4",
+          "G.spined-wurm.1",
+          "G.spined-wurm.2",
+          "G.spined-wurm.3",
+          "G.spined-wurm.4"
+        ]
+      },
+      "opening_declarations": [
+        {
+          "role": "G",
+          "taken": 0,
+          "choice": "mulligan"
+        },
+        {
+          "role": "W",
+          "taken": 0,
+          "choice": "keep"
+        },
+        {
+          "role": "G",
+          "taken": 1,
+          "choice": "keep"
+        }
+      ],
+      "mulligan_shuffles": [
+        {
+          "role": "G",
+          "taken_after_shuffle": 1,
+          "target_order_top_first": [
+            "G.forest.1",
+            "G.forest.2",
+            "G.forest.3",
+            "G.kalonian-tusker.1",
+            "G.alpine-grizzly.1",
+            "G.spined-wurm.1",
+            "G.runeclaw-bear.1",
+            "G.forest.4",
+            "G.forest.5",
+            "G.forest.6",
+            "G.forest.7",
+            "G.forest.8",
+            "G.forest.9",
+            "G.forest.10",
+            "G.forest.11",
+            "G.forest.12",
+            "G.forest.13",
+            "G.forest.14",
+            "G.forest.15",
+            "G.forest.16",
+            "G.forest.17",
+            "G.forest.18",
+            "G.forest.19",
+            "G.forest.20",
+            "G.forest.21",
+            "G.forest.22",
+            "G.forest.23",
+            "G.forest.24",
+            "G.grizzly-bears.1",
+            "G.grizzly-bears.2",
+            "G.grizzly-bears.3",
+            "G.grizzly-bears.4",
+            "G.runeclaw-bear.2",
+            "G.runeclaw-bear.3",
+            "G.runeclaw-bear.4",
+            "G.terrain-elemental.1",
+            "G.terrain-elemental.2",
+            "G.terrain-elemental.3",
+            "G.terrain-elemental.4",
+            "G.kalonian-tusker.2",
+            "G.kalonian-tusker.3",
+            "G.kalonian-tusker.4",
+            "G.centaur-courser.1",
+            "G.centaur-courser.2",
+            "G.centaur-courser.3",
+            "G.centaur-courser.4",
+            "G.nessian-courser.1",
+            "G.nessian-courser.2",
+            "G.nessian-courser.3",
+            "G.nessian-courser.4",
+            "G.alpine-grizzly.2",
+            "G.alpine-grizzly.3",
+            "G.alpine-grizzly.4",
+            "G.rumbling-baloth.1",
+            "G.rumbling-baloth.2",
+            "G.rumbling-baloth.3",
+            "G.rumbling-baloth.4",
+            "G.spined-wurm.2",
+            "G.spined-wurm.3",
+            "G.spined-wurm.4"
+          ]
+        }
+      ],
+      "london_bottom": [
+        {
+          "role": "G",
+          "count": 1,
+          "selected_top_first": [
+            "G.runeclaw-bear.1"
+          ],
+          "hand_domain": [
+            "G.forest.1",
+            "G.forest.2",
+            "G.forest.3",
+            "G.kalonian-tusker.1",
+            "G.alpine-grizzly.1",
+            "G.spined-wurm.1",
+            "G.runeclaw-bear.1"
+          ]
+        }
+      ],
+      "actions": [
+        {
+          "role": "G",
+          "own_turn": 1,
+          "step": "precombat_main",
+          "kind": "play_land",
+          "card": "G.forest.1"
+        },
+        {
+          "role": "W",
+          "own_turn": 1,
+          "step": "precombat_main",
+          "kind": "play_land",
+          "card": "W.plains.1"
+        },
+        {
+          "role": "W",
+          "own_turn": 1,
+          "step": "precombat_main",
+          "kind": "activate_intrinsic_mana",
+          "card": "W.plains.1"
+        },
+        {
+          "role": "W",
+          "own_turn": 1,
+          "step": "precombat_main",
+          "kind": "cast_creature",
+          "card": "W.yoked-ox.1",
+          "mana_units_paid": "1",
+          "required_cost": "{W}",
+          "targets": []
+        },
+        {
+          "role": "G",
+          "own_turn": 2,
+          "step": "precombat_main",
+          "kind": "play_land",
+          "card": "G.forest.2"
+        },
+        {
+          "role": "G",
+          "own_turn": 2,
+          "step": "precombat_main",
+          "kind": "activate_intrinsic_mana",
+          "card": "G.forest.1"
+        },
+        {
+          "role": "G",
+          "own_turn": 2,
+          "step": "precombat_main",
+          "kind": "activate_intrinsic_mana",
+          "card": "G.forest.2"
+        },
+        {
+          "role": "G",
+          "own_turn": 2,
+          "step": "precombat_main",
+          "kind": "cast_creature",
+          "card": "G.kalonian-tusker.1",
+          "mana_units_paid": "2",
+          "required_cost": "{G}{G}",
+          "targets": []
+        },
+        {
+          "role": "W",
+          "own_turn": 2,
+          "step": "precombat_main",
+          "kind": "play_land",
+          "card": "W.plains.2"
+        },
+        {
+          "role": "W",
+          "own_turn": 2,
+          "step": "precombat_main",
+          "kind": "activate_intrinsic_mana",
+          "card": "W.plains.1"
+        },
+        {
+          "role": "W",
+          "own_turn": 2,
+          "step": "precombat_main",
+          "kind": "cast_creature",
+          "card": "W.elite-vanguard.1",
+          "mana_units_paid": "1",
+          "required_cost": "{W}",
+          "targets": []
+        },
+        {
+          "role": "G",
+          "own_turn": 3,
+          "step": "precombat_main",
+          "kind": "play_land",
+          "card": "G.forest.3"
+        },
+        {
+          "role": "G",
+          "own_turn": 3,
+          "step": "precombat_main",
+          "kind": "activate_intrinsic_mana",
+          "card": "G.forest.1"
+        },
+        {
+          "role": "G",
+          "own_turn": 3,
+          "step": "precombat_main",
+          "kind": "activate_intrinsic_mana",
+          "card": "G.forest.2"
+        },
+        {
+          "role": "G",
+          "own_turn": 3,
+          "step": "precombat_main",
+          "kind": "activate_intrinsic_mana",
+          "card": "G.forest.3"
+        },
+        {
+          "role": "G",
+          "own_turn": 3,
+          "step": "precombat_main",
+          "kind": "cast_creature",
+          "card": "G.alpine-grizzly.1",
+          "mana_units_paid": "3",
+          "required_cost": "{2}{G}",
+          "targets": []
+        },
+        {
+          "role": "G",
+          "own_turn": 4,
+          "step": "precombat_main",
+          "kind": "play_land",
+          "card": "G.forest.4"
+        },
+        {
+          "role": "G",
+          "own_turn": 5,
+          "step": "precombat_main",
+          "kind": "play_land",
+          "card": "G.forest.5"
+        },
+        {
+          "role": "G",
+          "own_turn": 5,
+          "step": "precombat_main",
+          "kind": "activate_intrinsic_mana",
+          "card": "G.forest.1"
+        },
+        {
+          "role": "G",
+          "own_turn": 5,
+          "step": "precombat_main",
+          "kind": "activate_intrinsic_mana",
+          "card": "G.forest.2"
+        },
+        {
+          "role": "G",
+          "own_turn": 5,
+          "step": "precombat_main",
+          "kind": "activate_intrinsic_mana",
+          "card": "G.forest.3"
+        },
+        {
+          "role": "G",
+          "own_turn": 5,
+          "step": "precombat_main",
+          "kind": "activate_intrinsic_mana",
+          "card": "G.forest.4"
+        },
+        {
+          "role": "G",
+          "own_turn": 5,
+          "step": "precombat_main",
+          "kind": "activate_intrinsic_mana",
+          "card": "G.forest.5"
+        },
+        {
+          "role": "G",
+          "own_turn": 5,
+          "step": "precombat_main",
+          "kind": "cast_creature",
+          "card": "G.spined-wurm.1",
+          "mana_units_paid": "5",
+          "required_cost": "{4}{G}",
+          "targets": []
+        },
+        {
+          "role": "G",
+          "own_turn": 6,
+          "step": "precombat_main",
+          "kind": "play_land",
+          "card": "G.forest.6"
+        },
+        {
+          "role": "G",
+          "own_turn": 7,
+          "step": "precombat_main",
+          "kind": "play_land",
+          "card": "G.forest.7"
+        }
+      ],
+      "combat": [
+        {
+          "active_role": "G",
+          "own_turn": 3,
+          "attackers": [
+            "G.kalonian-tusker.1"
+          ],
+          "blockers": [
+            {
+              "blocker": "W.yoked-ox.1",
+              "attacker": "G.kalonian-tusker.1"
+            }
+          ],
+          "defender_role": "W"
+        },
+        {
+          "active_role": "G",
+          "own_turn": 4,
+          "attackers": [
+            "G.kalonian-tusker.1",
+            "G.alpine-grizzly.1"
+          ],
+          "blockers": [
+            {
+              "blocker": "W.yoked-ox.1",
+              "attacker": "G.alpine-grizzly.1"
+            },
+            {
+              "blocker": "W.elite-vanguard.1",
+              "attacker": "G.kalonian-tusker.1"
+            }
+          ],
+          "defender_role": "W"
+        },
+        {
+          "active_role": "G",
+          "own_turn": 5,
+          "attackers": [
+            "G.kalonian-tusker.1",
+            "G.alpine-grizzly.1"
+          ],
+          "blockers": [],
+          "defender_role": "W"
+        },
+        {
+          "active_role": "G",
+          "own_turn": 6,
+          "attackers": [
+            "G.kalonian-tusker.1",
+            "G.alpine-grizzly.1",
+            "G.spined-wurm.1"
+          ],
+          "blockers": [],
+          "defender_role": "W"
+        },
+        {
+          "active_role": "G",
+          "own_turn": 7,
+          "attackers": [
+            "G.kalonian-tusker.1",
+            "G.alpine-grizzly.1",
+            "G.spined-wurm.1"
+          ],
+          "blockers": [],
+          "defender_role": "W"
+        }
+      ],
+      "state_check_order_choices": [
+        {
+          "at": "G4.after_combat_damage",
+          "owner_role": "W",
+          "domain": [
+            "W.yoked-ox.1",
+            "W.elite-vanguard.1"
+          ],
+          "selected_graveyard_top_first": [
+            "W.yoked-ox.1",
+            "W.elite-vanguard.1"
+          ]
+        }
+      ],
+      "cleanup_discards": [
+        {
+          "role": "W",
+          "own_turn": 5,
+          "cards": [
+            "W.plains.3"
+          ],
+          "hand_count_before": 8,
+          "hand_count_after": 7
+        },
+        {
+          "role": "W",
+          "own_turn": 6,
+          "cards": [
+            "W.plains.4"
+          ],
+          "hand_count_before": 8,
+          "hand_count_after": 7
+        }
+      ]
+    }
+  ]
+}

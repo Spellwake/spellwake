@@ -7,6 +7,7 @@ use std::{
     io::BufRead,
 };
 
+pub mod creature_types;
 pub mod snapshot;
 
 pub const FORMATS: [&str; 6] = [

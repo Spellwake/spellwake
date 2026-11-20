@@ -1,0 +1,4566 @@
+{
+  "kind": "literal-pinned-source-witness-input",
+  "status": "source reading only; not compiler output or publication success",
+  "line_protocol_ref": "source-section.input.json",
+  "tokens": [
+    {
+      "role": "Introduction",
+      "line_byte_start": "0",
+      "line_byte_end_exclusive": "103",
+      "raw_utf8": "205.3m Creatures and kindreds share their lists of subtypes; these subtypes are called creature types. ",
+      "member_ordinal": null
+    },
+    {
+      "role": "MultiwordSentencePrefix",
+      "line_byte_start": "103",
+      "line_byte_end_exclusive": "140",
+      "raw_utf8": "One creature type is two words long: ",
+      "member_ordinal": null
+    },
+    {
+      "role": "Member",
+      "line_byte_start": "140",
+      "line_byte_end_exclusive": "149",
+      "raw_utf8": "Time Lord",
+      "member_ordinal": "291"
+    },
+    {
+      "role": "MultiwordSentenceSuffix",
+      "line_byte_start": "149",
+      "line_byte_end_exclusive": "151",
+      "raw_utf8": ". ",
+      "member_ordinal": null
+    },
+    {
+      "role": "ListIntroduction",
+      "line_byte_start": "151",
+      "line_byte_end_exclusive": "195",
+      "raw_utf8": "All other creature types are one word long: ",
+      "member_ordinal": null
+    },
+    {
+      "role": "Member",
+      "line_byte_start": "195",
+      "line_byte_end_exclusive": "202",
+      "raw_utf8": "Advisor",
+      "member_ordinal": "0"
+    },
+    {
+      "role": "Separator",
+      "line_byte_start": "202",
+      "line_byte_end_exclusive": "204",
+      "raw_utf8": ", ",
+      "member_ordinal": null
+    },
+    {
+      "role": "Member",
+      "line_byte_start": "204",
+      "line_byte_end_exclusive": "214",
+      "raw_utf8": "Aetherborn",
+      "member_ordinal": "1"
+    },
+    {
+      "role": "Separator",
+      "line_byte_start": "214",
+      "line_byte_end_exclusive": "216",
+      "raw_utf8": ", ",
+      "member_ordinal": null
+    },
+    {
+      "role": "Member",
+      "line_byte_start": "216",
+      "line_byte_end_exclusive": "221",
+      "raw_utf8": "Alien",
+      "member_ordinal": "2"
+    },
+    {
+      "role": "Separator",
+      "line_byte_start": "221",
+      "line_byte_end_exclusive": "223",
+      "raw_utf8": ", ",
+      "member_ordinal": null
+    },
+    {
+      "role": "Member",
+      "line_byte_start": "223",
+      "line_byte_end_exclusive": "227",
+      "raw_utf8": "Ally",
+      "member_ordinal": "3"
+    },
+    {
+      "role": "Separator",
+      "line_byte_start": "227",
+      "line_byte_end_exclusive": "229",
+      "raw_utf8": ", ",
+      "member_ordinal": null
+    },
+    {
+      "role": "Member",
+      "line_byte_start": "229",
+      "line_byte_end_exclusive": "234",
+      "raw_utf8": "Angel",
+      "member_ordinal": "4"
+    },
+    {
+      "role": "Separator",
+      "line_byte_start": "234",
+      "line_byte_end_exclusive": "236",
+      "raw_utf8": ", ",
+      "member_ordinal": null
+    },
+    {
+      "role": "Member",
+      "line_byte_start": "236",
+      "line_byte_end_exclusive": "244",
+      "raw_utf8": "Antelope",
+      "member_ordinal": "5"
+    },
+    {
+      "role": "Separator",
+      "line_byte_start": "244",
+      "line_byte_end_exclusive": "246",
+      "raw_utf8": ", ",
+      "member_ordinal": null
+    },
+    {
+      "role": "Member",
+      "line_byte_start": "246",
+      "line_byte_end_exclusive": "249",
+      "raw_utf8": "Ape",
+      "member_ordinal": "6"
+    },
+    {
+      "role": "Separator",
+      "line_byte_start": "249",
+      "line_byte_end_exclusive": "251",
+      "raw_utf8": ", ",
+      "member_ordinal": null
+    },
+    {
+      "role": "Member",
+      "line_byte_start": "251",
+      "line_byte_end_exclusive": "257",
+      "raw_utf8": "Archer",
+      "member_ordinal": "7"
+    },
+    {
+      "role": "Separator",
+      "line_byte_start": "257",
+      "line_byte_end_exclusive": "259",
+      "raw_utf8": ", ",
+      "member_ordinal": null
+    },
+    {
+      "role": "Member",
+      "line_byte_start": "259",
+      "line_byte_end_exclusive": "265",
+      "raw_utf8": "Archon",
+      "member_ordinal": "8"
+    },
+    {
+      "role": "Separator",
+      "line_byte_start": "265",
+      "line_byte_end_exclusive": "267",
+      "raw_utf8": ", ",
+      "member_ordinal": null
+    },
+    {
+      "role": "Member",
+      "line_byte_start": "267",
+      "line_byte_end_exclusive": "276",
+      "raw_utf8": "Armadillo",
+      "member_ordinal": "9"
+    },
+    {
+      "role": "Separator",
+      "line_byte_start": "276",
+      "line_byte_end_exclusive": "278",
+      "raw_utf8": ", ",
+      "member_ordinal": null
+    },
+    {
+      "role": "Member",
+      "line_byte_start": "278",
+      "line_byte_end_exclusive": "282",
+      "raw_utf8": "Army",
+      "member_ordinal": "10"
+    },
+    {
+      "role": "Separator",
+      "line_byte_start": "282",
+      "line_byte_end_exclusive": "284",
+      "raw_utf8": ", ",
+      "member_ordinal": null
+    },
+    {
+      "role": "Member",
+      "line_byte_start": "284",
+      "line_byte_end_exclusive": "293",
+      "raw_utf8": "Artificer",
+      "member_ordinal": "11"
+    },
+    {
+      "role": "Separator",
+      "line_byte_start": "293",
+      "line_byte_end_exclusive": "295",
+      "raw_utf8": ", ",
+      "member_ordinal": null
+    },
+    {
+      "role": "Member",
+      "line_byte_start": "295",
+      "line_byte_end_exclusive": "303",
+      "raw_utf8": "Assassin",
+      "member_ordinal": "12"
+    },
+    {
+      "role": "Separator",
+      "line_byte_start": "303",
+      "line_byte_end_exclusive": "305",
+      "raw_utf8": ", ",
+      "member_ordinal": null
+    },
+    {
+      "role": "Member",
+      "line_byte_start": "305",
+      "line_byte_end_exclusive": "320",
+      "raw_utf8": "Assembly-Worker",
+      "member_ordinal": "13"
+    },
+    {
+      "role": "Separator",
+      "line_byte_start": "320",
+      "line_byte_end_exclusive": "322",
+      "raw_utf8": ", ",
+      "member_ordinal": null
+    },
+    {
+      "role": "Member",
+      "line_byte_start": "322",
+      "line_byte_end_exclusive": "330",
+      "raw_utf8": "Astartes",
+      "member_ordinal": "14"
+    },
+    {
+      "role": "Separator",
+      "line_byte_start": "330",
+      "line_byte_end_exclusive": "332",
+      "raw_utf8": ", ",
+      "member_ordinal": null
+    },
+    {
+      "role": "Member",
+      "line_byte_start": "332",
+      "line_byte_end_exclusive": "336",
+      "raw_utf8": "Atog",
+      "member_ordinal": "15"
+    },
+    {
+      "role": "Separator",
+      "line_byte_start": "336",
+      "line_byte_end_exclusive": "338",
+      "raw_utf8": ", ",
+      "member_ordinal": null
+    },
+    {
+      "role": "Member",
+      "line_byte_start": "338",
+      "line_byte_end_exclusive": "345",
+      "raw_utf8": "Aurochs",
+      "member_ordinal": "16"
+    },
+    {
+      "role": "Separator",
+      "line_byte_start": "345",
+      "line_byte_end_exclusive": "347",
+      "raw_utf8": ", ",
+      "member_ordinal": null
+    },
+    {
+      "role": "Member",
+      "line_byte_start": "347",
+      "line_byte_end_exclusive": "353",
+      "raw_utf8": "Avatar",
+      "member_ordinal": "17"
+    },
+    {
+      "role": "Separator",
+      "line_byte_start": "353",
+      "line_byte_end_exclusive": "355",
+      "raw_utf8": ", ",
+      "member_ordinal": null
+    },
+    {
+      "role": "Member",
+      "line_byte_start": "355",
+      "line_byte_end_exclusive": "359",
+      "raw_utf8": "Azra",
+      "member_ordinal": "18"
+    },
+    {
+      "role": "Separator",
+      "line_byte_start": "359",
+      "line_byte_end_exclusive": "361",
+      "raw_utf8": ", ",
+      "member_ordinal": null
+    },
+    {
+      "role": "Member",
+      "line_byte_start": "361",
+      "line_byte_end_exclusive": "367",
+      "raw_utf8": "Badger",
+      "member_ordinal": "19"
+    },
+    {
+      "role": "Separator",
+      "line_byte_start": "367",
+      "line_byte_end_exclusive": "369",
+      "raw_utf8": ", ",
+      "member_ordinal": null
+    },
+    {
+      "role": "Member",
+      "line_byte_start": "369",
+      "line_byte_end_exclusive": "376",
+      "raw_utf8": "Balloon",
+      "member_ordinal": "20"
+    },
+    {
+      "role": "Separator",
+      "line_byte_start": "376",
+      "line_byte_end_exclusive": "378",
+      "raw_utf8": ", ",
+      "member_ordinal": null
+    },
+    {
+      "role": "Member",
+      "line_byte_start": "378",
+      "line_byte_end_exclusive": "387",
+      "raw_utf8": "Barbarian",
+      "member_ordinal": "21"
+    },
+    {
+      "role": "Separator",
+      "line_byte_start": "387",
+      "line_byte_end_exclusive": "389",
+      "raw_utf8": ", ",
+      "member_ordinal": null
+    },
+    {
+      "role": "Member",
+      "line_byte_start": "389",
+      "line_byte_end_exclusive": "393",
+      "raw_utf8": "Bard",
+      "member_ordinal": "22"
+    },
+    {
+      "role": "Separator",
+      "line_byte_start": "393",
+      "line_byte_end_exclusive": "395",
+      "raw_utf8": ", ",
+      "member_ordinal": null
+    },
+    {
+      "role": "Member",
+      "line_byte_start": "395",
+      "line_byte_end_exclusive": "403",
+      "raw_utf8": "Basilisk",
+      "member_ordinal": "23"
+    },
+    {
+      "role": "Separator",
+      "line_byte_start": "403",
+      "line_byte_end_exclusive": "405",
+      "raw_utf8": ", ",
+      "member_ordinal": null
+    },
+    {
+      "role": "Member",
+      "line_byte_start": "405",
+      "line_byte_end_exclusive": "408",
+      "raw_utf8": "Bat",
+      "member_ordinal": "24"
+    },
+    {
+      "role": "Separator",
+      "line_byte_start": "408",
+      "line_byte_end_exclusive": "410",
+      "raw_utf8": ", ",
+      "member_ordinal": null
+    },
+    {
+      "role": "Member",
+      "line_byte_start": "410",
+      "line_byte_end_exclusive": "414",
+      "raw_utf8": "Bear",
+      "member_ordinal": "25"
+    },
+    {
+      "role": "Separator",
+      "line_byte_start": "414",
+      "line_byte_end_exclusive": "416",
+      "raw_utf8": ", ",
+      "member_ordinal": null
+    },
+    {
+      "role": "Member",
+      "line_byte_start": "416",
+      "line_byte_end_exclusive": "421",
+      "raw_utf8": "Beast",
+      "member_ordinal": "26"
+    },
+    {
+      "role": "Separator",
+      "line_byte_start": "421",
+      "line_byte_end_exclusive": "423",
+      "raw_utf8": ", ",
+      "member_ordinal": null
+    },
+    {
+      "role": "Member",
+      "line_byte_start": "423",
+      "line_byte_end_exclusive": "429",
+      "raw_utf8": "Beaver",
+      "member_ordinal": "27"
+    },
+    {
+      "role": "Separator",
+      "line_byte_start": "429",
+      "line_byte_end_exclusive": "431",
+      "raw_utf8": ", ",
+      "member_ordinal": null
+    },
+    {
+      "role": "Member",
+      "line_byte_start": "431",
+      "line_byte_end_exclusive": "437",
+      "raw_utf8": "Beeble",
+      "member_ordinal": "28"
+    },
+    {
+      "role": "Separator",
+      "line_byte_start": "437",
+      "line_byte_end_exclusive": "439",
+      "raw_utf8": ", ",
+      "member_ordinal": null
+    },
+    {
+      "role": "Member",
+      "line_byte_start": "439",
+      "line_byte_end_exclusive": "447",
+      "raw_utf8": "Beholder",
+      "member_ordinal": "29"
+    },
+    {
+      "role": "Separator",
+      "line_byte_start": "447",
+      "line_byte_end_exclusive": "449",
+      "raw_utf8": ", ",
+      "member_ordinal": null
+    },
+    {
+      "role": "Member",
+      "line_byte_start": "449",
+      "line_byte_end_exclusive": "458",
+      "raw_utf8": "Berserker",
+      "member_ordinal": "30"
+    },
+    {
+      "role": "Separator",
+      "line_byte_start": "458",
+      "line_byte_end_exclusive": "460",
+      "raw_utf8": ", ",
+      "member_ordinal": null
+    },
+    {
+      "role": "Member",
+      "line_byte_start": "460",
+      "line_byte_end_exclusive": "464",
+      "raw_utf8": "Bird",
+      "member_ordinal": "31"
+    },
+    {
+      "role": "Separator",
+      "line_byte_start": "464",
+      "line_byte_end_exclusive": "466",
+      "raw_utf8": ", ",
+      "member_ordinal": null
+    },
+    {
+      "role": "Member",
+      "line_byte_start": "466",
+      "line_byte_end_exclusive": "471",
+      "raw_utf8": "Bison",
+      "member_ordinal": "32"
+    },
+    {
+      "role": "Separator",
+      "line_byte_start": "471",
+      "line_byte_end_exclusive": "473",
+      "raw_utf8": ", ",
+      "member_ordinal": null
+    },
+    {
+      "role": "Member",
+      "line_byte_start": "473",
+      "line_byte_end_exclusive": "482",
+      "raw_utf8": "Blinkmoth",
+      "member_ordinal": "33"
+    },
+    {
+      "role": "Separator",
+      "line_byte_start": "482",
+      "line_byte_end_exclusive": "484",
+      "raw_utf8": ", ",
+      "member_ordinal": null
+    },
+    {
+      "role": "Member",
+      "line_byte_start": "484",
+      "line_byte_end_exclusive": "488",
+      "raw_utf8": "Boar",
+      "member_ordinal": "34"
+    },
+    {
+      "role": "Separator",
+      "line_byte_start": "488",
+      "line_byte_end_exclusive": "490",
+      "raw_utf8": ", ",
+      "member_ordinal": null
+    },
+    {
+      "role": "Member",
+      "line_byte_start": "490",
+      "line_byte_end_exclusive": "497",
+      "raw_utf8": "Bringer",
+      "member_ordinal": "35"
+    },
+    {
+      "role": "Separator",
+      "line_byte_start": "497",
+      "line_byte_end_exclusive": "499",
+      "raw_utf8": ", ",
+      "member_ordinal": null
+    },
+    {
+      "role": "Member",
+      "line_byte_start": "499",
+      "line_byte_end_exclusive": "508",
+      "raw_utf8": "Brushwagg",
+      "member_ordinal": "36"
+    },
+    {
+      "role": "Separator",
+      "line_byte_start": "508",
+      "line_byte_end_exclusive": "510",
+      "raw_utf8": ", ",
+      "member_ordinal": null
+    },
+    {
+      "role": "Member",
+      "line_byte_start": "510",
+      "line_byte_end_exclusive": "517",
+      "raw_utf8": "Camarid",
+      "member_ordinal": "37"
+    },
+    {
+      "role": "Separator",
+      "line_byte_start": "517",
+      "line_byte_end_exclusive": "519",
+      "raw_utf8": ", ",
+      "member_ordinal": null
+    },
+    {
+      "role": "Member",
+      "line_byte_start": "519",
+      "line_byte_end_exclusive": "524",
+      "raw_utf8": "Camel",
+      "member_ordinal": "38"
+    },
+    {
+      "role": "Separator",
+      "line_byte_start": "524",
+      "line_byte_end_exclusive": "526",
+      "raw_utf8": ", ",
+      "member_ordinal": null
+    },
+    {
+      "role": "Member",
+      "line_byte_start": "526",
+      "line_byte_end_exclusive": "534",
+      "raw_utf8": "Capybara",
+      "member_ordinal": "39"
+    },
+    {
+      "role": "Separator",
+      "line_byte_start": "534",
+      "line_byte_end_exclusive": "536",
+      "raw_utf8": ", ",
+      "member_ordinal": null
+    },
+    {
+      "role": "Member",
+      "line_byte_start": "536",
+      "line_byte_end_exclusive": "543",
+      "raw_utf8": "Caribou",
+      "member_ordinal": "40"
+    },
+    {
+      "role": "Separator",
+      "line_byte_start": "543",
+      "line_byte_end_exclusive": "545",
+      "raw_utf8": ", ",
+      "member_ordinal": null
+    },
+    {
+      "role": "Member",
+      "line_byte_start": "545",
+      "line_byte_end_exclusive": "552",
+      "raw_utf8": "Carrier",
+      "member_ordinal": "41"
+    },
+    {
+      "role": "Separator",
+      "line_byte_start": "552",
+      "line_byte_end_exclusive": "554",
+      "raw_utf8": ", ",
+      "member_ordinal": null
+    },
+    {
+      "role": "Member",
+      "line_byte_start": "554",
+      "line_byte_end_exclusive": "557",
+      "raw_utf8": "Cat",
+      "member_ordinal": "42"
+    },
+    {
+      "role": "Separator",
+      "line_byte_start": "557",
+      "line_byte_end_exclusive": "559",
+      "raw_utf8": ", ",
+      "member_ordinal": null
+    },
+    {
+      "role": "Member",
+      "line_byte_start": "559",
+      "line_byte_end_exclusive": "566",
+      "raw_utf8": "Centaur",
+      "member_ordinal": "43"
+    },
+    {
+      "role": "Separator",
+      "line_byte_start": "566",
+      "line_byte_end_exclusive": "568",
+      "raw_utf8": ", ",
+      "member_ordinal": null
+    },
+    {
+      "role": "Member",
+      "line_byte_start": "568",
+      "line_byte_end_exclusive": "573",
+      "raw_utf8": "Child",
+      "member_ordinal": "44"
+    },
+    {
+      "role": "Separator",
+      "line_byte_start": "573",
+      "line_byte_end_exclusive": "575",
+      "raw_utf8": ", ",
+      "member_ordinal": null
+    },
+    {
+      "role": "Member",
+      "line_byte_start": "575",
+      "line_byte_end_exclusive": "582",
+      "raw_utf8": "Chimera",
+      "member_ordinal": "45"
+    },
+    {
+      "role": "Separator",
+      "line_byte_start": "582",
+      "line_byte_end_exclusive": "584",
+      "raw_utf8": ", ",
+      "member_ordinal": null
+    },
+    {
+      "role": "Member",
+      "line_byte_start": "584",
+      "line_byte_end_exclusive": "591",
+      "raw_utf8": "Citizen",
+      "member_ordinal": "46"
+    },
+    {
+      "role": "Separator",
+      "line_byte_start": "591",
+      "line_byte_end_exclusive": "593",
+      "raw_utf8": ", ",
+      "member_ordinal": null
+    },
+    {
+      "role": "Member",
+      "line_byte_start": "593",
+      "line_byte_end_exclusive": "599",
+      "raw_utf8": "Cleric",
+      "member_ordinal": "47"
+    },
+    {
+      "role": "Separator",
+      "line_byte_start": "599",
+      "line_byte_end_exclusive": "601",
+      "raw_utf8": ", ",
+      "member_ordinal": null
+    },
+    {
+      "role": "Member",
+      "line_byte_start": "601",
+      "line_byte_end_exclusive": "606",
+      "raw_utf8": "Clown",
+      "member_ordinal": "48"
+    },
+    {
+      "role": "Separator",
+      "line_byte_start": "606",
+      "line_byte_end_exclusive": "608",
+      "raw_utf8": ", ",
+      "member_ordinal": null
+    },
+    {
+      "role": "Member",
+      "line_byte_start": "608",
+      "line_byte_end_exclusive": "618",
+      "raw_utf8": "Cockatrice",
+      "member_ordinal": "49"
+    },
+    {
+      "role": "Separator",
+      "line_byte_start": "618",
+      "line_byte_end_exclusive": "620",
+      "raw_utf8": ", ",
+      "member_ordinal": null
+    },
+    {
+      "role": "Member",
+      "line_byte_start": "620",
+      "line_byte_end_exclusive": "629",
+      "raw_utf8": "Construct",
+      "member_ordinal": "50"
+    },
+    {
+      "role": "Separator",
+      "line_byte_start": "629",
+      "line_byte_end_exclusive": "631",
+      "raw_utf8": ", ",
+      "member_ordinal": null
+    },
+    {
+      "role": "Member",
+      "line_byte_start": "631",
+      "line_byte_end_exclusive": "637",
+      "raw_utf8": "Coward",
+      "member_ordinal": "51"
+    },
+    {
+      "role": "Separator",
+      "line_byte_start": "637",
+      "line_byte_end_exclusive": "639",
+      "raw_utf8": ", ",
+      "member_ordinal": null
+    },
+    {
+      "role": "Member",
+      "line_byte_start": "639",
+      "line_byte_end_exclusive": "645",
+      "raw_utf8": "Coyote",
+      "member_ordinal": "52"
+    },
+    {
+      "role": "Separator",
+      "line_byte_start": "645",
+      "line_byte_end_exclusive": "647",
+      "raw_utf8": ", ",
+      "member_ordinal": null
+    },
+    {
+      "role": "Member",
+      "line_byte_start": "647",
+      "line_byte_end_exclusive": "651",
+      "raw_utf8": "Crab",
+      "member_ordinal": "53"
+    },
+    {
+      "role": "Separator",
+      "line_byte_start": "651",
+      "line_byte_end_exclusive": "653",
+      "raw_utf8": ", ",
+      "member_ordinal": null
+    },
+    {
+      "role": "Member",
+      "line_byte_start": "653",
+      "line_byte_end_exclusive": "662",
+      "raw_utf8": "Crocodile",
+      "member_ordinal": "54"
+    },
+    {
+      "role": "Separator",
+      "line_byte_start": "662",
+      "line_byte_end_exclusive": "664",
+      "raw_utf8": ", ",
+      "member_ordinal": null
+    },
+    {
+      "role": "Member",
+      "line_byte_start": "664",
+      "line_byte_end_exclusive": "671",
+      "raw_utf8": "C’tan",
+      "member_ordinal": "58"
+    },
+    {
+      "role": "Separator",
+      "line_byte_start": "671",
+      "line_byte_end_exclusive": "673",
+      "raw_utf8": ", ",
+      "member_ordinal": null
+    },
+    {
+      "role": "Member",
+      "line_byte_start": "673",
+      "line_byte_end_exclusive": "681",
+      "raw_utf8": "Custodes",
+      "member_ordinal": "55"
+    },
+    {
+      "role": "Separator",
+      "line_byte_start": "681",
+      "line_byte_end_exclusive": "683",
+      "raw_utf8": ", ",
+      "member_ordinal": null
+    },
+    {
+      "role": "Member",
+      "line_byte_start": "683",
+      "line_byte_end_exclusive": "691",
+      "raw_utf8": "Cyberman",
+      "member_ordinal": "56"
+    },
+    {
+      "role": "Separator",
+      "line_byte_start": "691",
+      "line_byte_end_exclusive": "693",
+      "raw_utf8": ", ",
+      "member_ordinal": null
+    },
+    {
+      "role": "Member",
+      "line_byte_start": "693",
+      "line_byte_end_exclusive": "700",
+      "raw_utf8": "Cyclops",
+      "member_ordinal": "57"
+    },
+    {
+      "role": "Separator",
+      "line_byte_start": "700",
+      "line_byte_end_exclusive": "702",
+      "raw_utf8": ", ",
+      "member_ordinal": null
+    },
+    {
+      "role": "Member",
+      "line_byte_start": "702",
+      "line_byte_end_exclusive": "707",
+      "raw_utf8": "Dalek",
+      "member_ordinal": "59"
+    },
+    {
+      "role": "Separator",
+      "line_byte_start": "707",
+      "line_byte_end_exclusive": "709",
+      "raw_utf8": ", ",
+      "member_ordinal": null
+    },
+    {
+      "role": "Member",
+      "line_byte_start": "709",
+      "line_byte_end_exclusive": "715",
+      "raw_utf8": "Dauthi",
+      "member_ordinal": "60"
+    },
+    {
+      "role": "Separator",
+      "line_byte_start": "715",
+      "line_byte_end_exclusive": "717",
+      "raw_utf8": ", ",
+      "member_ordinal": null
+    },
+    {
+      "role": "Member",
+      "line_byte_start": "717",
+      "line_byte_end_exclusive": "724",
+      "raw_utf8": "Demigod",
+      "member_ordinal": "61"
+    },
+    {
+      "role": "Separator",
+      "line_byte_start": "724",
+      "line_byte_end_exclusive": "726",
+      "raw_utf8": ", ",
+      "member_ordinal": null
+    },
+    {
+      "role": "Member",
+      "line_byte_start": "726",
+      "line_byte_end_exclusive": "731",
+      "raw_utf8": "Demon",
+      "member_ordinal": "62"
+    },
+    {
+      "role": "Separator",
+      "line_byte_start": "731",
+      "line_byte_end_exclusive": "733",
+      "raw_utf8": ", ",
+      "member_ordinal": null
+    },
+    {
+      "role": "Member",
+      "line_byte_start": "733",
+      "line_byte_end_exclusive": "741",
+      "raw_utf8": "Deserter",
+      "member_ordinal": "63"
+    },
+    {
+      "role": "Separator",
+      "line_byte_start": "741",
+      "line_byte_end_exclusive": "743",
+      "raw_utf8": ", ",
+      "member_ordinal": null
+    },
+    {
+      "role": "Member",
+      "line_byte_start": "743",
+      "line_byte_end_exclusive": "752",
+      "raw_utf8": "Detective",
+      "member_ordinal": "64"
+    },
+    {
+      "role": "Separator",
+      "line_byte_start": "752",
+      "line_byte_end_exclusive": "754",
+      "raw_utf8": ", ",
+      "member_ordinal": null
+    },
+    {
+      "role": "Member",
+      "line_byte_start": "754",
+      "line_byte_end_exclusive": "759",
+      "raw_utf8": "Devil",
+      "member_ordinal": "65"
+    },
+    {
+      "role": "Separator",
+      "line_byte_start": "759",
+      "line_byte_end_exclusive": "761",
+      "raw_utf8": ", ",
+      "member_ordinal": null
+    },
+    {
+      "role": "Member",
+      "line_byte_start": "761",
+      "line_byte_end_exclusive": "769",
+      "raw_utf8": "Dinosaur",
+      "member_ordinal": "66"
+    },
+    {
+      "role": "Separator",
+      "line_byte_start": "769",
+      "line_byte_end_exclusive": "771",
+      "raw_utf8": ", ",
+      "member_ordinal": null
+    },
+    {
+      "role": "Member",
+      "line_byte_start": "771",
+      "line_byte_end_exclusive": "776",
+      "raw_utf8": "Djinn",
+      "member_ordinal": "67"
+    },
+    {
+      "role": "Separator",
+      "line_byte_start": "776",
+      "line_byte_end_exclusive": "778",
+      "raw_utf8": ", ",
+      "member_ordinal": null
+    },
+    {
+      "role": "Member",
+      "line_byte_start": "778",
+      "line_byte_end_exclusive": "784",
+      "raw_utf8": "Doctor",
+      "member_ordinal": "68"
+    },
+    {
+      "role": "Separator",
+      "line_byte_start": "784",
+      "line_byte_end_exclusive": "786",
+      "raw_utf8": ", ",
+      "member_ordinal": null
+    },
+    {
+      "role": "Member",
+      "line_byte_start": "786",
+      "line_byte_end_exclusive": "789",
+      "raw_utf8": "Dog",
+      "member_ordinal": "69"
+    },
+    {
+      "role": "Separator",
+      "line_byte_start": "789",
+      "line_byte_end_exclusive": "791",
+      "raw_utf8": ", ",
+      "member_ordinal": null
+    },
+    {
+      "role": "Member",
+      "line_byte_start": "791",
+      "line_byte_end_exclusive": "797",
+      "raw_utf8": "Dragon",
+      "member_ordinal": "70"
+    },
+    {
+      "role": "Separator",
+      "line_byte_start": "797",
+      "line_byte_end_exclusive": "799",
+      "raw_utf8": ", ",
+      "member_ordinal": null
+    },
+    {
+      "role": "Member",
+      "line_byte_start": "799",
+      "line_byte_end_exclusive": "804",
+      "raw_utf8": "Drake",
+      "member_ordinal": "71"
+    },
+    {
+      "role": "Separator",
+      "line_byte_start": "804",
+      "line_byte_end_exclusive": "806",
+      "raw_utf8": ", ",
+      "member_ordinal": null
+    },
+    {
+      "role": "Member",
+      "line_byte_start": "806",
+      "line_byte_end_exclusive": "817",
+      "raw_utf8": "Dreadnought",
+      "member_ordinal": "72"
+    },
+    {
+      "role": "Separator",
+      "line_byte_start": "817",
+      "line_byte_end_exclusive": "819",
+      "raw_utf8": ", ",
+      "member_ordinal": null
+    },
+    {
+      "role": "Member",
+      "line_byte_start": "819",
+      "line_byte_end_exclusive": "823",
+      "raw_utf8": "Drix",
+      "member_ordinal": "73"
+    },
+    {
+      "role": "Separator",
+      "line_byte_start": "823",
+      "line_byte_end_exclusive": "825",
+      "raw_utf8": ", ",
+      "member_ordinal": null
+    },
+    {
+      "role": "Member",
+      "line_byte_start": "825",
+      "line_byte_end_exclusive": "830",
+      "raw_utf8": "Drone",
+      "member_ordinal": "74"
+    },
+    {
+      "role": "Separator",
+      "line_byte_start": "830",
+      "line_byte_end_exclusive": "832",
+      "raw_utf8": ", ",
+      "member_ordinal": null
+    },
+    {
+      "role": "Member",
+      "line_byte_start": "832",
+      "line_byte_end_exclusive": "837",
+      "raw_utf8": "Druid",
+      "member_ordinal": "75"
+    },
+    {
+      "role": "Separator",
+      "line_byte_start": "837",
+      "line_byte_end_exclusive": "839",
+      "raw_utf8": ", ",
+      "member_ordinal": null
+    },
+    {
+      "role": "Member",
+      "line_byte_start": "839",
+      "line_byte_end_exclusive": "844",
+      "raw_utf8": "Dryad",
+      "member_ordinal": "76"
+    },
+    {
+      "role": "Separator",
+      "line_byte_start": "844",
+      "line_byte_end_exclusive": "846",
+      "raw_utf8": ", ",
+      "member_ordinal": null
+    },
+    {
+      "role": "Member",
+      "line_byte_start": "846",
+      "line_byte_end_exclusive": "851",
+      "raw_utf8": "Dwarf",
+      "member_ordinal": "77"
+    },
+    {
+      "role": "Separator",
+      "line_byte_start": "851",
+      "line_byte_end_exclusive": "853",
+      "raw_utf8": ", ",
+      "member_ordinal": null
+    },
+    {
+      "role": "Member",
+      "line_byte_start": "853",
+      "line_byte_end_exclusive": "860",
+      "raw_utf8": "Echidna",
+      "member_ordinal": "78"
+    },
+    {
+      "role": "Separator",
+      "line_byte_start": "860",
+      "line_byte_end_exclusive": "862",
+      "raw_utf8": ", ",
+      "member_ordinal": null
+    },
+    {
+      "role": "Member",
+      "line_byte_start": "862",
+      "line_byte_end_exclusive": "868",
+      "raw_utf8": "Efreet",
+      "member_ordinal": "79"
+    },
+    {
+      "role": "Separator",
+      "line_byte_start": "868",
+      "line_byte_end_exclusive": "870",
+      "raw_utf8": ", ",
+      "member_ordinal": null
+    },
+    {
+      "role": "Member",
+      "line_byte_start": "870",
+      "line_byte_end_exclusive": "873",
+      "raw_utf8": "Egg",
+      "member_ordinal": "80"
+    },
+    {
+      "role": "Separator",
+      "line_byte_start": "873",
+      "line_byte_end_exclusive": "875",
+      "raw_utf8": ", ",
+      "member_ordinal": null
+    },
+    {
+      "role": "Member",
+      "line_byte_start": "875",
+      "line_byte_end_exclusive": "880",
+      "raw_utf8": "Elder",
+      "member_ordinal": "81"
+    },
+    {
+      "role": "Separator",
+      "line_byte_start": "880",
+      "line_byte_end_exclusive": "882",
+      "raw_utf8": ", ",
+      "member_ordinal": null
+    },
+    {
+      "role": "Member",
+      "line_byte_start": "882",
+      "line_byte_end_exclusive": "889",
+      "raw_utf8": "Eldrazi",
+      "member_ordinal": "82"
+    },
+    {
+      "role": "Separator",
+      "line_byte_start": "889",
+      "line_byte_end_exclusive": "891",
+      "raw_utf8": ", ",
+      "member_ordinal": null
+    },
+    {
+      "role": "Member",
+      "line_byte_start": "891",
+      "line_byte_end_exclusive": "900",
+      "raw_utf8": "Elemental",
+      "member_ordinal": "83"
+    },
+    {
+      "role": "Separator",
+      "line_byte_start": "900",
+      "line_byte_end_exclusive": "902",
+      "raw_utf8": ", ",
+      "member_ordinal": null
+    },
+    {
+      "role": "Member",
+      "line_byte_start": "902",
+      "line_byte_end_exclusive": "910",
+      "raw_utf8": "Elephant",
+      "member_ordinal": "84"
+    },
+    {
+      "role": "Separator",
+      "line_byte_start": "910",
+      "line_byte_end_exclusive": "912",
+      "raw_utf8": ", ",
+      "member_ordinal": null
+    },
+    {
+      "role": "Member",
+      "line_byte_start": "912",
+      "line_byte_end_exclusive": "915",
+      "raw_utf8": "Elf",
+      "member_ordinal": "85"
+    },
+    {
+      "role": "Separator",
+      "line_byte_start": "915",
+      "line_byte_end_exclusive": "917",
+      "raw_utf8": ", ",
+      "member_ordinal": null
+    },
+    {
+      "role": "Member",
+      "line_byte_start": "917",
+      "line_byte_end_exclusive": "920",
+      "raw_utf8": "Elk",
+      "member_ordinal": "86"
+    },
+    {
+      "role": "Separator",
+      "line_byte_start": "920",
+      "line_byte_end_exclusive": "922",
+      "raw_utf8": ", ",
+      "member_ordinal": null
+    },
+    {
+      "role": "Member",
+      "line_byte_start": "922",
+      "line_byte_end_exclusive": "930",
+      "raw_utf8": "Employee",
+      "member_ordinal": "87"
+    },
+    {
+      "role": "Separator",
+      "line_byte_start": "930",
+      "line_byte_end_exclusive": "932",
+      "raw_utf8": ", ",
+      "member_ordinal": null
+    },
+    {
+      "role": "Member",
+      "line_byte_start": "932",
+      "line_byte_end_exclusive": "939",
+      "raw_utf8": "Eternal",
+      "member_ordinal": "88"
+    },
+    {
+      "role": "Separator",
+      "line_byte_start": "939",
+      "line_byte_end_exclusive": "941",
+      "raw_utf8": ", ",
+      "member_ordinal": null
+    },
+    {
+      "role": "Member",
+      "line_byte_start": "941",
+      "line_byte_end_exclusive": "944",
+      "raw_utf8": "Eye",
+      "member_ordinal": "89"
+    },
+    {
+      "role": "Separator",
+      "line_byte_start": "944",
+      "line_byte_end_exclusive": "946",
+      "raw_utf8": ", ",
+      "member_ordinal": null
+    },
+    {
+      "role": "Member",
+      "line_byte_start": "946",
+      "line_byte_end_exclusive": "952",
+      "raw_utf8": "Faerie",
+      "member_ordinal": "90"
+    },
+    {
+      "role": "Separator",
+      "line_byte_start": "952",
+      "line_byte_end_exclusive": "954",
+      "raw_utf8": ", ",
+      "member_ordinal": null
+    },
+    {
+      "role": "Member",
+      "line_byte_start": "954",
+      "line_byte_end_exclusive": "960",
+      "raw_utf8": "Ferret",
+      "member_ordinal": "91"
+    },
+    {
+      "role": "Separator",
+      "line_byte_start": "960",
+      "line_byte_end_exclusive": "962",
+      "raw_utf8": ", ",
+      "member_ordinal": null
+    },
+    {
+      "role": "Member",
+      "line_byte_start": "962",
+      "line_byte_end_exclusive": "966",
+      "raw_utf8": "Fish",
+      "member_ordinal": "92"
+    },
+    {
+      "role": "Separator",
+      "line_byte_start": "966",
+      "line_byte_end_exclusive": "968",
+      "raw_utf8": ", ",
+      "member_ordinal": null
+    },
+    {
+      "role": "Member",
+      "line_byte_start": "968",
+      "line_byte_end_exclusive": "978",
+      "raw_utf8": "Flagbearer",
+      "member_ordinal": "93"
+    },
+    {
+      "role": "Separator",
+      "line_byte_start": "978",
+      "line_byte_end_exclusive": "980",
+      "raw_utf8": ", ",
+      "member_ordinal": null
+    },
+    {
+      "role": "Member",
+      "line_byte_start": "980",
+      "line_byte_end_exclusive": "983",
+      "raw_utf8": "Fox",
+      "member_ordinal": "94"
+    },
+    {
+      "role": "Separator",
+      "line_byte_start": "983",
+      "line_byte_end_exclusive": "985",
+      "raw_utf8": ", ",
+      "member_ordinal": null
+    },
+    {
+      "role": "Member",
+      "line_byte_start": "985",
+      "line_byte_end_exclusive": "992",
+      "raw_utf8": "Fractal",
+      "member_ordinal": "95"
+    },
+    {
+      "role": "Separator",
+      "line_byte_start": "992",
+      "line_byte_end_exclusive": "994",
+      "raw_utf8": ", ",
+      "member_ordinal": null
+    },
+    {
+      "role": "Member",
+      "line_byte_start": "994",
+      "line_byte_end_exclusive": "998",
+      "raw_utf8": "Frog",
+      "member_ordinal": "96"
+    },
+    {
+      "role": "Separator",
+      "line_byte_start": "998",
+      "line_byte_end_exclusive": "1000",
+      "raw_utf8": ", ",
+      "member_ordinal": null
+    },
+    {
+      "role": "Member",
+      "line_byte_start": "1000",
+      "line_byte_end_exclusive": "1006",
+      "raw_utf8": "Fungus",
+      "member_ordinal": "97"
+    },
+    {
+      "role": "Separator",
+      "line_byte_start": "1006",
+      "line_byte_end_exclusive": "1008",
+      "raw_utf8": ", ",
+      "member_ordinal": null
+    },
+    {
+      "role": "Member",
+      "line_byte_start": "1008",
+      "line_byte_end_exclusive": "1013",
+      "raw_utf8": "Gamer",
+      "member_ordinal": "98"
+    },
+    {
+      "role": "Separator",
+      "line_byte_start": "1013",
+      "line_byte_end_exclusive": "1015",
+      "raw_utf8": ", ",
+      "member_ordinal": null
+    },
+    {
+      "role": "Member",
+      "line_byte_start": "1015",
+      "line_byte_end_exclusive": "1020",
+      "raw_utf8": "Gamma",
+      "member_ordinal": "99"
+    },
+    {
+      "role": "Separator",
+      "line_byte_start": "1020",
+      "line_byte_end_exclusive": "1022",
+      "raw_utf8": ", ",
+      "member_ordinal": null
+    },
+    {
+      "role": "Member",
+      "line_byte_start": "1022",
+      "line_byte_end_exclusive": "1030",
+      "raw_utf8": "Gargoyle",
+      "member_ordinal": "100"
+    },
+    {
+      "role": "Separator",
+      "line_byte_start": "1030",
+      "line_byte_end_exclusive": "1032",
+      "raw_utf8": ", ",
+      "member_ordinal": null
+    },
+    {
+      "role": "Member",
+      "line_byte_start": "1032",
+      "line_byte_end_exclusive": "1036",
+      "raw_utf8": "Germ",
+      "member_ordinal": "101"
+    },
+    {
+      "role": "Separator",
+      "line_byte_start": "1036",
+      "line_byte_end_exclusive": "1038",
+      "raw_utf8": ", ",
+      "member_ordinal": null
+    },
+    {
+      "role": "Member",
+      "line_byte_start": "1038",
+      "line_byte_end_exclusive": "1043",
+      "raw_utf8": "Giant",
+      "member_ordinal": "102"
+    },
+    {
+      "role": "Separator",
+      "line_byte_start": "1043",
+      "line_byte_end_exclusive": "1045",
+      "raw_utf8": ", ",
+      "member_ordinal": null
+    },
+    {
+      "role": "Member",
+      "line_byte_start": "1045",
+      "line_byte_end_exclusive": "1052",
+      "raw_utf8": "Giraffe",
+      "member_ordinal": "103"
+    },
+    {
+      "role": "Separator",
+      "line_byte_start": "1052",
+      "line_byte_end_exclusive": "1054",
+      "raw_utf8": ", ",
+      "member_ordinal": null
+    },
+    {
+      "role": "Member",
+      "line_byte_start": "1054",
+      "line_byte_end_exclusive": "1058",
+      "raw_utf8": "Gith",
+      "member_ordinal": "104"
+    },
+    {
+      "role": "Separator",
+      "line_byte_start": "1058",
+      "line_byte_end_exclusive": "1060",
+      "raw_utf8": ", ",
+      "member_ordinal": null
+    },
+    {
+      "role": "Member",
+      "line_byte_start": "1060",
+      "line_byte_end_exclusive": "1067",
+      "raw_utf8": "Glimmer",
+      "member_ordinal": "105"
+    },
+    {
+      "role": "Separator",
+      "line_byte_start": "1067",
+      "line_byte_end_exclusive": "1069",
+      "raw_utf8": ", ",
+      "member_ordinal": null
+    },
+    {
+      "role": "Member",
+      "line_byte_start": "1069",
+      "line_byte_end_exclusive": "1074",
+      "raw_utf8": "Gnoll",
+      "member_ordinal": "106"
+    },
+    {
+      "role": "Separator",
+      "line_byte_start": "1074",
+      "line_byte_end_exclusive": "1076",
+      "raw_utf8": ", ",
+      "member_ordinal": null
+    },
+    {
+      "role": "Member",
+      "line_byte_start": "1076",
+      "line_byte_end_exclusive": "1081",
+      "raw_utf8": "Gnome",
+      "member_ordinal": "107"
+    },
+    {
+      "role": "Separator",
+      "line_byte_start": "1081",
+      "line_byte_end_exclusive": "1083",
+      "raw_utf8": ", ",
+      "member_ordinal": null
+    },
+    {
+      "role": "Member",
+      "line_byte_start": "1083",
+      "line_byte_end_exclusive": "1087",
+      "raw_utf8": "Goat",
+      "member_ordinal": "108"
+    },
+    {
+      "role": "Separator",
+      "line_byte_start": "1087",
+      "line_byte_end_exclusive": "1089",
+      "raw_utf8": ", ",
+      "member_ordinal": null
+    },
+    {
+      "role": "Member",
+      "line_byte_start": "1089",
+      "line_byte_end_exclusive": "1095",
+      "raw_utf8": "Goblin",
+      "member_ordinal": "109"
+    },
+    {
+      "role": "Separator",
+      "line_byte_start": "1095",
+      "line_byte_end_exclusive": "1097",
+      "raw_utf8": ", ",
+      "member_ordinal": null
+    },
+    {
+      "role": "Member",
+      "line_byte_start": "1097",
+      "line_byte_end_exclusive": "1100",
+      "raw_utf8": "God",
+      "member_ordinal": "110"
+    },
+    {
+      "role": "Separator",
+      "line_byte_start": "1100",
+      "line_byte_end_exclusive": "1102",
+      "raw_utf8": ", ",
+      "member_ordinal": null
+    },
+    {
+      "role": "Member",
+      "line_byte_start": "1102",
+      "line_byte_end_exclusive": "1107",
+      "raw_utf8": "Golem",
+      "member_ordinal": "111"
+    },
+    {
+      "role": "Separator",
+      "line_byte_start": "1107",
+      "line_byte_end_exclusive": "1109",
+      "raw_utf8": ", ",
+      "member_ordinal": null
+    },
+    {
+      "role": "Member",
+      "line_byte_start": "1109",
+      "line_byte_end_exclusive": "1115",
+      "raw_utf8": "Gorgon",
+      "member_ordinal": "112"
+    },
+    {
+      "role": "Separator",
+      "line_byte_start": "1115",
+      "line_byte_end_exclusive": "1117",
+      "raw_utf8": ", ",
+      "member_ordinal": null
+    },
+    {
+      "role": "Member",
+      "line_byte_start": "1117",
+      "line_byte_end_exclusive": "1126",
+      "raw_utf8": "Graveborn",
+      "member_ordinal": "113"
+    },
+    {
+      "role": "Separator",
+      "line_byte_start": "1126",
+      "line_byte_end_exclusive": "1128",
+      "raw_utf8": ", ",
+      "member_ordinal": null
+    },
+    {
+      "role": "Member",
+      "line_byte_start": "1128",
+      "line_byte_end_exclusive": "1135",
+      "raw_utf8": "Gremlin",
+      "member_ordinal": "114"
+    },
+    {
+      "role": "Separator",
+      "line_byte_start": "1135",
+      "line_byte_end_exclusive": "1137",
+      "raw_utf8": ", ",
+      "member_ordinal": null
+    },
+    {
+      "role": "Member",
+      "line_byte_start": "1137",
+      "line_byte_end_exclusive": "1144",
+      "raw_utf8": "Griffin",
+      "member_ordinal": "115"
+    },
+    {
+      "role": "Separator",
+      "line_byte_start": "1144",
+      "line_byte_end_exclusive": "1146",
+      "raw_utf8": ", ",
+      "member_ordinal": null
+    },
+    {
+      "role": "Member",
+      "line_byte_start": "1146",
+      "line_byte_end_exclusive": "1151",
+      "raw_utf8": "Guest",
+      "member_ordinal": "116"
+    },
+    {
+      "role": "Separator",
+      "line_byte_start": "1151",
+      "line_byte_end_exclusive": "1153",
+      "raw_utf8": ", ",
+      "member_ordinal": null
+    },
+    {
+      "role": "Member",
+      "line_byte_start": "1153",
+      "line_byte_end_exclusive": "1156",
+      "raw_utf8": "Hag",
+      "member_ordinal": "117"
+    },
+    {
+      "role": "Separator",
+      "line_byte_start": "1156",
+      "line_byte_end_exclusive": "1158",
+      "raw_utf8": ", ",
+      "member_ordinal": null
+    },
+    {
+      "role": "Member",
+      "line_byte_start": "1158",
+      "line_byte_end_exclusive": "1166",
+      "raw_utf8": "Halfling",
+      "member_ordinal": "118"
+    },
+    {
+      "role": "Separator",
+      "line_byte_start": "1166",
+      "line_byte_end_exclusive": "1168",
+      "raw_utf8": ", ",
+      "member_ordinal": null
+    },
+    {
+      "role": "Member",
+      "line_byte_start": "1168",
+      "line_byte_end_exclusive": "1175",
+      "raw_utf8": "Hamster",
+      "member_ordinal": "119"
+    },
+    {
+      "role": "Separator",
+      "line_byte_start": "1175",
+      "line_byte_end_exclusive": "1177",
+      "raw_utf8": ", ",
+      "member_ordinal": null
+    },
+    {
+      "role": "Member",
+      "line_byte_start": "1177",
+      "line_byte_end_exclusive": "1182",
+      "raw_utf8": "Harpy",
+      "member_ordinal": "120"
+    },
+    {
+      "role": "Separator",
+      "line_byte_start": "1182",
+      "line_byte_end_exclusive": "1184",
+      "raw_utf8": ", ",
+      "member_ordinal": null
+    },
+    {
+      "role": "Member",
+      "line_byte_start": "1184",
+      "line_byte_end_exclusive": "1192",
+      "raw_utf8": "Hedgehog",
+      "member_ordinal": "121"
+    },
+    {
+      "role": "Separator",
+      "line_byte_start": "1192",
+      "line_byte_end_exclusive": "1194",
+      "raw_utf8": ", ",
+      "member_ordinal": null
+    },
+    {
+      "role": "Member",
+      "line_byte_start": "1194",
+      "line_byte_end_exclusive": "1201",
+      "raw_utf8": "Hellion",
+      "member_ordinal": "122"
+    },
+    {
+      "role": "Separator",
+      "line_byte_start": "1201",
+      "line_byte_end_exclusive": "1203",
+      "raw_utf8": ", ",
+      "member_ordinal": null
+    },
+    {
+      "role": "Member",
+      "line_byte_start": "1203",
+      "line_byte_end_exclusive": "1207",
+      "raw_utf8": "Hero",
+      "member_ordinal": "123"
+    },
+    {
+      "role": "Separator",
+      "line_byte_start": "1207",
+      "line_byte_end_exclusive": "1209",
+      "raw_utf8": ", ",
+      "member_ordinal": null
+    },
+    {
+      "role": "Member",
+      "line_byte_start": "1209",
+      "line_byte_end_exclusive": "1214",
+      "raw_utf8": "Hippo",
+      "member_ordinal": "124"
+    },
+    {
+      "role": "Separator",
+      "line_byte_start": "1214",
+      "line_byte_end_exclusive": "1216",
+      "raw_utf8": ", ",
+      "member_ordinal": null
+    },
+    {
+      "role": "Member",
+      "line_byte_start": "1216",
+      "line_byte_end_exclusive": "1226",
+      "raw_utf8": "Hippogriff",
+      "member_ordinal": "125"
+    },
+    {
+      "role": "Separator",
+      "line_byte_start": "1226",
+      "line_byte_end_exclusive": "1228",
+      "raw_utf8": ", ",
+      "member_ordinal": null
+    },
+    {
+      "role": "Member",
+      "line_byte_start": "1228",
+      "line_byte_end_exclusive": "1235",
+      "raw_utf8": "Homarid",
+      "member_ordinal": "126"
+    },
+    {
+      "role": "Separator",
+      "line_byte_start": "1235",
+      "line_byte_end_exclusive": "1237",
+      "raw_utf8": ", ",
+      "member_ordinal": null
+    },
+    {
+      "role": "Member",
+      "line_byte_start": "1237",
+      "line_byte_end_exclusive": "1247",
+      "raw_utf8": "Homunculus",
+      "member_ordinal": "127"
+    },
+    {
+      "role": "Separator",
+      "line_byte_start": "1247",
+      "line_byte_end_exclusive": "1249",
+      "raw_utf8": ", ",
+      "member_ordinal": null
+    },
+    {
+      "role": "Member",
+      "line_byte_start": "1249",
+      "line_byte_end_exclusive": "1255",
+      "raw_utf8": "Horror",
+      "member_ordinal": "128"
+    },
+    {
+      "role": "Separator",
+      "line_byte_start": "1255",
+      "line_byte_end_exclusive": "1257",
+      "raw_utf8": ", ",
+      "member_ordinal": null
+    },
+    {
+      "role": "Member",
+      "line_byte_start": "1257",
+      "line_byte_end_exclusive": "1262",
+      "raw_utf8": "Horse",
+      "member_ordinal": "129"
+    },
+    {
+      "role": "Separator",
+      "line_byte_start": "1262",
+      "line_byte_end_exclusive": "1264",
+      "raw_utf8": ", ",
+      "member_ordinal": null
+    },
+    {
+      "role": "Member",
+      "line_byte_start": "1264",
+      "line_byte_end_exclusive": "1269",
+      "raw_utf8": "Human",
+      "member_ordinal": "130"
+    },
+    {
+      "role": "Separator",
+      "line_byte_start": "1269",
+      "line_byte_end_exclusive": "1271",
+      "raw_utf8": ", ",
+      "member_ordinal": null
+    },
+    {
+      "role": "Member",
+      "line_byte_start": "1271",
+      "line_byte_end_exclusive": "1276",
+      "raw_utf8": "Hydra",
+      "member_ordinal": "131"
+    },
+    {
+      "role": "Separator",
+      "line_byte_start": "1276",
+      "line_byte_end_exclusive": "1278",
+      "raw_utf8": ", ",
+      "member_ordinal": null
+    },
+    {
+      "role": "Member",
+      "line_byte_start": "1278",
+      "line_byte_end_exclusive": "1283",
+      "raw_utf8": "Hyena",
+      "member_ordinal": "132"
+    },
+    {
+      "role": "Separator",
+      "line_byte_start": "1283",
+      "line_byte_end_exclusive": "1285",
+      "raw_utf8": ", ",
+      "member_ordinal": null
+    },
+    {
+      "role": "Member",
+      "line_byte_start": "1285",
+      "line_byte_end_exclusive": "1293",
+      "raw_utf8": "Illusion",
+      "member_ordinal": "133"
+    },
+    {
+      "role": "Separator",
+      "line_byte_start": "1293",
+      "line_byte_end_exclusive": "1295",
+      "raw_utf8": ", ",
+      "member_ordinal": null
+    },
+    {
+      "role": "Member",
+      "line_byte_start": "1295",
+      "line_byte_end_exclusive": "1298",
+      "raw_utf8": "Imp",
+      "member_ordinal": "134"
+    },
+    {
+      "role": "Separator",
+      "line_byte_start": "1298",
+      "line_byte_end_exclusive": "1300",
+      "raw_utf8": ", ",
+      "member_ordinal": null
+    },
+    {
+      "role": "Member",
+      "line_byte_start": "1300",
+      "line_byte_end_exclusive": "1311",
+      "raw_utf8": "Incarnation",
+      "member_ordinal": "135"
+    },
+    {
+      "role": "Separator",
+      "line_byte_start": "1311",
+      "line_byte_end_exclusive": "1313",
+      "raw_utf8": ", ",
+      "member_ordinal": null
+    },
+    {
+      "role": "Member",
+      "line_byte_start": "1313",
+      "line_byte_end_exclusive": "1320",
+      "raw_utf8": "Inhuman",
+      "member_ordinal": "136"
+    },
+    {
+      "role": "Separator",
+      "line_byte_start": "1320",
+      "line_byte_end_exclusive": "1322",
+      "raw_utf8": ", ",
+      "member_ordinal": null
+    },
+    {
+      "role": "Member",
+      "line_byte_start": "1322",
+      "line_byte_end_exclusive": "1329",
+      "raw_utf8": "Inkling",
+      "member_ordinal": "137"
+    },
+    {
+      "role": "Separator",
+      "line_byte_start": "1329",
+      "line_byte_end_exclusive": "1331",
+      "raw_utf8": ", ",
+      "member_ordinal": null
+    },
+    {
+      "role": "Member",
+      "line_byte_start": "1331",
+      "line_byte_end_exclusive": "1341",
+      "raw_utf8": "Inquisitor",
+      "member_ordinal": "138"
+    },
+    {
+      "role": "Separator",
+      "line_byte_start": "1341",
+      "line_byte_end_exclusive": "1343",
+      "raw_utf8": ", ",
+      "member_ordinal": null
+    },
+    {
+      "role": "Member",
+      "line_byte_start": "1343",
+      "line_byte_end_exclusive": "1349",
+      "raw_utf8": "Insect",
+      "member_ordinal": "139"
+    },
+    {
+      "role": "Separator",
+      "line_byte_start": "1349",
+      "line_byte_end_exclusive": "1351",
+      "raw_utf8": ", ",
+      "member_ordinal": null
+    },
+    {
+      "role": "Member",
+      "line_byte_start": "1351",
+      "line_byte_end_exclusive": "1357",
+      "raw_utf8": "Jackal",
+      "member_ordinal": "140"
+    },
+    {
+      "role": "Separator",
+      "line_byte_start": "1357",
+      "line_byte_end_exclusive": "1359",
+      "raw_utf8": ", ",
+      "member_ordinal": null
+    },
+    {
+      "role": "Member",
+      "line_byte_start": "1359",
+      "line_byte_end_exclusive": "1368",
+      "raw_utf8": "Jellyfish",
+      "member_ordinal": "141"
+    },
+    {
+      "role": "Separator",
+      "line_byte_start": "1368",
+      "line_byte_end_exclusive": "1370",
+      "raw_utf8": ", ",
+      "member_ordinal": null
+    },
+    {
+      "role": "Member",
+      "line_byte_start": "1370",
+      "line_byte_end_exclusive": "1380",
+      "raw_utf8": "Juggernaut",
+      "member_ordinal": "142"
+    },
+    {
+      "role": "Separator",
+      "line_byte_start": "1380",
+      "line_byte_end_exclusive": "1382",
+      "raw_utf8": ", ",
+      "member_ordinal": null
+    },
+    {
+      "role": "Member",
+      "line_byte_start": "1382",
+      "line_byte_end_exclusive": "1390",
+      "raw_utf8": "Kangaroo",
+      "member_ordinal": "143"
+    },
+    {
+      "role": "Separator",
+      "line_byte_start": "1390",
+      "line_byte_end_exclusive": "1392",
+      "raw_utf8": ", ",
+      "member_ordinal": null
+    },
+    {
+      "role": "Member",
+      "line_byte_start": "1392",
+      "line_byte_end_exclusive": "1396",
+      "raw_utf8": "Kavu",
+      "member_ordinal": "144"
+    },
+    {
+      "role": "Separator",
+      "line_byte_start": "1396",
+      "line_byte_end_exclusive": "1398",
+      "raw_utf8": ", ",
+      "member_ordinal": null
+    },
+    {
+      "role": "Member",
+      "line_byte_start": "1398",
+      "line_byte_end_exclusive": "1403",
+      "raw_utf8": "Kirin",
+      "member_ordinal": "145"
+    },
+    {
+      "role": "Separator",
+      "line_byte_start": "1403",
+      "line_byte_end_exclusive": "1405",
+      "raw_utf8": ", ",
+      "member_ordinal": null
+    },
+    {
+      "role": "Member",
+      "line_byte_start": "1405",
+      "line_byte_end_exclusive": "1412",
+      "raw_utf8": "Kithkin",
+      "member_ordinal": "146"
+    },
+    {
+      "role": "Separator",
+      "line_byte_start": "1412",
+      "line_byte_end_exclusive": "1414",
+      "raw_utf8": ", ",
+      "member_ordinal": null
+    },
+    {
+      "role": "Member",
+      "line_byte_start": "1414",
+      "line_byte_end_exclusive": "1420",
+      "raw_utf8": "Knight",
+      "member_ordinal": "147"
+    },
+    {
+      "role": "Separator",
+      "line_byte_start": "1420",
+      "line_byte_end_exclusive": "1422",
+      "raw_utf8": ", ",
+      "member_ordinal": null
+    },
+    {
+      "role": "Member",
+      "line_byte_start": "1422",
+      "line_byte_end_exclusive": "1428",
+      "raw_utf8": "Kobold",
+      "member_ordinal": "148"
+    },
+    {
+      "role": "Separator",
+      "line_byte_start": "1428",
+      "line_byte_end_exclusive": "1430",
+      "raw_utf8": ", ",
+      "member_ordinal": null
+    },
+    {
+      "role": "Member",
+      "line_byte_start": "1430",
+      "line_byte_end_exclusive": "1433",
+      "raw_utf8": "Kor",
+      "member_ordinal": "149"
+    },
+    {
+      "role": "Separator",
+      "line_byte_start": "1433",
+      "line_byte_end_exclusive": "1435",
+      "raw_utf8": ", ",
+      "member_ordinal": null
+    },
+    {
+      "role": "Member",
+      "line_byte_start": "1435",
+      "line_byte_end_exclusive": "1441",
+      "raw_utf8": "Kraken",
+      "member_ordinal": "150"
+    },
+    {
+      "role": "Separator",
+      "line_byte_start": "1441",
+      "line_byte_end_exclusive": "1443",
+      "raw_utf8": ", ",
+      "member_ordinal": null
+    },
+    {
+      "role": "Member",
+      "line_byte_start": "1443",
+      "line_byte_end_exclusive": "1447",
+      "raw_utf8": "Kree",
+      "member_ordinal": "151"
+    },
+    {
+      "role": "Separator",
+      "line_byte_start": "1447",
+      "line_byte_end_exclusive": "1449",
+      "raw_utf8": ", ",
+      "member_ordinal": null
+    },
+    {
+      "role": "Member",
+      "line_byte_start": "1449",
+      "line_byte_end_exclusive": "1454",
+      "raw_utf8": "Llama",
+      "member_ordinal": "160"
+    },
+    {
+      "role": "Separator",
+      "line_byte_start": "1454",
+      "line_byte_end_exclusive": "1456",
+      "raw_utf8": ", ",
+      "member_ordinal": null
+    },
+    {
+      "role": "Member",
+      "line_byte_start": "1456",
+      "line_byte_end_exclusive": "1461",
+      "raw_utf8": "Lamia",
+      "member_ordinal": "152"
+    },
+    {
+      "role": "Separator",
+      "line_byte_start": "1461",
+      "line_byte_end_exclusive": "1463",
+      "raw_utf8": ", ",
+      "member_ordinal": null
+    },
+    {
+      "role": "Member",
+      "line_byte_start": "1463",
+      "line_byte_end_exclusive": "1470",
+      "raw_utf8": "Lammasu",
+      "member_ordinal": "153"
+    },
+    {
+      "role": "Separator",
+      "line_byte_start": "1470",
+      "line_byte_end_exclusive": "1472",
+      "raw_utf8": ", ",
+      "member_ordinal": null
+    },
+    {
+      "role": "Member",
+      "line_byte_start": "1472",
+      "line_byte_end_exclusive": "1477",
+      "raw_utf8": "Leech",
+      "member_ordinal": "154"
+    },
+    {
+      "role": "Separator",
+      "line_byte_start": "1477",
+      "line_byte_end_exclusive": "1479",
+      "raw_utf8": ", ",
+      "member_ordinal": null
+    },
+    {
+      "role": "Member",
+      "line_byte_start": "1479",
+      "line_byte_end_exclusive": "1484",
+      "raw_utf8": "Lemur",
+      "member_ordinal": "155"
+    },
+    {
+      "role": "Separator",
+      "line_byte_start": "1484",
+      "line_byte_end_exclusive": "1486",
+      "raw_utf8": ", ",
+      "member_ordinal": null
+    },
+    {
+      "role": "Member",
+      "line_byte_start": "1486",
+      "line_byte_end_exclusive": "1495",
+      "raw_utf8": "Leviathan",
+      "member_ordinal": "156"
+    },
+    {
+      "role": "Separator",
+      "line_byte_start": "1495",
+      "line_byte_end_exclusive": "1497",
+      "raw_utf8": ", ",
+      "member_ordinal": null
+    },
+    {
+      "role": "Member",
+      "line_byte_start": "1497",
+      "line_byte_end_exclusive": "1505",
+      "raw_utf8": "Lhurgoyf",
+      "member_ordinal": "157"
+    },
+    {
+      "role": "Separator",
+      "line_byte_start": "1505",
+      "line_byte_end_exclusive": "1507",
+      "raw_utf8": ", ",
+      "member_ordinal": null
+    },
+    {
+      "role": "Member",
+      "line_byte_start": "1507",
+      "line_byte_end_exclusive": "1512",
+      "raw_utf8": "Licid",
+      "member_ordinal": "158"
+    },
+    {
+      "role": "Separator",
+      "line_byte_start": "1512",
+      "line_byte_end_exclusive": "1514",
+      "raw_utf8": ", ",
+      "member_ordinal": null
+    },
+    {
+      "role": "Member",
+      "line_byte_start": "1514",
+      "line_byte_end_exclusive": "1520",
+      "raw_utf8": "Lizard",
+      "member_ordinal": "159"
+    },
+    {
+      "role": "Separator",
+      "line_byte_start": "1520",
+      "line_byte_end_exclusive": "1522",
+      "raw_utf8": ", ",
+      "member_ordinal": null
+    },
+    {
+      "role": "Member",
+      "line_byte_start": "1522",
+      "line_byte_end_exclusive": "1529",
+      "raw_utf8": "Lobster",
+      "member_ordinal": "161"
+    },
+    {
+      "role": "Separator",
+      "line_byte_start": "1529",
+      "line_byte_end_exclusive": "1531",
+      "raw_utf8": ", ",
+      "member_ordinal": null
+    },
+    {
+      "role": "Member",
+      "line_byte_start": "1531",
+      "line_byte_end_exclusive": "1540",
+      "raw_utf8": "Manticore",
+      "member_ordinal": "162"
+    },
+    {
+      "role": "Separator",
+      "line_byte_start": "1540",
+      "line_byte_end_exclusive": "1542",
+      "raw_utf8": ", ",
+      "member_ordinal": null
+    },
+    {
+      "role": "Member",
+      "line_byte_start": "1542",
+      "line_byte_end_exclusive": "1551",
+      "raw_utf8": "Masticore",
+      "member_ordinal": "163"
+    },
+    {
+      "role": "Separator",
+      "line_byte_start": "1551",
+      "line_byte_end_exclusive": "1553",
+      "raw_utf8": ", ",
+      "member_ordinal": null
+    },
+    {
+      "role": "Member",
+      "line_byte_start": "1553",
+      "line_byte_end_exclusive": "1562",
+      "raw_utf8": "Mercenary",
+      "member_ordinal": "164"
+    },
+    {
+      "role": "Separator",
+      "line_byte_start": "1562",
+      "line_byte_end_exclusive": "1564",
+      "raw_utf8": ", ",
+      "member_ordinal": null
+    },
+    {
+      "role": "Member",
+      "line_byte_start": "1564",
+      "line_byte_end_exclusive": "1571",
+      "raw_utf8": "Merfolk",
+      "member_ordinal": "165"
+    },
+    {
+      "role": "Separator",
+      "line_byte_start": "1571",
+      "line_byte_end_exclusive": "1573",
+      "raw_utf8": ", ",
+      "member_ordinal": null
+    },
+    {
+      "role": "Member",
+      "line_byte_start": "1573",
+      "line_byte_end_exclusive": "1582",
+      "raw_utf8": "Metathran",
+      "member_ordinal": "166"
+    },
+    {
+      "role": "Separator",
+      "line_byte_start": "1582",
+      "line_byte_end_exclusive": "1584",
+      "raw_utf8": ", ",
+      "member_ordinal": null
+    },
+    {
+      "role": "Member",
+      "line_byte_start": "1584",
+      "line_byte_end_exclusive": "1590",
+      "raw_utf8": "Minion",
+      "member_ordinal": "167"
+    },
+    {
+      "role": "Separator",
+      "line_byte_start": "1590",
+      "line_byte_end_exclusive": "1592",
+      "raw_utf8": ", ",
+      "member_ordinal": null
+    },
+    {
+      "role": "Member",
+      "line_byte_start": "1592",
+      "line_byte_end_exclusive": "1600",
+      "raw_utf8": "Minotaur",
+      "member_ordinal": "168"
+    },
+    {
+      "role": "Separator",
+      "line_byte_start": "1600",
+      "line_byte_end_exclusive": "1602",
+      "raw_utf8": ", ",
+      "member_ordinal": null
+    },
+    {
+      "role": "Member",
+      "line_byte_start": "1602",
+      "line_byte_end_exclusive": "1606",
+      "raw_utf8": "Mite",
+      "member_ordinal": "169"
+    },
+    {
+      "role": "Separator",
+      "line_byte_start": "1606",
+      "line_byte_end_exclusive": "1608",
+      "raw_utf8": ", ",
+      "member_ordinal": null
+    },
+    {
+      "role": "Member",
+      "line_byte_start": "1608",
+      "line_byte_end_exclusive": "1612",
+      "raw_utf8": "Mole",
+      "member_ordinal": "170"
+    },
+    {
+      "role": "Separator",
+      "line_byte_start": "1612",
+      "line_byte_end_exclusive": "1614",
+      "raw_utf8": ", ",
+      "member_ordinal": null
+    },
+    {
+      "role": "Member",
+      "line_byte_start": "1614",
+      "line_byte_end_exclusive": "1620",
+      "raw_utf8": "Monger",
+      "member_ordinal": "171"
+    },
+    {
+      "role": "Separator",
+      "line_byte_start": "1620",
+      "line_byte_end_exclusive": "1622",
+      "raw_utf8": ", ",
+      "member_ordinal": null
+    },
+    {
+      "role": "Member",
+      "line_byte_start": "1622",
+      "line_byte_end_exclusive": "1630",
+      "raw_utf8": "Mongoose",
+      "member_ordinal": "172"
+    },
+    {
+      "role": "Separator",
+      "line_byte_start": "1630",
+      "line_byte_end_exclusive": "1632",
+      "raw_utf8": ", ",
+      "member_ordinal": null
+    },
+    {
+      "role": "Member",
+      "line_byte_start": "1632",
+      "line_byte_end_exclusive": "1636",
+      "raw_utf8": "Monk",
+      "member_ordinal": "173"
+    },
+    {
+      "role": "Separator",
+      "line_byte_start": "1636",
+      "line_byte_end_exclusive": "1638",
+      "raw_utf8": ", ",
+      "member_ordinal": null
+    },
+    {
+      "role": "Member",
+      "line_byte_start": "1638",
+      "line_byte_end_exclusive": "1644",
+      "raw_utf8": "Monkey",
+      "member_ordinal": "174"
+    },
+    {
+      "role": "Separator",
+      "line_byte_start": "1644",
+      "line_byte_end_exclusive": "1646",
+      "raw_utf8": ", ",
+      "member_ordinal": null
+    },
+    {
+      "role": "Member",
+      "line_byte_start": "1646",
+      "line_byte_end_exclusive": "1652",
+      "raw_utf8": "Moogle",
+      "member_ordinal": "175"
+    },
+    {
+      "role": "Separator",
+      "line_byte_start": "1652",
+      "line_byte_end_exclusive": "1654",
+      "raw_utf8": ", ",
+      "member_ordinal": null
+    },
+    {
+      "role": "Member",
+      "line_byte_start": "1654",
+      "line_byte_end_exclusive": "1662",
+      "raw_utf8": "Moonfolk",
+      "member_ordinal": "176"
+    },
+    {
+      "role": "Separator",
+      "line_byte_start": "1662",
+      "line_byte_end_exclusive": "1664",
+      "raw_utf8": ", ",
+      "member_ordinal": null
+    },
+    {
+      "role": "Member",
+      "line_byte_start": "1664",
+      "line_byte_end_exclusive": "1669",
+      "raw_utf8": "Mount",
+      "member_ordinal": "177"
+    },
+    {
+      "role": "Separator",
+      "line_byte_start": "1669",
+      "line_byte_end_exclusive": "1671",
+      "raw_utf8": ", ",
+      "member_ordinal": null
+    },
+    {
+      "role": "Member",
+      "line_byte_start": "1671",
+      "line_byte_end_exclusive": "1676",
+      "raw_utf8": "Mouse",
+      "member_ordinal": "178"
+    },
+    {
+      "role": "Separator",
+      "line_byte_start": "1676",
+      "line_byte_end_exclusive": "1678",
+      "raw_utf8": ", ",
+      "member_ordinal": null
+    },
+    {
+      "role": "Member",
+      "line_byte_start": "1678",
+      "line_byte_end_exclusive": "1684",
+      "raw_utf8": "Mutant",
+      "member_ordinal": "179"
+    },
+    {
+      "role": "Separator",
+      "line_byte_start": "1684",
+      "line_byte_end_exclusive": "1686",
+      "raw_utf8": ", ",
+      "member_ordinal": null
+    },
+    {
+      "role": "Member",
+      "line_byte_start": "1686",
+      "line_byte_end_exclusive": "1689",
+      "raw_utf8": "Myr",
+      "member_ordinal": "180"
+    },
+    {
+      "role": "Separator",
+      "line_byte_start": "1689",
+      "line_byte_end_exclusive": "1691",
+      "raw_utf8": ", ",
+      "member_ordinal": null
+    },
+    {
+      "role": "Member",
+      "line_byte_start": "1691",
+      "line_byte_end_exclusive": "1697",
+      "raw_utf8": "Mystic",
+      "member_ordinal": "181"
+    },
+    {
+      "role": "Separator",
+      "line_byte_start": "1697",
+      "line_byte_end_exclusive": "1699",
+      "raw_utf8": ", ",
+      "member_ordinal": null
+    },
+    {
+      "role": "Member",
+      "line_byte_start": "1699",
+      "line_byte_end_exclusive": "1707",
+      "raw_utf8": "Nautilus",
+      "member_ordinal": "182"
+    },
+    {
+      "role": "Separator",
+      "line_byte_start": "1707",
+      "line_byte_end_exclusive": "1709",
+      "raw_utf8": ", ",
+      "member_ordinal": null
+    },
+    {
+      "role": "Member",
+      "line_byte_start": "1709",
+      "line_byte_end_exclusive": "1715",
+      "raw_utf8": "Necron",
+      "member_ordinal": "183"
+    },
+    {
+      "role": "Separator",
+      "line_byte_start": "1715",
+      "line_byte_end_exclusive": "1717",
+      "raw_utf8": ", ",
+      "member_ordinal": null
+    },
+    {
+      "role": "Member",
+      "line_byte_start": "1717",
+      "line_byte_end_exclusive": "1725",
+      "raw_utf8": "Nephilim",
+      "member_ordinal": "184"
+    },
+    {
+      "role": "Separator",
+      "line_byte_start": "1725",
+      "line_byte_end_exclusive": "1727",
+      "raw_utf8": ", ",
+      "member_ordinal": null
+    },
+    {
+      "role": "Member",
+      "line_byte_start": "1727",
+      "line_byte_end_exclusive": "1736",
+      "raw_utf8": "Nightmare",
+      "member_ordinal": "185"
+    },
+    {
+      "role": "Separator",
+      "line_byte_start": "1736",
+      "line_byte_end_exclusive": "1738",
+      "raw_utf8": ", ",
+      "member_ordinal": null
+    },
+    {
+      "role": "Member",
+      "line_byte_start": "1738",
+      "line_byte_end_exclusive": "1750",
+      "raw_utf8": "Nightstalker",
+      "member_ordinal": "186"
+    },
+    {
+      "role": "Separator",
+      "line_byte_start": "1750",
+      "line_byte_end_exclusive": "1752",
+      "raw_utf8": ", ",
+      "member_ordinal": null
+    },
+    {
+      "role": "Member",
+      "line_byte_start": "1752",
+      "line_byte_end_exclusive": "1757",
+      "raw_utf8": "Ninja",
+      "member_ordinal": "187"
+    },
+    {
+      "role": "Separator",
+      "line_byte_start": "1757",
+      "line_byte_end_exclusive": "1759",
+      "raw_utf8": ", ",
+      "member_ordinal": null
+    },
+    {
+      "role": "Member",
+      "line_byte_start": "1759",
+      "line_byte_end_exclusive": "1764",
+      "raw_utf8": "Noble",
+      "member_ordinal": "188"
+    },
+    {
+      "role": "Separator",
+      "line_byte_start": "1764",
+      "line_byte_end_exclusive": "1766",
+      "raw_utf8": ", ",
+      "member_ordinal": null
+    },
+    {
+      "role": "Member",
+      "line_byte_start": "1766",
+      "line_byte_end_exclusive": "1772",
+      "raw_utf8": "Noggle",
+      "member_ordinal": "189"
+    },
+    {
+      "role": "Separator",
+      "line_byte_start": "1772",
+      "line_byte_end_exclusive": "1774",
+      "raw_utf8": ", ",
+      "member_ordinal": null
+    },
+    {
+      "role": "Member",
+      "line_byte_start": "1774",
+      "line_byte_end_exclusive": "1779",
+      "raw_utf8": "Nomad",
+      "member_ordinal": "190"
+    },
+    {
+      "role": "Separator",
+      "line_byte_start": "1779",
+      "line_byte_end_exclusive": "1781",
+      "raw_utf8": ", ",
+      "member_ordinal": null
+    },
+    {
+      "role": "Member",
+      "line_byte_start": "1781",
+      "line_byte_end_exclusive": "1786",
+      "raw_utf8": "Nymph",
+      "member_ordinal": "191"
+    },
+    {
+      "role": "Separator",
+      "line_byte_start": "1786",
+      "line_byte_end_exclusive": "1788",
+      "raw_utf8": ", ",
+      "member_ordinal": null
+    },
+    {
+      "role": "Member",
+      "line_byte_start": "1788",
+      "line_byte_end_exclusive": "1795",
+      "raw_utf8": "Octopus",
+      "member_ordinal": "192"
+    },
+    {
+      "role": "Separator",
+      "line_byte_start": "1795",
+      "line_byte_end_exclusive": "1797",
+      "raw_utf8": ", ",
+      "member_ordinal": null
+    },
+    {
+      "role": "Member",
+      "line_byte_start": "1797",
+      "line_byte_end_exclusive": "1801",
+      "raw_utf8": "Ogre",
+      "member_ordinal": "193"
+    },
+    {
+      "role": "Separator",
+      "line_byte_start": "1801",
+      "line_byte_end_exclusive": "1803",
+      "raw_utf8": ", ",
+      "member_ordinal": null
+    },
+    {
+      "role": "Member",
+      "line_byte_start": "1803",
+      "line_byte_end_exclusive": "1807",
+      "raw_utf8": "Ooze",
+      "member_ordinal": "194"
+    },
+    {
+      "role": "Separator",
+      "line_byte_start": "1807",
+      "line_byte_end_exclusive": "1809",
+      "raw_utf8": ", ",
+      "member_ordinal": null
+    },
+    {
+      "role": "Member",
+      "line_byte_start": "1809",
+      "line_byte_end_exclusive": "1812",
+      "raw_utf8": "Orb",
+      "member_ordinal": "195"
+    },
+    {
+      "role": "Separator",
+      "line_byte_start": "1812",
+      "line_byte_end_exclusive": "1814",
+      "raw_utf8": ", ",
+      "member_ordinal": null
+    },
+    {
+      "role": "Member",
+      "line_byte_start": "1814",
+      "line_byte_end_exclusive": "1817",
+      "raw_utf8": "Orc",
+      "member_ordinal": "196"
+    },
+    {
+      "role": "Separator",
+      "line_byte_start": "1817",
+      "line_byte_end_exclusive": "1819",
+      "raw_utf8": ", ",
+      "member_ordinal": null
+    },
+    {
+      "role": "Member",
+      "line_byte_start": "1819",
+      "line_byte_end_exclusive": "1823",
+      "raw_utf8": "Orgg",
+      "member_ordinal": "197"
+    },
+    {
+      "role": "Separator",
+      "line_byte_start": "1823",
+      "line_byte_end_exclusive": "1825",
+      "raw_utf8": ", ",
+      "member_ordinal": null
+    },
+    {
+      "role": "Member",
+      "line_byte_start": "1825",
+      "line_byte_end_exclusive": "1830",
+      "raw_utf8": "Otter",
+      "member_ordinal": "198"
+    },
+    {
+      "role": "Separator",
+      "line_byte_start": "1830",
+      "line_byte_end_exclusive": "1832",
+      "raw_utf8": ", ",
+      "member_ordinal": null
+    },
+    {
+      "role": "Member",
+      "line_byte_start": "1832",
+      "line_byte_end_exclusive": "1837",
+      "raw_utf8": "Ouphe",
+      "member_ordinal": "199"
+    },
+    {
+      "role": "Separator",
+      "line_byte_start": "1837",
+      "line_byte_end_exclusive": "1839",
+      "raw_utf8": ", ",
+      "member_ordinal": null
+    },
+    {
+      "role": "Member",
+      "line_byte_start": "1839",
+      "line_byte_end_exclusive": "1841",
+      "raw_utf8": "Ox",
+      "member_ordinal": "200"
+    },
+    {
+      "role": "Separator",
+      "line_byte_start": "1841",
+      "line_byte_end_exclusive": "1843",
+      "raw_utf8": ", ",
+      "member_ordinal": null
+    },
+    {
+      "role": "Member",
+      "line_byte_start": "1843",
+      "line_byte_end_exclusive": "1849",
+      "raw_utf8": "Oyster",
+      "member_ordinal": "201"
+    },
+    {
+      "role": "Separator",
+      "line_byte_start": "1849",
+      "line_byte_end_exclusive": "1851",
+      "raw_utf8": ", ",
+      "member_ordinal": null
+    },
+    {
+      "role": "Member",
+      "line_byte_start": "1851",
+      "line_byte_end_exclusive": "1859",
+      "raw_utf8": "Pangolin",
+      "member_ordinal": "202"
+    },
+    {
+      "role": "Separator",
+      "line_byte_start": "1859",
+      "line_byte_end_exclusive": "1861",
+      "raw_utf8": ", ",
+      "member_ordinal": null
+    },
+    {
+      "role": "Member",
+      "line_byte_start": "1861",
+      "line_byte_end_exclusive": "1868",
+      "raw_utf8": "Peasant",
+      "member_ordinal": "203"
+    },
+    {
+      "role": "Separator",
+      "line_byte_start": "1868",
+      "line_byte_end_exclusive": "1870",
+      "raw_utf8": ", ",
+      "member_ordinal": null
+    },
+    {
+      "role": "Member",
+      "line_byte_start": "1870",
+      "line_byte_end_exclusive": "1877",
+      "raw_utf8": "Pegasus",
+      "member_ordinal": "204"
+    },
+    {
+      "role": "Separator",
+      "line_byte_start": "1877",
+      "line_byte_end_exclusive": "1879",
+      "raw_utf8": ", ",
+      "member_ordinal": null
+    },
+    {
+      "role": "Member",
+      "line_byte_start": "1879",
+      "line_byte_end_exclusive": "1888",
+      "raw_utf8": "Pentavite",
+      "member_ordinal": "205"
+    },
+    {
+      "role": "Separator",
+      "line_byte_start": "1888",
+      "line_byte_end_exclusive": "1890",
+      "raw_utf8": ", ",
+      "member_ordinal": null
+    },
+    {
+      "role": "Member",
+      "line_byte_start": "1890",
+      "line_byte_end_exclusive": "1899",
+      "raw_utf8": "Performer",
+      "member_ordinal": "206"
+    },
+    {
+      "role": "Separator",
+      "line_byte_start": "1899",
+      "line_byte_end_exclusive": "1901",
+      "raw_utf8": ", ",
+      "member_ordinal": null
+    },
+    {
+      "role": "Member",
+      "line_byte_start": "1901",
+      "line_byte_end_exclusive": "1905",
+      "raw_utf8": "Pest",
+      "member_ordinal": "207"
+    },
+    {
+      "role": "Separator",
+      "line_byte_start": "1905",
+      "line_byte_end_exclusive": "1907",
+      "raw_utf8": ", ",
+      "member_ordinal": null
+    },
+    {
+      "role": "Member",
+      "line_byte_start": "1907",
+      "line_byte_end_exclusive": "1918",
+      "raw_utf8": "Phelddagrif",
+      "member_ordinal": "208"
+    },
+    {
+      "role": "Separator",
+      "line_byte_start": "1918",
+      "line_byte_end_exclusive": "1920",
+      "raw_utf8": ", ",
+      "member_ordinal": null
+    },
+    {
+      "role": "Member",
+      "line_byte_start": "1920",
+      "line_byte_end_exclusive": "1927",
+      "raw_utf8": "Phoenix",
+      "member_ordinal": "209"
+    },
+    {
+      "role": "Separator",
+      "line_byte_start": "1927",
+      "line_byte_end_exclusive": "1929",
+      "raw_utf8": ", ",
+      "member_ordinal": null
+    },
+    {
+      "role": "Member",
+      "line_byte_start": "1929",
+      "line_byte_end_exclusive": "1938",
+      "raw_utf8": "Phyrexian",
+      "member_ordinal": "210"
+    },
+    {
+      "role": "Separator",
+      "line_byte_start": "1938",
+      "line_byte_end_exclusive": "1940",
+      "raw_utf8": ", ",
+      "member_ordinal": null
+    },
+    {
+      "role": "Member",
+      "line_byte_start": "1940",
+      "line_byte_end_exclusive": "1945",
+      "raw_utf8": "Pilot",
+      "member_ordinal": "211"
+    },
+    {
+      "role": "Separator",
+      "line_byte_start": "1945",
+      "line_byte_end_exclusive": "1947",
+      "raw_utf8": ", ",
+      "member_ordinal": null
+    },
+    {
+      "role": "Member",
+      "line_byte_start": "1947",
+      "line_byte_end_exclusive": "1954",
+      "raw_utf8": "Pincher",
+      "member_ordinal": "212"
+    },
+    {
+      "role": "Separator",
+      "line_byte_start": "1954",
+      "line_byte_end_exclusive": "1956",
+      "raw_utf8": ", ",
+      "member_ordinal": null
+    },
+    {
+      "role": "Member",
+      "line_byte_start": "1956",
+      "line_byte_end_exclusive": "1962",
+      "raw_utf8": "Pirate",
+      "member_ordinal": "213"
+    },
+    {
+      "role": "Separator",
+      "line_byte_start": "1962",
+      "line_byte_end_exclusive": "1964",
+      "raw_utf8": ", ",
+      "member_ordinal": null
+    },
+    {
+      "role": "Member",
+      "line_byte_start": "1964",
+      "line_byte_end_exclusive": "1969",
+      "raw_utf8": "Plant",
+      "member_ordinal": "214"
+    },
+    {
+      "role": "Separator",
+      "line_byte_start": "1969",
+      "line_byte_end_exclusive": "1971",
+      "raw_utf8": ", ",
+      "member_ordinal": null
+    },
+    {
+      "role": "Member",
+      "line_byte_start": "1971",
+      "line_byte_end_exclusive": "1979",
+      "raw_utf8": "Platypus",
+      "member_ordinal": "215"
+    },
+    {
+      "role": "Separator",
+      "line_byte_start": "1979",
+      "line_byte_end_exclusive": "1981",
+      "raw_utf8": ", ",
+      "member_ordinal": null
+    },
+    {
+      "role": "Member",
+      "line_byte_start": "1981",
+      "line_byte_end_exclusive": "1990",
+      "raw_utf8": "Porcupine",
+      "member_ordinal": "216"
+    },
+    {
+      "role": "Separator",
+      "line_byte_start": "1990",
+      "line_byte_end_exclusive": "1992",
+      "raw_utf8": ", ",
+      "member_ordinal": null
+    },
+    {
+      "role": "Member",
+      "line_byte_start": "1992",
+      "line_byte_end_exclusive": "1998",
+      "raw_utf8": "Possum",
+      "member_ordinal": "217"
+    },
+    {
+      "role": "Separator",
+      "line_byte_start": "1998",
+      "line_byte_end_exclusive": "2000",
+      "raw_utf8": ", ",
+      "member_ordinal": null
+    },
+    {
+      "role": "Member",
+      "line_byte_start": "2000",
+      "line_byte_end_exclusive": "2007",
+      "raw_utf8": "Praetor",
+      "member_ordinal": "218"
+    },
+    {
+      "role": "Separator",
+      "line_byte_start": "2007",
+      "line_byte_end_exclusive": "2009",
+      "raw_utf8": ", ",
+      "member_ordinal": null
+    },
+    {
+      "role": "Member",
+      "line_byte_start": "2009",
+      "line_byte_end_exclusive": "2017",
+      "raw_utf8": "Primarch",
+      "member_ordinal": "219"
+    },
+    {
+      "role": "Separator",
+      "line_byte_start": "2017",
+      "line_byte_end_exclusive": "2019",
+      "raw_utf8": ", ",
+      "member_ordinal": null
+    },
+    {
+      "role": "Member",
+      "line_byte_start": "2019",
+      "line_byte_end_exclusive": "2024",
+      "raw_utf8": "Prism",
+      "member_ordinal": "220"
+    },
+    {
+      "role": "Separator",
+      "line_byte_start": "2024",
+      "line_byte_end_exclusive": "2026",
+      "raw_utf8": ", ",
+      "member_ordinal": null
+    },
+    {
+      "role": "Member",
+      "line_byte_start": "2026",
+      "line_byte_end_exclusive": "2035",
+      "raw_utf8": "Processor",
+      "member_ordinal": "221"
+    },
+    {
+      "role": "Separator",
+      "line_byte_start": "2035",
+      "line_byte_end_exclusive": "2037",
+      "raw_utf8": ", ",
+      "member_ordinal": null
+    },
+    {
+      "role": "Member",
+      "line_byte_start": "2037",
+      "line_byte_end_exclusive": "2039",
+      "raw_utf8": "Qu",
+      "member_ordinal": "222"
+    },
+    {
+      "role": "Separator",
+      "line_byte_start": "2039",
+      "line_byte_end_exclusive": "2041",
+      "raw_utf8": ", ",
+      "member_ordinal": null
+    },
+    {
+      "role": "Member",
+      "line_byte_start": "2041",
+      "line_byte_end_exclusive": "2047",
+      "raw_utf8": "Rabbit",
+      "member_ordinal": "223"
+    },
+    {
+      "role": "Separator",
+      "line_byte_start": "2047",
+      "line_byte_end_exclusive": "2049",
+      "raw_utf8": ", ",
+      "member_ordinal": null
+    },
+    {
+      "role": "Member",
+      "line_byte_start": "2049",
+      "line_byte_end_exclusive": "2056",
+      "raw_utf8": "Raccoon",
+      "member_ordinal": "224"
+    },
+    {
+      "role": "Separator",
+      "line_byte_start": "2056",
+      "line_byte_end_exclusive": "2058",
+      "raw_utf8": ", ",
+      "member_ordinal": null
+    },
+    {
+      "role": "Member",
+      "line_byte_start": "2058",
+      "line_byte_end_exclusive": "2064",
+      "raw_utf8": "Ranger",
+      "member_ordinal": "225"
+    },
+    {
+      "role": "Separator",
+      "line_byte_start": "2064",
+      "line_byte_end_exclusive": "2066",
+      "raw_utf8": ", ",
+      "member_ordinal": null
+    },
+    {
+      "role": "Member",
+      "line_byte_start": "2066",
+      "line_byte_end_exclusive": "2069",
+      "raw_utf8": "Rat",
+      "member_ordinal": "226"
+    },
+    {
+      "role": "Separator",
+      "line_byte_start": "2069",
+      "line_byte_end_exclusive": "2071",
+      "raw_utf8": ", ",
+      "member_ordinal": null
+    },
+    {
+      "role": "Member",
+      "line_byte_start": "2071",
+      "line_byte_end_exclusive": "2076",
+      "raw_utf8": "Rebel",
+      "member_ordinal": "227"
+    },
+    {
+      "role": "Separator",
+      "line_byte_start": "2076",
+      "line_byte_end_exclusive": "2078",
+      "raw_utf8": ", ",
+      "member_ordinal": null
+    },
+    {
+      "role": "Member",
+      "line_byte_start": "2078",
+      "line_byte_end_exclusive": "2088",
+      "raw_utf8": "Reflection",
+      "member_ordinal": "228"
+    },
+    {
+      "role": "Separator",
+      "line_byte_start": "2088",
+      "line_byte_end_exclusive": "2090",
+      "raw_utf8": ", ",
+      "member_ordinal": null
+    },
+    {
+      "role": "Member",
+      "line_byte_start": "2090",
+      "line_byte_end_exclusive": "2095",
+      "raw_utf8": "Rhino",
+      "member_ordinal": "229"
+    },
+    {
+      "role": "Separator",
+      "line_byte_start": "2095",
+      "line_byte_end_exclusive": "2097",
+      "raw_utf8": ", ",
+      "member_ordinal": null
+    },
+    {
+      "role": "Member",
+      "line_byte_start": "2097",
+      "line_byte_end_exclusive": "2103",
+      "raw_utf8": "Rigger",
+      "member_ordinal": "230"
+    },
+    {
+      "role": "Separator",
+      "line_byte_start": "2103",
+      "line_byte_end_exclusive": "2105",
+      "raw_utf8": ", ",
+      "member_ordinal": null
+    },
+    {
+      "role": "Member",
+      "line_byte_start": "2105",
+      "line_byte_end_exclusive": "2110",
+      "raw_utf8": "Robot",
+      "member_ordinal": "231"
+    },
+    {
+      "role": "Separator",
+      "line_byte_start": "2110",
+      "line_byte_end_exclusive": "2112",
+      "raw_utf8": ", ",
+      "member_ordinal": null
+    },
+    {
+      "role": "Member",
+      "line_byte_start": "2112",
+      "line_byte_end_exclusive": "2117",
+      "raw_utf8": "Rogue",
+      "member_ordinal": "232"
+    },
+    {
+      "role": "Separator",
+      "line_byte_start": "2117",
+      "line_byte_end_exclusive": "2119",
+      "raw_utf8": ", ",
+      "member_ordinal": null
+    },
+    {
+      "role": "Member",
+      "line_byte_start": "2119",
+      "line_byte_end_exclusive": "2124",
+      "raw_utf8": "Sable",
+      "member_ordinal": "233"
+    },
+    {
+      "role": "Separator",
+      "line_byte_start": "2124",
+      "line_byte_end_exclusive": "2126",
+      "raw_utf8": ", ",
+      "member_ordinal": null
+    },
+    {
+      "role": "Member",
+      "line_byte_start": "2126",
+      "line_byte_end_exclusive": "2136",
+      "raw_utf8": "Salamander",
+      "member_ordinal": "234"
+    },
+    {
+      "role": "Separator",
+      "line_byte_start": "2136",
+      "line_byte_end_exclusive": "2138",
+      "raw_utf8": ", ",
+      "member_ordinal": null
+    },
+    {
+      "role": "Member",
+      "line_byte_start": "2138",
+      "line_byte_end_exclusive": "2145",
+      "raw_utf8": "Samurai",
+      "member_ordinal": "235"
+    },
+    {
+      "role": "Separator",
+      "line_byte_start": "2145",
+      "line_byte_end_exclusive": "2147",
+      "raw_utf8": ", ",
+      "member_ordinal": null
+    },
+    {
+      "role": "Member",
+      "line_byte_start": "2147",
+      "line_byte_end_exclusive": "2151",
+      "raw_utf8": "Sand",
+      "member_ordinal": "236"
+    },
+    {
+      "role": "Separator",
+      "line_byte_start": "2151",
+      "line_byte_end_exclusive": "2153",
+      "raw_utf8": ", ",
+      "member_ordinal": null
+    },
+    {
+      "role": "Member",
+      "line_byte_start": "2153",
+      "line_byte_end_exclusive": "2162",
+      "raw_utf8": "Saproling",
+      "member_ordinal": "237"
+    },
+    {
+      "role": "Separator",
+      "line_byte_start": "2162",
+      "line_byte_end_exclusive": "2164",
+      "raw_utf8": ", ",
+      "member_ordinal": null
+    },
+    {
+      "role": "Member",
+      "line_byte_start": "2164",
+      "line_byte_end_exclusive": "2169",
+      "raw_utf8": "Satyr",
+      "member_ordinal": "238"
+    },
+    {
+      "role": "Separator",
+      "line_byte_start": "2169",
+      "line_byte_end_exclusive": "2171",
+      "raw_utf8": ", ",
+      "member_ordinal": null
+    },
+    {
+      "role": "Member",
+      "line_byte_start": "2171",
+      "line_byte_end_exclusive": "2180",
+      "raw_utf8": "Scarecrow",
+      "member_ordinal": "239"
+    },
+    {
+      "role": "Separator",
+      "line_byte_start": "2180",
+      "line_byte_end_exclusive": "2182",
+      "raw_utf8": ", ",
+      "member_ordinal": null
+    },
+    {
+      "role": "Member",
+      "line_byte_start": "2182",
+      "line_byte_end_exclusive": "2191",
+      "raw_utf8": "Scientist",
+      "member_ordinal": "240"
+    },
+    {
+      "role": "Separator",
+      "line_byte_start": "2191",
+      "line_byte_end_exclusive": "2193",
+      "raw_utf8": ", ",
+      "member_ordinal": null
+    },
+    {
+      "role": "Member",
+      "line_byte_start": "2193",
+      "line_byte_end_exclusive": "2198",
+      "raw_utf8": "Scion",
+      "member_ordinal": "241"
+    },
+    {
+      "role": "Separator",
+      "line_byte_start": "2198",
+      "line_byte_end_exclusive": "2200",
+      "raw_utf8": ", ",
+      "member_ordinal": null
+    },
+    {
+      "role": "Member",
+      "line_byte_start": "2200",
+      "line_byte_end_exclusive": "2208",
+      "raw_utf8": "Scorpion",
+      "member_ordinal": "242"
+    },
+    {
+      "role": "Separator",
+      "line_byte_start": "2208",
+      "line_byte_end_exclusive": "2210",
+      "raw_utf8": ", ",
+      "member_ordinal": null
+    },
+    {
+      "role": "Member",
+      "line_byte_start": "2210",
+      "line_byte_end_exclusive": "2215",
+      "raw_utf8": "Scout",
+      "member_ordinal": "243"
+    },
+    {
+      "role": "Separator",
+      "line_byte_start": "2215",
+      "line_byte_end_exclusive": "2217",
+      "raw_utf8": ", ",
+      "member_ordinal": null
+    },
+    {
+      "role": "Member",
+      "line_byte_start": "2217",
+      "line_byte_end_exclusive": "2226",
+      "raw_utf8": "Sculpture",
+      "member_ordinal": "244"
+    },
+    {
+      "role": "Separator",
+      "line_byte_start": "2226",
+      "line_byte_end_exclusive": "2228",
+      "raw_utf8": ", ",
+      "member_ordinal": null
+    },
+    {
+      "role": "Member",
+      "line_byte_start": "2228",
+      "line_byte_end_exclusive": "2232",
+      "raw_utf8": "Seal",
+      "member_ordinal": "245"
+    },
+    {
+      "role": "Separator",
+      "line_byte_start": "2232",
+      "line_byte_end_exclusive": "2234",
+      "raw_utf8": ", ",
+      "member_ordinal": null
+    },
+    {
+      "role": "Member",
+      "line_byte_start": "2234",
+      "line_byte_end_exclusive": "2238",
+      "raw_utf8": "Serf",
+      "member_ordinal": "246"
+    },
+    {
+      "role": "Separator",
+      "line_byte_start": "2238",
+      "line_byte_end_exclusive": "2240",
+      "raw_utf8": ", ",
+      "member_ordinal": null
+    },
+    {
+      "role": "Member",
+      "line_byte_start": "2240",
+      "line_byte_end_exclusive": "2247",
+      "raw_utf8": "Serpent",
+      "member_ordinal": "247"
+    },
+    {
+      "role": "Separator",
+      "line_byte_start": "2247",
+      "line_byte_end_exclusive": "2249",
+      "raw_utf8": ", ",
+      "member_ordinal": null
+    },
+    {
+      "role": "Member",
+      "line_byte_start": "2249",
+      "line_byte_end_exclusive": "2254",
+      "raw_utf8": "Servo",
+      "member_ordinal": "248"
+    },
+    {
+      "role": "Separator",
+      "line_byte_start": "2254",
+      "line_byte_end_exclusive": "2256",
+      "raw_utf8": ", ",
+      "member_ordinal": null
+    },
+    {
+      "role": "Member",
+      "line_byte_start": "2256",
+      "line_byte_end_exclusive": "2261",
+      "raw_utf8": "Shade",
+      "member_ordinal": "249"
+    },
+    {
+      "role": "Separator",
+      "line_byte_start": "2261",
+      "line_byte_end_exclusive": "2263",
+      "raw_utf8": ", ",
+      "member_ordinal": null
+    },
+    {
+      "role": "Member",
+      "line_byte_start": "2263",
+      "line_byte_end_exclusive": "2269",
+      "raw_utf8": "Shaman",
+      "member_ordinal": "250"
+    },
+    {
+      "role": "Separator",
+      "line_byte_start": "2269",
+      "line_byte_end_exclusive": "2271",
+      "raw_utf8": ", ",
+      "member_ordinal": null
+    },
+    {
+      "role": "Member",
+      "line_byte_start": "2271",
+      "line_byte_end_exclusive": "2283",
+      "raw_utf8": "Shapeshifter",
+      "member_ordinal": "251"
+    },
+    {
+      "role": "Separator",
+      "line_byte_start": "2283",
+      "line_byte_end_exclusive": "2285",
+      "raw_utf8": ", ",
+      "member_ordinal": null
+    },
+    {
+      "role": "Member",
+      "line_byte_start": "2285",
+      "line_byte_end_exclusive": "2290",
+      "raw_utf8": "Shark",
+      "member_ordinal": "252"
+    },
+    {
+      "role": "Separator",
+      "line_byte_start": "2290",
+      "line_byte_end_exclusive": "2292",
+      "raw_utf8": ", ",
+      "member_ordinal": null
+    },
+    {
+      "role": "Member",
+      "line_byte_start": "2292",
+      "line_byte_end_exclusive": "2297",
+      "raw_utf8": "Sheep",
+      "member_ordinal": "253"
+    },
+    {
+      "role": "Separator",
+      "line_byte_start": "2297",
+      "line_byte_end_exclusive": "2299",
+      "raw_utf8": ", ",
+      "member_ordinal": null
+    },
+    {
+      "role": "Member",
+      "line_byte_start": "2299",
+      "line_byte_end_exclusive": "2307",
+      "raw_utf8": "Shi’ar",
+      "member_ordinal": "254"
+    },
+    {
+      "role": "Separator",
+      "line_byte_start": "2307",
+      "line_byte_end_exclusive": "2309",
+      "raw_utf8": ", ",
+      "member_ordinal": null
+    },
+    {
+      "role": "Member",
+      "line_byte_start": "2309",
+      "line_byte_end_exclusive": "2314",
+      "raw_utf8": "Siren",
+      "member_ordinal": "255"
+    },
+    {
+      "role": "Separator",
+      "line_byte_start": "2314",
+      "line_byte_end_exclusive": "2316",
+      "raw_utf8": ", ",
+      "member_ordinal": null
+    },
+    {
+      "role": "Member",
+      "line_byte_start": "2316",
+      "line_byte_end_exclusive": "2324",
+      "raw_utf8": "Skeleton",
+      "member_ordinal": "256"
+    },
+    {
+      "role": "Separator",
+      "line_byte_start": "2324",
+      "line_byte_end_exclusive": "2326",
+      "raw_utf8": ", ",
+      "member_ordinal": null
+    },
+    {
+      "role": "Member",
+      "line_byte_start": "2326",
+      "line_byte_end_exclusive": "2332",
+      "raw_utf8": "Skrull",
+      "member_ordinal": "257"
+    },
+    {
+      "role": "Separator",
+      "line_byte_start": "2332",
+      "line_byte_end_exclusive": "2334",
+      "raw_utf8": ", ",
+      "member_ordinal": null
+    },
+    {
+      "role": "Member",
+      "line_byte_start": "2334",
+      "line_byte_end_exclusive": "2339",
+      "raw_utf8": "Skunk",
+      "member_ordinal": "258"
+    },
+    {
+      "role": "Separator",
+      "line_byte_start": "2339",
+      "line_byte_end_exclusive": "2341",
+      "raw_utf8": ", ",
+      "member_ordinal": null
+    },
+    {
+      "role": "Member",
+      "line_byte_start": "2341",
+      "line_byte_end_exclusive": "2346",
+      "raw_utf8": "Slith",
+      "member_ordinal": "259"
+    },
+    {
+      "role": "Separator",
+      "line_byte_start": "2346",
+      "line_byte_end_exclusive": "2348",
+      "raw_utf8": ", ",
+      "member_ordinal": null
+    },
+    {
+      "role": "Member",
+      "line_byte_start": "2348",
+      "line_byte_end_exclusive": "2354",
+      "raw_utf8": "Sliver",
+      "member_ordinal": "260"
+    },
+    {
+      "role": "Separator",
+      "line_byte_start": "2354",
+      "line_byte_end_exclusive": "2356",
+      "raw_utf8": ", ",
+      "member_ordinal": null
+    },
+    {
+      "role": "Member",
+      "line_byte_start": "2356",
+      "line_byte_end_exclusive": "2361",
+      "raw_utf8": "Sloth",
+      "member_ordinal": "261"
+    },
+    {
+      "role": "Separator",
+      "line_byte_start": "2361",
+      "line_byte_end_exclusive": "2363",
+      "raw_utf8": ", ",
+      "member_ordinal": null
+    },
+    {
+      "role": "Member",
+      "line_byte_start": "2363",
+      "line_byte_end_exclusive": "2367",
+      "raw_utf8": "Slug",
+      "member_ordinal": "262"
+    },
+    {
+      "role": "Separator",
+      "line_byte_start": "2367",
+      "line_byte_end_exclusive": "2369",
+      "raw_utf8": ", ",
+      "member_ordinal": null
+    },
+    {
+      "role": "Member",
+      "line_byte_start": "2369",
+      "line_byte_end_exclusive": "2374",
+      "raw_utf8": "Snail",
+      "member_ordinal": "263"
+    },
+    {
+      "role": "Separator",
+      "line_byte_start": "2374",
+      "line_byte_end_exclusive": "2376",
+      "raw_utf8": ", ",
+      "member_ordinal": null
+    },
+    {
+      "role": "Member",
+      "line_byte_start": "2376",
+      "line_byte_end_exclusive": "2381",
+      "raw_utf8": "Snake",
+      "member_ordinal": "264"
+    },
+    {
+      "role": "Separator",
+      "line_byte_start": "2381",
+      "line_byte_end_exclusive": "2383",
+      "raw_utf8": ", ",
+      "member_ordinal": null
+    },
+    {
+      "role": "Member",
+      "line_byte_start": "2383",
+      "line_byte_end_exclusive": "2390",
+      "raw_utf8": "Soldier",
+      "member_ordinal": "265"
+    },
+    {
+      "role": "Separator",
+      "line_byte_start": "2390",
+      "line_byte_end_exclusive": "2392",
+      "raw_utf8": ", ",
+      "member_ordinal": null
+    },
+    {
+      "role": "Member",
+      "line_byte_start": "2392",
+      "line_byte_end_exclusive": "2399",
+      "raw_utf8": "Soltari",
+      "member_ordinal": "266"
+    },
+    {
+      "role": "Separator",
+      "line_byte_start": "2399",
+      "line_byte_end_exclusive": "2401",
+      "raw_utf8": ", ",
+      "member_ordinal": null
+    },
+    {
+      "role": "Member",
+      "line_byte_start": "2401",
+      "line_byte_end_exclusive": "2409",
+      "raw_utf8": "Sorcerer",
+      "member_ordinal": "267"
+    },
+    {
+      "role": "Separator",
+      "line_byte_start": "2409",
+      "line_byte_end_exclusive": "2411",
+      "raw_utf8": ", ",
+      "member_ordinal": null
+    },
+    {
+      "role": "Member",
+      "line_byte_start": "2411",
+      "line_byte_end_exclusive": "2416",
+      "raw_utf8": "Spawn",
+      "member_ordinal": "268"
+    },
+    {
+      "role": "Separator",
+      "line_byte_start": "2416",
+      "line_byte_end_exclusive": "2418",
+      "raw_utf8": ", ",
+      "member_ordinal": null
+    },
+    {
+      "role": "Member",
+      "line_byte_start": "2418",
+      "line_byte_end_exclusive": "2425",
+      "raw_utf8": "Specter",
+      "member_ordinal": "269"
+    },
+    {
+      "role": "Separator",
+      "line_byte_start": "2425",
+      "line_byte_end_exclusive": "2427",
+      "raw_utf8": ", ",
+      "member_ordinal": null
+    },
+    {
+      "role": "Member",
+      "line_byte_start": "2427",
+      "line_byte_end_exclusive": "2438",
+      "raw_utf8": "Spellshaper",
+      "member_ordinal": "270"
+    },
+    {
+      "role": "Separator",
+      "line_byte_start": "2438",
+      "line_byte_end_exclusive": "2440",
+      "raw_utf8": ", ",
+      "member_ordinal": null
+    },
+    {
+      "role": "Member",
+      "line_byte_start": "2440",
+      "line_byte_end_exclusive": "2446",
+      "raw_utf8": "Sphinx",
+      "member_ordinal": "271"
+    },
+    {
+      "role": "Separator",
+      "line_byte_start": "2446",
+      "line_byte_end_exclusive": "2448",
+      "raw_utf8": ", ",
+      "member_ordinal": null
+    },
+    {
+      "role": "Member",
+      "line_byte_start": "2448",
+      "line_byte_end_exclusive": "2454",
+      "raw_utf8": "Spider",
+      "member_ordinal": "272"
+    },
+    {
+      "role": "Separator",
+      "line_byte_start": "2454",
+      "line_byte_end_exclusive": "2456",
+      "raw_utf8": ", ",
+      "member_ordinal": null
+    },
+    {
+      "role": "Member",
+      "line_byte_start": "2456",
+      "line_byte_end_exclusive": "2461",
+      "raw_utf8": "Spike",
+      "member_ordinal": "273"
+    },
+    {
+      "role": "Separator",
+      "line_byte_start": "2461",
+      "line_byte_end_exclusive": "2463",
+      "raw_utf8": ", ",
+      "member_ordinal": null
+    },
+    {
+      "role": "Member",
+      "line_byte_start": "2463",
+      "line_byte_end_exclusive": "2469",
+      "raw_utf8": "Spirit",
+      "member_ordinal": "274"
+    },
+    {
+      "role": "Separator",
+      "line_byte_start": "2469",
+      "line_byte_end_exclusive": "2471",
+      "raw_utf8": ", ",
+      "member_ordinal": null
+    },
+    {
+      "role": "Member",
+      "line_byte_start": "2471",
+      "line_byte_end_exclusive": "2479",
+      "raw_utf8": "Splinter",
+      "member_ordinal": "275"
+    },
+    {
+      "role": "Separator",
+      "line_byte_start": "2479",
+      "line_byte_end_exclusive": "2481",
+      "raw_utf8": ", ",
+      "member_ordinal": null
+    },
+    {
+      "role": "Member",
+      "line_byte_start": "2481",
+      "line_byte_end_exclusive": "2487",
+      "raw_utf8": "Sponge",
+      "member_ordinal": "276"
+    },
+    {
+      "role": "Separator",
+      "line_byte_start": "2487",
+      "line_byte_end_exclusive": "2489",
+      "raw_utf8": ", ",
+      "member_ordinal": null
+    },
+    {
+      "role": "Member",
+      "line_byte_start": "2489",
+      "line_byte_end_exclusive": "2492",
+      "raw_utf8": "Spy",
+      "member_ordinal": "277"
+    },
+    {
+      "role": "Separator",
+      "line_byte_start": "2492",
+      "line_byte_end_exclusive": "2494",
+      "raw_utf8": ", ",
+      "member_ordinal": null
+    },
+    {
+      "role": "Member",
+      "line_byte_start": "2494",
+      "line_byte_end_exclusive": "2499",
+      "raw_utf8": "Squid",
+      "member_ordinal": "278"
+    },
+    {
+      "role": "Separator",
+      "line_byte_start": "2499",
+      "line_byte_end_exclusive": "2501",
+      "raw_utf8": ", ",
+      "member_ordinal": null
+    },
+    {
+      "role": "Member",
+      "line_byte_start": "2501",
+      "line_byte_end_exclusive": "2509",
+      "raw_utf8": "Squirrel",
+      "member_ordinal": "279"
+    },
+    {
+      "role": "Separator",
+      "line_byte_start": "2509",
+      "line_byte_end_exclusive": "2511",
+      "raw_utf8": ", ",
+      "member_ordinal": null
+    },
+    {
+      "role": "Member",
+      "line_byte_start": "2511",
+      "line_byte_end_exclusive": "2519",
+      "raw_utf8": "Starfish",
+      "member_ordinal": "280"
+    },
+    {
+      "role": "Separator",
+      "line_byte_start": "2519",
+      "line_byte_end_exclusive": "2521",
+      "raw_utf8": ", ",
+      "member_ordinal": null
+    },
+    {
+      "role": "Member",
+      "line_byte_start": "2521",
+      "line_byte_end_exclusive": "2529",
+      "raw_utf8": "Surrakar",
+      "member_ordinal": "281"
+    },
+    {
+      "role": "Separator",
+      "line_byte_start": "2529",
+      "line_byte_end_exclusive": "2531",
+      "raw_utf8": ", ",
+      "member_ordinal": null
+    },
+    {
+      "role": "Member",
+      "line_byte_start": "2531",
+      "line_byte_end_exclusive": "2539",
+      "raw_utf8": "Survivor",
+      "member_ordinal": "282"
+    },
+    {
+      "role": "Separator",
+      "line_byte_start": "2539",
+      "line_byte_end_exclusive": "2541",
+      "raw_utf8": ", ",
+      "member_ordinal": null
+    },
+    {
+      "role": "Member",
+      "line_byte_start": "2541",
+      "line_byte_end_exclusive": "2549",
+      "raw_utf8": "Symbiote",
+      "member_ordinal": "283"
+    },
+    {
+      "role": "Separator",
+      "line_byte_start": "2549",
+      "line_byte_end_exclusive": "2551",
+      "raw_utf8": ", ",
+      "member_ordinal": null
+    },
+    {
+      "role": "Member",
+      "line_byte_start": "2551",
+      "line_byte_end_exclusive": "2556",
+      "raw_utf8": "Synth",
+      "member_ordinal": "284"
+    },
+    {
+      "role": "Separator",
+      "line_byte_start": "2556",
+      "line_byte_end_exclusive": "2558",
+      "raw_utf8": ", ",
+      "member_ordinal": null
+    },
+    {
+      "role": "Member",
+      "line_byte_start": "2558",
+      "line_byte_end_exclusive": "2566",
+      "raw_utf8": "Tentacle",
+      "member_ordinal": "285"
+    },
+    {
+      "role": "Separator",
+      "line_byte_start": "2566",
+      "line_byte_end_exclusive": "2568",
+      "raw_utf8": ", ",
+      "member_ordinal": null
+    },
+    {
+      "role": "Member",
+      "line_byte_start": "2568",
+      "line_byte_end_exclusive": "2577",
+      "raw_utf8": "Tetravite",
+      "member_ordinal": "286"
+    },
+    {
+      "role": "Separator",
+      "line_byte_start": "2577",
+      "line_byte_end_exclusive": "2579",
+      "raw_utf8": ", ",
+      "member_ordinal": null
+    },
+    {
+      "role": "Member",
+      "line_byte_start": "2579",
+      "line_byte_end_exclusive": "2587",
+      "raw_utf8": "Thalakos",
+      "member_ordinal": "287"
+    },
+    {
+      "role": "Separator",
+      "line_byte_start": "2587",
+      "line_byte_end_exclusive": "2589",
+      "raw_utf8": ", ",
+      "member_ordinal": null
+    },
+    {
+      "role": "Member",
+      "line_byte_start": "2589",
+      "line_byte_end_exclusive": "2596",
+      "raw_utf8": "Thopter",
+      "member_ordinal": "288"
+    },
+    {
+      "role": "Separator",
+      "line_byte_start": "2596",
+      "line_byte_end_exclusive": "2598",
+      "raw_utf8": ", ",
+      "member_ordinal": null
+    },
+    {
+      "role": "Member",
+      "line_byte_start": "2598",
+      "line_byte_end_exclusive": "2604",
+      "raw_utf8": "Thrull",
+      "member_ordinal": "289"
+    },
+    {
+      "role": "Separator",
+      "line_byte_start": "2604",
+      "line_byte_end_exclusive": "2606",
+      "raw_utf8": ", ",
+      "member_ordinal": null
+    },
+    {
+      "role": "Member",
+      "line_byte_start": "2606",
+      "line_byte_end_exclusive": "2614",
+      "raw_utf8": "Tiefling",
+      "member_ordinal": "290"
+    },
+    {
+      "role": "Separator",
+      "line_byte_start": "2614",
+      "line_byte_end_exclusive": "2616",
+      "raw_utf8": ", ",
+      "member_ordinal": null
+    },
+    {
+      "role": "Member",
+      "line_byte_start": "2616",
+      "line_byte_end_exclusive": "2619",
+      "raw_utf8": "Toy",
+      "member_ordinal": "292"
+    },
+    {
+      "role": "Separator",
+      "line_byte_start": "2619",
+      "line_byte_end_exclusive": "2621",
+      "raw_utf8": ", ",
+      "member_ordinal": null
+    },
+    {
+      "role": "Member",
+      "line_byte_start": "2621",
+      "line_byte_end_exclusive": "2629",
+      "raw_utf8": "Treefolk",
+      "member_ordinal": "293"
+    },
+    {
+      "role": "Separator",
+      "line_byte_start": "2629",
+      "line_byte_end_exclusive": "2631",
+      "raw_utf8": ", ",
+      "member_ordinal": null
+    },
+    {
+      "role": "Member",
+      "line_byte_start": "2631",
+      "line_byte_end_exclusive": "2640",
+      "raw_utf8": "Trilobite",
+      "member_ordinal": "294"
+    },
+    {
+      "role": "Separator",
+      "line_byte_start": "2640",
+      "line_byte_end_exclusive": "2642",
+      "raw_utf8": ", ",
+      "member_ordinal": null
+    },
+    {
+      "role": "Member",
+      "line_byte_start": "2642",
+      "line_byte_end_exclusive": "2654",
+      "raw_utf8": "Triskelavite",
+      "member_ordinal": "295"
+    },
+    {
+      "role": "Separator",
+      "line_byte_start": "2654",
+      "line_byte_end_exclusive": "2656",
+      "raw_utf8": ", ",
+      "member_ordinal": null
+    },
+    {
+      "role": "Member",
+      "line_byte_start": "2656",
+      "line_byte_end_exclusive": "2661",
+      "raw_utf8": "Troll",
+      "member_ordinal": "296"
+    },
+    {
+      "role": "Separator",
+      "line_byte_start": "2661",
+      "line_byte_end_exclusive": "2663",
+      "raw_utf8": ", ",
+      "member_ordinal": null
+    },
+    {
+      "role": "Member",
+      "line_byte_start": "2663",
+      "line_byte_end_exclusive": "2669",
+      "raw_utf8": "Turtle",
+      "member_ordinal": "297"
+    },
+    {
+      "role": "Separator",
+      "line_byte_start": "2669",
+      "line_byte_end_exclusive": "2671",
+      "raw_utf8": ", ",
+      "member_ordinal": null
+    },
+    {
+      "role": "Member",
+      "line_byte_start": "2671",
+      "line_byte_end_exclusive": "2678",
+      "raw_utf8": "Tyranid",
+      "member_ordinal": "298"
+    },
+    {
+      "role": "Separator",
+      "line_byte_start": "2678",
+      "line_byte_end_exclusive": "2680",
+      "raw_utf8": ", ",
+      "member_ordinal": null
+    },
+    {
+      "role": "Member",
+      "line_byte_start": "2680",
+      "line_byte_end_exclusive": "2687",
+      "raw_utf8": "Unicorn",
+      "member_ordinal": "299"
+    },
+    {
+      "role": "Separator",
+      "line_byte_start": "2687",
+      "line_byte_end_exclusive": "2689",
+      "raw_utf8": ", ",
+      "member_ordinal": null
+    },
+    {
+      "role": "Member",
+      "line_byte_start": "2689",
+      "line_byte_end_exclusive": "2694",
+      "raw_utf8": "Utrom",
+      "member_ordinal": "300"
+    },
+    {
+      "role": "Separator",
+      "line_byte_start": "2694",
+      "line_byte_end_exclusive": "2696",
+      "raw_utf8": ", ",
+      "member_ordinal": null
+    },
+    {
+      "role": "Member",
+      "line_byte_start": "2696",
+      "line_byte_end_exclusive": "2703",
+      "raw_utf8": "Vampire",
+      "member_ordinal": "301"
+    },
+    {
+      "role": "Separator",
+      "line_byte_start": "2703",
+      "line_byte_end_exclusive": "2705",
+      "raw_utf8": ", ",
+      "member_ordinal": null
+    },
+    {
+      "role": "Member",
+      "line_byte_start": "2705",
+      "line_byte_end_exclusive": "2712",
+      "raw_utf8": "Varmint",
+      "member_ordinal": "302"
+    },
+    {
+      "role": "Separator",
+      "line_byte_start": "2712",
+      "line_byte_end_exclusive": "2714",
+      "raw_utf8": ", ",
+      "member_ordinal": null
+    },
+    {
+      "role": "Member",
+      "line_byte_start": "2714",
+      "line_byte_end_exclusive": "2722",
+      "raw_utf8": "Vedalken",
+      "member_ordinal": "303"
+    },
+    {
+      "role": "Separator",
+      "line_byte_start": "2722",
+      "line_byte_end_exclusive": "2724",
+      "raw_utf8": ", ",
+      "member_ordinal": null
+    },
+    {
+      "role": "Member",
+      "line_byte_start": "2724",
+      "line_byte_end_exclusive": "2731",
+      "raw_utf8": "Villain",
+      "member_ordinal": "304"
+    },
+    {
+      "role": "Separator",
+      "line_byte_start": "2731",
+      "line_byte_end_exclusive": "2733",
+      "raw_utf8": ", ",
+      "member_ordinal": null
+    },
+    {
+      "role": "Member",
+      "line_byte_start": "2733",
+      "line_byte_end_exclusive": "2739",
+      "raw_utf8": "Volver",
+      "member_ordinal": "305"
+    },
+    {
+      "role": "Separator",
+      "line_byte_start": "2739",
+      "line_byte_end_exclusive": "2741",
+      "raw_utf8": ", ",
+      "member_ordinal": null
+    },
+    {
+      "role": "Member",
+      "line_byte_start": "2741",
+      "line_byte_end_exclusive": "2745",
+      "raw_utf8": "Wall",
+      "member_ordinal": "306"
+    },
+    {
+      "role": "Separator",
+      "line_byte_start": "2745",
+      "line_byte_end_exclusive": "2747",
+      "raw_utf8": ", ",
+      "member_ordinal": null
+    },
+    {
+      "role": "Member",
+      "line_byte_start": "2747",
+      "line_byte_end_exclusive": "2753",
+      "raw_utf8": "Walrus",
+      "member_ordinal": "307"
+    },
+    {
+      "role": "Separator",
+      "line_byte_start": "2753",
+      "line_byte_end_exclusive": "2755",
+      "raw_utf8": ", ",
+      "member_ordinal": null
+    },
+    {
+      "role": "Member",
+      "line_byte_start": "2755",
+      "line_byte_end_exclusive": "2762",
+      "raw_utf8": "Warlock",
+      "member_ordinal": "308"
+    },
+    {
+      "role": "Separator",
+      "line_byte_start": "2762",
+      "line_byte_end_exclusive": "2764",
+      "raw_utf8": ", ",
+      "member_ordinal": null
+    },
+    {
+      "role": "Member",
+      "line_byte_start": "2764",
+      "line_byte_end_exclusive": "2771",
+      "raw_utf8": "Warrior",
+      "member_ordinal": "309"
+    },
+    {
+      "role": "Separator",
+      "line_byte_start": "2771",
+      "line_byte_end_exclusive": "2773",
+      "raw_utf8": ", ",
+      "member_ordinal": null
+    },
+    {
+      "role": "Member",
+      "line_byte_start": "2773",
+      "line_byte_end_exclusive": "2779",
+      "raw_utf8": "Weasel",
+      "member_ordinal": "310"
+    },
+    {
+      "role": "Separator",
+      "line_byte_start": "2779",
+      "line_byte_end_exclusive": "2781",
+      "raw_utf8": ", ",
+      "member_ordinal": null
+    },
+    {
+      "role": "Member",
+      "line_byte_start": "2781",
+      "line_byte_end_exclusive": "2786",
+      "raw_utf8": "Weird",
+      "member_ordinal": "311"
+    },
+    {
+      "role": "Separator",
+      "line_byte_start": "2786",
+      "line_byte_end_exclusive": "2788",
+      "raw_utf8": ", ",
+      "member_ordinal": null
+    },
+    {
+      "role": "Member",
+      "line_byte_start": "2788",
+      "line_byte_end_exclusive": "2796",
+      "raw_utf8": "Werewolf",
+      "member_ordinal": "312"
+    },
+    {
+      "role": "Separator",
+      "line_byte_start": "2796",
+      "line_byte_end_exclusive": "2798",
+      "raw_utf8": ", ",
+      "member_ordinal": null
+    },
+    {
+      "role": "Member",
+      "line_byte_start": "2798",
+      "line_byte_end_exclusive": "2803",
+      "raw_utf8": "Whale",
+      "member_ordinal": "313"
+    },
+    {
+      "role": "Separator",
+      "line_byte_start": "2803",
+      "line_byte_end_exclusive": "2805",
+      "raw_utf8": ", ",
+      "member_ordinal": null
+    },
+    {
+      "role": "Member",
+      "line_byte_start": "2805",
+      "line_byte_end_exclusive": "2811",
+      "raw_utf8": "Wizard",
+      "member_ordinal": "314"
+    },
+    {
+      "role": "Separator",
+      "line_byte_start": "2811",
+      "line_byte_end_exclusive": "2813",
+      "raw_utf8": ", ",
+      "member_ordinal": null
+    },
+    {
+      "role": "Member",
+      "line_byte_start": "2813",
+      "line_byte_end_exclusive": "2817",
+      "raw_utf8": "Wolf",
+      "member_ordinal": "315"
+    },
+    {
+      "role": "Separator",
+      "line_byte_start": "2817",
+      "line_byte_end_exclusive": "2819",
+      "raw_utf8": ", ",
+      "member_ordinal": null
+    },
+    {
+      "role": "Member",
+      "line_byte_start": "2819",
+      "line_byte_end_exclusive": "2828",
+      "raw_utf8": "Wolverine",
+      "member_ordinal": "316"
+    },
+    {
+      "role": "Separator",
+      "line_byte_start": "2828",
+      "line_byte_end_exclusive": "2830",
+      "raw_utf8": ", ",
+      "member_ordinal": null
+    },
+    {
+      "role": "Member",
+      "line_byte_start": "2830",
+      "line_byte_end_exclusive": "2836",
+      "raw_utf8": "Wombat",
+      "member_ordinal": "317"
+    },
+    {
+      "role": "Separator",
+      "line_byte_start": "2836",
+      "line_byte_end_exclusive": "2838",
+      "raw_utf8": ", ",
+      "member_ordinal": null
+    },
+    {
+      "role": "Member",
+      "line_byte_start": "2838",
+      "line_byte_end_exclusive": "2842",
+      "raw_utf8": "Worm",
+      "member_ordinal": "318"
+    },
+    {
+      "role": "Separator",
+      "line_byte_start": "2842",
+      "line_byte_end_exclusive": "2844",
+      "raw_utf8": ", ",
+      "member_ordinal": null
+    },
+    {
+      "role": "Member",
+      "line_byte_start": "2844",
+      "line_byte_end_exclusive": "2850",
+      "raw_utf8": "Wraith",
+      "member_ordinal": "319"
+    },
+    {
+      "role": "Separator",
+      "line_byte_start": "2850",
+      "line_byte_end_exclusive": "2852",
+      "raw_utf8": ", ",
+      "member_ordinal": null
+    },
+    {
+      "role": "Member",
+      "line_byte_start": "2852",
+      "line_byte_end_exclusive": "2856",
+      "raw_utf8": "Wurm",
+      "member_ordinal": "320"
+    },
+    {
+      "role": "Separator",
+      "line_byte_start": "2856",
+      "line_byte_end_exclusive": "2858",
+      "raw_utf8": ", ",
+      "member_ordinal": null
+    },
+    {
+      "role": "Member",
+      "line_byte_start": "2858",
+      "line_byte_end_exclusive": "2862",
+      "raw_utf8": "Yeti",
+      "member_ordinal": "321"
+    },
+    {
+      "role": "Separator",
+      "line_byte_start": "2862",
+      "line_byte_end_exclusive": "2864",
+      "raw_utf8": ", ",
+      "member_ordinal": null
+    },
+    {
+      "role": "Member",
+      "line_byte_start": "2864",
+      "line_byte_end_exclusive": "2870",
+      "raw_utf8": "Zombie",
+      "member_ordinal": "322"
+    },
+    {
+      "role": "FinalConjunction",
+      "line_byte_start": "2870",
+      "line_byte_end_exclusive": "2876",
+      "raw_utf8": ", and ",
+      "member_ordinal": null
+    },
+    {
+      "role": "Member",
+      "line_byte_start": "2876",
+      "line_byte_end_exclusive": "2882",
+      "raw_utf8": "Zubera",
+      "member_ordinal": "323"
+    },
+    {
+      "role": "FinalPeriod",
+      "line_byte_start": "2882",
+      "line_byte_end_exclusive": "2883",
+      "raw_utf8": ".",
+      "member_ordinal": null
+    }
+  ],
+  "member_token_count": 324,
+  "canonical_ordinal_source": "separately pinned candidate entries; runtime compiler must emit all raw token witnesses independently"
+}
