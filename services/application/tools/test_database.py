@@ -16,6 +16,7 @@ CONTAINER = 'spellwake-application-db'
 # The UUID-named acl_probe function fixture is deliberately ordinary: it neither
 # replaces an existing function nor changes locks on an application relation.
 SHARED_STATE_TESTS = (
+    'countdown_dispatch::due_sweep_reserves_both_qualified_paths_and_isolates_policy_drift',
     'native_opening_context::late_finalization_failure_rolls_back_context_artifacts_receipt_and_clocks',
     'retirement::retirement_rejects_stale_isolation_and_rolls_back_all_effects_on_late_failure',
     'patreon_intake::shared_evidence_scan_rediscovers_late_objects_and_preserves_stripe_nonwebhook_rules',

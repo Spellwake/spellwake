@@ -601,7 +601,9 @@ import {
   roomCommandErrorsSchema,
   roomConfigurationErrorsSchema,
   roomConfigurationAckSchema,
+  roomGameSchema,
 } from "./rooms.ts";
+export const roomGameResponseSchema = apiResponseSchema(roomGameSchema);
 export const roomCommandDispositionSchema = makeCommandDispositionSchema(
   roomCommandErrorsSchema,
   commandAckSchema,
