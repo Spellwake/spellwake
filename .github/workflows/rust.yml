@@ -22,6 +22,11 @@ jobs:
         run: rustup show
       - name: Format
         run: cargo fmt --all --check
+      - name: Prepare the pinned CI vocabulary
+        run: |
+          vocabulary="$RUNNER_TEMP/spellwake-creature-vocabulary.input.json"
+          python3 tests/support/prepare_ci_vocabulary.py "$vocabulary"
+          echo "SPELLWAKE_CREATURE_VOCABULARY_INPUT=$vocabulary" >> "$GITHUB_ENV"
       - name: Lint
         run: cargo clippy --locked --workspace --all-targets -- -D warnings
       - name: Test

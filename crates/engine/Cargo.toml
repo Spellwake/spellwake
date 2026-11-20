@@ -7,5 +7,10 @@ publish.workspace = true
 [dependencies]
 spellwake-contracts.workspace = true
 
+[dev-dependencies]
+serde.workspace = true
+serde_json.workspace = true
+sha2 = "0.10"
+
 [lints]
 workspace = true

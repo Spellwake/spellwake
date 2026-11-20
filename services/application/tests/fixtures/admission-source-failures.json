@@ -1,0 +1,252 @@
+[
+  {
+    "sourceFunction": "claim_matchmaking",
+    "field": "configuration",
+    "reason": "format or competitive mismatch"
+  },
+  {
+    "sourceFunction": "claim_matchmaking",
+    "field": "configuration",
+    "reason": "unsupported"
+  },
+  {
+    "sourceFunction": "claim_matchmaking",
+    "field": "deck",
+    "reason": "source changed"
+  },
+  {
+    "sourceFunction": "claim_matchmaking",
+    "field": "preferences",
+    "reason": "selection outside an accepted intent"
+  },
+  {
+    "sourceFunction": "claim_matchmaking",
+    "field": "queue",
+    "reason": "intent unavailable"
+  },
+  {
+    "sourceFunction": "claim_matchmaking",
+    "field": "selection",
+    "reason": "duplicate, missing or foreign seat"
+  },
+  {
+    "sourceFunction": "claim_matchmaking",
+    "field": "selection",
+    "reason": "one typed intent per human required"
+  },
+  {
+    "sourceFunction": "set_room_ready",
+    "field": "account",
+    "reason": "unavailable"
+  },
+  {
+    "sourceFunction": "set_room_ready",
+    "field": "deck",
+    "reason": "qualified selected revision required"
+  },
+  {
+    "sourceFunction": "set_room_ready",
+    "field": "ready",
+    "reason": "unavailable"
+  },
+  {
+    "sourceFunction": "set_room_ready",
+    "field": "revision",
+    "reason": "conflict"
+  },
+  {
+    "sourceFunction": "set_room_ready",
+    "field": "room",
+    "reason": "unavailable"
+  },
+  {
+    "sourceFunction": "start_room_countdown",
+    "field": "account",
+    "reason": "unavailable"
+  },
+  {
+    "sourceFunction": "start_room_countdown",
+    "field": "decks",
+    "reason": "qualification required"
+  },
+  {
+    "sourceFunction": "start_room_countdown",
+    "field": "revision",
+    "reason": "conflict"
+  },
+  {
+    "sourceFunction": "start_room_countdown",
+    "field": "room",
+    "reason": "invalid slots or selected decks"
+  },
+  {
+    "sourceFunction": "start_room_countdown",
+    "field": "room",
+    "reason": "unavailable"
+  },
+  {
+    "sourceFunction": "accept_match_decks",
+    "field": "account",
+    "reason": "unavailable"
+  },
+  {
+    "sourceFunction": "accept_match_decks",
+    "field": "cards",
+    "reason": "unsupported or not legal in accepted revision"
+  },
+  {
+    "sourceFunction": "accept_match_decks",
+    "field": "collection",
+    "reason": "not enough available copies"
+  },
+  {
+    "sourceFunction": "accept_match_decks",
+    "field": "deck",
+    "reason": "unavailable or incompatible"
+  },
+  {
+    "sourceFunction": "accept_match_decks",
+    "field": "match",
+    "reason": "stale, accepted or started"
+  },
+  {
+    "sourceFunction": "accept_match_decks",
+    "field": "profile",
+    "reason": "qualified roster and complete inputs required"
+  },
+  {
+    "sourceFunction": "accept_match_decks",
+    "field": "release",
+    "reason": "unavailable"
+  },
+  {
+    "sourceFunction": "accept_match_decks",
+    "field": "seat",
+    "reason": "duplicate input"
+  },
+  {
+    "sourceFunction": "accept_match_decks",
+    "field": "seat",
+    "reason": "unavailable"
+  },
+  {
+    "sourceFunction": "start_room_match",
+    "field": "account",
+    "reason": "unavailable"
+  },
+  {
+    "sourceFunction": "start_room_match",
+    "field": "ai",
+    "reason": "authenticated current-epoch readiness required"
+  },
+  {
+    "sourceFunction": "start_room_match",
+    "field": "cards",
+    "reason": "unsupported or not legal in accepted revision"
+  },
+  {
+    "sourceFunction": "start_room_match",
+    "field": "collection",
+    "reason": "not enough available copies"
+  },
+  {
+    "sourceFunction": "start_room_match",
+    "field": "deck",
+    "reason": "selected revision changed"
+  },
+  {
+    "sourceFunction": "start_room_match",
+    "field": "deck",
+    "reason": "unavailable or incompatible"
+  },
+  {
+    "sourceFunction": "start_room_match",
+    "field": "inputs",
+    "reason": "complete occupied roster required"
+  },
+  {
+    "sourceFunction": "start_room_match",
+    "field": "match",
+    "reason": "stale, accepted or started"
+  },
+  {
+    "sourceFunction": "start_room_match",
+    "field": "profile",
+    "reason": "qualified roster and complete inputs required"
+  },
+  {
+    "sourceFunction": "start_room_match",
+    "field": "release",
+    "reason": "unavailable"
+  },
+  {
+    "sourceFunction": "start_room_match",
+    "field": "room",
+    "reason": "stale, not due or already reserved"
+  },
+  {
+    "sourceFunction": "start_room_match",
+    "field": "seat",
+    "reason": "duplicate input"
+  },
+  {
+    "sourceFunction": "start_room_match",
+    "field": "seat",
+    "reason": "unavailable"
+  },
+  {
+    "sourceFunction": "accept_host_candidate",
+    "field": "availability",
+    "reason": "match recovering"
+  },
+  {
+    "sourceFunction": "accept_host_candidate",
+    "field": "basis",
+    "reason": "stale or terminal"
+  },
+  {
+    "sourceFunction": "accept_host_candidate",
+    "field": "clocks",
+    "reason": "BO1 overall bank is inactive"
+  },
+  {
+    "sourceFunction": "accept_host_candidate",
+    "field": "clocks",
+    "reason": "complete match clock state required"
+  },
+  {
+    "sourceFunction": "accept_host_candidate",
+    "field": "clocks",
+    "reason": "duplicate seat"
+  },
+  {
+    "sourceFunction": "accept_host_candidate",
+    "field": "clocks",
+    "reason": "overall bank requires its timeout transition"
+  },
+  {
+    "sourceFunction": "accept_host_candidate",
+    "field": "clocks",
+    "reason": "send the current bank; elapsed debit is authoritative"
+  },
+  {
+    "sourceFunction": "accept_host_candidate",
+    "field": "clocks",
+    "reason": "stale or invalid"
+  },
+  {
+    "sourceFunction": "accept_host_candidate",
+    "field": "context",
+    "reason": "unavailable"
+  },
+  {
+    "sourceFunction": "accept_host_candidate",
+    "field": "fence",
+    "reason": "stale or unavailable"
+  },
+  {
+    "sourceFunction": "accept_host_candidate",
+    "field": "game",
+    "reason": "unavailable"
+  }
+]

@@ -7,13 +7,16 @@ use std::{
 };
 
 #[test]
+#[ignore = "full current capture requires explicit source-qualified V and actual D06 publication paths"]
 fn default_subset_and_explicit_saved_snapshot_have_the_same_behavior_but_distinct_provenance() {
     let binary = env!("CARGO_BIN_EXE_interaction-trace");
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
-    let default = Command::new(binary).output().unwrap();
+    let default = real_capture(binary).output().unwrap();
     assert!(default.status.success());
-    let subset: serde_json::Value = serde_json::from_slice(&default.stdout).unwrap();
-    let saved = Command::new(binary)
+    let current: serde_json::Value = serde_json::from_slice(&default.stdout).unwrap();
+    assert_eq!(current["schema_version"], 4);
+    let subset = &current["observations"];
+    let saved = real_capture(binary)
         .args([
             root.join("tests/catalogue/registry-cards.meta.json"),
             root.join("tests/catalogue/registry-cards.jsonl.gz"),
@@ -21,7 +24,8 @@ fn default_subset_and_explicit_saved_snapshot_have_the_same_behavior_but_distinc
         .output()
         .unwrap();
     assert!(saved.status.success());
-    let explicit: serde_json::Value = serde_json::from_slice(&saved.stdout).unwrap();
+    let current: serde_json::Value = serde_json::from_slice(&saved.stdout).unwrap();
+    let explicit = &current["observations"];
     assert_eq!(
         subset["data"]["registry_input"],
         "embedded-four-card-test-subset"
@@ -57,7 +61,14 @@ fn oracle_text_drift_stops_execution_and_bad_sources_never_fall_back_to_embedded
     std::fs::write(&metadata_path, metadata.to_string()).unwrap();
     std::fs::write(&snapshot_path, changed).unwrap();
     let binary = env!("CARGO_BIN_EXE_interaction-trace");
-    let output = Command::new(binary)
+    let vocabulary_path = synthetic_input(temp.path());
+    let mut command = Command::new(binary);
+    command
+        .env_remove("SPELLWAKE_CREATURE_VOCABULARY_INPUT")
+        .env_remove("SPELLWAKE_CREATURE_VOCABULARY_PUBLICATION")
+        .arg("--creature-vocabulary-input")
+        .arg(&vocabulary_path);
+    let output = command
         .args([metadata_path, snapshot_path])
         .output()
         .unwrap();
@@ -66,6 +77,10 @@ fn oracle_text_drift_stops_execution_and_bad_sources_never_fall_back_to_embedded
     assert_eq!(response["status"], "fail");
     assert_eq!(response["data"]["registry"], "invalid-input");
     let output = Command::new(binary)
+        .env_remove("SPELLWAKE_CREATURE_VOCABULARY_INPUT")
+        .env_remove("SPELLWAKE_CREATURE_VOCABULARY_PUBLICATION")
+        .arg("--creature-vocabulary-input")
+        .arg(&vocabulary_path)
         .args(["missing-metadata", "missing-snapshot"])
         .output()
         .unwrap();
@@ -75,12 +90,14 @@ fn oracle_text_drift_stops_execution_and_bad_sources_never_fall_back_to_embedded
 }
 
 #[test]
+#[ignore = "full current capture requires explicit source-qualified V and actual D06 publication paths"]
 fn copied_spell_profile_uses_guarded_five_card_source_and_never_falls_back() {
     let binary = env!("CARGO_BIN_EXE_interaction-trace");
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
-    let default = Command::new(binary).arg("--copies").output().unwrap();
+    let default = real_capture(binary).arg("--copies").output().unwrap();
     assert!(default.status.success());
-    let report: serde_json::Value = serde_json::from_slice(&default.stdout).unwrap();
+    let current: serde_json::Value = serde_json::from_slice(&default.stdout).unwrap();
+    let report = &current["observations"];
     assert_eq!(report["data"]["schema_version"], 3);
     assert_eq!(
         report["data"]["registry_input"],
@@ -95,7 +112,7 @@ fn copied_spell_profile_uses_guarded_five_card_source_and_never_falls_back() {
             .sum::<usize>(),
         38
     );
-    let saved = Command::new(binary)
+    let saved = real_capture(binary)
         .arg("--copies")
         .args([
             root.join("tests/catalogue/spell-copy-cards.meta.json"),
@@ -104,9 +121,10 @@ fn copied_spell_profile_uses_guarded_five_card_source_and_never_falls_back() {
         .output()
         .unwrap();
     assert!(saved.status.success());
-    let explicit: serde_json::Value = serde_json::from_slice(&saved.stdout).unwrap();
+    let current: serde_json::Value = serde_json::from_slice(&saved.stdout).unwrap();
+    let explicit = &current["observations"];
     assert_eq!(report["data"]["scenarios"], explicit["data"]["scenarios"]);
-    let missing = Command::new(binary)
+    let missing = real_capture(binary)
         .arg("--copies")
         .args([
             root.join("tests/catalogue/registry-cards.meta.json"),
@@ -118,4 +136,32 @@ fn copied_spell_profile_uses_guarded_five_card_source_and_never_falls_back() {
     let failed: serde_json::Value = serde_json::from_slice(&missing.stdout).unwrap();
     assert_eq!(failed["status"], "fail");
     assert_eq!(failed["data"]["registry"], "invalid-input");
+}
+
+fn real_capture(binary: &str) -> Command {
+    let input = std::env::var_os("SPELLWAKE_CREATURE_VOCABULARY_INPUT")
+        .expect("explicit source-qualified vocabulary input required");
+    std::env::var_os("SPELLWAKE_CREATURE_VOCABULARY_PUBLICATION")
+        .expect("actual native D06 publication required");
+    let mut command = Command::new(binary);
+    command.arg("--creature-vocabulary-input").arg(input);
+    command
+}
+fn synthetic_input(directory: &Path) -> std::path::PathBuf {
+    let vocabulary = spellwake_contracts::creature_types::CreatureTypeVocabulary::new(
+        "synthetic-registry-source-guard-unit".into(),
+        [0; 32],
+        vec!["Cat".into(), "Elf".into()],
+    )
+    .unwrap();
+    let path = directory.join("synthetic-vocabulary.input.json");
+    std::fs::write(
+        &path,
+        serde_json::to_vec(&spellwake_reference_tools::projection::vocabulary(
+            &vocabulary,
+        ))
+        .unwrap(),
+    )
+    .unwrap();
+    path
 }

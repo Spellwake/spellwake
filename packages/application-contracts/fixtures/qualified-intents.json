@@ -1,0 +1,2797 @@
+{
+  "cases": [
+    {
+      "name": "room_intent valid",
+      "kind": "room_intent",
+      "wire": "{\"requestId\":\"10000000-0000-4000-8000-000000000004\",\"expectedRevision\":\"7\"}",
+      "valid": true,
+      "room": "10000000-0000-4000-8000-000000000001",
+      "original_room": {
+        "requestId": "10000000-0000-4000-8000-000000000004",
+        "expectedRevision": "7"
+      },
+      "original_between": {
+        "requestId": "10000000-0000-4000-8000-000000000004",
+        "expectedRevision": "7",
+        "decisionId": "10000000-0000-4000-8000-000000000002",
+        "selectedRevisionId": "10000000-0000-4000-8000-000000000005"
+      },
+      "original_reroll": {
+        "requestId": "10000000-0000-4000-8000-000000000004",
+        "assignmentId": "10000000-0000-4000-8000-000000000003"
+      }
+    },
+    {
+      "name": "room_intent forbids actorId",
+      "kind": "room_intent",
+      "wire": "{\"requestId\":\"10000000-0000-4000-8000-000000000004\",\"expectedRevision\":\"7\",\"actorId\":\"10000000-0000-4000-8000-000000000008\"}",
+      "valid": false,
+      "room": "10000000-0000-4000-8000-000000000001",
+      "original_room": {
+        "requestId": "10000000-0000-4000-8000-000000000004",
+        "expectedRevision": "7"
+      },
+      "original_between": {
+        "requestId": "10000000-0000-4000-8000-000000000004",
+        "expectedRevision": "7",
+        "decisionId": "10000000-0000-4000-8000-000000000002",
+        "selectedRevisionId": "10000000-0000-4000-8000-000000000005"
+      },
+      "original_reroll": {
+        "requestId": "10000000-0000-4000-8000-000000000004",
+        "assignmentId": "10000000-0000-4000-8000-000000000003"
+      }
+    },
+    {
+      "name": "room_intent forbids qualificationRef",
+      "kind": "room_intent",
+      "wire": "{\"requestId\":\"10000000-0000-4000-8000-000000000004\",\"expectedRevision\":\"7\",\"qualificationRef\":\"10000000-0000-4000-8000-000000000008\"}",
+      "valid": false,
+      "room": "10000000-0000-4000-8000-000000000001",
+      "original_room": {
+        "requestId": "10000000-0000-4000-8000-000000000004",
+        "expectedRevision": "7"
+      },
+      "original_between": {
+        "requestId": "10000000-0000-4000-8000-000000000004",
+        "expectedRevision": "7",
+        "decisionId": "10000000-0000-4000-8000-000000000002",
+        "selectedRevisionId": "10000000-0000-4000-8000-000000000005"
+      },
+      "original_reroll": {
+        "requestId": "10000000-0000-4000-8000-000000000004",
+        "assignmentId": "10000000-0000-4000-8000-000000000003"
+      }
+    },
+    {
+      "name": "room_intent forbids definitionId",
+      "kind": "room_intent",
+      "wire": "{\"requestId\":\"10000000-0000-4000-8000-000000000004\",\"expectedRevision\":\"7\",\"definitionId\":\"10000000-0000-4000-8000-000000000008\"}",
+      "valid": false,
+      "room": "10000000-0000-4000-8000-000000000001",
+      "original_room": {
+        "requestId": "10000000-0000-4000-8000-000000000004",
+        "expectedRevision": "7"
+      },
+      "original_between": {
+        "requestId": "10000000-0000-4000-8000-000000000004",
+        "expectedRevision": "7",
+        "decisionId": "10000000-0000-4000-8000-000000000002",
+        "selectedRevisionId": "10000000-0000-4000-8000-000000000005"
+      },
+      "original_reroll": {
+        "requestId": "10000000-0000-4000-8000-000000000004",
+        "assignmentId": "10000000-0000-4000-8000-000000000003"
+      }
+    },
+    {
+      "name": "room_intent forbids day",
+      "kind": "room_intent",
+      "wire": "{\"requestId\":\"10000000-0000-4000-8000-000000000004\",\"expectedRevision\":\"7\",\"day\":\"10000000-0000-4000-8000-000000000008\"}",
+      "valid": false,
+      "room": "10000000-0000-4000-8000-000000000001",
+      "original_room": {
+        "requestId": "10000000-0000-4000-8000-000000000004",
+        "expectedRevision": "7"
+      },
+      "original_between": {
+        "requestId": "10000000-0000-4000-8000-000000000004",
+        "expectedRevision": "7",
+        "decisionId": "10000000-0000-4000-8000-000000000002",
+        "selectedRevisionId": "10000000-0000-4000-8000-000000000005"
+      },
+      "original_reroll": {
+        "requestId": "10000000-0000-4000-8000-000000000004",
+        "assignmentId": "10000000-0000-4000-8000-000000000003"
+      }
+    },
+    {
+      "name": "room_intent missing requestId",
+      "kind": "room_intent",
+      "wire": "{\"expectedRevision\":\"7\"}",
+      "valid": false,
+      "room": "10000000-0000-4000-8000-000000000001",
+      "original_room": {
+        "requestId": "10000000-0000-4000-8000-000000000004",
+        "expectedRevision": "7"
+      },
+      "original_between": {
+        "requestId": "10000000-0000-4000-8000-000000000004",
+        "expectedRevision": "7",
+        "decisionId": "10000000-0000-4000-8000-000000000002",
+        "selectedRevisionId": "10000000-0000-4000-8000-000000000005"
+      },
+      "original_reroll": {
+        "requestId": "10000000-0000-4000-8000-000000000004",
+        "assignmentId": "10000000-0000-4000-8000-000000000003"
+      }
+    },
+    {
+      "name": "room_intent null requestId",
+      "kind": "room_intent",
+      "wire": "{\"requestId\":null,\"expectedRevision\":\"7\"}",
+      "valid": false,
+      "room": "10000000-0000-4000-8000-000000000001",
+      "original_room": {
+        "requestId": "10000000-0000-4000-8000-000000000004",
+        "expectedRevision": "7"
+      },
+      "original_between": {
+        "requestId": "10000000-0000-4000-8000-000000000004",
+        "expectedRevision": "7",
+        "decisionId": "10000000-0000-4000-8000-000000000002",
+        "selectedRevisionId": "10000000-0000-4000-8000-000000000005"
+      },
+      "original_reroll": {
+        "requestId": "10000000-0000-4000-8000-000000000004",
+        "assignmentId": "10000000-0000-4000-8000-000000000003"
+      }
+    },
+    {
+      "name": "room_intent missing expectedRevision",
+      "kind": "room_intent",
+      "wire": "{\"requestId\":\"10000000-0000-4000-8000-000000000004\"}",
+      "valid": false,
+      "room": "10000000-0000-4000-8000-000000000001",
+      "original_room": {
+        "requestId": "10000000-0000-4000-8000-000000000004",
+        "expectedRevision": "7"
+      },
+      "original_between": {
+        "requestId": "10000000-0000-4000-8000-000000000004",
+        "expectedRevision": "7",
+        "decisionId": "10000000-0000-4000-8000-000000000002",
+        "selectedRevisionId": "10000000-0000-4000-8000-000000000005"
+      },
+      "original_reroll": {
+        "requestId": "10000000-0000-4000-8000-000000000004",
+        "assignmentId": "10000000-0000-4000-8000-000000000003"
+      }
+    },
+    {
+      "name": "room_intent null expectedRevision",
+      "kind": "room_intent",
+      "wire": "{\"requestId\":\"10000000-0000-4000-8000-000000000004\",\"expectedRevision\":null}",
+      "valid": false,
+      "room": "10000000-0000-4000-8000-000000000001",
+      "original_room": {
+        "requestId": "10000000-0000-4000-8000-000000000004",
+        "expectedRevision": "7"
+      },
+      "original_between": {
+        "requestId": "10000000-0000-4000-8000-000000000004",
+        "expectedRevision": "7",
+        "decisionId": "10000000-0000-4000-8000-000000000002",
+        "selectedRevisionId": "10000000-0000-4000-8000-000000000005"
+      },
+      "original_reroll": {
+        "requestId": "10000000-0000-4000-8000-000000000004",
+        "assignmentId": "10000000-0000-4000-8000-000000000003"
+      }
+    },
+    {
+      "name": "room_intent positional",
+      "kind": "room_intent",
+      "wire": "[\"10000000-0000-4000-8000-000000000004\",\"7\"]",
+      "valid": false,
+      "room": "10000000-0000-4000-8000-000000000001",
+      "original_room": {
+        "requestId": "10000000-0000-4000-8000-000000000004",
+        "expectedRevision": "7"
+      },
+      "original_between": {
+        "requestId": "10000000-0000-4000-8000-000000000004",
+        "expectedRevision": "7",
+        "decisionId": "10000000-0000-4000-8000-000000000002",
+        "selectedRevisionId": "10000000-0000-4000-8000-000000000005"
+      },
+      "original_reroll": {
+        "requestId": "10000000-0000-4000-8000-000000000004",
+        "assignmentId": "10000000-0000-4000-8000-000000000003"
+      }
+    },
+    {
+      "name": "room_intent duplicate request",
+      "kind": "room_intent",
+      "wire": "{\"requestId\":\"10000000-0000-4000-8000-000000000004\",\"expectedRevision\":\"7\",\"requestId\":\"10000000-0000-4000-8000-000000000004\"}",
+      "valid": false,
+      "room": "10000000-0000-4000-8000-000000000001",
+      "original_room": {
+        "requestId": "10000000-0000-4000-8000-000000000004",
+        "expectedRevision": "7"
+      },
+      "original_between": {
+        "requestId": "10000000-0000-4000-8000-000000000004",
+        "expectedRevision": "7",
+        "decisionId": "10000000-0000-4000-8000-000000000002",
+        "selectedRevisionId": "10000000-0000-4000-8000-000000000005"
+      },
+      "original_reroll": {
+        "requestId": "10000000-0000-4000-8000-000000000004",
+        "assignmentId": "10000000-0000-4000-8000-000000000003"
+      }
+    },
+    {
+      "name": "room_intent escaped duplicate",
+      "kind": "room_intent",
+      "wire": "{\"requestId\":\"10000000-0000-4000-8000-000000000004\",\"expectedRevision\":\"7\",\"request\\u0049d\":\"10000000-0000-4000-8000-000000000004\"}",
+      "valid": false,
+      "room": "10000000-0000-4000-8000-000000000001",
+      "original_room": {
+        "requestId": "10000000-0000-4000-8000-000000000004",
+        "expectedRevision": "7"
+      },
+      "original_between": {
+        "requestId": "10000000-0000-4000-8000-000000000004",
+        "expectedRevision": "7",
+        "decisionId": "10000000-0000-4000-8000-000000000002",
+        "selectedRevisionId": "10000000-0000-4000-8000-000000000005"
+      },
+      "original_reroll": {
+        "requestId": "10000000-0000-4000-8000-000000000004",
+        "assignmentId": "10000000-0000-4000-8000-000000000003"
+      }
+    },
+    {
+      "name": "room_intent nil request",
+      "kind": "room_intent",
+      "wire": "{\"requestId\":\"00000000-0000-0000-0000-000000000000\",\"expectedRevision\":\"7\"}",
+      "valid": false,
+      "room": "10000000-0000-4000-8000-000000000001",
+      "original_room": {
+        "requestId": "10000000-0000-4000-8000-000000000004",
+        "expectedRevision": "7"
+      },
+      "original_between": {
+        "requestId": "10000000-0000-4000-8000-000000000004",
+        "expectedRevision": "7",
+        "decisionId": "10000000-0000-4000-8000-000000000002",
+        "selectedRevisionId": "10000000-0000-4000-8000-000000000005"
+      },
+      "original_reroll": {
+        "requestId": "10000000-0000-4000-8000-000000000004",
+        "assignmentId": "10000000-0000-4000-8000-000000000003"
+      }
+    },
+    {
+      "name": "room_intent invalid revision 01",
+      "kind": "room_intent",
+      "wire": "{\"requestId\":\"10000000-0000-4000-8000-000000000004\",\"expectedRevision\":\"01\"}",
+      "valid": false,
+      "room": "10000000-0000-4000-8000-000000000001",
+      "original_room": {
+        "requestId": "10000000-0000-4000-8000-000000000004",
+        "expectedRevision": "7"
+      },
+      "original_between": {
+        "requestId": "10000000-0000-4000-8000-000000000004",
+        "expectedRevision": "7",
+        "decisionId": "10000000-0000-4000-8000-000000000002",
+        "selectedRevisionId": "10000000-0000-4000-8000-000000000005"
+      },
+      "original_reroll": {
+        "requestId": "10000000-0000-4000-8000-000000000004",
+        "assignmentId": "10000000-0000-4000-8000-000000000003"
+      }
+    },
+    {
+      "name": "room_intent invalid revision -1",
+      "kind": "room_intent",
+      "wire": "{\"requestId\":\"10000000-0000-4000-8000-000000000004\",\"expectedRevision\":\"-1\"}",
+      "valid": false,
+      "room": "10000000-0000-4000-8000-000000000001",
+      "original_room": {
+        "requestId": "10000000-0000-4000-8000-000000000004",
+        "expectedRevision": "7"
+      },
+      "original_between": {
+        "requestId": "10000000-0000-4000-8000-000000000004",
+        "expectedRevision": "7",
+        "decisionId": "10000000-0000-4000-8000-000000000002",
+        "selectedRevisionId": "10000000-0000-4000-8000-000000000005"
+      },
+      "original_reroll": {
+        "requestId": "10000000-0000-4000-8000-000000000004",
+        "assignmentId": "10000000-0000-4000-8000-000000000003"
+      }
+    },
+    {
+      "name": "room_intent invalid revision 7",
+      "kind": "room_intent",
+      "wire": "{\"requestId\":\"10000000-0000-4000-8000-000000000004\",\"expectedRevision\":7}",
+      "valid": false,
+      "room": "10000000-0000-4000-8000-000000000001",
+      "original_room": {
+        "requestId": "10000000-0000-4000-8000-000000000004",
+        "expectedRevision": "7"
+      },
+      "original_between": {
+        "requestId": "10000000-0000-4000-8000-000000000004",
+        "expectedRevision": "7",
+        "decisionId": "10000000-0000-4000-8000-000000000002",
+        "selectedRevisionId": "10000000-0000-4000-8000-000000000005"
+      },
+      "original_reroll": {
+        "requestId": "10000000-0000-4000-8000-000000000004",
+        "assignmentId": "10000000-0000-4000-8000-000000000003"
+      }
+    },
+    {
+      "name": "room_intent invalid revision 9999999999999999999999999999999999999999999999999999999999999999999999999999999",
+      "kind": "room_intent",
+      "wire": "{\"requestId\":\"10000000-0000-4000-8000-000000000004\",\"expectedRevision\":\"9999999999999999999999999999999999999999999999999999999999999999999999999999999\"}",
+      "valid": false,
+      "room": "10000000-0000-4000-8000-000000000001",
+      "original_room": {
+        "requestId": "10000000-0000-4000-8000-000000000004",
+        "expectedRevision": "7"
+      },
+      "original_between": {
+        "requestId": "10000000-0000-4000-8000-000000000004",
+        "expectedRevision": "7",
+        "decisionId": "10000000-0000-4000-8000-000000000002",
+        "selectedRevisionId": "10000000-0000-4000-8000-000000000005"
+      },
+      "original_reroll": {
+        "requestId": "10000000-0000-4000-8000-000000000004",
+        "assignmentId": "10000000-0000-4000-8000-000000000003"
+      }
+    },
+    {
+      "name": "between_intent valid",
+      "kind": "between_intent",
+      "wire": "{\"requestId\":\"10000000-0000-4000-8000-000000000004\",\"expectedRevision\":\"7\",\"decisionId\":\"10000000-0000-4000-8000-000000000002\",\"selectedRevisionId\":\"10000000-0000-4000-8000-000000000005\"}",
+      "valid": true,
+      "room": "10000000-0000-4000-8000-000000000001",
+      "original_room": {
+        "requestId": "10000000-0000-4000-8000-000000000004",
+        "expectedRevision": "7"
+      },
+      "original_between": {
+        "requestId": "10000000-0000-4000-8000-000000000004",
+        "expectedRevision": "7",
+        "decisionId": "10000000-0000-4000-8000-000000000002",
+        "selectedRevisionId": "10000000-0000-4000-8000-000000000005"
+      },
+      "original_reroll": {
+        "requestId": "10000000-0000-4000-8000-000000000004",
+        "assignmentId": "10000000-0000-4000-8000-000000000003"
+      }
+    },
+    {
+      "name": "between_intent forbids actorId",
+      "kind": "between_intent",
+      "wire": "{\"requestId\":\"10000000-0000-4000-8000-000000000004\",\"expectedRevision\":\"7\",\"decisionId\":\"10000000-0000-4000-8000-000000000002\",\"selectedRevisionId\":\"10000000-0000-4000-8000-000000000005\",\"actorId\":\"10000000-0000-4000-8000-000000000008\"}",
+      "valid": false,
+      "room": "10000000-0000-4000-8000-000000000001",
+      "original_room": {
+        "requestId": "10000000-0000-4000-8000-000000000004",
+        "expectedRevision": "7"
+      },
+      "original_between": {
+        "requestId": "10000000-0000-4000-8000-000000000004",
+        "expectedRevision": "7",
+        "decisionId": "10000000-0000-4000-8000-000000000002",
+        "selectedRevisionId": "10000000-0000-4000-8000-000000000005"
+      },
+      "original_reroll": {
+        "requestId": "10000000-0000-4000-8000-000000000004",
+        "assignmentId": "10000000-0000-4000-8000-000000000003"
+      }
+    },
+    {
+      "name": "between_intent forbids qualificationRef",
+      "kind": "between_intent",
+      "wire": "{\"requestId\":\"10000000-0000-4000-8000-000000000004\",\"expectedRevision\":\"7\",\"decisionId\":\"10000000-0000-4000-8000-000000000002\",\"selectedRevisionId\":\"10000000-0000-4000-8000-000000000005\",\"qualificationRef\":\"10000000-0000-4000-8000-000000000008\"}",
+      "valid": false,
+      "room": "10000000-0000-4000-8000-000000000001",
+      "original_room": {
+        "requestId": "10000000-0000-4000-8000-000000000004",
+        "expectedRevision": "7"
+      },
+      "original_between": {
+        "requestId": "10000000-0000-4000-8000-000000000004",
+        "expectedRevision": "7",
+        "decisionId": "10000000-0000-4000-8000-000000000002",
+        "selectedRevisionId": "10000000-0000-4000-8000-000000000005"
+      },
+      "original_reroll": {
+        "requestId": "10000000-0000-4000-8000-000000000004",
+        "assignmentId": "10000000-0000-4000-8000-000000000003"
+      }
+    },
+    {
+      "name": "between_intent forbids definitionId",
+      "kind": "between_intent",
+      "wire": "{\"requestId\":\"10000000-0000-4000-8000-000000000004\",\"expectedRevision\":\"7\",\"decisionId\":\"10000000-0000-4000-8000-000000000002\",\"selectedRevisionId\":\"10000000-0000-4000-8000-000000000005\",\"definitionId\":\"10000000-0000-4000-8000-000000000008\"}",
+      "valid": false,
+      "room": "10000000-0000-4000-8000-000000000001",
+      "original_room": {
+        "requestId": "10000000-0000-4000-8000-000000000004",
+        "expectedRevision": "7"
+      },
+      "original_between": {
+        "requestId": "10000000-0000-4000-8000-000000000004",
+        "expectedRevision": "7",
+        "decisionId": "10000000-0000-4000-8000-000000000002",
+        "selectedRevisionId": "10000000-0000-4000-8000-000000000005"
+      },
+      "original_reroll": {
+        "requestId": "10000000-0000-4000-8000-000000000004",
+        "assignmentId": "10000000-0000-4000-8000-000000000003"
+      }
+    },
+    {
+      "name": "between_intent forbids day",
+      "kind": "between_intent",
+      "wire": "{\"requestId\":\"10000000-0000-4000-8000-000000000004\",\"expectedRevision\":\"7\",\"decisionId\":\"10000000-0000-4000-8000-000000000002\",\"selectedRevisionId\":\"10000000-0000-4000-8000-000000000005\",\"day\":\"10000000-0000-4000-8000-000000000008\"}",
+      "valid": false,
+      "room": "10000000-0000-4000-8000-000000000001",
+      "original_room": {
+        "requestId": "10000000-0000-4000-8000-000000000004",
+        "expectedRevision": "7"
+      },
+      "original_between": {
+        "requestId": "10000000-0000-4000-8000-000000000004",
+        "expectedRevision": "7",
+        "decisionId": "10000000-0000-4000-8000-000000000002",
+        "selectedRevisionId": "10000000-0000-4000-8000-000000000005"
+      },
+      "original_reroll": {
+        "requestId": "10000000-0000-4000-8000-000000000004",
+        "assignmentId": "10000000-0000-4000-8000-000000000003"
+      }
+    },
+    {
+      "name": "between_intent missing requestId",
+      "kind": "between_intent",
+      "wire": "{\"expectedRevision\":\"7\",\"decisionId\":\"10000000-0000-4000-8000-000000000002\",\"selectedRevisionId\":\"10000000-0000-4000-8000-000000000005\"}",
+      "valid": false,
+      "room": "10000000-0000-4000-8000-000000000001",
+      "original_room": {
+        "requestId": "10000000-0000-4000-8000-000000000004",
+        "expectedRevision": "7"
+      },
+      "original_between": {
+        "requestId": "10000000-0000-4000-8000-000000000004",
+        "expectedRevision": "7",
+        "decisionId": "10000000-0000-4000-8000-000000000002",
+        "selectedRevisionId": "10000000-0000-4000-8000-000000000005"
+      },
+      "original_reroll": {
+        "requestId": "10000000-0000-4000-8000-000000000004",
+        "assignmentId": "10000000-0000-4000-8000-000000000003"
+      }
+    },
+    {
+      "name": "between_intent null requestId",
+      "kind": "between_intent",
+      "wire": "{\"requestId\":null,\"expectedRevision\":\"7\",\"decisionId\":\"10000000-0000-4000-8000-000000000002\",\"selectedRevisionId\":\"10000000-0000-4000-8000-000000000005\"}",
+      "valid": false,
+      "room": "10000000-0000-4000-8000-000000000001",
+      "original_room": {
+        "requestId": "10000000-0000-4000-8000-000000000004",
+        "expectedRevision": "7"
+      },
+      "original_between": {
+        "requestId": "10000000-0000-4000-8000-000000000004",
+        "expectedRevision": "7",
+        "decisionId": "10000000-0000-4000-8000-000000000002",
+        "selectedRevisionId": "10000000-0000-4000-8000-000000000005"
+      },
+      "original_reroll": {
+        "requestId": "10000000-0000-4000-8000-000000000004",
+        "assignmentId": "10000000-0000-4000-8000-000000000003"
+      }
+    },
+    {
+      "name": "between_intent missing expectedRevision",
+      "kind": "between_intent",
+      "wire": "{\"requestId\":\"10000000-0000-4000-8000-000000000004\",\"decisionId\":\"10000000-0000-4000-8000-000000000002\",\"selectedRevisionId\":\"10000000-0000-4000-8000-000000000005\"}",
+      "valid": false,
+      "room": "10000000-0000-4000-8000-000000000001",
+      "original_room": {
+        "requestId": "10000000-0000-4000-8000-000000000004",
+        "expectedRevision": "7"
+      },
+      "original_between": {
+        "requestId": "10000000-0000-4000-8000-000000000004",
+        "expectedRevision": "7",
+        "decisionId": "10000000-0000-4000-8000-000000000002",
+        "selectedRevisionId": "10000000-0000-4000-8000-000000000005"
+      },
+      "original_reroll": {
+        "requestId": "10000000-0000-4000-8000-000000000004",
+        "assignmentId": "10000000-0000-4000-8000-000000000003"
+      }
+    },
+    {
+      "name": "between_intent null expectedRevision",
+      "kind": "between_intent",
+      "wire": "{\"requestId\":\"10000000-0000-4000-8000-000000000004\",\"expectedRevision\":null,\"decisionId\":\"10000000-0000-4000-8000-000000000002\",\"selectedRevisionId\":\"10000000-0000-4000-8000-000000000005\"}",
+      "valid": false,
+      "room": "10000000-0000-4000-8000-000000000001",
+      "original_room": {
+        "requestId": "10000000-0000-4000-8000-000000000004",
+        "expectedRevision": "7"
+      },
+      "original_between": {
+        "requestId": "10000000-0000-4000-8000-000000000004",
+        "expectedRevision": "7",
+        "decisionId": "10000000-0000-4000-8000-000000000002",
+        "selectedRevisionId": "10000000-0000-4000-8000-000000000005"
+      },
+      "original_reroll": {
+        "requestId": "10000000-0000-4000-8000-000000000004",
+        "assignmentId": "10000000-0000-4000-8000-000000000003"
+      }
+    },
+    {
+      "name": "between_intent missing decisionId",
+      "kind": "between_intent",
+      "wire": "{\"requestId\":\"10000000-0000-4000-8000-000000000004\",\"expectedRevision\":\"7\",\"selectedRevisionId\":\"10000000-0000-4000-8000-000000000005\"}",
+      "valid": false,
+      "room": "10000000-0000-4000-8000-000000000001",
+      "original_room": {
+        "requestId": "10000000-0000-4000-8000-000000000004",
+        "expectedRevision": "7"
+      },
+      "original_between": {
+        "requestId": "10000000-0000-4000-8000-000000000004",
+        "expectedRevision": "7",
+        "decisionId": "10000000-0000-4000-8000-000000000002",
+        "selectedRevisionId": "10000000-0000-4000-8000-000000000005"
+      },
+      "original_reroll": {
+        "requestId": "10000000-0000-4000-8000-000000000004",
+        "assignmentId": "10000000-0000-4000-8000-000000000003"
+      }
+    },
+    {
+      "name": "between_intent null decisionId",
+      "kind": "between_intent",
+      "wire": "{\"requestId\":\"10000000-0000-4000-8000-000000000004\",\"expectedRevision\":\"7\",\"decisionId\":null,\"selectedRevisionId\":\"10000000-0000-4000-8000-000000000005\"}",
+      "valid": false,
+      "room": "10000000-0000-4000-8000-000000000001",
+      "original_room": {
+        "requestId": "10000000-0000-4000-8000-000000000004",
+        "expectedRevision": "7"
+      },
+      "original_between": {
+        "requestId": "10000000-0000-4000-8000-000000000004",
+        "expectedRevision": "7",
+        "decisionId": "10000000-0000-4000-8000-000000000002",
+        "selectedRevisionId": "10000000-0000-4000-8000-000000000005"
+      },
+      "original_reroll": {
+        "requestId": "10000000-0000-4000-8000-000000000004",
+        "assignmentId": "10000000-0000-4000-8000-000000000003"
+      }
+    },
+    {
+      "name": "between_intent missing selectedRevisionId",
+      "kind": "between_intent",
+      "wire": "{\"requestId\":\"10000000-0000-4000-8000-000000000004\",\"expectedRevision\":\"7\",\"decisionId\":\"10000000-0000-4000-8000-000000000002\"}",
+      "valid": false,
+      "room": "10000000-0000-4000-8000-000000000001",
+      "original_room": {
+        "requestId": "10000000-0000-4000-8000-000000000004",
+        "expectedRevision": "7"
+      },
+      "original_between": {
+        "requestId": "10000000-0000-4000-8000-000000000004",
+        "expectedRevision": "7",
+        "decisionId": "10000000-0000-4000-8000-000000000002",
+        "selectedRevisionId": "10000000-0000-4000-8000-000000000005"
+      },
+      "original_reroll": {
+        "requestId": "10000000-0000-4000-8000-000000000004",
+        "assignmentId": "10000000-0000-4000-8000-000000000003"
+      }
+    },
+    {
+      "name": "between_intent null selectedRevisionId",
+      "kind": "between_intent",
+      "wire": "{\"requestId\":\"10000000-0000-4000-8000-000000000004\",\"expectedRevision\":\"7\",\"decisionId\":\"10000000-0000-4000-8000-000000000002\",\"selectedRevisionId\":null}",
+      "valid": false,
+      "room": "10000000-0000-4000-8000-000000000001",
+      "original_room": {
+        "requestId": "10000000-0000-4000-8000-000000000004",
+        "expectedRevision": "7"
+      },
+      "original_between": {
+        "requestId": "10000000-0000-4000-8000-000000000004",
+        "expectedRevision": "7",
+        "decisionId": "10000000-0000-4000-8000-000000000002",
+        "selectedRevisionId": "10000000-0000-4000-8000-000000000005"
+      },
+      "original_reroll": {
+        "requestId": "10000000-0000-4000-8000-000000000004",
+        "assignmentId": "10000000-0000-4000-8000-000000000003"
+      }
+    },
+    {
+      "name": "between_intent positional",
+      "kind": "between_intent",
+      "wire": "[\"10000000-0000-4000-8000-000000000004\",\"7\",\"10000000-0000-4000-8000-000000000002\",\"10000000-0000-4000-8000-000000000005\"]",
+      "valid": false,
+      "room": "10000000-0000-4000-8000-000000000001",
+      "original_room": {
+        "requestId": "10000000-0000-4000-8000-000000000004",
+        "expectedRevision": "7"
+      },
+      "original_between": {
+        "requestId": "10000000-0000-4000-8000-000000000004",
+        "expectedRevision": "7",
+        "decisionId": "10000000-0000-4000-8000-000000000002",
+        "selectedRevisionId": "10000000-0000-4000-8000-000000000005"
+      },
+      "original_reroll": {
+        "requestId": "10000000-0000-4000-8000-000000000004",
+        "assignmentId": "10000000-0000-4000-8000-000000000003"
+      }
+    },
+    {
+      "name": "between_intent duplicate request",
+      "kind": "between_intent",
+      "wire": "{\"requestId\":\"10000000-0000-4000-8000-000000000004\",\"expectedRevision\":\"7\",\"decisionId\":\"10000000-0000-4000-8000-000000000002\",\"selectedRevisionId\":\"10000000-0000-4000-8000-000000000005\",\"requestId\":\"10000000-0000-4000-8000-000000000004\"}",
+      "valid": false,
+      "room": "10000000-0000-4000-8000-000000000001",
+      "original_room": {
+        "requestId": "10000000-0000-4000-8000-000000000004",
+        "expectedRevision": "7"
+      },
+      "original_between": {
+        "requestId": "10000000-0000-4000-8000-000000000004",
+        "expectedRevision": "7",
+        "decisionId": "10000000-0000-4000-8000-000000000002",
+        "selectedRevisionId": "10000000-0000-4000-8000-000000000005"
+      },
+      "original_reroll": {
+        "requestId": "10000000-0000-4000-8000-000000000004",
+        "assignmentId": "10000000-0000-4000-8000-000000000003"
+      }
+    },
+    {
+      "name": "between_intent escaped duplicate",
+      "kind": "between_intent",
+      "wire": "{\"requestId\":\"10000000-0000-4000-8000-000000000004\",\"expectedRevision\":\"7\",\"decisionId\":\"10000000-0000-4000-8000-000000000002\",\"selectedRevisionId\":\"10000000-0000-4000-8000-000000000005\",\"request\\u0049d\":\"10000000-0000-4000-8000-000000000004\"}",
+      "valid": false,
+      "room": "10000000-0000-4000-8000-000000000001",
+      "original_room": {
+        "requestId": "10000000-0000-4000-8000-000000000004",
+        "expectedRevision": "7"
+      },
+      "original_between": {
+        "requestId": "10000000-0000-4000-8000-000000000004",
+        "expectedRevision": "7",
+        "decisionId": "10000000-0000-4000-8000-000000000002",
+        "selectedRevisionId": "10000000-0000-4000-8000-000000000005"
+      },
+      "original_reroll": {
+        "requestId": "10000000-0000-4000-8000-000000000004",
+        "assignmentId": "10000000-0000-4000-8000-000000000003"
+      }
+    },
+    {
+      "name": "between_intent nil request",
+      "kind": "between_intent",
+      "wire": "{\"requestId\":\"00000000-0000-0000-0000-000000000000\",\"expectedRevision\":\"7\",\"decisionId\":\"10000000-0000-4000-8000-000000000002\",\"selectedRevisionId\":\"10000000-0000-4000-8000-000000000005\"}",
+      "valid": false,
+      "room": "10000000-0000-4000-8000-000000000001",
+      "original_room": {
+        "requestId": "10000000-0000-4000-8000-000000000004",
+        "expectedRevision": "7"
+      },
+      "original_between": {
+        "requestId": "10000000-0000-4000-8000-000000000004",
+        "expectedRevision": "7",
+        "decisionId": "10000000-0000-4000-8000-000000000002",
+        "selectedRevisionId": "10000000-0000-4000-8000-000000000005"
+      },
+      "original_reroll": {
+        "requestId": "10000000-0000-4000-8000-000000000004",
+        "assignmentId": "10000000-0000-4000-8000-000000000003"
+      }
+    },
+    {
+      "name": "between_intent invalid revision 01",
+      "kind": "between_intent",
+      "wire": "{\"requestId\":\"10000000-0000-4000-8000-000000000004\",\"expectedRevision\":\"01\",\"decisionId\":\"10000000-0000-4000-8000-000000000002\",\"selectedRevisionId\":\"10000000-0000-4000-8000-000000000005\"}",
+      "valid": false,
+      "room": "10000000-0000-4000-8000-000000000001",
+      "original_room": {
+        "requestId": "10000000-0000-4000-8000-000000000004",
+        "expectedRevision": "7"
+      },
+      "original_between": {
+        "requestId": "10000000-0000-4000-8000-000000000004",
+        "expectedRevision": "7",
+        "decisionId": "10000000-0000-4000-8000-000000000002",
+        "selectedRevisionId": "10000000-0000-4000-8000-000000000005"
+      },
+      "original_reroll": {
+        "requestId": "10000000-0000-4000-8000-000000000004",
+        "assignmentId": "10000000-0000-4000-8000-000000000003"
+      }
+    },
+    {
+      "name": "between_intent invalid revision -1",
+      "kind": "between_intent",
+      "wire": "{\"requestId\":\"10000000-0000-4000-8000-000000000004\",\"expectedRevision\":\"-1\",\"decisionId\":\"10000000-0000-4000-8000-000000000002\",\"selectedRevisionId\":\"10000000-0000-4000-8000-000000000005\"}",
+      "valid": false,
+      "room": "10000000-0000-4000-8000-000000000001",
+      "original_room": {
+        "requestId": "10000000-0000-4000-8000-000000000004",
+        "expectedRevision": "7"
+      },
+      "original_between": {
+        "requestId": "10000000-0000-4000-8000-000000000004",
+        "expectedRevision": "7",
+        "decisionId": "10000000-0000-4000-8000-000000000002",
+        "selectedRevisionId": "10000000-0000-4000-8000-000000000005"
+      },
+      "original_reroll": {
+        "requestId": "10000000-0000-4000-8000-000000000004",
+        "assignmentId": "10000000-0000-4000-8000-000000000003"
+      }
+    },
+    {
+      "name": "between_intent invalid revision 7",
+      "kind": "between_intent",
+      "wire": "{\"requestId\":\"10000000-0000-4000-8000-000000000004\",\"expectedRevision\":7,\"decisionId\":\"10000000-0000-4000-8000-000000000002\",\"selectedRevisionId\":\"10000000-0000-4000-8000-000000000005\"}",
+      "valid": false,
+      "room": "10000000-0000-4000-8000-000000000001",
+      "original_room": {
+        "requestId": "10000000-0000-4000-8000-000000000004",
+        "expectedRevision": "7"
+      },
+      "original_between": {
+        "requestId": "10000000-0000-4000-8000-000000000004",
+        "expectedRevision": "7",
+        "decisionId": "10000000-0000-4000-8000-000000000002",
+        "selectedRevisionId": "10000000-0000-4000-8000-000000000005"
+      },
+      "original_reroll": {
+        "requestId": "10000000-0000-4000-8000-000000000004",
+        "assignmentId": "10000000-0000-4000-8000-000000000003"
+      }
+    },
+    {
+      "name": "between_intent invalid revision 9999999999999999999999999999999999999999999999999999999999999999999999999999999",
+      "kind": "between_intent",
+      "wire": "{\"requestId\":\"10000000-0000-4000-8000-000000000004\",\"expectedRevision\":\"9999999999999999999999999999999999999999999999999999999999999999999999999999999\",\"decisionId\":\"10000000-0000-4000-8000-000000000002\",\"selectedRevisionId\":\"10000000-0000-4000-8000-000000000005\"}",
+      "valid": false,
+      "room": "10000000-0000-4000-8000-000000000001",
+      "original_room": {
+        "requestId": "10000000-0000-4000-8000-000000000004",
+        "expectedRevision": "7"
+      },
+      "original_between": {
+        "requestId": "10000000-0000-4000-8000-000000000004",
+        "expectedRevision": "7",
+        "decisionId": "10000000-0000-4000-8000-000000000002",
+        "selectedRevisionId": "10000000-0000-4000-8000-000000000005"
+      },
+      "original_reroll": {
+        "requestId": "10000000-0000-4000-8000-000000000004",
+        "assignmentId": "10000000-0000-4000-8000-000000000003"
+      }
+    },
+    {
+      "name": "reroll_intent valid",
+      "kind": "reroll_intent",
+      "wire": "{\"requestId\":\"10000000-0000-4000-8000-000000000004\",\"assignmentId\":\"10000000-0000-4000-8000-000000000003\"}",
+      "valid": true,
+      "room": "10000000-0000-4000-8000-000000000001",
+      "original_room": {
+        "requestId": "10000000-0000-4000-8000-000000000004",
+        "expectedRevision": "7"
+      },
+      "original_between": {
+        "requestId": "10000000-0000-4000-8000-000000000004",
+        "expectedRevision": "7",
+        "decisionId": "10000000-0000-4000-8000-000000000002",
+        "selectedRevisionId": "10000000-0000-4000-8000-000000000005"
+      },
+      "original_reroll": {
+        "requestId": "10000000-0000-4000-8000-000000000004",
+        "assignmentId": "10000000-0000-4000-8000-000000000003"
+      }
+    },
+    {
+      "name": "reroll_intent forbids actorId",
+      "kind": "reroll_intent",
+      "wire": "{\"requestId\":\"10000000-0000-4000-8000-000000000004\",\"assignmentId\":\"10000000-0000-4000-8000-000000000003\",\"actorId\":\"10000000-0000-4000-8000-000000000008\"}",
+      "valid": false,
+      "room": "10000000-0000-4000-8000-000000000001",
+      "original_room": {
+        "requestId": "10000000-0000-4000-8000-000000000004",
+        "expectedRevision": "7"
+      },
+      "original_between": {
+        "requestId": "10000000-0000-4000-8000-000000000004",
+        "expectedRevision": "7",
+        "decisionId": "10000000-0000-4000-8000-000000000002",
+        "selectedRevisionId": "10000000-0000-4000-8000-000000000005"
+      },
+      "original_reroll": {
+        "requestId": "10000000-0000-4000-8000-000000000004",
+        "assignmentId": "10000000-0000-4000-8000-000000000003"
+      }
+    },
+    {
+      "name": "reroll_intent forbids qualificationRef",
+      "kind": "reroll_intent",
+      "wire": "{\"requestId\":\"10000000-0000-4000-8000-000000000004\",\"assignmentId\":\"10000000-0000-4000-8000-000000000003\",\"qualificationRef\":\"10000000-0000-4000-8000-000000000008\"}",
+      "valid": false,
+      "room": "10000000-0000-4000-8000-000000000001",
+      "original_room": {
+        "requestId": "10000000-0000-4000-8000-000000000004",
+        "expectedRevision": "7"
+      },
+      "original_between": {
+        "requestId": "10000000-0000-4000-8000-000000000004",
+        "expectedRevision": "7",
+        "decisionId": "10000000-0000-4000-8000-000000000002",
+        "selectedRevisionId": "10000000-0000-4000-8000-000000000005"
+      },
+      "original_reroll": {
+        "requestId": "10000000-0000-4000-8000-000000000004",
+        "assignmentId": "10000000-0000-4000-8000-000000000003"
+      }
+    },
+    {
+      "name": "reroll_intent forbids definitionId",
+      "kind": "reroll_intent",
+      "wire": "{\"requestId\":\"10000000-0000-4000-8000-000000000004\",\"assignmentId\":\"10000000-0000-4000-8000-000000000003\",\"definitionId\":\"10000000-0000-4000-8000-000000000008\"}",
+      "valid": false,
+      "room": "10000000-0000-4000-8000-000000000001",
+      "original_room": {
+        "requestId": "10000000-0000-4000-8000-000000000004",
+        "expectedRevision": "7"
+      },
+      "original_between": {
+        "requestId": "10000000-0000-4000-8000-000000000004",
+        "expectedRevision": "7",
+        "decisionId": "10000000-0000-4000-8000-000000000002",
+        "selectedRevisionId": "10000000-0000-4000-8000-000000000005"
+      },
+      "original_reroll": {
+        "requestId": "10000000-0000-4000-8000-000000000004",
+        "assignmentId": "10000000-0000-4000-8000-000000000003"
+      }
+    },
+    {
+      "name": "reroll_intent forbids day",
+      "kind": "reroll_intent",
+      "wire": "{\"requestId\":\"10000000-0000-4000-8000-000000000004\",\"assignmentId\":\"10000000-0000-4000-8000-000000000003\",\"day\":\"10000000-0000-4000-8000-000000000008\"}",
+      "valid": false,
+      "room": "10000000-0000-4000-8000-000000000001",
+      "original_room": {
+        "requestId": "10000000-0000-4000-8000-000000000004",
+        "expectedRevision": "7"
+      },
+      "original_between": {
+        "requestId": "10000000-0000-4000-8000-000000000004",
+        "expectedRevision": "7",
+        "decisionId": "10000000-0000-4000-8000-000000000002",
+        "selectedRevisionId": "10000000-0000-4000-8000-000000000005"
+      },
+      "original_reroll": {
+        "requestId": "10000000-0000-4000-8000-000000000004",
+        "assignmentId": "10000000-0000-4000-8000-000000000003"
+      }
+    },
+    {
+      "name": "reroll_intent missing requestId",
+      "kind": "reroll_intent",
+      "wire": "{\"assignmentId\":\"10000000-0000-4000-8000-000000000003\"}",
+      "valid": false,
+      "room": "10000000-0000-4000-8000-000000000001",
+      "original_room": {
+        "requestId": "10000000-0000-4000-8000-000000000004",
+        "expectedRevision": "7"
+      },
+      "original_between": {
+        "requestId": "10000000-0000-4000-8000-000000000004",
+        "expectedRevision": "7",
+        "decisionId": "10000000-0000-4000-8000-000000000002",
+        "selectedRevisionId": "10000000-0000-4000-8000-000000000005"
+      },
+      "original_reroll": {
+        "requestId": "10000000-0000-4000-8000-000000000004",
+        "assignmentId": "10000000-0000-4000-8000-000000000003"
+      }
+    },
+    {
+      "name": "reroll_intent null requestId",
+      "kind": "reroll_intent",
+      "wire": "{\"requestId\":null,\"assignmentId\":\"10000000-0000-4000-8000-000000000003\"}",
+      "valid": false,
+      "room": "10000000-0000-4000-8000-000000000001",
+      "original_room": {
+        "requestId": "10000000-0000-4000-8000-000000000004",
+        "expectedRevision": "7"
+      },
+      "original_between": {
+        "requestId": "10000000-0000-4000-8000-000000000004",
+        "expectedRevision": "7",
+        "decisionId": "10000000-0000-4000-8000-000000000002",
+        "selectedRevisionId": "10000000-0000-4000-8000-000000000005"
+      },
+      "original_reroll": {
+        "requestId": "10000000-0000-4000-8000-000000000004",
+        "assignmentId": "10000000-0000-4000-8000-000000000003"
+      }
+    },
+    {
+      "name": "reroll_intent missing assignmentId",
+      "kind": "reroll_intent",
+      "wire": "{\"requestId\":\"10000000-0000-4000-8000-000000000004\"}",
+      "valid": false,
+      "room": "10000000-0000-4000-8000-000000000001",
+      "original_room": {
+        "requestId": "10000000-0000-4000-8000-000000000004",
+        "expectedRevision": "7"
+      },
+      "original_between": {
+        "requestId": "10000000-0000-4000-8000-000000000004",
+        "expectedRevision": "7",
+        "decisionId": "10000000-0000-4000-8000-000000000002",
+        "selectedRevisionId": "10000000-0000-4000-8000-000000000005"
+      },
+      "original_reroll": {
+        "requestId": "10000000-0000-4000-8000-000000000004",
+        "assignmentId": "10000000-0000-4000-8000-000000000003"
+      }
+    },
+    {
+      "name": "reroll_intent null assignmentId",
+      "kind": "reroll_intent",
+      "wire": "{\"requestId\":\"10000000-0000-4000-8000-000000000004\",\"assignmentId\":null}",
+      "valid": false,
+      "room": "10000000-0000-4000-8000-000000000001",
+      "original_room": {
+        "requestId": "10000000-0000-4000-8000-000000000004",
+        "expectedRevision": "7"
+      },
+      "original_between": {
+        "requestId": "10000000-0000-4000-8000-000000000004",
+        "expectedRevision": "7",
+        "decisionId": "10000000-0000-4000-8000-000000000002",
+        "selectedRevisionId": "10000000-0000-4000-8000-000000000005"
+      },
+      "original_reroll": {
+        "requestId": "10000000-0000-4000-8000-000000000004",
+        "assignmentId": "10000000-0000-4000-8000-000000000003"
+      }
+    },
+    {
+      "name": "reroll_intent positional",
+      "kind": "reroll_intent",
+      "wire": "[\"10000000-0000-4000-8000-000000000004\",\"10000000-0000-4000-8000-000000000003\"]",
+      "valid": false,
+      "room": "10000000-0000-4000-8000-000000000001",
+      "original_room": {
+        "requestId": "10000000-0000-4000-8000-000000000004",
+        "expectedRevision": "7"
+      },
+      "original_between": {
+        "requestId": "10000000-0000-4000-8000-000000000004",
+        "expectedRevision": "7",
+        "decisionId": "10000000-0000-4000-8000-000000000002",
+        "selectedRevisionId": "10000000-0000-4000-8000-000000000005"
+      },
+      "original_reroll": {
+        "requestId": "10000000-0000-4000-8000-000000000004",
+        "assignmentId": "10000000-0000-4000-8000-000000000003"
+      }
+    },
+    {
+      "name": "reroll_intent duplicate request",
+      "kind": "reroll_intent",
+      "wire": "{\"requestId\":\"10000000-0000-4000-8000-000000000004\",\"assignmentId\":\"10000000-0000-4000-8000-000000000003\",\"requestId\":\"10000000-0000-4000-8000-000000000004\"}",
+      "valid": false,
+      "room": "10000000-0000-4000-8000-000000000001",
+      "original_room": {
+        "requestId": "10000000-0000-4000-8000-000000000004",
+        "expectedRevision": "7"
+      },
+      "original_between": {
+        "requestId": "10000000-0000-4000-8000-000000000004",
+        "expectedRevision": "7",
+        "decisionId": "10000000-0000-4000-8000-000000000002",
+        "selectedRevisionId": "10000000-0000-4000-8000-000000000005"
+      },
+      "original_reroll": {
+        "requestId": "10000000-0000-4000-8000-000000000004",
+        "assignmentId": "10000000-0000-4000-8000-000000000003"
+      }
+    },
+    {
+      "name": "reroll_intent escaped duplicate",
+      "kind": "reroll_intent",
+      "wire": "{\"requestId\":\"10000000-0000-4000-8000-000000000004\",\"assignmentId\":\"10000000-0000-4000-8000-000000000003\",\"request\\u0049d\":\"10000000-0000-4000-8000-000000000004\"}",
+      "valid": false,
+      "room": "10000000-0000-4000-8000-000000000001",
+      "original_room": {
+        "requestId": "10000000-0000-4000-8000-000000000004",
+        "expectedRevision": "7"
+      },
+      "original_between": {
+        "requestId": "10000000-0000-4000-8000-000000000004",
+        "expectedRevision": "7",
+        "decisionId": "10000000-0000-4000-8000-000000000002",
+        "selectedRevisionId": "10000000-0000-4000-8000-000000000005"
+      },
+      "original_reroll": {
+        "requestId": "10000000-0000-4000-8000-000000000004",
+        "assignmentId": "10000000-0000-4000-8000-000000000003"
+      }
+    },
+    {
+      "name": "reroll_intent nil request",
+      "kind": "reroll_intent",
+      "wire": "{\"requestId\":\"00000000-0000-0000-0000-000000000000\",\"assignmentId\":\"10000000-0000-4000-8000-000000000003\"}",
+      "valid": false,
+      "room": "10000000-0000-4000-8000-000000000001",
+      "original_room": {
+        "requestId": "10000000-0000-4000-8000-000000000004",
+        "expectedRevision": "7"
+      },
+      "original_between": {
+        "requestId": "10000000-0000-4000-8000-000000000004",
+        "expectedRevision": "7",
+        "decisionId": "10000000-0000-4000-8000-000000000002",
+        "selectedRevisionId": "10000000-0000-4000-8000-000000000005"
+      },
+      "original_reroll": {
+        "requestId": "10000000-0000-4000-8000-000000000004",
+        "assignmentId": "10000000-0000-4000-8000-000000000003"
+      }
+    },
+    {
+      "name": "room_ack valid",
+      "kind": "room_ack",
+      "wire": "{\"resourceId\":\"10000000-0000-4000-8000-000000000001\",\"revision\":\"8\"}",
+      "valid": true,
+      "room": "10000000-0000-4000-8000-000000000001",
+      "original_room": {
+        "requestId": "10000000-0000-4000-8000-000000000004",
+        "expectedRevision": "7"
+      },
+      "original_between": {
+        "requestId": "10000000-0000-4000-8000-000000000004",
+        "expectedRevision": "7",
+        "decisionId": "10000000-0000-4000-8000-000000000002",
+        "selectedRevisionId": "10000000-0000-4000-8000-000000000005"
+      },
+      "original_reroll": {
+        "requestId": "10000000-0000-4000-8000-000000000004",
+        "assignmentId": "10000000-0000-4000-8000-000000000003"
+      }
+    },
+    {
+      "name": "room_ack foreign target",
+      "kind": "room_ack",
+      "wire": "{\"resourceId\":\"10000000-0000-4000-8000-000000000008\",\"revision\":\"8\"}",
+      "valid": false,
+      "room": "10000000-0000-4000-8000-000000000001",
+      "original_room": {
+        "requestId": "10000000-0000-4000-8000-000000000004",
+        "expectedRevision": "7"
+      },
+      "original_between": {
+        "requestId": "10000000-0000-4000-8000-000000000004",
+        "expectedRevision": "7",
+        "decisionId": "10000000-0000-4000-8000-000000000002",
+        "selectedRevisionId": "10000000-0000-4000-8000-000000000005"
+      },
+      "original_reroll": {
+        "requestId": "10000000-0000-4000-8000-000000000004",
+        "assignmentId": "10000000-0000-4000-8000-000000000003"
+      }
+    },
+    {
+      "name": "room_ack private proof",
+      "kind": "room_ack",
+      "wire": "{\"resourceId\":\"10000000-0000-4000-8000-000000000001\",\"revision\":\"8\",\"qualificationRef\":\"private\"}",
+      "valid": false,
+      "room": "10000000-0000-4000-8000-000000000001",
+      "original_room": {
+        "requestId": "10000000-0000-4000-8000-000000000004",
+        "expectedRevision": "7"
+      },
+      "original_between": {
+        "requestId": "10000000-0000-4000-8000-000000000004",
+        "expectedRevision": "7",
+        "decisionId": "10000000-0000-4000-8000-000000000002",
+        "selectedRevisionId": "10000000-0000-4000-8000-000000000005"
+      },
+      "original_reroll": {
+        "requestId": "10000000-0000-4000-8000-000000000004",
+        "assignmentId": "10000000-0000-4000-8000-000000000003"
+      }
+    },
+    {
+      "name": "room_ack positional",
+      "kind": "room_ack",
+      "wire": "[\"10000000-0000-4000-8000-000000000001\",\"8\"]",
+      "valid": false,
+      "room": "10000000-0000-4000-8000-000000000001",
+      "original_room": {
+        "requestId": "10000000-0000-4000-8000-000000000004",
+        "expectedRevision": "7"
+      },
+      "original_between": {
+        "requestId": "10000000-0000-4000-8000-000000000004",
+        "expectedRevision": "7",
+        "decisionId": "10000000-0000-4000-8000-000000000002",
+        "selectedRevisionId": "10000000-0000-4000-8000-000000000005"
+      },
+      "original_reroll": {
+        "requestId": "10000000-0000-4000-8000-000000000004",
+        "assignmentId": "10000000-0000-4000-8000-000000000003"
+      }
+    },
+    {
+      "name": "room_ack jumps revision",
+      "kind": "room_ack",
+      "wire": "{\"resourceId\":\"10000000-0000-4000-8000-000000000001\",\"revision\":\"9\"}",
+      "valid": false,
+      "room": "10000000-0000-4000-8000-000000000001",
+      "original_room": {
+        "requestId": "10000000-0000-4000-8000-000000000004",
+        "expectedRevision": "7"
+      },
+      "original_between": {
+        "requestId": "10000000-0000-4000-8000-000000000004",
+        "expectedRevision": "7",
+        "decisionId": "10000000-0000-4000-8000-000000000002",
+        "selectedRevisionId": "10000000-0000-4000-8000-000000000005"
+      },
+      "original_reroll": {
+        "requestId": "10000000-0000-4000-8000-000000000004",
+        "assignmentId": "10000000-0000-4000-8000-000000000003"
+      }
+    },
+    {
+      "name": "room_ack no-op",
+      "kind": "room_ack",
+      "wire": "{\"resourceId\":\"10000000-0000-4000-8000-000000000001\",\"revision\":\"7\"}",
+      "valid": true,
+      "room": "10000000-0000-4000-8000-000000000001",
+      "original_room": {
+        "requestId": "10000000-0000-4000-8000-000000000004",
+        "expectedRevision": "7"
+      },
+      "original_between": {
+        "requestId": "10000000-0000-4000-8000-000000000004",
+        "expectedRevision": "7",
+        "decisionId": "10000000-0000-4000-8000-000000000002",
+        "selectedRevisionId": "10000000-0000-4000-8000-000000000005"
+      },
+      "original_reroll": {
+        "requestId": "10000000-0000-4000-8000-000000000004",
+        "assignmentId": "10000000-0000-4000-8000-000000000003"
+      }
+    },
+    {
+      "name": "room_ack overflow successor",
+      "kind": "room_ack",
+      "wire": "{\"resourceId\":\"10000000-0000-4000-8000-000000000001\",\"revision\":\"0\"}",
+      "valid": false,
+      "room": "10000000-0000-4000-8000-000000000001",
+      "original_room": {
+        "requestId": "10000000-0000-4000-8000-000000000004",
+        "expectedRevision": "999999999999999999999999999999999999999999999999999999999999999999999999999999"
+      },
+      "original_between": {
+        "requestId": "10000000-0000-4000-8000-000000000004",
+        "expectedRevision": "7",
+        "decisionId": "10000000-0000-4000-8000-000000000002",
+        "selectedRevisionId": "10000000-0000-4000-8000-000000000005"
+      },
+      "original_reroll": {
+        "requestId": "10000000-0000-4000-8000-000000000004",
+        "assignmentId": "10000000-0000-4000-8000-000000000003"
+      }
+    },
+    {
+      "name": "between_ack valid",
+      "kind": "between_ack",
+      "wire": "{\"resourceId\":\"10000000-0000-4000-8000-000000000002\",\"revision\":\"8\",\"reservedGameId\":null}",
+      "valid": true,
+      "room": "10000000-0000-4000-8000-000000000001",
+      "original_room": {
+        "requestId": "10000000-0000-4000-8000-000000000004",
+        "expectedRevision": "7"
+      },
+      "original_between": {
+        "requestId": "10000000-0000-4000-8000-000000000004",
+        "expectedRevision": "7",
+        "decisionId": "10000000-0000-4000-8000-000000000002",
+        "selectedRevisionId": "10000000-0000-4000-8000-000000000005"
+      },
+      "original_reroll": {
+        "requestId": "10000000-0000-4000-8000-000000000004",
+        "assignmentId": "10000000-0000-4000-8000-000000000003"
+      }
+    },
+    {
+      "name": "between_ack foreign target",
+      "kind": "between_ack",
+      "wire": "{\"resourceId\":\"10000000-0000-4000-8000-000000000008\",\"revision\":\"8\",\"reservedGameId\":null}",
+      "valid": false,
+      "room": "10000000-0000-4000-8000-000000000001",
+      "original_room": {
+        "requestId": "10000000-0000-4000-8000-000000000004",
+        "expectedRevision": "7"
+      },
+      "original_between": {
+        "requestId": "10000000-0000-4000-8000-000000000004",
+        "expectedRevision": "7",
+        "decisionId": "10000000-0000-4000-8000-000000000002",
+        "selectedRevisionId": "10000000-0000-4000-8000-000000000005"
+      },
+      "original_reroll": {
+        "requestId": "10000000-0000-4000-8000-000000000004",
+        "assignmentId": "10000000-0000-4000-8000-000000000003"
+      }
+    },
+    {
+      "name": "between_ack private proof",
+      "kind": "between_ack",
+      "wire": "{\"resourceId\":\"10000000-0000-4000-8000-000000000002\",\"revision\":\"8\",\"reservedGameId\":null,\"qualificationRef\":\"private\"}",
+      "valid": false,
+      "room": "10000000-0000-4000-8000-000000000001",
+      "original_room": {
+        "requestId": "10000000-0000-4000-8000-000000000004",
+        "expectedRevision": "7"
+      },
+      "original_between": {
+        "requestId": "10000000-0000-4000-8000-000000000004",
+        "expectedRevision": "7",
+        "decisionId": "10000000-0000-4000-8000-000000000002",
+        "selectedRevisionId": "10000000-0000-4000-8000-000000000005"
+      },
+      "original_reroll": {
+        "requestId": "10000000-0000-4000-8000-000000000004",
+        "assignmentId": "10000000-0000-4000-8000-000000000003"
+      }
+    },
+    {
+      "name": "between_ack positional",
+      "kind": "between_ack",
+      "wire": "[\"10000000-0000-4000-8000-000000000002\",\"8\",null]",
+      "valid": false,
+      "room": "10000000-0000-4000-8000-000000000001",
+      "original_room": {
+        "requestId": "10000000-0000-4000-8000-000000000004",
+        "expectedRevision": "7"
+      },
+      "original_between": {
+        "requestId": "10000000-0000-4000-8000-000000000004",
+        "expectedRevision": "7",
+        "decisionId": "10000000-0000-4000-8000-000000000002",
+        "selectedRevisionId": "10000000-0000-4000-8000-000000000005"
+      },
+      "original_reroll": {
+        "requestId": "10000000-0000-4000-8000-000000000004",
+        "assignmentId": "10000000-0000-4000-8000-000000000003"
+      }
+    },
+    {
+      "name": "between_ack jumps revision",
+      "kind": "between_ack",
+      "wire": "{\"resourceId\":\"10000000-0000-4000-8000-000000000002\",\"revision\":\"9\",\"reservedGameId\":null}",
+      "valid": false,
+      "room": "10000000-0000-4000-8000-000000000001",
+      "original_room": {
+        "requestId": "10000000-0000-4000-8000-000000000004",
+        "expectedRevision": "7"
+      },
+      "original_between": {
+        "requestId": "10000000-0000-4000-8000-000000000004",
+        "expectedRevision": "7",
+        "decisionId": "10000000-0000-4000-8000-000000000002",
+        "selectedRevisionId": "10000000-0000-4000-8000-000000000005"
+      },
+      "original_reroll": {
+        "requestId": "10000000-0000-4000-8000-000000000004",
+        "assignmentId": "10000000-0000-4000-8000-000000000003"
+      }
+    },
+    {
+      "name": "between_ack no-op",
+      "kind": "between_ack",
+      "wire": "{\"resourceId\":\"10000000-0000-4000-8000-000000000002\",\"revision\":\"7\",\"reservedGameId\":null}",
+      "valid": false,
+      "room": "10000000-0000-4000-8000-000000000001",
+      "original_room": {
+        "requestId": "10000000-0000-4000-8000-000000000004",
+        "expectedRevision": "7"
+      },
+      "original_between": {
+        "requestId": "10000000-0000-4000-8000-000000000004",
+        "expectedRevision": "7",
+        "decisionId": "10000000-0000-4000-8000-000000000002",
+        "selectedRevisionId": "10000000-0000-4000-8000-000000000005"
+      },
+      "original_reroll": {
+        "requestId": "10000000-0000-4000-8000-000000000004",
+        "assignmentId": "10000000-0000-4000-8000-000000000003"
+      }
+    },
+    {
+      "name": "between_ack overflow successor",
+      "kind": "between_ack",
+      "wire": "{\"resourceId\":\"10000000-0000-4000-8000-000000000002\",\"revision\":\"0\",\"reservedGameId\":null}",
+      "valid": false,
+      "room": "10000000-0000-4000-8000-000000000001",
+      "original_room": {
+        "requestId": "10000000-0000-4000-8000-000000000004",
+        "expectedRevision": "7"
+      },
+      "original_between": {
+        "requestId": "10000000-0000-4000-8000-000000000004",
+        "expectedRevision": "999999999999999999999999999999999999999999999999999999999999999999999999999999",
+        "decisionId": "10000000-0000-4000-8000-000000000002",
+        "selectedRevisionId": "10000000-0000-4000-8000-000000000005"
+      },
+      "original_reroll": {
+        "requestId": "10000000-0000-4000-8000-000000000004",
+        "assignmentId": "10000000-0000-4000-8000-000000000003"
+      }
+    },
+    {
+      "name": "reroll_ack valid",
+      "kind": "reroll_ack",
+      "wire": "{\"resourceId\":\"10000000-0000-4000-8000-000000000006\",\"replacedId\":\"10000000-0000-4000-8000-000000000003\"}",
+      "valid": true,
+      "room": "10000000-0000-4000-8000-000000000001",
+      "original_room": {
+        "requestId": "10000000-0000-4000-8000-000000000004",
+        "expectedRevision": "7"
+      },
+      "original_between": {
+        "requestId": "10000000-0000-4000-8000-000000000004",
+        "expectedRevision": "7",
+        "decisionId": "10000000-0000-4000-8000-000000000002",
+        "selectedRevisionId": "10000000-0000-4000-8000-000000000005"
+      },
+      "original_reroll": {
+        "requestId": "10000000-0000-4000-8000-000000000004",
+        "assignmentId": "10000000-0000-4000-8000-000000000003"
+      }
+    },
+    {
+      "name": "reroll_ack foreign target",
+      "kind": "reroll_ack",
+      "wire": "{\"resourceId\":\"10000000-0000-4000-8000-000000000006\",\"replacedId\":\"10000000-0000-4000-8000-000000000008\"}",
+      "valid": false,
+      "room": "10000000-0000-4000-8000-000000000001",
+      "original_room": {
+        "requestId": "10000000-0000-4000-8000-000000000004",
+        "expectedRevision": "7"
+      },
+      "original_between": {
+        "requestId": "10000000-0000-4000-8000-000000000004",
+        "expectedRevision": "7",
+        "decisionId": "10000000-0000-4000-8000-000000000002",
+        "selectedRevisionId": "10000000-0000-4000-8000-000000000005"
+      },
+      "original_reroll": {
+        "requestId": "10000000-0000-4000-8000-000000000004",
+        "assignmentId": "10000000-0000-4000-8000-000000000003"
+      }
+    },
+    {
+      "name": "reroll_ack private proof",
+      "kind": "reroll_ack",
+      "wire": "{\"resourceId\":\"10000000-0000-4000-8000-000000000006\",\"replacedId\":\"10000000-0000-4000-8000-000000000003\",\"qualificationRef\":\"private\"}",
+      "valid": false,
+      "room": "10000000-0000-4000-8000-000000000001",
+      "original_room": {
+        "requestId": "10000000-0000-4000-8000-000000000004",
+        "expectedRevision": "7"
+      },
+      "original_between": {
+        "requestId": "10000000-0000-4000-8000-000000000004",
+        "expectedRevision": "7",
+        "decisionId": "10000000-0000-4000-8000-000000000002",
+        "selectedRevisionId": "10000000-0000-4000-8000-000000000005"
+      },
+      "original_reroll": {
+        "requestId": "10000000-0000-4000-8000-000000000004",
+        "assignmentId": "10000000-0000-4000-8000-000000000003"
+      }
+    },
+    {
+      "name": "reroll_ack positional",
+      "kind": "reroll_ack",
+      "wire": "[\"10000000-0000-4000-8000-000000000006\",\"10000000-0000-4000-8000-000000000003\"]",
+      "valid": false,
+      "room": "10000000-0000-4000-8000-000000000001",
+      "original_room": {
+        "requestId": "10000000-0000-4000-8000-000000000004",
+        "expectedRevision": "7"
+      },
+      "original_between": {
+        "requestId": "10000000-0000-4000-8000-000000000004",
+        "expectedRevision": "7",
+        "decisionId": "10000000-0000-4000-8000-000000000002",
+        "selectedRevisionId": "10000000-0000-4000-8000-000000000005"
+      },
+      "original_reroll": {
+        "requestId": "10000000-0000-4000-8000-000000000004",
+        "assignmentId": "10000000-0000-4000-8000-000000000003"
+      }
+    },
+    {
+      "name": "reroll_ack same replacement",
+      "kind": "reroll_ack",
+      "wire": "{\"resourceId\":\"10000000-0000-4000-8000-000000000003\",\"replacedId\":\"10000000-0000-4000-8000-000000000003\"}",
+      "valid": false,
+      "room": "10000000-0000-4000-8000-000000000001",
+      "original_room": {
+        "requestId": "10000000-0000-4000-8000-000000000004",
+        "expectedRevision": "7"
+      },
+      "original_between": {
+        "requestId": "10000000-0000-4000-8000-000000000004",
+        "expectedRevision": "7",
+        "decisionId": "10000000-0000-4000-8000-000000000002",
+        "selectedRevisionId": "10000000-0000-4000-8000-000000000005"
+      },
+      "original_reroll": {
+        "requestId": "10000000-0000-4000-8000-000000000004",
+        "assignmentId": "10000000-0000-4000-8000-000000000003"
+      }
+    },
+    {
+      "name": "between has reserved game",
+      "kind": "between_ack",
+      "wire": "{\"resourceId\":\"10000000-0000-4000-8000-000000000002\",\"revision\":\"8\",\"reservedGameId\":\"10000000-0000-4000-8000-000000000007\"}",
+      "valid": true,
+      "room": "10000000-0000-4000-8000-000000000001",
+      "original_room": {
+        "requestId": "10000000-0000-4000-8000-000000000004",
+        "expectedRevision": "7"
+      },
+      "original_between": {
+        "requestId": "10000000-0000-4000-8000-000000000004",
+        "expectedRevision": "7",
+        "decisionId": "10000000-0000-4000-8000-000000000002",
+        "selectedRevisionId": "10000000-0000-4000-8000-000000000005"
+      },
+      "original_reroll": {
+        "requestId": "10000000-0000-4000-8000-000000000004",
+        "assignmentId": "10000000-0000-4000-8000-000000000003"
+      }
+    },
+    {
+      "name": "between invalid reserved ",
+      "kind": "between_ack",
+      "wire": "{\"resourceId\":\"10000000-0000-4000-8000-000000000002\",\"revision\":\"8\",\"reservedGameId\":\"\"}",
+      "valid": false,
+      "room": "10000000-0000-4000-8000-000000000001",
+      "original_room": {
+        "requestId": "10000000-0000-4000-8000-000000000004",
+        "expectedRevision": "7"
+      },
+      "original_between": {
+        "requestId": "10000000-0000-4000-8000-000000000004",
+        "expectedRevision": "7",
+        "decisionId": "10000000-0000-4000-8000-000000000002",
+        "selectedRevisionId": "10000000-0000-4000-8000-000000000005"
+      },
+      "original_reroll": {
+        "requestId": "10000000-0000-4000-8000-000000000004",
+        "assignmentId": "10000000-0000-4000-8000-000000000003"
+      }
+    },
+    {
+      "name": "between invalid reserved 00000000-0000-0000-0000-000000000000",
+      "kind": "between_ack",
+      "wire": "{\"resourceId\":\"10000000-0000-4000-8000-000000000002\",\"revision\":\"8\",\"reservedGameId\":\"00000000-0000-0000-0000-000000000000\"}",
+      "valid": false,
+      "room": "10000000-0000-4000-8000-000000000001",
+      "original_room": {
+        "requestId": "10000000-0000-4000-8000-000000000004",
+        "expectedRevision": "7"
+      },
+      "original_between": {
+        "requestId": "10000000-0000-4000-8000-000000000004",
+        "expectedRevision": "7",
+        "decisionId": "10000000-0000-4000-8000-000000000002",
+        "selectedRevisionId": "10000000-0000-4000-8000-000000000005"
+      },
+      "original_reroll": {
+        "requestId": "10000000-0000-4000-8000-000000000004",
+        "assignmentId": "10000000-0000-4000-8000-000000000003"
+      }
+    },
+    {
+      "name": "between required nullable",
+      "kind": "between_ack",
+      "wire": "{\"resourceId\":\"10000000-0000-4000-8000-000000000002\",\"revision\":\"8\"}",
+      "valid": false,
+      "room": "10000000-0000-4000-8000-000000000001",
+      "original_room": {
+        "requestId": "10000000-0000-4000-8000-000000000004",
+        "expectedRevision": "7"
+      },
+      "original_between": {
+        "requestId": "10000000-0000-4000-8000-000000000004",
+        "expectedRevision": "7",
+        "decisionId": "10000000-0000-4000-8000-000000000002",
+        "selectedRevisionId": "10000000-0000-4000-8000-000000000005"
+      },
+      "original_reroll": {
+        "requestId": "10000000-0000-4000-8000-000000000004",
+        "assignmentId": "10000000-0000-4000-8000-000000000003"
+      }
+    },
+    {
+      "name": "ready_disposition accepted",
+      "kind": "ready_disposition",
+      "wire": "{\"state\":\"accepted\",\"response\":{\"status\":\"success\",\"data\":{\"resourceId\":\"10000000-0000-4000-8000-000000000001\",\"revision\":\"8\"}}}",
+      "valid": true,
+      "room": "10000000-0000-4000-8000-000000000001",
+      "original_room": {
+        "requestId": "10000000-0000-4000-8000-000000000004",
+        "expectedRevision": "7"
+      },
+      "original_between": {
+        "requestId": "10000000-0000-4000-8000-000000000004",
+        "expectedRevision": "7",
+        "decisionId": "10000000-0000-4000-8000-000000000002",
+        "selectedRevisionId": "10000000-0000-4000-8000-000000000005"
+      },
+      "original_reroll": {
+        "requestId": "10000000-0000-4000-8000-000000000004",
+        "assignmentId": "10000000-0000-4000-8000-000000000003"
+      }
+    },
+    {
+      "name": "ready_disposition nested positional",
+      "kind": "ready_disposition",
+      "wire": "{\"state\":\"accepted\",\"response\":[\"success\",{\"resourceId\":\"10000000-0000-4000-8000-000000000001\",\"revision\":\"8\"}]}",
+      "valid": false,
+      "room": "10000000-0000-4000-8000-000000000001",
+      "original_room": {
+        "requestId": "10000000-0000-4000-8000-000000000004",
+        "expectedRevision": "7"
+      },
+      "original_between": {
+        "requestId": "10000000-0000-4000-8000-000000000004",
+        "expectedRevision": "7",
+        "decisionId": "10000000-0000-4000-8000-000000000002",
+        "selectedRevisionId": "10000000-0000-4000-8000-000000000005"
+      },
+      "original_reroll": {
+        "requestId": "10000000-0000-4000-8000-000000000004",
+        "assignmentId": "10000000-0000-4000-8000-000000000003"
+      }
+    },
+    {
+      "name": "ready_disposition unknown",
+      "kind": "ready_disposition",
+      "wire": "{\"state\":\"unknown\",\"response\":null}",
+      "valid": true,
+      "room": "10000000-0000-4000-8000-000000000001",
+      "original_room": {
+        "requestId": "10000000-0000-4000-8000-000000000004",
+        "expectedRevision": "7"
+      },
+      "original_between": {
+        "requestId": "10000000-0000-4000-8000-000000000004",
+        "expectedRevision": "7",
+        "decisionId": "10000000-0000-4000-8000-000000000002",
+        "selectedRevisionId": "10000000-0000-4000-8000-000000000005"
+      },
+      "original_reroll": {
+        "requestId": "10000000-0000-4000-8000-000000000004",
+        "assignmentId": "10000000-0000-4000-8000-000000000003"
+      }
+    },
+    {
+      "name": "ready_disposition missing null unknown",
+      "kind": "ready_disposition",
+      "wire": "{\"state\":\"unknown\"}",
+      "valid": false,
+      "room": "10000000-0000-4000-8000-000000000001",
+      "original_room": {
+        "requestId": "10000000-0000-4000-8000-000000000004",
+        "expectedRevision": "7"
+      },
+      "original_between": {
+        "requestId": "10000000-0000-4000-8000-000000000004",
+        "expectedRevision": "7",
+        "decisionId": "10000000-0000-4000-8000-000000000002",
+        "selectedRevisionId": "10000000-0000-4000-8000-000000000005"
+      },
+      "original_reroll": {
+        "requestId": "10000000-0000-4000-8000-000000000004",
+        "assignmentId": "10000000-0000-4000-8000-000000000003"
+      }
+    },
+    {
+      "name": "ready_disposition pending",
+      "kind": "ready_disposition",
+      "wire": "{\"state\":\"pending\",\"response\":null}",
+      "valid": true,
+      "room": "10000000-0000-4000-8000-000000000001",
+      "original_room": {
+        "requestId": "10000000-0000-4000-8000-000000000004",
+        "expectedRevision": "7"
+      },
+      "original_between": {
+        "requestId": "10000000-0000-4000-8000-000000000004",
+        "expectedRevision": "7",
+        "decisionId": "10000000-0000-4000-8000-000000000002",
+        "selectedRevisionId": "10000000-0000-4000-8000-000000000005"
+      },
+      "original_reroll": {
+        "requestId": "10000000-0000-4000-8000-000000000004",
+        "assignmentId": "10000000-0000-4000-8000-000000000003"
+      }
+    },
+    {
+      "name": "ready_disposition missing null pending",
+      "kind": "ready_disposition",
+      "wire": "{\"state\":\"pending\"}",
+      "valid": false,
+      "room": "10000000-0000-4000-8000-000000000001",
+      "original_room": {
+        "requestId": "10000000-0000-4000-8000-000000000004",
+        "expectedRevision": "7"
+      },
+      "original_between": {
+        "requestId": "10000000-0000-4000-8000-000000000004",
+        "expectedRevision": "7",
+        "decisionId": "10000000-0000-4000-8000-000000000002",
+        "selectedRevisionId": "10000000-0000-4000-8000-000000000005"
+      },
+      "original_reroll": {
+        "requestId": "10000000-0000-4000-8000-000000000004",
+        "assignmentId": "10000000-0000-4000-8000-000000000003"
+      }
+    },
+    {
+      "name": "ready_disposition rejection accountunavailable",
+      "kind": "ready_disposition",
+      "wire": "{\"state\":\"rejected\",\"response\":{\"status\":\"fail\",\"data\":{\"account\":\"unavailable\"}}}",
+      "valid": true,
+      "room": "10000000-0000-4000-8000-000000000001",
+      "original_room": {
+        "requestId": "10000000-0000-4000-8000-000000000004",
+        "expectedRevision": "7"
+      },
+      "original_between": {
+        "requestId": "10000000-0000-4000-8000-000000000004",
+        "expectedRevision": "7",
+        "decisionId": "10000000-0000-4000-8000-000000000002",
+        "selectedRevisionId": "10000000-0000-4000-8000-000000000005"
+      },
+      "original_reroll": {
+        "requestId": "10000000-0000-4000-8000-000000000004",
+        "assignmentId": "10000000-0000-4000-8000-000000000003"
+      }
+    },
+    {
+      "name": "ready_disposition rejection deckqualified selected revision required",
+      "kind": "ready_disposition",
+      "wire": "{\"state\":\"rejected\",\"response\":{\"status\":\"fail\",\"data\":{\"deck\":\"qualified selected revision required\"}}}",
+      "valid": true,
+      "room": "10000000-0000-4000-8000-000000000001",
+      "original_room": {
+        "requestId": "10000000-0000-4000-8000-000000000004",
+        "expectedRevision": "7"
+      },
+      "original_between": {
+        "requestId": "10000000-0000-4000-8000-000000000004",
+        "expectedRevision": "7",
+        "decisionId": "10000000-0000-4000-8000-000000000002",
+        "selectedRevisionId": "10000000-0000-4000-8000-000000000005"
+      },
+      "original_reroll": {
+        "requestId": "10000000-0000-4000-8000-000000000004",
+        "assignmentId": "10000000-0000-4000-8000-000000000003"
+      }
+    },
+    {
+      "name": "ready_disposition rejection readyunavailable",
+      "kind": "ready_disposition",
+      "wire": "{\"state\":\"rejected\",\"response\":{\"status\":\"fail\",\"data\":{\"ready\":\"unavailable\"}}}",
+      "valid": true,
+      "room": "10000000-0000-4000-8000-000000000001",
+      "original_room": {
+        "requestId": "10000000-0000-4000-8000-000000000004",
+        "expectedRevision": "7"
+      },
+      "original_between": {
+        "requestId": "10000000-0000-4000-8000-000000000004",
+        "expectedRevision": "7",
+        "decisionId": "10000000-0000-4000-8000-000000000002",
+        "selectedRevisionId": "10000000-0000-4000-8000-000000000005"
+      },
+      "original_reroll": {
+        "requestId": "10000000-0000-4000-8000-000000000004",
+        "assignmentId": "10000000-0000-4000-8000-000000000003"
+      }
+    },
+    {
+      "name": "ready_disposition rejection revisionconflict",
+      "kind": "ready_disposition",
+      "wire": "{\"state\":\"rejected\",\"response\":{\"status\":\"fail\",\"data\":{\"revision\":\"conflict\"}}}",
+      "valid": true,
+      "room": "10000000-0000-4000-8000-000000000001",
+      "original_room": {
+        "requestId": "10000000-0000-4000-8000-000000000004",
+        "expectedRevision": "7"
+      },
+      "original_between": {
+        "requestId": "10000000-0000-4000-8000-000000000004",
+        "expectedRevision": "7",
+        "decisionId": "10000000-0000-4000-8000-000000000002",
+        "selectedRevisionId": "10000000-0000-4000-8000-000000000005"
+      },
+      "original_reroll": {
+        "requestId": "10000000-0000-4000-8000-000000000004",
+        "assignmentId": "10000000-0000-4000-8000-000000000003"
+      }
+    },
+    {
+      "name": "ready_disposition rejection roomunavailable",
+      "kind": "ready_disposition",
+      "wire": "{\"state\":\"rejected\",\"response\":{\"status\":\"fail\",\"data\":{\"room\":\"unavailable\"}}}",
+      "valid": true,
+      "room": "10000000-0000-4000-8000-000000000001",
+      "original_room": {
+        "requestId": "10000000-0000-4000-8000-000000000004",
+        "expectedRevision": "7"
+      },
+      "original_between": {
+        "requestId": "10000000-0000-4000-8000-000000000004",
+        "expectedRevision": "7",
+        "decisionId": "10000000-0000-4000-8000-000000000002",
+        "selectedRevisionId": "10000000-0000-4000-8000-000000000005"
+      },
+      "original_reroll": {
+        "requestId": "10000000-0000-4000-8000-000000000004",
+        "assignmentId": "10000000-0000-4000-8000-000000000003"
+      }
+    },
+    {
+      "name": "ready_disposition invalid error {}",
+      "kind": "ready_disposition",
+      "wire": "{\"state\":\"rejected\",\"response\":{\"status\":\"fail\",\"data\":{}}}",
+      "valid": false,
+      "room": "10000000-0000-4000-8000-000000000001",
+      "original_room": {
+        "requestId": "10000000-0000-4000-8000-000000000004",
+        "expectedRevision": "7"
+      },
+      "original_between": {
+        "requestId": "10000000-0000-4000-8000-000000000004",
+        "expectedRevision": "7",
+        "decisionId": "10000000-0000-4000-8000-000000000002",
+        "selectedRevisionId": "10000000-0000-4000-8000-000000000005"
+      },
+      "original_reroll": {
+        "requestId": "10000000-0000-4000-8000-000000000004",
+        "assignmentId": "10000000-0000-4000-8000-000000000003"
+      }
+    },
+    {
+      "name": "ready_disposition invalid error {'internal': 'secret'}",
+      "kind": "ready_disposition",
+      "wire": "{\"state\":\"rejected\",\"response\":{\"status\":\"fail\",\"data\":{\"internal\":\"secret\"}}}",
+      "valid": false,
+      "room": "10000000-0000-4000-8000-000000000001",
+      "original_room": {
+        "requestId": "10000000-0000-4000-8000-000000000004",
+        "expectedRevision": "7"
+      },
+      "original_between": {
+        "requestId": "10000000-0000-4000-8000-000000000004",
+        "expectedRevision": "7",
+        "decisionId": "10000000-0000-4000-8000-000000000002",
+        "selectedRevisionId": "10000000-0000-4000-8000-000000000005"
+      },
+      "original_reroll": {
+        "requestId": "10000000-0000-4000-8000-000000000004",
+        "assignmentId": "10000000-0000-4000-8000-000000000003"
+      }
+    },
+    {
+      "name": "ready_disposition invalid error {'account': 'unavailable', 'extra': 'unavailable'}",
+      "kind": "ready_disposition",
+      "wire": "{\"state\":\"rejected\",\"response\":{\"status\":\"fail\",\"data\":{\"account\":\"unavailable\",\"extra\":\"unavailable\"}}}",
+      "valid": false,
+      "room": "10000000-0000-4000-8000-000000000001",
+      "original_room": {
+        "requestId": "10000000-0000-4000-8000-000000000004",
+        "expectedRevision": "7"
+      },
+      "original_between": {
+        "requestId": "10000000-0000-4000-8000-000000000004",
+        "expectedRevision": "7",
+        "decisionId": "10000000-0000-4000-8000-000000000002",
+        "selectedRevisionId": "10000000-0000-4000-8000-000000000005"
+      },
+      "original_reroll": {
+        "requestId": "10000000-0000-4000-8000-000000000004",
+        "assignmentId": "10000000-0000-4000-8000-000000000003"
+      }
+    },
+    {
+      "name": "ready_disposition server error not stored rejection",
+      "kind": "ready_disposition",
+      "wire": "{\"state\":\"rejected\",\"response\":{\"status\":\"error\",\"message\":\"unavailable\"}}",
+      "valid": false,
+      "room": "10000000-0000-4000-8000-000000000001",
+      "original_room": {
+        "requestId": "10000000-0000-4000-8000-000000000004",
+        "expectedRevision": "7"
+      },
+      "original_between": {
+        "requestId": "10000000-0000-4000-8000-000000000004",
+        "expectedRevision": "7",
+        "decisionId": "10000000-0000-4000-8000-000000000002",
+        "selectedRevisionId": "10000000-0000-4000-8000-000000000005"
+      },
+      "original_reroll": {
+        "requestId": "10000000-0000-4000-8000-000000000004",
+        "assignmentId": "10000000-0000-4000-8000-000000000003"
+      }
+    },
+    {
+      "name": "force_disposition accepted",
+      "kind": "force_disposition",
+      "wire": "{\"state\":\"accepted\",\"response\":{\"status\":\"success\",\"data\":{\"resourceId\":\"10000000-0000-4000-8000-000000000001\",\"revision\":\"8\"}}}",
+      "valid": true,
+      "room": "10000000-0000-4000-8000-000000000001",
+      "original_room": {
+        "requestId": "10000000-0000-4000-8000-000000000004",
+        "expectedRevision": "7"
+      },
+      "original_between": {
+        "requestId": "10000000-0000-4000-8000-000000000004",
+        "expectedRevision": "7",
+        "decisionId": "10000000-0000-4000-8000-000000000002",
+        "selectedRevisionId": "10000000-0000-4000-8000-000000000005"
+      },
+      "original_reroll": {
+        "requestId": "10000000-0000-4000-8000-000000000004",
+        "assignmentId": "10000000-0000-4000-8000-000000000003"
+      }
+    },
+    {
+      "name": "force_disposition nested positional",
+      "kind": "force_disposition",
+      "wire": "{\"state\":\"accepted\",\"response\":[\"success\",{\"resourceId\":\"10000000-0000-4000-8000-000000000001\",\"revision\":\"8\"}]}",
+      "valid": false,
+      "room": "10000000-0000-4000-8000-000000000001",
+      "original_room": {
+        "requestId": "10000000-0000-4000-8000-000000000004",
+        "expectedRevision": "7"
+      },
+      "original_between": {
+        "requestId": "10000000-0000-4000-8000-000000000004",
+        "expectedRevision": "7",
+        "decisionId": "10000000-0000-4000-8000-000000000002",
+        "selectedRevisionId": "10000000-0000-4000-8000-000000000005"
+      },
+      "original_reroll": {
+        "requestId": "10000000-0000-4000-8000-000000000004",
+        "assignmentId": "10000000-0000-4000-8000-000000000003"
+      }
+    },
+    {
+      "name": "force_disposition unknown",
+      "kind": "force_disposition",
+      "wire": "{\"state\":\"unknown\",\"response\":null}",
+      "valid": true,
+      "room": "10000000-0000-4000-8000-000000000001",
+      "original_room": {
+        "requestId": "10000000-0000-4000-8000-000000000004",
+        "expectedRevision": "7"
+      },
+      "original_between": {
+        "requestId": "10000000-0000-4000-8000-000000000004",
+        "expectedRevision": "7",
+        "decisionId": "10000000-0000-4000-8000-000000000002",
+        "selectedRevisionId": "10000000-0000-4000-8000-000000000005"
+      },
+      "original_reroll": {
+        "requestId": "10000000-0000-4000-8000-000000000004",
+        "assignmentId": "10000000-0000-4000-8000-000000000003"
+      }
+    },
+    {
+      "name": "force_disposition missing null unknown",
+      "kind": "force_disposition",
+      "wire": "{\"state\":\"unknown\"}",
+      "valid": false,
+      "room": "10000000-0000-4000-8000-000000000001",
+      "original_room": {
+        "requestId": "10000000-0000-4000-8000-000000000004",
+        "expectedRevision": "7"
+      },
+      "original_between": {
+        "requestId": "10000000-0000-4000-8000-000000000004",
+        "expectedRevision": "7",
+        "decisionId": "10000000-0000-4000-8000-000000000002",
+        "selectedRevisionId": "10000000-0000-4000-8000-000000000005"
+      },
+      "original_reroll": {
+        "requestId": "10000000-0000-4000-8000-000000000004",
+        "assignmentId": "10000000-0000-4000-8000-000000000003"
+      }
+    },
+    {
+      "name": "force_disposition pending",
+      "kind": "force_disposition",
+      "wire": "{\"state\":\"pending\",\"response\":null}",
+      "valid": true,
+      "room": "10000000-0000-4000-8000-000000000001",
+      "original_room": {
+        "requestId": "10000000-0000-4000-8000-000000000004",
+        "expectedRevision": "7"
+      },
+      "original_between": {
+        "requestId": "10000000-0000-4000-8000-000000000004",
+        "expectedRevision": "7",
+        "decisionId": "10000000-0000-4000-8000-000000000002",
+        "selectedRevisionId": "10000000-0000-4000-8000-000000000005"
+      },
+      "original_reroll": {
+        "requestId": "10000000-0000-4000-8000-000000000004",
+        "assignmentId": "10000000-0000-4000-8000-000000000003"
+      }
+    },
+    {
+      "name": "force_disposition missing null pending",
+      "kind": "force_disposition",
+      "wire": "{\"state\":\"pending\"}",
+      "valid": false,
+      "room": "10000000-0000-4000-8000-000000000001",
+      "original_room": {
+        "requestId": "10000000-0000-4000-8000-000000000004",
+        "expectedRevision": "7"
+      },
+      "original_between": {
+        "requestId": "10000000-0000-4000-8000-000000000004",
+        "expectedRevision": "7",
+        "decisionId": "10000000-0000-4000-8000-000000000002",
+        "selectedRevisionId": "10000000-0000-4000-8000-000000000005"
+      },
+      "original_reroll": {
+        "requestId": "10000000-0000-4000-8000-000000000004",
+        "assignmentId": "10000000-0000-4000-8000-000000000003"
+      }
+    },
+    {
+      "name": "force_disposition rejection accountunavailable",
+      "kind": "force_disposition",
+      "wire": "{\"state\":\"rejected\",\"response\":{\"status\":\"fail\",\"data\":{\"account\":\"unavailable\"}}}",
+      "valid": true,
+      "room": "10000000-0000-4000-8000-000000000001",
+      "original_room": {
+        "requestId": "10000000-0000-4000-8000-000000000004",
+        "expectedRevision": "7"
+      },
+      "original_between": {
+        "requestId": "10000000-0000-4000-8000-000000000004",
+        "expectedRevision": "7",
+        "decisionId": "10000000-0000-4000-8000-000000000002",
+        "selectedRevisionId": "10000000-0000-4000-8000-000000000005"
+      },
+      "original_reroll": {
+        "requestId": "10000000-0000-4000-8000-000000000004",
+        "assignmentId": "10000000-0000-4000-8000-000000000003"
+      }
+    },
+    {
+      "name": "force_disposition rejection decksqualification required",
+      "kind": "force_disposition",
+      "wire": "{\"state\":\"rejected\",\"response\":{\"status\":\"fail\",\"data\":{\"decks\":\"qualification required\"}}}",
+      "valid": true,
+      "room": "10000000-0000-4000-8000-000000000001",
+      "original_room": {
+        "requestId": "10000000-0000-4000-8000-000000000004",
+        "expectedRevision": "7"
+      },
+      "original_between": {
+        "requestId": "10000000-0000-4000-8000-000000000004",
+        "expectedRevision": "7",
+        "decisionId": "10000000-0000-4000-8000-000000000002",
+        "selectedRevisionId": "10000000-0000-4000-8000-000000000005"
+      },
+      "original_reroll": {
+        "requestId": "10000000-0000-4000-8000-000000000004",
+        "assignmentId": "10000000-0000-4000-8000-000000000003"
+      }
+    },
+    {
+      "name": "force_disposition rejection revisionconflict",
+      "kind": "force_disposition",
+      "wire": "{\"state\":\"rejected\",\"response\":{\"status\":\"fail\",\"data\":{\"revision\":\"conflict\"}}}",
+      "valid": true,
+      "room": "10000000-0000-4000-8000-000000000001",
+      "original_room": {
+        "requestId": "10000000-0000-4000-8000-000000000004",
+        "expectedRevision": "7"
+      },
+      "original_between": {
+        "requestId": "10000000-0000-4000-8000-000000000004",
+        "expectedRevision": "7",
+        "decisionId": "10000000-0000-4000-8000-000000000002",
+        "selectedRevisionId": "10000000-0000-4000-8000-000000000005"
+      },
+      "original_reroll": {
+        "requestId": "10000000-0000-4000-8000-000000000004",
+        "assignmentId": "10000000-0000-4000-8000-000000000003"
+      }
+    },
+    {
+      "name": "force_disposition rejection roominvalid slots or selected decks",
+      "kind": "force_disposition",
+      "wire": "{\"state\":\"rejected\",\"response\":{\"status\":\"fail\",\"data\":{\"room\":\"invalid slots or selected decks\"}}}",
+      "valid": true,
+      "room": "10000000-0000-4000-8000-000000000001",
+      "original_room": {
+        "requestId": "10000000-0000-4000-8000-000000000004",
+        "expectedRevision": "7"
+      },
+      "original_between": {
+        "requestId": "10000000-0000-4000-8000-000000000004",
+        "expectedRevision": "7",
+        "decisionId": "10000000-0000-4000-8000-000000000002",
+        "selectedRevisionId": "10000000-0000-4000-8000-000000000005"
+      },
+      "original_reroll": {
+        "requestId": "10000000-0000-4000-8000-000000000004",
+        "assignmentId": "10000000-0000-4000-8000-000000000003"
+      }
+    },
+    {
+      "name": "force_disposition rejection roomunavailable",
+      "kind": "force_disposition",
+      "wire": "{\"state\":\"rejected\",\"response\":{\"status\":\"fail\",\"data\":{\"room\":\"unavailable\"}}}",
+      "valid": true,
+      "room": "10000000-0000-4000-8000-000000000001",
+      "original_room": {
+        "requestId": "10000000-0000-4000-8000-000000000004",
+        "expectedRevision": "7"
+      },
+      "original_between": {
+        "requestId": "10000000-0000-4000-8000-000000000004",
+        "expectedRevision": "7",
+        "decisionId": "10000000-0000-4000-8000-000000000002",
+        "selectedRevisionId": "10000000-0000-4000-8000-000000000005"
+      },
+      "original_reroll": {
+        "requestId": "10000000-0000-4000-8000-000000000004",
+        "assignmentId": "10000000-0000-4000-8000-000000000003"
+      }
+    },
+    {
+      "name": "force_disposition invalid error {}",
+      "kind": "force_disposition",
+      "wire": "{\"state\":\"rejected\",\"response\":{\"status\":\"fail\",\"data\":{}}}",
+      "valid": false,
+      "room": "10000000-0000-4000-8000-000000000001",
+      "original_room": {
+        "requestId": "10000000-0000-4000-8000-000000000004",
+        "expectedRevision": "7"
+      },
+      "original_between": {
+        "requestId": "10000000-0000-4000-8000-000000000004",
+        "expectedRevision": "7",
+        "decisionId": "10000000-0000-4000-8000-000000000002",
+        "selectedRevisionId": "10000000-0000-4000-8000-000000000005"
+      },
+      "original_reroll": {
+        "requestId": "10000000-0000-4000-8000-000000000004",
+        "assignmentId": "10000000-0000-4000-8000-000000000003"
+      }
+    },
+    {
+      "name": "force_disposition invalid error {'internal': 'secret'}",
+      "kind": "force_disposition",
+      "wire": "{\"state\":\"rejected\",\"response\":{\"status\":\"fail\",\"data\":{\"internal\":\"secret\"}}}",
+      "valid": false,
+      "room": "10000000-0000-4000-8000-000000000001",
+      "original_room": {
+        "requestId": "10000000-0000-4000-8000-000000000004",
+        "expectedRevision": "7"
+      },
+      "original_between": {
+        "requestId": "10000000-0000-4000-8000-000000000004",
+        "expectedRevision": "7",
+        "decisionId": "10000000-0000-4000-8000-000000000002",
+        "selectedRevisionId": "10000000-0000-4000-8000-000000000005"
+      },
+      "original_reroll": {
+        "requestId": "10000000-0000-4000-8000-000000000004",
+        "assignmentId": "10000000-0000-4000-8000-000000000003"
+      }
+    },
+    {
+      "name": "force_disposition invalid error {'account': 'unavailable', 'extra': 'unavailable'}",
+      "kind": "force_disposition",
+      "wire": "{\"state\":\"rejected\",\"response\":{\"status\":\"fail\",\"data\":{\"account\":\"unavailable\",\"extra\":\"unavailable\"}}}",
+      "valid": false,
+      "room": "10000000-0000-4000-8000-000000000001",
+      "original_room": {
+        "requestId": "10000000-0000-4000-8000-000000000004",
+        "expectedRevision": "7"
+      },
+      "original_between": {
+        "requestId": "10000000-0000-4000-8000-000000000004",
+        "expectedRevision": "7",
+        "decisionId": "10000000-0000-4000-8000-000000000002",
+        "selectedRevisionId": "10000000-0000-4000-8000-000000000005"
+      },
+      "original_reroll": {
+        "requestId": "10000000-0000-4000-8000-000000000004",
+        "assignmentId": "10000000-0000-4000-8000-000000000003"
+      }
+    },
+    {
+      "name": "force_disposition server error not stored rejection",
+      "kind": "force_disposition",
+      "wire": "{\"state\":\"rejected\",\"response\":{\"status\":\"error\",\"message\":\"unavailable\"}}",
+      "valid": false,
+      "room": "10000000-0000-4000-8000-000000000001",
+      "original_room": {
+        "requestId": "10000000-0000-4000-8000-000000000004",
+        "expectedRevision": "7"
+      },
+      "original_between": {
+        "requestId": "10000000-0000-4000-8000-000000000004",
+        "expectedRevision": "7",
+        "decisionId": "10000000-0000-4000-8000-000000000002",
+        "selectedRevisionId": "10000000-0000-4000-8000-000000000005"
+      },
+      "original_reroll": {
+        "requestId": "10000000-0000-4000-8000-000000000004",
+        "assignmentId": "10000000-0000-4000-8000-000000000003"
+      }
+    },
+    {
+      "name": "between_disposition accepted",
+      "kind": "between_disposition",
+      "wire": "{\"state\":\"accepted\",\"response\":{\"status\":\"success\",\"data\":{\"resourceId\":\"10000000-0000-4000-8000-000000000002\",\"revision\":\"8\",\"reservedGameId\":null}}}",
+      "valid": true,
+      "room": "10000000-0000-4000-8000-000000000001",
+      "original_room": {
+        "requestId": "10000000-0000-4000-8000-000000000004",
+        "expectedRevision": "7"
+      },
+      "original_between": {
+        "requestId": "10000000-0000-4000-8000-000000000004",
+        "expectedRevision": "7",
+        "decisionId": "10000000-0000-4000-8000-000000000002",
+        "selectedRevisionId": "10000000-0000-4000-8000-000000000005"
+      },
+      "original_reroll": {
+        "requestId": "10000000-0000-4000-8000-000000000004",
+        "assignmentId": "10000000-0000-4000-8000-000000000003"
+      }
+    },
+    {
+      "name": "between_disposition nested positional",
+      "kind": "between_disposition",
+      "wire": "{\"state\":\"accepted\",\"response\":[\"success\",{\"resourceId\":\"10000000-0000-4000-8000-000000000002\",\"revision\":\"8\",\"reservedGameId\":null}]}",
+      "valid": false,
+      "room": "10000000-0000-4000-8000-000000000001",
+      "original_room": {
+        "requestId": "10000000-0000-4000-8000-000000000004",
+        "expectedRevision": "7"
+      },
+      "original_between": {
+        "requestId": "10000000-0000-4000-8000-000000000004",
+        "expectedRevision": "7",
+        "decisionId": "10000000-0000-4000-8000-000000000002",
+        "selectedRevisionId": "10000000-0000-4000-8000-000000000005"
+      },
+      "original_reroll": {
+        "requestId": "10000000-0000-4000-8000-000000000004",
+        "assignmentId": "10000000-0000-4000-8000-000000000003"
+      }
+    },
+    {
+      "name": "between_disposition unknown",
+      "kind": "between_disposition",
+      "wire": "{\"state\":\"unknown\",\"response\":null}",
+      "valid": true,
+      "room": "10000000-0000-4000-8000-000000000001",
+      "original_room": {
+        "requestId": "10000000-0000-4000-8000-000000000004",
+        "expectedRevision": "7"
+      },
+      "original_between": {
+        "requestId": "10000000-0000-4000-8000-000000000004",
+        "expectedRevision": "7",
+        "decisionId": "10000000-0000-4000-8000-000000000002",
+        "selectedRevisionId": "10000000-0000-4000-8000-000000000005"
+      },
+      "original_reroll": {
+        "requestId": "10000000-0000-4000-8000-000000000004",
+        "assignmentId": "10000000-0000-4000-8000-000000000003"
+      }
+    },
+    {
+      "name": "between_disposition missing null unknown",
+      "kind": "between_disposition",
+      "wire": "{\"state\":\"unknown\"}",
+      "valid": false,
+      "room": "10000000-0000-4000-8000-000000000001",
+      "original_room": {
+        "requestId": "10000000-0000-4000-8000-000000000004",
+        "expectedRevision": "7"
+      },
+      "original_between": {
+        "requestId": "10000000-0000-4000-8000-000000000004",
+        "expectedRevision": "7",
+        "decisionId": "10000000-0000-4000-8000-000000000002",
+        "selectedRevisionId": "10000000-0000-4000-8000-000000000005"
+      },
+      "original_reroll": {
+        "requestId": "10000000-0000-4000-8000-000000000004",
+        "assignmentId": "10000000-0000-4000-8000-000000000003"
+      }
+    },
+    {
+      "name": "between_disposition pending",
+      "kind": "between_disposition",
+      "wire": "{\"state\":\"pending\",\"response\":null}",
+      "valid": true,
+      "room": "10000000-0000-4000-8000-000000000001",
+      "original_room": {
+        "requestId": "10000000-0000-4000-8000-000000000004",
+        "expectedRevision": "7"
+      },
+      "original_between": {
+        "requestId": "10000000-0000-4000-8000-000000000004",
+        "expectedRevision": "7",
+        "decisionId": "10000000-0000-4000-8000-000000000002",
+        "selectedRevisionId": "10000000-0000-4000-8000-000000000005"
+      },
+      "original_reroll": {
+        "requestId": "10000000-0000-4000-8000-000000000004",
+        "assignmentId": "10000000-0000-4000-8000-000000000003"
+      }
+    },
+    {
+      "name": "between_disposition missing null pending",
+      "kind": "between_disposition",
+      "wire": "{\"state\":\"pending\"}",
+      "valid": false,
+      "room": "10000000-0000-4000-8000-000000000001",
+      "original_room": {
+        "requestId": "10000000-0000-4000-8000-000000000004",
+        "expectedRevision": "7"
+      },
+      "original_between": {
+        "requestId": "10000000-0000-4000-8000-000000000004",
+        "expectedRevision": "7",
+        "decisionId": "10000000-0000-4000-8000-000000000002",
+        "selectedRevisionId": "10000000-0000-4000-8000-000000000005"
+      },
+      "original_reroll": {
+        "requestId": "10000000-0000-4000-8000-000000000004",
+        "assignmentId": "10000000-0000-4000-8000-000000000003"
+      }
+    },
+    {
+      "name": "between_disposition rejection basisstale or unavailable between-game decision",
+      "kind": "between_disposition",
+      "wire": "{\"state\":\"rejected\",\"response\":{\"status\":\"fail\",\"data\":{\"basis\":\"stale or unavailable between-game decision\"}}}",
+      "valid": true,
+      "room": "10000000-0000-4000-8000-000000000001",
+      "original_room": {
+        "requestId": "10000000-0000-4000-8000-000000000004",
+        "expectedRevision": "7"
+      },
+      "original_between": {
+        "requestId": "10000000-0000-4000-8000-000000000004",
+        "expectedRevision": "7",
+        "decisionId": "10000000-0000-4000-8000-000000000002",
+        "selectedRevisionId": "10000000-0000-4000-8000-000000000005"
+      },
+      "original_reroll": {
+        "requestId": "10000000-0000-4000-8000-000000000004",
+        "assignmentId": "10000000-0000-4000-8000-000000000003"
+      }
+    },
+    {
+      "name": "between_disposition rejection deckunavailable selected revision",
+      "kind": "between_disposition",
+      "wire": "{\"state\":\"rejected\",\"response\":{\"status\":\"fail\",\"data\":{\"deck\":\"unavailable selected revision\"}}}",
+      "valid": true,
+      "room": "10000000-0000-4000-8000-000000000001",
+      "original_room": {
+        "requestId": "10000000-0000-4000-8000-000000000004",
+        "expectedRevision": "7"
+      },
+      "original_between": {
+        "requestId": "10000000-0000-4000-8000-000000000004",
+        "expectedRevision": "7",
+        "decisionId": "10000000-0000-4000-8000-000000000002",
+        "selectedRevisionId": "10000000-0000-4000-8000-000000000005"
+      },
+      "original_reroll": {
+        "requestId": "10000000-0000-4000-8000-000000000004",
+        "assignmentId": "10000000-0000-4000-8000-000000000003"
+      }
+    },
+    {
+      "name": "between_disposition rejection deckselection changes the immutable original card pool",
+      "kind": "between_disposition",
+      "wire": "{\"state\":\"rejected\",\"response\":{\"status\":\"fail\",\"data\":{\"deck\":\"selection changes the immutable original card pool\"}}}",
+      "valid": true,
+      "room": "10000000-0000-4000-8000-000000000001",
+      "original_room": {
+        "requestId": "10000000-0000-4000-8000-000000000004",
+        "expectedRevision": "7"
+      },
+      "original_between": {
+        "requestId": "10000000-0000-4000-8000-000000000004",
+        "expectedRevision": "7",
+        "decisionId": "10000000-0000-4000-8000-000000000002",
+        "selectedRevisionId": "10000000-0000-4000-8000-000000000005"
+      },
+      "original_reroll": {
+        "requestId": "10000000-0000-4000-8000-000000000004",
+        "assignmentId": "10000000-0000-4000-8000-000000000003"
+      }
+    },
+    {
+      "name": "between_disposition rejection deadlinequalified cutoff has elapsed",
+      "kind": "between_disposition",
+      "wire": "{\"state\":\"rejected\",\"response\":{\"status\":\"fail\",\"data\":{\"deadline\":\"qualified cutoff has elapsed\"}}}",
+      "valid": true,
+      "room": "10000000-0000-4000-8000-000000000001",
+      "original_room": {
+        "requestId": "10000000-0000-4000-8000-000000000004",
+        "expectedRevision": "7"
+      },
+      "original_between": {
+        "requestId": "10000000-0000-4000-8000-000000000004",
+        "expectedRevision": "7",
+        "decisionId": "10000000-0000-4000-8000-000000000002",
+        "selectedRevisionId": "10000000-0000-4000-8000-000000000005"
+      },
+      "original_reroll": {
+        "requestId": "10000000-0000-4000-8000-000000000004",
+        "assignmentId": "10000000-0000-4000-8000-000000000003"
+      }
+    },
+    {
+      "name": "between_disposition invalid error {}",
+      "kind": "between_disposition",
+      "wire": "{\"state\":\"rejected\",\"response\":{\"status\":\"fail\",\"data\":{}}}",
+      "valid": false,
+      "room": "10000000-0000-4000-8000-000000000001",
+      "original_room": {
+        "requestId": "10000000-0000-4000-8000-000000000004",
+        "expectedRevision": "7"
+      },
+      "original_between": {
+        "requestId": "10000000-0000-4000-8000-000000000004",
+        "expectedRevision": "7",
+        "decisionId": "10000000-0000-4000-8000-000000000002",
+        "selectedRevisionId": "10000000-0000-4000-8000-000000000005"
+      },
+      "original_reroll": {
+        "requestId": "10000000-0000-4000-8000-000000000004",
+        "assignmentId": "10000000-0000-4000-8000-000000000003"
+      }
+    },
+    {
+      "name": "between_disposition invalid error {'internal': 'secret'}",
+      "kind": "between_disposition",
+      "wire": "{\"state\":\"rejected\",\"response\":{\"status\":\"fail\",\"data\":{\"internal\":\"secret\"}}}",
+      "valid": false,
+      "room": "10000000-0000-4000-8000-000000000001",
+      "original_room": {
+        "requestId": "10000000-0000-4000-8000-000000000004",
+        "expectedRevision": "7"
+      },
+      "original_between": {
+        "requestId": "10000000-0000-4000-8000-000000000004",
+        "expectedRevision": "7",
+        "decisionId": "10000000-0000-4000-8000-000000000002",
+        "selectedRevisionId": "10000000-0000-4000-8000-000000000005"
+      },
+      "original_reroll": {
+        "requestId": "10000000-0000-4000-8000-000000000004",
+        "assignmentId": "10000000-0000-4000-8000-000000000003"
+      }
+    },
+    {
+      "name": "between_disposition invalid error {'basis': 'stale or unavailable between-game decision', 'extra': 'unavailable'}",
+      "kind": "between_disposition",
+      "wire": "{\"state\":\"rejected\",\"response\":{\"status\":\"fail\",\"data\":{\"basis\":\"stale or unavailable between-game decision\",\"extra\":\"unavailable\"}}}",
+      "valid": false,
+      "room": "10000000-0000-4000-8000-000000000001",
+      "original_room": {
+        "requestId": "10000000-0000-4000-8000-000000000004",
+        "expectedRevision": "7"
+      },
+      "original_between": {
+        "requestId": "10000000-0000-4000-8000-000000000004",
+        "expectedRevision": "7",
+        "decisionId": "10000000-0000-4000-8000-000000000002",
+        "selectedRevisionId": "10000000-0000-4000-8000-000000000005"
+      },
+      "original_reroll": {
+        "requestId": "10000000-0000-4000-8000-000000000004",
+        "assignmentId": "10000000-0000-4000-8000-000000000003"
+      }
+    },
+    {
+      "name": "between_disposition server error not stored rejection",
+      "kind": "between_disposition",
+      "wire": "{\"state\":\"rejected\",\"response\":{\"status\":\"error\",\"message\":\"unavailable\"}}",
+      "valid": false,
+      "room": "10000000-0000-4000-8000-000000000001",
+      "original_room": {
+        "requestId": "10000000-0000-4000-8000-000000000004",
+        "expectedRevision": "7"
+      },
+      "original_between": {
+        "requestId": "10000000-0000-4000-8000-000000000004",
+        "expectedRevision": "7",
+        "decisionId": "10000000-0000-4000-8000-000000000002",
+        "selectedRevisionId": "10000000-0000-4000-8000-000000000005"
+      },
+      "original_reroll": {
+        "requestId": "10000000-0000-4000-8000-000000000004",
+        "assignmentId": "10000000-0000-4000-8000-000000000003"
+      }
+    },
+    {
+      "name": "reroll_disposition accepted",
+      "kind": "reroll_disposition",
+      "wire": "{\"state\":\"accepted\",\"response\":{\"status\":\"success\",\"data\":{\"resourceId\":\"10000000-0000-4000-8000-000000000006\",\"replacedId\":\"10000000-0000-4000-8000-000000000003\"}}}",
+      "valid": true,
+      "room": "10000000-0000-4000-8000-000000000001",
+      "original_room": {
+        "requestId": "10000000-0000-4000-8000-000000000004",
+        "expectedRevision": "7"
+      },
+      "original_between": {
+        "requestId": "10000000-0000-4000-8000-000000000004",
+        "expectedRevision": "7",
+        "decisionId": "10000000-0000-4000-8000-000000000002",
+        "selectedRevisionId": "10000000-0000-4000-8000-000000000005"
+      },
+      "original_reroll": {
+        "requestId": "10000000-0000-4000-8000-000000000004",
+        "assignmentId": "10000000-0000-4000-8000-000000000003"
+      }
+    },
+    {
+      "name": "reroll_disposition nested positional",
+      "kind": "reroll_disposition",
+      "wire": "{\"state\":\"accepted\",\"response\":[\"success\",{\"resourceId\":\"10000000-0000-4000-8000-000000000006\",\"replacedId\":\"10000000-0000-4000-8000-000000000003\"}]}",
+      "valid": false,
+      "room": "10000000-0000-4000-8000-000000000001",
+      "original_room": {
+        "requestId": "10000000-0000-4000-8000-000000000004",
+        "expectedRevision": "7"
+      },
+      "original_between": {
+        "requestId": "10000000-0000-4000-8000-000000000004",
+        "expectedRevision": "7",
+        "decisionId": "10000000-0000-4000-8000-000000000002",
+        "selectedRevisionId": "10000000-0000-4000-8000-000000000005"
+      },
+      "original_reroll": {
+        "requestId": "10000000-0000-4000-8000-000000000004",
+        "assignmentId": "10000000-0000-4000-8000-000000000003"
+      }
+    },
+    {
+      "name": "reroll_disposition unknown",
+      "kind": "reroll_disposition",
+      "wire": "{\"state\":\"unknown\",\"response\":null}",
+      "valid": true,
+      "room": "10000000-0000-4000-8000-000000000001",
+      "original_room": {
+        "requestId": "10000000-0000-4000-8000-000000000004",
+        "expectedRevision": "7"
+      },
+      "original_between": {
+        "requestId": "10000000-0000-4000-8000-000000000004",
+        "expectedRevision": "7",
+        "decisionId": "10000000-0000-4000-8000-000000000002",
+        "selectedRevisionId": "10000000-0000-4000-8000-000000000005"
+      },
+      "original_reroll": {
+        "requestId": "10000000-0000-4000-8000-000000000004",
+        "assignmentId": "10000000-0000-4000-8000-000000000003"
+      }
+    },
+    {
+      "name": "reroll_disposition missing null unknown",
+      "kind": "reroll_disposition",
+      "wire": "{\"state\":\"unknown\"}",
+      "valid": false,
+      "room": "10000000-0000-4000-8000-000000000001",
+      "original_room": {
+        "requestId": "10000000-0000-4000-8000-000000000004",
+        "expectedRevision": "7"
+      },
+      "original_between": {
+        "requestId": "10000000-0000-4000-8000-000000000004",
+        "expectedRevision": "7",
+        "decisionId": "10000000-0000-4000-8000-000000000002",
+        "selectedRevisionId": "10000000-0000-4000-8000-000000000005"
+      },
+      "original_reroll": {
+        "requestId": "10000000-0000-4000-8000-000000000004",
+        "assignmentId": "10000000-0000-4000-8000-000000000003"
+      }
+    },
+    {
+      "name": "reroll_disposition pending",
+      "kind": "reroll_disposition",
+      "wire": "{\"state\":\"pending\",\"response\":null}",
+      "valid": true,
+      "room": "10000000-0000-4000-8000-000000000001",
+      "original_room": {
+        "requestId": "10000000-0000-4000-8000-000000000004",
+        "expectedRevision": "7"
+      },
+      "original_between": {
+        "requestId": "10000000-0000-4000-8000-000000000004",
+        "expectedRevision": "7",
+        "decisionId": "10000000-0000-4000-8000-000000000002",
+        "selectedRevisionId": "10000000-0000-4000-8000-000000000005"
+      },
+      "original_reroll": {
+        "requestId": "10000000-0000-4000-8000-000000000004",
+        "assignmentId": "10000000-0000-4000-8000-000000000003"
+      }
+    },
+    {
+      "name": "reroll_disposition missing null pending",
+      "kind": "reroll_disposition",
+      "wire": "{\"state\":\"pending\"}",
+      "valid": false,
+      "room": "10000000-0000-4000-8000-000000000001",
+      "original_room": {
+        "requestId": "10000000-0000-4000-8000-000000000004",
+        "expectedRevision": "7"
+      },
+      "original_between": {
+        "requestId": "10000000-0000-4000-8000-000000000004",
+        "expectedRevision": "7",
+        "decisionId": "10000000-0000-4000-8000-000000000002",
+        "selectedRevisionId": "10000000-0000-4000-8000-000000000005"
+      },
+      "original_reroll": {
+        "requestId": "10000000-0000-4000-8000-000000000004",
+        "assignmentId": "10000000-0000-4000-8000-000000000003"
+      }
+    },
+    {
+      "name": "reroll_disposition rejection accountunavailable",
+      "kind": "reroll_disposition",
+      "wire": "{\"state\":\"rejected\",\"response\":{\"status\":\"fail\",\"data\":{\"account\":\"unavailable\"}}}",
+      "valid": true,
+      "room": "10000000-0000-4000-8000-000000000001",
+      "original_room": {
+        "requestId": "10000000-0000-4000-8000-000000000004",
+        "expectedRevision": "7"
+      },
+      "original_between": {
+        "requestId": "10000000-0000-4000-8000-000000000004",
+        "expectedRevision": "7",
+        "decisionId": "10000000-0000-4000-8000-000000000002",
+        "selectedRevisionId": "10000000-0000-4000-8000-000000000005"
+      },
+      "original_reroll": {
+        "requestId": "10000000-0000-4000-8000-000000000004",
+        "assignmentId": "10000000-0000-4000-8000-000000000003"
+      }
+    },
+    {
+      "name": "reroll_disposition rejection daynot current UTC day",
+      "kind": "reroll_disposition",
+      "wire": "{\"state\":\"rejected\",\"response\":{\"status\":\"fail\",\"data\":{\"day\":\"not current UTC day\"}}}",
+      "valid": true,
+      "room": "10000000-0000-4000-8000-000000000001",
+      "original_room": {
+        "requestId": "10000000-0000-4000-8000-000000000004",
+        "expectedRevision": "7"
+      },
+      "original_between": {
+        "requestId": "10000000-0000-4000-8000-000000000004",
+        "expectedRevision": "7",
+        "decisionId": "10000000-0000-4000-8000-000000000002",
+        "selectedRevisionId": "10000000-0000-4000-8000-000000000005"
+      },
+      "original_reroll": {
+        "requestId": "10000000-0000-4000-8000-000000000004",
+        "assignmentId": "10000000-0000-4000-8000-000000000003"
+      }
+    },
+    {
+      "name": "reroll_disposition rejection assignmentunavailable",
+      "kind": "reroll_disposition",
+      "wire": "{\"state\":\"rejected\",\"response\":{\"status\":\"fail\",\"data\":{\"assignment\":\"unavailable\"}}}",
+      "valid": true,
+      "room": "10000000-0000-4000-8000-000000000001",
+      "original_room": {
+        "requestId": "10000000-0000-4000-8000-000000000004",
+        "expectedRevision": "7"
+      },
+      "original_between": {
+        "requestId": "10000000-0000-4000-8000-000000000004",
+        "expectedRevision": "7",
+        "decisionId": "10000000-0000-4000-8000-000000000002",
+        "selectedRevisionId": "10000000-0000-4000-8000-000000000005"
+      },
+      "original_reroll": {
+        "requestId": "10000000-0000-4000-8000-000000000004",
+        "assignmentId": "10000000-0000-4000-8000-000000000003"
+      }
+    },
+    {
+      "name": "reroll_disposition rejection definitiondifferent available definition required",
+      "kind": "reroll_disposition",
+      "wire": "{\"state\":\"rejected\",\"response\":{\"status\":\"fail\",\"data\":{\"definition\":\"different available definition required\"}}}",
+      "valid": true,
+      "room": "10000000-0000-4000-8000-000000000001",
+      "original_room": {
+        "requestId": "10000000-0000-4000-8000-000000000004",
+        "expectedRevision": "7"
+      },
+      "original_between": {
+        "requestId": "10000000-0000-4000-8000-000000000004",
+        "expectedRevision": "7",
+        "decisionId": "10000000-0000-4000-8000-000000000002",
+        "selectedRevisionId": "10000000-0000-4000-8000-000000000005"
+      },
+      "original_reroll": {
+        "requestId": "10000000-0000-4000-8000-000000000004",
+        "assignmentId": "10000000-0000-4000-8000-000000000003"
+      }
+    },
+    {
+      "name": "reroll_disposition rejection rerollalready used",
+      "kind": "reroll_disposition",
+      "wire": "{\"state\":\"rejected\",\"response\":{\"status\":\"fail\",\"data\":{\"reroll\":\"already used\"}}}",
+      "valid": true,
+      "room": "10000000-0000-4000-8000-000000000001",
+      "original_room": {
+        "requestId": "10000000-0000-4000-8000-000000000004",
+        "expectedRevision": "7"
+      },
+      "original_between": {
+        "requestId": "10000000-0000-4000-8000-000000000004",
+        "expectedRevision": "7",
+        "decisionId": "10000000-0000-4000-8000-000000000002",
+        "selectedRevisionId": "10000000-0000-4000-8000-000000000005"
+      },
+      "original_reroll": {
+        "requestId": "10000000-0000-4000-8000-000000000004",
+        "assignmentId": "10000000-0000-4000-8000-000000000003"
+      }
+    },
+    {
+      "name": "reroll_disposition invalid error {}",
+      "kind": "reroll_disposition",
+      "wire": "{\"state\":\"rejected\",\"response\":{\"status\":\"fail\",\"data\":{}}}",
+      "valid": false,
+      "room": "10000000-0000-4000-8000-000000000001",
+      "original_room": {
+        "requestId": "10000000-0000-4000-8000-000000000004",
+        "expectedRevision": "7"
+      },
+      "original_between": {
+        "requestId": "10000000-0000-4000-8000-000000000004",
+        "expectedRevision": "7",
+        "decisionId": "10000000-0000-4000-8000-000000000002",
+        "selectedRevisionId": "10000000-0000-4000-8000-000000000005"
+      },
+      "original_reroll": {
+        "requestId": "10000000-0000-4000-8000-000000000004",
+        "assignmentId": "10000000-0000-4000-8000-000000000003"
+      }
+    },
+    {
+      "name": "reroll_disposition invalid error {'internal': 'secret'}",
+      "kind": "reroll_disposition",
+      "wire": "{\"state\":\"rejected\",\"response\":{\"status\":\"fail\",\"data\":{\"internal\":\"secret\"}}}",
+      "valid": false,
+      "room": "10000000-0000-4000-8000-000000000001",
+      "original_room": {
+        "requestId": "10000000-0000-4000-8000-000000000004",
+        "expectedRevision": "7"
+      },
+      "original_between": {
+        "requestId": "10000000-0000-4000-8000-000000000004",
+        "expectedRevision": "7",
+        "decisionId": "10000000-0000-4000-8000-000000000002",
+        "selectedRevisionId": "10000000-0000-4000-8000-000000000005"
+      },
+      "original_reroll": {
+        "requestId": "10000000-0000-4000-8000-000000000004",
+        "assignmentId": "10000000-0000-4000-8000-000000000003"
+      }
+    },
+    {
+      "name": "reroll_disposition invalid error {'account': 'unavailable', 'extra': 'unavailable'}",
+      "kind": "reroll_disposition",
+      "wire": "{\"state\":\"rejected\",\"response\":{\"status\":\"fail\",\"data\":{\"account\":\"unavailable\",\"extra\":\"unavailable\"}}}",
+      "valid": false,
+      "room": "10000000-0000-4000-8000-000000000001",
+      "original_room": {
+        "requestId": "10000000-0000-4000-8000-000000000004",
+        "expectedRevision": "7"
+      },
+      "original_between": {
+        "requestId": "10000000-0000-4000-8000-000000000004",
+        "expectedRevision": "7",
+        "decisionId": "10000000-0000-4000-8000-000000000002",
+        "selectedRevisionId": "10000000-0000-4000-8000-000000000005"
+      },
+      "original_reroll": {
+        "requestId": "10000000-0000-4000-8000-000000000004",
+        "assignmentId": "10000000-0000-4000-8000-000000000003"
+      }
+    },
+    {
+      "name": "reroll_disposition server error not stored rejection",
+      "kind": "reroll_disposition",
+      "wire": "{\"state\":\"rejected\",\"response\":{\"status\":\"error\",\"message\":\"unavailable\"}}",
+      "valid": false,
+      "room": "10000000-0000-4000-8000-000000000001",
+      "original_room": {
+        "requestId": "10000000-0000-4000-8000-000000000004",
+        "expectedRevision": "7"
+      },
+      "original_between": {
+        "requestId": "10000000-0000-4000-8000-000000000004",
+        "expectedRevision": "7",
+        "decisionId": "10000000-0000-4000-8000-000000000002",
+        "selectedRevisionId": "10000000-0000-4000-8000-000000000005"
+      },
+      "original_reroll": {
+        "requestId": "10000000-0000-4000-8000-000000000004",
+        "assignmentId": "10000000-0000-4000-8000-000000000003"
+      }
+    }
+  ]
+}

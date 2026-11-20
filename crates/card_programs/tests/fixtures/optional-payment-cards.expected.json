@@ -1,0 +1,211 @@
+{
+  "kind": "EXACT_SIX_PROVIDER_LINES_UNIT_ONLY_NOT_SOURCE_QUALIFICATION_OR_NATIVE_SIGNATURES",
+  "originalSourceSha256": "c1c9dc28fa9a7a4bae61c02330ba5a1190205aab1a93361e590ff5d9a146af08",
+  "originalMetadataSha256": "77a7ffc2250306197da78c0c4faf35fb4fae01b4dbdd50bf8eb45f502e4737ad",
+  "originalMetadata": {
+    "object": "bulk_data",
+    "id": "27bf3214-1271-490b-bdfe-c0be6c23d02e",
+    "type": "oracle_cards",
+    "updated_at": "2026-10-29T21:01:58.033+00:00",
+    "uri": "https://api.scryfall.com/bulk-data/27bf3214-1271-490b-bdfe-c0be6c23d02e",
+    "name": "Oracle Cards",
+    "description": "A JSON file containing one Scryfall card object for each Oracle ID on Scryfall. The chosen sets for the cards are an attempt to return the most up-to-date recognizable version of the card.",
+    "jsonl_download_uri": "https://data.scryfall.io/oracle-cards/oracle-cards-20261029210158.jsonl.gz",
+    "compressed_size": 25229019
+  },
+  "creatureVocabularyInputSha256": "dd16c29df30b69a72ea9021f0e60429a8537914e9e85187d36559e42ce59cd3c",
+  "sixSubsetSha256": "bc0a2dbab37a04afd5eb365ab42f41461f4b3711b730c37ffa5a5e723ea3ba04",
+  "cards": [
+    {
+      "name": "Blood Artist",
+      "oracleId": "310f141c-7f37-4729-aed6-dd9c09db448d",
+      "printingId": "b5275d76-2947-4219-be21-614c7421614a",
+      "sourceLineOneBased": 7413,
+      "rawLineSha256IncludingLf": "ac366a8a788f98ac71dc204fbf3f0ada9f0cf209838ae30efeecd1f1d03e6c47",
+      "reusedCuratedRow": true,
+      "reducedOnly": false,
+      "registrySignatureV1Sha256": null
+    },
+    {
+      "name": "Coral Merfolk",
+      "oracleId": "4ed27607-21a8-4bc3-997e-6d2242313f6d",
+      "printingId": "97a74ccf-8165-4db1-a87c-52c2d8ea0058",
+      "sourceLineOneBased": 11983,
+      "rawLineSha256IncludingLf": "2c80e78b3198c80d7f7da699b6bc72bc5b2501c6d4802148981ccbb3ca29963a",
+      "reusedCuratedRow": true,
+      "reducedOnly": false,
+      "registrySignatureV1Sha256": null
+    },
+    {
+      "name": "Counterspell",
+      "oracleId": "cc187110-1148-4090-bbb8-e205694a39f5",
+      "printingId": "4f616706-ec97-4923-bb1e-11a69fbaa1f8",
+      "sourceLineOneBased": 31149,
+      "rawLineSha256IncludingLf": "e1e36ac8b02f2c8a8ff570f5500d8c023ae44a00251af158b01427803dfbe230",
+      "reusedCuratedRow": true,
+      "reducedOnly": false,
+      "registrySignatureV1Sha256": null
+    },
+    {
+      "name": "Divination",
+      "oracleId": "273b339c-964b-4a18-8eb5-ceb8abcdfd9e",
+      "printingId": "cb3b35b8-f321-46d8-a441-6b9a6efa9021",
+      "sourceLineOneBased": 5961,
+      "rawLineSha256IncludingLf": "a9134e13ce74c689fab6633071a077fdf35a67ed08d4c23c080b92b14d25d1ea",
+      "reusedCuratedRow": true,
+      "reducedOnly": false,
+      "registrySignatureV1Sha256": null
+    },
+    {
+      "name": "Doomed Dissenter",
+      "oracleId": "11cb509d-21af-48f1-b355-135ebd3e4bd1",
+      "printingId": "f7c0cf16-81ea-45e3-99cc-4424d59bb44b",
+      "sourceLineOneBased": 2741,
+      "rawLineSha256IncludingLf": "7608edb2c954c49cc8b6f9fde6d0f340ae8813f8e1f2b045e5447405e7314b4d",
+      "reusedCuratedRow": true,
+      "reducedOnly": false,
+      "registrySignatureV1Sha256": null
+    },
+    {
+      "name": "Elite Vanguard",
+      "oracleId": "b3b9a87d-cb95-435c-90b6-037406cab32e",
+      "printingId": "28a5c350-2ed1-4a25-9626-0f8da5d1aef7",
+      "sourceLineOneBased": 27405,
+      "rawLineSha256IncludingLf": "df9584f60ea6a3b650d69152adddce3e2d37f25f62413cab106bfc7022a7290b",
+      "reusedCuratedRow": true,
+      "reducedOnly": false,
+      "registrySignatureV1Sha256": null
+    },
+    {
+      "name": "Island",
+      "oracleId": "b2c6aa39-2d2a-459c-a555-fb48ba993373",
+      "printingId": "1335d293-3dd2-4f13-bd2c-22181f4528ee",
+      "sourceLineOneBased": 27256,
+      "rawLineSha256IncludingLf": "a5365e49cba1ca36f32f871fefeeea86ee366480b71c34485f306b744cfcf938",
+      "reusedCuratedRow": true,
+      "reducedOnly": false,
+      "registrySignatureV1Sha256": null
+    },
+    {
+      "name": "Mana Leak",
+      "oracleId": "c61fe162-2202-4e56-9ba0-393547f9875f",
+      "printingId": "179236d9-6fe2-4db6-bdfb-f851e8d531a2",
+      "sourceLineOneBased": 30204,
+      "rawLineSha256IncludingLf": "93fef5c4fa9e42d40b0c7a734889f220b807643381ff6cbb616f6c54da8f846a",
+      "reusedCuratedRow": false,
+      "reducedOnly": false,
+      "registrySignatureV1Sha256": null
+    },
+    {
+      "name": "Manalith",
+      "oracleId": "bd9e416a-89b3-4912-be9b-49fce6a93dc9",
+      "printingId": "f0d7d904-f29b-4524-9223-27910d748bdb",
+      "sourceLineOneBased": 28900,
+      "rawLineSha256IncludingLf": "e9d2bf034ee8e2e9c9b6e2927c1a1ab956816523af427e57832bf41f7e9bc4c6",
+      "reusedCuratedRow": false,
+      "reducedOnly": false,
+      "registrySignatureV1Sha256": null
+    },
+    {
+      "name": "Novice Occultist",
+      "oracleId": "e51f5b41-5465-4b1d-b96a-544762657ca5",
+      "printingId": "a541ac79-a969-42b4-b989-f6e37572ec90",
+      "sourceLineOneBased": 35001,
+      "rawLineSha256IncludingLf": "63d64b90e053dd312a66344cf225ce27aa948cac4bd7318d508c3909bf245d47",
+      "reusedCuratedRow": true,
+      "reducedOnly": false,
+      "registrySignatureV1Sha256": null
+    },
+    {
+      "name": "Oculus",
+      "oracleId": "e793ede9-044a-44e9-bc9c-99b0034503eb",
+      "printingId": "673bebb4-9c82-40ca-8552-b9030e961005",
+      "sourceLineOneBased": 35363,
+      "rawLineSha256IncludingLf": "a4a40f05dc2841234222ee8399a1ae89ead90b8a2428ea4e0855c72c9a05f5da",
+      "reusedCuratedRow": false,
+      "reducedOnly": false,
+      "registrySignatureV1Sha256": null
+    },
+    {
+      "name": "Phyrexian Rager",
+      "oracleId": "e409c9be-0c9a-43c3-adb4-8c47afc1d551",
+      "printingId": "a9861fb3-6722-43b8-bf0a-af6dd166e59d",
+      "sourceLineOneBased": 34815,
+      "rawLineSha256IncludingLf": "9df3b5ed3d38fa9e5245a1035b72413fd134231b07fe4ca03d491b7eab21794e",
+      "reusedCuratedRow": true,
+      "reducedOnly": false,
+      "registrySignatureV1Sha256": null
+    },
+    {
+      "name": "Plains",
+      "oracleId": "bc71ebf6-2056-41f7-be35-b2e5c34afa99",
+      "printingId": "09ac862f-0a51-44dd-b86f-9412b8218b13",
+      "sourceLineOneBased": 28694,
+      "rawLineSha256IncludingLf": "62d89ba7d073949c430c4edbd94c2ca4f77c52e5f277048c466cb933030d12e8",
+      "reusedCuratedRow": true,
+      "reducedOnly": false,
+      "registrySignatureV1Sha256": null
+    },
+    {
+      "name": "Raise the Alarm",
+      "oracleId": "5b2364d7-a811-4595-a1b4-224c70555ffa",
+      "printingId": "6c7c8527-55f6-494d-b4f7-c427a5735053",
+      "sourceLineOneBased": 13868,
+      "rawLineSha256IncludingLf": "495b615dc6de83baec52786c1b8d345726e15db3320dcd11f8175e2a72ce3bad",
+      "reusedCuratedRow": true,
+      "reducedOnly": false,
+      "registrySignatureV1Sha256": null
+    },
+    {
+      "name": "Rhystic Study",
+      "oracleId": "53236dd7-845a-444c-96d5-f41ed7325d8f",
+      "printingId": "9f37c5b6-a59c-45cd-9a99-e9357fe9ea1b",
+      "sourceLineOneBased": 12668,
+      "rawLineSha256IncludingLf": "a86bf31a2fb6978a50804d1851ac0e38f61a4e294abf4e530c6e80563b337704",
+      "reusedCuratedRow": false,
+      "reducedOnly": false,
+      "registrySignatureV1Sha256": null
+    },
+    {
+      "name": "Soul's Attendant",
+      "oracleId": "045a9d3d-c20d-427f-a77b-0bffc6f55526",
+      "printingId": "3223c0ac-cc22-4886-8919-11273b477cc7",
+      "sourceLineOneBased": 701,
+      "rawLineSha256IncludingLf": "6bd7488bb64111bfd8f0a40336cd932035fa5a7744ec74e9a149a1cd9dd80235",
+      "reusedCuratedRow": false,
+      "reducedOnly": false,
+      "registrySignatureV1Sha256": null
+    },
+    {
+      "name": "Swamp",
+      "oracleId": "56719f6a-1a6c-4c0a-8d21-18f7d7350b68",
+      "printingId": "b233b117-9369-45c1-80c5-cc857386b6be",
+      "sourceLineOneBased": 13152,
+      "rawLineSha256IncludingLf": "916287ac46c937685adf05728f04157b4af7b081542042df7746e48135151dd6",
+      "reusedCuratedRow": true,
+      "reducedOnly": false,
+      "registrySignatureV1Sha256": null
+    },
+    {
+      "name": "Twincast",
+      "oracleId": "8f878efc-850f-43d2-a6fe-5ea8d1dd5afb",
+      "printingId": "f38eec33-a40e-4739-ad2c-2f57008cef4e",
+      "sourceLineOneBased": 21893,
+      "rawLineSha256IncludingLf": "7cd5411421e067c0be5eae2aa8f565406f2dd2151b46461a73b271493a7378f7",
+      "reusedCuratedRow": false,
+      "reducedOnly": true,
+      "registrySignatureV1Sha256": null
+    },
+    {
+      "name": "Unsummon",
+      "oracleId": "837182db-1bf3-4a2c-bd01-1af9d9873561",
+      "printingId": "ddad9f16-52d5-49de-82b0-b1a5294a9c44",
+      "sourceLineOneBased": 20016,
+      "rawLineSha256IncludingLf": "0dc9f4d8269f1ae167f0d3431c41ce01b846feb9803345fcf93c7ed6a57cd66e",
+      "reusedCuratedRow": true,
+      "reducedOnly": false,
+      "registrySignatureV1Sha256": null
+    }
+  ],
+  "signatureDisposition": "PENDING_ACTUAL_CANONICAL_REGISTRY8_OWNER_NO_SUBSTITUTE_HASH"
+}

@@ -1,0 +1,211 @@
+[
+  {
+    "name": "Blood Artist",
+    "oracleId": "310f141c-7f37-4729-aed6-dd9c09db448d",
+    "scryfallId": "b5275d76-2947-4219-be21-614c7421614a",
+    "sourceLineOneBased": 7413,
+    "rawLineSha256IncludingLf": "ac366a8a788f98ac71dc204fbf3f0ada9f0cf209838ae30efeecd1f1d03e6c47",
+    "registrySignatureV1Sha256": "499c3ca6bcd5fba7b91df444ad98480850a323b638214f95744b27fb8a93d993",
+    "set": "soc",
+    "collector": "209",
+    "language": "en"
+  },
+  {
+    "name": "Centaur Courser",
+    "oracleId": "2f5bf099-2e01-4e1c-9ebf-0ce0ac66939e",
+    "scryfallId": "e8b67ee8-3189-4426-8b1a-b540267768fd",
+    "sourceLineOneBased": 7129,
+    "rawLineSha256IncludingLf": "c6b41cc482af743c637adb7347ada6a2061a1763fb1239e1381338b7b64d3c5b",
+    "registrySignatureV1Sha256": "885fe0ae8252420d0a0d606c201a4aa28f5547753663c80471eeef3bc9e4bc6c",
+    "set": "m20",
+    "collector": "168",
+    "language": "en"
+  },
+  {
+    "name": "Counterspell",
+    "oracleId": "cc187110-1148-4090-bbb8-e205694a39f5",
+    "scryfallId": "4f616706-ec97-4923-bb1e-11a69fbaa1f8",
+    "sourceLineOneBased": 31149,
+    "rawLineSha256IncludingLf": "e1e36ac8b02f2c8a8ff570f5500d8c023ae44a00251af158b01427803dfbe230",
+    "registrySignatureV1Sha256": "8dd9ff6c912af8eb9a730364572c57f239e176ed54f46c16c80807c09c452866",
+    "set": "dsc",
+    "collector": "114",
+    "language": "en"
+  },
+  {
+    "name": "Doomed Dissenter",
+    "oracleId": "11cb509d-21af-48f1-b355-135ebd3e4bd1",
+    "scryfallId": "f7c0cf16-81ea-45e3-99cc-4424d59bb44b",
+    "sourceLineOneBased": 2741,
+    "rawLineSha256IncludingLf": "7608edb2c954c49cc8b6f9fde6d0f340ae8813f8e1f2b045e5447405e7314b4d",
+    "registrySignatureV1Sha256": "f9f376142e4a525b39cf867940d430c083d2581aa04454f69e59ffcd472ff795",
+    "set": "vow",
+    "collector": "106",
+    "language": "en"
+  },
+  {
+    "name": "Elvish Visionary",
+    "oracleId": "c6a3a882-a127-4590-93d7-679ef4313efe",
+    "scryfallId": "6d2f4a37-453f-4a2c-bfba-2d1227394c90",
+    "sourceLineOneBased": 30292,
+    "rawLineSha256IncludingLf": "4f8df9738979bc7a6e8148a81a1f4e8d1064ae8121b8bd7c2cfb7b0bd464827f",
+    "registrySignatureV1Sha256": "a62012264ed755d9c37f84d798bc0e33ba12e6acfd9eb9924992a773c40e766b",
+    "set": "hoc",
+    "collector": "206",
+    "language": "en"
+  },
+  {
+    "name": "Forest",
+    "oracleId": "b34bb2dc-c1af-4d77-b0b3-a0fb342a5fc6",
+    "scryfallId": "2e781bfd-f8cb-4d20-b977-4359f3a21311",
+    "sourceLineOneBased": 27346,
+    "rawLineSha256IncludingLf": "df7c145ca49a3588ef513698543d4651ab1c554161e5f2c3cc19e0937b2d9f0b",
+    "registrySignatureV1Sha256": "add8a0fda94261088dc4c292b7201ebcfadb7ea46be6b3b40ce67dd7049a8fe6",
+    "set": "mdd",
+    "collector": "301",
+    "language": "en"
+  },
+  {
+    "name": "Grizzly Bears",
+    "oracleId": "14c8f55d-d177-4c25-a931-ebeb9e6062a0",
+    "scryfallId": "409f9b88-f03e-40b6-9883-68c14c37c0de",
+    "sourceLineOneBased": 3221,
+    "rawLineSha256IncludingLf": "3e51dcca3d60899dd6d213ace72ab7fc333b40bbb1c04b20d34de1283b5df04b",
+    "registrySignatureV1Sha256": "f0a0e899618134ff97f4c9fa6fbadc2968959374cff030528788dcd43144887b",
+    "set": "10e",
+    "collector": "268",
+    "language": "en"
+  },
+  {
+    "name": "Impassioned Orator",
+    "oracleId": "c7107a2d-2dcf-42e9-9ea9-d0fc0d6d2ec6",
+    "scryfallId": "696d6c4b-69d7-498b-87d4-0a03b16cc971",
+    "sourceLineOneBased": 30360,
+    "rawLineSha256IncludingLf": "53e4c180cf041bf7d6217cb309693267d3aa70203d29ff4a0342cfb288dd935d",
+    "registrySignatureV1Sha256": "0cc19377bb6a97558b14612d10e9e3c7cf1aa6b1d043cb83f106eed4427a55c8",
+    "set": "m20",
+    "collector": "306",
+    "language": "en"
+  },
+  {
+    "name": "Island",
+    "oracleId": "b2c6aa39-2d2a-459c-a555-fb48ba993373",
+    "scryfallId": "1335d293-3dd2-4f13-bd2c-22181f4528ee",
+    "sourceLineOneBased": 27256,
+    "rawLineSha256IncludingLf": "a5365e49cba1ca36f32f871fefeeea86ee366480b71c34485f306b744cfcf938",
+    "registrySignatureV1Sha256": "f7794b130f48b16234927c7fb97a10e5ea44b2ec064d8d8856aeedc7904ac678",
+    "set": "mdd",
+    "collector": "294",
+    "language": "en"
+  },
+  {
+    "name": "Kalonian Tusker",
+    "oracleId": "df7f697e-6886-4897-a024-61ae225c1b34",
+    "scryfallId": "135946fc-fe67-401f-821d-d7145c63f030",
+    "sourceLineOneBased": 34125,
+    "rawLineSha256IncludingLf": "e5e97000082833afb9a7330ddc4617d678d4039282a628c85dc49d70216aca30",
+    "registrySignatureV1Sha256": "3a709d89b6f82e684826ef196183dc3bcaf1337d7cfdea28310b569e8cc8c185",
+    "set": "m14",
+    "collector": "182",
+    "language": "en"
+  },
+  {
+    "name": "Llanowar Visionary",
+    "oracleId": "f75ed312-3a23-4624-80c5-03980aa22d0b",
+    "scryfallId": "d6e23afa-7e08-4049-baf0-d4d0134ba2c8",
+    "sourceLineOneBased": 37877,
+    "rawLineSha256IncludingLf": "a0876a0d43f59eb87155a02d310609749f5a21efd815daa7c60a852a1a7d6d12",
+    "registrySignatureV1Sha256": "073aea1d276a7c76676f3a5fa05bdd80d2712c2df05170349682c22228628be3",
+    "set": "m21",
+    "collector": "193",
+    "language": "en"
+  },
+  {
+    "name": "Novice Occultist",
+    "oracleId": "e51f5b41-5465-4b1d-b96a-544762657ca5",
+    "scryfallId": "a541ac79-a969-42b4-b989-f6e37572ec90",
+    "sourceLineOneBased": 35001,
+    "rawLineSha256IncludingLf": "63d64b90e053dd312a66344cf225ce27aa948cac4bd7318d508c3909bf245d47",
+    "registrySignatureV1Sha256": "0626ecd5fa076e3523a59f42cba1f72f4ba1e10cd0cd6876e4fed0c2bfabe8fc",
+    "set": "mid",
+    "collector": "117",
+    "language": "en"
+  },
+  {
+    "name": "Phyrexian Rager",
+    "oracleId": "e409c9be-0c9a-43c3-adb4-8c47afc1d551",
+    "scryfallId": "a9861fb3-6722-43b8-bf0a-af6dd166e59d",
+    "sourceLineOneBased": 34815,
+    "rawLineSha256IncludingLf": "9df3b5ed3d38fa9e5245a1035b72413fd134231b07fe4ca03d491b7eab21794e",
+    "registrySignatureV1Sha256": "4030c872bf513674d741e5d9860964a0cf65573c9f99eed4ae54809844097ec5",
+    "set": "moc",
+    "collector": "265",
+    "language": "en"
+  },
+  {
+    "name": "Plains",
+    "oracleId": "bc71ebf6-2056-41f7-be35-b2e5c34afa99",
+    "scryfallId": "09ac862f-0a51-44dd-b86f-9412b8218b13",
+    "sourceLineOneBased": 28694,
+    "rawLineSha256IncludingLf": "62d89ba7d073949c430c4edbd94c2ca4f77c52e5f277048c466cb933030d12e8",
+    "registrySignatureV1Sha256": "c4511685fb2da8e920d2da7ae6217aa981fb64c3670788582dee723013e0c7c6",
+    "set": "mdd",
+    "collector": "292",
+    "language": "en"
+  },
+  {
+    "name": "Raise the Alarm",
+    "oracleId": "5b2364d7-a811-4595-a1b4-224c70555ffa",
+    "scryfallId": "6c7c8527-55f6-494d-b4f7-c427a5735053",
+    "sourceLineOneBased": 13868,
+    "rawLineSha256IncludingLf": "495b615dc6de83baec52786c1b8d345726e15db3320dcd11f8175e2a72ce3bad",
+    "registrySignatureV1Sha256": "e1130e72e141cee5b5bfc368b04325703c344a4d6f0860eef07fc018835d0a25",
+    "set": "cmr",
+    "collector": "41",
+    "language": "en"
+  },
+  {
+    "name": "Rumbling Baloth",
+    "oracleId": "3191c6ca-4d25-4ba3-bfe1-4aeab1295573",
+    "scryfallId": "93a56610-482b-4ddf-88e1-e4a2edf4fa0f",
+    "sourceLineOneBased": 7482,
+    "rawLineSha256IncludingLf": "76109deca6116a7259546da85d6addb8d5099fa5837a304584f2945498cf8aa4",
+    "registrySignatureV1Sha256": "5581d51919511877fbfa3373c483e66210261eddc419691cc721a9718c713d42",
+    "set": "jmp",
+    "collector": "426",
+    "language": "en"
+  },
+  {
+    "name": "Soul Warden",
+    "oracleId": "f3fad295-1af2-4ecc-8546-b121ad6be27b",
+    "scryfallId": "d96266b3-a7cb-40ce-a328-ac13719fe5f0",
+    "sourceLineOneBased": 37356,
+    "rawLineSha256IncludingLf": "36ff9477747cf7337185b2bb3f1d1874179e5f0edb678e89b8377c26b3a93760",
+    "registrySignatureV1Sha256": "3c38dcb565754177a21a74f683e19e24289eb80ac3f5b0e626b3e77ddaee5076",
+    "set": "mm3",
+    "collector": "24",
+    "language": "en"
+  },
+  {
+    "name": "Swamp",
+    "oracleId": "56719f6a-1a6c-4c0a-8d21-18f7d7350b68",
+    "scryfallId": "b233b117-9369-45c1-80c5-cc857386b6be",
+    "sourceLineOneBased": 13152,
+    "rawLineSha256IncludingLf": "916287ac46c937685adf05728f04157b4af7b081542042df7746e48135151dd6",
+    "registrySignatureV1Sha256": "99c053ff97b10a5083056f046942b7716a7b6e882e3639e8608dee57d3f6aad4",
+    "set": "mdd",
+    "collector": "296",
+    "language": "en"
+  },
+  {
+    "name": "Unsummon",
+    "oracleId": "837182db-1bf3-4a2c-bd01-1af9d9873561",
+    "scryfallId": "ddad9f16-52d5-49de-82b0-b1a5294a9c44",
+    "sourceLineOneBased": 20016,
+    "rawLineSha256IncludingLf": "0dc9f4d8269f1ae167f0d3431c41ce01b846feb9803345fcf93c7ed6a57cd66e",
+    "registrySignatureV1Sha256": "bcb64c816134bb131be2c02e1245ce7e3c7b8a53bf865151777091dc5dcbd0f9",
+    "set": "fra",
+    "collector": "46",
+    "language": "en"
+  }
+]

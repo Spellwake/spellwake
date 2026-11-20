@@ -1,19 +1,26 @@
 //! Independently derived ordered-program cases frozen in resolution-program-scenarios.md.
 //! These test native mechanisms, not complete cards or a production game protocol.
+use spellwake_engine::program::{BodyTarget, ExecutableBody, SpellTargetFilter};
+#[path = "support/damage.rs"]
+pub mod damage_support;
 use spellwake_contracts::RulesInteger;
+use spellwake_engine::combat::CombatRules;
+use spellwake_engine::setup::GameSeed;
 use spellwake_engine::{
-    card_identity::{CardDestination, CardId, CardObjectId, CardZone},
-    characteristics::{PowerToughness, PowerToughnessCounters, PowerToughnessOperation},
-    damage::{DamageEffectCreation, DamageEffectId, DamageJournal, DamageOutcome},
-    effects::{
-        CopyTargetChoice, EffectError, EffectWindow, Instruction, Program, ResolutionProgress,
-        SeedCard,
+    characteristics::{
+        EffectInstanceKey, PowerToughness, PowerToughnessCounters, ResolvedPartSpec,
     },
+    damage::{
+        DamageEffectCreation, DamageEffectId, DamageEffectTarget, DamageJournal, DamageOutcome,
+        DamageRecipient,
+    },
+    effects::{CopyTargetChoice, EffectError, EffectWindow, Instruction, Program, SeedCard},
     game::{
         CandidateBase, DecisionId, DecisionReply, GameCommand, GameContext, GameError, GameId,
         GameInput, GameState, NativeCandidate, RuleFrame,
     },
     mana::{FloatingMana, ManaCost, ManaType},
+    object_identity::{CardId, ObjectDestination, ObjectId, ObjectZone},
     priority::{PriorityPhase, SeatId},
     stack_window::{StackEntryId, StackKind, WindowPhase},
     targets::TargetRef,
@@ -56,8 +63,11 @@ fn pt(power: i64, toughness: i64) -> PowerToughness {
     }
 }
 
-fn continuous(operation: PowerToughnessOperation) -> Instruction {
-    Instruction::ContinuousPowerToughness { operation }
+fn continuous(operation: ResolvedPartSpec) -> Instruction {
+    Instruction::CreateContinuousEffect {
+        parts: spellwake_engine::characteristics::ResolvedPartsSpec(vec![operation]),
+        duration: spellwake_engine::characteristics::ResolvedDuration::NoStatedDuration,
+    }
 }
 
 fn counters(plus: i64, minus: i64) -> Instruction {
@@ -71,18 +81,20 @@ fn counters(plus: i64, minus: i64) -> Instruction {
 
 fn initialize(
     toughness: RulesInteger,
-    programs: Vec<(u64, SeatId, Vec<Instruction>)>,
+    programs: Vec<(u64, SeatId, ExecutableBody)>,
 ) -> Result<NativeCandidate, GameError> {
     let mut cards: Vec<_> = [(FIRST, B), (SECOND, A)]
         .into_iter()
         .map(|(card, controller)| SeedCard {
             card: CardId(card),
             owner: A,
-            destination: CardDestination::Battlefield { controller },
-            program: Program::VanillaCreature {
-                power: 1.into(),
-                toughness: toughness.clone(),
-            },
+            destination: ObjectDestination::Battlefield { controller },
+            program: Program::creature(
+                None,
+                1.into(),
+                toughness.clone(),
+                std::collections::BTreeSet::new(),
+            ),
         })
         .collect();
     cards.extend(
@@ -91,11 +103,8 @@ fn initialize(
             .map(|(card, owner, instructions)| SeedCard {
                 card: CardId(card),
                 owner,
-                destination: CardDestination::Hand,
-                program: Program::Instant {
-                    cost: ManaCost::one(ManaType::Blue),
-                    instructions,
-                },
+                destination: ObjectDestination::Hand,
+                program: Program::instant(ManaCost::one(ManaType::Blue), instructions),
             }),
     );
     GameState::initialize(
@@ -106,27 +115,49 @@ fn initialize(
             "synthetic".into(),
             "ordered-primitives".into(),
             "individual-turn".into(),
+            test_vocabulary().id(),
+            spellwake_contracts::names::NameRules::literal_names().id(),
         )
         .unwrap(),
-        vec![A, B],
-        A,
-        cards,
-        [A, B]
-            .into_iter()
-            .map(|player| FloatingMana {
-                player,
-                mana_type: ManaType::Blue,
-                amount: 100.into(),
-            })
-            .collect(),
+        {
+            // Fixture premise: seeded BF timestamps follow this authored card sequence.
+            let initial_battlefield_order = cards
+                .iter()
+                .filter(|card| {
+                    matches!(
+                        card.destination,
+                        spellwake_engine::object_identity::ObjectDestination::Battlefield { .. }
+                    )
+                })
+                .map(|card| card.card)
+                .collect();
+            GameSeed::with_uniform_life(
+                vec![A, B],
+                A,
+                cards,
+                initial_battlefield_order,
+                [A, B]
+                    .into_iter()
+                    .map(|player| FloatingMana {
+                        player,
+                        mana_type: ManaType::Blue,
+                        amount: 100.into(),
+                    })
+                    .collect(),
+                20.into(),
+                CombatRules::UnrestrictedFreeForAll,
+                test_vocabulary(),
+                std::sync::Arc::new(spellwake_contracts::names::NameRules::literal_names()),
+            )
+        },
     )
 }
 
-fn world(toughness: i64, programs: Vec<(u64, SeatId, Vec<Instruction>)>) -> GameState {
+fn world(toughness: i64, programs: Vec<(u64, SeatId, ExecutableBody)>) -> GameState {
     initialize(toughness.into(), programs).unwrap().into_state()
 }
 
-fn object(game: &GameState, card: u64) -> CardObjectId {
+fn object(game: &GameState, card: u64) -> ObjectId {
     game.execution()
         .window()
         .cards()
@@ -134,7 +165,7 @@ fn object(game: &GameState, card: u64) -> CardObjectId {
         .unwrap()
 }
 
-fn zone(game: &GameState, card: u64) -> CardZone {
+fn zone(game: &GameState, card: u64) -> ObjectZone {
     game.execution()
         .window()
         .cards()
@@ -143,8 +174,8 @@ fn zone(game: &GameState, card: u64) -> CardZone {
         .zone()
 }
 
-fn marked(game: &GameState, target: CardObjectId) -> RulesInteger {
-    game.execution().creature(target).unwrap().damage
+fn marked(game: &GameState, target: ObjectId) -> RulesInteger {
+    game.execution().creature(target).unwrap().unwrap().damage
 }
 
 fn input(game: &GameState, actor: SeatId, command: GameCommand) -> GameInput {
@@ -158,6 +189,7 @@ fn input(game: &GameState, actor: SeatId, command: GameCommand) -> GameInput {
 fn accept(game: &GameState, actor: SeatId, command: GameCommand) -> NativeCandidate {
     let saved = game.clone();
     let candidate = game.advance(input(game, actor, command)).unwrap();
+    damage_support::assert_transition_damage(game, &candidate);
     assert_eq!(game, &saved);
     assert_eq!(
         candidate.base(),
@@ -215,8 +247,8 @@ fn resolve(game: &GameState) -> NativeCandidate {
     accept(first.state(), holder(first.state()), GameCommand::Pass)
 }
 
-fn execute(game: &GameState, card: u64, target: CardObjectId) -> (NativeCandidate, StackEntryId) {
-    let (game, source) = cast(game, A, card, TargetRef::Card(target));
+fn execute(game: &GameState, card: u64, target: ObjectId) -> (NativeCandidate, StackEntryId) {
+    let (game, source) = cast(game, A, card, TargetRef::Object(target));
     (resolve(&game), source)
 }
 
@@ -233,7 +265,10 @@ fn reply(game: &GameState, choice: DecisionReply) -> NativeCandidate {
 }
 
 fn choose(game: &GameState, effect: impl Into<DamageEffectId>) -> NativeCandidate {
-    reply(game, DecisionReply::DamageOrder(effect.into()))
+    reply(
+        game,
+        DecisionReply::DamageOrder(damage_support::application(game, effect)),
+    )
 }
 
 fn checking(game: &GameState) -> EffectWindow {
@@ -250,6 +285,7 @@ fn checking(game: &GameState) -> EffectWindow {
 }
 
 fn assert_finished(candidate: &NativeCandidate, source: StackEntryId, card: u64) {
+    damage_support::assert_started_origin(candidate.damage_journal(), source);
     let game = candidate.state();
     assert!(game.pending_decision().is_none());
     assert_eq!(game.execution().instruction_index(), None);
@@ -260,7 +296,7 @@ fn assert_finished(candidate: &NativeCandidate, source: StackEntryId, card: u64)
             .iter()
             .all(|entry| entry.id() != source)
     );
-    assert_eq!(zone(game, card), CardZone::Graveyard(A));
+    assert_eq!(zone(game, card), ObjectZone::Graveyard(A));
     assert_eq!(holder(game), A);
 }
 
@@ -284,15 +320,31 @@ fn setup_validates_every_instruction_and_homogeneous_nonempty_programs() {
     ];
     for instructions in invalid {
         assert_eq!(
-            initialize(100.into(), vec![(1, A, instructions)]),
+            initialize(
+                100.into(),
+                vec![(
+                    1,
+                    A,
+                    ExecutableBody::new(BodyTarget::SingleCreature, instructions)
+                )]
+            ),
             Err(GameError::Effect(EffectError::InvalidSetup))
         );
     }
-    for instructions in [
-        vec![damage(1), shield(1)],
-        vec![Instruction::CopySpell, Instruction::CounterSpell],
+    for (target, instructions) in [
+        (BodyTarget::SingleCreature, vec![damage(1), shield(1)]),
+        (
+            BodyTarget::SingleSpell(SpellTargetFilter::CopyableInstructionSpell),
+            vec![Instruction::CopySpell, Instruction::CounterSpell],
+        ),
     ] {
-        assert!(initialize(100.into(), vec![(1, A, instructions)]).is_ok());
+        assert!(
+            initialize(
+                100.into(),
+                vec![(1, A, ExecutableBody::new(target, instructions))]
+            )
+            .is_ok()
+        );
     }
 }
 
@@ -303,33 +355,40 @@ fn transient_zero_toughness_recovers_before_any_state_based_action() {
         vec![(
             1,
             A,
-            vec![
-                continuous(PowerToughnessOperation::Set(pt(1, 0))),
-                continuous(PowerToughnessOperation::Modify(pt(0, 2))),
-            ],
+            ExecutableBody::new(
+                BodyTarget::SingleCreature,
+                vec![
+                    continuous(ResolvedPartSpec::SetPT(pt(1, 0))),
+                    continuous(ResolvedPartSpec::ModifyPT(pt(0, 2))),
+                ],
+            ),
         )],
     );
     let target = object(&game, FIRST);
     let (candidate, source) = execute(&game, 1, target);
     assert_finished(&candidate, source, 1);
     assert_eq!(object(candidate.state(), FIRST), target);
-    assert_eq!(zone(candidate.state(), FIRST), CardZone::Battlefield);
+    assert_eq!(zone(candidate.state(), FIRST), ObjectZone::Battlefield);
     let derived = candidate
         .state()
         .execution()
         .power_toughness(target)
+        .unwrap()
         .unwrap();
     assert_eq!(derived.base, pt(1, 0));
     assert_eq!(derived.derived, pt(1, 2));
     assert_eq!(derived.applied_effects.len(), 2);
-    for effect in derived.applied_effects {
+    for key in derived.applied_effects {
+        let EffectInstanceKey::Resolved(effect) = key else {
+            panic!("this fixture has only resolved effects")
+        };
         assert_eq!(
             candidate
                 .state()
                 .execution()
-                .power_toughness_effect(effect)
+                .continuous_effect(effect)
                 .unwrap()
-                .source,
+                .creator,
             source
         );
     }
@@ -340,24 +399,34 @@ fn transient_zero_toughness_recovers_before_any_state_based_action() {
 fn lethal_damage_then_bounce_retains_exact_applied_identity_and_reaches_hand() {
     let game = world(
         3,
-        vec![(1, A, vec![damage(3), Instruction::ReturnToOwnersHand])],
+        vec![(
+            1,
+            A,
+            ExecutableBody::new(
+                BodyTarget::SingleCreature,
+                vec![damage(3), Instruction::ReturnToOwnersHand],
+            ),
+        )],
     );
     let target = object(&game, FIRST);
     let (candidate, source) = execute(&game, 1, target);
     assert_finished(&candidate, source, 1);
-    assert_eq!(zone(candidate.state(), FIRST), CardZone::Hand(A));
+    assert_eq!(zone(candidate.state(), FIRST), ObjectZone::Hand(A));
     assert_ne!(object(candidate.state(), FIRST), target);
-    assert!(candidate.state().execution().creature(target).is_none());
+    assert!(
+        candidate
+            .state()
+            .execution()
+            .creature(target)
+            .unwrap()
+            .is_none()
+    );
     let journal = candidate.damage_journal();
     assert_eq!(journal.attempts.len(), 1);
     assert_eq!(journal.applied.len(), 1);
     assert_eq!(
-        (
-            journal.applied[0].source,
-            journal.applied[0].target,
-            journal.applied[0].amount.clone()
-        ),
-        (source, target, 3.into())
+        (journal.applied[0].target, journal.applied[0].amount.clone()),
+        (DamageRecipient::Creature(target), 3.into())
     );
     assert_eq!(
         journal.completions[0].outcome,
@@ -372,21 +441,24 @@ fn departed_operand_skips_every_later_creature_primitive_without_allocating_effe
         vec![(
             1,
             A,
-            vec![
-                Instruction::ReturnToOwnersHand,
-                damage(3),
-                continuous(PowerToughnessOperation::Set(pt(9, 9))),
-                counters(1, 0),
-                shield(4),
-                multiplier(2),
-                Instruction::ReturnToOwnersHand,
-            ],
+            ExecutableBody::new(
+                BodyTarget::SingleCreature,
+                vec![
+                    Instruction::ReturnToOwnersHand,
+                    damage(3),
+                    continuous(ResolvedPartSpec::SetPT(pt(9, 9))),
+                    counters(1, 0),
+                    shield(4),
+                    multiplier(2),
+                    Instruction::ReturnToOwnersHand,
+                ],
+            ),
         )],
     );
     let target = object(&game, FIRST);
     let (candidate, source) = execute(&game, 1, target);
     assert_finished(&candidate, source, 1);
-    assert_eq!(zone(candidate.state(), FIRST), CardZone::Hand(A));
+    assert_eq!(zone(candidate.state(), FIRST), ObjectZone::Hand(A));
     assert_ne!(object(candidate.state(), FIRST), target);
     assert_eq!(candidate.damage_journal(), &DamageJournal::default());
     assert_eq!(
@@ -402,7 +474,7 @@ fn departed_operand_skips_every_later_creature_primitive_without_allocating_effe
             .state()
             .execution()
             .copiable_power_toughness(object(candidate.state(), FIRST)),
-        Some(pt(1, 3))
+        Some(pt(1, 3).into())
     );
     assert_eq!(
         marked(candidate.state(), object(candidate.state(), SECOND)),
@@ -412,7 +484,17 @@ fn departed_operand_skips_every_later_creature_primitive_without_allocating_effe
 
 #[test]
 fn a_created_shield_is_observed_even_when_later_instructions_consume_it() {
-    let game = world(100, vec![(1, A, vec![shield(4), damage(3), damage(3)])]);
+    let game = world(
+        100,
+        vec![(
+            1,
+            A,
+            ExecutableBody::new(
+                BodyTarget::SingleCreature,
+                vec![shield(4), damage(3), damage(3)],
+            ),
+        )],
+    );
     let target = object(&game, FIRST);
     let (candidate, source) = execute(&game, 1, target);
     assert_finished(&candidate, source, 1);
@@ -429,11 +511,11 @@ fn a_created_shield_is_observed_even_when_later_instructions_consume_it() {
     assert_eq!(
         (
             *instruction,
-            shield.source,
+            shield.creator,
             shield.target,
             shield.remaining.clone()
         ),
-        (0, source, target, 4.into())
+        (0, source, DamageEffectTarget::Permanent(target), 4.into())
     );
     assert_eq!(journal.attempts.len(), 2);
     assert_ne!(journal.attempts[0].id, journal.attempts[1].id);
@@ -443,15 +525,24 @@ fn a_created_shield_is_observed_even_when_later_instructions_consume_it() {
         assert_eq!(
             (
                 event.shield,
-                event.shield_source,
+                event.creator,
                 event.target,
                 event.stage,
                 event.amount.clone()
             ),
-            (shield.id, source, target, 1, amount.into())
+            (
+                shield.id,
+                source,
+                DamageRecipient::Creature(target),
+                1,
+                amount.into()
+            )
         );
-        assert_eq!(event.attempt, journal.attempts[index].id);
-        assert_eq!(journal.completions[index].attempt, event.attempt);
+        assert_eq!(event.allocations[0].attempt, journal.attempts[index].id);
+        assert_eq!(
+            journal.completions[index].attempt,
+            event.allocations[0].attempt
+        );
     }
     assert_eq!(
         journal.completions[0].outcome,
@@ -472,7 +563,17 @@ fn a_created_shield_is_observed_even_when_later_instructions_consume_it() {
 
 #[test]
 fn a_multiplier_is_reused_once_for_each_independent_instruction_attempt() {
-    let game = world(100, vec![(1, A, vec![multiplier(2), damage(1), damage(1)])]);
+    let game = world(
+        100,
+        vec![(
+            1,
+            A,
+            ExecutableBody::new(
+                BodyTarget::SingleCreature,
+                vec![multiplier(2), damage(1), damage(1)],
+            ),
+        )],
+    );
     let target = object(&game, FIRST);
     let (candidate, source) = execute(&game, 1, target);
     assert_finished(&candidate, source, 1);
@@ -487,8 +588,8 @@ fn a_multiplier_is_reused_once_for_each_independent_instruction_attempt() {
         panic!("expected multiplier birth")
     };
     assert_eq!(
-        (*instruction, multiplier.source, multiplier.target),
-        (0, source, target)
+        (*instruction, multiplier.creator, multiplier.target),
+        (0, source, DamageEffectTarget::Permanent(target))
     );
     assert_eq!(journal.attempts.len(), 2);
     assert_eq!(journal.multiplications.len(), 2);
@@ -518,18 +619,27 @@ fn a_multiplier_is_reused_once_for_each_independent_instruction_attempt() {
 fn several_same_source_births_bind_actual_ids_before_a_later_damage_choice() {
     let game = world(
         100,
-        vec![(1, A, vec![shield(3), shield(4), damage(5), damage(3)])],
+        vec![(
+            1,
+            A,
+            ExecutableBody::new(
+                BodyTarget::SingleCreature,
+                vec![shield(3), shield(4), damage(5), damage(3)],
+            ),
+        )],
     );
     let target = object(&game, FIRST);
     let (start, source) = execute(&game, 1, target);
     let game = start.state();
-    assert_eq!(zone(game, 1), CardZone::Stack);
+    assert_eq!(zone(game, 1), ObjectZone::Stack);
     assert_eq!(game.execution().instruction_index(), Some(2));
-    let RuleFrame::DamageOrder(frame) = game.pending_decision().unwrap().frame() else {
+    let RuleFrame::Damage(spellwake_engine::effects::DamageDecision::Order(frame)) =
+        game.pending_decision().unwrap().frame()
+    else {
         panic!("expected later instruction choice")
     };
-    assert_eq!(frame.instruction_index(), 2);
-    assert_eq!(frame.source(), source);
+    assert_eq!(damage_support::resolution_origin(frame).1, 2);
+    assert_eq!(damage_support::resolution_origin(frame).0, source);
     assert_eq!(frame.chooser(), B);
     let births = &start.damage_journal().created;
     assert_eq!(births.len(), 2);
@@ -543,14 +653,21 @@ fn several_same_source_births_bind_actual_ids_before_a_later_damage_choice() {
             panic!("expected shields")
         };
         assert_eq!(
-            (*instruction, shield.source, shield.target),
-            (index, source, target)
+            (*instruction, shield.creator, shield.target),
+            (index, source, DamageEffectTarget::Permanent(target))
         );
         assert_eq!(game.execution().prevention_shield(shield.id), Some(shield));
         ids.push(shield.id);
     }
     assert_ne!(ids[0], ids[1]);
-    assert_eq!(frame.options(), &[ids[0].into(), ids[1].into()]);
+    assert_eq!(
+        frame
+            .applications()
+            .iter()
+            .map(|application| application.effect)
+            .collect::<Vec<_>>(),
+        vec![ids[0].into(), ids[1].into()]
+    );
     assert_eq!(start.damage_journal().attempts.len(), 1);
     assert!(start.damage_journal().completions.is_empty());
     let done = choose(game, ids[0]);
@@ -574,17 +691,26 @@ fn several_same_source_births_bind_actual_ids_before_a_later_damage_choice() {
 fn pending_later_instruction_retains_earlier_work_and_blocks_priority_and_checks() {
     let game = world(
         100,
-        vec![(1, A, vec![damage(2), shield(4), multiplier(2), damage(3)])],
+        vec![(
+            1,
+            A,
+            ExecutableBody::new(
+                BodyTarget::SingleCreature,
+                vec![damage(2), shield(4), multiplier(2), damage(3)],
+            ),
+        )],
     );
     let target = object(&game, FIRST);
     let (start, source) = execute(&game, 1, target);
     let game = start.state();
     assert_eq!(marked(game, target), 2.into());
     assert_eq!(game.execution().instruction_index(), Some(3));
-    let RuleFrame::DamageOrder(frame) = game.pending_decision().unwrap().frame() else {
+    let RuleFrame::Damage(spellwake_engine::effects::DamageDecision::Order(frame)) =
+        game.pending_decision().unwrap().frame()
+    else {
         panic!("expected damage choice")
     };
-    assert_eq!(frame.instruction_index(), 3);
+    assert_eq!(damage_support::resolution_origin(frame).1, 3);
     assert_eq!(start.damage_journal().attempts.len(), 2);
     assert_eq!(start.damage_journal().completions.len(), 1);
     assert_eq!(start.damage_journal().applied[0].amount, 2.into());
@@ -604,7 +730,7 @@ fn pending_later_instruction_retains_earlier_work_and_blocks_priority_and_checks
         Err(EffectError::WrongPhase)
     );
     assert_eq!(game, &saved);
-    assert_eq!(zone(game, 1), CardZone::Stack);
+    assert_eq!(zone(game, 1), ObjectZone::Stack);
     let shield = game.execution().prevention_shields().next().unwrap().id;
     let done = choose(game, shield);
     assert_finished(&done, source, 1);
@@ -617,7 +743,14 @@ fn pending_later_instruction_retains_earlier_work_and_blocks_priority_and_checks
 
 #[test]
 fn twelve_attempts_in_one_candidate_preserve_typed_encounter_order() {
-    let game = world(100, vec![(1, A, (1..=12).map(damage).collect())]);
+    let game = world(
+        100,
+        vec![(
+            1,
+            A,
+            ExecutableBody::new(BodyTarget::SingleCreature, (1..=12).map(damage).collect()),
+        )],
+    );
     let target = object(&game, FIRST);
     let (candidate, source) = execute(&game, 1, target);
     assert_finished(&candidate, source, 1);
@@ -636,8 +769,8 @@ fn twelve_attempts_in_one_candidate_preserve_typed_encounter_order() {
     for (index, attempt) in journal.attempts.iter().enumerate() {
         let amount: RulesInteger = (index as i64 + 1).into();
         assert_eq!(
-            (attempt.source, attempt.target, attempt.amount.clone()),
-            (source, target, amount.clone())
+            (attempt.target, attempt.amount.clone()),
+            (DamageRecipient::Creature(target), amount.clone())
         );
         assert_eq!(journal.applied[index].attempt, attempt.id);
         assert_eq!(journal.completions[index].attempt, attempt.id);
@@ -654,7 +787,14 @@ fn twelve_attempts_in_one_candidate_preserve_typed_encounter_order() {
 fn reply_completes_prior_attempt_then_emits_twelve_later_attempts_without_replaying_facts() {
     let mut instructions = vec![shield(1), shield(1), damage(1)];
     instructions.extend((1..=12).map(|_| damage(1)));
-    let game = world(100, vec![(1, A, instructions)]);
+    let game = world(
+        100,
+        vec![(
+            1,
+            A,
+            ExecutableBody::new(BodyTarget::SingleCreature, instructions),
+        )],
+    );
     let target = object(&game, FIRST);
     let (start, source) = execute(&game, 1, target);
     let old_attempt = start.damage_journal().attempts[0].id;
@@ -687,8 +827,11 @@ fn reply_completes_prior_attempt_then_emits_twelve_later_attempts_without_replay
         DamageOutcome::FullyPrevented
     );
     assert_eq!(journal.preventions.len(), 2);
-    assert_eq!(journal.preventions[0].attempt, old_attempt);
-    assert_eq!(journal.preventions[1].attempt, journal.attempts[0].id);
+    assert_eq!(journal.preventions[0].allocations[0].attempt, old_attempt);
+    assert_eq!(
+        journal.preventions[1].allocations[0].attempt,
+        journal.attempts[0].id
+    );
     assert!(
         journal
             .attempts
@@ -704,8 +847,8 @@ fn reply_completes_prior_attempt_then_emits_twelve_later_attempts_without_replay
     for (index, attempt) in journal.attempts.iter().enumerate() {
         assert_eq!(journal.completions[index + 1].attempt, attempt.id);
         assert_eq!(
-            (attempt.source, attempt.target, attempt.amount.clone()),
-            (source, target, 1.into())
+            (attempt.target, attempt.amount.clone()),
+            (DamageRecipient::Creature(target), 1.into())
         );
     }
     assert_eq!(marked(done.state(), target), 11.into());
@@ -714,6 +857,9 @@ fn reply_completes_prior_attempt_then_emits_twelve_later_attempts_without_replay
             .state()
             .execution()
             .pending_damage()
+            .unwrap()
+            .components()
+            .next()
             .unwrap()
             .attempt()
             .id,
@@ -726,13 +872,24 @@ fn two_copy_choices_keep_source_cursor_and_independent_full_programs_above_it() 
     let game = world(
         100,
         vec![
-            (1, A, vec![damage(1), damage(2)]),
-            (2, B, vec![Instruction::CopySpell, Instruction::CopySpell]),
+            (
+                1,
+                A,
+                ExecutableBody::new(BodyTarget::SingleCreature, vec![damage(1), damage(2)]),
+            ),
+            (
+                2,
+                B,
+                ExecutableBody::new(
+                    BodyTarget::SingleSpell(SpellTargetFilter::CopyableInstructionSpell),
+                    vec![Instruction::CopySpell, Instruction::CopySpell],
+                ),
+            ),
         ],
     );
     let first = object(&game, FIRST);
     let second = object(&game, SECOND);
-    let (game, original) = cast(&game, A, 1, TargetRef::Card(first));
+    let (game, original) = cast(&game, A, 1, TargetRef::Object(first));
     let (game, source) = cast(&game, B, 2, TargetRef::Stack(original));
     let start = resolve(&game);
     let RuleFrame::CopyTargets(old_frame) = start.state().pending_decision().unwrap().frame()
@@ -776,7 +933,7 @@ fn two_copy_choices_keep_source_cursor_and_independent_full_programs_above_it() 
         ),
         GameError::WrongDecision,
     );
-    assert_eq!(zone(game, 2), CardZone::Stack);
+    assert_eq!(zone(game, 2), ObjectZone::Stack);
     assert_eq!(game.execution().window().entries().len(), 3);
     assert_ne!(
         game.execution().window().entries().last().unwrap().id(),
@@ -796,11 +953,11 @@ fn two_copy_choices_keep_source_cursor_and_independent_full_programs_above_it() 
     assert_eq!(game, &saved);
     let finished = reply(
         game,
-        DecisionReply::CopyTargets(CopyTargetChoice::Change(TargetRef::Card(second))),
+        DecisionReply::CopyTargets(CopyTargetChoice::Change(TargetRef::Object(second))),
     );
     let mut game = finished.into_state();
     assert!(game.pending_decision().is_none());
-    assert_eq!(zone(&game, 2), CardZone::Graveyard(B));
+    assert_eq!(zone(&game, 2), ObjectZone::Graveyard(B));
     assert_eq!(game.execution().instruction_index(), None);
     assert_eq!(game.execution().window().entries().len(), 3);
     let copies: Vec<_> = game
@@ -820,7 +977,7 @@ fn two_copy_choices_keep_source_cursor_and_independent_full_programs_above_it() 
     }
     assert_eq!(marked(&game, first), 6.into());
     assert_eq!(marked(&game, second), 3.into());
-    assert_eq!(zone(&game, 1), CardZone::Graveyard(A));
+    assert_eq!(zone(&game, 1), ObjectZone::Graveyard(A));
     assert!(game.execution().window().entries().is_empty());
 }
 
@@ -829,16 +986,23 @@ fn copy_then_counter_preserves_the_independent_copied_sequence() {
     let game = world(
         100,
         vec![
-            (1, A, vec![damage(1), damage(2)]),
+            (
+                1,
+                A,
+                ExecutableBody::new(BodyTarget::SingleCreature, vec![damage(1), damage(2)]),
+            ),
             (
                 2,
                 B,
-                vec![Instruction::CopySpell, Instruction::CounterSpell],
+                ExecutableBody::new(
+                    BodyTarget::SingleSpell(SpellTargetFilter::CopyableInstructionSpell),
+                    vec![Instruction::CopySpell, Instruction::CounterSpell],
+                ),
             ),
         ],
     );
     let target = object(&game, FIRST);
-    let (game, original) = cast(&game, A, 1, TargetRef::Card(target));
+    let (game, original) = cast(&game, A, 1, TargetRef::Object(target));
     let (game, source) = cast(&game, B, 2, TargetRef::Stack(original));
     let start = resolve(&game);
     let done = reply(
@@ -846,8 +1010,8 @@ fn copy_then_counter_preserves_the_independent_copied_sequence() {
         DecisionReply::CopyTargets(CopyTargetChoice::Retain),
     );
     let game = done.into_state();
-    assert_eq!(zone(&game, 1), CardZone::Graveyard(A));
-    assert_eq!(zone(&game, 2), CardZone::Graveyard(B));
+    assert_eq!(zone(&game, 1), ObjectZone::Graveyard(A));
+    assert_eq!(zone(&game, 2), ObjectZone::Graveyard(B));
     assert!(
         game.execution()
             .window()
@@ -868,18 +1032,29 @@ fn counter_then_copy_and_repeated_counter_skip_departed_stack_operands() {
         let game = world(
             100,
             vec![
-                (1, A, vec![damage(1), shield(5)]),
-                (2, B, vec![Instruction::CounterSpell, later]),
+                (
+                    1,
+                    A,
+                    ExecutableBody::new(BodyTarget::SingleCreature, vec![damage(1), shield(5)]),
+                ),
+                (
+                    2,
+                    B,
+                    ExecutableBody::new(
+                        BodyTarget::SingleSpell(SpellTargetFilter::AnySpell),
+                        vec![Instruction::CounterSpell, later],
+                    ),
+                ),
             ],
         );
         let target = object(&game, FIRST);
-        let (game, original) = cast(&game, A, 1, TargetRef::Card(target));
+        let (game, original) = cast(&game, A, 1, TargetRef::Object(target));
         let (game, _) = cast(&game, B, 2, TargetRef::Stack(original));
         let done = resolve(&game);
         assert!(done.state().pending_decision().is_none());
         assert_eq!(done.damage_journal(), &DamageJournal::default());
-        assert_eq!(zone(done.state(), 1), CardZone::Graveyard(A));
-        assert_eq!(zone(done.state(), 2), CardZone::Graveyard(B));
+        assert_eq!(zone(done.state(), 1), ObjectZone::Graveyard(A));
+        assert_eq!(zone(done.state(), 2), ObjectZone::Graveyard(B));
         assert_eq!(marked(done.state(), target), 0.into());
         assert!(done.state().execution().window().entries().is_empty());
     }
@@ -890,19 +1065,30 @@ fn initial_all_illegal_aborts_the_whole_program_before_any_effect_or_attempt() {
     let game = world(
         100,
         vec![
-            (1, A, vec![shield(4), damage(3)]),
-            (2, B, vec![Instruction::ReturnToOwnersHand]),
+            (
+                1,
+                A,
+                ExecutableBody::new(BodyTarget::SingleCreature, vec![shield(4), damage(3)]),
+            ),
+            (
+                2,
+                B,
+                ExecutableBody::new(
+                    BodyTarget::SingleCreature,
+                    vec![Instruction::ReturnToOwnersHand],
+                ),
+            ),
         ],
     );
     let target = object(&game, FIRST);
-    let (game, source) = cast(&game, A, 1, TargetRef::Card(target));
-    let (game, _) = cast(&game, B, 2, TargetRef::Card(target));
+    let (game, source) = cast(&game, A, 1, TargetRef::Object(target));
+    let (game, _) = cast(&game, B, 2, TargetRef::Object(target));
     let bounced = resolve(&game).into_state();
-    assert_eq!(zone(&bounced, FIRST), CardZone::Hand(A));
+    assert_eq!(zone(&bounced, FIRST), ObjectZone::Hand(A));
     let done = resolve(&bounced);
     assert_finished(&done, source, 1);
     assert_eq!(done.damage_journal(), &DamageJournal::default());
-    assert_eq!(zone(done.state(), FIRST), CardZone::Hand(A));
+    assert_eq!(zone(done.state(), FIRST), ObjectZone::Hand(A));
     assert_eq!(done.state().execution().prevention_shields().count(), 0);
 }
 
@@ -911,20 +1097,27 @@ fn one_choice_convenience_wrappers_reject_a_second_prompt_atomically() {
     let game = world(
         100,
         vec![
-            (1, A, vec![damage(1)]),
+            (
+                1,
+                A,
+                ExecutableBody::new(BodyTarget::SingleCreature, vec![damage(1)]),
+            ),
             (
                 2,
                 B,
-                vec![
-                    Instruction::CopySpell,
-                    Instruction::CopySpell,
-                    Instruction::CopySpell,
-                ],
+                ExecutableBody::new(
+                    BodyTarget::SingleSpell(SpellTargetFilter::CopyableInstructionSpell),
+                    vec![
+                        Instruction::CopySpell,
+                        Instruction::CopySpell,
+                        Instruction::CopySpell,
+                    ],
+                ),
             ),
         ],
     );
     let target = object(&game, FIRST);
-    let (game, original) = cast(&game, A, 1, TargetRef::Card(target));
+    let (game, original) = cast(&game, A, 1, TargetRef::Object(target));
     let (game, _) = cast(&game, B, 2, TargetRef::Stack(original));
     let execution = checking(&game);
     let saved = execution.clone();
@@ -933,11 +1126,17 @@ fn one_choice_convenience_wrappers_reject_a_second_prompt_atomically() {
         Err(EffectError::CopyChoiceRequired)
     );
     assert_eq!(execution, saved);
-    let ResolutionProgress::Pending {
-        state: execution,
-        frame: RuleFrame::CopyTargets(frame),
-        ..
-    } = execution.begin_resolution(execution.revision()).unwrap()
+    let (
+        execution,
+        spellwake_engine::effects::RuleResult::Pending {
+            frame: spellwake_engine::effects::EffectDecision::CopyTargets(frame),
+            ..
+        },
+        _,
+    ) = execution
+        .begin_resolution(execution.revision())
+        .unwrap()
+        .into_parts()
     else {
         panic!("expected first copy prompt")
     };
@@ -947,18 +1146,23 @@ fn one_choice_convenience_wrappers_reject_a_second_prompt_atomically() {
         Err(EffectError::CopyChoiceRequired)
     );
     assert_eq!(execution, saved);
-    let ResolutionProgress::Pending {
-        state: execution,
-        frame: RuleFrame::CopyTargets(frame),
-        ..
-    } = execution
-        .resume_resolution(
+    let (
+        execution,
+        spellwake_engine::effects::RuleResult::Pending {
+            frame: spellwake_engine::effects::EffectDecision::CopyTargets(frame),
+            ..
+        },
+        _,
+    ) = execution
+        .resume_rule(
             execution.revision(),
-            &RuleFrame::CopyTargets(frame),
+            &spellwake_engine::effects::EffectDecision::CopyTargets(frame),
             B,
             DecisionReply::CopyTargets(CopyTargetChoice::Retain),
+            None,
         )
         .unwrap()
+        .into_parts()
     else {
         panic!("expected second copy prompt")
     };
@@ -979,7 +1183,10 @@ fn invalid_replies_preserve_prior_work_and_the_exact_second_choice() {
         vec![(
             1,
             A,
-            vec![damage(2), shield(4), multiplier(2), damage(3), damage(2)],
+            ExecutableBody::new(
+                BodyTarget::SingleCreature,
+                vec![damage(2), shield(4), multiplier(2), damage(3), damage(2)],
+            ),
         )],
     );
     let target = object(&game, FIRST);
@@ -994,7 +1201,7 @@ fn invalid_replies_preserve_prior_work_and_the_exact_second_choice() {
             A,
             GameCommand::Reply {
                 decision: decision.id(),
-                choice: DecisionReply::DamageOrder(effect.into()),
+                choice: DecisionReply::DamageOrder(damage_support::application(game, effect)),
             },
         ),
         GameError::WrongChooser,
@@ -1018,7 +1225,7 @@ fn invalid_replies_preserve_prior_work_and_the_exact_second_choice() {
             B,
             GameCommand::Reply {
                 decision: DecisionId(decision.id().0 + 1),
-                choice: DecisionReply::DamageOrder(effect.into()),
+                choice: DecisionReply::DamageOrder(damage_support::application(game, effect)),
             },
         ),
         GameError::WrongDecision,
@@ -1028,7 +1235,7 @@ fn invalid_replies_preserve_prior_work_and_the_exact_second_choice() {
         B,
         GameCommand::Reply {
             decision: decision.id(),
-            choice: DecisionReply::DamageOrder(effect.into()),
+            choice: DecisionReply::DamageOrder(damage_support::application(game, effect)),
         },
     );
     stale.basis.revision -= 1;
@@ -1037,7 +1244,7 @@ fn invalid_replies_preserve_prior_work_and_the_exact_second_choice() {
     let valid = choose(game, effect);
     assert_eq!(valid, choose(&saved, effect));
     assert_eq!(marked(game, target), 2.into());
-    assert_eq!(zone(game, 1), CardZone::Stack);
+    assert_eq!(zone(game, 1), ObjectZone::Stack);
 }
 
 #[test]
@@ -1048,15 +1255,18 @@ fn exact_large_multiplication_and_sequential_addition_never_narrow() {
         vec![(
             1,
             A,
-            vec![
-                multiplier(2),
-                Instruction::Damage {
-                    amount: amount.clone(),
-                },
-                Instruction::Damage {
-                    amount: amount.clone(),
-                },
-            ],
+            ExecutableBody::new(
+                BodyTarget::SingleCreature,
+                vec![
+                    multiplier(2),
+                    Instruction::Damage {
+                        amount: amount.clone(),
+                    },
+                    Instruction::Damage {
+                        amount: amount.clone(),
+                    },
+                ],
+            ),
         )],
     )
     .unwrap()
@@ -1090,13 +1300,16 @@ fn zero_toughness_target_survives_a_real_suspension_until_later_recovery() {
         vec![(
             1,
             A,
-            vec![
-                continuous(PowerToughnessOperation::Set(pt(1, 0))),
-                shield(3),
-                shield(4),
-                damage(5),
-                continuous(PowerToughnessOperation::Set(pt(1, 2))),
-            ],
+            ExecutableBody::new(
+                BodyTarget::SingleCreature,
+                vec![
+                    continuous(ResolvedPartSpec::SetPT(pt(1, 0))),
+                    shield(3),
+                    shield(4),
+                    damage(5),
+                    continuous(ResolvedPartSpec::SetPT(pt(1, 2))),
+                ],
+            ),
         )],
     );
     let target = object(&game, FIRST);
@@ -1104,19 +1317,28 @@ fn zero_toughness_target_survives_a_real_suspension_until_later_recovery() {
     let game = start.state();
     assert_eq!(game.execution().instruction_index(), Some(3));
     assert_eq!(
-        game.execution().creature(target).unwrap().toughness,
+        game.execution()
+            .creature(target)
+            .unwrap()
+            .unwrap()
+            .toughness,
         0.into()
     );
     assert_eq!(object(game, FIRST), target);
-    assert_eq!(zone(game, FIRST), CardZone::Battlefield);
-    assert_eq!(zone(game, 1), CardZone::Stack);
+    assert_eq!(zone(game, FIRST), ObjectZone::Battlefield);
+    assert_eq!(zone(game, 1), ObjectZone::Stack);
     let shield = game.execution().prevention_shields().next().unwrap().id;
     let done = choose(game, shield);
     assert_finished(&done, source, 1);
-    assert_eq!(zone(done.state(), FIRST), CardZone::Battlefield);
+    assert_eq!(zone(done.state(), FIRST), ObjectZone::Battlefield);
     assert_eq!(object(done.state(), FIRST), target);
     assert_eq!(
-        done.state().execution().creature(target).unwrap().toughness,
+        done.state()
+            .execution()
+            .creature(target)
+            .unwrap()
+            .unwrap()
+            .toughness,
         2.into()
     );
     assert_eq!(marked(done.state(), target), 0.into());
@@ -1134,16 +1356,21 @@ fn later_damage_choice_has_fresh_identity_stage_and_exact_instruction_index() {
         vec![(
             1,
             A,
-            vec![multiplier(2), multiplier(3), damage(1), damage(1)],
+            ExecutableBody::new(
+                BodyTarget::SingleCreature,
+                vec![multiplier(2), multiplier(3), damage(1), damage(1)],
+            ),
         )],
     );
     let target = object(&game, FIRST);
     let (start, source) = execute(&game, 1, target);
     let decision = start.state().pending_decision().unwrap();
-    let RuleFrame::DamageOrder(old_frame) = decision.frame() else {
+    let RuleFrame::Damage(spellwake_engine::effects::DamageDecision::Order(old_frame)) =
+        decision.frame()
+    else {
         panic!("expected first damage choice")
     };
-    assert_eq!(old_frame.instruction_index(), 2);
+    assert_eq!(damage_support::resolution_origin(old_frame).1, 2);
     let effects: Vec<_> = start
         .state()
         .execution()
@@ -1153,23 +1380,29 @@ fn later_damage_choice_has_fresh_identity_stage_and_exact_instruction_index() {
     let middle = choose(start.state(), effects[0]);
     let game = middle.state();
     let later = game.pending_decision().unwrap();
-    let RuleFrame::DamageOrder(frame) = later.frame() else {
+    let RuleFrame::Damage(spellwake_engine::effects::DamageDecision::Order(frame)) = later.frame()
+    else {
         panic!("expected later damage choice")
     };
-    assert_eq!(frame.instruction_index(), 3);
-    assert_eq!(frame.source(), source);
+    assert_eq!(damage_support::resolution_origin(frame).1, 3);
+    assert_eq!(damage_support::resolution_origin(frame).0, source);
     assert_eq!(frame.chooser(), old_frame.chooser());
-    assert_eq!(frame.options(), old_frame.options());
-    assert_ne!(frame.attempt(), old_frame.attempt());
+    assert_eq!(
+        frame
+            .applications()
+            .iter()
+            .map(|application| application.effect)
+            .collect::<Vec<_>>(),
+        old_frame
+            .applications()
+            .iter()
+            .map(|application| application.effect)
+            .collect::<Vec<_>>()
+    );
+    assert_ne!(frame.batch(), old_frame.batch());
     assert_ne!(later.id(), decision.id());
     assert_eq!(game.execution().pending_damage().unwrap().stage(), 0);
-    assert!(
-        game.execution()
-            .pending_damage()
-            .unwrap()
-            .used_effects()
-            .is_empty()
-    );
+    assert!(damage_support::used_effects(game.execution().pending_damage().unwrap()).is_empty());
     assert_eq!(marked(game, target), 6.into());
     assert_eq!(middle.damage_journal().attempts.len(), 1);
     assert_eq!(middle.damage_journal().multiplications.len(), 2);
@@ -1179,13 +1412,16 @@ fn later_damage_choice_has_fresh_identity_stage_and_exact_instruction_index() {
     assert_eq!(middle.damage_journal().multiplications[1].stage, 2);
     let saved = game.clone();
     assert_eq!(
-        game.execution().resume_resolution(
+        game.execution().resume_rule(
             game.execution().revision(),
-            &RuleFrame::DamageOrder(old_frame.clone()),
+            &spellwake_engine::effects::EffectDecision::Damage(
+                spellwake_engine::effects::DamageDecision::Order(old_frame.clone())
+            ),
             B,
-            DecisionReply::DamageOrder(effects[0].into()),
+            DecisionReply::DamageOrder(damage_support::application(game, effects[0])),
+            None
         ),
-        Err(EffectError::WrongResolutionFrame)
+        Err(EffectError::WrongDamageFrame)
     );
     assert_eq!(game, &saved);
     assert_rejected(
@@ -1195,7 +1431,7 @@ fn later_damage_choice_has_fresh_identity_stage_and_exact_instruction_index() {
             B,
             GameCommand::Reply {
                 decision: decision.id(),
-                choice: DecisionReply::DamageOrder(effects[0].into()),
+                choice: DecisionReply::DamageOrder(damage_support::application(game, effects[0])),
             },
         ),
         GameError::WrongDecision,
@@ -1208,4 +1444,11 @@ fn later_damage_choice_has_fresh_identity_stage_and_exact_instruction_index() {
     assert_eq!(done.damage_journal().multiplications.len(), 2);
     assert_eq!(done.damage_journal().multiplications[0].stage, 1);
     assert_eq!(done.damage_journal().multiplications[1].stage, 2);
+}
+
+#[path = "support/vocabulary.rs"]
+mod synthetic_vocabulary;
+fn test_vocabulary() -> std::sync::Arc<spellwake_contracts::creature_types::CreatureTypeVocabulary>
+{
+    synthetic_vocabulary::for_rules("rules-20260925")
 }

@@ -1,3 +1,5 @@
+//! This finite producer authors only physical-card seeds. Physical provenance
+//! assertions below check that fixture invariant, not a generic object fallback.
 //! A distinct copy-aware projection profile; it shares source loading and native
 //! execution with the original instant baseline, whose recorded schema stays fixed.
 use super::{
@@ -6,10 +8,10 @@ use super::{
 use serde::Serialize;
 use spellwake_card_programs::{BOLT, COUNTERSPELL, LION, Registry, TWINCAST, UNSUMMON};
 use spellwake_engine::{
-    card_identity::{CardDestination, CardId, CardZone},
     effects::{CopyTargetChoice, EffectError, EffectWindow},
     game::{GameError, GameId},
     mana::{FloatingMana, ManaType},
+    object_identity::{CardId, ObjectDestination, ObjectZone},
     priority::SeatId,
     stack_window::{StackEntryId, StackKind},
     targets::TargetRef,
@@ -26,6 +28,12 @@ struct EntryView {
 }
 #[derive(Serialize)]
 struct Observation {
+    #[serde(
+        rename = "__current_capture_point",
+        skip_serializing_if = "Option::is_none"
+    )]
+    capture_point: Option<String>,
+
     checkpoint: &'static str,
     stack_bottom_first: Vec<EntryView>,
     cards: Vec<CardView>,
@@ -71,7 +79,10 @@ fn observe(
     aliases: &mut Aliases,
 ) -> Result<Observation, EffectError> {
     for card in state.window().cards().iter() {
-        aliases.cards.insert(card.id(), alias(card.card())?);
+        aliases.cards.insert(
+            card.id(),
+            alias(card.card_id().expect("source-authored card-only trace"))?,
+        );
     }
     for entry in state.window().entries() {
         let name = match entry.kind() {
@@ -89,7 +100,7 @@ fn observe(
         let mut targets = Vec::new();
         for target in entry.targets().targets() {
             let value = match target.choice().target {
-                TargetRef::Card(id) => aliases.cards.get(&id),
+                TargetRef::Object(id) => aliases.cards.get(&id),
                 TargetRef::Stack(id) => aliases.stack.get(&id),
                 TargetRef::Player(_) => None,
             }
@@ -116,6 +127,7 @@ fn observe(
             targets,
         });
     }
+    let evaluated = state.evaluated_characteristics()?;
     let mut cards = Vec::new();
     for key in 1..=6 {
         let object = identity(state, key)?;
@@ -124,44 +136,58 @@ fn observe(
             .cards()
             .get(object)
             .ok_or(EffectError::InconsistentProgram)?;
-        let creature = state.creature(object);
+        let creature = evaluated
+            .get(object)
+            .and_then(|value| value.power_toughness.as_ref());
         cards.push(CardView {
-            alias: alias(card.card())?,
+            alias: alias(card.card_id().expect("source-authored card-only trace"))?,
             owner: seat(card.owner())?,
             zone: match card.zone() {
-                CardZone::Hand(_) => "HAND",
-                CardZone::Stack => "STACK",
-                CardZone::Battlefield => "BATTLEFIELD",
-                CardZone::Graveyard(_) => "GRAVEYARD",
+                ObjectZone::Hand(_) => "HAND",
+                ObjectZone::Stack => "STACK",
+                ObjectZone::Battlefield => "BATTLEFIELD",
+                ObjectZone::Graveyard(_) => "GRAVEYARD",
                 _ => return Err(EffectError::InconsistentProgram),
             },
-            damage: creature.as_ref().map(|view| view.damage.clone()),
-            power: creature.as_ref().map(|view| view.power.clone()),
-            toughness: creature.map(|view| view.toughness),
+            damage: state.battlefield_marked_damage(object),
+            power: creature.as_ref().map(|view| view.derived.power.clone()),
+            toughness: creature.map(|view| view.derived.toughness.clone()),
         });
     }
     Ok(Observation {
+        capture_point: spellwake_reference_tools::capture_points::token(
+            concat!(file!(), "::observe"),
+            spellwake_reference_tools::current_profile::SnapshotOwner::EffectWindow(state),
+            &spellwake_reference_tools::packet::AliasContext::default(),
+        )
+        .expect("current native observation point"),
         checkpoint,
         stack_bottom_first: stack,
         cards,
     })
 }
 fn stack_id(state: &EffectWindow, physical: u64) -> Result<StackEntryId, EffectError> {
-    state.window().entries().iter().find(|entry| matches!(entry.kind(),StackKind::CardSpell(object) if state.window().cards().get(*object).is_some_and(|card|card.card()==CardId(physical)))).map(|entry|entry.id()).ok_or(EffectError::InconsistentProgram)
+    state.window().entries().iter().find(|entry| matches!(entry.kind(),StackKind::CardSpell(object) if state.window().cards().get(*object).is_some_and(|card|card.card_id().expect("source-authored card-only trace")==CardId(physical)))).map(|entry|entry.id()).ok_or(EffectError::InconsistentProgram)
 }
-fn scenario(name: &'static str, registry: &Registry, game: GameId) -> Result<Scenario, GameError> {
+fn scenario(
+    vocabulary: &std::sync::Arc<spellwake_contracts::creature_types::CreatureTypeVocabulary>,
+    name: &'static str,
+    registry: &Registry,
+    game: GameId,
+) -> Result<Scenario, GameError> {
     let mut seeds = Vec::new();
     for (oracle, key, owner, destination) in [
-        (BOLT, 1, A, CardDestination::Hand),
-        (TWINCAST, 2, B, CardDestination::Hand),
-        (COUNTERSPELL, 3, A, CardDestination::Hand),
-        (UNSUMMON, 4, A, CardDestination::Hand),
-        (LION, 5, B, CardDestination::Battlefield { controller: B }),
-        (LION, 6, A, CardDestination::Battlefield { controller: A }),
+        (BOLT, 1, A, ObjectDestination::Hand),
+        (TWINCAST, 2, B, ObjectDestination::Hand),
+        (COUNTERSPELL, 3, A, ObjectDestination::Hand),
+        (UNSUMMON, 4, A, ObjectDestination::Hand),
+        (LION, 5, B, ObjectDestination::Battlefield { controller: B }),
+        (LION, 6, A, ObjectDestination::Battlefield { controller: A }),
     ] {
         seeds.push(registered_seed(registry, oracle, key, owner, destination)?);
     }
     let mut state = initialize(
+        vocabulary,
         registry,
         game,
         "restricted-spell-copies-v3",
@@ -186,11 +212,14 @@ fn scenario(name: &'static str, registry: &Registry, game: GameId) -> Result<Sce
     )?;
     let mut aliases = Aliases::default();
     for card in state.execution().window().cards().iter() {
-        aliases.cards.insert(card.id(), alias(card.card())?);
+        aliases.cards.insert(
+            card.id(),
+            alias(card.card_id().expect("source-authored card-only trace"))?,
+        );
     }
     let lion1 = identity(state.execution(), 5)?;
     let lion2 = identity(state.execution(), 6)?;
-    state = cast(state, A, 1, TargetRef::Card(lion1))?;
+    state = cast(state, A, 1, TargetRef::Object(lion1))?;
     let bolt = stack_id(state.execution(), 1)?;
     let mut observations = vec![observe(state.execution(), "bolt-on-stack", &mut aliases)?];
     state = cast(state, B, 2, TargetRef::Stack(bolt))?;
@@ -200,7 +229,7 @@ fn scenario(name: &'static str, registry: &Registry, game: GameId) -> Result<Sce
         &mut aliases,
     )?);
     if name.contains("missing-target") {
-        state = cast(state, A, 4, TargetRef::Card(lion1))?;
+        state = cast(state, A, 4, TargetRef::Object(lion1))?;
         observations.push(observe(state.execution(), "bounce-on-stack", &mut aliases)?);
         state = resolve(state, None)?;
         observations.push(observe(state.execution(), "after-bounce", &mut aliases)?);
@@ -208,7 +237,7 @@ fn scenario(name: &'static str, registry: &Registry, game: GameId) -> Result<Sce
     let choice = if matches!(name, "copy-retain-missing-target" | "copy-target-departs") {
         CopyTargetChoice::Retain
     } else {
-        CopyTargetChoice::Change(TargetRef::Card(lion2))
+        CopyTargetChoice::Change(TargetRef::Object(lion2))
     };
     state = resolve(state, Some(choice))?;
     observations.push(observe(state.execution(), "after-copy", &mut aliases)?);
@@ -234,7 +263,7 @@ fn scenario(name: &'static str, registry: &Registry, game: GameId) -> Result<Sce
         observations.push(observe(state.execution(), "after-counter", &mut aliases)?);
     } else {
         if name == "copy-target-departs" {
-            state = cast(state, A, 4, TargetRef::Card(lion1))?;
+            state = cast(state, A, 4, TargetRef::Object(lion1))?;
             observations.push(observe(state.execution(), "bounce-on-stack", &mut aliases)?);
             state = resolve(state, None)?;
             observations.push(observe(state.execution(), "after-bounce", &mut aliases)?);
@@ -253,7 +282,11 @@ fn scenario(name: &'static str, registry: &Registry, game: GameId) -> Result<Sce
         observations,
     })
 }
-pub(super) fn run(registry: &Registry, input: &'static str) -> Result<Report, GameError> {
+pub(super) fn run(
+    vocabulary: &std::sync::Arc<spellwake_contracts::creature_types::CreatureTypeVocabulary>,
+    registry: &Registry,
+    input: &'static str,
+) -> Result<Report, GameError> {
     let names = [
         "copy-redirect",
         "counter-original",
@@ -265,7 +298,7 @@ pub(super) fn run(registry: &Registry, input: &'static str) -> Result<Report, Ga
     let scenarios = names
         .into_iter()
         .zip(101..)
-        .map(|(name, id)| scenario(name, registry, GameId(id)))
+        .map(|(name, id)| scenario(vocabulary, name, registry, GameId(id)))
         .collect::<Result<Vec<_>, _>>()?;
     Ok(Report {
         schema_version: 3,
