@@ -45,9 +45,9 @@ jobs:
   reference-report:
     name: Reference report replay
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 55
     env:
-      CARGO_PROFILE_TEST_OPT_LEVEL: "1"
+      CARGO_PROFILE_TEST_OPT_LEVEL: "3"
       CARGO_PROFILE_TEST_DEBUG: "0"
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
@@ -55,6 +55,8 @@ jobs:
           persist-credentials: false
       - name: Install pinned toolchain
         run: rustup show
+      - name: Build the optimized reference test binary
+        run: cargo test --locked -p spellwake-reference-tools --lib --no-run
       - name: Replay the full report with the pinned vocabulary
         shell: bash
         run: |
@@ -66,7 +68,7 @@ jobs:
           trap 'kill "$progress_pid" 2>/dev/null || true' EXIT
           SPELLWAKE_CREATURE_VOCABULARY_INPUT="$vocabulary" \
             cargo test --locked -p spellwake-reference-tools --lib \
-            ordinary_game::record::staged::tests::complete_existing_fixture_uses_finalized_delivery_and_preserves_report_bytes -- --exact | tee "$RUNNER_TEMP/reference-report.log"
+            ordinary_game::record::staged::tests::complete_existing_fixture_uses_finalized_delivery_and_preserves_report_bytes -- --exact --nocapture | tee "$RUNNER_TEMP/reference-report.log"
           grep -Fq "test result: ok. 1 passed; 0 failed" "$RUNNER_TEMP/reference-report.log"
 
   check:
