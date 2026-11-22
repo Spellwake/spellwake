@@ -31,8 +31,6 @@ export const page = style({
   scrollbarWidth: "thin",
   scrollbarColor: "#71674f transparent",
   padding: "30px 3% 40px 32px",
-  // The library's empty states size their words from here.
-  fontSize: "12px",
   selectors: {
     [compact]: { paddingBottom: "130px" },
     [phone]: { padding: "16px 16px 150px" },
@@ -117,7 +115,8 @@ export const tile = style({
   display: "grid",
   gridTemplateColumns: "minmax(0,152px) minmax(0,1fr)",
   alignItems: "start",
-  gap: "30px",
+  // Narrower where three tiles share a tablet's width, so a set name keeps its words whole.
+  gap: "clamp(14px, 1.9cqi, 30px)",
   minWidth: 0,
   selectors: { '&[data-kind="set"]': { gridTemplateColumns: "minmax(0,1fr)" } },
 });
@@ -136,7 +135,8 @@ export const name = style({
   font: `28px/1.15 ${shellTokens.serif}`,
   fontWeight: 400,
   color: shellTokens.ink,
-  overflowWrap: "anywhere",
+  overflowWrap: "break-word",
+  hyphens: "manual",
 });
 export const product = style({ fontSize: "21px", color: "#e3dccb" });
 export const remaining = style({
@@ -211,6 +211,8 @@ export const quiet = style({
   display: "grid",
   placeItems: "center",
   minHeight: "40vh",
+  // The library's empty states size their words from here: a 28px title.
+  fontSize: "12px",
 });
 export const loading = style({
   display: "flex",
@@ -295,7 +297,6 @@ export const vote = style({
   display: "grid",
   gap: "18px",
   minWidth: 0,
-  fontSize: "12px",
 });
 export const voteHead = style({
   margin: 0,
@@ -321,10 +322,11 @@ export const candidates = style({
   "@media": {
     "(max-width: 900px)": { gridTemplateColumns: "repeat(3, minmax(0,1fr))" },
   },
+  // The list scrolls in its own bounded area, as approved, so the count and Save stay below it.
   selectors: {
     [phone]: {
       gridTemplateColumns: "repeat(2, minmax(0,1fr))",
-      maxHeight: "none",
+      maxHeight: "min(330px, 40dvh)",
     },
   },
 });
@@ -439,3 +441,4 @@ globalStyle(`${results} th, ${results} td`, {
 });
 globalStyle(`${results} thead th`, { background: "#1a1e22", color: "#e3dccb" });
 globalStyle(`${results} td`, { textAlign: "center" });
+globalStyle(`${results} thead th:not(:first-child)`, { textAlign: "center" });

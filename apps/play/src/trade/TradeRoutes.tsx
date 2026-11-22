@@ -37,12 +37,16 @@ function PreviewTrade({ partnerId }: { partnerId: string }): ReactElement {
     />
   );
 }
-function AccountTrade(): ReactElement {
+function AccountTrade({ partnerId }: { partnerId: string }): ReactElement {
   const navigate = useNavigate();
   const origin = useOrigin();
   const leave = useCallback(() => void navigate(origin), [navigate, origin]);
   return (
-    <TradePage source={useConnectedTrade()} onBack={leave} onFinish={leave} />
+    <TradePage
+      source={useConnectedTrade(partnerId)}
+      onBack={leave}
+      onFinish={leave}
+    />
   );
 }
 
@@ -55,6 +59,6 @@ export function TradeRoute(): ReactElement {
   return useAccount().state.status === "unconfigured" ? (
     <PreviewTrade key={personId} partnerId={personId} />
   ) : (
-    <AccountTrade />
+    <AccountTrade key={personId} partnerId={personId} />
   );
 }

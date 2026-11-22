@@ -43,11 +43,16 @@ export type BuilderCard = {
 export type FormatLegality = "legal" | "not-legal" | "unknown";
 
 const root = `${import.meta.env.BASE_URL}builder-preview/`;
+const useRemoteManaSymbols = Boolean(
+  import.meta.env["VITE_APPLICATION_API_URL"],
+);
 /** Card names are matched without regard to case or apostrophe style. */
 export const cardKey = (name: string): string =>
   name.trim().replaceAll("’", "'").toLowerCase();
 export const manaSymbolUrl = (symbol: string): string =>
-  `${root}mana/${symbol.replaceAll("/", "-")}.svg`;
+  useRemoteManaSymbols
+    ? `https://svgs.scryfall.io/card-symbols/${encodeURIComponent(symbol.replaceAll("/", ""))}.svg`
+    : `${root}mana/${symbol.replaceAll("/", "-")}.svg`;
 
 /** Reads the set and collector number out of a printing's catalogue address. */
 export function printingFrom(
