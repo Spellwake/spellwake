@@ -57,6 +57,9 @@ impl OAuthConfig {
     pub fn matches(&self, terms: &ServerTerms) -> bool {
         self.terms == *terms
     }
+    pub(crate) fn source(&self) -> &PatreonConfig {
+        &self.source
+    }
     #[cfg(test)]
     pub(crate) fn fixture(base: &str) -> Self {
         Self {

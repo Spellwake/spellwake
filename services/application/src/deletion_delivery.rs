@@ -189,7 +189,7 @@ impl DeletionDelivery {
     pub fn from_env() -> Result<Self, DeliveryError> {
         Self::new(BackendConfig::from_env()?)
     }
-    fn new(config: BackendConfig) -> Result<Self, DeliveryError> {
+    pub(crate) fn new(config: BackendConfig) -> Result<Self, DeliveryError> {
         Ok(Self {
             backend: BackendClient::new(
                 config,
