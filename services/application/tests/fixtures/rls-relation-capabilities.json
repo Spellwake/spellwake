@@ -758,7 +758,8 @@
         "back_id",
         "sleeve_id",
         "dice_id",
-        "playmat_id"
+        "playmat_id",
+        "face_definition_id"
       ],
       "service_role": [
         "id",
@@ -773,7 +774,8 @@
         "back_id",
         "sleeve_id",
         "dice_id",
-        "playmat_id"
+        "playmat_id",
+        "face_definition_id"
       ],
       "supabase_auth_admin": []
     }

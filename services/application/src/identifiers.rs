@@ -52,6 +52,11 @@ pub(crate) fn empty_uuid<'de, D: Deserializer<'de>>(input: D) -> Result<Option<U
         parse(&value).map(Some).map_err(de::Error::custom)
     }
 }
+/// An optional field that, when present, must hold a UUID: omission is the only
+/// way to say "none", so an explicit JSON null is rejected.
+pub(crate) fn present_uuid<'de, D: Deserializer<'de>>(input: D) -> Result<Option<Uuid>, D::Error> {
+    uuid(input).map(Some)
+}
 /// The field attribute, not this adapter, controls whether omission is permitted.
 pub(crate) fn nullable_uuid<'de, D: Deserializer<'de>>(input: D) -> Result<Option<Uuid>, D::Error> {
     Option::<String>::deserialize(input)?
