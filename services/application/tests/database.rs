@@ -166,6 +166,8 @@ mod cosmetics;
 mod catalogue;
 #[path = "database/catalogue_publication.rs"]
 mod catalogue_publication;
+#[path = "database/deck_face_cards.rs"]
+mod deck_face_cards;
 #[path = "database/deck_settings.rs"]
 mod deck_settings;
 #[path = "database/decks.rs"]
