@@ -3,7 +3,6 @@ import {
   useId,
   useRef,
   useState,
-  type KeyboardEvent,
   type ReactElement,
   type ReactNode,
   type RefObject,
@@ -27,6 +26,7 @@ import { motionLanguage as m } from "../../lib/motion";
 import { BadgeEditor } from "./BadgeEditor";
 import { useCommand, useNotice } from "./operation";
 import { PictureEditor } from "./PictureEditor";
+import { SectionTabs } from "./SectionTabs";
 import * as s from "./account.css";
 
 export const ACCOUNT_SECTIONS = [
@@ -398,87 +398,6 @@ function DeleteConfirmation({
   );
 }
 
-/** The four sections, as a tab list that reads top to bottom or side to side. */
-function Sections({
-  id,
-  current,
-  locked,
-  onChange,
-}: {
-  id: string;
-  current: AccountSection;
-  /** True once deletion is requested: only Account stays available. */
-  locked: boolean;
-  onChange: (section: AccountSection) => void;
-}): ReactElement {
-  const available = locked ? (["account"] as const) : ACCOUNT_SECTIONS;
-  const onKeyDown = (event: KeyboardEvent<HTMLDivElement>): void => {
-    const index = available.indexOf(current as never);
-    const step =
-      event.key === "ArrowDown" || event.key === "ArrowRight"
-        ? 1
-        : event.key === "ArrowUp" || event.key === "ArrowLeft"
-          ? -1
-          : 0;
-    const next =
-      event.key === "Home"
-        ? available[0]
-        : event.key === "End"
-          ? available.at(-1)
-          : step !== 0
-            ? available[(index + step + available.length) % available.length]
-            : undefined;
-    if (!next) return;
-    event.preventDefault();
-    onChange(next);
-    event.currentTarget
-      .querySelector<HTMLElement>(`[data-section="${next}"]`)
-      ?.focus();
-  };
-  return (
-    <div
-      role="tablist"
-      aria-label="Account settings"
-      className={s.sections}
-      onKeyDown={onKeyDown}
-    >
-      {ACCOUNT_SECTIONS.map((section) => {
-        const isSelected = section === current;
-        const isDisabled = locked && section !== "account";
-        return (
-          <button
-            key={section}
-            type="button"
-            role="tab"
-            id={`${id}-tab-${section}`}
-            data-section={section}
-            className={s.section}
-            aria-selected={isSelected}
-            aria-controls={`${id}-panel`}
-            aria-disabled={isDisabled || undefined}
-            tabIndex={isSelected ? 0 : -1}
-            onClick={() => {
-              if (!isDisabled) onChange(section);
-            }}
-          >
-            {isSelected && (
-              <motion.span
-                layoutId={`${id}-plate`}
-                className={s.sectionPlate}
-                transition={{
-                  duration: m.duration.marker,
-                  ease: m.ease.travel,
-                }}
-              />
-            )}
-            <span className={s.sectionLabel}>{SECTION_LABEL[section]}</span>
-          </button>
-        );
-      })}
-    </div>
-  );
-}
-
 /**
  * Account settings: Profile, Patreon, Billing & purchases and Account. Each
  * change saves by itself from its own small dialog, so there is no Save here.
@@ -579,10 +498,14 @@ export function AccountSettingsDialog({
     >
       <div className={s.layout} data-account-settings={current}>
         <div className={s.columns}>
-          <Sections
+          <SectionTabs
             id={id}
+            label="Account settings"
+            sections={ACCOUNT_SECTIONS}
+            labels={SECTION_LABEL}
             current={current}
-            locked={isDeleting || !ready}
+            // Once deletion is requested, only Account stays available.
+            isDisabled={(next) => (isDeleting || !ready) && next !== "account"}
             onChange={onSectionChange}
           />
           <div className={s.divider} />

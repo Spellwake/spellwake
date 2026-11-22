@@ -33,6 +33,10 @@ import {
   type CosmeticView,
 } from "../routes/cosmetics/CosmeticsDialog";
 import { DefaultSettingsDialog } from "../routes/cosmetics/DefaultSettingsDialog";
+import {
+  AGREEMENT_SECTIONS,
+  CommunityAgreementDialog,
+} from "../routes/agreement/CommunityAgreementDialog";
 
 /**
  * Account settings and a player's profile open over whatever screen the
@@ -43,6 +47,13 @@ import { DefaultSettingsDialog } from "../routes/cosmetics/DefaultSettingsDialog
 const section = parseAsStringLiteral(ACCOUNT_SECTIONS);
 
 const cosmeticView = parseAsStringLiteral(COSMETIC_VIEWS);
+const agreementSection = parseAsStringLiteral(AGREEMENT_SECTIONS);
+
+/** Opens the Community agreement at Our promise. `?agreement=` names the section. */
+export function useOpenAgreement(): () => void {
+  const [, setSection] = useQueryState("agreement", agreementSection);
+  return () => void setSection("promise");
+}
 
 /** Opens Cosmetics at Your cosmetics, and Default settings. */
 export function useOpenCosmetics(): {
@@ -157,9 +168,21 @@ export function AccountOverlays({
     "defaults",
     parseAsBoolean,
   );
+  const [agreement, setAgreement] = useQueryState(
+    "agreement",
+    agreementSection,
+  );
   const isPreview = useAccount().state.status === "unconfigured";
   return (
     <>
+      {agreement && (
+        <CommunityAgreementDialog
+          returnFocusRef={accountButton}
+          section={agreement}
+          onSectionChange={(next) => void setAgreement(next)}
+          onClose={() => void setAgreement(null)}
+        />
+      )}
       {open && (
         <AccountSettings
           returnFocusRef={accountButton}

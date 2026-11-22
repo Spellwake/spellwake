@@ -15,6 +15,7 @@ import { motionLanguage as m } from "../../lib/motion";
 import { PackOpening } from "./PackOpening";
 import { PackWrapper } from "./PackWrapper";
 import * as s from "./packs.css";
+import * as cards from "../cards/cards.css";
 
 const ALL_SETS = "All sets";
 const STAGGERED_TILES = 8;
@@ -149,9 +150,13 @@ export function PacksPage({ source }: { source: PacksSource }): ReactElement {
                       product={pack.product}
                       setCode={pack.setCode}
                     />
+                    {/* The same count badge the Cards screen puts on a card. */}
+                    <span className={cards.count} aria-hidden="true">
+                      ×{pack.available}
+                    </span>
                   </span>
                   <h2 className={s.setName}>{pack.setName}</h2>
-                  <p className={s.owned}>{packsLabel(pack.available)}</p>
+                  <p className={s.srOnly}>{packsLabel(pack.available)}</p>
                   <span className={s.openButton}>
                     <ActionButton
                       treatment="compact-form"

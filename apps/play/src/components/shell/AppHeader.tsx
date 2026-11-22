@@ -11,6 +11,7 @@ import { Link, useNavigate } from "react-router-dom";
 import {
   ChevronDown,
   CircleUserRound,
+  Handshake,
   LogOut,
   MessageSquare,
   Palette,
@@ -34,7 +35,12 @@ const SIGN_OUT = "sign-out";
 const VIEW_PROFILE = "view-profile";
 const COSMETICS = "cosmetics";
 const DEFAULTS = "default-settings";
-/** The account menu, as approved: identity, cosmetics, defaults, then Sign out apart. */
+const AGREEMENT = "community-agreement";
+/**
+ * The account menu, as approved: identity, cosmetics, defaults, then Sign out
+ * apart. The Community agreement was added on the owner's request, apart
+ * from the account's own settings.
+ */
 const accountCommands = (
   username: string | null,
   canSignOut: boolean,
@@ -52,6 +58,12 @@ const accountCommands = (
     dividerBefore: true,
   },
   { id: DEFAULTS, label: "Default settings", leading: <Settings /> },
+  {
+    id: AGREEMENT,
+    label: "Community agreement",
+    leading: <Handshake />,
+    dividerBefore: true,
+  },
   // Offered only where there is an account to leave.
   ...(canSignOut
     ? [
@@ -135,6 +147,7 @@ export function AppHeader({
   onViewProfile,
   onOpenCosmetics,
   onOpenDefaults,
+  onOpenAgreement,
   onToggleMessages,
   isMessagesOpen,
   messagesRef,
@@ -152,6 +165,7 @@ export function AppHeader({
   onViewProfile: () => void;
   onOpenCosmetics: () => void;
   onOpenDefaults: () => void;
+  onOpenAgreement: () => void;
   /** Opens or closes Messages under its button. */
   onToggleMessages: () => void;
   isMessagesOpen: boolean;
@@ -193,6 +207,7 @@ export function AppHeader({
             else if (command === VIEW_PROFILE) onViewProfile();
             else if (command === COSMETICS) onOpenCosmetics();
             else if (command === DEFAULTS) onOpenDefaults();
+            else if (command === AGREEMENT) onOpenAgreement();
             else void navigate(command);
           }}
           trigger={

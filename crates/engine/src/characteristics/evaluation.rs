@@ -546,12 +546,11 @@ pub(crate) fn evaluate(
         }
     }
     // Graveyard grants use each source's final controller and active ability roster.
-    let encore_grants =
-        objects
-            .values()
-            .filter(|o| o.zone == ObjectZone::Battlefield)
-            .flat_map(|source| {
-                source
+    let encore_grants = objects
+        .values()
+        .filter(|o| o.zone == ObjectZone::Battlefield)
+        .flat_map(|source| {
+            source
                     .printed_text
                     .continuous
                     .iter()
@@ -584,8 +583,8 @@ pub(crate) fn evaluate(
                         })
                         .flatten()
                     })
-            })
-            .collect::<Vec<_>>();
+        })
+        .collect::<Vec<_>>();
     for (controller, subtype, grant) in encore_grants {
         for recipient in objects.values_mut().filter(|o| {
             o.zone == ObjectZone::Graveyard(controller)
