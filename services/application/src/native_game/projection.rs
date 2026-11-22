@@ -1822,11 +1822,11 @@ impl Projection<'_, '_> {
         self.objects
             .iter()
             .find(|value| &value.handle == handle)
-            .and_then(|value| match &value.identity {
+            .map(|value| match &value.identity {
                 PlayerObjectIdentity::Known {
                     characteristics, ..
-                } => Some(characteristics.name.clone()),
-                PlayerObjectIdentity::Concealed {} => Some("Face-down card".into()),
+                } => characteristics.name.clone(),
+                PlayerObjectIdentity::Concealed {} => "Face-down card".into(),
             })
             .ok_or(NativeProjectionError::HiddenReference)
     }

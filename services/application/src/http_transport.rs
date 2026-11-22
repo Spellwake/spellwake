@@ -60,13 +60,13 @@ fn pooled_client(
         .join()
         .map_err(|_| BackendError::Configuration)?
         .map_err(|_| BackendError::Configuration)?;
-    if let Ok(mut guard) = client_pool().lock() {
-        if let Some((_, evicted)) = guard.push(pool_key, created.clone()) {
-            // Drop any evicted blocking client off the caller thread so Tokio never panics.
-            let _ = std::thread::Builder::new()
-                .name("http-pool-drop".into())
-                .spawn(move || drop(evicted));
-        }
+    if let Ok(mut guard) = client_pool().lock()
+        && let Some((_, evicted)) = guard.push(pool_key, created.clone())
+    {
+        // Drop any evicted blocking client off the caller thread so Tokio never panics.
+        let _ = std::thread::Builder::new()
+            .name("http-pool-drop".into())
+            .spawn(move || drop(evicted));
     }
     Ok(created)
 }

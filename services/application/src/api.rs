@@ -292,9 +292,11 @@ fn configured_limit(name: &str, default: usize) -> usize {
         .unwrap_or(default)
 }
 
+type RateLimitBuckets = HashMap<(String, bool), (f64, Instant)>;
+
 #[derive(Clone)]
 struct RateLimiter {
-    buckets: Arc<Mutex<HashMap<(String, bool), (f64, Instant)>>>,
+    buckets: Arc<Mutex<RateLimitBuckets>>,
     general_per_min: f64,
     unauth_per_min: f64,
 }

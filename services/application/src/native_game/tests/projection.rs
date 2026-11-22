@@ -19,6 +19,10 @@ mod ninja;
 mod stored_view;
 
 #[derive(Clone, PartialEq, Eq)]
+#[allow(
+    clippy::large_enum_variant,
+    reason = "The short-lived projection fixture captures exact value inputs for comparison."
+)]
 enum DisplayCall {
     Object(GameObject, Program),
     Ability(GameObject, ObjectCharacteristics, NativeAbilityReference),

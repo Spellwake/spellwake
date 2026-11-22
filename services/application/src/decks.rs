@@ -170,6 +170,10 @@ impl ChangeDeckSettings {
     rename_all = "snake_case",
     deny_unknown_fields
 )]
+#[allow(
+    clippy::large_enum_variant,
+    reason = "Keep the existing value constructors used by command recovery."
+)]
 pub enum DeckCommand {
     Create(CreateDeck),
     Save(SaveDeck),

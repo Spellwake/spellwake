@@ -52,6 +52,10 @@ fn relay_rpc(
     }
 }
 
+#[allow(
+    clippy::result_large_err,
+    reason = "Return the existing Axum rejection directly so route handlers preserve its response."
+)]
 async fn parse_json_body<T: serde::de::DeserializeOwned>(
     request: Request,
     max_bytes: usize,

@@ -106,12 +106,11 @@ impl NativeGameRuntime {
 
     /// Broadcast a newly committed revision to all active stream subscribers for this game.
     pub(crate) fn notify_game(&self, game_id: Uuid, revision: u64) {
-        if let Ok(mut guard) = self.revisions.lock() {
-            if let Some(tx) = guard.get(&game_id) {
-                if tx.send(revision).is_err() {
-                    guard.remove(&game_id);
-                }
-            }
+        if let Ok(mut guard) = self.revisions.lock()
+            && let Some(tx) = guard.get(&game_id)
+            && tx.send(revision).is_err()
+        {
+            guard.remove(&game_id);
         }
     }
 
