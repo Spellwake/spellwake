@@ -472,6 +472,7 @@ fn original_werewolf_upkeeps_count_the_spells_of_each_player() {
 }
 
 #[test]
+#[ignore = "requires dated Oracle source and creature vocabulary"]
 fn original_transform_choices_reveal_without_moving_and_use_starting_life() {
     use spellwake_engine::{
         activated::ActivatedAbilityId,

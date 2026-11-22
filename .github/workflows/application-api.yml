@@ -45,6 +45,8 @@ jobs:
       - run: cargo fmt --manifest-path services/application/Cargo.toml --all --check
       - run: cargo clippy --locked --manifest-path services/application/Cargo.toml --workspace --all-targets -- -D warnings
       - run: cargo test --locked --manifest-path services/application/Cargo.toml --workspace
+        env:
+          RUST_MIN_STACK: "67108864"
       - name: Start an isolated PostgreSQL test container
         shell: bash
         run: |
@@ -59,6 +61,8 @@ jobs:
           done
           exit 1
       - run: python3 services/application/tools/test_database.py
+        env:
+          RUST_MIN_STACK: "67108864"
       - name: Stop the job's PostgreSQL container
         if: always()
         run: |

@@ -1547,6 +1547,7 @@ fn resolve_set_spell(state: &GameState, price: &[(ManaType, i64)], name: &str) -
 }
 
 #[test]
+#[ignore = "requires dated Oracle source and creature vocabulary"]
 fn increasing_confusion_pays_for_x_when_cast_with_flashback() {
     let (inventory, vocabulary) = dated_sources();
     let id = inventory
@@ -1614,6 +1615,7 @@ fn increasing_confusion_pays_for_x_when_cast_with_flashback() {
 }
 
 #[test]
+#[ignore = "requires dated Oracle source and creature vocabulary"]
 fn innistrad_moonmist_orders_transforms_in_one_event() {
     let (inventory, vocabulary) = dated_sources();
     let requested = [
@@ -1693,6 +1695,7 @@ fn innistrad_moonmist_orders_transforms_in_one_event() {
 }
 
 #[test]
+#[ignore = "requires dated Oracle source and creature vocabulary"]
 fn innistrad_sudden_disappearance_returns_only_exiled_cards_to_their_owners() {
     let (inventory, vocabulary) = dated_sources();
     let oracle = inventory
@@ -1765,6 +1768,7 @@ fn innistrad_sudden_disappearance_returns_only_exiled_cards_to_their_owners() {
 }
 
 #[test]
+#[ignore = "requires dated Oracle source and creature vocabulary"]
 fn innistrad_snapcaster_uses_the_granted_cost_even_with_printed_flashback() {
     let (inventory, vocabulary) = dated_sources();
     let oracle = |name: &str| {
@@ -1835,6 +1839,7 @@ fn innistrad_snapcaster_uses_the_granted_cost_even_with_printed_flashback() {
 }
 
 #[test]
+#[ignore = "requires dated Oracle source and creature vocabulary"]
 fn innistrad_ghost_quarter_offers_its_search_even_when_the_target_survives() {
     let (inventory, vocabulary) = dated_sources();
     let names = ["Ghost Quarter", "Forest"];
@@ -1920,6 +1925,7 @@ fn innistrad_ghost_quarter_offers_its_search_even_when_the_target_survives() {
 }
 
 #[test]
+#[ignore = "requires dated Oracle source and creature vocabulary"]
 fn innistrad_spiteful_shadows_uses_the_dead_creatures_controller() {
     let (inventory, vocabulary) = dated_sources();
     let oracle = inventory
@@ -1991,6 +1997,7 @@ fn innistrad_spiteful_shadows_uses_the_dead_creatures_controller() {
 }
 
 #[test]
+#[ignore = "requires dated Oracle source and creature vocabulary"]
 fn innistrad_flayer_damage_is_dealt_by_the_creature_that_entered() {
     let (inventory, vocabulary) = dated_sources();
     let oracle = inventory
@@ -2051,6 +2058,7 @@ fn innistrad_flayer_damage_is_dealt_by_the_creature_that_entered() {
 }
 
 #[test]
+#[ignore = "requires dated Oracle source and creature vocabulary"]
 fn innistrad_fiend_hunter_has_independent_entry_and_leave_triggers() {
     let (inventory, vocabulary) = dated_sources();
     let oracle = inventory
@@ -2127,6 +2135,7 @@ fn innistrad_fiend_hunter_has_independent_entry_and_leave_triggers() {
 }
 
 #[test]
+#[ignore = "requires dated Oracle source and creature vocabulary"]
 fn innistrad_tree_exchanges_life_and_sets_only_toughness_in_one_event() {
     let (inventory, vocabulary) = dated_sources();
     let oracle = inventory
@@ -2205,6 +2214,7 @@ fn innistrad_tree_exchanges_life_and_sets_only_toughness_in_one_event() {
 }
 
 #[test]
+#[ignore = "requires dated Oracle source and creature vocabulary"]
 fn innistrad_loyal_cathar_enters_on_its_back_face_under_its_last_controllers_control() {
     let (inventory, vocabulary) = dated_sources();
     let oracle = inventory
@@ -2258,6 +2268,7 @@ fn innistrad_loyal_cathar_enters_on_its_back_face_under_its_last_controllers_con
 }
 
 #[test]
+#[ignore = "requires dated Oracle source and creature vocabulary"]
 fn innistrad_entry_counters_use_the_relevant_battlefield_and_graveyard() {
     let (inventory, vocabulary) = dated_sources();
     let find = |name| {
@@ -2350,6 +2361,7 @@ fn innistrad_entry_counters_use_the_relevant_battlefield_and_graveyard() {
 }
 
 #[test]
+#[ignore = "requires dated Oracle source and creature vocabulary"]
 fn innistrad_altar_mana_works_for_flashback_and_rejects_hand_casts() {
     use spellwake_engine::mana::{
         ManaAbilityId, ManaAbilityRef, ManaRestriction, RestrictedManaSpend,
@@ -2435,6 +2447,7 @@ fn innistrad_altar_mana_works_for_flashback_and_rejects_hand_casts() {
 }
 
 #[test]
+#[ignore = "requires dated Oracle source and creature vocabulary"]
 fn innistrad_soul_seizer_transforms_attaches_and_controls_the_target() {
     let (inventory, vocabulary) = dated_sources();
     let oracle = inventory
@@ -2505,6 +2518,7 @@ fn innistrad_soul_seizer_transforms_attaches_and_controls_the_target() {
 }
 
 #[test]
+#[ignore = "requires dated Oracle source and creature vocabulary"]
 fn innistrad_essence_of_the_wild_applies_to_creature_cards_and_tokens() {
     let (inventory, vocabulary) = dated_sources();
     let find = |name| {
@@ -2582,6 +2596,7 @@ fn innistrad_essence_of_the_wild_applies_to_creature_cards_and_tokens() {
 }
 
 #[test]
+#[ignore = "requires dated Oracle source and creature vocabulary"]
 fn innistrad_ravager_still_damages_its_creature_target_after_the_planeswalker_leaves() {
     let (inventory, vocabulary) = dated_sources();
     let find = |prefix: &str| {
@@ -2670,6 +2685,7 @@ fn innistrad_ravager_still_damages_its_creature_target_after_the_planeswalker_le
 }
 
 #[test]
+#[ignore = "requires dated Oracle source and creature vocabulary"]
 fn innistrad_curse_searches_share_entry_and_keep_the_right_player_and_names() {
     let (inventory, vocabulary) = dated_sources();
     let find = |name| {
@@ -2781,6 +2797,7 @@ fn innistrad_curse_searches_share_entry_and_keep_the_right_player_and_names() {
 }
 
 #[test]
+#[ignore = "requires dated Oracle source and creature vocabulary"]
 fn innistrad_divine_reckoning_lets_each_player_keep_one_creature() {
     let (inventory, vocabulary) = dated_sources();
     let oracle = inventory
@@ -2837,6 +2854,7 @@ fn innistrad_divine_reckoning_lets_each_player_keep_one_creature() {
 }
 
 #[test]
+#[ignore = "requires dated Oracle source and creature vocabulary"]
 fn innistrad_cellar_door_moves_the_bottom_card_and_checks_the_moved_card() {
     let (inventory, vocabulary) = dated_sources();
     let oracle = inventory
@@ -2910,6 +2928,7 @@ fn innistrad_cellar_door_moves_the_bottom_card_and_checks_the_moved_card() {
 }
 
 #[test]
+#[ignore = "requires dated Oracle source and creature vocabulary"]
 fn innistrad_trepanation_blade_counts_the_revealed_land_and_moves_the_same_cards() {
     let (inventory, vocabulary) = dated_sources();
     let oracle = inventory
@@ -3009,6 +3028,7 @@ fn innistrad_trepanation_blade_counts_the_revealed_land_and_moves_the_same_cards
 }
 
 #[test]
+#[ignore = "requires dated Oracle source and creature vocabulary"]
 fn innistrad_graveyard_clauses_use_distinct_targets_and_order_cards_at_resolution() {
     use spellwake_engine::program::CardType;
 
@@ -3121,6 +3141,7 @@ fn innistrad_graveyard_clauses_use_distinct_targets_and_order_cards_at_resolutio
 }
 
 #[test]
+#[ignore = "requires dated Oracle source and creature vocabulary"]
 fn innistrad_targeted_shuffle_moves_only_the_legal_cards_and_can_shuffle_none() {
     let (inventory, vocabulary) = dated_sources();
     let oracle = inventory
@@ -3199,6 +3220,7 @@ fn innistrad_targeted_shuffle_moves_only_the_legal_cards_and_can_shuffle_none() 
 }
 
 #[test]
+#[ignore = "requires dated Oracle source and creature vocabulary"]
 fn innistrad_seance_copies_an_exiled_creature_with_an_added_subtype_until_end_step() {
     let (inventory, vocabulary) = dated_sources();
     let oracle = inventory
@@ -3295,6 +3317,7 @@ fn innistrad_seance_copies_an_exiled_creature_with_an_added_subtype_until_end_st
 }
 
 #[test]
+#[ignore = "requires dated Oracle source and creature vocabulary"]
 fn innistrad_morbid_search_offers_the_same_land_for_hand_or_battlefield() {
     let (inventory, vocabulary) = dated_sources();
     let oracle = inventory
@@ -3383,6 +3406,7 @@ fn innistrad_morbid_search_offers_the_same_land_for_hand_or_battlefield() {
 }
 
 #[test]
+#[ignore = "requires dated Oracle source and creature vocabulary"]
 fn innistrad_activation_uses_the_exiled_creatures_own_mana_cost_and_copiable_values() {
     use spellwake_engine::mana::{HybridAlternative, HybridSymbol};
 
@@ -3463,6 +3487,7 @@ fn innistrad_activation_uses_the_exiled_creatures_own_mana_cost_and_copiable_val
 }
 
 #[test]
+#[ignore = "requires dated Oracle source and creature vocabulary"]
 fn innistrad_zone_restriction_keeps_the_exact_graveyard_card_and_blocks_flashback() {
     use spellwake_engine::program::ObjectFilter;
 
@@ -3558,6 +3583,7 @@ fn innistrad_zone_restriction_keeps_the_exact_graveyard_card_and_blocks_flashbac
 }
 
 #[test]
+#[ignore = "requires dated Oracle source and creature vocabulary"]
 fn innistrad_named_counters_fund_the_library_choice_from_the_paid_count() {
     use spellwake_engine::effects::CounterKind;
 
@@ -3676,6 +3702,7 @@ fn innistrad_named_counters_fund_the_library_choice_from_the_paid_count() {
 }
 
 #[test]
+#[ignore = "requires dated Oracle source and creature vocabulary"]
 fn innistrad_study_counters_pay_for_one_return_batch_from_both_graveyards() {
     use spellwake_engine::{
         effects::CounterKind,
@@ -3846,6 +3873,7 @@ fn innistrad_study_counters_pay_for_one_return_batch_from_both_graveyards() {
 }
 
 #[test]
+#[ignore = "requires dated Oracle source and creature vocabulary"]
 fn innistrad_counter_sized_tokens_track_the_source_and_retain_its_last_count() {
     let (inventory, vocabulary) = dated_sources();
     let oracle = inventory
@@ -3928,6 +3956,7 @@ fn innistrad_counter_sized_tokens_track_the_source_and_retain_its_last_count() {
 }
 
 #[test]
+#[ignore = "requires dated Oracle source and creature vocabulary"]
 fn innistrad_kindred_look_keeps_the_private_cohort_and_uses_the_last_host() {
     let (inventory, vocabulary) = dated_sources();
     let oracle = inventory
@@ -4039,6 +4068,7 @@ fn innistrad_kindred_look_keeps_the_private_cohort_and_uses_the_last_host() {
 }
 
 #[test]
+#[ignore = "requires dated Oracle source and creature vocabulary"]
 fn innistrad_equipment_grant_pays_with_the_equipment_and_deals_damage_as_that_source() {
     let (inventory, vocabulary) = dated_sources();
     let oracle = inventory
@@ -4121,6 +4151,7 @@ fn innistrad_equipment_grant_pays_with_the_equipment_and_deals_damage_as_that_so
 }
 
 #[test]
+#[ignore = "requires dated Oracle source and creature vocabulary"]
 fn innistrad_attached_player_damage_is_a_resolution_choice() {
     let (inventory, vocabulary) = dated_sources();
     let oracle = inventory
@@ -4228,6 +4259,7 @@ fn innistrad_attached_player_damage_is_a_resolution_choice() {
 }
 
 #[test]
+#[ignore = "requires dated Oracle source and creature vocabulary"]
 fn innistrad_permanent_partition_uses_two_choosers_and_one_sacrifice_event() {
     let (inventory, vocabulary) = dated_sources();
     let oracle = inventory
@@ -4340,6 +4372,7 @@ fn innistrad_permanent_partition_uses_two_choosers_and_one_sacrifice_event() {
 }
 
 #[test]
+#[ignore = "requires dated Oracle source and creature vocabulary"]
 fn innistrad_destruction_returns_only_cards_actually_put_into_graveyards() {
     let (inventory, vocabulary) = dated_sources();
     let oracle = inventory
@@ -4427,6 +4460,7 @@ fn innistrad_destruction_returns_only_cards_actually_put_into_graveyards() {
 }
 
 #[test]
+#[ignore = "requires dated Oracle source and creature vocabulary"]
 fn innistrad_exiled_hand_card_can_be_played_by_the_ability_controller_after_cleanup() {
     let (inventory, vocabulary) = dated_sources();
     let oracle = inventory
@@ -4503,6 +4537,7 @@ fn innistrad_exiled_hand_card_can_be_played_by_the_ability_controller_after_clea
 }
 
 #[test]
+#[ignore = "requires dated Oracle source and creature vocabulary"]
 fn innistrad_empty_draw_victory_ends_the_resolving_instruction_immediately() {
     let (inventory, vocabulary) = dated_sources();
     let oracle = inventory
@@ -4570,6 +4605,7 @@ fn innistrad_empty_draw_victory_ends_the_resolving_instruction_immediately() {
 }
 
 #[test]
+#[ignore = "requires dated Oracle source and creature vocabulary"]
 fn innistrad_fateful_protection_uses_one_color_for_the_player_and_current_permanents() {
     use spellwake_engine::program::DamageGroup;
     let (inventory, vocabulary) = dated_sources();
@@ -4721,6 +4757,7 @@ fn innistrad_fateful_protection_uses_one_color_for_the_player_and_current_perman
 }
 
 #[test]
+#[ignore = "requires dated Oracle source and creature vocabulary"]
 fn innistrad_source_control_duration_expires_permanently_when_control_changes() {
     let (inventory, vocabulary) = dated_sources();
     let oracle = inventory
@@ -4845,6 +4882,7 @@ fn innistrad_source_control_duration_expires_permanently_when_control_changes() 
 }
 
 #[test]
+#[ignore = "requires dated Oracle source and creature vocabulary"]
 fn innistrad_counter_followup_casts_a_matching_hand_spell_even_if_the_target_survives() {
     let (inventory, vocabulary) = dated_sources();
     let oracle = OracleId::try_from("16de96d0-a58e-42a7-9a13-45358542a246".to_owned()).unwrap();
@@ -4934,6 +4972,7 @@ fn innistrad_counter_followup_casts_a_matching_hand_spell_even_if_the_target_sur
 }
 
 #[test]
+#[ignore = "requires dated Oracle source and creature vocabulary"]
 fn innistrad_source_shuffle_uses_the_owner_and_only_reveals_through_the_match() {
     let (inventory, vocabulary) = dated_sources();
     let oracle = inventory
@@ -5028,6 +5067,7 @@ fn innistrad_source_shuffle_uses_the_owner_and_only_reveals_through_the_match() 
 }
 
 #[test]
+#[ignore = "requires dated Oracle source and creature vocabulary"]
 fn innistrad_low_loyalty_transforms_the_same_permanent_after_sequential_damage() {
     let (inventory, vocabulary) = dated_sources();
     let oracle = inventory
@@ -5111,6 +5151,7 @@ fn innistrad_low_loyalty_transforms_the_same_permanent_after_sequential_damage()
 }
 
 #[test]
+#[ignore = "requires dated Oracle source and creature vocabulary"]
 fn innistrad_each_other_player_can_copy_and_retarget_the_same_departed_spell() {
     use spellwake_engine::effects::CopyTargetChoice;
     let (inventory, vocabulary) = dated_sources();
@@ -5229,6 +5270,7 @@ fn innistrad_each_other_player_can_copy_and_retarget_the_same_departed_spell() {
 }
 
 #[test]
+#[ignore = "requires dated Oracle source and creature vocabulary"]
 fn innistrad_zombie_combat_replaces_unpreventable_damage_and_triggers_once_per_milled_creature() {
     let (inventory, vocabulary) = dated_sources();
     let oracle = inventory
@@ -5345,6 +5387,7 @@ fn innistrad_zombie_combat_replaces_unpreventable_damage_and_triggers_once_per_m
 }
 
 #[test]
+#[ignore = "requires dated Oracle source and creature vocabulary"]
 fn innistrad_a_graveyard_cast_grants_the_exact_cards_abilities_after_the_delayed_trigger() {
     let (inventory, vocabulary) = dated_sources();
     let oracle = inventory
@@ -5473,6 +5516,7 @@ fn innistrad_a_graveyard_cast_grants_the_exact_cards_abilities_after_the_delayed
 }
 
 #[test]
+#[ignore = "requires dated Oracle source and creature vocabulary"]
 fn innistrad_nonland_name_choice_blocks_that_spell_until_the_source_leaves() {
     use spellwake_contracts::names::{EnglishCardName, ObjectNames};
     use spellwake_engine::land::{CardNameIndex, EntryChoice};
@@ -5567,6 +5611,7 @@ fn innistrad_nonland_name_choice_blocks_that_spell_until_the_source_leaves() {
 }
 
 #[test]
+#[ignore = "requires dated Oracle source and creature vocabulary"]
 fn innistrad_equipment_unattaches_transforms_and_grows_after_a_player_leaves() {
     let (inventory, vocabulary) = dated_sources();
     let oracle = inventory
