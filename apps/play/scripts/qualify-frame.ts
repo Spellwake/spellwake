@@ -89,7 +89,10 @@ type Case = {
     | "prediction-calendar"
     /** League: Standings scrolled to your row, and a player's profile from it. */
     | "league-scrolled"
-    | "league-profile";
+    | "league-profile"
+    /** The match: another seat's board, and the whole table. */
+    | "match-opponent"
+    | "match-overview";
 };
 
 const viewports: Viewport[] = [
@@ -326,6 +329,16 @@ const cases: Case[] = [
       ].map((state) => at(probe(state), "supply-vote")),
     ];
   }),
+  // The match table on every screen: your board, another seat's, and the whole table.
+  ...viewports.flatMap((viewport): Case[] =>
+    ([undefined, "match-opponent", "match-overview"] as const).map((state) => ({
+      viewport,
+      art: "none",
+      decks: "six",
+      path: "/match",
+      ...(state ? { state } : {}),
+    })),
+  ),
   // League on every screen, both sections, then its formats and states.
   ...viewports.flatMap((viewport): Case[] =>
     ["/league/season", "/league/standings"].map((path) => ({
@@ -989,7 +1002,9 @@ function inspect({
       !control.closest("[inert]") &&
       control.tagName !== "INPUT" &&
       !control.closest("[role=region]") &&
-      !control.closest("[data-frame=dock]")
+      !control.closest("[data-frame=dock]") &&
+      // Cards on a table overlap by design: a fanned hand, a squeezed row, a pile.
+      !control.closest("[data-match-table]")
     );
   });
   for (const [index, first] of fixed.entries())
@@ -1208,6 +1223,16 @@ async function run(browser: Browser, test: Case): Promise<Finding[]> {
       .getByRole("heading", { name: /Supply (vote|results)/ })
       .waitFor();
     await page.waitForTimeout(900);
+  }
+  if (state === "match-opponent") {
+    await page.getByRole("button", { name: "View Alex’s board" }).click();
+    await page.locator('[data-match-table="seat"]').waitFor();
+    await page.waitForTimeout(1200);
+  }
+  if (state === "match-overview") {
+    await page.getByRole("button", { name: "View the whole table" }).click();
+    await page.locator('[data-match-table="overview"]').waitFor();
+    await page.waitForTimeout(1200);
   }
   if (state === "league-scrolled") {
     await page
