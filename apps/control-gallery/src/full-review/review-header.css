@@ -1,0 +1,8 @@
+.sw-review-header{height:76px;width:100%;box-sizing:border-box;padding:0 30px;display:flex;align-items:center;gap:26px;color:#f6e9d3;font:26px/1 Baskerville,Georgia,serif;background:linear-gradient(110deg,#080d13ee,#0b0e16e6);border-bottom:1px solid #99857266;position:relative;z-index:1}
+.sw-review-wordmark{font-size:20px;padding-right:16px;border-right:1px solid #a18b6d44}
+.sw-review-header nav{display:flex;gap:26px;height:100%;margin-right:auto}
+.sw-review-header button{border:0;background:transparent;color:inherit;font:inherit;cursor:pointer;display:inline-flex;align-items:center;justify-content:center;padding:0 12px;position:relative}
+.sw-review-header nav button[aria-current]::after{content:"";height:2px;background:linear-gradient(90deg,transparent,#dfc18b,transparent);position:absolute;bottom:0;inset-inline:0}
+.sw-review-header nav button[aria-current]::before{content:"";position:absolute;bottom:-3px;left:50%;width:8px;height:8px;background:#f2d8a9;rotate:45deg}
+.sw-review-header .sw-review-balance,.sw-review-header .sw-review-person{display:flex;align-items:center;gap:12px}
+.sw-review-balance img{width:33px;height:33px}

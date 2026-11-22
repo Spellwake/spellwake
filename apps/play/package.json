@@ -10,11 +10,34 @@
     "check": "tsc --noEmit"
   },
   "dependencies": {
+    "@spellwake/application-contracts": "workspace:*",
+    "@spellwake/booster-pack": "workspace:*",
+    "@spellwake/deck-box": "workspace:*",
+    "@spellwake/ui": "workspace:*",
+    "@supabase/supabase-js": "2.118.0",
+    "@tanstack/react-query": "5.105.1",
     "@tauri-apps/api": "2.12.4",
-    "spellwake-renderer-benchmark": "workspace:*"
+    "@tauri-apps/plugin-deep-link": "2.6.3",
+    "@tauri-apps/plugin-dialog": "2.8.4",
+    "@tauri-apps/plugin-fs": "2.7.1",
+    "@tauri-apps/plugin-opener": "2.7.2",
+    "@vanilla-extract/css": "1.21.3",
+    "@vanilla-extract/dynamic": "2.1.5",
+    "jotai": "^2.0.0",
+    "lucide-react": "1.66.0",
+    "motion": "12.42.2",
+    "nuqs": "2.10.2",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0",
+    "react-router-dom": "7.18.5",
+    "spellwake-renderer-benchmark": "workspace:*",
+    "zod": "4.6.7"
   },
   "devDependencies": {
     "@types/bun": "latest",
+    "@vanilla-extract/vite-plugin": "5.2.6",
+    "@vitejs/plugin-react": "latest",
+    "postcss": "8.5.32",
     "vite": "8.3.5"
   }
 }

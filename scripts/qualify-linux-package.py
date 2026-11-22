@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import base64
+import http.client
 import json
 import os
 import subprocess
@@ -46,11 +47,22 @@ class NativeSession:
     ) -> object:
         return self.request(method, f"/session/{self.session_id}{path}", data)
 
+    def read_command(
+        self, method: str, path: str, data: dict[str, object] | None = None
+    ) -> object:
+        """Retry a dropped connection only for a read-only WebDriver probe."""
+        for delay in (0.25, 0.5):
+            try:
+                return self.command(method, path, data)
+            except http.client.RemoteDisconnected:
+                time.sleep(delay)
+        return self.command(method, path, data)
+
     def evaluate(self, script: str) -> object:
-        return self.command("POST", "/execute/sync", {"script": script, "args": []})
+        return self.read_command("POST", "/execute/sync", {"script": script, "args": []})
 
     def screenshot(self, path: Path) -> None:
-        encoded = self.command("GET", "/screenshot")
+        encoded = self.read_command("GET", "/screenshot")
         if not isinstance(encoded, str):
             raise TypeError("WebDriver did not return an image")
         png = base64.b64decode(encoded, validate=True)

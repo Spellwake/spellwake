@@ -1,0 +1,85 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1062" height="1482" viewBox="0 0 1062 1482">
+  <title>Blank extended-art trigger frame</title>
+  <defs>
+    <linearGradient id="ivory-stock" x1="0" y1="0" x2="1" y2=".18" gradientUnits="objectBoundingBox">
+      <stop stop-color="#bdb198"/><stop offset=".06" stop-color="#e8dcc3"/>
+      <stop offset=".25" stop-color="#d9cdb6"/><stop offset=".51" stop-color="#f2ead9"/>
+      <stop offset=".81" stop-color="#ded2ba"/><stop offset="1" stop-color="#ebdfc7"/>
+    </linearGradient>
+    <linearGradient id="silver-rim" x2=".05" y2="1" gradientUnits="objectBoundingBox">
+      <stop stop-color="#fffaf0"/><stop offset=".13" stop-color="#ece6da"/>
+      <stop offset=".55" stop-color="#a49e92"/><stop offset=".78" stop-color="#c8c2b6"/>
+      <stop offset=".92" stop-color="#fffdf6"/><stop offset="1" stop-color="#b7b0a5"/>
+    </linearGradient>
+    <linearGradient id="name-paper" x2="1" y2=".48" gradientUnits="objectBoundingBox">
+      <stop stop-color="#e8dfce"/><stop offset=".34" stop-color="#f2eddf"/>
+      <stop offset=".65" stop-color="#ebe4d7"/><stop offset="1" stop-color="#e4dbca"/>
+    </linearGradient>
+    <linearGradient id="dark-enamel" x1="0" y1="0" x2=".05" y2="1" gradientUnits="objectBoundingBox">
+      <stop stop-color="#131312" stop-opacity=".52"/><stop offset=".28" stop-color="#101010" stop-opacity=".77"/>
+      <stop offset=".72" stop-color="#0a0a0a" stop-opacity=".97"/><stop offset="1" stop-color="#070807"/>
+    </linearGradient>
+    <linearGradient id="rule-paper" x1="0" y1=".2" x2="1" y2=".8" gradientUnits="objectBoundingBox">
+      <stop stop-color="#f3eee5"/><stop offset=".34" stop-color="#eae4d9"/>
+      <stop offset=".59" stop-color="#f4f0e7"/><stop offset="1" stop-color="#eae4d9"/>
+    </linearGradient>
+    <linearGradient id="type-rim" x1="0" y1="0" x2="0" y2="1">
+      <stop stop-color="#aaa49b" stop-opacity=".48"/><stop offset=".52" stop-color="#999386" stop-opacity=".64"/>
+      <stop offset="1" stop-color="#f7f3e9"/>
+    </linearGradient>
+    <!-- These stops control how much of the artwork shows through the black stock. -->
+    <linearGradient id="stock-fade" gradientUnits="userSpaceOnUse" x1="0" y1="108" x2="0" y2="1124">
+      <stop stop-color="#040404"/>
+      <stop offset=".017" stop-color="#040404" stop-opacity=".93"/>
+      <stop offset=".041" stop-color="#040404" stop-opacity=".55"/>
+      <stop offset=".068" stop-color="#040404" stop-opacity=".13"/>
+      <stop offset=".087" stop-color="#040404" stop-opacity="0"/>
+      <stop offset=".88" stop-color="#040404" stop-opacity="0"/>
+      <stop offset=".907" stop-color="#040404" stop-opacity=".08"/>
+      <stop offset=".934" stop-color="#040404" stop-opacity=".29"/>
+      <stop offset=".962" stop-color="#040404" stop-opacity=".73"/>
+      <stop offset=".988" stop-color="#040404" stop-opacity=".97"/>
+      <stop offset="1" stop-color="#040404"/>
+    </linearGradient>
+    <linearGradient id="upper-rail-fade" gradientUnits="userSpaceOnUse" x1="0" y1="105" x2="0" y2="158">
+      <stop stop-color="white"/><stop offset=".3" stop-color="white" stop-opacity=".95"/>
+      <stop offset="1" stop-color="white" stop-opacity="0"/>
+    </linearGradient>
+    <linearGradient id="lower-rail-fade" gradientUnits="userSpaceOnUse" x1="0" y1="1032" x2="0" y2="1117">
+      <stop stop-color="white" stop-opacity="0"/><stop offset=".43" stop-color="white" stop-opacity=".12"/>
+      <stop offset=".78" stop-color="white" stop-opacity=".8"/><stop offset="1" stop-color="white"/>
+    </linearGradient>
+    <mask id="upper-rail-mask" maskUnits="userSpaceOnUse" x="0" y="0" width="1062" height="166">
+      <rect width="1062" height="166" fill="url(#upper-rail-fade)"/>
+    </mask>
+    <mask id="lower-rail-mask" maskUnits="userSpaceOnUse" x="0" y="1029" width="1062" height="306">
+      <rect y="1029" width="1062" height="306" fill="url(#lower-rail-fade)"/>
+    </mask>
+  </defs>
+  <!-- The central field is open to the artwork layer below. -->
+  <g id="stock">
+    <rect width="1062" height="1482" rx="37" fill="url(#stock-fade)"/>
+  </g>
+  <g id="nameplate">
+    <path mask="url(#upper-rail-mask)" fill="url(#ivory-stock)" stroke="#f4eddd" stroke-width="2" d="M63 42H999Q1020 44 1020 66V125Q1019 150 996 161H65Q42 149 42 126V64Q42 47 63 42Z"/>
+    <path fill="#141413" d="M77 58H986C1017 80 1020 142 989 165H73C45 145 46 83 77 58Z"/>
+    <path fill="url(#silver-rim)" d="M77 60H985C1013 82 1016 139 988 162H75C49 141 50 85 77 60Z"/>
+    <path fill="#282724" d="M77 68H986C1008 87 1010 135 984 156H77C54 136 56 89 77 68Z"/>
+    <path fill="url(#name-paper)" d="M80 72H982C1003 90 1004 132 980 150H81C61 132 61 91 80 72Z"/>
+    <path fill="#fffdf5" opacity=".72" d="M80 72H982L985 77H78Z"/>
+    <path fill="#5f5a52" opacity=".65" d="M78 146H984L980 151H81Z"/>
+  </g>
+  <g id="rules-box">
+    <path mask="url(#lower-rail-mask)" fill="url(#ivory-stock)" d="M67 1033H995Q1018 1050 1020 1086V1273Q1020 1306 994 1330H69Q42 1307 42 1274V1087Q43 1050 67 1033Z"/>
+    <path fill="#181817" d="M64 1096H998V1354Q998 1387 969 1387H95Q64 1387 64 1355Z"/>
+    <path fill="url(#silver-rim)" d="M69 1104H994V1354Q994 1383 967 1383H96Q69 1383 69 1355Z"/>
+    <path fill="#faf6ed" d="M73 1114H990V1352Q990 1379 965 1379H99Q73 1379 73 1353Z"/>
+    <path fill="url(#rule-paper)" d="M78 1118H985V1350Q985 1372 963 1372H101Q78 1372 78 1351Z"/>
+    <path fill="#77736a" opacity=".58" d="M78 1118H985V1350Q985 1367 973 1370Q982 1366 982 1349V1124H80Z"/>
+  </g>
+  <g id="type-bar">
+    <path fill="url(#type-rim)" fill-rule="evenodd" d="M76 1029H985C1013 1048 1017 1094 991 1119H70C46 1094 50 1048 76 1029Z M79 1034H982C1006 1052 1010 1090 986 1113H75C54 1091 56 1053 79 1034Z"/>
+    <path fill="url(#dark-enamel)" d="M79 1034H982C1006 1052 1010 1090 986 1113H75C54 1091 56 1053 79 1034Z"/>
+    <path fill="#fcf8ee" d="M73 1112H989L985 1117H77Z"/>
+  </g>
+</svg>

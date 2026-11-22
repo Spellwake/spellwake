@@ -1,0 +1,61 @@
+.sw-combat-assignment {
+  position: absolute;
+  inset: 0;
+  z-index: 6;
+  background: linear-gradient(#09100fc9, #091511c9);
+  overflow: auto;
+}
+.sw-combat-assignment form {
+  padding-top: 6.4%;
+  min-height: 0;
+}
+.sw-divide-total {
+  position: absolute;
+  top: 213px;
+  left: 50%;
+  transform: translateX(-50%);
+  pointer-events: none;
+  z-index: 4;
+}
+.sw-divide-source,
+.sw-damage-stack {
+  position: absolute;
+  right: 130px;
+  top: 275px;
+  width: 220px;
+  z-index: 3;
+}
+.sw-divide-source {
+  pointer-events: none;
+}
+.sw-damage-stack {
+  right: 150px;
+  top: 240px;
+}
+.sw-damage-actions {
+  position: absolute;
+  right: 25px;
+  top: 197px;
+  z-index: 5;
+  min-width: 260px;
+}
+.sw-damage-point {
+  position: absolute;
+  z-index: 5;
+  transform: translate(-50%, -50%);
+}
+.sw-damage-point::after {
+  content: "";
+  position: absolute;
+  pointer-events: none;
+  top: 100%;
+  left: 50%;
+  width: 1.5px;
+  height: 68px;
+  background: #cccca7;
+}
+.sw-damage-point[data-player="true"]::after {
+  top: auto;
+  bottom: 100%;
+  height: 29px;
+}
