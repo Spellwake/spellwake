@@ -18,7 +18,7 @@ export function logoAssetSource(): string {
     root,
     process.env.SPELLWAKE_RELEASE_ASSETS === "true"
       ? ".release-assets/logo.svg"
-      : "apps/ui-workshop/public/logo.svg",
+      : "assets/logo/spellwake-gold-two-dots.svg",
   );
 }
 
