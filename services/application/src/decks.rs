@@ -97,6 +97,14 @@ pub struct DeckSettings {
     pub format_id: Uuid,
     #[serde(deserialize_with = "crate::provider_json::object")]
     pub appearance: crate::cosmetics::AppearanceSelection,
+    /// The card in the deck shown on its box. Only a change may name one; the
+    /// observed baseline never does, and omitting it keeps the current card.
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "crate::identifiers::present_uuid"
+    )]
+    pub face_card_id: Option<Uuid>,
 }
 
 impl DeckSettings {
@@ -138,6 +146,10 @@ impl ChangeDeckSettings {
         if self.request_id.is_nil() || self.deck_id.is_nil() {
             return Err("invalid deck settings identity");
         }
+        // The face card is a preference outside the compared baseline.
+        if self.expected.face_card_id.is_some() {
+            return Err("invalid deck settings");
+        }
         self.expected.validate()?;
         self.settings.validate()?;
         if serde_json::to_vec(self)
@@ -162,7 +174,8 @@ impl ChangeDeckSettings {
 pub enum DeckCommand {
     Create(CreateDeck),
     Save(SaveDeck),
-    Settings(ChangeDeckSettings),
+    // Boxed: with its optional face card the settings change is far larger than the others.
+    Settings(Box<ChangeDeckSettings>),
 }
 impl<'de> Deserialize<'de> for DeckCommand {
     fn deserialize<D: serde::Deserializer<'de>>(input: D) -> Result<Self, D::Error> {
@@ -170,7 +183,9 @@ impl<'de> Deserialize<'de> for DeckCommand {
         match wire.kind.as_str() {
             "create" => wire.payload().map(Self::Create),
             "save" => wire.payload().map(Self::Save),
-            "settings" => wire.payload().map(Self::Settings),
+            "settings" => wire
+                .payload()
+                .map(|command| Self::Settings(Box::new(command))),
             _ => Err(serde::de::Error::custom("invalid command kind")),
         }
     }
@@ -323,6 +338,37 @@ mod tests {
         let mut spoof = payload;
         spoof["command"]["settings"]["appearance"]["owned"] = json!(true);
         assert!(serde_json::from_value::<DeckCommand>(spoof).is_err());
+    }
+
+    #[test]
+    fn a_face_card_may_only_be_named_by_the_change_and_never_as_null() {
+        let settings = json!({"name":"Deck","mode":"collection","formatId":Uuid::new_v4(),"appearance":{"backId":Uuid::new_v4(),"sleeveId":Uuid::new_v4(),"diceId":Uuid::new_v4(),"playmatId":null}});
+        let face = Uuid::new_v4();
+        let mut change = settings.clone();
+        change["faceCardId"] = json!(face);
+        let payload = json!({"kind":"settings","command":{"requestId":Uuid::new_v4(),"deckId":Uuid::new_v4(),"expected":settings,"settings":change}});
+        let parsed: DeckCommand = serde_json::from_value(payload.clone()).unwrap();
+        assert!(parsed.validate().is_ok());
+        let DeckCommand::Settings(command) = &parsed else {
+            panic!("expected a settings command");
+        };
+        assert_eq!(command.settings.face_card_id, Some(face));
+        // The stored body round-trips exactly, so recovery terms stay bound.
+        assert_eq!(serde_json::to_value(&parsed).unwrap(), payload);
+        // Without a face card the original wire shape is unchanged.
+        let plain = json!({"kind":"settings","command":{"requestId":Uuid::new_v4(),"deckId":Uuid::new_v4(),"expected":settings,"settings":settings}});
+        let parsed_plain: DeckCommand = serde_json::from_value(plain.clone()).unwrap();
+        assert_eq!(serde_json::to_value(&parsed_plain).unwrap(), plain);
+        let mut baseline = payload.clone();
+        baseline["command"]["expected"]["faceCardId"] = json!(face);
+        let parsed_baseline: DeckCommand = serde_json::from_value(baseline).unwrap();
+        assert!(parsed_baseline.validate().is_err());
+        let mut null = payload.clone();
+        null["command"]["settings"]["faceCardId"] = json!(null);
+        assert!(serde_json::from_value::<DeckCommand>(null).is_err());
+        let mut nil = payload;
+        nil["command"]["settings"]["faceCardId"] = json!(Uuid::nil());
+        assert!(serde_json::from_value::<DeckCommand>(nil).is_err());
     }
 
     #[test]
