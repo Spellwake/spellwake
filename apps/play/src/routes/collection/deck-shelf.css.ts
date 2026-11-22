@@ -227,8 +227,9 @@ export const caption = style({
   gap: "12px",
   minHeight: "64px",
   marginTop: "-10px",
-  padding: "0 8px",
-  selectors: { [phone]: { padding: 0, minHeight: "58px" } },
+  // Inset towards the box, so the name and Play sit with it, not at the tile's edges.
+  padding: "0 28px",
+  selectors: { [phone]: { padding: "0 6px", minHeight: "58px" } },
 });
 export const title = style({ minWidth: 0, flex: 1 });
 export const name = style({
