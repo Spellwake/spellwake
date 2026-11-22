@@ -47,12 +47,7 @@ const named = process.env.SPELLWAKE_PREVIEW_WORKSPACE;
 const workspace = resolve(named ?? resolve(import.meta.dir, "../../.."));
 const assetRoot = resolve(workspace, "assets");
 const applicationAssets = [
-  {
-    from: named
-      ? resolve(assetRoot, "logo/spellwake-gold-two-dots.svg")
-      : logoAssetSource(),
-    to: "logo.svg",
-  },
+  { from: logoAssetSource(), to: "logo.svg" },
   { from: resolve(assetRoot, "ui-study/coin.svg"), to: "coin.svg" },
   {
     from: resolve(assetRoot, "deck-box/models/deck-box-leather.glb"),
