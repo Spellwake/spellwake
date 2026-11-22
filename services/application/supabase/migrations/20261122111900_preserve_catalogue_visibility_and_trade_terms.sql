@@ -21,7 +21,7 @@ LANGUAGE sql STABLE SECURITY DEFINER SET search_path = '' AS $$
     'externalPrintingRef', p.external_printing_ref,
     'rarity', p.rarity,
     'finish', p.finish,
-    'imageUrl', CASE WHEN p.image_ref ~ '^https://[^[:space:]]+$' THEN p.image_ref END,
+    'imageUrl', app.printing_art_url(p.image_ref,p.external_printing_ref),
     'setId', s.id,
     'setName', s.name,
     'setCode', COALESCE(NULLIF(btrim(s.code), ''), s.external_set_ref),
@@ -212,7 +212,7 @@ BEGIN
       app.market_listing_view(l, actor) || jsonb_build_object(
         'displayName', COALESCE(cd.name, bp.name, ad.currency_key, 'Item'),
         'rarity', p.rarity,
-        'imageUrl', CASE WHEN p.image_ref ~ '^https://[^[:space:]]+$' THEN p.image_ref END
+        'imageUrl', app.printing_art_url(p.image_ref,p.external_printing_ref)
       ) AS view_json
     FROM app.market_listing l
     JOIN app.asset_definition ad ON ad.id = l.asset_definition_id

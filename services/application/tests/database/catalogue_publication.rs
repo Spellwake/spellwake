@@ -195,6 +195,12 @@ async fn catalogue_batches_remain_hidden_until_atomic_release_and_exact_receipts
         metadata["data"]["definitions"][0]["definitionId"],
         json!(definition)
     );
+    assert!(
+        metadata["data"]["printings"][0]["imageUrl"]
+            .as_str()
+            .unwrap()
+            .starts_with("https://cards.scryfall.io/art_crop/front/")
+    );
     let search: Value = observer.query_one(search_query, &[&name]).await?.get(0);
     assert_eq!(search["data"]["items"].as_array().unwrap().len(), 4);
     assert_eq!(finish(&client, publication).await?, publication);
@@ -245,10 +251,10 @@ async fn catalogue_batches_remain_hidden_until_atomic_release_and_exact_receipts
     assert_eq!(visible_sets["data"]["items"].as_array().unwrap().len(), 1);
     client.batch_execute("RESET ROLE").await?;
     let (faces, images, programs): (i64, i64, i64) = {
-        let row=client.query_one("SELECT (SELECT count(*) FROM app.card_face f JOIN app.card_definition_revision r ON r.id=f.definition_revision_id WHERE r.catalogue_receipt_id=$1), (SELECT count(*) FROM app.printing WHERE catalogue_receipt_id=$1 AND image_ref LIKE 'https://cards.scryfall.io/art_crop/front/%'), (SELECT count(*) FROM app.release_card_program p JOIN app.card_definition_revision r ON r.id=p.definition_revision_id WHERE r.catalogue_receipt_id=$1)",&[&publication]).await?;
+        let row=client.query_one("SELECT (SELECT count(*) FROM app.card_face f JOIN app.card_definition_revision r ON r.id=f.definition_revision_id WHERE r.catalogue_receipt_id=$1), (SELECT count(*) FROM app.printing WHERE catalogue_receipt_id=$1 AND image_ref IS NOT NULL), (SELECT count(*) FROM app.release_card_program p JOIN app.card_definition_revision r ON r.id=p.definition_revision_id WHERE r.catalogue_receipt_id=$1)",&[&publication]).await?;
         (row.get(0), row.get(1), row.get(2))
     };
-    assert_eq!((faces, images, programs), (1, 4, 0));
+    assert_eq!((faces, images, programs), (1, 0, 0));
     assert!(client.execute("UPDATE app.card_definition_revision SET source_metadata='{}' WHERE catalogue_receipt_id=$1",&[&publication]).await.is_err());
     assert!(client.execute("UPDATE app.card_face SET name='Changed' WHERE definition_revision_id IN (SELECT id FROM app.card_definition_revision WHERE catalogue_receipt_id=$1)",&[&publication]).await.is_err());
     Ok(())

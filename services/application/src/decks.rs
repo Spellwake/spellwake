@@ -177,7 +177,8 @@ impl ChangeDeckSettings {
 pub enum DeckCommand {
     Create(CreateDeck),
     Save(SaveDeck),
-    Settings(ChangeDeckSettings),
+    // Boxed: with its optional face card the settings change is far larger than the others.
+    Settings(Box<ChangeDeckSettings>),
 }
 impl<'de> Deserialize<'de> for DeckCommand {
     fn deserialize<D: serde::Deserializer<'de>>(input: D) -> Result<Self, D::Error> {
@@ -185,7 +186,9 @@ impl<'de> Deserialize<'de> for DeckCommand {
         match wire.kind.as_str() {
             "create" => wire.payload().map(Self::Create),
             "save" => wire.payload().map(Self::Save),
-            "settings" => wire.payload().map(Self::Settings),
+            "settings" => wire
+                .payload()
+                .map(|command| Self::Settings(Box::new(command))),
             _ => Err(serde::de::Error::custom("invalid command kind")),
         }
     }

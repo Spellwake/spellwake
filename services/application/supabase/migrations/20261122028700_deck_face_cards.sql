@@ -1,8 +1,8 @@
 -- Deck face cards and official card art.
 --
--- 1. Every printing's image reference is its official Scryfall art crop, built
---    from the Scryfall card ID the catalogue already stores. New printings get
---    it as they are published; existing ones are filled here.
+-- 1. A printing with no image of its own shows its official Scryfall art crop,
+--    built when it is read from the Scryfall card ID the catalogue already
+--    stores. Stored image references are never changed.
 -- 2. A deck may name a face card: a card in its current contents whose art is
 --    shown on the deck box. Settings may set it (optional, so existing clients
 --    are unchanged); saving contents keeps it valid, defaulting to the first
@@ -31,22 +31,6 @@ LANGUAGE sql IMMUTABLE SET search_path='' AS $$
 $$;
 REVOKE ALL ON FUNCTION app.scryfall_image_url(text,text) FROM PUBLIC,anon,authenticated,service_role,supabase_auth_admin;
 
--- Publication inserts printings without an image; give each its art crop.
-CREATE FUNCTION app.fill_printing_image() RETURNS trigger
-LANGUAGE plpgsql SET search_path='' AS $$
-BEGIN
- IF NEW.image_ref IS NULL OR length(btrim(NEW.image_ref))=0 THEN
-  NEW.image_ref:=app.scryfall_image_url(NEW.external_printing_ref,'art_crop');
- END IF;
- RETURN NEW;
-END $$;
-REVOKE ALL ON FUNCTION app.fill_printing_image() FROM PUBLIC,anon,authenticated,service_role,supabase_auth_admin;
-CREATE TRIGGER printing_official_image BEFORE INSERT OR UPDATE OF image_ref ON app.printing
- FOR EACH ROW EXECUTE FUNCTION app.fill_printing_image();
-
-UPDATE app.printing SET image_ref=app.scryfall_image_url(external_printing_ref,'art_crop')
- WHERE image_ref IS NULL OR length(btrim(image_ref))=0;
-
 -- ---------------------------------------------------------------------------
 -- 2. The stored face card
 -- ---------------------------------------------------------------------------
@@ -64,16 +48,29 @@ UPDATE app.deck d SET face_definition_id=(
   c.name,e.definition_id LIMIT 1)
 WHERE d.face_definition_id IS NULL AND d.current_revision_id IS NOT NULL;
 
--- A card's official art: the printing's art when it has a web address, else
--- the card's English nonfoil printing. Image references stay private columns;
--- this returns only public https links, never private storage references.
+-- A printing's official art: its own image when that is a web address, or,
+-- when it has no image at all, the Scryfall art crop for its card ID. A private
+-- storage reference yields nothing, so it is never revealed or replaced.
+CREATE FUNCTION app.printing_art_url(p_image text,p_external text) RETURNS text
+LANGUAGE sql IMMUTABLE SET search_path='' AS $$
+ SELECT CASE
+  WHEN p_image ~ '^https://[^[:space:]]+$' THEN p_image
+  WHEN p_image IS NULL OR length(btrim(p_image))=0 THEN app.scryfall_image_url(p_external,'art_crop')
+ END
+$$;
+REVOKE ALL ON FUNCTION app.printing_art_url(text,text) FROM PUBLIC,anon,authenticated,service_role,supabase_auth_admin;
+
+-- A card's official art: the chosen printing's art, else the card's English
+-- nonfoil printing with art. Image references stay private columns; this
+-- returns only public https links, never private storage references.
 CREATE FUNCTION app.card_art_url(p_definition uuid,p_printing uuid) RETURNS text
 LANGUAGE sql STABLE SECURITY DEFINER SET search_path='' AS $$
  SELECT coalesce(
-  (SELECT p.image_ref FROM app.printing p WHERE p.id=p_printing AND p.definition_id=p_definition
-   AND p.image_ref ~ '^https://[^[:space:]]+$'),
-  (SELECT p.image_ref FROM app.printing p WHERE p.definition_id=p_definition
-   AND p.image_ref ~ '^https://[^[:space:]]+$'
+  (SELECT app.printing_art_url(p.image_ref,p.external_printing_ref) FROM app.printing p
+   WHERE p.id=p_printing AND p.definition_id=p_definition),
+  (SELECT art.url FROM app.printing p
+   CROSS JOIN LATERAL (SELECT app.printing_art_url(p.image_ref,p.external_printing_ref) AS url) art
+   WHERE p.definition_id=p_definition AND art.url IS NOT NULL
    ORDER BY (p.language='en') DESC,(p.finish='nonfoil') DESC,p.id LIMIT 1))
 $$;
 REVOKE ALL ON FUNCTION app.card_art_url(uuid,uuid) FROM PUBLIC,anon,authenticated,service_role,supabase_auth_admin;

@@ -13,7 +13,7 @@ async fn session(c: &Client, subject: Uuid) -> Result<Uuid, tokio_postgres::Erro
 }
 async fn printing(c: &Client, definition: Uuid) -> Result<Uuid, tokio_postgres::Error> {
     let set:Uuid=c.query_one("INSERT INTO app.card_set(external_set_ref,name) VALUES($1,'Profile fixture') RETURNING id",&[&Uuid::new_v4().to_string()]).await?.get(0);
-    Ok(c.query_one("INSERT INTO app.printing(definition_id,set_id,external_printing_ref,rarity,finish,image_ref) VALUES($1,$2,$3,'common','nonfoil','fixture:reference-only') RETURNING id",&[&definition,&set,&format!("profile-fixture-{}", Uuid::new_v4())]).await?.get(0))
+    Ok(c.query_one("INSERT INTO app.printing(definition_id,set_id,external_printing_ref,rarity,finish,image_ref) VALUES($1,$2,$3,'common','nonfoil','fixture:reference-only') RETURNING id",&[&definition,&set,&Uuid::new_v4().to_string()]).await?.get(0))
 }
 async fn change(
     c: &Client,
