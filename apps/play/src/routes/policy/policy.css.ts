@@ -3,13 +3,27 @@ import { controlTokens as t } from "@spellwake/ui/tokens";
 import { shellTokens } from "../../components/shell/shell.css";
 
 /**
- * Community agreement: reading text in the Account settings layout. Lengths
+ * Policy & Commitment: reading text in the Account settings layout. Lengths
  * are in the same design-pixel scale as Account settings.
  */
 const STACKED = "settings (inline-size < 46rem)";
 const rule = "#a698774c";
 const sans = '"Albert Sans", system-ui, sans-serif';
 const gold = "#e9c983";
+
+/** Slightly wider section rail so longer policy titles stay on one line. */
+export const columns = style({
+  flex: 1,
+  minWidth: 0,
+  display: "grid",
+  gridTemplateColumns: "332px 1px minmax(0, 1fr)",
+  "@container": {
+    [STACKED]: {
+      gridTemplateColumns: "minmax(0, 1fr)",
+      gridTemplateRows: "auto 1px minmax(0, 1fr)",
+    },
+  },
+});
 
 /** The reading column scrolls by itself, so the sections stay in place. */
 export const reading = style({
@@ -72,6 +86,10 @@ export const promise = style({
   color: "#e7dccb",
   "@container": { [STACKED]: { fontSize: "21px" } },
 });
+export const itemTitle = style({
+  fontWeight: 600,
+  color: shellTokens.ink,
+});
 /** A small gold diamond, the shell's marker, instead of a bullet. */
 globalStyle(`${promise}::before`, {
   content: '""',
@@ -88,12 +106,23 @@ globalStyle(`${promise}::before`, {
 export const pledge = style({
   margin: "40px 0 8px",
   padding: "26px 30px",
-  border: `1px solid #b9a67d66`,
+  border: "1px solid #b9a67d66",
   borderRadius: "10px",
   background: "linear-gradient(100deg,#37322a99,#2a272266)",
   font: `italic 30px/1.35 ${shellTokens.serif}`,
   color: shellTokens.active,
   "@container": { [STACKED]: { fontSize: "25px", padding: "20px 22px" } },
+});
+
+/** A quiet note marking copy that still awaits launch details and legal review. */
+export const draftNote = style({
+  margin: "34px 0 8px",
+  paddingTop: "20px",
+  borderTop: `1px solid ${rule}`,
+  maxWidth: "36em",
+  font: `italic 21px/1.45 ${sans}`,
+  color: "#c8bba5",
+  "@container": { [STACKED]: { fontSize: "19px" } },
 });
 
 /** A notice whose wording is set by someone else, quoted as given. */
