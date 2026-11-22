@@ -1,0 +1,277 @@
+//! Resolving a targetless activated ability changes its original source (CR 113.7a).
+use super::*;
+use crate::{
+    characteristics::{
+        AbilityChange, PowerToughness, ResolvedDuration, ResolvedPart, ResolvedParts,
+    },
+    occurrence::{EventCause, RulesOccurrence},
+    stack_window::StackEntry,
+};
+impl EffectWindow {
+    pub(super) fn resolve_source_boost(
+        &mut self,
+        entry: &StackEntry,
+        index: usize,
+        stats: Option<PowerToughness>,
+        keywords: BTreeSet<KeywordAbility>,
+        append: &mut RulesJournal,
+    ) -> Result<(), EffectError> {
+        let (StackKind::ActivatedAbility { source } | StackKind::TriggeredAbility { source }) =
+            entry.kind()
+        else {
+            return Err(EffectError::InconsistentProgram);
+        };
+        let id = source.id();
+        if !self
+            .window
+            .cards()
+            .get(id)
+            .is_some_and(|o| o.zone() == ObjectZone::Battlefield)
+        {
+            return Ok(());
+        }
+        self.modify_objects(entry, index, [id].into(), stats, keywords, append)
+    }
+
+    pub(super) fn modify_group(
+        &mut self,
+        entry: &StackEntry,
+        index: usize,
+        group: crate::program::EffectSubject,
+        stats: Option<PowerToughness>,
+        keywords: BTreeSet<KeywordAbility>,
+        append: &mut RulesJournal,
+    ) -> Result<(), EffectError> {
+        let affected = self.effect_group(entry, group)?;
+        if affected.is_empty() {
+            return Ok(());
+        }
+        self.modify_objects(entry, index, affected, stats, keywords, append)
+    }
+
+    pub(super) fn effect_group(
+        &self,
+        entry: &StackEntry,
+        group: crate::program::EffectSubject,
+    ) -> Result<BTreeSet<ObjectId>, EffectError> {
+        use crate::program::EffectSubject;
+        let view = self.evaluated_characteristics()?;
+        match group {
+            EffectSubject::TriggeringAttacker
+            | EffectSubject::TriggeringAttackGroup
+            | EffectSubject::TriggeringTarget => {
+                let binding = self
+                    .execution_bindings(entry.id())
+                    .and_then(|b| b.trigger.as_ref())
+                    .ok_or(EffectError::InconsistentProgram)?;
+                let [cause] = binding.causes.members() else {
+                    return Err(EffectError::InconsistentProgram);
+                };
+                let triggering = match &cause.related {
+                    crate::occurrence::TriggerRelated::AttackedAlone(id)
+                    | crate::occurrence::TriggerRelated::Combatant(id) => std::slice::from_ref(id),
+                    crate::occurrence::TriggerRelated::AttackGroup { creatures, .. } => {
+                        creatures.as_slice()
+                    }
+                    crate::occurrence::TriggerRelated::TargetedPermanent(id) => {
+                        std::slice::from_ref(id)
+                    }
+                    _ => return Err(EffectError::InconsistentProgram),
+                };
+                Ok(view
+                    .objects
+                    .values()
+                    .filter(|p| p.zone == ObjectZone::Battlefield && triggering.contains(&p.object))
+                    .map(|p| p.object)
+                    .collect())
+            }
+            EffectSubject::AbilitySource => Ok(view
+                .objects
+                .values()
+                .filter(|p| {
+                    p.zone == ObjectZone::Battlefield
+                        && matches!(
+                            entry.kind(),
+                            StackKind::TriggeredAbility { source }
+                                | StackKind::ActivatedAbility { source }
+                                if source.id() == p.object
+                        )
+                })
+                .map(|p| p.object)
+                .collect()),
+            EffectSubject::Matching(filter) => {
+                let mut excluded = BTreeSet::new();
+                if let Some(slot) = filter.chosen_type_slot() {
+                    let kind = *self
+                        .resolution_cursor()
+                        .and_then(|cursor| cursor.values.get(&slot))
+                        .ok_or(EffectError::InconsistentProgram)?;
+                    excluded.insert(kind);
+                } else if filter.uses_outside_named_slots()
+                    && let Some(cursor) = self.resolution_cursor()
+                {
+                    excluded.extend(cursor.values.values().copied());
+                }
+                let ability_source = match entry.kind() {
+                    StackKind::TriggeredAbility { source }
+                    | StackKind::ActivatedAbility { source } => Some(source.id()),
+                    _ => None,
+                };
+                Ok(view
+                    .objects
+                    .values()
+                    .filter(|p| {
+                        p.zone == ObjectZone::Battlefield
+                            && self.matches_object_filter(
+                                filter,
+                                p,
+                                entry.controller(),
+                                ability_source,
+                                &excluded,
+                                &view,
+                            )
+                    })
+                    .map(|p| p.object)
+                    .collect())
+            }
+        }
+    }
+
+    pub(super) fn untap_and_control_creatures(
+        &mut self,
+        entry: &StackEntry,
+        index: usize,
+        append: &mut RulesJournal,
+    ) -> Result<(), EffectError> {
+        let before = self.rules_snapshot(None)?;
+        let affected = before
+            .view()
+            .evaluated
+            .objects
+            .values()
+            .filter(|p| p.zone == ObjectZone::Battlefield && p.is_creature())
+            .map(|p| p.object)
+            .collect::<BTreeSet<_>>();
+        if affected.is_empty() {
+            return Ok(());
+        }
+        let tapped = affected
+            .iter()
+            .copied()
+            .filter(|id| self.window.cards().get(*id).and_then(GameObject::tapped) == Some(true))
+            .collect::<Vec<_>>();
+        let cause = EventCause::Instruction {
+            entry: entry.id(),
+            instruction: index,
+        };
+        if !tapped.is_empty() {
+            let (window, changes) = self.window.untap_for_effect(entry.id(), &tapped)?;
+            self.window = window;
+            self.emit_from(cause.clone(), &before, None, append, |_, _, _| {
+                Ok(occurrence_flow::status_occurrences(
+                    changes,
+                    crate::occurrence::StatusReason::Effect,
+                ))
+            })?;
+        }
+        let before = self.rules_snapshot(None)?;
+        let parts = ResolvedParts(vec![
+            ResolvedPart::Control(entry.controller()),
+            ResolvedPart::Abilities(AbilityChange::grant_keywords([KeywordAbility::Haste])),
+        ]);
+        let effect = self.characteristics.add_effect_for_objects(
+            entry.id(),
+            affected,
+            parts,
+            ResolvedDuration::UntilEndOfTurn,
+        )?;
+        self.emit_from(cause, &before, None, append, |old, new, _| {
+            let appearances = occurrence_flow::characteristic_appearance_changes(
+                old,
+                new,
+                effect.affected.iter().copied(),
+            )?;
+            Ok(vec![RulesOccurrence::ContinuousEffectCreated {
+                effect,
+                appearances,
+            }])
+        })
+    }
+
+    pub(super) fn modify_objects(
+        &mut self,
+        entry: &StackEntry,
+        index: usize,
+        affected: BTreeSet<ObjectId>,
+        stats: Option<PowerToughness>,
+        keywords: BTreeSet<KeywordAbility>,
+        append: &mut RulesJournal,
+    ) -> Result<(), EffectError> {
+        let mut parts = Vec::new();
+        if let Some(stats) = stats {
+            parts.push(ResolvedPart::ModifyPT(stats));
+        }
+        if !keywords.is_empty() {
+            parts.push(ResolvedPart::Abilities(AbilityChange::grant_keywords(
+                keywords,
+            )));
+        }
+        self.modify_objects_until_cleanup(entry, index, affected, ResolvedParts(parts), append)
+    }
+
+    pub(super) fn modify_objects_until_cleanup(
+        &mut self,
+        entry: &StackEntry,
+        index: usize,
+        affected: BTreeSet<ObjectId>,
+        parts: ResolvedParts,
+        append: &mut RulesJournal,
+    ) -> Result<(), EffectError> {
+        self.modify_objects_for_duration(
+            entry,
+            index,
+            affected,
+            parts,
+            ResolvedDuration::UntilEndOfTurn,
+            append,
+        )
+    }
+
+    pub(super) fn modify_objects_for_duration(
+        &mut self,
+        entry: &StackEntry,
+        index: usize,
+        affected: BTreeSet<ObjectId>,
+        parts: ResolvedParts,
+        duration: ResolvedDuration,
+        append: &mut RulesJournal,
+    ) -> Result<(), EffectError> {
+        if affected.is_empty() {
+            return Ok(());
+        }
+        let before = self.rules_snapshot(None)?;
+        let effect =
+            self.characteristics
+                .add_effect_for_objects(entry.id(), affected, parts, duration)?;
+        self.emit_from(
+            EventCause::Instruction {
+                entry: entry.id(),
+                instruction: index,
+            },
+            &before,
+            None,
+            append,
+            |previous, current, _| {
+                let appearances = occurrence_flow::characteristic_appearance_changes(
+                    previous,
+                    current,
+                    effect.affected.iter().copied(),
+                )?;
+                Ok(vec![RulesOccurrence::ContinuousEffectCreated {
+                    effect,
+                    appearances,
+                }])
+            },
+        )
+    }
+}

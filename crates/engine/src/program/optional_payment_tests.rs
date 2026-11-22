@@ -1,5 +1,6 @@
 //! Definition admission and forward-flow checks; these do not qualify runtime rules.
 use super::*;
+use crate::life::LifeChangeKind;
 use crate::{
     characteristics::{ResolvedPartSpec, ResolvedPartsSpec},
     mana::ManaType,
@@ -31,9 +32,11 @@ fn choose(slot: u16) -> Instruction {
 }
 fn read(slot: u16) -> Instruction {
     Instruction::DrawController {
-        amount: InstructionAmount::ControlledPermanentsOfChosenType {
-            chosen: CreatureTypeSlot::new(slot),
-        },
+        amount: crate::program::ValueExpr::count_battlefield(
+            crate::program::ObjectFilter::any()
+                .controlled()
+                .of_chosen_slot(CreatureTypeSlot::new(slot)),
+        ),
     }
 }
 fn check(target: BodyTarget, instructions: Vec<Instruction>) -> Result<(), DefinitionError> {
@@ -41,7 +44,7 @@ fn check(target: BodyTarget, instructions: Vec<Instruction>) -> Result<(), Defin
         .validate(&creature_types::selected_vocabulary().unwrap())
 }
 fn triggered(
-    condition: OrdinaryCondition,
+    condition: TriggerSpec,
     grouping: TriggerGrouping,
     instructions: Vec<Instruction>,
 ) -> Program {
@@ -95,11 +98,11 @@ fn optional_accepts_each_primitive_with_its_real_operand_contract() {
         ),
         (BodyTarget::SinglePermanent, Instruction::ReturnToOwnersHand),
         (
-            BodyTarget::SingleSpell(SpellTargetFilter::AnySpell),
+            BodyTarget::SingleSpell(crate::program::SpellFilter::any()),
             Instruction::CounterSpell,
         ),
         (
-            BodyTarget::SingleSpell(SpellTargetFilter::CopyableInstructionSpell),
+            BodyTarget::SingleSpell(crate::program::SpellFilter::copyable_instruction()),
             Instruction::CopySpell,
         ),
         (
@@ -128,7 +131,7 @@ fn optional_accepts_each_primitive_with_its_real_operand_contract() {
         (
             BodyTarget::None,
             Instruction::DrawController {
-                amount: InstructionAmount::Literal(1.into()),
+                amount: crate::program::ValueExpr::Literal(1.into()),
             },
         ),
     ];
@@ -155,9 +158,11 @@ fn optional_rejects_missing_effect_and_each_control_wrapper() {
     );
     let branch = Instruction::BranchIfFalse {
         condition: ResolutionCondition {
-            left: ConditionValue::ControllerLife,
+            left: crate::program::ValueExpr::PlayerStat(
+                crate::program::PlayerStatExpr::ControllerLife,
+            ),
             comparison: Comparison::Equal,
-            right: ConditionValue::Literal(20.into()),
+            right: crate::program::ValueExpr::Literal(20.into()),
         },
         destination: 3,
     };
@@ -190,7 +195,7 @@ fn optional_preserves_the_following_primitives_validation() {
             vec![
                 optional(ResolvingPlayer::Controller),
                 Instruction::DrawController {
-                    amount: InstructionAmount::Literal((-1).into())
+                    amount: crate::program::ValueExpr::Literal((-1).into())
                 }
             ]
         ),
@@ -303,25 +308,28 @@ fn related_player_requires_actual_trigger_context_for_both_instruction_forms() {
 fn each_current_condition_proves_related_participant_only_with_singular_grouping() {
     let vocabulary = creature_types::selected_vocabulary().unwrap();
     let conditions = [
-        OrdinaryCondition::SelfCast,
-        OrdinaryCondition::SpellCast {
-            player: PlayerRelation::Opponent,
-            filter: SpellCastFilter::AnySpell,
-        },
-        OrdinaryCondition::TokenCreated(PlayerRelation::AnyParticipant),
-        OrdinaryCondition::LifeChanged {
-            kind: LifeChangeKind::Gain,
-            player: PlayerRelation::AnyParticipant,
-        },
-        OrdinaryCondition::Enters(ObjectRelation::AnyCreature),
-        OrdinaryCondition::LeavesBattlefield(ObjectRelation::AnyCreature),
-        OrdinaryCondition::Dies(ObjectRelation::AnyCreature),
-        OrdinaryCondition::BecomesTapped(ObjectRelation::SelfObject),
-        OrdinaryCondition::Discarded(PlayerRelation::AnyParticipant),
-        OrdinaryCondition::StepBegan {
-            step: Step::Upkeep,
-            player: PlayerRelation::AnyParticipant,
-        },
+        crate::program::TriggerSpec::self_cast(),
+        crate::program::TriggerSpec::spell_cast(
+            PlayerRelation::Opponent,
+            crate::program::SpellFilter::any(),
+        ),
+        crate::program::TriggerSpec::player_action(
+            PlayerRelation::AnyParticipant,
+            crate::program::PlayerTriggerAction::TokenCreated,
+        ),
+        crate::program::TriggerSpec::life_changed(
+            LifeChangeKind::Gain,
+            PlayerRelation::AnyParticipant,
+        ),
+        crate::program::TriggerSpec::enters(crate::program::ObjectFilter::creature()),
+        crate::program::TriggerSpec::leaves_battlefield(crate::program::ObjectFilter::creature()),
+        crate::program::TriggerSpec::dies(crate::program::ObjectFilter::creature()),
+        crate::program::TriggerSpec::becomes_tapped(crate::program::ObjectFilter::self_object()),
+        crate::program::TriggerSpec::player_action(
+            PlayerRelation::AnyParticipant,
+            crate::program::PlayerTriggerAction::Discarded,
+        ),
+        crate::program::TriggerSpec::step_began(Step::Upkeep, PlayerRelation::AnyParticipant),
     ];
     for condition in conditions {
         for instructions in [
@@ -337,7 +345,8 @@ fn each_current_condition_proves_related_participant_only_with_singular_grouping
                 ),
             ] {
                 assert_eq!(
-                    triggered(condition, grouping, instructions.clone()).validate(&vocabulary),
+                    triggered(condition.clone(), grouping, instructions.clone())
+                        .validate(&vocabulary),
                     expected,
                     "condition {condition:?}, grouping {grouping:?}"
                 );
@@ -353,20 +362,24 @@ fn controller_and_existing_trigger_scalars_keep_together_admission() {
         offer(ResolvingPlayer::Controller, 1, 1),
         Instruction::BranchIfFalse {
             condition: ResolutionCondition {
-                left: ConditionValue::MatchedOccurrences,
+                left: crate::program::ValueExpr::event(
+                    crate::program::EventValueKind::MatchedOccurrences,
+                ),
                 comparison: Comparison::Greater,
-                right: ConditionValue::Literal(0.into()),
+                right: crate::program::ValueExpr::Literal(0.into()),
             },
             destination: 4,
         },
         optional(ResolvingPlayer::Controller),
         Instruction::DrawController {
-            amount: InstructionAmount::MatchedOccurrences,
+            amount: crate::program::ValueExpr::event(
+                crate::program::EventValueKind::MatchedOccurrences,
+            ),
         },
     ];
     assert_eq!(
         triggered(
-            OrdinaryCondition::Dies(ObjectRelation::AnyCreature),
+            crate::program::TriggerSpec::dies(crate::program::ObjectFilter::creature()),
             TriggerGrouping::OneOrMoreTogether,
             instructions
         )
@@ -378,8 +391,8 @@ fn controller_and_existing_trigger_scalars_keep_together_admission() {
 #[test]
 fn spell_controller_requires_single_spell_and_consumes_the_target() {
     for target in [
-        BodyTarget::SingleSpell(SpellTargetFilter::AnySpell),
-        BodyTarget::SingleSpell(SpellTargetFilter::CopyableInstructionSpell),
+        BodyTarget::SingleSpell(crate::program::SpellFilter::any()),
+        BodyTarget::SingleSpell(crate::program::SpellFilter::copyable_instruction()),
     ] {
         assert_eq!(
             check(
@@ -480,7 +493,7 @@ fn unreachable_new_instructions_still_validate_context_syntax_and_cost() {
     );
     assert_eq!(
         check(
-            BodyTarget::SingleSpell(SpellTargetFilter::AnySpell),
+            BodyTarget::SingleSpell(crate::program::SpellFilter::any()),
             vec![
                 Instruction::Jump { destination: 2 },
                 offer(ResolvingPlayer::TargetSpellController, 2, 2)

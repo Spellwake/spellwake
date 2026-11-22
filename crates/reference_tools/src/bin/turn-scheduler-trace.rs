@@ -200,7 +200,7 @@ fn observe(
         scenario,
         label,
         turn: position.number,
-        active: seat(state.execution().window().turn_owner()),
+        active: seat(state.execution().window().active_player()),
         step: step(position.step),
         priority: match state.execution().window().phase() {
             WindowPhase::Priority(PriorityPhase::Ready { holder }) => Some(seat(holder)),

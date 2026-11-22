@@ -35,13 +35,6 @@
     ]
   },
   {
-    "name": "adopt_native_response_wait",
-    "arguments": "p_game uuid, p_checkpoint uuid, p_state text, p_owner text, p_fence numeric, p_runtime text, p_programs text, p_kind text, p_seat uuid, p_remaining uuid[]",
-    "roles": [
-      "service_role"
-    ]
-  },
-  {
     "name": "append_catalogue_batch",
     "arguments": "p_publication uuid, p_sequence integer, p_body text",
     "roles": [
@@ -144,6 +137,13 @@
     "arguments": "p_external text, p_type text, p_capture jsonb, p_delivery timestamp with time zone",
     "roles": [
       "service_role"
+    ]
+  },
+  {
+    "name": "card_art_url",
+    "arguments": "p_definition uuid, p_printing uuid",
+    "roles": [
+      "authenticated"
     ]
   },
   {
@@ -280,13 +280,6 @@
     ]
   },
   {
-    "name": "consume_quest_game_activity",
-    "arguments": "p_game uuid, p_limit integer",
-    "roles": [
-      "service_role"
-    ]
-  },
-  {
     "name": "contact_allowed",
     "arguments": "p_actor uuid, p_other uuid",
     "roles": [
@@ -322,17 +315,10 @@
     ]
   },
   {
-    "name": "deliver_native_between_decision",
-    "arguments": "p_decision uuid, p_basis numeric, p_deadline numeric, p_request uuid, p_seconds integer, p_selected uuid, p_hash text, p_reply text, p_qualification text",
+    "name": "deck_face_card_json",
+    "arguments": "p_revision uuid, p_face uuid",
     "roles": [
-      "service_role"
-    ]
-  },
-  {
-    "name": "deliver_native_match_handoff",
-    "arguments": "p_handoff uuid",
-    "roles": [
-      "service_role"
+      "authenticated"
     ]
   },
   {
@@ -394,13 +380,6 @@
   {
     "name": "finish_stripe_evidence_expiry",
     "arguments": "p_event uuid",
-    "roles": [
-      "service_role"
-    ]
-  },
-  {
-    "name": "generate_daily_quest",
-    "arguments": "p_actor uuid, p_definition uuid, p_day text, p_request uuid",
     "roles": [
       "service_role"
     ]
@@ -490,27 +469,6 @@
     ]
   },
   {
-    "name": "native_opening_controller_choice",
-    "arguments": "p_grant uuid, p_epoch numeric, p_secret_ref text, p_game uuid, p_play_first boolean, p_prior_chooser uuid, p_first_seat uuid",
-    "roles": [
-      "service_role"
-    ]
-  },
-  {
-    "name": "native_opening_human_choice",
-    "arguments": "p_subject uuid, p_session uuid, p_game uuid, p_play_first boolean, p_prior_chooser uuid, p_first_seat uuid",
-    "roles": [
-      "service_role"
-    ]
-  },
-  {
-    "name": "native_opening_player_choice",
-    "arguments": "p_subject uuid, p_session uuid, p_game uuid, p_play_first boolean, p_prior_chooser uuid",
-    "roles": [
-      "service_role"
-    ]
-  },
-  {
     "name": "observe_account_deletion",
     "arguments": "p_account uuid, p_request uuid, p_status_key_hash text",
     "roles": [
@@ -539,13 +497,6 @@
     ]
   },
   {
-    "name": "observe_native_clock_job",
-    "arguments": "p_game uuid, p_basis jsonb, p_owner text, p_request uuid",
-    "roles": [
-      "service_role"
-    ]
-  },
-  {
     "name": "owns_asset_owner",
     "arguments": "p_owner uuid",
     "roles": [
@@ -569,13 +520,6 @@
   {
     "name": "pause_match_between_games",
     "arguments": "p_match uuid, p_expected numeric, p_availability numeric, p_incident_at timestamp with time zone, p_kind text, p_proof text, p_request uuid",
-    "roles": [
-      "service_role"
-    ]
-  },
-  {
-    "name": "pause_native_host_exit",
-    "arguments": "p_instance uuid, p_incident_at timestamp with time zone, p_process integer, p_status text",
     "roles": [
       "service_role"
     ]
@@ -1239,29 +1183,8 @@
     ]
   },
   {
-    "name": "read_native_match_delivery_page",
-    "arguments": "p_owner text, p_lane text, p_after uuid, p_limit integer",
-    "roles": [
-      "service_role"
-    ]
-  },
-  {
     "name": "read_native_match_recovery_work",
     "arguments": "p_after uuid, p_limit integer",
-    "roles": [
-      "service_role"
-    ]
-  },
-  {
-    "name": "read_native_opening_material",
-    "arguments": "p_game uuid",
-    "roles": [
-      "service_role"
-    ]
-  },
-  {
-    "name": "read_native_opening_response_wait",
-    "arguments": "p_game uuid",
     "roles": [
       "service_role"
     ]
@@ -1290,13 +1213,6 @@
   {
     "name": "read_native_recovery_work",
     "arguments": "p_after uuid, p_limit integer",
-    "roles": [
-      "service_role"
-    ]
-  },
-  {
-    "name": "read_native_restore_original",
-    "arguments": "p_game uuid, p_request uuid, p_terms jsonb",
     "roles": [
       "service_role"
     ]
@@ -1484,13 +1400,6 @@
     ]
   },
   {
-    "name": "read_room_game",
-    "arguments": "p_room uuid",
-    "roles": [
-      "authenticated"
-    ]
-  },
-  {
     "name": "read_room_invitation_command",
     "arguments": "p_subject uuid, p_session uuid, p_kind text, p_request uuid, p_target uuid, p_expected numeric, p_token_hash text",
     "roles": [
@@ -1617,13 +1526,6 @@
     ]
   },
   {
-    "name": "register_native_host_watch",
-    "arguments": "p_instance uuid, p_owner text",
-    "roles": [
-      "service_role"
-    ]
-  },
-  {
     "name": "replace_supply_ballot_command",
     "arguments": "p_subject uuid, p_session uuid, p_request uuid, p_season uuid, p_sets uuid[]",
     "roles": [
@@ -1640,13 +1542,6 @@
   {
     "name": "reroll_quest_command",
     "arguments": "p_subject uuid, p_session uuid, p_request uuid, p_assignment uuid",
-    "roles": [
-      "service_role"
-    ]
-  },
-  {
-    "name": "reserve_native_entropy_seed",
-    "arguments": "p_game uuid, p_checkpoint uuid, p_owner text, p_fence numeric",
     "roles": [
       "service_role"
     ]
@@ -1745,13 +1640,6 @@
   {
     "name": "start_room_match",
     "arguments": "p_room uuid, p_expected numeric, p_release uuid, p_legality uuid, p_qualification text, p_inputs jsonb, p_request uuid",
-    "roles": [
-      "service_role"
-    ]
-  },
-  {
-    "name": "start_validated_countdown",
-    "arguments": "p_room uuid, p_expected numeric, p_request uuid",
     "roles": [
       "service_role"
     ]

@@ -161,7 +161,10 @@ pub fn discovery(
         let RulesRecord::TriggerDiscovered(waiting) = record else {
             continue;
         };
-        if waiting.source.object.id() != source || waiting.definition.0 != ability {
+        if waiting.granting_effect.is_some()
+            || waiting.source.object.id() != source
+            || waiting.definition.0 != ability
+        {
             continue;
         }
         for member in waiting.causes.members() {

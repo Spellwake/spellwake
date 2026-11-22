@@ -22,9 +22,8 @@ use spellwake_engine::{
     object_identity::{CardId, ObjectId, ObjectZone},
     occurrence::RulesOccurrence,
     program::{
-        BodyTarget, CardType, CreatureTypeSlot, ExecutableBody, Instruction, InstructionAmount,
-        ObjectRelation, OrdinaryCondition, Program, SpellTargetFilter, TriggeredAbility,
-        TriggeredAbilityId,
+        BodyTarget, CardType, CreatureTypeSlot, ExecutableBody, Instruction, Program,
+        TriggeredAbility, TriggeredAbilityId,
     },
     targets::TargetRef,
 };
@@ -442,7 +441,9 @@ fn triggered_choice_exclusions_use_the_same_rewritten_text_as_the_appearance() {
     p.triggered.push(TriggeredAbility {
         grouping: spellwake_engine::program::TriggerGrouping::EachOccurrence,
         id: TriggeredAbilityId(1),
-        condition: OrdinaryCondition::BecomesTapped(ObjectRelation::SelfObject),
+        condition: spellwake_engine::program::TriggerSpec::becomes_tapped(
+            spellwake_engine::program::ObjectFilter::self_object(),
+        ),
         body: ExecutableBody::new(
             BodyTarget::None,
             vec![
@@ -451,7 +452,7 @@ fn triggered_choice_exclusions_use_the_same_rewritten_text_as_the_appearance() {
                     excluding: subtypes(&v, &["Elf"]),
                 },
                 Instruction::DrawController {
-                    amount: InstructionAmount::Literal(0.into()),
+                    amount: spellwake_engine::program::ValueExpr::Literal(0.into()),
                 },
             ],
         ),
@@ -773,7 +774,9 @@ fn copied_text_spells_choose_independent_words_and_retarget_independent_objects(
             ),
             spell(
                 4,
-                BodyTarget::SingleSpell(SpellTargetFilter::CopyableInstructionSpell),
+                BodyTarget::SingleSpell(
+                    spellwake_engine::program::SpellFilter::copyable_instruction(),
+                ),
                 vec![Instruction::CopySpell],
             ),
         ],
@@ -831,7 +834,9 @@ fn a_trigger_captured_before_the_text_change_keeps_its_original_word_exclusion()
     p.triggered.push(TriggeredAbility {
         grouping: spellwake_engine::program::TriggerGrouping::EachOccurrence,
         id: TriggeredAbilityId(1),
-        condition: OrdinaryCondition::BecomesTapped(ObjectRelation::SelfObject),
+        condition: spellwake_engine::program::TriggerSpec::becomes_tapped(
+            spellwake_engine::program::ObjectFilter::self_object(),
+        ),
         body: ExecutableBody::new(
             BodyTarget::None,
             vec![
@@ -840,7 +845,7 @@ fn a_trigger_captured_before_the_text_change_keeps_its_original_word_exclusion()
                     excluding: subtypes(&v, &["Elf"]),
                 },
                 Instruction::DrawController {
-                    amount: InstructionAmount::Literal(0.into()),
+                    amount: spellwake_engine::program::ValueExpr::Literal(0.into()),
                 },
             ],
         ),

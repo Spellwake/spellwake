@@ -79,12 +79,12 @@ jobs:
       - name: Build locked API, worker and release tool
         run: |
           cargo build --locked --release --manifest-path services/application/Cargo.toml \
-            --bin application_api --bin native_match_worker --bin native_release_candidate
+            --bin application_api --bin qualified_opening_worker --bin unified_release_candidate
       - name: Record Linux binary digests and native runtime identity
         working-directory: services/application/target/release
         shell: bash
         run: |
-          sha256sum application_api native_match_worker native_release_candidate
+          sha256sum application_api qualified_opening_worker unified_release_candidate
           shopt -s nullglob
           manifests=(build/spellwake-application-*/out/native-runtime-inputs.json)
           test "${#manifests[@]}" -eq 1

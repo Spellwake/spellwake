@@ -12,12 +12,22 @@ use reqwest::{
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
 use std::{
+    collections::HashMap,
     error::Error,
     fmt,
     fs::{self, File, OpenOptions},
     io::{self, Read},
     path::Path,
+    sync::{Mutex, OnceLock},
+    time::{Duration, Instant},
 };
+
+const BUCKET_PRIVACY_TTL: Duration = Duration::from_secs(300);
+
+fn verified_buckets() -> &'static Mutex<HashMap<(String, String), Instant>> {
+    static CACHE: OnceLock<Mutex<HashMap<(String, String), Instant>>> = OnceLock::new();
+    CACHE.get_or_init(|| Mutex::new(HashMap::new()))
+}
 use uuid::Uuid;
 
 /// Private accepted source ticket. Each domain validates identity, namespace and state.
@@ -109,6 +119,14 @@ pub(crate) fn private_bucket(backend: &BackendClient, bucket: &str) -> Result<()
     if !bucket_name(bucket) {
         return Err(StorageError::Contract);
     }
+    let cache_key = (backend.origin_str().to_owned(), bucket.to_owned());
+    let now = Instant::now();
+    if let Ok(guard) = verified_buckets().lock()
+        && let Some(&verified_at) = guard.get(&cache_key)
+        && now.saturating_duration_since(verified_at) < BUCKET_PRIVACY_TTL
+    {
+        return Ok(());
+    }
     let response = backend
         .request(
             Method::GET,
@@ -124,6 +142,12 @@ pub(crate) fn private_bucket(backend: &BackendClient, bucket: &str) -> Result<()
         serde_json::from_slice::<Object<BucketMetadata>>(&body).map_err(StorageError::Json)?;
     if meta.id != bucket || meta.public {
         return Err(StorageError::Contract);
+    }
+    if let Ok(mut guard) = verified_buckets().lock() {
+        if guard.len() >= 128 {
+            guard.retain(|_, ts| now.saturating_duration_since(*ts) < BUCKET_PRIVACY_TTL);
+        }
+        guard.insert(cache_key, now);
     }
     Ok(())
 }
@@ -333,7 +357,10 @@ pub(crate) fn retain_file(
         .send();
     let failure = upload_failure(upload);
     if failure.is_some() {
-        eprintln!("private_storage event=upload_ack_unconfirmed");
+        tracing::warn!(
+            event = "upload_ack_unconfirmed",
+            "private storage upload ack unconfirmed"
+        );
     }
     if !verify_file(backend, bucket, key, hash, size, stage)? {
         return Err(failure.unwrap_or(StorageError::Contract));
@@ -350,6 +377,27 @@ pub(crate) fn retain_bytes(
     if existing(backend, bucket, key, bytes)? {
         return Ok(());
     }
+    upload_and_verify_bytes(backend, bucket, key, bytes)
+}
+
+/// A create-only write followed by the same authenticated exact-byte read.
+/// Use for newly generated content, where an existing object is unlikely.
+pub(crate) fn retain_new_bytes(
+    backend: &BackendClient,
+    bucket: &str,
+    key: &str,
+    bytes: &[u8],
+) -> Result<(), StorageError> {
+    private_bucket(backend, bucket)?;
+    upload_and_verify_bytes(backend, bucket, key, bytes)
+}
+
+fn upload_and_verify_bytes(
+    backend: &BackendClient,
+    bucket: &str,
+    key: &str,
+    bytes: &[u8],
+) -> Result<(), StorageError> {
     let sent = backend
         .request(Method::POST, object_url(backend, bucket, key, false)?)?
         .header("Content-Type", "application/json")
@@ -358,7 +406,10 @@ pub(crate) fn retain_bytes(
         .send();
     let failure = upload_failure(sent);
     if failure.is_some() {
-        eprintln!("private_storage event=upload_ack_unconfirmed");
+        tracing::warn!(
+            event = "upload_ack_unconfirmed",
+            "private storage upload ack unconfirmed"
+        );
     }
     if !existing(backend, bucket, key, bytes)? {
         return Err(failure.unwrap_or(StorageError::Contract));
@@ -394,7 +445,10 @@ pub(crate) fn delete_private_object(
         .json(&serde_json::json!({"prefixes":[key]}))
         .send();
     if !attempt.as_ref().is_ok_and(|r| r.status().is_success()) {
-        eprintln!("private_storage event=delete_ack_unconfirmed");
+        tracing::warn!(
+            event = "delete_ack_unconfirmed",
+            "private storage delete ack unconfirmed"
+        );
     }
     let response = backend.request(Method::GET, object)?.send()?;
     if present_object(response)?.is_none() {

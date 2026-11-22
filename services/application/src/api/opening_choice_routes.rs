@@ -29,7 +29,12 @@ pub(super) async fn handle(
         match backend.rpc_object::<ApiResponse<Selection>>("native_opening_human_choice",&json!({
             "p_subject":actor.subject(),"p_session":actor.session(),"p_game":intent.game_id,"p_play_first":intent.play_first,"p_prior_chooser":intent.prior_chooser_seat_id,"p_first_seat":intent.first_seat_id
         })) {
-            Ok(ApiResponse::Success { data }) if data.matches(intent.game_id) => native_delivery_routes::bounded_success(data),
+            Ok(ApiResponse::Success { data }) if data.matches(intent.game_id) => {
+                if let Some(runtime) = &config.native_views {
+                    runtime.notify_game(intent.game_id, 0);
+                }
+                native_delivery_routes::bounded_success(data)
+            }
             Ok(ApiResponse::Fail { data }) if data.len()==1 && data.get("choice").is_some_and(|s|s=="already selected") =>
                 fail(StatusCode::CONFLICT,"choice","already selected"),
             Ok(ApiResponse::Fail { data }) if data.len()==1 && data.get("game").is_some_and(|s|s=="unavailable") =>

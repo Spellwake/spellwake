@@ -38,6 +38,27 @@ fn validate_assignments(
         *total = total.plus(&row.amount);
     }
     for domain in domains {
+        if !domain.trample_lethal().is_empty()
+            && selected.iter().any(|row| {
+                row.source == domain.source()
+                    && matches!(
+                        row.target,
+                        DamageRecipient::Player(_)
+                            | DamageRecipient::Planeswalker(_)
+                            | DamageRecipient::Battle(_)
+                    )
+            })
+        {
+            for (&blocker, minimum) in domain.trample_lethal() {
+                let assigned = selected.iter().find(|row| {
+                    row.source == domain.source()
+                        && row.target == DamageRecipient::Creature(blocker)
+                });
+                if minimum.is_positive() && assigned.is_none_or(|row| row.amount < *minimum) {
+                    return Err(CombatError::InsufficientTrampleAssignment);
+                }
+            }
+        }
         if totals.get(&domain.source()) != Some(domain.power()) {
             return Err(CombatError::IncorrectDamageTotal);
         }
@@ -69,12 +90,47 @@ impl EffectWindow {
         &self,
         evaluated: &EvaluatedCharacteristics,
         actor: SeatId,
+        additional: bool,
     ) -> Result<Vec<DamageAssignmentDomain>, EffectError> {
         let combat = self.combat.as_ref().ok_or(CombatError::InvalidContext)?;
+        let eligible = |source: Combatant| {
+            let early = combat.first_strike_participants();
+            // The second step uses the identity at the first step, even when an ability
+            // was gained or lost during the intervening priority window.
+            let had_first_strike = early.get(&source.object()) == Some(&source);
+            let assigns_this_step = if early.is_empty() {
+                true
+            } else if additional {
+                !had_first_strike
+                    || evaluated
+                        .get(source.object())
+                        .is_some_and(|view| view.has_keyword(KeywordAbility::DoubleStrike))
+            } else {
+                had_first_strike
+            };
+            self.current_damage_combatant(evaluated, source) && assigns_this_step
+        };
         let mut domains = Vec::new();
         for attacker in combat.attackers() {
             let source = attacker.combatant();
-            if source.controller() != actor || !self.current_damage_combatant(evaluated, source) {
+            let defender_present = attacker.defending_planeswalker().is_some()
+                || self.window.participants().contains(&attacker.defender());
+            let blocked_by_banding = crate::combat::controls_opposing_assignment(
+                combat
+                    .blockers()
+                    .filter(|blocker| {
+                        blocker.attackers().contains(&source.object())
+                            && self.current_damage_combatant(evaluated, blocker.combatant())
+                    })
+                    .filter_map(|blocker| evaluated.get(blocker.combatant().object())),
+                &self.name_rules,
+            );
+            let chooser = if blocked_by_banding {
+                attacker.defender()
+            } else {
+                source.controller()
+            };
+            if chooser != actor || !eligible(source) {
                 continue;
             }
             let power = evaluated
@@ -87,41 +143,119 @@ impl EffectWindow {
             if !power.is_positive() {
                 continue;
             }
-            let recipients = match attacker.block_status() {
+            let mut lethal = BTreeMap::new();
+            let mut recipients = Vec::new();
+            match attacker.block_status() {
+                BlockStatus::NotDeclared if !defender_present => continue,
                 BlockStatus::NotDeclared => return Err(CombatError::InvalidContext.into()),
-                // Rule 800.4e leaves damage to a departed defender unassigned.
-                BlockStatus::Unblocked
-                    if !self.window.participants().contains(&attacker.defender()) =>
-                {
-                    continue;
+                BlockStatus::Unblocked => {
+                    if !defender_present {
+                        continue;
+                    }
+                    recipients.push(attacker.defending_planeswalker().map_or(
+                        DamageRecipient::Player(attacker.defender()),
+                        |id| {
+                            if evaluated
+                                .get(id)
+                                .is_some_and(|view| view.has_type(crate::program::CardType::Battle))
+                            {
+                                DamageRecipient::Battle(id)
+                            } else {
+                                DamageRecipient::Planeswalker(id)
+                            }
+                        },
+                    ))
                 }
-                BlockStatus::Unblocked => vec![DamageRecipient::Player(attacker.defender())],
-                BlockStatus::Blocked => combat
-                    .blockers()
-                    .filter(|blocker| {
-                        blocker.attacker() == Some(source.object())
+                BlockStatus::Blocked => {
+                    let current = evaluated
+                        .get(source.object())
+                        .ok_or(CombatError::InvalidContext)?;
+                    let trample = current.has_keyword(KeywordAbility::Trample);
+                    for blocker in combat.blockers().filter(|blocker| {
+                        blocker.attackers().contains(&source.object())
                             && self.current_damage_combatant(evaluated, blocker.combatant())
-                    })
-                    .map(|blocker| DamageRecipient::Creature(blocker.combatant().object()))
-                    .collect(),
-            };
+                    }) {
+                        let id = blocker.combatant().object();
+                        recipients.push(DamageRecipient::Creature(id));
+                        if trample {
+                            let threshold = evaluated
+                                .get(id)
+                                .and_then(|view| evaluated.lethal_damage_threshold(view))
+                                .ok_or(CombatError::InvalidContext)?;
+                            let marked = self.damage.get(&id).cloned().unwrap_or_else(|| 0.into());
+                            let remaining = threshold.minus(&marked).max(0.into());
+                            lethal.insert(
+                                id,
+                                if current.has_keyword(KeywordAbility::Deathtouch) {
+                                    remaining.min(1.into())
+                                } else {
+                                    remaining
+                                },
+                            );
+                        }
+                    }
+                    if trample && defender_present {
+                        let required = lethal
+                            .values()
+                            .fold(RulesInteger::from(0), |sum, amount| sum.plus(amount));
+                        if power > required {
+                            recipients.push(attacker.defending_planeswalker().map_or(
+                                DamageRecipient::Player(attacker.defender()),
+                                |id| {
+                                    if evaluated.get(id).is_some_and(|view| {
+                                        view.has_type(crate::program::CardType::Battle)
+                                    }) {
+                                        DamageRecipient::Battle(id)
+                                    } else {
+                                        DamageRecipient::Planeswalker(id)
+                                    }
+                                },
+                            ));
+                        } else {
+                            lethal.clear();
+                        }
+                    } else {
+                        lethal.clear();
+                    }
+                }
+            }
             if !recipients.is_empty() {
-                domains.push(DamageAssignmentDomain::new(
-                    source.object(),
-                    power,
-                    recipients,
-                ));
+                domains.push(
+                    DamageAssignmentDomain::new(source.object(), power, recipients)
+                        .with_trample_lethal(lethal),
+                );
             }
         }
         for blocker in combat.blockers() {
             let source = blocker.combatant();
-            if source.controller() != actor || !self.current_damage_combatant(evaluated, source) {
+            let blocking_banding = crate::combat::controls_opposing_assignment(
+                blocker
+                    .attackers()
+                    .iter()
+                    .filter(|id| {
+                        combat.attacker(**id).is_some_and(|attacker| {
+                            self.current_damage_combatant(evaluated, attacker.combatant())
+                        })
+                    })
+                    .filter_map(|id| evaluated.get(*id)),
+                &self.name_rules,
+            );
+            let chooser = if blocking_banding {
+                self.window.active_player()
+            } else {
+                source.controller()
+            };
+            if chooser != actor || !eligible(source) {
                 continue;
             }
-            let Some(attacker) = blocker.attacker().and_then(|id| combat.attacker(id)) else {
-                continue;
-            };
-            if !self.current_damage_combatant(evaluated, attacker.combatant()) {
+            let recipients = blocker
+                .attackers()
+                .iter()
+                .filter_map(|id| combat.attacker(*id))
+                .filter(|attacker| self.current_damage_combatant(evaluated, attacker.combatant()))
+                .map(|attacker| DamageRecipient::Creature(attacker.combatant().object()))
+                .collect::<Vec<_>>();
+            if recipients.is_empty() {
                 continue;
             }
             let power = evaluated
@@ -135,7 +269,7 @@ impl EffectWindow {
                 domains.push(DamageAssignmentDomain::new(
                     source.object(),
                     power,
-                    vec![DamageRecipient::Creature(attacker.combatant().object())],
+                    recipients,
                 ));
             }
         }
@@ -143,9 +277,11 @@ impl EffectWindow {
         Ok(domains)
     }
 
-    fn require_ordinary_damage_work(&self, turn: &TurnScheduler) -> Result<(), EffectError> {
-        self.require_combat_work(turn, TurnWork::CombatDamage { additional: false })?;
-        if turn.position().additional_damage || self.combat.is_none() {
+    pub(super) fn require_damage_work(&self, turn: &TurnScheduler) -> Result<(), EffectError> {
+        let additional = turn.position().additional_damage;
+        self.require_combat_work(turn, TurnWork::CombatDamage { additional })?;
+        let combat = self.combat.as_ref().ok_or(CombatError::InvalidContext)?;
+        if additional && combat.first_strike_participants().is_empty() {
             return Err(CombatError::InvalidContext.into());
         }
         Ok(())
@@ -157,53 +293,35 @@ impl EffectWindow {
         turn: &TurnScheduler,
     ) -> Result<RuleProgress, EffectError> {
         let revision = self.next_revision(expected)?;
-        self.require_ordinary_damage_work(turn)?;
+        self.require_damage_work(turn)?;
         if self.pending_work.is_some() {
             return Err(EffectError::WrongPhase);
         }
         let actors = self.window.apnap_players()?.collect();
         let mut next = self.clone();
         next.revision = revision;
+        if !turn.position().additional_damage {
+            let evaluated = self.evaluated_characteristics()?;
+            let combat = next.combat.as_mut().ok_or(CombatError::InvalidContext)?;
+            let participants = combat
+                .attackers()
+                .map(|row| row.combatant())
+                .chain(combat.blockers().map(|row| row.combatant()))
+                .filter(|&source| {
+                    self.current_damage_combatant(&evaluated, source)
+                        && evaluated.get(source.object()).is_some_and(|view| {
+                            view.has_keyword(KeywordAbility::FirstStrike)
+                                || view.has_keyword(KeywordAbility::DoubleStrike)
+                        })
+                })
+                .map(|source| (source.object(), source))
+                .collect();
+            combat.begin_first_strike(participants);
+        }
         next.advance_damage_assignment_actors(turn, actors, vec![], vec![], RulesJournal::default())
     }
 
-    /// Preserve legal allocations by earlier actors. Reopen only actors whose
-    /// allocations can no longer cover their surviving domains after departure.
-    pub(super) fn resume_damage_after_departure(
-        &self,
-        turn: &TurnScheduler,
-        remaining: &[SeatId],
-        previous: &[CombatDamageAssignment],
-    ) -> Result<RuleProgress, EffectError> {
-        let evaluated = self.evaluated_characteristics()?;
-        let mut selected = Vec::new();
-        let mut actors = Vec::new();
-        for actor in self.window.apnap_players()? {
-            if remaining.contains(&actor) {
-                actors.push(actor);
-                continue;
-            }
-            let domains = self.combat_damage_domains(&evaluated, actor)?;
-            let rows = previous
-                .iter()
-                .filter(|row| domains.iter().any(|domain| domain.source() == row.source))
-                .cloned()
-                .collect();
-            match validate_assignments(&domains, rows) {
-                Ok(rows) => selected.extend(rows),
-                Err(_) => actors.push(actor),
-            }
-        }
-        self.clone().advance_damage_assignment_actors(
-            turn,
-            actors,
-            selected,
-            vec![],
-            RulesJournal::default(),
-        )
-    }
-
-    pub(super) fn advance_damage_assignment_actors(
+    fn advance_damage_assignment_actors(
         mut self,
         turn: &TurnScheduler,
         mut actors: Vec<SeatId>,
@@ -216,7 +334,8 @@ impl EffectWindow {
         let evaluated = self.evaluated_characteristics()?;
         while !actors.is_empty() {
             let actor = actors.remove(0);
-            let domains = self.combat_damage_domains(&evaluated, actor)?;
+            let domains =
+                self.combat_damage_domains(&evaluated, actor, turn.position().additional_damage)?;
             if domains.is_empty() {
                 continue;
             }
@@ -228,6 +347,7 @@ impl EffectWindow {
                     domains,
                 ));
                 self.pending_work = Some(PendingWork::Combat(CombatCursor {
+                    attack_payment: None,
                     frame: frame.clone(),
                     remaining_actors: actors,
                     assignments: selected,
@@ -268,12 +388,13 @@ impl EffectWindow {
             });
         }
         if selected.is_empty() {
+            let additional_step_required = self.additional_damage_required(position);
             return Ok(RuleProgress::new(
                 self,
                 RuleResult::Complete {
                     checks: CheckJournal::default(),
                     completion: RuleCompletion::TurnWork(WorkCompleted::CombatDamage {
-                        additional_step_required: false,
+                        additional_step_required,
                     }),
                     journal: DamageJournal::default(),
                     declarations: vec![],
@@ -304,6 +425,14 @@ impl EffectWindow {
         self.progress_rules(journal, vec![], records, DrawJournal::default(), append)
     }
 
+    pub(super) fn additional_damage_required(&self, position: crate::turn::TurnPosition) -> bool {
+        !position.additional_damage
+            && self
+                .combat
+                .as_ref()
+                .is_some_and(|combat| !combat.first_strike_participants().is_empty())
+    }
+
     fn emit_combat_assignments(
         &mut self,
         turn: &TurnScheduler,
@@ -318,7 +447,10 @@ impl EffectWindow {
         let before = self.rules_snapshot(Some(turn))?;
         let view = before.view();
         let calendar = view.turn.ok_or(CombatError::InvalidContext)?;
-        if calendar.stage() != TurnStage::Work(TurnWork::CombatDamage { additional: false })
+        if calendar.stage()
+            != TurnStage::Work(TurnWork::CombatDamage {
+                additional: calendar.position().additional_damage,
+            })
             || view.combat.is_none()
         {
             return Err(CombatError::InvalidContext.into());
@@ -351,7 +483,7 @@ impl EffectWindow {
         turn: &TurnScheduler,
     ) -> Result<RuleProgress, EffectError> {
         let revision = self.next_revision(expected)?;
-        self.require_ordinary_damage_work(turn)?;
+        self.require_damage_work(turn)?;
         let Some(PendingWork::Combat(cursor)) = self.pending_work.as_ref() else {
             return Err(CombatError::WrongFrame.into());
         };
@@ -366,7 +498,7 @@ impl EffectWindow {
             self.revision,
             actor,
             turn.position(),
-            self.combat_damage_domains(&evaluated, actor)?,
+            self.combat_damage_domains(&evaluated, actor, turn.position().additional_damage)?,
         );
         if &reconstructed != frame {
             return Err(CombatError::WrongFrame.into());

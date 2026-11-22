@@ -28,13 +28,13 @@ fn resolving_copy_retains_its_complete_payload_after_original_entry_departure() 
             hand(
                 2,
                 B,
-                BodyTarget::SingleSpell(SpellTargetFilter::CopyableInstructionSpell),
+                BodyTarget::SingleSpell(crate::program::SpellFilter::copyable_instruction()),
                 vec![Instruction::CopySpell],
             ),
             hand(
                 3,
                 A,
-                BodyTarget::SingleSpell(SpellTargetFilter::AnySpell),
+                BodyTarget::SingleSpell(crate::program::SpellFilter::any()),
                 vec![Instruction::CounterSpell],
             ),
             seed(4, B, ObjectDestination::Battlefield { controller: B }, mana),
@@ -161,6 +161,7 @@ fn resolving_copy_retains_its_complete_payload_after_original_entry_departure() 
     let paid = reply(
         funded.state(),
         DecisionReply::ResolutionPayment(ResolutionPaymentReply::Pay(ManaPayment {
+            from_lots: Default::default(),
             spend: vec![ManaSpend {
                 mana_type: ManaType::Blue,
                 amount: 1.into(),

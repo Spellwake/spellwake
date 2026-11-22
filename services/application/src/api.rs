@@ -13,11 +13,16 @@ use axum::{
     extract::{Path, Query, Request, State},
     http::{HeaderMap, HeaderValue, Method, StatusCode, header},
     response::{IntoResponse, Response},
-    routing::{get, post},
+    routing::{get, patch, post},
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
-use std::{collections::BTreeMap, sync::Arc, time::Duration};
+use std::{
+    collections::{BTreeMap, HashMap},
+    net::{IpAddr, SocketAddr},
+    sync::{Arc, Mutex},
+    time::{Duration, Instant},
+};
 use tokio::sync::Semaphore;
 use tower_http::cors::CorsLayer;
 use uuid::Uuid;
@@ -27,6 +32,7 @@ mod ballot_routes;
 mod catalogue_routes;
 mod chat_notification_routes;
 mod command_routes;
+mod commander_admission_routes;
 mod deck_routes;
 mod deletion_routes;
 mod economy_routes;
@@ -52,6 +58,7 @@ mod room_configuration_routes;
 mod room_control_routes;
 mod room_routes;
 mod social_routes;
+mod ui_surface_routes;
 
 /// Extractor errors and identifier spellings share each route's safe JSON failure mapping.
 type IdentifierPath = Result<Path<String>, axum::extract::rejection::PathRejection>;
@@ -78,8 +85,9 @@ pub struct ApiConfig {
     patreon: Option<Arc<crate::patreon::oauth::OAuthConfig>>,
     patreon_intake: Option<Arc<crate::patreon::intake::IntakeConfig>>,
     invitation_key: Option<Arc<crate::rooms::invitations::InvitationKey>>,
-    native_views: Option<Arc<crate::native_game::NativeGameRuntime>>,
+    commander_admission: Option<Arc<crate::native_game::CommanderRelease>>,
     admission: Option<Arc<crate::native_game::AdmissionManifest>>,
+    native_views: Option<Arc<crate::native_game::NativeGameRuntime>>,
     native_host_owner: Option<crate::native_game::NativeHostOwner>,
 }
 impl ApiConfig {
@@ -131,8 +139,9 @@ impl ApiConfig {
             patreon: None,
             patreon_intake: None,
             invitation_key: None,
-            native_views: None,
+            commander_admission: None,
             admission: None,
+            native_views: None,
             native_host_owner: None,
         })
     }
@@ -210,12 +219,16 @@ impl ApiConfig {
                 .map_err(|_| ActorError::Configuration)?,
             ));
         }
+        config.commander_admission =
+            crate::native_game::CommanderRelease::from_env()?.map(Arc::new);
+        config.admission = crate::native_game::AdmissionManifest::from_env()?.map(Arc::new);
         config.native_views =
             crate::native_game::NativeGameRuntime::from_env(&config.base, &config.secret_key)
                 .map_err(|_| ActorError::Configuration)?
                 .map(Arc::new);
-        config.admission = crate::native_game::AdmissionManifest::from_env()?.map(Arc::new);
-        if config.admission.is_some() && config.native_views.is_none() {
+        if (config.admission.is_some() || config.commander_admission.is_some())
+            && config.native_views.is_none()
+        {
             return Err(ActorError::Configuration);
         }
         if let Some(value) = std::env::var_os("SPELLWAKE_NATIVE_HOST_OWNER") {
@@ -254,6 +267,112 @@ impl ApiConfig {
             &self.issuer,
         )?)
     }
+
+    pub(super) fn backend(
+        &self,
+        user_agent: &'static str,
+    ) -> Result<BackendClient, crate::backend::BackendError> {
+        BackendClient::new(
+            BackendConfig::new(&self.base, &self.secret_key)?,
+            user_agent,
+            Duration::from_secs(60),
+        )
+    }
+}
+
+const DEFAULT_MAX_CONCURRENT_REQUESTS: usize = 256;
+const DEFAULT_MAX_CONCURRENT_STREAMS: usize = 512;
+const PERMIT_WAIT_TIMEOUT: Duration = Duration::from_millis(50);
+
+fn configured_limit(name: &str, default: usize) -> usize {
+    std::env::var(name)
+        .ok()
+        .and_then(|v| v.parse::<usize>().ok())
+        .filter(|&n| (1..=4096).contains(&n))
+        .unwrap_or(default)
+}
+
+#[derive(Clone)]
+struct RateLimiter {
+    buckets: Arc<Mutex<HashMap<(String, bool), (f64, Instant)>>>,
+    general_per_min: f64,
+    unauth_per_min: f64,
+}
+
+impl RateLimiter {
+    fn from_env() -> Self {
+        let general = std::env::var("SPELLWAKE_API_RATE_LIMIT_PER_MIN")
+            .ok()
+            .and_then(|v| v.parse::<u32>().ok())
+            .unwrap_or(600);
+        let unauth = std::env::var("SPELLWAKE_API_UNAUTH_RATE_LIMIT_PER_MIN")
+            .ok()
+            .and_then(|v| v.parse::<u32>().ok())
+            .unwrap_or(20);
+        Self {
+            buckets: Arc::new(Mutex::new(HashMap::new())),
+            general_per_min: f64::from(general),
+            unauth_per_min: f64::from(unauth),
+        }
+    }
+
+    fn allow(&self, client_key: &str, unauthenticated_sensitive: bool) -> bool {
+        let capacity = if unauthenticated_sensitive {
+            self.unauth_per_min
+        } else {
+            self.general_per_min
+        };
+        if capacity <= 0.0 {
+            return true;
+        }
+        let refill_per_sec = capacity / 60.0;
+        let now = Instant::now();
+        let Ok(mut guard) = self.buckets.lock() else {
+            return true;
+        };
+        if guard.len() > 8192 {
+            guard
+                .retain(|_, (_, ts)| now.saturating_duration_since(*ts) < Duration::from_secs(120));
+        }
+        let entry = guard
+            .entry((client_key.to_owned(), unauthenticated_sensitive))
+            .or_insert((capacity, now));
+        let elapsed = now.saturating_duration_since(entry.1).as_secs_f64();
+        entry.0 = (entry.0 + elapsed * refill_per_sec).min(capacity);
+        entry.1 = now;
+        if entry.0 >= 1.0 {
+            entry.0 -= 1.0;
+            true
+        } else {
+            false
+        }
+    }
+}
+
+fn client_ip_key(request: &Request) -> Option<String> {
+    if let Some(ip) = request
+        .headers()
+        .get("fly-client-ip")
+        .and_then(|v| v.to_str().ok())
+        .map(str::trim)
+        .filter(|s| s.parse::<IpAddr>().is_ok())
+    {
+        return Some(ip.to_owned());
+    }
+    if let Some(ip) = request
+        .headers()
+        .get("x-forwarded-for")
+        .and_then(|v| v.to_str().ok())
+        .and_then(|s| s.split(',').next())
+        .map(str::trim)
+        .filter(|s| s.parse::<IpAddr>().is_ok())
+    {
+        return Some(ip.to_owned());
+    }
+    request
+        .extensions()
+        .get::<axum::extract::ConnectInfo<SocketAddr>>()
+        .map(|info| info.0.ip().to_string())
 }
 
 #[derive(Clone)]
@@ -266,8 +385,14 @@ impl ApiState {
     fn new(config: ApiConfig) -> Self {
         Self {
             config: Arc::new(config),
-            permits: Arc::new(Semaphore::new(16)),
-            stream_permits: Arc::new(Semaphore::new(16)),
+            permits: Arc::new(Semaphore::new(configured_limit(
+                "SPELLWAKE_API_MAX_CONCURRENT_REQUESTS",
+                DEFAULT_MAX_CONCURRENT_REQUESTS,
+            ))),
+            stream_permits: Arc::new(Semaphore::new(configured_limit(
+                "SPELLWAKE_API_MAX_CONCURRENT_STREAMS",
+                DEFAULT_MAX_CONCURRENT_STREAMS,
+            ))),
         }
     }
     /// The permit belongs to the actual blocking closure, including after caller cancellation.
@@ -276,7 +401,13 @@ impl ApiState {
         T: Send + 'static,
         F: FnOnce(&ApiConfig) -> T + Send + 'static,
     {
-        let permit = self.permits.clone().try_acquire_owned().map_err(|_| ())?;
+        let permit =
+            match tokio::time::timeout(PERMIT_WAIT_TIMEOUT, self.permits.clone().acquire_owned())
+                .await
+            {
+                Ok(Ok(permit)) => permit,
+                _ => return Err(()),
+            };
         let config = self.config.clone();
         tokio::task::spawn_blocking(move || {
             let _permit = permit;
@@ -302,13 +433,16 @@ pub fn router(config: ApiConfig) -> Router {
 fn router_with_state(state: ApiState) -> Router {
     let cors = CorsLayer::new()
         .allow_origin(state.config.origins.clone())
-        .allow_methods([Method::GET, Method::POST])
+        .allow_methods([Method::GET, Method::POST, Method::PATCH, Method::DELETE])
         .allow_headers([header::AUTHORIZATION, header::CONTENT_TYPE]);
     Router::new()
         .route(
             "/health",
-            get(|| async {
-                success(json!({"service":"spellwake-application","gameplayEnabled":false}))
+            get(|State(state): State<ApiState>| async move {
+                success(json!({
+                    "service": "spellwake-application",
+                    "gameplayEnabled": state.config.native_views.is_some(),
+                }))
             }),
         )
         .route("/v1/matches", get(history_routes::matches))
@@ -393,30 +527,6 @@ fn router_with_state(state: ApiState) -> Router {
         .route(
             "/v1/ai-slots/{slot}/remove/disposition",
             post(room_control_routes::remove_disposition),
-        )
-        .route(
-            "/v1/between-game/replies",
-            post(admission_receipt_routes::execute_between),
-        )
-        .route(
-            "/v1/between-game/replies/disposition",
-            post(admission_receipt_routes::between),
-        )
-        .route(
-            "/v1/rooms/{room}/ready",
-            post(admission_receipt_routes::execute_ready),
-        )
-        .route(
-            "/v1/rooms/{room}/force-start",
-            post(admission_receipt_routes::execute_force_start),
-        )
-        .route(
-            "/v1/rooms/{room}/ready/disposition",
-            post(admission_receipt_routes::ready),
-        )
-        .route(
-            "/v1/rooms/{room}/force-start/disposition",
-            post(admission_receipt_routes::force_start),
         )
         .route(
             "/v1/rooms/{room}/unready",
@@ -526,6 +636,30 @@ fn router_with_state(state: ApiState) -> Router {
             "/v1/table-profiles/{profile}/configurations",
             get(matchmaking_routes::configurations),
         )
+        .route(
+            "/v1/between-game/replies",
+            post(admission_receipt_routes::execute_between),
+        )
+        .route(
+            "/v1/between-game/replies/disposition",
+            post(admission_receipt_routes::between),
+        )
+        .route(
+            "/v1/rooms/{room}/ready",
+            post(commander_admission_routes::execute_ready),
+        )
+        .route(
+            "/v1/rooms/{room}/ready/disposition",
+            post(commander_admission_routes::ready),
+        )
+        .route(
+            "/v1/rooms/{room}/force-start",
+            post(commander_admission_routes::execute_force_start),
+        )
+        .route(
+            "/v1/rooms/{room}/force-start/disposition",
+            post(commander_admission_routes::force_start),
+        )
         .route("/v1/rooms", get(room_routes::list))
         .route("/v1/rooms/{room}", get(room_routes::detail))
         .route("/v1/rooms/commands", post(command_routes::room_execute))
@@ -561,7 +695,10 @@ fn router_with_state(state: ApiState) -> Router {
             post(import_routes::disposition),
         )
         .route("/v1/decks", get(deck_library).post(deck_routes::create))
-        .route("/v1/decks/{deck}", get(deck_routes::detail))
+        .route(
+            "/v1/decks/{deck}",
+            get(deck_routes::detail).delete(ui_surface_routes::delete_deck),
+        )
         .route("/v1/decks/{deck}/revisions", post(deck_routes::save))
         .route("/v1/decks/{deck}/settings", post(deck_routes::settings))
         .route(
@@ -639,23 +776,169 @@ fn router_with_state(state: ApiState) -> Router {
         .route("/v1/cosmetics", get(cosmetic_catalogue))
         .route("/v1/purchases", post(checkout).get(purchases))
         .route("/v1/purchases/{purchase}", get(purchase))
+        // UI-surface completion endpoints
+        .route(
+            "/v1/catalogue/metadata",
+            post(ui_surface_routes::card_metadata),
+        )
+        .route(
+            "/v1/catalogue/cards",
+            get(ui_surface_routes::search_cards_rich),
+        )
+        .route(
+            "/v1/decks/{deck}/duplicate",
+            post(ui_surface_routes::duplicate_deck),
+        )
+        .route(
+            "/v1/cosmetics/catalogue",
+            get(ui_surface_routes::cosmetics_rich),
+        )
+        .route(
+            "/v1/account/profile/badge",
+            post(ui_surface_routes::set_profile_badge),
+        )
+        .route(
+            "/v1/account/patreon",
+            get(ui_surface_routes::patreon_account_status),
+        )
+        .route(
+            "/v1/billing/portal",
+            post(ui_surface_routes::billing_portal),
+        )
+        .route(
+            "/v1/league/leaderboard",
+            get(ui_surface_routes::league_leaderboard),
+        )
+        .route(
+            "/v1/players/{player}/summary",
+            get(ui_surface_routes::player_public_summary),
+        )
+        .route("/v1/market/search", get(ui_surface_routes::market_search))
+        .route(
+            "/v1/trades/sessions",
+            get(ui_surface_routes::trade_sessions_list)
+                .post(ui_surface_routes::trade_session_create),
+        )
+        .route(
+            "/v1/trades/sessions/{session}",
+            get(ui_surface_routes::trade_session_detail),
+        )
+        .route(
+            "/v1/trades/sessions/{session}/offer",
+            patch(ui_surface_routes::trade_session_offer),
+        )
+        .route(
+            "/v1/trades/sessions/{session}/ready",
+            post(ui_surface_routes::trade_session_ready),
+        )
+        .route(
+            "/v1/trades/sessions/{session}/confirm",
+            post(ui_surface_routes::trade_session_confirm),
+        )
+        .route(
+            "/v1/trades/sessions/{session}/cancel",
+            post(ui_surface_routes::trade_session_cancel),
+        )
+        .route(
+            "/v1/predictions/markets/search",
+            get(ui_surface_routes::predictions_search),
+        )
+        .route(
+            "/v1/predictions/markets/{market}/bet",
+            post(ui_surface_routes::prediction_bet),
+        )
+        .route("/v1/rooms/{room}/game", get(ui_surface_routes::room_game))
+        .route(
+            "/v1/rooms/{room}/detail",
+            get(ui_surface_routes::room_enriched),
+        )
+        .route(
+            "/v1/rooms/{room}/options",
+            patch(ui_surface_routes::update_room_options),
+        )
+        .route(
+            "/v1/rooms/{room}/invitations/by-username",
+            post(ui_surface_routes::invite_room_by_username),
+        )
+        .route(
+            "/v1/rooms/{room}/draft",
+            get(ui_surface_routes::limited_draft_read),
+        )
+        .route(
+            "/v1/rooms/{room}/draft/start",
+            post(ui_surface_routes::limited_draft_start),
+        )
+        .route(
+            "/v1/rooms/{room}/draft/pick",
+            post(ui_surface_routes::limited_draft_pick),
+        )
+        .route(
+            "/v1/rooms/{room}/draft/seal",
+            post(ui_surface_routes::limited_draft_seal),
+        )
+        .route(
+            "/v1/social/conversations/{conversation}/attachments",
+            post(ui_surface_routes::dm_send_attachment),
+        )
         .route("/v1/webhooks/stripe", post(stripe_webhook))
         .route("/v1/webhooks/patreon", post(patreon_routes::webhook))
         .fallback(|| async { fail(StatusCode::NOT_FOUND, "route", "not_found") })
         .method_not_allowed_fallback(|| async {
             fail(StatusCode::METHOD_NOT_ALLOWED, "method", "not_allowed")
         })
-        .layer(axum::middleware::from_fn(
-            |request: Request, next: axum::middleware::Next| async move {
-                let is_private = request.uri().path() != "/health";
-                let response = next.run(request).await;
-                if is_private {
-                    command_routes::private(response)
-                } else {
-                    response
+        .layer(axum::middleware::from_fn({
+            let limiter = RateLimiter::from_env();
+            move |request: Request, next: axum::middleware::Next| {
+                let limiter = limiter.clone();
+                async move {
+                    let method = request.method().clone();
+                    let path = request.uri().path().to_owned();
+                    let is_private = path != "/health";
+                    let started = Instant::now();
+                    if is_private && let Some(ip) = client_ip_key(&request) {
+                        let sensitive_unauth = path == "/v1/account/deletion/observe";
+                        if !limiter.allow(&ip, sensitive_unauth) {
+                            tracing::warn!(
+                                http.method = %method,
+                                http.path = %path,
+                                http.status = 429_u16,
+                                "request rate limited"
+                            );
+                            return command_routes::private(fail(
+                                StatusCode::TOO_MANY_REQUESTS,
+                                "rate",
+                                "limited",
+                            ));
+                        }
+                    }
+                    let response = next.run(request).await;
+                    let status = response.status().as_u16();
+                    let latency_ms = started.elapsed().as_millis() as u64;
+                    if status >= 500 {
+                        tracing::warn!(
+                            http.method = %method,
+                            http.path = %path,
+                            http.status = status,
+                            latency_ms,
+                            "request completed with server error"
+                        );
+                    } else if path != "/health" {
+                        tracing::debug!(
+                            http.method = %method,
+                            http.path = %path,
+                            http.status = status,
+                            latency_ms,
+                            "request completed"
+                        );
+                    }
+                    if is_private {
+                        command_routes::private(response)
+                    } else {
+                        response
+                    }
                 }
-            },
-        ))
+            }
+        }))
         .layer(cors)
         .with_state(state)
 }
@@ -685,12 +968,7 @@ async fn checkout(State(state): State<ApiState>, request: Request) -> Response {
         Ok(token) => token,
         Err(e) => return actor_error(e),
     };
-    if single_content_type(request.headers())
-        .and_then(|v| v.to_str().ok())
-        .and_then(|v| v.split(';').next())
-        .map(str::trim)
-        != Some("application/json")
-    {
+    if !is_json_content_type(request.headers()) {
         return fail(StatusCode::BAD_REQUEST, "body", "json_required");
     }
     let bytes = match to_bytes(request.into_body(), 4096).await {
@@ -849,7 +1127,7 @@ fn fail(status: StatusCode, field: &str, reason: &str) -> Response {
         .into_response()
 }
 fn unavailable() -> Response {
-    eprintln!("application_api code=unavailable");
+    tracing::warn!(code = "unavailable", "application_api service unavailable");
     (
         StatusCode::SERVICE_UNAVAILABLE,
         Json(ApiResponse::<Value>::Error {
@@ -935,12 +1213,7 @@ async fn register(State(state): State<ApiState>, request: Request) -> Response {
         Ok(v) => v,
         Err(e) => return actor_error(e),
     };
-    if single_content_type(request.headers())
-        .and_then(|v| v.to_str().ok())
-        .and_then(|v| v.split(';').next())
-        .map(str::trim)
-        != Some("application/json")
-    {
+    if !is_json_content_type(request.headers()) {
         return fail(StatusCode::BAD_REQUEST, "body", "json_required");
     }
     let body = match to_bytes(request.into_body(), 4096).await {
@@ -1145,6 +1418,30 @@ fn single_content_type(headers: &HeaderMap) -> Option<&HeaderValue> {
     } else {
         Some(value)
     }
+}
+
+/// Accept a singleton `application/json` media type with optional RFC 9110 parameters
+/// (such as `; charset=utf-8`), while rejecting duplicate or ambiguous headers.
+pub(super) fn is_json_content_type(headers: &HeaderMap) -> bool {
+    let Some(raw) = single_content_type(headers).and_then(|value| value.to_str().ok()) else {
+        return false;
+    };
+    let mut parts = raw.split(';');
+    let Some(media_type) = parts.next() else {
+        return false;
+    };
+    if !media_type.trim().eq_ignore_ascii_case("application/json") {
+        return false;
+    }
+    // Reject comma-separated multi-type headers like `application/json, text/plain`
+    // and malformed parameters lacking `key=value`.
+    for param in parts {
+        let trimmed = param.trim();
+        if trimmed.is_empty() || trimmed.contains(',') || !trimmed.contains('=') {
+            return false;
+        }
+    }
+    true
 }
 
 /// Qualification-only observer of the real router/body resources, not a proof factory.

@@ -5,7 +5,7 @@ use crate::{
     object_identity::{ControllerChange, ObjectMovement, ObjectStatusChange},
     occurrence::{
         CharacteristicAppearanceChange, DrawOrigin, EventCause, RulesJournal, RulesOccurrence,
-        RulesView, ZoneOccurrence, ZoneReason,
+        RulesView, SupportedAppearance, ZoneOccurrence, ZoneReason,
     },
     stack_window::DrawBatchProgress,
 };
@@ -20,9 +20,13 @@ pub(super) struct RulesSnapshot {
     evaluated: Arc<EvaluatedCharacteristics>,
     marks: BTreeMap<ObjectId, RulesInteger>,
     mana: BTreeMap<(SeatId, ManaType), RulesInteger>,
+    entry_creature_types: BTreeMap<ObjectId, spellwake_contracts::creature_types::CreatureTypeId>,
     life: crate::life::LifeState,
     combat: Option<CombatState>,
+    step: Option<crate::turn::Step>,
     turn: Option<TurnScheduler>,
+    previous_turn_casts: Option<crate::program::PreviousTurnCastCondition>,
+    morbid: bool,
 }
 impl RulesSnapshot {
     pub(super) fn view(&self) -> RulesView<'_> {
@@ -35,6 +39,12 @@ impl RulesSnapshot {
         cards: &'a GameObjects,
     ) -> Result<RulesView<'a>, EffectError> {
         let evaluated = Arc::new(evaluate(CharacteristicWorld {
+            active_player: self.window.active_player(),
+            participants: self.window.participants(),
+            life: Some(&self.life),
+            entry_creature_types: &self.entry_creature_types,
+            mana: &self.mana,
+            combat: self.combat.as_ref(),
             cards,
             programs: &self.programs,
             state: &self.characteristics,
@@ -49,19 +59,83 @@ impl RulesSnapshot {
         evaluated: Arc<EvaluatedCharacteristics>,
     ) -> RulesView<'a> {
         RulesView {
+            name_rules: &self.name_rules,
             window: &self.window,
             cards,
+            programs: &self.programs,
             characteristics: &self.characteristics,
             evaluated,
             marks: &self.marks,
             mana: &self.mana,
             life: &self.life,
             combat: self.combat.as_ref(),
+            step: self.step,
             turn: self.turn.as_ref(),
+            previous_turn_casts: self.previous_turn_casts,
+            morbid: self.morbid,
         }
     }
 }
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct SagaSource {
+    final_chapter: u8,
+    controller: SeatId,
+    mana_value: RulesInteger,
+}
+
+impl RulesView<'_> {
+    fn saga_source(&self, object: ObjectId) -> Option<SagaSource> {
+        let current = self.evaluated.get(object)?;
+        let final_chapter = current.final_saga_chapter()?;
+        let controller = current.controller?;
+        let physical = self.cards.get(object)?;
+        let mana_value = if physical.face_down().is_some() {
+            0.into()
+        } else if physical.transformed() && self.characteristics.copied_definition(object).is_none()
+        {
+            self.programs.get(&physical.card_id()?)?.mana_value()
+        } else {
+            self.characteristics
+                .copiable_definition(physical, self.programs)?
+                .0
+                .mana_value()
+        };
+        Some(SagaSource {
+            final_chapter,
+            controller,
+            mana_value,
+        })
+    }
+}
+
 impl EffectWindow {
+    fn final_saga_chapter_completed(
+        &self,
+        entry: StackEntryId,
+        before: &RulesSnapshot,
+    ) -> Option<RulesOccurrence> {
+        use crate::occurrence::TriggerRelated;
+        let departed = self.departed_saga_sources.as_ref()?;
+        let binding = self.execution_bindings(entry)?.trigger.as_ref()?;
+        let [cause] = binding.causes.members() else {
+            return None;
+        };
+        let TriggerRelated::SagaChapter { number } = cause.related else {
+            return None;
+        };
+        let saga = binding.source.object.id();
+        let source = if before.evaluated.get(saga).is_some() {
+            before.view().saga_source(saga)?
+        } else {
+            departed.get(&saga)?.clone()
+        };
+        (number == source.final_chapter).then_some(RulesOccurrence::FinalSagaChapterCompleted {
+            saga,
+            controller: source.controller,
+            mana_value: source.mana_value,
+        })
+    }
+
     /// Complete through the sole stack mutator and consume its actual exit receipt.
     pub(super) fn complete_at_cut(
         &mut self,
@@ -71,8 +145,36 @@ impl EffectWindow {
         append: &mut RulesJournal,
     ) -> Result<Option<ObjectMovement>, EffectError> {
         let before = self.rules_snapshot(None)?;
-        let (window, exit) = match completion {
-            crate::occurrence::EntryCompletion::Resolved => self
+        let saga_completion = (completion == crate::occurrence::EntryCompletion::Resolved)
+            .then(|| self.final_saga_chapter_completed(entry.id(), &before))
+            .flatten();
+        let rebound_source = match entry.kind() {
+            StackKind::CardSpell(object)
+                if completion == crate::occurrence::EntryCompletion::Resolved
+                    && destination == Some(ObjectDestination::Graveyard)
+                    && entry.cast_from_controllers_hand()
+                    && before
+                        .evaluated
+                        .get(*object)
+                        .is_some_and(|current| current.has_keyword(KeywordAbility::Rebound)) =>
+            {
+                before.view().appearance(*object)
+            }
+            _ => None,
+        };
+        let adventure = completion == crate::occurrence::EntryCompletion::Resolved
+            && destination == Some(ObjectDestination::Graveyard)
+            && self
+                .stack_copiable_spell_subtypes(entry.id())
+                .is_some_and(|types| types.contains(&crate::program::SpellSubtype::Adventure));
+        let destination = if rebound_source.is_some() || adventure {
+            Some(ObjectDestination::Exile)
+        } else {
+            destination
+        };
+        let (window, mut exit) = match completion {
+            crate::occurrence::EntryCompletion::Resolved
+            | crate::occurrence::EntryCompletion::InterveningIfFalse => self
                 .window
                 .finish_resolution_with_exit(self.window.revision(), entry.id(), destination)?,
             crate::occurrence::EntryCompletion::AllTargetsIllegal => self
@@ -84,17 +186,146 @@ impl EffectWindow {
             Some(crate::stack_window::StackExit::Object(movement)) => Some(movement.clone()),
             _ => None,
         };
-        if let Some(movement) = &movement
+        if adventure
+            && let Some(moved) = movement.as_ref()
+            && moved.after.zone() == ObjectZone::Exile
+            && moved.after.card_id().is_some()
+        {
+            self.adventured
+                .insert((moved.after.id(), entry.controller()));
+        }
+        if let (Some(source), Some(moved)) = (rebound_source, movement.as_ref())
+            && moved.after.zone() == ObjectZone::Exile
+        {
+            self.triggers
+                .delay_rebound(source, moved.after.id(), entry.controller());
+        }
+        let mut entry_counters = None;
+        if let Some(movement) = &mut movement
             && movement.after.zone() == ObjectZone::Battlefield
             && movement.before.zone() != ObjectZone::Battlefield
         {
+            self.stage_resolution_entry_choice(movement.before.id(), movement.after.id())?;
             self.characteristics
                 .register_battlefield_entry(movement.after.id())?;
+            if self
+                .characteristics
+                .bestowed_spells
+                .remove(&movement.before.id())
+            {
+                self.characteristics
+                    .enter_bestowed(entry.id(), movement.after.id())?;
+            }
+            if !entry.kicker_choices().is_empty() {
+                self.characteristics.kicked.insert(movement.after.id());
+            }
+            if entry.paid_conditional_cost()
+                && self.copiable_program(movement.after.id()).is_some_and(|p| {
+                    matches!(
+                        p.conditional_cost,
+                        Some(crate::program::ConditionalCastCost::Evoke(_))
+                    )
+                })
+            {
+                self.characteristics.evoked.insert(movement.after.id());
+            }
+            if entry.paid_conditional_cost()
+                && let Some(crate::program::ConditionalCastCost::EndStep { kind, .. }) = self
+                    .copiable_program(movement.after.id())
+                    .and_then(|p| p.conditional_cost.as_ref())
+            {
+                let kind = *kind;
+                let spell = before
+                    .view()
+                    .appearance(movement.before.id())
+                    .ok_or(EffectError::InconsistentProgram)?;
+                self.characteristics
+                    .end_step_casts
+                    .insert(movement.after.id(), kind);
+                self.triggers
+                    .delay_cast(spell, movement.after.id(), kind, entry.controller());
+            }
+            let mut extra = PowerToughnessCounters::default();
+            if let Some(card) = movement.before.card_id() {
+                extra.plus_one =
+                    self.take_commander_mana_entry_counters(movement.before.id(), card);
+            }
+            if let Some((controller, _)) = self
+                .characteristics
+                .suspend_haste
+                .remove(&movement.before.id())
+            {
+                let parts = crate::characteristics::ResolvedParts(vec![
+                    crate::characteristics::ResolvedPart::Abilities(
+                        crate::characteristics::AbilityChange::grant_keywords([
+                            KeywordAbility::Haste,
+                        ]),
+                    ),
+                ]);
+                let effect = self.characteristics.add_effect(
+                    entry.id(),
+                    movement.after.id(),
+                    parts,
+                    crate::characteristics::ResolvedDuration::NoStatedDuration,
+                )?;
+                self.characteristics
+                    .suspend_haste
+                    .insert(movement.after.id(), (controller, Some(effect.id)));
+            }
+            if entry.paid_conditional_cost()
+                && matches!(entry.kind(), StackKind::CardSpell(_))
+                && let Some(crate::program::ConditionalCastCost::Escape { entry_counters, .. }) =
+                    movement
+                        .after
+                        .card_id()
+                        .and_then(|id| self.programs.get(&id))
+                        .and_then(|p| p.conditional_cost.as_ref())
+            {
+                extra.plus_one = extra.plus_one.plus(&i64::from(*entry_counters).into());
+            }
+            let added = self.apply_spell_entry_counters(
+                &before,
+                movement.after.id(),
+                extra,
+                entry.sunburst_colors(),
+                Some(entry),
+            )?;
+            if let Some(defender) = entry.attacking_defender() {
+                movement.after = self.put_attacking(movement.after.id(), defender)?;
+            } else {
+                movement.after = self
+                    .window
+                    .cards()
+                    .get(movement.after.id())
+                    .ok_or(EffectError::InconsistentProgram)?
+                    .clone();
+            }
+            if let Some(crate::stack_window::StackExit::Object(moved)) = &mut exit {
+                moved.after = movement.after.clone();
+            }
+            if added.valid_placement() {
+                entry_counters = Some((movement.before.id(), movement.after.id(), added));
+            }
+            if let Some(host) = self.resolution_aura_choices.remove(&movement.before.id()) {
+                self.characteristics
+                    .attach(movement.after.id(), host, true)?;
+            } else if let [bound] = entry.targets().targets()
+                && matches!(
+                    self.attachment_kind(movement.after.id()),
+                    Some(crate::attachment::AttachmentKind::Aura(_))
+                )
+            {
+                self.characteristics
+                    .attach(movement.after.id(), bound.choice().target, true)?;
+            }
         }
         let reason = if matches!(destination, Some(ObjectDestination::Battlefield { .. })) {
             ZoneReason::PermanentResolution
         } else if completion == crate::occurrence::EntryCompletion::AllTargetsIllegal {
             ZoneReason::AllTargetsIllegalExit
+        } else if matches!(self.payloads.get(&entry.id()), Some(StackPayload::Instructions(payload)) if payload.exile_on_resolve)
+        {
+            ZoneReason::ExiledByEffect
         } else {
             ZoneReason::ResolutionExit
         };
@@ -117,7 +348,27 @@ impl EffectWindow {
                         completion,
                     }
                 };
-                Ok(vec![value])
+                let mut rows = vec![value];
+                rows.extend(saga_completion);
+                if let Some((source, object, added)) = entry_counters {
+                    rows.push(RulesOccurrence::CountersPlaced {
+                        object,
+                        before: previous.characteristics.counters(object),
+                        added,
+                        after: current.characteristics.counters(object),
+                        before_appearance: Box::new(
+                            previous
+                                .appearance(source)
+                                .ok_or(EffectError::InconsistentProgram)?,
+                        ),
+                        after_appearance: Box::new(
+                            current
+                                .appearance(object)
+                                .ok_or(EffectError::InconsistentProgram)?,
+                        ),
+                    });
+                }
+                Ok(rows)
             },
         )?;
         if let Some(movement) = &mut movement {
@@ -130,51 +381,349 @@ impl EffectWindow {
         }
         Ok(movement)
     }
+    pub(super) fn remember_exiled_ability_donor(
+        &mut self,
+        entry: StackEntryId,
+        movement: &crate::object_identity::ObjectMovement,
+    ) {
+        let Some(StackKind::ActivatedAbility { source }) = self
+            .window
+            .resolving()
+            .filter(|actual| actual.id() == entry)
+            .map(|actual| actual.kind())
+        else {
+            return;
+        };
+        let source = source.id();
+        if movement.after.zone() != ObjectZone::Exile
+            || (!self
+                .window
+                .cards()
+                .get(source)
+                .is_some_and(|card| card.zone() == ObjectZone::Battlefield)
+                && self.window.cards().phased_out_under(source).is_none())
+        {
+            return;
+        }
+        let donors = movement.arrivals().filter(|id| {
+            self.window
+                .cards()
+                .get(*id)
+                .is_some_and(|card| card.card_id().is_some())
+        });
+        self.characteristics
+            .ability_donors_in_exile
+            .entry(source)
+            .or_default()
+            .extend(donors);
+    }
+
+    pub(super) fn remember_imprinted_card(
+        &mut self,
+        entry: StackEntryId,
+        movement: &crate::object_identity::ObjectMovement,
+    ) {
+        if movement.after.zone() == ObjectZone::Exile
+            && let Some(trigger) = self
+                .execution_bindings(entry)
+                .and_then(|bindings| bindings.trigger.as_ref())
+            && (self
+                .window
+                .cards()
+                .get(trigger.source.object.id())
+                .is_some_and(|card| card.zone() == ObjectZone::Battlefield)
+                || self
+                    .window
+                    .cards()
+                    .phased_out_under(trigger.source.object.id())
+                    .is_some())
+        {
+            let source = trigger.source.object.id();
+            let cards = movement
+                .arrivals()
+                .filter(|id| {
+                    self.window
+                        .cards()
+                        .get(*id)
+                        .is_some_and(|card| card.card_id().is_some())
+                })
+                .collect::<Vec<_>>();
+            if !cards.is_empty() {
+                self.characteristics
+                    .imprinted_cards
+                    .entry(source)
+                    .or_default()
+                    .extend(cards);
+            }
+        }
+    }
+    pub(crate) fn begin_retained_mana(&mut self, issued: &[ManaProductionRecord]) {
+        self.retained_mana = Some(issued.iter().cloned().collect());
+    }
+    pub(crate) fn finish_retained_mana(&mut self) -> Result<(), EffectError> {
+        if self
+            .retained_mana
+            .take()
+            .is_some_and(|records| !records.is_empty())
+        {
+            return Err(EffectError::InconsistentProgram);
+        }
+        Ok(())
+    }
+    pub(super) fn retained_mana_amount(
+        &self,
+        source: ObjectId,
+        ability: crate::mana::ManaAbilityRef,
+    ) -> Option<RulesInteger> {
+        self.retained_mana
+            .as_ref()?
+            .front()
+            .filter(|p| p.source == source && p.ability == ability)
+            .map(|p| {
+                p.produced
+                    .values()
+                    .fold(0.into(), |sum: RulesInteger, count| sum.plus(count))
+            })
+    }
+    // Internal mana-credit helper passing source, restriction, and journal context explicitly.
+    #[allow(clippy::too_many_arguments)]
     pub(super) fn credit_mana_at_cut(
         &mut self,
         source: ObjectId,
         ability: crate::mana::ManaAbilityRef,
-        controller: SeatId,
+        players: (SeatId, SeatId),
         produced: BTreeMap<ManaType, RulesInteger>,
+        restriction: Option<crate::mana::ManaRestriction>,
+        triggered: bool,
+        sacrificed_source: Option<SacrificedManaSource>,
         append: &mut RulesJournal,
     ) -> Result<ManaProductionRecord, EffectError> {
+        let (controller, recipient) = players;
+        let produced = if let Some(records) = &mut self.retained_mana {
+            let original = records
+                .pop_front()
+                .filter(|p| {
+                    p.source == source
+                        && p.ability == ability
+                        && p.controller == controller
+                        && p.recipient.unwrap_or(controller) == recipient
+                        && p.restriction == restriction
+                })
+                .ok_or(EffectError::InconsistentProgram)?;
+            original.produced
+        } else {
+            produced
+        };
+
         // A counted mana ability may legally resolve producing nothing. Its tap
         // and activation facts already exist; CR 106.12a requires real produced
         // mana before a tapped-for-mana occurrence can arise.
         if produced.is_empty() {
-            return Ok(self.credit_mana(source, ability, controller, produced));
+            return Ok(self.credit_mana(
+                source,
+                ability,
+                (controller, recipient),
+                produced,
+                restriction,
+            ));
         }
         let before = self.rules_snapshot(None)?;
-        let production = self.credit_mana(source, ability, controller, produced);
+        let output = before
+            .evaluated
+            .get(source)
+            .and_then(|p| p.mana_output(ability));
+        let tap_mana = !triggered
+            && sacrificed_source
+                .as_ref()
+                .is_none_or(|source| source.tapped)
+            && !output
+                .as_deref()
+                .is_some_and(crate::mana::ManaOutput::skips_source_tap);
+        let was_artifact = sacrificed_source
+            .as_ref()
+            .map(|source| source.was_artifact)
+            .unwrap_or_else(|| {
+                before.evaluated.get(source).is_some_and(|object| {
+                    object.zone == ObjectZone::Battlefield && object.has_type(CardType::Artifact)
+                })
+            });
+        if !triggered
+            && let Some(effect) = output
+                .as_deref()
+                .and_then(crate::mana::ManaOutput::spend_effect_rule)
+        {
+            let appearance = before
+                .view()
+                .appearance(source)
+                .ok_or(EffectError::InconsistentProgram)?;
+            self.record_mana_lots(appearance, recipient, &produced, effect)?;
+        }
+        let production = self.credit_mana(
+            source,
+            ability,
+            (controller, recipient),
+            produced,
+            restriction,
+        );
+        let record_artifact_tap = tap_mana && was_artifact && self.track_artifact_tapped_for_mana;
         self.emit_from(
             EventCause::ManaProduced { source, ability },
             &before,
             None,
             append,
             |previous, current, _| {
-                Ok(vec![RulesOccurrence::ManaProduced {
+                let mut values = vec![RulesOccurrence::ManaProduced {
                     production: production.clone(),
                     before: previous
-                        .mana_pool(controller)
+                        .mana_pool(recipient)
                         .ok_or(EffectError::InconsistentProgram)?,
                     after: current
-                        .mana_pool(controller)
+                        .mana_pool(recipient)
                         .ok_or(EffectError::InconsistentProgram)?,
-                }])
+                }];
+                if record_artifact_tap {
+                    values.push(RulesOccurrence::ArtifactTappedForMana {
+                        source,
+                        actor: controller,
+                    });
+                }
+                Ok(values)
             },
         )?;
+        // Triggered mana abilities resolve immediately after the land ability,
+        // without using the stack. Capture each surviving instance at this cut.
+        if tap_mana {
+            let current = self.evaluated_characteristics()?;
+            let was_land = sacrificed_source
+                .as_ref()
+                .map(|source| source.was_land)
+                .unwrap_or_else(|| {
+                    current.get(source).is_some_and(|object| {
+                        object.zone == ObjectZone::Battlefield
+                            && object.has_type(crate::program::CardType::Land)
+                    })
+                });
+            let names = sacrificed_source
+                .as_ref()
+                .map(|source| &source.names)
+                .or_else(|| before.evaluated.get(source).map(|land| &land.current_names));
+            for object in current
+                .objects
+                .values()
+                .filter(|object| object.zone == ObjectZone::Battlefield)
+            {
+                let Some(mana_controller) = object.controller else {
+                    continue;
+                };
+                for mana in &object.printed_text.mana {
+                    if !object.abilities.mana.contains(&mana.id) {
+                        continue;
+                    }
+                    let crate::mana::ManaOutput::Triggered(rule) = mana.output else {
+                        continue;
+                    };
+                    let imprinted =
+                        rule == crate::mana::TriggeredManaRule::ImprintedLandTappedSameType;
+                    if !imprinted && mana_controller != controller {
+                        continue;
+                    }
+                    let colors = match rule {
+                        crate::mana::TriggeredManaRule::ImprintedLandTappedSameType
+                            if was_land
+                                && names.is_some_and(|names| {
+                                    self.characteristics
+                                        .imprinted_cards
+                                        .get(&object.object)
+                                        .into_iter()
+                                        .flatten()
+                                        .filter_map(|id| current.get(*id))
+                                        .any(|card| {
+                                            card.zone == ObjectZone::Exile
+                                                && self
+                                                    .name_rules
+                                                    .shares_name(names, &card.current_names)
+                                        })
+                                }) =>
+                        {
+                            production.produced.keys().copied().collect()
+                        }
+                        crate::mana::TriggeredManaRule::LandTappedWhileMonarch
+                            if was_land && self.characteristics.monarch == Some(controller) =>
+                        {
+                            ManaType::ALL
+                                .into_iter()
+                                .filter(|kind| *kind != ManaType::Colourless)
+                                .collect()
+                        }
+                        crate::mana::TriggeredManaRule::LandTappedSameType if was_land => {
+                            production.produced.keys().copied().collect()
+                        }
+                        crate::mana::TriggeredManaRule::PermanentTappedForColorless
+                            if production.produced.contains_key(&ManaType::Colourless) =>
+                        {
+                            BTreeSet::from([ManaType::Colourless])
+                        }
+                        _ => continue,
+                    };
+                    if self.retained_mana.as_ref().is_some_and(|records| {
+                        !records.iter().any(|record| {
+                            record.source == object.object
+                                && record.ability == crate::mana::ManaAbilityRef::Printed(mana.id)
+                        })
+                    }) {
+                        continue;
+                    }
+                    self.triggered_mana_queue.push((
+                        object.object,
+                        mana.id,
+                        mana_controller,
+                        controller,
+                        colors,
+                    ));
+                }
+            }
+        }
         Ok(production)
     }
     pub(super) fn debit_mana_at_cut(
         &mut self,
         payment: &ManaPaymentRecord,
+        casting: bool,
         turn: Option<&TurnScheduler>,
         append: &mut RulesJournal,
     ) -> Result<(), EffectError> {
         if payment.spend.is_empty() {
-            return Ok(());
+            return if payment.from_lots.is_empty() {
+                Ok(())
+            } else {
+                Err(EffectError::InvalidManaPayment(
+                    ManaPaymentError::WrongTotal,
+                ))
+            };
         }
         let before = self.rules_snapshot(turn)?;
+        self.debit_restricted_mana(payment.payer, &payment.restricted_mana)?;
+        let spent = self.spend_mana_lots(
+            payment.payer,
+            &payment.spend,
+            &payment.restricted_mana,
+            Some(&payment.from_lots),
+        )?;
+        if casting {
+            self.floating_mana.remember_cast(payment.source, spent);
+            if let Some(StackPayload::Instructions(payload)) =
+                self.payloads.get_mut(&payment.source)
+                && let Some(Instruction::ReturnOddGraveyardPermanentIfPaid { mana, minimum }) =
+                    payload.body.instructions.last()
+            {
+                payload.met_mana_threshold = payment
+                    .spend
+                    .iter()
+                    .filter(|unit| unit.mana_type == *mana)
+                    .fold(RulesInteger::from(0), |sum, unit| sum.plus(&unit.amount))
+                    >= i64::from(*minimum).into();
+            }
+        }
         self.debit_mana(payment.payer, &payment.spend);
         self.emit_from(
             EventCause::ManaDebited {
@@ -217,6 +766,31 @@ impl EffectWindow {
         // This batch changes only the physical registry and failed-draw memory.
         // Its preceding after-result remains exact for the next unchanged before-cut.
         let context = self.rules_snapshot(None)?;
+        let mut amount = amount;
+        if amount.is_positive() {
+            let capped = self
+                .combat_rules
+                .opponents(self.window.participants(), player)?
+                .into_iter()
+                .any(|controller| {
+                    context.evaluated.controlled_rules(controller, |rule| {
+                        matches!(
+                            rule,
+                            crate::characteristics::StaticContinuousAbility::DrawRule {
+                                rule: crate::characteristics::StaticDrawRule::OpponentsAtMostOne,
+                                ..
+                            }
+                        )
+                    }) > 0
+                });
+            if capped {
+                if self.cards_drawn_this_turn.contains_key(&player) {
+                    amount = 0.into();
+                } else if amount > 1.into() {
+                    amount = 1.into();
+                }
+            }
+        }
         let mut before_evaluated = context.evaluated.clone();
         let mut batch =
             context
@@ -238,6 +812,10 @@ impl EffectWindow {
                         next.cards(),
                         &movement,
                     );
+                    let ordinal = self
+                        .cards_drawn_this_turn
+                        .get(&player)
+                        .map_or_else(|| 1.into(), |count| count.plus(&1.into()));
                     let (after_evaluated, state, records) = {
                         let previous = context.view_with_evaluated(&before, before_evaluated);
                         let current = context.view_with_cards(next.cards())?;
@@ -248,23 +826,65 @@ impl EffectWindow {
                             ZoneReason::Draw { player },
                             &[],
                         )?;
+                        let mut values = vec![value];
+                        if current.evaluated.objects.values().any(|source| {
+                            source.zone == ObjectZone::Battlefield
+                                && source.controller == Some(player)
+                                && source.printed_text.triggered.iter().any(|ability| {
+                                    matches!(
+                                        ability.condition.event,
+                                        crate::program::TriggerEvent::PlayerAction {
+                                            player: crate::program::PlayerRelation::Controller,
+                                            action: crate::program::PlayerTriggerAction::DrewCard {
+                                                nth_each_turn: Some(number),
+                                            },
+                                        } if ordinal == i64::from(number.get()).into()
+                                    ) && source.abilities.triggered.contains(&ability.id)
+                                })
+                        }) {
+                            values.push(RulesOccurrence::CardDrawOrdinal {
+                                player,
+                                number: ordinal.clone(),
+                            });
+                        }
                         let triggers = std::mem::take(&mut self.triggers);
                         let (state, _, records) = triggers
                             .publish(
                                 EventCause::Draw { player, origin },
-                                vec![value],
+                                values,
                                 &previous,
                                 &current,
                             )?
                             .into_parts();
                         (current.evaluated.clone(), state, records)
                     };
-                    self.triggers = state;
+                    self.cards_drawn_this_turn.insert(player, ordinal);
+                    *self.triggers = state;
                     append.append(records);
                     before_evaluated = after_evaluated;
                     batch = next;
                 }
-                DrawBatchProgress::Complete { window, journal } => {
+                DrawBatchProgress::Complete {
+                    window,
+                    mut journal,
+                } => {
+                    if matches!(journal.events.last(), Some(DrawEvent::EmptyLibrary { .. }))
+                        && let Some(source) = before_evaluated
+                            .controlled_rule_sources(player, |rule| {
+                                matches!(
+                                    rule,
+                                    crate::characteristics::StaticContinuousAbility::DrawRule {
+                                        rule: crate::characteristics::StaticDrawRule::EmptyDrawWins,
+                                        ..
+                                    }
+                                )
+                            })
+                            .next()
+                    {
+                        // The first impossible draw is replaced. Later draws never occur.
+                        journal.events.pop();
+                        self.won_by_effect = Some((player, source));
+                    }
                     if let Some(DrawEvent::EmptyLibrary { player, attempts }) =
                         journal.events.last()
                     {
@@ -285,7 +905,7 @@ impl EffectWindow {
                                 &view,
                             )?
                             .into_parts();
-                        self.triggers = state;
+                        *self.triggers = state;
                         append.append(records);
                     }
                     self.window = window;
@@ -306,12 +926,16 @@ impl EffectWindow {
             programs: self.programs.clone(),
             vocabulary: self.creature_vocabulary.clone(),
             name_rules: self.name_rules.clone(),
-            characteristics: self.characteristics.clone(),
+            characteristics: (*self.characteristics).clone(),
             marks: self.damage.clone(),
             mana: self.mana.clone(),
+            entry_creature_types: self.entry_creature_type_choices.clone(),
             life: self.life.clone(),
             combat: self.combat.clone(),
+            step: turn.map(|turn| turn.position().step).or(self.current_step),
             turn: turn.cloned(),
+            previous_turn_casts: self.previous_turn_casts,
+            morbid: self.creatures_died_this_turn.is_positive(),
         })
     }
     fn rules_view_with_evaluated<'a>(
@@ -320,15 +944,20 @@ impl EffectWindow {
         evaluated: Arc<EvaluatedCharacteristics>,
     ) -> RulesView<'a> {
         RulesView {
+            name_rules: &self.name_rules,
             window: &self.window,
             cards: self.window.cards(),
+            programs: &self.programs,
             characteristics: &self.characteristics,
             evaluated,
             marks: &self.damage,
             mana: &self.mana,
             life: &self.life,
             combat: self.combat.as_ref(),
+            step: turn.map(|turn| turn.position().step).or(self.current_step),
             turn,
+            previous_turn_casts: self.previous_turn_casts,
+            morbid: self.creatures_died_this_turn.is_positive(),
         }
     }
     /// Actual operations alone call this seam. Scratch layer/probe changes never
@@ -356,15 +985,30 @@ impl EffectWindow {
         let mut removed = Vec::new();
         if let Some(combat) = self.combat.as_mut() {
             let cards = self.window.cards();
-            combat.reconcile(|participant| {
-                let retained = cards.get(participant.object()).is_some_and(|card| {
-                    card.zone() == ObjectZone::Battlefield
-                        && card.controller() == Some(participant.controller())
-                        && card.control_epoch() == Some(participant.control_epoch())
-                        && evaluated
-                            .get(card.id())
-                            .is_some_and(ObjectCharacteristics::is_creature)
+            combat.reconcile(|participant, defender| {
+                let defender_current = defender.is_none_or(|(id, controller)| {
+                    cards.get(id).is_some_and(|card| {
+                        card.zone() == ObjectZone::Battlefield
+                            && evaluated.get(id).is_some_and(|view| {
+                                if view.has_type(CardType::Battle) {
+                                    self.characteristics.battle_protectors.get(&id)
+                                        == Some(&controller)
+                                } else {
+                                    view.has_type(CardType::Planeswalker)
+                                        && view.controller == Some(controller)
+                                }
+                            })
+                    })
                 });
+                let retained = defender_current
+                    && cards.get(participant.object()).is_some_and(|card| {
+                        card.zone() == ObjectZone::Battlefield
+                            && card.controller() == Some(participant.controller())
+                            && card.control_epoch() == Some(participant.control_epoch())
+                            && evaluated
+                                .get(card.id())
+                                .is_some_and(ObjectCharacteristics::is_creature)
+                    });
                 if !retained {
                     removed.push(participant);
                 }
@@ -373,6 +1017,256 @@ impl EffectWindow {
         }
         removed
     }
+    pub(super) fn copy_controlled_creatures_as_entry_host(
+        &mut self,
+        entry: &crate::stack_window::StackEntry,
+        instruction: usize,
+        append: &mut RulesJournal,
+    ) -> Result<(), EffectError> {
+        use crate::characteristics::{ResolvedDuration, ResolvedPart, ResolvedParts};
+        use crate::occurrence::TriggerRelated;
+        let binding = self
+            .execution_bindings(entry.id())
+            .and_then(|b| b.trigger.as_ref())
+            .ok_or(EffectError::InconsistentProgram)?;
+        let [cause] = binding.causes.members() else {
+            return Err(EffectError::InconsistentProgram);
+        };
+        let (TriggerRelated::ZoneChange { after, .. } | TriggerRelated::TokenCreated { after, .. }) =
+            &cause.related
+        else {
+            return Err(EffectError::InconsistentProgram);
+        };
+        let Some(TargetRef::Object(host)) = after.attached_to else {
+            return Err(EffectError::InconsistentProgram);
+        };
+        let program = self
+            .copiable_program(host)
+            .or_else(|| self.departed_copy_sources.get(&host))
+            .ok_or(EffectError::InconsistentProgram)?
+            .clone();
+        let before = self.rules_snapshot(None)?;
+        let affected = before
+            .view()
+            .evaluated
+            .objects
+            .values()
+            .filter(|view| {
+                view.object != host
+                    && view.zone == ObjectZone::Battlefield
+                    && view.controller == Some(entry.controller())
+                    && view.is_creature()
+                    && !view.is_token
+            })
+            .map(|view| view.object)
+            .collect::<BTreeSet<_>>();
+        if affected.is_empty() {
+            return Ok(());
+        }
+        let effect = self.characteristics.add_effect_for_objects(
+            entry.id(),
+            affected,
+            ResolvedParts(vec![ResolvedPart::Copy(Box::new(program))]),
+            ResolvedDuration::NoStatedDuration,
+        )?;
+        self.emit_from(
+            EventCause::Instruction {
+                entry: entry.id(),
+                instruction,
+            },
+            &before,
+            None,
+            append,
+            |old, current, _| {
+                let appearances = characteristic_appearance_changes(
+                    old,
+                    current,
+                    effect.affected.iter().copied(),
+                )?;
+                Ok(vec![RulesOccurrence::ContinuousEffectCreated {
+                    effect,
+                    appearances,
+                }])
+            },
+        )
+    }
+
+    fn needs_departed_copy_source(&self, object: ObjectId) -> bool {
+        let refers_to = |source: ObjectId,
+                         causes: &crate::occurrence::TriggerCauseSet,
+                         body: &ExecutableBody| {
+            (source == object && body.instructions.iter().any(|op| matches!(op, Instruction::CreateNonlegendaryLoyaltyCopy | Instruction::Myriad)))
+                || (body.instructions.contains(&Instruction::CopyOtherControlledNontokensAsEntryHost)
+                    && causes.members().iter().any(|member| matches!(&member.related,
+                        crate::occurrence::TriggerRelated::ZoneChange { after, .. }
+                        | crate::occurrence::TriggerRelated::TokenCreated { after, .. }
+                        if after.attached_to == Some(TargetRef::Object(object)))))
+                || (body.instructions.iter().any(|op| matches!(op, Instruction::CopyEntrantOnceEachTurn | Instruction::CopyCreatureExiledForAbility | Instruction::DamageFromGrantingPermanent { .. } | Instruction::CopyEntrantAsArtifact)) && causes.members().iter().any(|member| {
+                    matches!(&member.related, crate::occurrence::TriggerRelated::ZoneChange { after, .. }
+                        | crate::occurrence::TriggerRelated::TokenCreated { after, .. } if after.object.id() == object)
+                }))
+        };
+        self.triggers.waiting().values().any(|waiting| refers_to(waiting.source.object.id(), &waiting.causes, &waiting.body))
+            || self.payloads.values().any(|payload| matches!(payload, StackPayload::Instructions(p)
+                if p.bindings.trigger.as_ref().is_some_and(|b| refers_to(b.source.object.id(), &b.causes, &p.body))))
+    }
+
+    fn needs_departed_ability_source(&self, object: ObjectId) -> bool {
+        let needs_source = |op: &Instruction| {
+            matches!(op, Instruction::GiveEquippedCreatureToUpkeepPlayer)
+                || matches!(op, Instruction::CreateTokens { creations } if creations.iter().any(|creation|
+                creation.amount.references_trigger_source_stat() || matches!(&creation.base_size, Some(crate::token::TokenSize::AtCreation(expr)) if expr.references_trigger_source_stat())))
+        };
+        if self.triggers.waiting().values().any(|waiting| waiting.source.object.id() == object && waiting.body.instructions.iter().any(needs_source))
+            || self.payloads.values().any(|payload| matches!(payload, StackPayload::Instructions(p) if p.bindings.trigger.as_ref().is_some_and(|b|b.source.object.id()==object) && p.body.instructions.iter().any(needs_source))) {
+            return true;
+        }
+        self.window.entries().iter().chain(self.window.resolving()).chain(self.window.checking_targets())
+            .any(|entry| matches!(entry.kind(), StackKind::ActivatedAbility { source } if source.id() == object)
+                && self.payloads.get(&entry.id()).and_then(StackPayload::instructions).is_some_and(|body| body.iter().any(|op| matches!(op,
+                    Instruction::WatchSmallCreatureCombatDraw(_) | Instruction::PhaseOtherPlaneswalkersNextEndStep | Instruction::WeakenOpposingAttackersUntilNextTurn
+                    | Instruction::AbilitySourceControllerLosesLife(_) | Instruction::CreateReflexiveDiscardDamage | Instruction::RegisterTokenLinkedExile
+                ) || matches!(op, Instruction::SearchLibrary { filter } if filter.is_haste_and_return()))))
+    }
+
+    // Phased-out sources and departed sources both need their last known characteristics.
+    fn retain_source_appearance(
+        &mut self,
+        appearance: &SupportedAppearance,
+        before: &RulesSnapshot,
+    ) {
+        let source_id = appearance.object.id();
+        if let Some(departed) = &mut self.departed_saga_sources
+            && let Some(source) = before.view().saga_source(source_id)
+        {
+            departed.insert(source_id, source);
+        }
+        if let Some(count)=before.characteristics.quest_counters.get(&source_id)
+            && (self.triggers.waiting().values().any(|w|w.source.object.id()==source_id && w.body.instructions.iter().any(|op|matches!(op,Instruction::RequireCondition(crate::program::InterveningCondition::SourceQuestCounters(_)))))
+                || self.window.entries().iter().chain(self.window.resolving()).chain(self.window.checking_targets()).any(|entry|matches!(entry.kind(),StackKind::TriggeredAbility {source} if source.id()==source_id)
+                    && self.stack_body(entry.id()).is_some_and(|body|body.instructions.iter().any(|op|matches!(op,Instruction::RequireCondition(crate::program::InterveningCondition::SourceQuestCounters(_))))))) {
+            self.departed_quest_counts.insert(source_id,count.clone());
+        }
+        for entry in self
+            .window
+            .entries()
+            .iter()
+            .chain(self.window.resolving())
+            .chain(self.window.checking_targets())
+        {
+            if matches!(entry.kind(), StackKind::ActivatedAbility {source} | StackKind::TriggeredAbility {source} if source.id()==source_id)
+                && let Some(StackPayload::Instructions(payload)) =
+                    self.payloads.get_mut(&entry.id())
+            {
+                for op in &payload.body.instructions {
+                    let kind = match op {
+                        Instruction::SearchLibrary { filter } => filter.source_counter_kind(),
+                        Instruction::DrawEachPlayer { amount }
+                        | Instruction::DamageAmount(amount)
+                        | Instruction::ExileFromHandOrBattlefield(amount) => {
+                            amount.ability_source_counter_kind()
+                        }
+                        _ => None,
+                    };
+                    if let Some(kind) = kind {
+                        payload.departed_source_counters.insert(
+                            kind,
+                            before
+                                .characteristics
+                                .permanent_counter_count(source_id, kind),
+                        );
+                    }
+                }
+            }
+        }
+        if self.needs_departed_copy_source(source_id)
+            && let Some((definition, _)) = before
+                .characteristics
+                .copiable_definition(&appearance.object, &before.programs)
+        {
+            self.departed_copy_sources
+                .insert(source_id, definition.clone());
+        }
+        if self.needs_departed_ability_source(source_id) {
+            self.departed_reflexive_sources
+                .insert(source_id, appearance.clone());
+        }
+        let keywords: BTreeSet<_> = [
+            KeywordAbility::Deathtouch,
+            KeywordAbility::Lifelink,
+            KeywordAbility::Infect,
+            KeywordAbility::Wither,
+        ]
+        .into_iter()
+        .filter(|key| appearance.keywords.contains(key))
+        .collect();
+        // If current and captured colors equal the immutable card/token baseline,
+        // future abilities can recover the exact value without retaining another object.
+        let source = appearance.object.id();
+        let colors = &appearance.colors;
+        let different_capture = self
+            .triggers
+            .waiting()
+            .values()
+            .any(|t| t.source.object.id() == source && t.source.colors != *colors)
+            || self
+                .window
+                .entries()
+                .iter()
+                .chain(self.window.resolving())
+                .chain(self.window.checking_targets())
+                .any(|entry| {
+                    self.execution_bindings(entry.id())
+                        .and_then(|b| b.trigger.as_ref())
+                        .is_some_and(|t| {
+                            t.source.object.id() == source && t.source.colors != *colors
+                        })
+                });
+        let refers_to_combatant = |causes: &crate::occurrence::TriggerCauseSet| {
+            causes.members().iter().any(|member|
+            matches!(member.related,crate::occurrence::TriggerRelated::Combatant(id) if id==source) || matches!(&member.related,crate::occurrence::TriggerRelated::ZoneChange {after,..} | crate::occurrence::TriggerRelated::TokenCreated {after,..} if after.object.id()==source))
+        };
+        let held_as_combatant=self.triggers.waiting().values().any(|trigger|refers_to_combatant(&trigger.causes))
+            || self.payloads.values().any(|payload|matches!(payload,StackPayload::Instructions(p) if
+                p.bindings.trigger.as_ref().is_some_and(|trigger|refers_to_combatant(&trigger.causes))));
+        let attached_equipment = before.view().evaluated.equipment_attached_to(source);
+        let attached_auras_and_equipment = before
+            .view()
+            .evaluated
+            .auras_and_equipment_attached_to(source);
+        let granting_damage_source = self.payloads.values().any(|payload| {
+            matches!(payload,
+            StackPayload::Instructions(p) if p.granting_damage_source.as_ref().is_some_and(|grant|
+                grant.id() == crate::damage::DamageSourceId::Object(source)))
+        });
+        if granting_damage_source
+            || held_as_combatant
+            || attached_auras_and_equipment.is_positive()
+            || appearance.types.contains(&CardType::Creature)
+            || !keywords.is_empty()
+            || !appearance.creature_subtypes.is_empty()
+            || *colors != self.printed_source_colors(&appearance.object)
+            || different_capture
+        {
+            self.departed_damage_sources.insert(
+                appearance.object.id(),
+                crate::damage::DepartedDamageSource {
+                    attached_equipment,
+                    attached_auras_and_equipment,
+                    power: appearance
+                        .current_power_toughness
+                        .as_ref()
+                        .map(|pt| pt.power.clone()),
+                    was_creature: appearance.types.contains(&CardType::Creature),
+                    creature_subtypes: appearance.creature_subtypes.clone(),
+                    colors: appearance.colors.clone(),
+                    object: appearance.object.clone(),
+                    keywords,
+                },
+            );
+        }
+    }
+
     /// Call only on the enclosing transaction's owned tentative successor.
     /// Complete evaluation and combat reconciliation precede all after appearances
     /// and discovery. A propagated failure drops the entire tentative prefix.
@@ -388,53 +1282,320 @@ impl EffectWindow {
             &[ControllerChange],
         ) -> Result<Vec<RulesOccurrence>, EffectError>,
     ) -> Result<(), EffectError> {
-        self.prune_non_battlefield_state();
-        let mut evaluated = self.evaluated_characteristics()?;
-        let mut default_exiles = Vec::new();
-        loop {
-            let exiles = self
-                .window
-                .cards()
-                .iter()
-                .filter(|object| {
-                    object.zone() == ObjectZone::Battlefield
-                        && object
-                            .default_controller()
-                            .is_some_and(|player| !self.window.participants().contains(&player))
-                        && evaluated
-                            .get(object.id())
-                            .and_then(|current| current.controller)
-                            == object.default_controller()
+        // If a revealed cost card leaves hand, its characteristics immediately before
+        // that move supply the resolving spell’s last known information.
+        for payload in self.payloads.values_mut() {
+            if let StackPayload::Instructions(payload) = payload
+                && let Some(revealed) = &mut payload.revealed_cost_card
+                && self.window.cards().get(revealed.object).is_none()
+                && let Some(stats) = before
+                    .evaluated
+                    .get(revealed.object)
+                    .and_then(|o| o.power_toughness.as_ref())
+            {
+                revealed.last_power = stats.derived.power.clone();
+            }
+        }
+        for payload in self.payloads.values_mut() {
+            if let StackPayload::Instructions(payload) = payload
+                && let Some((object, power)) = &mut payload.exiled_cost_creature
+                && self.window.cards().get(*object).is_none()
+                && let Some(stats) = before
+                    .evaluated
+                    .get(*object)
+                    .and_then(|card| card.power_toughness.as_ref())
+            {
+                *power = stats.derived.power.clone();
+            }
+        }
+        self.independent_exile_links.retain(|_, objects| {
+            objects.retain(|id| {
+                self.window.cards().get(*id).is_some_and(|card| {
+                    card.zone() == ObjectZone::Exile && card.card_id().is_some()
                 })
-                .map(GameObject::id)
-                .collect::<Vec<_>>();
-            if exiles.is_empty() {
+            });
+            !objects.is_empty()
+        });
+        self.granted_flashback.retain(|id| {
+            self.window
+                .cards()
+                .get(*id)
+                .is_some_and(|card| matches!(card.zone(), ObjectZone::Graveyard(_)))
+        });
+        self.characteristics.foretold.retain(|id, _| {
+            self.window
+                .cards()
+                .get(*id)
+                .is_some_and(|o| o.zone() == ObjectZone::Exile)
+        });
+        self.any_type_exile_cast.retain(|(id, _)| {
+            self.window
+                .cards()
+                .get(*id)
+                .is_some_and(|object| object.zone() == ObjectZone::Exile)
+        });
+        self.card_play_permissions.retain(|grant| {
+            self.window
+                .cards()
+                .get(grant.object)
+                .is_some_and(|object| grant.zone.allows(object.zone()))
+        });
+        self.exile_play_until_next.retain(|_, (id, _)| {
+            self.window
+                .cards()
+                .get(*id)
+                .is_some_and(|object| object.zone() == ObjectZone::Exile)
+        });
+        self.face_down_exile.retain(|id, _| {
+            self.window
+                .cards()
+                .get(*id)
+                .is_some_and(|object| object.zone() == ObjectZone::Exile)
+        });
+        self.warped.retain(|id, _| {
+            self.window
+                .cards()
+                .get(*id)
+                .is_some_and(|object| object.zone() == ObjectZone::Exile)
+        });
+        self.plotted.retain(|id, _| {
+            self.window
+                .cards()
+                .get(*id)
+                .is_some_and(|o| o.zone() == ObjectZone::Exile)
+        });
+        self.characteristics.bestowed_spells.retain(|id| {
+            self.window
+                .cards()
+                .get(*id)
+                .is_some_and(|o| o.zone() == ObjectZone::Stack)
+        });
+        self.prune_non_battlefield_state();
+        let old_clock = self.day_night();
+        let mut evaluated = Arc::new(self.evaluated_characteristics()?);
+        let (clock, flipped) = self.reconcile_day_night(None, &evaluated)?;
+        if !flipped.is_empty() {
+            evaluated = Arc::new(self.evaluated_characteristics()?);
+        }
+        let mut ended_control_effects = Vec::new();
+        let mut control_exiles = Vec::new();
+        loop {
+            let expired = self
+                .characteristics
+                .expire_source_control(self.window.cards(), &evaluated);
+            if !expired.is_empty() {
+                ended_control_effects.extend(expired);
+                evaluated = Arc::new(self.evaluated_characteristics()?);
+                continue;
+            }
+            if self.window.participants().len() == self.window.original_participants().len() {
                 break;
             }
-            // CR 800.4c exile is outside the admitted action-specific replacement predicates.
-            let (window, movements) = self.window.exile_departed_defaults(&exiles)?;
+            // CR 800.4c: a surviving object cannot revert to a departed default controller.
+            let exile = evaluated
+                .objects
+                .values()
+                .filter(|object| {
+                    object.zone == ObjectZone::Battlefield
+                        && object.controller.is_some_and(|seat| {
+                            !self.window.participants().contains(&seat)
+                                && self
+                                    .window
+                                    .cards()
+                                    .get(object.object)
+                                    .and_then(GameObject::default_controller)
+                                    == Some(seat)
+                        })
+                })
+                .map(|object| (object.object, ObjectDestination::Exile))
+                .collect::<Vec<_>>();
+            if exile.is_empty() {
+                break;
+            }
+            let (window, changes) = self.window.record_linked_return_moves(&exile)?;
             self.window = window;
-            default_exiles.extend(movements);
+            control_exiles.extend(changes);
             self.prune_non_battlefield_state();
-            evaluated = self.evaluated_characteristics()?;
+            evaluated = Arc::new(self.evaluated_characteristics()?);
         }
-        let evaluated = Arc::new(evaluated);
         let world_changes = self.characteristics.reconcile_world_tenures(&evaluated)?;
         let controllers = self.synchronize_controllers(&evaluated)?;
+        self.untap_locks.retain(|&(target, source, epoch)| {
+            (self
+                .window
+                .cards()
+                .get(target)
+                .is_some_and(|card| card.zone() == ObjectZone::Battlefield)
+                || self.window.cards().phased_out_under(target).is_some())
+                && self.window.cards().get(source).is_some_and(|card| {
+                    card.zone() == ObjectZone::Battlefield && card.control_epoch() == Some(epoch)
+                })
+        });
+        let expired_haste = self
+            .characteristics
+            .expire_suspend_haste(self.window.cards());
+        let broke_pair = self.reconcile_pairs(&evaluated, &controllers);
+        let evaluated = if expired_haste || broke_pair {
+            Arc::new(self.evaluated_characteristics()?)
+        } else {
+            evaluated
+        };
         let removed = self.reconcile_characteristic_boundary(&evaluated);
-        let mut values = build(
-            &before.view(),
-            &self.rules_view_with_evaluated(turn, evaluated.clone()),
-            &controllers,
-        )?;
-        for movement in default_exiles {
+        let blessing = self.update_city_blessing(&evaluated);
+        let current = self.rules_view_with_evaluated(turn, evaluated.clone());
+        let mut values = build(&before.view(), &current, &controllers)?;
+        for change in &control_exiles {
             values.push(zone_occurrence_at(
                 &before.view(),
-                &self.rules_view_with_evaluated(turn, evaluated.clone()),
-                &movement,
-                ZoneReason::DefaultControllerDeparted,
+                &current,
+                change,
+                ZoneReason::PlayerDeparture,
                 &controllers,
             )?);
+        }
+        let mut cast_spend_events = Vec::new();
+        for occurrence in &values {
+            if let Some(permanent) = occurrence.departing_permanent() {
+                self.source_created_tokens.retain(|_, tokens| {
+                    tokens.remove(&permanent.object.id());
+                    !tokens.is_empty()
+                });
+            }
+            if let RulesOccurrence::CastCompleted(cast) = occurrence {
+                if self
+                    .window
+                    .entries()
+                    .iter()
+                    .any(|entry| entry.id() == cast.entry() && entry.cast_from_command)
+                    && let Some(record) = cast
+                        .spell()
+                        .object
+                        .card_id()
+                        .and_then(|id| self.commanders.get_mut(&id))
+                {
+                    record.record_cast();
+                }
+                cast_spend_events.extend(self.mana_spend_effects(
+                    cast.entry(),
+                    cast.controller(),
+                    &evaluated,
+                )?);
+            }
+            if let RulesOccurrence::ZoneChange(change) = occurrence
+                && change.before.object.zone() == ObjectZone::Stack
+            {
+                self.forget_departed_commander_mana(change.before.object.id());
+            }
+        }
+        values.extend(cast_spend_events);
+        values.extend(
+            blessing
+                .into_iter()
+                .map(|player| RulesOccurrence::CityBlessingGained { player }),
+        );
+        for (&object, after) in &self.characteristics.lore {
+            let old = before
+                .characteristics
+                .lore
+                .get(&object)
+                .cloned()
+                .unwrap_or_else(|| 0.into());
+            if old != *after {
+                values.push(RulesOccurrence::LoreCountersChanged {
+                    object,
+                    before: old,
+                    after: after.clone(),
+                    exact_chapter_only: object >= self.turn_start_incarnation
+                        && evaluated.get(object).is_some_and(|view| {
+                            matches!(
+                                view.abilities.entry_tap,
+                                Some(crate::land::EntryTap::ReadAhead { .. })
+                            )
+                        }),
+                });
+            }
+        }
+        if !self.pending_entry_reveals.is_empty() {
+            let mut reveals = std::mem::take(&mut self.pending_entry_reveals)
+                .into_iter()
+                .map(|object| RulesOccurrence::HandCardRevealed { object })
+                .collect::<Vec<_>>();
+            reveals.append(&mut values);
+            values = reveals;
+        }
+        if old_clock != clock || !flipped.is_empty() {
+            values.extend(Self::day_change_occurrences(
+                old_clock,
+                clock,
+                &flipped,
+                &before.view(),
+                &self.rules_view_with_evaluated(turn, evaluated.clone()),
+            )?);
+        }
+        for value in &values {
+            if let RulesOccurrence::CastCompleted(cast) = value {
+                let count = self
+                    .spells_cast_by_player
+                    .entry(cast.controller())
+                    .or_default();
+                *count = (*count + 1).min(2);
+            }
+        }
+        for event in &values {
+            if let RulesOccurrence::ZoneChange(change) = event {
+                let after = &change.after.object;
+                if let Some(record) = after.card_id().and_then(|id| self.commanders.get_mut(&id)) {
+                    record.return_eligible =
+                        matches!(after.zone(), ObjectZone::Exile | ObjectZone::Graveyard(_))
+                            .then_some(after.id());
+                }
+            }
+        }
+        let reveals = values
+            .iter()
+            .filter_map(|value| {
+                let RulesOccurrence::ZoneChange(change) = value else {
+                    return None;
+                };
+                let object = &change.before.object;
+                ((before.characteristics.foretold.contains_key(&object.id())
+                    && change.reason == ZoneReason::CastAnnouncement)
+                    || object.face_down().is_some()
+                        && (object.zone() == ObjectZone::Battlefield
+                            || (object.zone() == ObjectZone::Stack
+                                && change.after.object.zone() != ObjectZone::Battlefield)))
+                    .then(|| RulesOccurrence::FaceDownRevealed {
+                        object: object.clone(),
+                    })
+            })
+            .collect::<Vec<_>>();
+        values.extend(reveals);
+        let mut target_events = Vec::new();
+        if let EventCause::CastAnnouncement { entry }
+        | EventCause::ActivatedAbilityCompleted { entry, .. }
+        | EventCause::TriggerTargetsBound { entry } = cause
+        {
+            target_events.extend(self.permanent_target_events(entry, &evaluated)?);
+        }
+        for occurrence in &values {
+            match occurrence {
+                RulesOccurrence::AbilityCopied { entry, .. }
+                | RulesOccurrence::CopyCreated { entry, .. } => {
+                    target_events.extend(self.permanent_target_events(*entry, &evaluated)?)
+                }
+                RulesOccurrence::StackTargetsChanged { entry, before, .. } => {
+                    let previous: BTreeSet<_> = before.iter().map(|bound| bound.target).collect();
+                    target_events.extend(self.permanent_target_events(*entry, &evaluated)?.into_iter().filter(|event|
+                        matches!(event, RulesOccurrence::PermanentTargeted { object, .. } if !previous.contains(&TargetRef::Object(*object)))));
+                }
+                _ => {}
+            }
+        }
+        values.extend(target_events);
+        if !ended_control_effects.is_empty() {
+            values.push(RulesOccurrence::SourceControlEffectsEnded {
+                effects: ended_control_effects,
+            });
         }
         values.extend(
             world_changes
@@ -451,8 +1612,395 @@ impl EffectWindow {
                 participants: removed,
             });
         }
+        // A state trigger can trigger again as soon as its previous instance
+        // leaves the stack. Freeze each relevant controller/subtype count once.
+        use crate::program::{SpellTargetShape, StateThresholdKind, TriggerEvent};
+        let mut subtype_counts = BTreeMap::new();
+        for current in evaluated
+            .objects
+            .values()
+            .filter(|object| object.zone == ObjectZone::Battlefield)
+        {
+            let object = current.object;
+            let Some(controller) = current.controller else {
+                continue;
+            };
+            let printed = current
+                .printed_text
+                .triggered
+                .iter()
+                .filter(|definition| current.abilities.triggered.contains(&definition.id))
+                .map(|definition| (None, definition));
+            let granted = current
+                .granted_triggers
+                .iter()
+                .map(|(grant, definition)| (Some(*grant), definition));
+            for (grant, definition) in printed.chain(granted) {
+                let candidate = match definition.condition.event {
+                    TriggerEvent::StateThreshold(StateThresholdKind::SourceCounters {
+                        kind,
+                        comparison,
+                        amount,
+                    }) if comparison.evaluate(
+                        &self.counters_of_kind(object, kind),
+                        &i64::from(amount).into(),
+                    ) =>
+                    {
+                        RulesOccurrence::CounterThresholdMet {
+                            object,
+                            definition: definition.id,
+                            grant,
+                            kind,
+                        }
+                    }
+                    TriggerEvent::StateThreshold(StateThresholdKind::ControlledSubtype {
+                        subtype,
+                        minimum,
+                    }) => {
+                        let count =
+                            subtype_counts
+                                .entry((controller, subtype))
+                                .or_insert_with(|| {
+                                    evaluated
+                                        .objects
+                                        .values()
+                                        .filter(|object| {
+                                            object.zone == ObjectZone::Battlefield
+                                                && object.controller == Some(controller)
+                                                && object
+                                                    .current_creature_subtypes
+                                                    .contains(&subtype)
+                                        })
+                                        .count()
+                                });
+                        if *count < usize::from(minimum) {
+                            continue;
+                        }
+                        RulesOccurrence::SubtypeThresholdMet {
+                            object,
+                            definition: definition.id,
+                            grant,
+                        }
+                    }
+                    _ => continue,
+                };
+                let pending = self.triggers.waiting().values().any(|waiting| {
+                    waiting.source.object.id() == object
+                        && waiting.definition == definition.id
+                        && waiting.granting_effect == grant
+                }) || self
+                    .window
+                    .entries()
+                    .iter()
+                    .chain(self.window.resolving())
+                    .chain(self.window.checking_targets())
+                    .filter_map(|entry| {
+                        self.execution_bindings(entry.id())
+                            .and_then(|bindings| bindings.trigger.as_ref())
+                    })
+                    .any(|bound| {
+                        bound.source.object.id() == object
+                            && bound.definition == definition.id
+                            && bound.granting_effect == grant
+                    });
+                if !pending {
+                    values.push(candidate);
+                }
+            }
+        }
         if values.is_empty() {
             return Ok(());
+        }
+        if !self.adventured.is_empty() {
+            for event in &values {
+                if let RulesOccurrence::ZoneChange(change) = event
+                    && change.before.object.zone() == ObjectZone::Exile
+                {
+                    self.adventured
+                        .retain(|(id, _)| *id != change.before.object.id());
+                }
+            }
+        }
+        if !self.linked_search_results.is_empty()
+            || !self.characteristics.imprinted_cards.is_empty()
+        {
+            for event in &values {
+                if let RulesOccurrence::ZoneChange(change) = event
+                    && change.before.object.zone() == ObjectZone::Stack
+                    && let Some(linked) = self
+                        .linked_search_results
+                        .remove(&change.before.object.id())
+                    && change.after.object.zone() == ObjectZone::Battlefield
+                    && change.reason == ZoneReason::PermanentResolution
+                {
+                    self.linked_search_results
+                        .insert(change.after.object.id(), linked);
+                }
+            }
+            let departed: BTreeSet<_> = values
+                .iter()
+                .filter_map(|value| match value {
+                    RulesOccurrence::ZoneChange(change)
+                        if change.before.object.zone() == ObjectZone::Exile =>
+                    {
+                        Some(change.before.object.id())
+                    }
+                    _ => None,
+                })
+                .collect();
+            if !departed.is_empty() {
+                self.linked_search_results.retain(|_, results| {
+                    results.retain(|id| !departed.contains(id));
+                    !results.is_empty()
+                });
+                self.characteristics.imprinted_cards.retain(|_, cards| {
+                    cards.retain(|id| !departed.contains(id));
+                    !cards.is_empty()
+                });
+            }
+        }
+        // A source might regain its cast trigger during payment. Inspect the completed
+        // spell's sole target before freezing a copy for that trigger's later resolution.
+        for event in &mut values {
+            let RulesOccurrence::CastCompleted(cast) = event else {
+                continue;
+            };
+            if cast.copy_source.is_some()
+                || !crate::program::SpellFilter::instant_or_sorcery()
+                    .matches_spell_appearance(cast.spell())
+            {
+                continue;
+            }
+            let Some(entry) = self
+                .window
+                .entries()
+                .iter()
+                .find(|entry| entry.id() == cast.entry())
+            else {
+                continue;
+            };
+            let targets = entry.targets().targets();
+            let Some(TargetRef::Object(id)) = targets.first().map(|bound| bound.choice().target)
+            else {
+                continue;
+            };
+            let is_targeting_only_source = |trigger: &crate::program::TriggeredAbility| {
+                matches!(
+                    trigger.condition.event,
+                    TriggerEvent::SpellCast {
+                        caster: crate::program::TriggerPlayerScope::Relation(crate::program::PlayerRelation::Controller),
+                        filter,
+                        self_cast: false,
+                        include_copy: false,
+                        min_mana_value: None,
+                    } if filter.target_shape == SpellTargetShape::TargetingOnlySource
+                )
+            };
+            if targets
+                .iter()
+                .all(|bound| bound.choice().target == TargetRef::Object(id))
+                && evaluated.get(id).is_some_and(|view| {
+                    view.zone == ObjectZone::Battlefield
+                        && view.controller == Some(cast.controller())
+                        && (view.printed_text.triggered.iter().any(|trigger| {
+                            view.abilities.triggered.contains(&trigger.id)
+                                && is_targeting_only_source(trigger)
+                        }) || view
+                            .granted_triggers
+                            .iter()
+                            .any(|(_, trigger)| is_targeting_only_source(trigger)))
+                })
+            {
+                cast.copy_source =
+                    Some(Box::new(self.capture_copy_source(cast.entry(), 0.into())?));
+            }
+        }
+        if let Some(history) = &mut self.spell_cast_positions {
+            for event in &values {
+                if let RulesOccurrence::CastCompleted(cast) = event {
+                    history.count = history
+                        .count
+                        .checked_add(1)
+                        .ok_or(EffectError::InconsistentProgram)?;
+                    history.positions.insert(cast.entry(), history.count);
+                }
+            }
+        }
+        if let Some(ordinals) = self.spell_ordinals.as_mut() {
+            for event in &mut values {
+                if let RulesOccurrence::CastCompleted(cast) = event {
+                    let count = ordinals
+                        .entry(cast.controller())
+                        .or_insert_with(|| 0.into());
+                    *count = count.plus(&1.into());
+                    cast.ordinal_this_turn = Some(count.clone());
+                }
+            }
+        }
+        let departing_link_sources = values
+            .iter()
+            .filter_map(RulesOccurrence::departing_permanent)
+            .map(|previous| previous.object.id())
+            .collect::<Vec<_>>();
+        for value in &values {
+            if let Some(permanent) = value.departing_permanent()
+                && let Some(defenders) = self.departed_attack_defenders.as_mut()
+                && let Some(attacker) = before
+                    .combat
+                    .as_ref()
+                    .and_then(|combat| combat.attacker(permanent.object.id()))
+            {
+                defenders.insert(
+                    permanent.object.id(),
+                    (attacker.defender(), attacker.defending_planeswalker()),
+                );
+            }
+            match value {
+                RulesOccurrence::ZoneChange(change)
+                    if change.before.object.zone() == ObjectZone::Battlefield
+                        && change.before.is_creature()
+                        && matches!(change.after.object.zone(), ObjectZone::Graveyard(_)) =>
+                {
+                    self.creatures_died_this_turn = self.creatures_died_this_turn.plus(&1.into());
+                }
+                RulesOccurrence::LifeChanged(change)
+                    if change.kind == crate::life::LifeChangeKind::Loss =>
+                {
+                    let lost = self
+                        .characteristics
+                        .life_lost_this_turn
+                        .entry(change.player)
+                        .or_insert_with(|| 0.into());
+                    *lost = lost.plus(&change.amount);
+                }
+                RulesOccurrence::TokenCreated { creator, .. } => {
+                    self.token_creators_this_turn.insert(*creator);
+                }
+                _ => {}
+            }
+        }
+        self.update_growth_last_known(&values);
+        for occurrence in &values {
+            if let RulesOccurrence::DamageDealt {
+                damage,
+                kind: crate::damage::DamageKind::Combat,
+                ..
+            } = occurrence
+                && let crate::damage::DamageSourceId::Object(source) = damage.source.id()
+                && let crate::damage::DamageRecipient::Player(target) = damage.target
+            {
+                self.combat_damaged_players_by_source
+                    .entry(source)
+                    .or_default()
+                    .insert(target);
+            }
+        }
+        if let Some(history) = &mut self.damage_to_players_this_turn {
+            for occurrence in &values {
+                if let RulesOccurrence::DamageDealt { damage, .. } = occurrence
+                    && let crate::damage::DamageRecipient::Player(player) = damage.target
+                {
+                    let total = history.entry(player).or_insert_with(|| 0.into());
+                    *total = total.plus(&damage.amount);
+                }
+            }
+        }
+        for value in &values {
+            if let RulesOccurrence::CastCompleted(cast) = value
+                && let Some((grant, kind)) = self.typed_exile_pending.remove(&cast.entry())
+                && let Some(cohort) = self.typed_exile_cohorts.get_mut(&grant)
+            {
+                cohort.used.insert(kind);
+            }
+            if let RulesOccurrence::CastCompleted(cast) = value
+                && let Some(permissions) = self.source_cast_pending.remove(&cast.entry())
+            {
+                self.source_cast_uses.extend(permissions);
+            }
+        }
+        if let Some(recent) = self.recent_graveyard_cards.as_mut() {
+            for value in &values {
+                let RulesOccurrence::ZoneChange(change) = value else {
+                    continue;
+                };
+                let old = &change.before.object;
+                let new = &change.after.object;
+                let known = recent.remove(&old.id());
+                let discarded = matches!(
+                    change.reason,
+                    ZoneReason::Discard { .. }
+                        | ZoneReason::CycleDiscard { .. }
+                        | ZoneReason::TransmuteDiscard { .. }
+                );
+                if new.card_id().is_some()
+                    && (matches!(new.zone(), ObjectZone::Graveyard(_))
+                        && (matches!(old.zone(), ObjectZone::Library(_))
+                            || discarded
+                            || known && change.reason == ZoneReason::MadnessDeclined)
+                        || discarded && new.zone() == ObjectZone::Exile)
+                {
+                    recent.insert(new.id());
+                }
+            }
+        }
+        if let Some(history) = &mut self.cast_history {
+            for value in &values {
+                match value {
+                    RulesOccurrence::ZoneChange(change) if self.track_discard_prices => {
+                        let old = &change.before.object;
+                        let new = &change.after.object;
+                        let discarded_by = match change.reason {
+                            ZoneReason::CycleDiscard { player }
+                            | ZoneReason::TransmuteDiscard { player }
+                            | ZoneReason::Discard { player }
+                                if old.zone() == ObjectZone::Hand(player) =>
+                            {
+                                Some(player)
+                            }
+                            ZoneReason::MadnessDeclined => {
+                                history.discarded.get(&old.id()).copied()
+                            }
+                            _ => None,
+                        };
+                        history.discarded.remove(&old.id());
+                        if let Some(player) = discarded_by
+                            && matches!(new.zone(), ObjectZone::Exile | ObjectZone::Graveyard(_))
+                        {
+                            history.discarded.insert(new.id(), player);
+                        }
+                    }
+                    RulesOccurrence::CastCompleted(cast) => {
+                        history.casters.insert(cast.controller());
+                        history.spells = history.spells.plus(&1.into());
+                    }
+                    RulesOccurrence::ZoneChange(change)
+                        if change.before.object.zone() == ObjectZone::Battlefield
+                            && matches!(change.after.object.zone(), ObjectZone::Graveyard(_)) =>
+                    {
+                        history.grave_permanents = history.grave_permanents.plus(&1.into());
+                    }
+                    RulesOccurrence::LifeChanged(loss)
+                        if loss.kind == crate::life::LifeChangeKind::Loss =>
+                    {
+                        history.lost_life.insert(loss.player);
+                    }
+                    _ => {}
+                }
+            }
+        }
+        for value in &values {
+            if let Some(permanent) = value.departing_permanent() {
+                self.retain_source_appearance(permanent, before);
+            }
+            if let RulesOccurrence::Phased { objects, out: true } = value {
+                for &object in objects {
+                    let appearance = before
+                        .view()
+                        .appearance(object)
+                        .ok_or(EffectError::InconsistentProgram)?;
+                    self.retain_source_appearance(&appearance, before);
+                }
+            }
         }
         let triggers = std::mem::take(&mut self.triggers);
         let updated = triggers.publish(
@@ -461,11 +2009,1004 @@ impl EffectWindow {
             &before.view(),
             &self.rules_view_with_evaluated(turn, evaluated),
         )?;
-        let (state, _, records) = updated.into_parts();
-        self.triggers = state;
+        let (state, _, mut records) = updated.into_parts();
+        *self.triggers = state;
+        self.record_aura_graveyard_returns(&records);
+        if self.triggers.watches_ability_copies() {
+            let activations = records
+                .records
+                .iter()
+                .filter_map(|record| match record {
+                    crate::occurrence::RulesRecord::Event(event) => Some(&event.occurrences),
+                    _ => None,
+                })
+                .flatten()
+                .filter_map(|row| match &row.value {
+                    RulesOccurrence::ActivatedAbility { entry, source, .. } => {
+                        Some((row.id, *entry, source.id()))
+                    }
+                    _ => None,
+                })
+                .collect::<Vec<_>>();
+            for (occurrence, id, source) in activations {
+                let current = self.evaluated_characteristics()?;
+                let captured = Arc::new(self.capture_ability(id, &current)?);
+                let types = match current.get(source) {
+                    Some(view) if view.zone == ObjectZone::Battlefield => {
+                        &view.current_planeswalker_subtypes
+                    }
+                    _ => &captured.payload.activated_planeswalker_types,
+                };
+                self.triggers.discover_ability_copies(
+                    occurrence,
+                    captured.entry.controller(),
+                    captured.clone(),
+                    captured.payload.activated_as_loyalty,
+                    types,
+                    &mut records,
+                )?;
+            }
+        }
+        self.departed_quest_counts.retain(|object,_|self.triggers.waiting().values().any(|w|w.source.object.id()==*object)
+            || self.window.entries().iter().chain(self.window.resolving()).chain(self.window.checking_targets())
+                .any(|entry|matches!(entry.kind(),StackKind::TriggeredAbility {source} if source.id()==*object)));
+        let captured_power_cohort = match &self.pending_work {
+            Some(PendingWork::Damage(work)) => match &work.parent {
+                DamageParent::Resolution(cursor) => cursor.results.power_damage_cohort.as_ref(),
+                _ => None,
+            },
+            _ => self
+                .resolution_cursor()
+                .and_then(|cursor| cursor.results.power_damage_cohort.as_ref()),
+        }
+        .cloned();
+        self.departed_damage_sources.retain(|source, _| {
+            let refers_to_source = |causes: &crate::occurrence::TriggerCauseSet| causes.members().iter().any(|member|
+                matches!(member.related, crate::occurrence::TriggerRelated::SubtypeCombatDamage {creature,..} | crate::occurrence::TriggerRelated::AttachedCreatureDamaged {creature, ..} | crate::occurrence::TriggerRelated::Combatant(creature) if creature == *source) || matches!(&member.related,crate::occurrence::TriggerRelated::ZoneChange {after,..} | crate::occurrence::TriggerRelated::TokenCreated {after,..} if after.object.id()==*source));
+            captured_power_cohort.as_ref().is_some_and(|(_, subjects)| subjects.contains(source))
+                || self.payloads.values().any(|payload| matches!(payload, StackPayload::Instructions(p)
+                    if p.granting_damage_source.as_ref().is_some_and(|grant|
+                        grant.id() == crate::damage::DamageSourceId::Object(*source))))
+                || self.triggers.waiting().values().any(|trigger| trigger.source.object.id() == *source || refers_to_source(&trigger.causes))
+                || self.payloads.values().any(|payload| matches!(payload, StackPayload::Instructions(p) if p.bindings.trigger.as_ref().is_some_and(|trigger| refers_to_source(&trigger.causes))))
+                || self.window.entries().iter().chain(self.window.resolving()).chain(self.window.checking_targets())
+                    .any(|entry| matches!(entry.kind(), StackKind::ActivatedAbility { source: object } | StackKind::TriggeredAbility { source: object } if object.id() == *source))
+        });
+        if let Some(mut departed) = self.departed_saga_sources.take() {
+            use crate::occurrence::{TriggerCauseSet, TriggerRelated};
+            let chapter = |causes: &TriggerCauseSet| {
+                causes
+                    .members()
+                    .iter()
+                    .any(|cause| matches!(cause.related, TriggerRelated::SagaChapter { .. }))
+            };
+            departed.retain(|&saga, _| {
+                self.triggers
+                    .waiting()
+                    .values()
+                    .any(|waiting| waiting.source.object.id() == saga && chapter(&waiting.causes))
+                    || self
+                        .window
+                        .entries()
+                        .iter()
+                        .chain(self.window.resolving())
+                        .chain(self.window.checking_targets())
+                        .filter_map(|entry| {
+                            self.execution_bindings(entry.id())
+                                .and_then(|bindings| bindings.trigger.as_ref())
+                        })
+                        .any(|bound| bound.source.object.id() == saga && chapter(&bound.causes))
+            });
+            self.departed_saga_sources = Some(departed);
+        }
+        let live_copy_sources = self
+            .departed_copy_sources
+            .keys()
+            .copied()
+            .filter(|id| self.needs_departed_copy_source(*id))
+            .collect::<BTreeSet<_>>();
+        self.departed_copy_sources
+            .retain(|id, _| live_copy_sources.contains(id));
+        let live_ability_sources = self
+            .departed_reflexive_sources
+            .keys()
+            .copied()
+            .filter(|id| self.needs_departed_ability_source(*id))
+            .collect::<BTreeSet<_>>();
+        self.departed_reflexive_sources
+            .retain(|id, _| live_ability_sources.contains(id));
         #[cfg(test)]
         super::characteristic_observations::published(self, &records);
         append.append(records);
+        let mut linked = Vec::new();
+        for source in departing_link_sources {
+            if let Some(objects) = self.linked_exiles.remove(&source) {
+                linked.extend(objects);
+            }
+        }
+        if !linked.is_empty() {
+            if let Some(work) = &mut self.linked_return_work {
+                if work.origin != LinkedReturnOrigin::Exile {
+                    return Err(EffectError::InconsistentProgram);
+                }
+                work.objects.extend(linked);
+                work.orders.clear();
+                work.graveyard_orders.clear();
+                work.replacements = None;
+            } else {
+                self.linked_return_work = Some(LinkedReturnWork {
+                    library_bottom: None,
+                    origin: LinkedReturnOrigin::Exile,
+                    wake_entry: None,
+                    objects: linked,
+                    orders: BTreeMap::new(),
+                    graveyard_orders: BTreeMap::new(),
+                    choices: BTreeMap::new(),
+                    auras: BTreeMap::new(),
+                    replacements: None,
+                });
+            }
+            self.finish_linked_return_if_ready(append)?;
+        }
+        Ok(())
+    }
+    pub(super) fn captured_graveyard_card(
+        &self,
+    ) -> Result<Option<(ObjectId, SeatId)>, EffectError> {
+        let entry = self
+            .window
+            .resolving()
+            .ok_or(EffectError::WrongResolutionFrame)?;
+        let binding = self
+            .execution_bindings(entry.id())
+            .and_then(|b| b.trigger.as_ref())
+            .ok_or(EffectError::InconsistentProgram)?;
+        let [member] = binding.causes.members() else {
+            return Err(EffectError::InconsistentProgram);
+        };
+        let crate::occurrence::TriggerRelated::ZoneChange { after, .. } = &member.related else {
+            return Err(EffectError::InconsistentProgram);
+        };
+        let owner = after.object.owner();
+        Ok(self
+            .window
+            .cards()
+            .get(after.object.id())
+            .filter(|card| card.card_id().is_some() && card.zone() == ObjectZone::Graveyard(owner))
+            .map(|card| (card.id(), owner)))
+    }
+    pub(super) fn face_down_entry_for(
+        &self,
+        id: ObjectId,
+    ) -> Option<crate::face_down::FaceDownKind> {
+        self.linked_return_work
+            .as_ref()
+            .filter(|work| work.objects.contains(&id))?
+            .origin
+            .face_down_entry()
+    }
+    pub(super) fn linked_aura_domain(
+        &self,
+        id: ObjectId,
+        owner: SeatId,
+        evaluated: &EvaluatedCharacteristics,
+    ) -> Option<Vec<TargetRef>> {
+        if self.face_down_entry_for(id).is_some() {
+            return None;
+        }
+        let copy = self
+            .linked_return_work
+            .as_ref()
+            .and_then(|work| work.replacements.as_ref())
+            .and_then(|batch| batch.copied_definition(id))
+            .or_else(|| {
+                self.prospective_entry_copies
+                    .get(&id)
+                    .map(|copy| copy.definition.as_ref())
+            });
+        let forced_host = self
+            .linked_return_work
+            .as_ref()
+            .filter(|work| work.objects.contains(&id))
+            .and_then(|work| match work.origin {
+                LinkedReturnOrigin::HandOrGraveyardAuras { host, .. } => {
+                    Some(TargetRef::Object(host))
+                }
+                _ => None,
+            });
+        self.prospective_aura_domain(id, owner, copy, forced_host, evaluated)
+    }
+
+    pub(super) fn prospective_aura_domain(
+        &self,
+        id: ObjectId,
+        owner: SeatId,
+        copy: Option<&Program>,
+        forced_host: Option<TargetRef>,
+        evaluated: &EvaluatedCharacteristics,
+    ) -> Option<Vec<TargetRef>> {
+        let apply_host = |mut candidates: Vec<TargetRef>| {
+            if let Some(host) = forced_host {
+                candidates.retain(|candidate| *candidate == host);
+            }
+            candidates
+        };
+        if let Some(definition) = copy {
+            return self
+                .token_aura_domain(definition, owner, evaluated)
+                .map(apply_host);
+        }
+        let crate::attachment::AttachmentKind::Aura(enchant) =
+            self.prospective_entry_face(id)?.permanent()?.attachment?
+        else {
+            return None;
+        };
+        let aura = evaluated.get(id)?;
+        if aura.is_creature() {
+            return Some(Vec::new());
+        }
+        Some(apply_host(self.aura_entry_domain(
+            enchant,
+            owner,
+            &super::protection::ProtectionSource::from(aura),
+            evaluated,
+        )))
+    }
+
+    pub(super) fn aura_entry_domain(
+        &self,
+        enchant: crate::attachment::EnchantRestriction,
+        owner: SeatId,
+        source: &super::protection::ProtectionSource,
+        evaluated: &EvaluatedCharacteristics,
+    ) -> Vec<TargetRef> {
+        self.window
+            .participants()
+            .iter()
+            .copied()
+            .map(TargetRef::Player)
+            .chain(
+                self.window
+                    .cards()
+                    .iter()
+                    .filter(|card| card.zone() == ObjectZone::Battlefield)
+                    .map(|card| TargetRef::Object(card.id())),
+            )
+            .filter(|target| {
+                self.enchant_permits(enchant, *target, owner, evaluated)
+                    && !Self::protected_target(*target, source, evaluated)
+            })
+            .collect()
+    }
+    pub(crate) fn linked_return_decision(&self) -> Result<Option<EffectDecision>, EffectError> {
+        let Some(work) = &self.linked_return_work else {
+            return Ok(None);
+        };
+        if let Some(batch) = &work.replacements
+            && let Some(frame) = batch.frame(self.revision)
+        {
+            return Ok(Some(EffectDecision::ZoneReplacement(frame)));
+        }
+        let players = self.window.apnap_players()?.collect::<Vec<_>>();
+        let evaluated = self.evaluated_characteristics()?;
+        for chooser in &players {
+            let objects = work
+                .objects
+                .iter()
+                .copied()
+                .filter(|id| {
+                    work.replacements.as_ref().is_some_and(|batch| {
+                        batch.destination(*id).ok()
+                            == Some(crate::program::PublicZoneDestination::Battlefield)
+                    }) && self.window.cards().get(*id).is_some_and(|card| {
+                        work.origin.accepts(card)
+                            && work
+                                .replacements
+                                .as_ref()
+                                .and_then(|batch| batch.entry_controller(card.id()))
+                                .unwrap_or_else(|| work.origin.entry_controller(card))
+                                == *chooser
+                    }) && self
+                        .linked_aura_domain(*id, *chooser, &evaluated)
+                        .is_none_or(|domain| !domain.is_empty())
+                })
+                .collect::<Vec<_>>();
+            // The multi-walker library choice already specified entry timestamp order.
+            // After replacements, another controller still orders their own entrants.
+            let ordered_on_selection = matches!(work.origin,
+                LinkedReturnOrigin::LibraryTop { player, entry, instruction, .. } if player == *chooser
+                    && self.payloads.get(&entry).and_then(StackPayload::instructions)
+                        .and_then(|body| body.get(instruction)) == Some(&Instruction::LookTopPlaneswalkers));
+            if objects.len() > 1 && !ordered_on_selection && !work.orders.contains_key(chooser) {
+                return Ok(Some(EffectDecision::LinkedReturnOrder(
+                    LinkedReturnOrderFrame {
+                        revision: self.revision,
+                        chooser: *chooser,
+                        objects,
+                        destination: crate::program::PublicZoneDestination::Battlefield,
+                    },
+                )));
+            }
+            let graveyard =
+                work.objects
+                    .iter()
+                    .filter(|_| {
+                        matches!(
+                            work.origin,
+                            LinkedReturnOrigin::Manifest { .. }
+                                | LinkedReturnOrigin::ChosenExile { .. }
+                                | LinkedReturnOrigin::ExileWithCounters { .. }
+                                | LinkedReturnOrigin::Exile
+                                | LinkedReturnOrigin::Hand { .. }
+                                | LinkedReturnOrigin::HandOrGraveyardAuras { .. }
+                                | LinkedReturnOrigin::LibraryTop { .. }
+                        )
+                    })
+                    .copied()
+                    .filter(|id| {
+                        work.replacements.as_ref().is_some_and(|batch| {
+                            batch.destination(*id).ok()
+                                == Some(crate::program::PublicZoneDestination::Graveyard)
+                        }) && self.window.cards().get(*id).is_some_and(|card| {
+                            work.origin.accepts(card) && card.owner() == *chooser
+                        })
+                    })
+                    .collect::<Vec<_>>();
+            if graveyard.len() > 1 && !work.graveyard_orders.contains_key(chooser) {
+                return Ok(Some(EffectDecision::LinkedReturnOrder(
+                    LinkedReturnOrderFrame {
+                        revision: self.revision,
+                        chooser: *chooser,
+                        objects: graveyard,
+                        destination: crate::program::PublicZoneDestination::Graveyard,
+                    },
+                )));
+            }
+        }
+        for chooser in players {
+            for id in &work.objects {
+                let Some(card) = self.window.cards().get(*id) else {
+                    continue;
+                };
+                if !work.origin.accepts(card)
+                    || work
+                        .replacements
+                        .as_ref()
+                        .and_then(|batch| batch.entry_controller(card.id()))
+                        .unwrap_or_else(|| work.origin.entry_controller(card))
+                        != chooser
+                {
+                    continue;
+                }
+                if work.replacements.as_ref().is_none_or(|batch| {
+                    batch.destination(*id).ok()
+                        != Some(crate::program::PublicZoneDestination::Battlefield)
+                }) {
+                    continue;
+                }
+                if let Some(domain) = self.linked_aura_domain(*id, chooser, &evaluated) {
+                    if domain.is_empty() {
+                        continue;
+                    }
+                    if !work.auras.contains_key(id) {
+                        return Ok(Some(EffectDecision::LinkedAuraChoice(
+                            LinkedAuraChoiceFrame {
+                                revision: self.revision,
+                                chooser,
+                                object: *id,
+                                domain,
+                            },
+                        )));
+                    }
+                }
+                if work.choices.contains_key(id) || work.origin.face_down_entry().is_some() {
+                    continue;
+                }
+                let Some(definition) = work
+                    .replacements
+                    .as_ref()
+                    .and_then(|batch| batch.copied_definition(*id))
+                    .or_else(|| self.copiable_program(*id))
+                else {
+                    continue;
+                };
+                if let Some(frame) =
+                    self.entry_choice_for_definition(chooser, *id, definition, false)?
+                {
+                    return Ok(Some(EffectDecision::EntryChoice(frame)));
+                }
+            }
+        }
+        Ok(None)
+    }
+    pub(super) fn begin_graveyard_returns(
+        &mut self,
+        entry: &crate::stack_window::StackEntry,
+        instruction: usize,
+        player: SeatId,
+        objects: Vec<ObjectId>,
+        tapped: bool,
+        append: &mut RulesJournal,
+    ) -> Result<(), EffectError> {
+        if self.linked_return_work.is_some() {
+            return Err(EffectError::InconsistentProgram);
+        }
+        self.linked_return_work = Some(LinkedReturnWork {
+            origin: LinkedReturnOrigin::Graveyard {
+                player: Some(player),
+                controller: None,
+                subtype_counters: None,
+                entry_additions: crate::program::EntryAdditions::default(),
+                entry: entry.id(),
+                instruction,
+                tapped,
+                forest: matches!(
+                    self.payloads
+                        .get(&entry.id())
+                        .and_then(StackPayload::instructions)
+                        .and_then(|ops| ops.get(instruction)),
+                    Some(Instruction::ReturnDyingCreatureAsForest)
+                ),
+                corpse: matches!(
+                    self.payloads
+                        .get(&entry.id())
+                        .and_then(StackPayload::instructions)
+                        .and_then(|ops| ops.get(instruction)),
+                    Some(Instruction::ReturnGraveyardCreatureWithCorpse(_))
+                ),
+            },
+            library_bottom: None,
+            wake_entry: None,
+            objects,
+            orders: BTreeMap::new(),
+            graveyard_orders: BTreeMap::new(),
+            choices: BTreeMap::new(),
+            auras: BTreeMap::new(),
+            replacements: None,
+        });
+        self.finish_linked_return_if_ready(append)
+    }
+
+    pub(super) fn begin_linked_cohort_return(
+        &mut self,
+        origin: LinkedReturnOrigin,
+        mut objects: Vec<ObjectId>,
+        append: &mut RulesJournal,
+    ) -> Result<(), EffectError> {
+        if self.linked_return_work.is_some() {
+            return Err(EffectError::InconsistentProgram);
+        }
+        objects.retain(|id| {
+            self.window
+                .cards()
+                .get(*id)
+                .is_some_and(|card| origin.accepts(card))
+        });
+        if objects.is_empty() {
+            return Ok(());
+        }
+        let auras = match origin {
+            LinkedReturnOrigin::HandOrGraveyardAuras { host, .. } => objects
+                .iter()
+                .map(|&id| (id, TargetRef::Object(host)))
+                .collect(),
+            _ => BTreeMap::new(),
+        };
+        self.linked_return_work = Some(LinkedReturnWork {
+            origin,
+            objects,
+            library_bottom: None,
+            wake_entry: None,
+            orders: BTreeMap::new(),
+            graveyard_orders: BTreeMap::new(),
+            choices: BTreeMap::new(),
+            auras,
+            replacements: None,
+        });
+        self.finish_linked_return_if_ready(append)
+    }
+
+    pub(super) fn finish_linked_return_if_ready(
+        &mut self,
+        append: &mut RulesJournal,
+    ) -> Result<(), EffectError> {
+        if self.linked_return_work.is_none() {
+            return Ok(());
+        }
+        if self
+            .linked_return_work
+            .as_ref()
+            .is_some_and(|work| work.replacements.is_none())
+        {
+            let work = self
+                .linked_return_work
+                .as_ref()
+                .ok_or(EffectError::InconsistentProgram)?;
+            let objects = work.objects.clone();
+            let origin = work.origin;
+            let controllers = objects
+                .iter()
+                .filter_map(|id| {
+                    self.window
+                        .cards()
+                        .get(*id)
+                        .filter(|card| work.origin.accepts(card))
+                        .map(|card| (*id, work.origin.entry_controller(card)))
+                })
+                .collect::<BTreeMap<_, _>>();
+            let intents = controllers
+                .keys()
+                .map(|id| {
+                    let before = self
+                        .window
+                        .cards()
+                        .get(*id)
+                        .ok_or(EffectError::InconsistentProgram)?;
+                    Ok(zone_replacement::ZoneMoveIntent {
+                        before: *id,
+                        reason: origin.reason(before.zone()),
+                    })
+                })
+                .collect::<Result<Vec<_>, EffectError>>()?;
+            let batch = self.begin_zone_replacements_with_entry(
+                zone_replacement::AuthorizedZoneBatch {
+                    cause: origin.cause(),
+                    action: crate::program::ZoneActionKind::EffectEnterBattlefield,
+                    intents,
+                },
+                Some(&controllers),
+            )?;
+            self.linked_return_work
+                .as_mut()
+                .ok_or(EffectError::InconsistentProgram)?
+                .replacements = Some(batch);
+        }
+        if let Some(work) = &mut self.linked_return_work
+            && let Some(batch) = &mut work.replacements
+            && batch.progress(self.revision)?.is_some()
+        {
+            return Ok(());
+        }
+        if self.linked_return_decision()?.is_some() {
+            return Ok(());
+        }
+        let held = self
+            .linked_return_work
+            .as_ref()
+            .ok_or(EffectError::InconsistentProgram)?;
+        let origin = held.origin;
+        let controllers = held
+            .objects
+            .iter()
+            .filter_map(|id| {
+                self.window
+                    .cards()
+                    .get(*id)
+                    .filter(|card| origin.accepts(card))
+                    .map(|card| (*id, origin.entry_controller(card)))
+            })
+            .collect::<BTreeMap<_, _>>();
+        let intents = controllers
+            .keys()
+            .map(|id| {
+                let before = self
+                    .window
+                    .cards()
+                    .get(*id)
+                    .ok_or(EffectError::InconsistentProgram)?;
+                Ok(zone_replacement::ZoneMoveIntent {
+                    before: *id,
+                    reason: origin.reason(before.zone()),
+                })
+            })
+            .collect::<Result<Vec<_>, EffectError>>()?;
+        let fresh = self.begin_zone_replacements_with_entry(
+            zone_replacement::AuthorizedZoneBatch {
+                cause: origin.cause(),
+                action: crate::program::ZoneActionKind::EffectEnterBattlefield,
+                intents,
+            },
+            Some(&controllers),
+        )?;
+        held.replacements
+            .as_ref()
+            .ok_or(EffectError::InconsistentProgram)?
+            .verify_initial(fresh)?;
+        let work = self
+            .linked_return_work
+            .take()
+            .ok_or(EffectError::InconsistentProgram)?;
+        let evaluated = self.evaluated_characteristics()?;
+        let destinations = work
+            .objects
+            .iter()
+            .filter_map(|id| {
+                work.replacements
+                    .as_ref()
+                    .and_then(|batch| batch.destination(*id).ok())
+                    .map(|destination| (*id, destination))
+            })
+            .collect::<BTreeMap<_, _>>();
+        let mut ordered = Vec::new();
+        for player in self.window.apnap_players()? {
+            if let Some(order) = work.orders.get(&player) {
+                ordered.extend(order.iter().copied());
+            } else {
+                ordered.extend(work.objects.iter().copied().filter(|id| {
+                    destinations.get(id)
+                        == Some(&crate::program::PublicZoneDestination::Battlefield)
+                        && self.window.cards().get(*id).is_some_and(|card| {
+                            work.origin.accepts(card)
+                                && work
+                                    .replacements
+                                    .as_ref()
+                                    .and_then(|batch| batch.entry_controller(card.id()))
+                                    .unwrap_or_else(|| work.origin.entry_controller(card))
+                                    == player
+                        })
+                        && self
+                            .linked_aura_domain(*id, player, &evaluated)
+                            .is_none_or(|domain| !domain.is_empty())
+                }));
+            }
+            if let Some(order) = work.graveyard_orders.get(&player) {
+                ordered.extend(order.iter().rev().copied());
+            } else {
+                ordered.extend(work.objects.iter().copied().filter(|id| {
+                    destinations.get(id) == Some(&crate::program::PublicZoneDestination::Graveyard)
+                        && self
+                            .window
+                            .cards()
+                            .get(*id)
+                            .is_some_and(|card| work.origin.accepts(card) && card.owner() == player)
+                }));
+            }
+            ordered.extend(work.objects.iter().copied().filter(|id| {
+                destinations.get(id).is_some_and(|destination| {
+                    !matches!(
+                        destination,
+                        crate::program::PublicZoneDestination::Battlefield
+                            | crate::program::PublicZoneDestination::Graveyard
+                    )
+                }) && self
+                    .window
+                    .cards()
+                    .get(*id)
+                    .is_some_and(|card| work.origin.accepts(card) && card.owner() == player)
+            }));
+        }
+        work.replacements
+            .as_ref()
+            .ok_or(EffectError::InconsistentProgram)?
+            .commit_devour(self, append)?;
+        self.prospective_entry_copies.extend(
+            work.replacements
+                .as_ref()
+                .ok_or(EffectError::InconsistentProgram)?
+                .entry_copies()
+                .filter(|(id, _)| ordered.contains(id)),
+        );
+        self.prospective_entry_controllers.extend(
+            work.replacements
+                .as_ref()
+                .ok_or(EffectError::InconsistentProgram)?
+                .entry_controllers()
+                .filter(|(id, _)| ordered.contains(id)),
+        );
+        self.resolution_entry_choices.extend(work.choices);
+        self.return_linked_exiles(
+            &ordered,
+            work.auras,
+            &destinations,
+            work.origin,
+            work.wake_entry,
+            append,
+        )?;
+        if let (LinkedReturnOrigin::LibraryTop { player, entry, .. }, Some(bottom)) =
+            (work.origin, work.library_bottom)
+        {
+            self.bottom_remaining_looked_at(player, entry, &bottom)?;
+        }
+        Ok(())
+    }
+    fn return_linked_exiles(
+        &mut self,
+        objects: &[ObjectId],
+        auras: BTreeMap<ObjectId, TargetRef>,
+        destinations: &BTreeMap<ObjectId, crate::program::PublicZoneDestination>,
+        origin: LinkedReturnOrigin,
+        wake_entry: Option<StackEntryId>,
+        append: &mut RulesJournal,
+    ) -> Result<(), EffectError> {
+        let mut moves = objects
+            .iter()
+            .filter_map(|id| {
+                let card = self.window.cards().get(*id)?;
+                if !origin.accepts(card) {
+                    return None;
+                }
+                let destination = destinations
+                    .get(id)?
+                    .physical(Some(origin.entry_controller(card)))?;
+                if matches!(origin, LinkedReturnOrigin::HandOrGraveyardAuras { .. })
+                    && matches!(
+                        (card.zone(), destination),
+                        (ObjectZone::Hand(_), ObjectDestination::Hand)
+                            | (ObjectZone::Graveyard(_), ObjectDestination::Graveyard)
+                    )
+                {
+                    return None;
+                }
+                (!matches!(
+                    (origin, destination),
+                    (LinkedReturnOrigin::Hand { .. }, ObjectDestination::Hand)
+                        | (
+                            LinkedReturnOrigin::Exile
+                                | LinkedReturnOrigin::ExileWithCounters { .. }
+                                | LinkedReturnOrigin::ChosenExile { .. },
+                            ObjectDestination::Exile
+                        )
+                        | (
+                            LinkedReturnOrigin::Graveyard { .. }
+                                | LinkedReturnOrigin::GraveyardTransformed { .. }
+                                | LinkedReturnOrigin::Sacrifice {
+                                    zone: ObjectZone::Graveyard(_),
+                                    ..
+                                },
+                            ObjectDestination::Graveyard
+                        )
+                        | (
+                            LinkedReturnOrigin::Sacrifice {
+                                zone: ObjectZone::Command,
+                                ..
+                            },
+                            ObjectDestination::Command
+                        )
+                        | (
+                            LinkedReturnOrigin::Sacrifice {
+                                zone: ObjectZone::Exile,
+                                ..
+                            },
+                            ObjectDestination::Exile
+                        )
+                        | (
+                            LinkedReturnOrigin::LibraryTop { .. },
+                            ObjectDestination::LibraryTop
+                        )
+                ))
+                .then_some((*id, destination))
+            })
+            .collect::<Vec<_>>();
+        let apnap = self.window.apnap_players()?.collect::<Vec<_>>();
+        moves.sort_by_key(|(_, destination)| match destination {
+            ObjectDestination::Battlefield { controller } => apnap
+                .iter()
+                .position(|player| player == controller)
+                .unwrap_or(apnap.len()),
+            _ => apnap.len(),
+        });
+        if moves.is_empty() {
+            if let Some(entry) = wake_entry {
+                let controller = self
+                    .window
+                    .resolving()
+                    .filter(|actual| actual.id() == entry)
+                    .ok_or(EffectError::WrongResolutionFrame)?
+                    .controller();
+                self.delay_spell_sacrifice(entry, controller, vec![])?;
+            }
+            return Ok(());
+        }
+        let before = self.rules_snapshot(None)?;
+        let mut face_up_origins = BTreeMap::new();
+        if let Some(kind) = origin.face_down_entry() {
+            for (id, destination) in &moves {
+                if matches!(destination, ObjectDestination::Battlefield { .. }) {
+                    let card = self
+                        .window
+                        .cards()
+                        .get(*id)
+                        .ok_or(EffectError::InconsistentProgram)?
+                        .clone();
+                    face_up_origins.insert(*id, card);
+                    self.window.set_orientation(*id, Some(kind))?;
+                }
+            }
+        }
+        let (window, mut movements) = self.window.record_linked_return_moves(&moves)?;
+        for movement in &mut movements {
+            if let Some(original) = face_up_origins.remove(&movement.before.id()) {
+                movement.before = original;
+            }
+        }
+        self.window = window;
+        let ids = movements
+            .iter()
+            .filter(|m| m.after.zone() == ObjectZone::Battlefield)
+            .map(|m| m.after.id())
+            .collect::<Vec<_>>();
+        self.characteristics.register_battlefield_entries(&ids)?;
+        if let Some(entry) = wake_entry {
+            let controller = self
+                .window
+                .resolving()
+                .filter(|actual| actual.id() == entry)
+                .ok_or(EffectError::WrongResolutionFrame)?
+                .controller();
+            self.delay_spell_sacrifice(entry, controller, ids.clone())?;
+        }
+        let mut counters = Vec::new();
+        let mut entry_effects = Vec::new();
+        for movement in &mut movements {
+            if movement.after.zone() != ObjectZone::Battlefield {
+                continue;
+            }
+            if matches!(origin, LinkedReturnOrigin::GraveyardTransformed { .. })
+                && !movement.after.transformed()
+            {
+                self.window.transform(movement.after.id())?;
+            }
+            if let LinkedReturnOrigin::Graveyard {
+                entry,
+                entry_additions,
+                ..
+            } = origin
+            {
+                use crate::characteristics::{
+                    ColorOperation, ResolvedDuration, ResolvedPart, ResolvedParts,
+                    SubtypeOperation, TypeChange, TypeOperation,
+                };
+                let mut parts = Vec::new();
+                if let Some(subtype) = entry_additions.creature_subtype {
+                    parts.push(ResolvedPart::Type(TypeChange {
+                        land_subtypes: SubtypeOperation::Keep,
+                        types: TypeOperation::Keep,
+                        supertypes: TypeOperation::Keep,
+                        subtypes: SubtypeOperation::Add([subtype].into()),
+                    }));
+                }
+                if let Some(color) = entry_additions.color {
+                    parts.push(ResolvedPart::Color(ColorOperation::Add([color].into())));
+                }
+                if !parts.is_empty() {
+                    entry_effects.push(self.characteristics.add_effect(
+                        entry,
+                        movement.after.id(),
+                        ResolvedParts(parts),
+                        ResolvedDuration::NoStatedDuration,
+                    )?);
+                }
+            }
+            self.stage_resolution_entry_choice(movement.before.id(), movement.after.id())?;
+            if matches!(
+                origin,
+                LinkedReturnOrigin::LibraryTop { tapped: true, .. }
+                    | LinkedReturnOrigin::Hand { tapped: true, .. }
+                    | LinkedReturnOrigin::Graveyard { tapped: true, .. }
+            ) {
+                self.window.enter_tapped(movement.after.id())?;
+            }
+            if let Some(host) = auras.get(&movement.before.id()) {
+                self.characteristics
+                    .attach(movement.after.id(), *host, true)?;
+            }
+            if matches!(origin, LinkedReturnOrigin::Graveyard { corpse: true, .. }) {
+                let object = movement.after.id();
+                let controller = self
+                    .current_characteristics(object)?
+                    .and_then(|o| o.controller)
+                    .ok_or(EffectError::InconsistentProgram)?;
+                let amount = super::permanent_counters::controlled_counter_multiplier(
+                    &before.view().evaluated,
+                    controller,
+                );
+                self.characteristics.corpse_counters.insert(object, amount);
+                self.window.mark_corpse_return(object)?;
+            }
+            let added = if matches!(origin, LinkedReturnOrigin::ExileWithCounters { .. }) {
+                self.apply_return_entry_counters(&before, movement.after.id())?
+            } else {
+                self.apply_entry_counters(
+                    &before,
+                    movement.after.id(),
+                    PowerToughnessCounters::default(),
+                    0,
+                )?
+            };
+            movement.after = self
+                .window
+                .cards()
+                .get(movement.after.id())
+                .ok_or(EffectError::InconsistentProgram)?
+                .clone();
+            if added.valid_placement() {
+                counters.push((movement.before.id(), movement.after.id(), added));
+            }
+        }
+        self.emit_from(
+            origin.cause(),
+            &before,
+            None,
+            append,
+            |old, current, controllers| {
+                let mut values = movements
+                    .iter()
+                    .map(|movement| {
+                        zone_occurrence_at(
+                            old,
+                            current,
+                            movement,
+                            origin.reason(movement.before.zone()),
+                            controllers,
+                        )
+                    })
+                    .collect::<Result<Vec<_>, _>>()?;
+                if matches!(origin, LinkedReturnOrigin::Graveyard { corpse: true, .. }) {
+                    for movement in movements
+                        .iter()
+                        .filter(|m| m.after.zone() == ObjectZone::Battlefield)
+                    {
+                        let id = movement.after.id();
+                        let after = current
+                            .characteristics
+                            .permanent_counter_count(id, CounterKind::Corpse);
+                        values.push(RulesOccurrence::PermanentCounterChanged {
+                            object: id,
+                            kind: CounterKind::Corpse,
+                            before: 0.into(),
+                            after,
+                        });
+                    }
+                }
+                for effect in entry_effects {
+                    // The zone change already records the entrant with its new characteristics.
+                    values.push(RulesOccurrence::ContinuousEffectCreated {
+                        effect,
+                        appearances: vec![],
+                    });
+                }
+                for (old_id, id, added) in counters {
+                    values.push(RulesOccurrence::CountersPlaced {
+                        object: id,
+                        before: old.characteristics.counters(id),
+                        after: current.characteristics.counters(id),
+                        added,
+                        before_appearance: Box::new(
+                            old.appearance(old_id)
+                                .ok_or(EffectError::InconsistentProgram)?,
+                        ),
+                        after_appearance: Box::new(
+                            current
+                                .appearance(id)
+                                .ok_or(EffectError::InconsistentProgram)?,
+                        ),
+                    });
+                }
+                Ok(values)
+            },
+        )?;
+        if let LinkedReturnOrigin::Graveyard {
+            subtype_counters: Some((subtype, amount)),
+            ..
+        } = origin
+        {
+            let current = self.evaluated_characteristics()?;
+            let recipients = ids
+                .into_iter()
+                .filter(|id| {
+                    current.get(*id).is_some_and(|permanent| {
+                        permanent.zone == ObjectZone::Battlefield
+                            && permanent.current_creature_subtypes.contains(&subtype)
+                    })
+                })
+                .collect();
+            self.place_plus_one_counter_amount(
+                recipients,
+                i64::from(amount).into(),
+                origin.cause(),
+                append,
+            )?;
+        }
         Ok(())
     }
 }
@@ -510,11 +3051,24 @@ pub(super) fn zone_occurrence_at(
     if previous.object != movement.before || !after_matches {
         return Err(EffectError::InconsistentProgram);
     }
+    let additional_arrivals = movement
+        .arrivals()
+        .skip(1)
+        .map(|id| after.appearance(id).ok_or(EffectError::InconsistentProgram))
+        .collect::<Result<Vec<_>, _>>()?;
     Ok(RulesOccurrence::ZoneChange(Box::new(ZoneOccurrence {
+        additional_arrivals,
+        madness: false,
         before: previous,
         after: current,
         reason,
     })))
+}
+pub(super) fn madness_replaced(mut value: RulesOccurrence, applied: bool) -> RulesOccurrence {
+    if let RulesOccurrence::ZoneChange(change) = &mut value {
+        change.madness = applied && change.after.object.zone() == ObjectZone::Exile;
+    }
+    value
 }
 pub(super) fn exit_occurrence_at(
     before: &RulesView<'_>,

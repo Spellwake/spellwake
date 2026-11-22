@@ -17,6 +17,49 @@ use spellwake_engine::{
     token::TokenEntryPreview,
 };
 use std::collections::BTreeSet;
+fn activated_kind(
+    ability: Option<&spellwake_engine::activated::ActivatedAbility>,
+) -> PlayerAbilityKind {
+    use spellwake_engine::{
+        activated::{HandDiscardKeyword, PowerAbility, SourceCost},
+        program::BodyTarget,
+    };
+    match ability.map(|a| (a.source_cost, a.body.target)) {
+        Some((
+            SourceCost::Power {
+                kind: PowerAbility::Crew,
+                ..
+            },
+            _,
+        )) => PlayerAbilityKind::Crew,
+        Some((cost, _)) if cost.uses_contributors_origin() && cost.power_cost().is_none() => {
+            PlayerAbilityKind::TapChosenPermanent
+        }
+        Some((
+            SourceCost::Power {
+                kind: PowerAbility::Station,
+                ..
+            },
+            _,
+        )) => PlayerAbilityKind::Station,
+        Some((
+            SourceCost::Power {
+                kind: PowerAbility::Saddle,
+                ..
+            },
+            _,
+        )) => PlayerAbilityKind::Saddle,
+        Some((SourceCost::HandDiscardSelf(HandDiscardKeyword::Cycling), _)) => {
+            PlayerAbilityKind::Cycling
+        }
+        Some((SourceCost::Ninjutsu { .. }, _)) => PlayerAbilityKind::Ninjutsu,
+        Some((SourceCost::HandDiscardSelf(HandDiscardKeyword::Transmute), _)) => {
+            PlayerAbilityKind::Transmute
+        }
+        Some((_, BodyTarget::None)) => PlayerAbilityKind::ActivatedUntargeted,
+        _ => PlayerAbilityKind::Activated,
+    }
+}
 mod decisions;
 mod values;
 use values::*;
@@ -551,15 +594,102 @@ impl Projection<'_, '_> {
         let mut players = vec![];
         for native in seats {
             let cards = source.execution().window().cards();
+            let mut search_reveals: Vec<_> = source
+                .search_reveals()
+                .into_iter()
+                .filter(|(card, _)| card.owner() == native)
+                .map(|(card, program)| {
+                    self.display
+                        .object(card, program)
+                        .map(|display| display.characteristics)
+                })
+                .collect::<Result<_, _>>()?;
+            let search_reveal = search_reveals.first().cloned();
+            if search_reveals.len() <= 1 {
+                search_reveals.clear();
+            }
+            let cascade_reveals = source
+                .cascade_reveals()
+                .filter(|(object, _)| object.owner() == native)
+                .map(|(object, face)| {
+                    self.display
+                        .object(object, face)
+                        .map(|value| value.characteristics)
+                })
+                .collect::<Result<_, _>>()?;
+            let face_down_reveals = source
+                .face_down_reveals()
+                .filter(|(object, _)| object.owner() == native)
+                .map(|(object, face)| {
+                    self.display
+                        .object(object, face)
+                        .map(|value| value.characteristics)
+                })
+                .collect::<Result<_, _>>()?;
+            let phased_out = source
+                .execution()
+                .phased_permanents()
+                .filter(|(object, _, _)| object.controller() == Some(native))
+                .map(|(object, return_seat, program)| {
+                    let face_down = object.face_down().is_some();
+                    Ok(crate::player_wire::PlayerPhasedPermanent {
+                        names: if face_down {
+                            Vec::new()
+                        } else {
+                            program
+                                .names
+                                .iter()
+                                .map(|name| name.as_str().to_owned())
+                                .collect()
+                        },
+                        face_down,
+                        tapped: object.tapped() == Some(true),
+                        phase_in_seat_id: self.app_seat(return_seat)?,
+                        loyalty: source
+                            .execution()
+                            .loyalty_counters()
+                            .get(&object.id())
+                            .map(quantity)
+                            .transpose()?,
+                    })
+                })
+                .collect::<Result<_, NativeProjectionError>>()?;
             players.push(PlayerSeatView {
+                phased_out,
+                emblems: source.execution().emblems().filter(|emblem| emblem.controller == native).map(|emblem| match &emblem.definition {
+                    spellwake_engine::emblem::EmblemDefinition::PreventAllButOne => PlayerEmblem::PreventAllButOne {},
+                    spellwake_engine::emblem::EmblemDefinition::LoyaltyAnyTurn => PlayerEmblem::LoyaltyAnyTurn {},
+                    spellwake_engine::emblem::EmblemDefinition::UnlimitedHandWithGraveyardReturn =>
+                        PlayerEmblem::UnlimitedHandWithGraveyardReturn {},
+                    spellwake_engine::emblem::EmblemDefinition::ReturnFallenArtifacts => PlayerEmblem::ReturnFallenArtifacts {},
+                    spellwake_engine::emblem::EmblemDefinition::SacrificeCreatureGainLifeDraw => PlayerEmblem::SacrificeCreatureGainLifeDraw {},
+                    spellwake_engine::emblem::EmblemDefinition::UpkeepDamage { amount } => PlayerEmblem::UpkeepDamage { amount: amount.clone() },
+                    spellwake_engine::emblem::EmblemDefinition::SpellcastDamage { amount, noncreature_only } => PlayerEmblem::SpellcastDamage { amount: amount.clone(), noncreature_only: *noncreature_only },
+                    spellwake_engine::emblem::EmblemDefinition::ControlledCreatureBonus { power_toughness, keywords } => PlayerEmblem::ControlledCreatureBonus {
+                        power: power_toughness.power.clone(), toughness: power_toughness.toughness.clone(),
+                        keywords: keywords.iter().copied().map(keyword).collect(),
+                    },
+                }).collect(),
+                monarch: source.execution().monarch() == Some(native),
+                city_blessing: source.execution().has_city_blessing(native),
+                cascade_reveals,
+                speed: source.execution().speed(native),
+                face_down_reveals,
+                search_reveal,
+                search_reveals,
                 seat_id: self.app_seat(native)?,
                 life: source
                     .execution()
                     .life_total(native)
                     .ok_or(NativeProjectionError::MissingNativeValue)?
                     .clone(),
-                poison: count(0)?,
-                counters: vec![],
+                poison: quantity(&source.execution().poison_counters(native))?,
+                counters: {
+                    let experience=source.execution().experience_counters(native);
+                    if experience.is_positive() {
+                        vec![crate::player_wire::PlayerCounter {name:"experience".to_owned(),count:quantity(&experience)?}]
+                    } else {vec![]}
+                },
                 mana_pool: ManaType::ALL
                     .into_iter()
                     .map(|kind| {
@@ -569,6 +699,26 @@ impl Projection<'_, '_> {
                         })
                     })
                     .collect::<Result<_, NativeProjectionError>>()?,
+                mana_lots: source.execution().floating_mana_lots().filter(|(_,lot)|lot.player == native).map(|(id,lot)| {
+                    use spellwake_engine::mana::ManaSpendEffect;
+                    use crate::player_wire::{PlayerManaLot, PlayerManaSpendEffect};
+                    let effect = match lot.effect {
+                        ManaSpendEffect::RetainUntilCleanup => PlayerManaSpendEffect::RetainUntilCleanup,
+                        ManaSpendEffect::CommanderEntryCounters => PlayerManaSpendEffect::CommanderEntryCounters,
+                        ManaSpendEffect::SharedCommanderTypeScry => PlayerManaSpendEffect::SharedCommanderTypeScry,
+                    };
+                    Ok(PlayerManaLot { id, effect, color: mana(lot.mana_type), amount: quantity(&lot.remaining)? })
+                }).collect::<Result<_,NativeProjectionError>>()?,
+                restricted_mana: source.execution().restricted_mana().iter().filter(|((seat, _, _), amount)| *seat == native && amount.is_positive()).map(|((_, kind, restriction), amount)| {
+                    Ok(crate::player_wire::PlayerRestrictedManaSpend {
+                        color: mana(*kind), amount: quantity(amount)?,
+                        restriction: match restriction { spellwake_engine::mana::ManaRestriction::SpellWithFlashbackFromGraveyard => crate::player_wire::PlayerManaRestriction::SpellWithFlashbackFromGraveyard, spellwake_engine::mana::ManaRestriction::PlaneswalkerSpell => crate::player_wire::PlayerManaRestriction::PlaneswalkerSpell, spellwake_engine::mana::ManaRestriction::ColorlessSpell => crate::player_wire::PlayerManaRestriction::ColorlessSpell, spellwake_engine::mana::ManaRestriction::CommanderSpell => crate::player_wire::PlayerManaRestriction::CommanderSpell, spellwake_engine::mana::ManaRestriction::ColorlessEldraziSpellOrAbility => crate::player_wire::PlayerManaRestriction::ColorlessEldraziSpellOrAbility, spellwake_engine::mana::ManaRestriction::NoncreatureSpell => crate::player_wire::PlayerManaRestriction::NoncreatureSpell, spellwake_engine::mana::ManaRestriction::ArtifactSpellOrAbility => crate::player_wire::PlayerManaRestriction::ArtifactSpellOrAbility, spellwake_engine::mana::ManaRestriction::CreatureSpell => crate::player_wire::PlayerManaRestriction::CreatureSpell, spellwake_engine::mana::ManaRestriction::CreatureSpellOfTypeUncounterable(_) => crate::player_wire::PlayerManaRestriction::CreatureSpellOfTypeUncounterable, spellwake_engine::mana::ManaRestriction::CreatureSpellOfType(_) => crate::player_wire::PlayerManaRestriction::CreatureSpellOfType, spellwake_engine::mana::ManaRestriction::CreatureSpellOrAbilityOfType(_) => crate::player_wire::PlayerManaRestriction::CreatureSpellOrAbilityOfType },
+                        creature_type: match restriction {
+                            spellwake_engine::mana::ManaRestriction::CreatureSpellOfTypeUncounterable(Some(kind)) | spellwake_engine::mana::ManaRestriction::CreatureSpellOfType(Some(kind)) | spellwake_engine::mana::ManaRestriction::CreatureSpellOrAbilityOfType(Some(kind)) => Some(PlayerCreatureTypeLabel::try_from(source.execution().creature_vocabulary().label(*kind).ok_or(NativeProjectionError::MissingNativeValue)?.to_owned()).map_err(|_| NativeProjectionError::InvalidSnapshot)?),
+                            _ => None,
+                        },
+                    })
+                }).collect::<Result<_, NativeProjectionError>>()?,
                 hand_count: count(
                     cards
                         .iter()
@@ -578,8 +728,8 @@ impl Projection<'_, '_> {
                 library_count: count(cards.library(native).len())?,
                 eliminated: !source.execution().window().participants().contains(&native)
                     || source.conclusion().is_some_and(|conclusion| {
-                        conclusion.losing_players().any(|seat| seat == native)
-                    }),
+                    conclusion.losing_players().any(|seat| seat == native)
+                }),
             });
         }
         let turn = if let Some(turn) = source.turn() {
@@ -601,16 +751,20 @@ impl Projection<'_, '_> {
             Some(PlayerTurn {
                 number: RulesCount::try_from(position.number.to_string())
                     .map_err(|_| NativeProjectionError::InvalidSnapshot)?,
+                day_night: match source.execution().day_night() {
+                    spellwake_engine::day_night::DayNight::Neither => None,
+                    spellwake_engine::day_night::DayNight::Day => Some(PlayerDayNight::Day),
+                    spellwake_engine::day_night::DayNight::Night => Some(PlayerDayNight::Night),
+                },
                 active_seat_ids: source
                     .execution()
                     .window()
-                    .active_player()
+                    .active_participant()
                     .map(|seat| self.app_seat(seat))
                     .transpose()?
                     .into_iter()
                     .collect(),
                 priority_seat_ids,
-                priority_deadline_at: None,
                 phase: phase(position.step.phase()),
                 step: step(position.step),
             })
@@ -693,12 +847,38 @@ impl Projection<'_, '_> {
                 ObjectZone::Hand(seat) => seat != self.scope.binding.actor,
                 _ => false,
             };
-        if hidden {
+        let total = ids.len();
+        let ids = if hidden {
+            match zone {
+                ObjectZone::Library(owner) => {
+                    let reveals = source.execution().draw_reveals(owner);
+                    let top_visible = source
+                        .execution()
+                        .library_top_access(&self.evaluated, owner, self.scope.binding.actor)
+                        .visible;
+                    ids.into_iter()
+                        .enumerate()
+                        .filter_map(|(i, id)| {
+                            (reveals.contains(&id) || (i == 0 && top_visible)).then_some(id)
+                        })
+                        .collect()
+                }
+                ObjectZone::Hand(_) => ids
+                    .into_iter()
+                    .filter(|id| source.execution().revealed_by_ninjutsu(*id))
+                    .collect(),
+                _ => Vec::new(),
+            }
+        } else {
+            ids
+        };
+        let concealed = total - ids.len();
+        if hidden && ids.is_empty() {
             return Ok(PlayerZone::Hidden {
                 handle,
                 zone_type,
                 owner_seat_id: owner,
-                hidden_count: count(ids.len())?,
+                hidden_count: count(concealed)?,
             });
         }
         let order_known = matches!(zone, ObjectZone::Library(_) | ObjectZone::Graveyard(_));
@@ -707,13 +887,25 @@ impl Projection<'_, '_> {
             self.visible.insert(id);
             let object = self.object(id, &handle)?;
             objects.push(object.handle.clone());
-            self.known.push(object.handle.clone());
+            if matches!(object.identity, PlayerObjectIdentity::Known { .. }) {
+                self.known.push(object.handle.clone());
+            }
             self.objects.push(object);
         }
         if order_known {
             self.ordered.push(handle.clone());
         } else {
             objects.sort();
+        }
+        if concealed > 0 {
+            return Ok(PlayerZone::Mixed {
+                handle,
+                zone_type,
+                owner_seat_id: owner,
+                objects,
+                hidden_count: count(concealed)?,
+                order_known,
+            });
         }
         Ok(PlayerZone::Visible {
             handle,
@@ -740,18 +932,121 @@ impl Projection<'_, '_> {
             .get(id)
             .ok_or(NativeProjectionError::MissingNativeValue)?
             .clone();
-        let definition = source
-            .execution()
-            .copiable_program(id)
-            .ok_or(NativeProjectionError::MissingNativeValue)?;
-        let display = self.display.object(physical, definition)?;
-        if display.definition_id.is_some_and(|id| id.is_nil())
-            || display.printing_id.is_some_and(|id| id.is_nil())
-            || (self.display.scope() == NativeDisplayScope::SourceOnly
-                && (display.definition_id.is_some() || display.printing_id.is_some()))
+        use spellwake_engine::face_down::FaceDownKind;
+        let face_down = physical.face_down().map(|kind| match kind {
+            FaceDownKind::Forest => PlayerFaceDownKind::Forest,
+            FaceDownKind::Manifest => PlayerFaceDownKind::Manifest,
+            FaceDownKind::Morph => PlayerFaceDownKind::Morph,
+            FaceDownKind::Disguise => PlayerFaceDownKind::Disguise,
+        });
+        let foretold = source.execution().foretold_on(id);
+        let exiled_face_down_viewer = source.execution().face_down_exile_viewer(id);
+        let may_look =
+            (face_down.is_none() && foretold.is_none() && exiled_face_down_viewer.is_none())
+                || self.metadata.disclosure == NativeDisclosure::CompletedParticipant
+                || source.conclusion().is_some()
+                || (face_down.is_some() && current.controller == Some(self.scope.binding.actor))
+                || (foretold.is_some() && physical.owner() == self.scope.binding.actor)
+                || exiled_face_down_viewer == Some(self.scope.binding.actor);
+        let face_down_order =
+            if face_down.is_some() || foretold.is_some() || exiled_face_down_viewer.is_some() {
+                let earlier = source
+                    .execution()
+                    .window()
+                    .cards()
+                    .iter()
+                    .filter(|other| {
+                        other.zone() == physical.zone()
+                            && other.id() < id
+                            && (other.face_down().is_some()
+                                || source.execution().foretold_on(other.id()).is_some()
+                                || source
+                                    .execution()
+                                    .face_down_exile_viewer(other.id())
+                                    .is_some())
+                    })
+                    .count();
+                Some(count(earlier + 1)?)
+            } else {
+                None
+            };
+        let mut face_up_options = Vec::new();
+        if face_down.is_some()
+            && current.zone == ObjectZone::Battlefield
+            && current.controller == Some(self.scope.binding.actor)
+            && source.conclusion().is_none()
         {
-            return Err(NativeProjectionError::InvalidMetadata);
+            let preview = source
+                .execution()
+                .face_up_preview(id)
+                .map_err(|_| NativeProjectionError::MissingNativeValue)?
+                .ok_or(NativeProjectionError::MissingNativeValue)?;
+            let mut options = preview
+                .abilities
+                .face_up
+                .iter()
+                .map(|&index| {
+                    let price = preview
+                        .printed_text
+                        .face_up_abilities
+                        .get(index)
+                        .ok_or(NativeProjectionError::MissingNativeValue)?
+                        .cost();
+                    Ok((index, price))
+                })
+                .collect::<Result<Vec<_>, NativeProjectionError>>()?;
+            if let Some(price) = source.execution().manifest_face_up_cost(id) {
+                options.push((preview.printed_text.face_up_abilities.len(), price));
+            }
+            for (index, price) in options {
+                face_up_options.push(PlayerFaceUpOption {
+                    ability: u16::try_from(index)
+                        .map_err(|_| NativeProjectionError::InvalidSnapshot)?,
+                    generic: quantity(&price.generic)?,
+                    required: price
+                        .required
+                        .iter()
+                        .map(|(kind, amount)| {
+                            Ok(ManaSpend {
+                                color: mana(*kind),
+                                amount: quantity(amount)?,
+                            })
+                        })
+                        .collect::<Result<_, NativeProjectionError>>()?,
+                });
+            }
         }
+        let identity = if may_look {
+            let definition =
+                if face_down.is_some() || foretold.is_some() || exiled_face_down_viewer.is_some() {
+                    source.execution().base_program(id)
+                } else {
+                    source.execution().display_program(id)
+                }
+                .ok_or(NativeProjectionError::MissingNativeValue)?;
+            let display = self
+                .display
+                .object(physical, physical.displayed_face(definition))?;
+            if display.definition_id.is_some_and(|id| id.is_nil())
+                || display.printing_id.is_some_and(|id| id.is_nil())
+                || (self.display.scope() == NativeDisplayScope::SourceOnly
+                    && (display.definition_id.is_some() || display.printing_id.is_some()))
+            {
+                return Err(NativeProjectionError::InvalidMetadata);
+            }
+            PlayerObjectIdentity::Known {
+                definition_id: display.definition_id,
+                printing_id: display.printing_id,
+                characteristics: Box::new(display.characteristics),
+                current_names: if foretold.is_some() || exiled_face_down_viewer.is_some() {
+                    spellwake_contracts::names::ObjectNames::nameless()
+                } else {
+                    current.current_names.clone()
+                },
+            }
+        } else {
+            PlayerObjectIdentity::Concealed {}
+        };
         let handle = self.issue(NativeReference::Object(id))?;
         let mut abilities = vec![];
         for ability in current
@@ -779,9 +1074,19 @@ impl Projection<'_, '_> {
                     .abilities
                     .continuous
                     .into_iter()
+                    .chain(
+                        current
+                            .abilities
+                            .additional_battlefield_abilities
+                            .iter()
+                            .copied(),
+                    )
                     .map(NativeAbilityReference::Continuous),
             )
         {
+            if foretold.is_some() || exiled_face_down_viewer.is_some() {
+                break;
+            }
             let (reference, kind) = match ability {
                 NativeAbilityReference::Mana(ability) => (
                     NativeReference::ManaAbility {
@@ -795,7 +1100,13 @@ impl Projection<'_, '_> {
                         source: id,
                         ability,
                     },
-                    PlayerAbilityKind::Activated,
+                    activated_kind(
+                        current
+                            .printed_text
+                            .activated
+                            .iter()
+                            .find(|instance| instance.id == ability),
+                    ),
                 ),
                 NativeAbilityReference::Triggered(ability) => (
                     NativeReference::TriggeredAbility {
@@ -812,18 +1123,147 @@ impl Projection<'_, '_> {
                     PlayerAbilityKind::Continuous,
                 ),
             };
-            let label = self.display.ability(physical, &current, ability)?;
+            let mut label = if face_down.is_some() {
+                match ability {
+                    NativeAbilityReference::Triggered(_) => "Triggered ability",
+                    NativeAbilityReference::Activated(_) => "Activated ability",
+                    NativeAbilityReference::Continuous(_) => "Static ability",
+                    NativeAbilityReference::Mana(_) => "Mana ability",
+                }
+                .into()
+            } else {
+                self.display.ability(physical, &current, ability)?
+            };
+            if let NativeAbilityReference::Activated(number) = ability
+                && let Some(cost) = current.printed_text.loyalty_costs.get(&number)
+            {
+                label = if current
+                    .printed_text
+                    .variable_loyalty_costs
+                    .contains(&number)
+                {
+                    format!("−X: {label}")
+                } else if *cost > 0 {
+                    format!("+{cost}: {label}")
+                } else {
+                    format!("{cost}: {label}")
+                };
+            }
             let issued = self.issue(reference)?;
             self.abilities.push(PlayerAbilityBinding {
                 source: handle.clone(),
                 handle: issued.clone(),
                 kind,
             });
+            let power_up_cost = match ability {
+                NativeAbilityReference::Activated(number)
+                    if current.zone == ObjectZone::Battlefield
+                        && current.abilities.activated.contains(&number)
+                        && current.printed_text.activation_restrictions.get(&number)
+                            == Some(
+                                &spellwake_engine::activated::ActivationRestriction::PowerUp,
+                            ) =>
+                {
+                    let definition = current
+                        .printed_text
+                        .activated
+                        .iter()
+                        .find(|a| a.id == number)
+                        .ok_or(NativeProjectionError::MissingNativeValue)?;
+                    let price = source
+                        .execution()
+                        .power_up_mana_cost(id, &definition.mana_cost);
+                    Some(PlayerPowerUpCost {
+                        generic: quantity(&price.generic)?,
+                        required: price
+                            .required
+                            .iter()
+                            .filter(|(_, n)| n.is_positive())
+                            .map(|(color, amount)| {
+                                Ok(ManaSpend {
+                                    color: mana(*color),
+                                    amount: quantity(amount)?,
+                                })
+                            })
+                            .collect::<Result<_, NativeProjectionError>>()?,
+                    })
+                }
+                _ => None,
+            };
             abilities.push(PlayerAbilityView {
+                power_up_cost,
+                exhausted:matches!(ability,NativeAbilityReference::Activated(number) if self.scope.source.execution().ability_exhausted(id,number)),
                 handle: issued,
                 kind,
                 label,
             });
+        }
+        if foretold.is_none() && exiled_face_down_viewer.is_none() {
+            for (effect, granted) in &current.granted_activated {
+                let kind = activated_kind(Some(granted));
+                let issued = self.issue(NativeReference::GrantedAbility {
+                    source: id,
+                    effect: *effect,
+                })?;
+                self.abilities.push(PlayerAbilityBinding {
+                    source: handle.clone(),
+                    handle: issued.clone(),
+                    kind,
+                });
+                let label = match granted.body.instructions.as_slice() {
+                    [spellwake_engine::program::Instruction::Encore] => "Encore",
+                    [spellwake_engine::program::Instruction::RegenerateSource] => {
+                        "Regenerate this permanent"
+                    }
+                    [spellwake_engine::program::Instruction::RegenerateTarget] => {
+                        "Regenerate target permanent"
+                    }
+                    [spellwake_engine::program::Instruction::DestroyTarget] => {
+                        "Destroy target permanent"
+                    }
+                    _ => "Granted activated ability",
+                };
+                let terms = current.inherited_activation_terms.get(effect);
+                let power_up_cost = if terms.is_some_and(|t| {
+                    t.restriction
+                        == Some(spellwake_engine::activated::ActivationRestriction::PowerUp)
+                }) {
+                    let price = source
+                        .execution()
+                        .power_up_mana_cost(id, &granted.mana_cost);
+                    Some(PlayerPowerUpCost {
+                        generic: quantity(&price.generic)?,
+                        required: price
+                            .required
+                            .iter()
+                            .filter(|(_, n)| n.is_positive())
+                            .map(|(color, amount)| {
+                                Ok(ManaSpend {
+                                    color: mana(*color),
+                                    amount: quantity(amount)?,
+                                })
+                            })
+                            .collect::<Result<_, NativeProjectionError>>()?,
+                    })
+                } else {
+                    None
+                };
+                let label = match terms.and_then(|t| t.loyalty.map(|n| (n, t.variable_loyalty))) {
+                    Some((_, true)) => format!("−X: {label}"),
+                    Some((n, false)) if n > 0 => format!("+{n}: {label}"),
+                    Some((n, false)) => format!("{n}: {label}"),
+                    None => label.into(),
+                };
+                let exhausted =
+                    terms.is_some_and(|t| source.execution().inherited_ability_exhausted(id, t));
+                abilities.push(PlayerAbilityView {
+                    power_up_cost,
+                    exhausted,
+                    handle: issued,
+                    kind,
+                    label,
+                });
+            }
         }
         let mut counters = vec![];
         if let Some(values) = source.execution().power_toughness_counters(id) {
@@ -836,7 +1276,85 @@ impl Projection<'_, '_> {
                 }
             }
         }
+        if let Some(n) = source.execution().lore_counters().get(&id) {
+            counters.push(PlayerCounter {
+                name: "lore".into(),
+                count: quantity(n)?,
+            });
+        }
+        if let Some(n) = source.execution().loyalty_counters().get(&id) {
+            counters.push(PlayerCounter {
+                name: "loyalty".into(),
+                count: quantity(n)?,
+            });
+        }
+        if let Some(n) = source.execution().charge_counters().get(&id) {
+            counters.push(PlayerCounter {
+                name: "charge".into(),
+                count: quantity(n)?,
+            });
+        }
+        for (name, kind) in [
+            ("defense", spellwake_engine::effects::CounterKind::Defense),
+            ("study", spellwake_engine::effects::CounterKind::Study),
+            ("eyeball", spellwake_engine::effects::CounterKind::Eyeball),
+            ("slime", spellwake_engine::effects::CounterKind::Slime),
+            ("vow", spellwake_engine::effects::CounterKind::Vow),
+            ("corpse", spellwake_engine::effects::CounterKind::Corpse),
+            ("blessing", spellwake_engine::effects::CounterKind::Blessing),
+            ("despair", spellwake_engine::effects::CounterKind::Despair),
+            (
+                "indestructible",
+                spellwake_engine::effects::CounterKind::Indestructible,
+            ),
+            ("page", spellwake_engine::effects::CounterKind::Page),
+            ("quest", spellwake_engine::effects::CounterKind::Quest),
+            ("verse", spellwake_engine::effects::CounterKind::Verse),
+        ] {
+            let count = source.execution().counters_of_kind(id, kind);
+            if count.is_positive() {
+                counters.push(PlayerCounter {
+                    name: name.into(),
+                    count: quantity(&count)?,
+                });
+            }
+        }
+        for (name, counts) in [
+            ("suspect", source.execution().suspect_counters()),
+            ("storage", source.execution().storage_counters()),
+            ("fade", source.execution().fade_counters()),
+            ("time", source.execution().time_counters()),
+        ] {
+            if let Some(amount) = counts.get(&id) {
+                counters.push(PlayerCounter {
+                    name: name.into(),
+                    count: quantity(amount)?,
+                });
+            }
+        }
+        if let Some(amount) = source.execution().age_counters().get(&id) {
+            counters.push(PlayerCounter {
+                name: "age".into(),
+                count: quantity(amount)?,
+            });
+        }
         let properties = PlayerPublicProperties {
+            chosen_creature_type: source
+                .execution()
+                .entry_creature_type(id)
+                .map(|kind| {
+                    source
+                        .execution()
+                        .creature_vocabulary()
+                        .label(kind)
+                        .ok_or(NativeProjectionError::MissingNativeValue)
+                        .and_then(|label| {
+                            PlayerCreatureTypeLabel::try_from(label.to_owned())
+                                .map_err(|_| NativeProjectionError::InvalidSnapshot)
+                        })
+                })
+                .transpose()?,
+            renowned: source.execution().renowned_objects().contains(&id),
             card_types: current
                 .current_types
                 .iter()
@@ -870,8 +1388,164 @@ impl Projection<'_, '_> {
                 .copied()
                 .map(land_type)
                 .collect(),
+            planeswalker_types: current
+                .current_planeswalker_subtypes
+                .iter()
+                .map(|kind| format!("{kind:?}"))
+                .collect(),
+            enchantment_types: current
+                .current_enchantment_subtypes
+                .iter()
+                .map(|kind| kind.wire_label().to_owned())
+                .collect(),
+            spell_types: current
+                .current_spell_subtypes
+                .iter()
+                .map(|kind| match kind {
+                    spellwake_engine::program::SpellSubtype::Arcane => PlayerSpellSubtype::Arcane,
+                    spellwake_engine::program::SpellSubtype::Adventure => {
+                        PlayerSpellSubtype::Adventure
+                    }
+                })
+                .collect(),
             colors: current.current_colors.iter().copied().map(color).collect(),
-            keywords: current.keywords.iter().copied().map(keyword).collect(),
+            keywords: current
+                .keywords
+                .iter()
+                .copied()
+                .map(keyword)
+                .chain(
+                    current
+                        .printed_text
+                        .activation_restrictions
+                        .iter()
+                        .any(|(id, r)| {
+                            *r == spellwake_engine::activated::ActivationRestriction::PowerUp
+                                && current.abilities.activated.contains(id)
+                        })
+                        .then_some(PlayerKeyword::PowerUp),
+                )
+                .chain(
+                    current
+                        .toxic_value
+                        .is_some()
+                        .then_some(PlayerKeyword::Toxic),
+                )
+                .chain(
+                    current
+                        .printed_text
+                        .triggered
+                        .iter()
+                        .filter(|a| current.abilities.triggered.contains(&a.id))
+                        .filter_map(|a| match &a.condition.event {
+                            spellwake_engine::program::TriggerEvent::Attacks {
+                                subject,
+                                mode:
+                                    spellwake_engine::program::AttackTriggerMode::Individual {
+                                        capture_defender: true,
+                                    },
+                            } if *subject
+                                == spellwake_engine::program::ObjectFilter::self_object() =>
+                            {
+                                Some(PlayerKeyword::Annihilator)
+                            }
+                            spellwake_engine::program::TriggerEvent::Keyword(
+                                spellwake_engine::program::TriggerKeywordEvent::Counter(k),
+                            ) => match k {
+                                spellwake_engine::program::CounterKeyword::Fading(_) => {
+                                    Some(PlayerKeyword::Fading)
+                                }
+                                spellwake_engine::program::CounterKeyword::Vanishing(_) => {
+                                    Some(PlayerKeyword::Vanishing)
+                                }
+                                spellwake_engine::program::CounterKeyword::Persist => {
+                                    Some(PlayerKeyword::Persist)
+                                }
+                                spellwake_engine::program::CounterKeyword::Undying => {
+                                    Some(PlayerKeyword::Undying)
+                                }
+                                _ => None,
+                            },
+                            spellwake_engine::program::TriggerEvent::Keyword(
+                                spellwake_engine::program::TriggerKeywordEvent::Upkeep(
+                                    spellwake_engine::program::UpkeepKeyword::Echo,
+                                ),
+                            ) => Some(PlayerKeyword::Echo),
+                            spellwake_engine::program::TriggerEvent::Keyword(
+                                spellwake_engine::program::TriggerKeywordEvent::Upkeep(
+                                    spellwake_engine::program::UpkeepKeyword::CumulativeUpkeep,
+                                ),
+                            ) => Some(PlayerKeyword::CumulativeUpkeep),
+                            _ => match a.body.instructions.as_slice() {
+                                [_, spellwake_engine::program::Instruction::ExtortDrain] => {
+                                    Some(PlayerKeyword::Extort)
+                                }
+                                [
+                                    _,
+                                    spellwake_engine::program::Instruction::ResolveTransfer(key),
+                                ] => {
+                                    use spellwake_engine::program::TransferKeyword;
+                                    Some(match key {
+                                        TransferKeyword::Graft(_) => PlayerKeyword::Graft,
+                                        TransferKeyword::Modular(_) => PlayerKeyword::Modular,
+                                        TransferKeyword::Soulshift(_) => PlayerKeyword::Soulshift,
+                                    })
+                                }
+                                [spellwake_engine::program::Instruction::ResolveGrowth(key)] => {
+                                    use spellwake_engine::program::GrowthKeyword;
+                                    Some(match key {
+                                        GrowthKeyword::Mentor => PlayerKeyword::Mentor,
+                                        GrowthKeyword::Increment => PlayerKeyword::Increment,
+                                        GrowthKeyword::Evolve => PlayerKeyword::Evolve,
+                                        GrowthKeyword::Backup { .. } => PlayerKeyword::Backup,
+                                    })
+                                }
+                                _ => None,
+                            },
+                        }),
+                )
+                .chain((current.exalted_instances() > 0).then_some(PlayerKeyword::Exalted))
+                .chain(
+                    current
+                        .printed_text
+                        .triggered
+                        .iter()
+                        .filter(|a| current.abilities.triggered.contains(&a.id))
+                        .filter_map(|a| {
+                            use spellwake_engine::program::TokenKeyword;
+                            TokenKeyword::from_ability(a, source.execution().creature_vocabulary())
+                                .map(|k| match k {
+                                    TokenKeyword::Afterlife => PlayerKeyword::Afterlife,
+                                    TokenKeyword::Fabricate => PlayerKeyword::Fabricate,
+                                })
+                        }),
+                )
+                .chain(
+                    current
+                        .combat_trigger_keywords()
+                        .map(|ability| {
+                            use spellwake_engine::program::CombatTriggerKeyword;
+                            match ability {
+                                CombatTriggerKeyword::Decayed => PlayerKeyword::Decayed,
+                                CombatTriggerKeyword::Mobilize(_) => PlayerKeyword::Mobilize,
+                                CombatTriggerKeyword::Ingest => PlayerKeyword::Ingest,
+                                CombatTriggerKeyword::Poisonous(_) => PlayerKeyword::Poisonous,
+                                CombatTriggerKeyword::Afflict(_) => PlayerKeyword::Afflict,
+                                CombatTriggerKeyword::Dethrone => PlayerKeyword::Dethrone,
+                                CombatTriggerKeyword::Melee => PlayerKeyword::Melee,
+                                CombatTriggerKeyword::Renown(_) => PlayerKeyword::Renown,
+                                CombatTriggerKeyword::Training => PlayerKeyword::Training,
+                                CombatTriggerKeyword::Prowess => PlayerKeyword::Prowess,
+                                CombatTriggerKeyword::BattleCry => PlayerKeyword::BattleCry,
+                                CombatTriggerKeyword::Bushido(_) => PlayerKeyword::Bushido,
+                                CombatTriggerKeyword::Flanking => PlayerKeyword::Flanking,
+                                CombatTriggerKeyword::Frenzy(_) => PlayerKeyword::Frenzy,
+                                CombatTriggerKeyword::Rampage(_) => PlayerKeyword::Rampage,
+                            }
+                        })
+                        .collect::<std::collections::BTreeSet<_>>(),
+                )
+                .collect(),
             power: current
                 .power_toughness
                 .as_ref()
@@ -881,7 +1555,118 @@ impl Projection<'_, '_> {
                 .as_ref()
                 .map(|value| value.derived.toughness.clone()),
         };
+        let commander = physical
+            .card_id()
+            .and_then(|id| source.execution().commander_record(id))
+            .map(|record| {
+                let combat_damage = record
+                    .combat_damage()
+                    .iter()
+                    .map(|(&seat, amount)| {
+                        Ok(PlayerCommanderDamage {
+                            seat_id: self.app_seat(seat)?,
+                            amount: quantity(amount)?,
+                        })
+                    })
+                    .collect::<Result<_, NativeProjectionError>>()?;
+                Ok::<_, NativeProjectionError>(PlayerCommanderView {
+                    command_zone_casts: quantity(record.command_zone_casts())?,
+                    combat_damage,
+                })
+            })
+            .transpose()?;
+        let adventure_face = if may_look {
+            source
+                .execution()
+                .printed_face(physical)
+                .and_then(|program| program.adventure.as_deref())
+                .map(|face| {
+                    self.display
+                        .object(physical, face)
+                        .map(|view| view.characteristics)
+                })
+                .transpose()?
+        } else {
+            None
+        };
+        let split_faces = if may_look {
+            source
+                .execution()
+                .printed_face(physical)
+                .and_then(|p| p.split.as_ref())
+                .map(|split| {
+                    Ok::<_, NativeProjectionError>([
+                        self.display.object(physical, &split.left)?.characteristics,
+                        self.display.object(physical, &split.right)?.characteristics,
+                    ])
+                })
+                .transpose()?
+        } else {
+            None
+        };
+        let transform_face = if may_look {
+            source
+                .execution()
+                .opposite_physical_face(id)
+                .map(|other| {
+                    self.display
+                        .object(physical, other)
+                        .map(|view| PlayerTransformFace {
+                            back_face_up: physical.transformed(),
+                            opposite: view.characteristics,
+                        })
+                })
+                .transpose()?
+        } else {
+            None
+        };
+        let protector_seat_id = if physical.zone() == ObjectZone::Battlefield
+            && current.has_type(spellwake_engine::program::CardType::Battle)
+        {
+            source
+                .execution()
+                .battle_protector(id)
+                .map(|seat| self.app_seat(seat))
+                .transpose()?
+        } else {
+            None
+        };
         Ok(PlayerObject {
+            times_mutated: (physical.times_mutated() > 0)
+                .then(|| count(physical.times_mutated()))
+                .transpose()?,
+            protector_seat_id,
+            adventure_face,
+            split_faces,
+            transform_face,
+            commander,
+            exile_mana: source
+                .execution()
+                .flexible_exile_mana(id, self.scope.binding.actor)
+                .map(|any_type| {
+                    if any_type {
+                        crate::player_wire::ExileManaPermission::AnyType
+                    } else {
+                        crate::player_wire::ExileManaPermission::AnyColor
+                    }
+                }),
+            may_play_from_library: matches!(physical.zone(),ObjectZone::Library(owner)
+                if source.execution().window().cards().library(owner).first()==Some(&id) && source.execution().library_top_access(&self.evaluated,owner,self.scope.binding.actor).playable),
+            free_exile_types: source
+                .execution()
+                .free_exile_types(id, self.scope.binding.actor)
+                .into_iter()
+                .map(card_type)
+                .collect(),
+            may_cast_free_from_exile: source
+                .execution()
+                .may_cast_free_from_exile(id, self.scope.binding.actor),
+            may_play_from_exile: source
+                .execution()
+                .may_play_from_exile(id, self.scope.binding.actor)
+                || source
+                    .execution()
+                    .may_cast_from_granted_exile(id, self.scope.binding.actor),
             handle,
             zone: zone.clone(),
             owner_seat_id: self.app_seat(physical.owner())?,
@@ -889,13 +1674,19 @@ impl Projection<'_, '_> {
                 .controller
                 .map(|seat| self.app_seat(seat))
                 .transpose()?,
-            identity: PlayerObjectIdentity::Known {
-                definition_id: display.definition_id,
-                printing_id: display.printing_id,
-                characteristics: Box::new(display.characteristics),
-                current_names: current.current_names,
-            },
-            public_properties: Some(properties),
+            identity,
+            face_down,
+            face_down_order,
+            exiled_face_down: exiled_face_down_viewer.is_some(),
+            face_up_options,
+            foretold_on_turn: foretold
+                .map(|turn| {
+                    RulesCount::try_from(turn.to_string())
+                        .map_err(|_| NativeProjectionError::InvalidSnapshot)
+                })
+                .transpose()?,
+            public_properties: (foretold.is_none() && exiled_face_down_viewer.is_none())
+                .then_some(properties),
             tapped: physical.tapped().unwrap_or(false),
             counters,
             abilities,
@@ -905,7 +1696,31 @@ impl Projection<'_, '_> {
                     .battlefield_marked_damage(id)
                     .unwrap_or_else(|| 0.into()),
             )?,
-            attached_to: None,
+            saddled: current.saddled,
+            bestowed: source.execution().is_bestowed(id),
+            warped_on_turn: source
+                .execution()
+                .warped_on(id)
+                .map(|turn| {
+                    RulesCount::try_from(turn.to_string())
+                        .map_err(|_| NativeProjectionError::InvalidSnapshot)
+                })
+                .transpose()?,
+            plotted_on_turn: source
+                .execution()
+                .plotted_on(id)
+                .map(|turn| {
+                    RulesCount::try_from(turn.to_string())
+                        .map_err(|_| NativeProjectionError::InvalidSnapshot)
+                })
+                .transpose()?,
+            attached_to: current
+                .attached_to
+                .map(|host| {
+                    VisibleSubject::try_from(self.target(host)?)
+                        .map_err(|_| NativeProjectionError::MissingNativeValue)
+                })
+                .transpose()?,
         })
     }
     fn stack_entries(&mut self) -> Result<Vec<PlayerStackEntry>, NativeProjectionError> {
@@ -917,7 +1732,11 @@ impl Projection<'_, '_> {
                 StackKind::ActivatedAbility { source } | StackKind::TriggeredAbility { source } => {
                     Some(source.id())
                 }
-                StackKind::SpellCopy { .. } => None,
+                StackKind::Speed
+                | StackKind::Monarch
+                | StackKind::DelayedCopy { .. }
+                | StackKind::Emblem { .. }
+                | StackKind::SpellCopy { .. } => None,
             };
             let source_object = source_id
                 .filter(|id| self.visible.contains(id))
@@ -953,15 +1772,46 @@ impl Projection<'_, '_> {
             if targets.len().checked_add(unavailable) != Some(entry.targets().targets().len()) {
                 return Err(NativeProjectionError::InvalidSnapshot);
             }
+            let mut visible_contributors = Vec::new();
+            for &member in entry.power_contributors() {
+                if self.visible.contains(&member) {
+                    visible_contributors.push(self.visible_object(member)?);
+                }
+            }
             result.push(PlayerStackEntry {
+                chosen_x: entry.chosen_x().map(quantity).transpose()?,
+                modes: source.execution().chosen_spell_modes(entry.id()).collect(),
+                visible_contributors,
                 handle: self.issue(NativeReference::Stack(entry.id()))?,
                 controller_seat_id: self.app_seat(entry.controller())?,
                 source_object,
-                label: self.display.stack(
-                    entry,
-                    source.execution().stack_body(entry.id()),
-                    source.execution().execution_bindings(entry.id()),
-                )?,
+                label: match entry.kind() {
+                    StackKind::Speed => "Increase speed".into(),
+                    StackKind::Monarch => "Monarch ability".into(),
+                    StackKind::DelayedCopy { .. } => "Delayed triggered ability".into(),
+                    StackKind::Emblem { .. } => "Emblem ability".into(),
+                    StackKind::CardSpell(id)
+                        if source
+                            .execution()
+                            .window()
+                            .cards()
+                            .get(*id)
+                            .is_some_and(|o| o.face_down().is_some()) =>
+                    {
+                        "Face-down creature spell".into()
+                    }
+                    StackKind::ActivatedAbility { source } if source.face_down().is_some() => {
+                        "Activated ability".into()
+                    }
+                    StackKind::TriggeredAbility { source } if source.face_down().is_some() => {
+                        "Triggered ability".into()
+                    }
+                    _ => self.display.stack(
+                        entry,
+                        source.execution().stack_body(entry.id()),
+                        source.execution().execution_bindings(entry.id()),
+                    )?,
+                },
                 targets,
                 unavailable_targets: count(unavailable)?,
             });
@@ -976,7 +1826,7 @@ impl Projection<'_, '_> {
                 PlayerObjectIdentity::Known {
                     characteristics, ..
                 } => Some(characteristics.name.clone()),
-                PlayerObjectIdentity::Concealed {} => None,
+                PlayerObjectIdentity::Concealed {} => Some("Face-down card".into()),
             })
             .ok_or(NativeProjectionError::HiddenReference)
     }

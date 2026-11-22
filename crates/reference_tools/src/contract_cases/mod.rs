@@ -25,6 +25,8 @@ use std::{collections::BTreeSet, sync::Arc};
 
 type PreparedSeedInput = (GameId, GameContext, spellwake_engine::setup::GameSeed);
 type PreparedSelection = Option<Result<PreparedSeedInput, String>>;
+// Test-only contract case enum kept inline across test fixtures.
+#[allow(clippy::large_enum_variant)]
 #[derive(Debug, PartialEq, Eq)]
 enum Native {
     ReplyLowering {
@@ -324,7 +326,7 @@ fn execute(selection: &shared::Selection) -> Result<(Vec<shared::CallRecord>, Na
             ExecutableBody::new(
                 spellwake_engine::program::BodyTarget::None,
                 vec![spellwake_engine::program::Instruction::DrawController {
-                    amount: spellwake_engine::program::InstructionAmount::Literal(0.into()),
+                    amount: spellwake_engine::program::ValueExpr::Literal(0.into()),
                 }],
             ),
         ));

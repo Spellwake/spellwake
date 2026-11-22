@@ -3,16 +3,18 @@ use super::*;
 use crate::test_support::{creature_types, program as codec};
 use serde_json::json;
 
-fn condition(left: ConditionValue) -> ResolutionCondition {
+fn condition(left: ValueExpr) -> ResolutionCondition {
     ResolutionCondition {
         left,
         comparison: Comparison::GreaterOrEqual,
-        right: ConditionValue::Literal(20.into()),
+        right: crate::program::ValueExpr::Literal(20.into()),
     }
 }
 fn branch(destination: usize) -> Instruction {
     Instruction::BranchIfFalse {
-        condition: condition(ConditionValue::ControllerLife),
+        condition: condition(crate::program::ValueExpr::PlayerStat(
+            crate::program::PlayerStatExpr::ControllerLife,
+        )),
         destination,
     }
 }
@@ -24,9 +26,11 @@ fn choose() -> Instruction {
 }
 fn read() -> Instruction {
     Instruction::DrawController {
-        amount: InstructionAmount::ControlledPermanentsOfChosenType {
-            chosen: CreatureTypeSlot::new(0),
-        },
+        amount: crate::program::ValueExpr::count_battlefield(
+            crate::program::ObjectFilter::any()
+                .controlled()
+                .of_chosen_slot(CreatureTypeSlot::new(0)),
+        ),
     }
 }
 fn gain() -> Instruction {
@@ -111,7 +115,7 @@ fn unreachable_code_cannot_supply_target_consumption_or_hide_invalid_syntax() {
             vec![
                 Instruction::Jump { destination: 2 },
                 Instruction::DrawController {
-                    amount: InstructionAmount::Literal((-1).into())
+                    amount: crate::program::ValueExpr::Literal((-1).into())
                 }
             ]
         ),
@@ -159,7 +163,9 @@ fn moved_donor_at_a_join_is_rejected_but_disjoint_paths_remain_admitted() {
 fn trigger_count_conditions_require_actual_bound_admission_even_when_unreachable() {
     let instructions = vec![
         Instruction::BranchIfFalse {
-            condition: condition(ConditionValue::MatchedOccurrences),
+            condition: condition(crate::program::ValueExpr::event(
+                crate::program::EventValueKind::MatchedOccurrences,
+            )),
             destination: 2,
         },
         gain(),
@@ -174,7 +180,7 @@ fn trigger_count_conditions_require_actual_bound_admission_even_when_unreachable
         body.validate_in(
             &vocabulary,
             BodyContext::TriggerBound {
-                condition: OrdinaryCondition::SelfCast,
+                condition: &crate::program::TriggerSpec::self_cast(),
                 grouping: TriggerGrouping::EachOccurrence,
             }
         ),

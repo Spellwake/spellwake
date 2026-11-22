@@ -59,9 +59,7 @@ fn two_actual_pre_color_events_accept_the_max_minus_two_prefix_before_later_fail
     use crate::{
         mana::{ManaAbility, ManaOutput, ManaType},
         occurrence::{RulesOccurrence, TriggerError},
-        program::{
-            ObjectRelation, OrdinaryCondition, Program, TriggeredAbility, TriggeredAbilityId,
-        },
+        program::{Program, TriggeredAbility, TriggeredAbilityId},
     };
     let a = SeatId(0);
     let b = SeatId(1);
@@ -78,11 +76,13 @@ fn two_actual_pre_color_events_accept_the_max_minus_two_prefix_before_later_fail
     land.triggered.push(TriggeredAbility {
         grouping: spellwake_engine::program::TriggerGrouping::EachOccurrence,
         id: TriggeredAbilityId(1),
-        condition: OrdinaryCondition::BecomesTapped(ObjectRelation::SelfObject),
+        condition: crate::program::TriggerSpec::becomes_tapped(
+            crate::program::ObjectFilter::self_object(),
+        ),
         body: ExecutableBody::new(
             BodyTarget::None,
             vec![crate::program::Instruction::DrawController {
-                amount: crate::program::InstructionAmount::Literal(1.into()),
+                amount: crate::program::ValueExpr::Literal(1.into()),
             }],
         ),
     });
@@ -275,6 +275,8 @@ fn standalone_error_observations_keep_the_actual_constructor_and_primitive_domai
         BTreeSet::new(),
         BTreeSet::new(),
         ProgramKind::Permanent(PermanentDefinition {
+            entry_tap: None,
+            attachment: None,
             printed_pt: None,
             casting_cost: None,
         }),

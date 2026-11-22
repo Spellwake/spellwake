@@ -103,7 +103,7 @@ fn explicit_nonuniform_totals_preserve_player_order_and_arbitrary_precision() {
     assert_eq!(game.execution().life_total(A), Some(&40.into()));
     assert_eq!(game.execution().life_total(B), Some(&huge));
     assert_eq!(game.execution().life_total(C), None);
-    assert_eq!(game.execution().window().turn_owner(), A);
+    assert_eq!(game.execution().window().active_player(), A);
     assert_eq!(game.outcome(), None);
 }
 
@@ -230,7 +230,7 @@ fn two_player_results_derive_from_all_supported_simultaneous_losses() {
 }
 
 #[test]
-fn multiplayer_life_loss_eliminates_the_seat_before_survivors_act() {
+fn multiplayer_life_loss_departs_loser_and_continues_for_survivors() {
     let mut input = GameSeed::with_uniform_life(
         vec![A, B, C],
         A,
@@ -257,16 +257,13 @@ fn multiplayer_life_loss_eliminates_the_seat_before_survivors_act() {
         }),
         Err(GameError::UnknownActor)
     );
-    let pass = game
-        .advance(GameInput {
+    assert!(
+        game.advance(GameInput {
             basis: game.basis().clone(),
             actor: A,
-            command: GameCommand::Pass,
+            command: GameCommand::Pass
         })
-        .unwrap();
-    assert_eq!(
-        pass.state().execution().window().phase(),
-        WindowPhase::Priority(spellwake_engine::priority::PriorityPhase::Ready { holder: C })
+        .is_ok()
     );
 }
 

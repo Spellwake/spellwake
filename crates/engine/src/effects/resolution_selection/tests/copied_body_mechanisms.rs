@@ -61,7 +61,11 @@ fn selected_body() -> ExecutableBody {
             },
             Instruction::Discard {
                 players: AffectedPlayers::One(ResolvingPlayer::TargetPlayer),
-                amount: InstructionAmount::ControlledPermanentsOfChosenType { chosen: slot() },
+                amount: crate::program::ValueExpr::count_battlefield(
+                    crate::program::ObjectFilter::any()
+                        .controlled()
+                        .of_chosen_slot(slot()),
+                ),
             },
             gain(4),
         ],
@@ -85,7 +89,7 @@ fn setup() -> GameState {
             Program::instant(
                 ManaCost::free(),
                 ExecutableBody::new(
-                    BodyTarget::SingleSpell(SpellTargetFilter::CopyableInstructionSpell),
+                    BodyTarget::SingleSpell(crate::program::SpellFilter::copyable_instruction()),
                     vec![
                         // A real live parent local has the same slot ordinal as
                         // the donor, but must not become a copied-body local.
@@ -105,7 +109,7 @@ fn setup() -> GameState {
             Program::instant(
                 ManaCost::free(),
                 ExecutableBody::new(
-                    BodyTarget::SingleSpell(SpellTargetFilter::AnySpell),
+                    BodyTarget::SingleSpell(crate::program::SpellFilter::any()),
                     vec![Instruction::CounterSpell],
                 ),
             ),

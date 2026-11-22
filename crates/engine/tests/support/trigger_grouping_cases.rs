@@ -20,7 +20,9 @@ fn grouped_watcher(grouping: TriggerGrouping, body: Vec<Instruction>) -> Program
     let mut program = Program::artifact(None, vec![]);
     program.triggered.push(TriggeredAbility {
         id: TriggeredAbilityId(7),
-        condition: OrdinaryCondition::Enters(ObjectRelation::AnyCreature),
+        condition: spellwake_engine::program::TriggerSpec::enters(
+            spellwake_engine::program::ObjectFilter::creature(),
+        ),
         grouping,
         body: ExecutableBody::new(BodyTarget::None, body),
     });
@@ -28,7 +30,9 @@ fn grouped_watcher(grouping: TriggerGrouping, body: Vec<Instruction>) -> Program
 }
 fn draw_count() -> Instruction {
     Instruction::DrawController {
-        amount: InstructionAmount::MatchedOccurrences,
+        amount: spellwake_engine::program::ValueExpr::event(
+            spellwake_engine::program::EventValueKind::MatchedOccurrences,
+        ),
     }
 }
 
@@ -107,8 +111,10 @@ fn copied_grouping_uses_current_text_and_excludes_retained_removed_roster_entrie
         let mut donor = Program::creature(None, 1.into(), 1.into(), BTreeSet::new());
         donor.triggered =
             grouped_watcher(TriggerGrouping::OneOrMoreTogether, vec![draw_count()]).triggered;
-        donor.triggered[0].condition =
-            OrdinaryCondition::TokenCreated(PlayerRelation::AnyParticipant);
+        donor.triggered[0].condition = spellwake_engine::program::TriggerSpec::player_action(
+            PlayerRelation::AnyParticipant,
+            spellwake_engine::program::PlayerTriggerAction::TokenCreated,
+        );
         let game = start(
             vec![create(vec![group(
                 creature(),
@@ -194,7 +200,9 @@ fn simultaneous_deaths_keep_complete_before_causes_after_watcher_itself_dies() {
     let mut watcher = Program::creature(None, 1.into(), 1.into(), BTreeSet::new());
     watcher.triggered =
         grouped_watcher(TriggerGrouping::OneOrMoreTogether, vec![draw_count()]).triggered;
-    watcher.triggered[0].condition = OrdinaryCondition::Dies(ObjectRelation::AnyCreature);
+    watcher.triggered[0].condition = spellwake_engine::program::TriggerSpec::dies(
+        spellwake_engine::program::ObjectFilter::creature(),
+    );
     let mut shrinker = Program::enchantment(Some(ManaCost::free()));
     shrinker.continuous = Some(StaticContinuousAbility::Battlefield {
         id: StaticAbilityId(1),
@@ -442,8 +450,10 @@ fn player_groups_keep_participant_keys_separate_from_one_source_controller() {
             adjustment: LifeAdjustment::Gain(1.into()),
         }],
     );
-    watcher.triggered[0].condition =
-        OrdinaryCondition::TokenCreated(spellwake_engine::program::PlayerRelation::AnyParticipant);
+    watcher.triggered[0].condition = spellwake_engine::program::TriggerSpec::player_action(
+        spellwake_engine::program::PlayerRelation::AnyParticipant,
+        spellwake_engine::program::PlayerTriggerAction::TokenCreated,
+    );
     let game = root(
         vec![
             spell(
@@ -502,7 +512,11 @@ fn matched_count_keeps_original_binding_across_nested_token_order_and_later_draw
         vec![
             create(vec![TokenCreation {
                 definition: template(Program::artifact(None, vec![])),
-                amount: InstructionAmount::MatchedOccurrences,
+                amount: spellwake_engine::program::ValueExpr::event(
+                    spellwake_engine::program::EventValueKind::MatchedOccurrences,
+                ),
+                base_size: None,
+                enters_tapped: false,
                 recipients: TokenRecipients::Controller,
             }]),
             draw_count(),

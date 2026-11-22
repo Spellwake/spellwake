@@ -103,6 +103,7 @@ fn payment_rejects_wrong_or_absent_intrinsic_ability_then_uses_the_same_sources_
         let paid = reply(
             funded.state(),
             DecisionReply::ResolutionPayment(ResolutionPaymentReply::Pay(ManaPayment {
+                from_lots: Default::default(),
                 spend: vec![ManaSpend {
                     mana_type: ManaType::Blue,
                     amount: 2.into(),
@@ -216,13 +217,13 @@ fn retain_copy_reply_rejects_wrong_actor_and_both_reuse_forms_before_real_retain
             hand(
                 2,
                 A,
-                BodyTarget::SingleSpell(SpellTargetFilter::AnySpell),
+                BodyTarget::SingleSpell(crate::program::SpellFilter::any()),
                 vec![Instruction::CounterSpell],
             ),
             hand(
                 3,
                 A,
-                BodyTarget::SingleSpell(SpellTargetFilter::CopyableInstructionSpell),
+                BodyTarget::SingleSpell(crate::program::SpellFilter::copyable_instruction()),
                 wrapped(Instruction::CopySpell),
             ),
         ],

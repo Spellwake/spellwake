@@ -3,7 +3,7 @@
 //! These authored programs do not qualify whole cards, games or nested mana timing.
 use spellwake_contracts::RulesInteger;
 use spellwake_engine::combat::CombatRules;
-use spellwake_engine::program::{BodyTarget, ExecutableBody, SpellTargetFilter};
+use spellwake_engine::program::{BodyTarget, ExecutableBody};
 use spellwake_engine::setup::GameSeed;
 use spellwake_engine::{
     damage::DamageJournal,
@@ -648,6 +648,7 @@ fn produced_mana_is_spent_by_real_castpaid_with_distinct_nonrepeated_records() {
     );
     let game = candidate.into_state();
     let payment = ManaPayment {
+        from_lots: Default::default(),
         spend: vec![
             ManaSpend {
                 mana_type: ManaType::Red,
@@ -1059,7 +1060,9 @@ fn pending_copy_decision_blocks_both_players_and_reply_does_not_repeat_productio
                 B,
                 ManaCost::free(),
                 Instruction::CopySpell,
-                BodyTarget::SingleSpell(SpellTargetFilter::CopyableInstructionSpell),
+                BodyTarget::SingleSpell(
+                    spellwake_engine::program::SpellFilter::copyable_instruction(),
+                ),
             ),
             creature(),
         ],

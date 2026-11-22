@@ -5,15 +5,14 @@ use crate::{
     actor::RequestActor,
     player_wire::{PlayerSnapshot, PlayerViewRequest},
 };
+mod commander_opening;
 mod commands;
-mod incident;
-mod match_worker;
-mod response_worker;
-pub use match_worker::NativeMatchWorker;
-pub use response_worker::{NativeResponseJobOutcome, run_owned_response_job};
+pub use commander_opening::{CommanderWorker, ReleaseOpeningWorker, open_commander_game_from_env};
 mod config;
 mod controller;
 mod history;
+mod qualified_opening;
+pub use qualified_opening::open_qualified_game_from_env;
 mod replay;
 pub(crate) use history::NativeHistoryRead;
 pub(crate) use replay::NativeReplayRead;
@@ -76,6 +75,10 @@ pub struct NativeGameRuntime {
     programs: NativeProgramSource,
     store: NativeArtifactStore,
     recovery: NativeRecoveryBudget,
+    checkpoints: lifecycle::CheckpointCache,
+    revisions: std::sync::Arc<
+        std::sync::Mutex<std::collections::HashMap<Uuid, tokio::sync::broadcast::Sender<u64>>>,
+    >,
     #[cfg(test)]
     hook: Option<(TestDeliveryStage, std::sync::Arc<DeliveryHook>)>,
     #[cfg(test)]
@@ -85,6 +88,43 @@ impl NativeGameRuntime {
     pub(crate) fn admission_programs(&self) -> &NativeProgramSource {
         &self.programs
     }
+
+    /// Subscribe to live revision advancement notifications for one game.
+    pub(crate) fn subscribe_game(&self, game_id: Uuid) -> tokio::sync::broadcast::Receiver<u64> {
+        let Ok(mut guard) = self.revisions.lock() else {
+            let (_, rx) = tokio::sync::broadcast::channel(16);
+            return rx;
+        };
+        if guard.len() > 1024 {
+            guard.retain(|_, tx| tx.receiver_count() > 0);
+        }
+        guard
+            .entry(game_id)
+            .or_insert_with(|| tokio::sync::broadcast::channel(32).0)
+            .subscribe()
+    }
+
+    /// Broadcast a newly committed revision to all active stream subscribers for this game.
+    pub(crate) fn notify_game(&self, game_id: Uuid, revision: u64) {
+        if let Ok(mut guard) = self.revisions.lock() {
+            if let Some(tx) = guard.get(&game_id) {
+                if tx.send(revision).is_err() {
+                    guard.remove(&game_id);
+                }
+            }
+        }
+    }
+
+    pub(crate) fn prepare_commander_room(
+        &self,
+        manifest: &crate::native_game::CommanderRelease,
+        observation: &crate::native_game::preparation_source::NativeRoomSource,
+        actor: Uuid,
+        countdown: bool,
+    ) -> Option<serde_json::Value> {
+        manifest.prepare_room(&self.programs, observation, actor, countdown)
+    }
+
     /// Install already validated immutable inputs and an unused recovery limit template.
     /// This grants no source readiness, participant authority or database capability.
     pub fn new(
@@ -96,6 +136,8 @@ impl NativeGameRuntime {
             programs,
             store,
             recovery,
+            checkpoints: lifecycle::CheckpointCache::new(),
+            revisions: std::sync::Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
             #[cfg(test)]
             hook: None,
             #[cfg(test)]
@@ -243,11 +285,12 @@ impl NativeGameRuntime {
                 return Ok(NativeReadOutcome::Refused(NativeReadRefusal::Unavailable));
             }
         };
-        let recovered = match repository.recover(
+        let recovered = match repository.recover_cached(
             request.game_id,
             &self.store,
             &self.programs,
             self.recovery.clone(),
+            &self.checkpoints,
         ) {
             Ok(Some(recovered)) => recovered,
             Ok(None) => return Ok(NativeReadOutcome::Refused(NativeReadRefusal::Unavailable)),
@@ -266,7 +309,8 @@ impl NativeGameRuntime {
             .map_err(|error| NativeSourceError(Failure::Initial(error)))?;
         let metadata = NativeProjectionMetadata {
             through_event_sequence: recovered.source().last_event_sequence().clone(),
-            // A cached View may outlive the operational wait. Bind the deadline at delivery.
+            // Current native source has overall-bank clocks, not an independently
+            // qualified per-decision deadline. Never invent one from wall time.
             deadline_at: None,
             disclosure: NativeDisclosure::LiveParticipant,
         };
@@ -289,9 +333,7 @@ impl NativeGameRuntime {
                 return Err(error);
             }
         };
-        let composed = issued
-            .with_live_deadline(repository, recovered.checkpoint(), access.viewer_seat_id())
-            .and_then(|issued| compose(&access, &recovered, issued));
+        let composed = compose(&access, &recovered, issued);
         #[cfg(test)]
         self.observe_delivery(TestDeliveryStage::Refresh, repository, &recovered);
         // Issuance/cache is not an authorization lease. Recheck after all private

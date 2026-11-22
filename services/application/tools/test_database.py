@@ -12,12 +12,9 @@ ROOT = Path(__file__).resolve().parents[1]
 CONTAINER = 'spellwake-application-db'
 
 # These fixtures change shared state or inspect all games for a shared host.
-# The supervised exit case uses the fixture-host owner also used by other tests.
 # The UUID-named acl_probe function fixture is deliberately ordinary: it neither
 # replaces an existing function nor changes locks on an application relation.
 SHARED_STATE_TESTS = (
-    'countdown_dispatch::due_sweep_reserves_both_qualified_paths_and_isolates_policy_drift',
-    'countdown_dispatch::opening_choice_dispatch_handles_silent_rooms_and_preserves_explicit_choices',
     'native_opening_context::late_finalization_failure_rolls_back_context_artifacts_receipt_and_clocks',
     'retirement::retirement_rejects_stale_isolation_and_rolls_back_all_effects_on_late_failure',
     'patreon_intake::shared_evidence_scan_rediscovers_late_objects_and_preserves_stripe_nonwebhook_rules',
@@ -26,16 +23,15 @@ SHARED_STATE_TESTS = (
     'native_foundation::transition_sources::upgrade_recovers_unmarked_human_controller_and_system_originals_after_host_fencing',
     'native_foundation::clock_opening::forward_migration_preserves_legacy_native_bo3_originals_and_exact_recovery',
     'native_foundation::presentation::presentation_keeps_original_match_across_authenticated_mode_format_and_cosmetic_edits',
-    'recovery_integrity::supervised_exit_freezes_at_durable_clock_and_replays_after_host_replacement',
 )
 
 # These cases assert database lock schedules with short observation deadlines.
 LOCK_SCHEDULE_TESTS = (
     'native_foundation::races::concurrent_same_original_installs_one_native_frame_and_both_callers_recover_it',
     'native_foundation::races::concurrent_view_and_cursor_issuers_retain_the_first_semantic_winner',
-    'native_foundation::races::controller_ante::committed_writer_precedes_rebind_and_funds_exactly_once',
-    'native_foundation::races::controller_ante::known_pending_and_same_original_wait_never_repeat_the_economic_write',
-    'native_foundation::races::controller_ante::lower_sorted_other_participant_wait_does_not_lock_controller_sponsor_first',
+    'native_foundation::controller_ante::committed_writer_precedes_rebind_and_funds_exactly_once',
+    'native_foundation::controller_ante::known_pending_and_same_original_wait_never_repeat_the_economic_write',
+    'native_foundation::controller_ante::lower_sorted_other_participant_wait_does_not_lock_controller_sponsor_first',
 )
 PRIVATE_DATABASE_TESTS = SHARED_STATE_TESTS + LOCK_SCHEDULE_TESTS
 

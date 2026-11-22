@@ -4,6 +4,8 @@ use crate::{amount::Amount, catalogue_source::read_bounded};
 use num_traits::ToPrimitive;
 use spellwake_content::Legality;
 use std::{collections::BTreeMap, error::Error, path::Path};
+mod limited;
+pub use limited::inspect_limited_deck;
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -21,7 +23,7 @@ struct Entry {
 }
 #[derive(Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
-enum DeckFailure {
+pub(super) enum DeckFailure {
     UnsupportedFormat,
     InvalidQuantity,
     UnsupportedCard,
@@ -34,7 +36,7 @@ enum DeckFailure {
 }
 #[derive(Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
-struct DeckCounts {
+pub(super) struct DeckCounts {
     main: u32,
     sideboard: u32,
 }
@@ -223,6 +225,30 @@ impl NativeProgramSource {
         format_key: &str,
         entries: &[preparation_source::PreparationEntry],
     ) -> Result<(u32, u32), NativeInitialError> {
+        if matches!(format_key, "draft" | "cube") {
+            return Err(NativeInitialError::ForeignSource);
+        }
+        self.inspect_selected_match_deck(format_key, entries)
+    }
+
+    pub(crate) fn inspect_selected_match_deck(
+        &self,
+        format_key: &str,
+        entries: &[preparation_source::PreparationEntry],
+    ) -> Result<(u32, u32), NativeInitialError> {
+        let counts = self
+            .selected_match_deck_counts(format_key, entries)?
+            .map_err(|_| NativeInitialError::ForeignSource)?;
+        Ok((counts.main, counts.sideboard))
+    }
+
+    // Separate a supported source's deck-rule refusal from failures to bind
+    // the release's native card data.
+    pub(super) fn selected_match_deck_counts(
+        &self,
+        format_key: &str,
+        entries: &[preparation_source::PreparationEntry],
+    ) -> Result<Result<DeckCounts, DeckFailure>, NativeInitialError> {
         if !preparation_source::valid_entries(entries) {
             return Err(NativeInitialError::ForeignSource);
         }
@@ -243,14 +269,17 @@ impl NativeProgramSource {
                     quantity: e.quantity.clone(),
                 })
             })
-            .collect::<Result<_, NativeInitialError>>()?;
-        let counts = self
-            .constructed_deck(&Deck {
-                format: format_key.to_owned(),
-                entries,
-            })
-            .map_err(|_| NativeInitialError::ForeignSource)?;
-        Ok((counts.main, counts.sideboard))
+            .collect::<Result<Vec<_>, NativeInitialError>>()?;
+        if matches!(format_key, "draft" | "cube") {
+            // The locked room writer proves membership in the seat's sealed
+            // pool. Rust independently checks this release's card programs and
+            // the sections and size needed by the native game initializer.
+            return Ok(limited::check_match_sections(&entries));
+        }
+        Ok(self.constructed_deck(&Deck {
+            format: format_key.to_owned(),
+            entries,
+        }))
     }
     /// Materialize an ordinary twenty-life constructed candidate from every reserved seat.
     /// Main-deck occurrences keep their exact SQL entry and printing. Sideboards
@@ -314,7 +343,7 @@ impl NativeProgramSource {
         seat_id: Uuid,
         entries: &[preparation_source::PreparationEntry],
     ) -> Result<(NativeInitialParticipant, NativeInitialSelection), NativeInitialError> {
-        self.inspect_selected_constructed_deck(format_key, entries)?;
+        self.inspect_selected_match_deck(format_key, entries)?;
         let mut cards = Vec::new();
         let mut entry_ids = Vec::new();
         for entry in entries.iter().filter(|e| e.section.as_str() == "main") {
@@ -406,6 +435,7 @@ impl NativeProgramSource {
 /// Rejects unavailable, oversized or foreign source files and malformed deck inputs.
 /// A structurally invalid deck yields a named rejection in the report.
 pub fn inspect_release_candidate(
+    pool: NativeProgramPool,
     metadata: &Path,
     snapshot: &Path,
     vocabulary: &Path,
@@ -415,7 +445,7 @@ pub fn inspect_release_candidate(
     let deck_bytes = read_bounded(deck, 262_144)?;
     let deck: Deck = crate::decode_wire_object(&deck_bytes)?;
     let source = NativeProgramSource::from_bytes(
-        NativeProgramPool::ResolutionSelectionNaturalMana,
+        pool,
         &read_bounded(metadata, 1_048_576)?,
         read_bounded(snapshot, MAX_NATIVE_ARTIFACT_BYTES)?,
         &read_bounded(vocabulary, 1_048_576)?,
@@ -450,6 +480,23 @@ pub fn inspect_release_candidate(
     }))
 }
 
+fn candidate_deck_catalogue(
+    metadata: &Path,
+    snapshot: &Path,
+) -> Result<spellwake_content::Inventory, Box<dyn Error>> {
+    let archive = read_bounded(snapshot, MAX_NATIVE_ARTIFACT_BYTES)?;
+    if digest(&archive).hex() != spellwake_card_programs::TEACHING_SOURCE_SHA256 {
+        return Err(NativeInitialError::ForeignSource.into());
+    }
+    let inventory =
+        spellwake_content::snapshot::decode(&read_bounded(metadata, 1_048_576)?, archive)
+            .map_err(|error| NativeInitialError::Snapshot(Box::new(error)))?;
+    if !inventory.duplicate_oracle_ids.is_empty() {
+        return Err(NativeInitialError::ForeignSource.into());
+    }
+    Ok(inventory)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -463,7 +510,7 @@ mod tests {
     #[test]
     #[ignore = "requires the genuine guarded catalogue and vocabulary"]
     fn constructed_deck_checks_full_sections_and_combined_name_counts() {
-        let source = super::super::tests::source(NativeProgramPool::ResolutionSelectionNaturalMana);
+        let source = super::super::tests::source(NativeProgramPool::KeywordGameplay);
         let check = |format: &str, rows: Vec<Value>| {
             let bytes = serde_json::to_vec(&json!({"format":format,"entries":rows})).unwrap();
             source.constructed_deck(&crate::decode_wire_object(&bytes).unwrap())
@@ -540,7 +587,7 @@ mod tests {
                 DeckFailure::InvalidQuantity,
             ),
             (
-                vec![row(spellwake_card_programs::BOLT, "main", 60)],
+                vec![row("00000000-0000-4000-8000-000000000001", "main", 60)],
                 DeckFailure::UnsupportedCard,
             ),
         ] {
@@ -554,7 +601,7 @@ mod tests {
     #[test]
     #[ignore = "requires the genuine guarded catalogue and vocabulary"]
     fn selected_library_preserves_occurrences_and_excludes_sideboard() {
-        let source = super::super::tests::source(NativeProgramPool::ResolutionSelectionNaturalMana);
+        let source = super::super::tests::source(NativeProgramPool::KeywordGameplay);
         let entry = |id, oracle, section, quantity, basic| {
             let bytes = serde_json::to_vec(&json!({
                 "entryId":Uuid::from_u128(id),"definitionId":Uuid::from_u128(id+10),
@@ -604,7 +651,7 @@ mod tests {
     #[test]
     #[ignore = "requires the genuine guarded catalogue and vocabulary"]
     fn release_content_links_the_kernel_rules_and_each_selected_card_program() {
-        let source = super::super::tests::source(NativeProgramPool::ResolutionSelectionNaturalMana);
+        let source = super::super::tests::source(NativeProgramPool::KeywordGameplay);
         let oracle = OracleId::try_from(FOREST.to_owned()).unwrap();
         let refs = source.card_source_refs(&oracle).unwrap();
         let release = json!({"id":Uuid::from_u128(17),"releaseRef":"fixture:controlled-release","evidenceRef":"fixture:controlled-review",
@@ -680,205 +727,5 @@ mod tests {
         let mut substituted = entry;
         substituted["oracleRef"] = json!(BEARS);
         assert!(check(&release, &substituted).is_err());
-    }
-    #[test]
-    #[ignore = "requires genuine catalogue and vocabulary for three populated candidate decks"]
-    fn validated_decks_open_and_response_timeout_replays_to_one_winner() {
-        timeout_match(&[
-            Response::Keep,
-            Response::Keep,
-            Response::Keep,
-            Response::Expire,
-            Response::Pass,
-            Response::Expire,
-        ]);
-    }
-    #[test]
-    #[ignore = "requires genuine catalogue and vocabulary for three populated candidate decks"]
-    fn opening_timeout_replays_remaining_mulligans_through_settlement() {
-        timeout_match(&[
-            Response::Expire,
-            Response::Keep,
-            Response::Keep,
-            Response::Pass,
-            Response::Expire,
-        ]);
-    }
-    enum Response {
-        Keep,
-        Pass,
-        Expire,
-    }
-    fn timeout_match(responses: &[Response]) {
-        use super::super::tests::{checkpoint_read_steps, checkpoint_store, with_store};
-        use crate::player_wire::{PlayerAction, PlayerChoice, PlayerCommand};
-        use crate::test_http::Mock;
-        use spellwake_engine::game::RuleFrame;
-        use spellwake_engine::opening::{MulliganChoice, OpeningDecision};
-        use spellwake_engine::priority::PriorityPhase;
-        use spellwake_engine::stack_window::WindowPhase;
-        let source = super::super::tests::source(NativeProgramPool::ResolutionSelectionNaturalMana);
-        let deck: Deck = crate::decode_wire_object(include_bytes!(
-            "../../../tests/fixtures/legacy-black-green.deck.json"
-        ))
-        .unwrap();
-        let counts = source.constructed_deck(&deck).unwrap();
-        assert_eq!(
-            counts,
-            DeckCounts {
-                main: 60,
-                sideboard: 4
-            }
-        );
-        let ids = super::super::tests::ids();
-        let seats = [
-            Uuid::from_u128(10),
-            Uuid::from_u128(11),
-            Uuid::from_u128(12),
-        ];
-        let spec = || NativeInitialSpec {
-            participants: seats
-                .iter()
-                .map(|seat_id| NativeInitialParticipant {
-                    seat_id: *seat_id,
-                    life: 20.into(),
-                    cards: deck
-                        .entries
-                        .iter()
-                        .filter(|entry| entry.section == "main")
-                        .flat_map(|entry| {
-                            (0..entry.quantity.integer().to_u32().unwrap()).map(|_| {
-                                NativeInitialCard {
-                                    oracle_id: entry.oracle_ref.clone(),
-                                    zone: NativeInitialZone::Library,
-                                }
-                            })
-                        })
-                        .collect(),
-                })
-                .collect(),
-            first_player_seat_id: seats[0],
-            entropy: vec![0.into(); 512],
-        };
-        let opening = prepare_initial(ids, source, spec()).unwrap();
-        let original = (
-            opening.reference().clone(),
-            opening.original_bytes().to_vec(),
-        );
-        let mut tip = NativeCheckpoint::initial(opening).unwrap();
-        let mut states = vec![(tip.reference().clone(), tip.original_bytes().to_vec())];
-        let mut inputs = Vec::new();
-        let mut losers = Vec::new();
-        for response in responses {
-            let state = tip.state();
-            let actor = if let Some(wait) = state.pending_decision() {
-                wait.chooser()
-            } else if let WindowPhase::Priority(PriorityPhase::Ready { holder }) =
-                state.execution().window().phase()
-            {
-                holder
-            } else {
-                panic!("expected a player response");
-            };
-            let viewer = seats[actor.0 as usize];
-            let mut scope = NativeScope::new(state, tip.binding(viewer).unwrap()).unwrap();
-            let (kind, bytes, expected) = if matches!(response, Response::Expire) {
-                let prepared = scope.prepare_response_timeout(viewer).unwrap();
-                assert!(
-                    restore_bank_expiry(state, tip.binding(viewer).unwrap(), prepared.record())
-                        .is_err()
-                );
-                losers.push(viewer);
-                let (bytes, expected) = prepared.into_parts();
-                (NativeCheckpointInput::ResponseTimeout, bytes, expected)
-            } else {
-                let action = if matches!(response, Response::Pass) {
-                    assert!(!losers.contains(&viewer));
-                    PlayerAction::Pass {}
-                } else {
-                    let wait = state.pending_decision().unwrap();
-                    assert!(matches!(
-                        wait.frame(),
-                        RuleFrame::Opening(OpeningDecision::Declare { .. })
-                    ));
-                    let decision = scope.issue(NativeReference::Decision(wait.id())).unwrap();
-                    let option = scope
-                        .issue(NativeReference::Mulligan(MulliganChoice::Keep))
-                        .unwrap();
-                    PlayerAction::Choose {
-                        decision,
-                        response: PlayerChoice::Option { option },
-                    }
-                };
-                let proposal = scope
-                    .propose(&PlayerCommand {
-                        request_id: Uuid::new_v4(),
-                        basis: scope.basis().clone(),
-                        action,
-                    })
-                    .unwrap();
-                let bytes = scope.encode_input(&proposal).unwrap();
-                (
-                    NativeCheckpointInput::Player,
-                    bytes,
-                    proposal.into_parts().3,
-                )
-            };
-            let input = NativeArtifactRef::for_bytes(
-                ids.game_id,
-                ids.context_id,
-                NativeArtifactRole::Input,
-                &bytes,
-            )
-            .unwrap();
-            tip = with_store(&bytes, &input, |store| {
-                tip.append(store, input.clone(), kind, viewer)
-            })
-            .unwrap();
-            assert_eq!(tip.candidate(), &expected);
-            if matches!(kind, NativeCheckpointInput::ResponseTimeout) {
-                assert!(
-                    restore_response_timeout(tip.state(), tip.binding(viewer).unwrap(), &bytes)
-                        .is_err()
-                );
-            }
-            if matches!(response, Response::Expire) && losers.len() == 1 {
-                assert!(tip.terminal().unwrap().is_none());
-                assert_eq!(tip.state().execution().window().participants().len(), 2);
-            }
-            states.push((tip.reference().clone(), tip.original_bytes().to_vec()));
-            inputs.push((input, bytes));
-        }
-        let expected =
-            NativeCheckpointExpected::new(tip.reference().clone(), tip.basis().clone()).unwrap();
-        let facts = tip.prepare_results().unwrap().original_bytes().to_vec();
-        drop(tip);
-        let steps = states
-            .iter()
-            .rev()
-            .chain(std::iter::once(&original))
-            .chain(inputs.iter())
-            .flat_map(|(r, b)| checkpoint_read_steps(r, b))
-            .collect();
-        let store = Mock::new(steps);
-        let cold = load_checkpoint(
-            &checkpoint_store(&store),
-            &expected,
-            &NativeInitialExpected::new(original.0, ids.release_id, ids.profile_id, seats.to_vec())
-                .unwrap(),
-            source,
-            NativeRecoveryBudget::new(states.len(), 100_000_000).unwrap(),
-        )
-        .unwrap();
-        store.finish();
-        assert_eq!(cold.prepare_results().unwrap().original_bytes(), facts);
-        let result = cold.terminal().unwrap().unwrap();
-        assert_eq!(result.reason(), "native_response_timeout");
-        assert_eq!(
-            result.losing_seat_ids().iter().collect::<BTreeSet<_>>(),
-            losers.iter().collect::<BTreeSet<_>>()
-        );
-        let winner = seats.iter().find(|s| !losers.contains(s)).unwrap();
-        assert_eq!(result.winner_seat_ids(), &[*winner]);
     }
 }

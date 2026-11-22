@@ -33,30 +33,8 @@ def main() -> None:
     parser.add_argument('--result-turns', type=int, choices=(0, 3), default=3)
     parser.add_argument('--unsupported-work', action='store_true', help='Reach a genuine unsupported native boundary in results mode')
     parser.add_argument('--rule-errors', action='store_true', help='Reach source-bound native target/payment errors')
-    parser.add_argument('--bank-expiry', action='store_true', help='Real selected bank expiry, without changing the thirty-minute policy')
     parser.add_argument('--no-contest', action='store_true', help='End the results game by an actual unrecoverable incident')
-    parser.add_argument('--opening-response', action='store_true', help='Exercise an elapsed three-player opening response and settle the surviving match')
-    parser.add_argument('--ranked-settlement', action='store_true', help='Trace the three-player Collection result through ante, Elo and win rewards')
-    parser.add_argument('--between-receipts', action='store_true', help='Recover both human selections after the next game is reserved')
-    parser.add_argument('--ranked-no-contest', action='store_true', help='Interrupt a genuinely opened ranked game and verify refunds and neutral rank')
-    parser.add_argument('--published-catalogue-plan', type=Path, help='Restore every original catalogue batch before the ranked match')
-    parser.add_argument('--controller-between', action='store_true', help='Recover the possessed AI seat reply after the human reply and game reservation')
-    parser.add_argument('--admission-http-evidence', type=Path, help='Test the public admission commands with a pinned isolated manifest and retained behavior evidence')
     arguments = parser.parse_args()
-    if arguments.admission_http_evidence and not arguments.published_catalogue_plan:
-        parser.error('HTTP admission qualification requires the genuine published catalogue')
-    if arguments.controller_between and not arguments.between_receipts:
-        parser.error('controller-between requires between-receipts')
-    if arguments.published_catalogue_plan and not arguments.ranked_settlement:
-        parser.error('published sources require ranked settlement')
-    if arguments.ranked_no_contest and not arguments.ranked_settlement:
-        parser.error('ranked-no-contest requires the ranked settlement fixture')
-    if arguments.between_receipts and (arguments.mode != 'results' or arguments.structure != 'bo3' or arguments.bank_expiry or arguments.no_contest or arguments.rule_errors or arguments.unsupported_work):
-        parser.error('Between-game receipt recovery requires an ordinary BO3 results case')
-    if arguments.ranked_settlement and not arguments.opening_response:
-        parser.error('ranked settlement requires the opening-response scenario')
-    if arguments.opening_response and (arguments.mode != 'results' or arguments.structure != 'bo1' or arguments.bank_expiry or arguments.no_contest or arguments.rule_errors or arguments.unsupported_work):
-        parser.error('opening-response requires the three-human BO1 results case')
     if (arguments.read_origin != 'active' or arguments.lifecycle_action != 'pending') and arguments.delivery_case != 'read-lifecycle':
         parser.error('read origin/lifecycle action requires read-lifecycle mode')
     if arguments.archive_variant != 'completed-own' and arguments.delivery_case != 'archive-authority':
@@ -79,21 +57,12 @@ def main() -> None:
         parser.error('unsupported-work requires results mode')
     if not 1 <= arguments.attempt <= 99:
         parser.error('attempt must be between 1 and 99')
-    if arguments.bank_expiry and (arguments.mode != "results" or arguments.structure != "bo3" or arguments.unsupported_work or arguments.rule_errors or arguments.no_contest):
-        parser.error("bank-expiry requires only results BO3 mode")
     mode = arguments.mode
     connected_mode = mode in ('source-reader', 'results', 'delivery')
     if arguments.structure == 'bo3' and not connected_mode:
         parser.error('BO3 structure requires an actual connected source/result mode')
     initial = mode != 'artifacts'
     result_path = RESULT if not initial else RESULT.with_name('api-native-' + mode + ('-bo3' if arguments.structure == 'bo3' else '') + '-connected-v1.json')
-    if arguments.between_receipts:
-        result_path = result_path.with_name('api-native-controller-between-connected-v1.json' if arguments.controller_between else 'api-native-between-receipts-connected-v1.json')
-    if arguments.opening_response:
-        name = 'ranked-no-contest' if arguments.ranked_no_contest else 'ranked-settlement' if arguments.ranked_settlement else 'opening-response'
-        result_path = result_path.with_name(f'api-native-{name}-connected-v1.json')
-    if arguments.bank_expiry:
-        result_path = result_path.with_name("api-native-bank-expiry-connected-v1.json")
     if arguments.unsupported_work:
         result_path = result_path.with_name('api-native-unsupported' + ('-bo3' if arguments.structure == 'bo3' else '') + '-connected-v1.json')
     if arguments.no_contest:
@@ -118,20 +87,12 @@ def main() -> None:
     if result_path.exists():
         raise RuntimeError('Refusing to overwrite retained connected evidence')
     vocabulary = Path(os.environ['SPELLWAKE_CREATURE_VOCABULARY_INPUT']).resolve(strict=True)
-    supply = os.environ.get('SPELLWAKE_SUPPLY_PARTICIPATION') == '1'
-    if supply and (mode != 'results' or arguments.result_turns != 3 or arguments.structure != 'bo1'):
-        raise RuntimeError('Supply qualification requires a three-turn BO1 result')
     source_environment = {}
     if initial:
         source_environment = {name: str(Path(os.environ[name]).resolve(strict=True)) for name in (
             'SPELLWAKE_CATALOGUE_METADATA', 'SPELLWAKE_CATALOGUE_INPUT')}
-    if arguments.opening_response:
-        saved_work = Path(source_environment['SPELLWAKE_CATALOGUE_METADATA']).parent.parent
-        rules = Path(os.environ.get('SPELLWAKE_NATIVE_RULES_INPUT',saved_work / 'rules/MagicCompRules-20260925.txt')).resolve(strict=True)
-        sample_deck = ROOT / 'tests/fixtures/legacy-black-green.deck.json'
     short_expiry = mode == 'delivery' and arguments.delivery_case in ('expiry','handoff','history-expiry','history-error-expiry','archive-authority','read-account-expiry')
-    long_history = mode == 'results' and arguments.structure == 'bo1' and arguments.result_turns == 3 and not any((arguments.opening_response, arguments.rule_errors, arguments.no_contest, arguments.unsupported_work))
-    realm = DisposableSupabase(storage=True, jwt_expiry_seconds=30 if short_expiry else 14400 if long_history else None)
+    realm = DisposableSupabase(storage=True, jwt_expiry_seconds=30 if short_expiry else None)
     result: dict = {'scope': 'owned-local-native-' + mode + '-private-storage-actual-auth', 'passed': False,
                     'objectsCleanupVerified': False, 'bucketCleanupVerified': False,
                     'environmentCleanupVerified': False, 'sourcePinsStable': False}
@@ -140,20 +101,10 @@ def main() -> None:
     paths += [ROOT / 'Cargo.toml', ROOT / 'Cargo.lock', vocabulary, Path(__file__),
               ROOT / 'tools/disposable_supabase.py', ROOT / 'tools/qualification_http.py',
               ROOT / 'tools/auth_admission_fixture.py', ROOT / 'tools/loopback_docker.py']
-    witness = ROOT / 'src/native_game/initial_source/published-card-witness-v1.json'
-    paths.append(witness)
-    if arguments.published_catalogue_plan:
-        paths += [arguments.published_catalogue_plan, ROOT/'tools/qualify_catalogue_match.py', ROOT/'tools/qualify_published_card_sources.py']
-    if arguments.bank_expiry or os.environ.get('SPELLWAKE_NATIVE_QUALIFICATION_WRAPPER'):
-        paths += [Path(os.environ['SPELLWAKE_NATIVE_QUALIFICATION_WRAPPER']).resolve(strict=True)]
-    if arguments.ranked_settlement:
-        paths.append(Path(__file__).with_name('qualification_ranked_settlement.py'))
-    if arguments.opening_response:
-        paths += [rules, sample_deck]
     paths += [ROOT / 'build.rs'] + list((ROOT / 'build_support').rglob('*.rs'))
     # The library-test image embeds these fixed wire vectors even when the owned
     # selector does not execute their separate compatibility/closure assertions.
-    paths += [ROOT / 'tests/fixtures/legacy-black-green.deck.json', ROOT / 'tests/fixtures/native-initial-v1-wire-golden.json',
+    paths += [ROOT / 'tests/fixtures/native-initial-v1-wire-golden.json',
               REPO / 'packages/application-contracts/fixtures/player-wire.json',
               *list((ROOT / 'tests/support').rglob('*.rs'))]
     for crate in ('card_programs', 'content'):
@@ -167,45 +118,14 @@ def main() -> None:
     config_paths = (REPO / '.cargo/config', REPO / '.cargo/config.toml', ROOT / '.cargo/config', ROOT / '.cargo/config.toml')
     config_presence = {str(path): path.exists() for path in config_paths}
     paths += [path for path in config_paths if path.exists()]
-    watched_roots = [ROOT / 'src', ROOT / 'build_support', ROOT / 'tests/support', ROOT / 'supabase/migrations'] + [REPO / 'crates' / name / 'src' for name in ('engine', 'contracts', 'card_programs', 'content')]
+    watched_roots = [ROOT / 'src', ROOT / 'build_support', ROOT / 'tests/support'] + [REPO / 'crates' / name / 'src' for name in ('engine', 'contracts', 'card_programs', 'content')]
     membership = {str(tree): sorted(str(path.relative_to(tree)) for path in tree.rglob('*') if path.is_file()) for tree in watched_roots}
-    if arguments.admission_http_evidence:
-        paths += [arguments.admission_http_evidence.resolve(strict=True),ROOT/'tools/qualify_admission_api.py']
     pins = {str(path.resolve()): hashlib.sha256(path.read_bytes()).hexdigest() for path in paths}
     bucket = 'native-owned-' + uuid.uuid4().hex
     bucket_attempted = False
     primary: BaseException | None = None
     try:
-        qualifier_binary = None
-        build = ['cargo','test','--locked','--manifest-path',str(ROOT/'Cargo.toml'),'--lib','--no-run']
-        if arguments.opening_response or arguments.between_receipts or arguments.bank_expiry or long_history or short_expiry:
-            # Hold the exact build across phases. Another shared-target build
-            # can replace Cargo's output or hold its lock during a live wait.
-            built = realm.command(build + ['--message-format=json'],timeout=1800)
-            artifacts = [json.loads(line) for line in built.splitlines() if line.startswith(b'{')]
-            executable, = [Path(row['executable']) for row in artifacts if row.get('reason')=='compiler-artifact'
-                and row.get('executable') and row['target']['name']=='spellwake_application' and row['profile']['test']]
-            from shutil import copy2
-            qualifier_binary = realm.stage / 'native-qualification-test'
-            copy2(executable, qualifier_binary)
-            with qualifier_binary.open('rb') as handle:
-                result['testExecutableSha256'] = hashlib.file_digest(handle,'sha256').hexdigest()
-        else:
-            realm.command(build, timeout=240)
-
-        if arguments.opening_response:
-            realm.command(['cargo','build','--locked','--manifest-path',str(ROOT / 'Cargo.toml'),'--bin','native_release_candidate'],timeout=1800)
-            from shutil import copy2
-            binary = realm.stage / 'native-release-candidate'
-            copy2(Path(realm.environment.get('CARGO_TARGET_DIR', ROOT/'target'))/'debug/native_release_candidate', binary)
-            with binary.open('rb') as handle:
-                result['releaseCandidateSha256'] = hashlib.file_digest(handle, 'sha256').hexdigest()
-        api_binary = None
-        if arguments.admission_http_evidence:
-            realm.command(['cargo','build','--locked','--manifest-path',str(ROOT/'Cargo.toml'),'--bin','application_api'],timeout=1800)
-            api_binary=realm.stage/'application-api'
-            copy2(Path(realm.environment.get('CARGO_TARGET_DIR',ROOT/'target'))/'debug/application_api',api_binary)
-            result['apiExecutableSha256']=hashlib.file_digest(api_binary.open('rb'),'sha256').hexdigest()
+        realm.command(['cargo', 'test', '--locked', '--manifest-path', str(ROOT / 'Cargo.toml'), '--lib', '--no-run'], timeout=240)
         realm.__enter__()
         base = realm.status['API_URL']
         public = realm.status['PUBLISHABLE_KEY']
@@ -265,11 +185,6 @@ def main() -> None:
                 raise RuntimeError('Fresh genuine credential changed the fixture owner')
             return fresh,fresh_claims
 
-        publication = None
-        if arguments.published_catalogue_plan:
-            from qualify_catalogue_match import restore_catalogue
-            publication = restore_catalogue(realm, arguments.published_catalogue_plan, json.loads(witness.read_bytes())['artifactHash'])
-            result['cataloguePublication'] = publication
         bearer, claims = sign_in('native-artifact-owner@example.invalid')
         admission, _ = qualify_admission(claims, realm.sql)
         result['ordinaryAccountAdmitted'] = admission['replaySameAccount'] is True
@@ -303,44 +218,10 @@ def main() -> None:
             peer = str(uuid.UUID(realm.sql("SELECT app.register_account('" + subject + "','" + session + "','NativeSourcePeer'," + ','.join("'" + value + "'" for value in cosmetics) + ")")))
             outsider_bearer, outsider_claims = sign_in('native-source-outsider@example.invalid')
             outsider_subject, outsider_session = str(uuid.UUID(outsider_claims['sub'])), str(uuid.UUID(outsider_claims['session_id']))
-            third_account = realm.sql("SELECT app.register_account('" + outsider_subject + "','" + outsider_session + "','NativeSourceOutsider'," + ','.join("'" + value + "'" for value in cosmetics) + ")")
+            realm.sql("SELECT app.register_account('" + outsider_subject + "','" + outsider_session + "','NativeSourceOutsider'," + ','.join("'" + value + "'" for value in cosmetics) + ")")
             presentation_free = dict(zip(('backId','sleeveId','diceId'),cosmetics,strict=True)) | {'playmatId':None}
             participant_environment = {'SPELLWAKE_NATIVE_SOURCE_PEER_BEARER':peer_bearer,'SPELLWAKE_NATIVE_SOURCE_OUTSIDER_BEARER':outsider_bearer,'SPELLWAKE_NATIVE_PRESENTATION_FREE':json.dumps(presentation_free)}
-            candidate_command = None
-            release_content = None
-            if arguments.opening_response:
-                candidate_command = [str(binary), 'room-candidate', source_environment['SPELLWAKE_CATALOGUE_METADATA'],
-                                     source_environment['SPELLWAKE_CATALOGUE_INPUT'], str(vocabulary)]
-                release_content = object_json(json.loads(realm.command([str(binary),
-                    source_environment['SPELLWAKE_CATALOGUE_METADATA'],source_environment['SPELLWAKE_CATALOGUE_INPUT'],
-                    str(vocabulary),str(rules),str(sample_deck)],timeout=180)))
-                result['releaseContent'] = release_content['releaseContent']
-            combat_timeout = arguments.opening_response and os.environ.get('SPELLWAKE_OPENING_TIMEOUT_SCENARIO') == 'combat-choice'
-            two_cards = arguments.ranked_settlement or combat_timeout
-            land = 'b34bb2dc-c1af-4d77-b0b3-a0fb342a5fc6' if two_cards else 'b2c6aa39-2d2a-459c-a555-fb48ba993373'
-            creature = '14c8f55d-d177-4c25-a931-ebeb9e6062a0'
-            admission_api = None
-            if api_binary is not None:
-                behavior='sha256:'+hashlib.sha256(arguments.admission_http_evidence.read_bytes()).hexdigest()
-                admission_api={'binary':api_binary,'behaviorEvidence':behavior,'tokens':[bearer,peer_bearer],
-                    'environment':source_environment | {'SPELLWAKE_CREATURE_VOCABULARY_INPUT':str(vocabulary),
-                    'SPELLWAKE_SUPABASE_URL':base,'SPELLWAKE_AUTH_ISSUER':base+'/auth/v1','SPELLWAKE_SUPABASE_SECRET_KEY':secret,
-                    'SPELLWAKE_SUPABASE_PUBLISHABLE_KEY':public,'SPELLWAKE_NATIVE_VIEWS_POOL':'resolution-selection-natural-mana',
-                    'SPELLWAKE_NATIVE_RECOVERY_MAX_RECORDS':'10000','SPELLWAKE_NATIVE_RECOVERY_MAX_BYTES':'100000000',
-                    'SPELLWAKE_NATIVE_ARTIFACT_BUCKET':bucket,'SPELLWAKE_FREE_BACK_ID':cosmetics[0],
-                    'SPELLWAKE_FREE_SLEEVE_ID':cosmetics[1],'SPELLWAKE_FREE_DICE_ID':cosmetics[2]}}
-                result['publicRoomAdmission']={'releaseScope':'owned fixture manifest','behaviorEvidence':behavior}
-            reservation = prepare_source_reader_reservation(
-                realm, owner, peer, oracle_ref='058917c1-21ab-488a-9f9c-591c55f3c596' if arguments.rule_errors else land,
-                quantity=56 if two_cards else 60 if arguments.opening_response else 20,
-                additional_oracle_ref=creature if two_cards else None,
-                additional_quantity=4 if two_cards else 0,
-                third_human=third_account if arguments.opening_response else None,mode='collection' if arguments.ranked_settlement else 'open',
-                competitive=arguments.ranked_settlement,release_content=release_content,publication=publication,candidate_command=candidate_command,admission_api=admission_api,structure=arguments.structure,
-                unlimited_basic_land=not arguments.rule_errors,mixed_ai=arguments.controller_between or arguments.delivery_case in ('mixed-replay','controller'))
-            if arguments.ranked_settlement:
-                from qualification_ranked_settlement import offer_stakes
-                commitment = offer_stakes(realm, reservation)
+            reservation = prepare_source_reader_reservation(realm,owner,peer,oracle_ref='058917c1-21ab-488a-9f9c-591c55f3c596' if arguments.rule_errors else 'b2c6aa39-2d2a-459c-a555-fb48ba993373',quantity=20,structure=arguments.structure,unlimited_basic_land=not arguments.rule_errors,mixed_ai=arguments.delivery_case in ('mixed-replay','controller'))
             if arguments.delivery_case == 'controller':
                 # Separate normalized source family proves existing foreign grant authority only.
                 foreign = prepare_source_reader_reservation(realm,peer,owner,quantity=20,structure='bo3',mixed_ai=True)
@@ -349,33 +230,12 @@ def main() -> None:
             if selected.get('status') != 'success':
                 raise RuntimeError('Owned selected SQL reservation unavailable')
             selected_seats = object_json(selected['data'])['seats']
-            if not isinstance(selected_seats, list) or len(selected_seats) != (3 if arguments.opening_response else 2):
+            if not isinstance(selected_seats, list) or len(selected_seats) != 2:
                 raise RuntimeError('Owned selected SQL seat count differs')
             selected_entries = object_json(selected_seats[0]).get('entries')
-            if not isinstance(selected_entries, list) or len(selected_entries) != (3 if arguments.ranked_settlement else 2 if combat_timeout else 1):
+            if not isinstance(selected_entries, list) or len(selected_entries) != 1:
                 raise RuntimeError('Owned selected SQL entry count differs')
-            main_entries = [entry for entry in selected_entries if object_json(entry)['section'] == 'main']
-            if len(main_entries) != (2 if two_cards else 1):
-                raise RuntimeError('Expected one main-deck definition in this fixture')
-            if two_cards:
-                reservation['mainEntries'] = {}
-                for seat in selected_seats:
-                    sections = sorted((entry['section'],entry['oracleRef'],entry['quantity']) for entry in seat['entries'])
-                    expected = [('main',land,'56'),('main',creature,'4')]
-                    if arguments.ranked_settlement:
-                        expected.append(('sideboard',land,'4'))
-                    if sections != sorted(expected):
-                        raise RuntimeError('Original ranked deck sections differ')
-                    for entry in seat['entries']:
-                        if entry['section']=='main':
-                            reservation['mainEntries'][entry['entryId']] = {'definitionId':entry['definitionId'],'printingId':entry['printing']['id'],
-                                'name':'Forest' if entry['oracleRef']==land else 'Grizzly Bears','quantity':int(entry['quantity'])}
-            first_entry = main_entries[0]
-            if arguments.opening_response:
-                match_id = uuid.UUID(reservation['matchId'])
-                reservation['format'] = object_json(json.loads(realm.sql(f"""SELECT json_build_object(
-                    'id', f.id, 'key', f.key, 'name', f.name)
-                    FROM app.match m JOIN app.format f ON f.id=m.format_id WHERE m.id='{match_id}'""")))
+            first_entry = object_json(selected_entries[0])
             reservation['definitionId'] = str(uuid.UUID(first_entry['definitionId']))
             reservation['printingId'] = str(uuid.UUID(object_json(first_entry.get('printing'))['id']))
             reservation_file = realm.stage / 'private-native-source-reservation.json'
@@ -434,13 +294,9 @@ def main() -> None:
             closed = realm.sql("SELECT NOT has_function_privilege('service_role','app.accept_reserved_game(uuid,numeric,uuid,text,jsonb)','EXECUTE') AND NOT has_function_privilege('service_role','app.accept_host_candidate(uuid,text,numeric,numeric,uuid,jsonb)','EXECUTE')")
             if closed != 't':
                 raise RuntimeError('Native writer fixture requires unchanged closed runtime capabilities')
-        if arguments.ranked_no_contest:
-            phases = ('prepare',)
         stage_results = []
         for phase in phases:
             phase_environment = {} if phase is None else {'SPELLWAKE_NATIVE_SOURCE_PHASE':phase,'SPELLWAKE_NATIVE_SOURCE_OUTPUT':str(output_file), 'SPELLWAKE_NATIVE_VIEW_HTTP_WIRE':str(realm.stage / ('private-native-view-http-'+phase+'.json'))}
-            if (supply or arguments.bank_expiry or arguments.opening_response or arguments.between_receipts) and phase == 'results':
-                phase_environment['SPELLWAKE_NATIVE_FIXTURE_DATABASE_URL'] = realm.status['DB_URL']
             if mode == 'delivery' and arguments.delivery_case in ('expiry','logout','handoff','history-authority','history-expiry','history-error-expiry','read-account-expiry') and phase != 'prepare':
                 fresh_bearer,fresh_claims = refresh_owner() if short_expiry else sign_in('native-artifact-owner@example.invalid')
                 if fresh_claims.get('sub') != claims['sub']:
@@ -462,19 +318,12 @@ def main() -> None:
                 if parsed_database is None or parsed_database.hostname != '127.0.0.1' or parsed_database.port != realm.ports[1]:
                     raise RuntimeError('Presentation fixture requires exact owned loopback database')
                 phase_environment['SPELLWAKE_NATIVE_FIXTURE_DATABASE_URL'] = database_url
-            test_command = [str(qualifier_binary),test,'--ignored','--exact','--nocapture'] if qualifier_binary else [
-                'cargo','test','--locked','--manifest-path',str(ROOT/'Cargo.toml'),'--lib',test,'--','--ignored','--exact','--nocapture']
-            output = realm.command(test_command, timeout=10800 if long_history else 2700 if mode == 'results' else 900 if mode == 'source-reader' and phase == 'verify' else 180, extra_environment={
+            output = realm.command(['cargo', 'test', '--locked', '--manifest-path', str(ROOT / 'Cargo.toml'), '--lib', test,
+                '--', '--ignored', '--exact', '--nocapture'], timeout=2700 if mode == 'results' else 900 if mode == 'source-reader' and phase == 'verify' else 180, extra_environment={
                     'SPELLWAKE_SUPABASE_URL': base, 'SPELLWAKE_SUPABASE_SECRET_KEY': secret,
                     'SPELLWAKE_SUPABASE_PUBLISHABLE_KEY': public, 'SPELLWAKE_NATIVE_ARTIFACT_BUCKET': bucket,
                     'SPELLWAKE_NATIVE_STORAGE_CALLER': bearer, 'SPELLWAKE_NATIVE_STORAGE_QUALIFY': '1',
                     'SPELLWAKE_NATIVE_RESULT_TURNS':str(arguments.result_turns),
-                    'SPELLWAKE_SUPPLY_PARTICIPATION':'1' if supply else '0',
-                    'SPELLWAKE_OPENING_TIMEOUT_SCENARIO':os.environ.get('SPELLWAKE_OPENING_TIMEOUT_SCENARIO',''),
-                'SPELLWAKE_NATIVE_CONTROLLER_BETWEEN':'1' if arguments.controller_between else '0',
-                'SPELLWAKE_NATIVE_BETWEEN_RECEIPTS':'1' if arguments.between_receipts else '0',
-                    'SPELLWAKE_NATIVE_OPENING_RESPONSE':'1' if arguments.opening_response else '0',
-                    'SPELLWAKE_NATIVE_BANK_EXPIRY':'1' if arguments.bank_expiry else '0',
                     'SPELLWAKE_NATIVE_UNSUPPORTED_WORK':'1' if arguments.unsupported_work else '0',
                     'SPELLWAKE_NATIVE_RULE_ERRORS':'1' if arguments.rule_errors else '0',
                     'SPELLWAKE_NATIVE_NO_CONTEST':'1' if arguments.no_contest else '0',
@@ -494,9 +343,6 @@ def main() -> None:
                 raise RuntimeError('Causal recovery record/byte starvation did not execute exactly')
             if phase == 'replay-lost-ack' and output.count(b'REPLAY_PUBLICATION_BODY_TRANSPORT_FAILURE') != 1:
                 raise RuntimeError('Actual publication client body-read failure was not observed exactly once')
-            if (supply or arguments.bank_expiry or arguments.opening_response or arguments.between_receipts) and phase == 'results':
-                stage_results.append(metrics)
-                continue
             if connected_mode:
                 if metrics.get('actualNativeTransitionEvidence') is not True:
                     raise RuntimeError('Actual native transition retention/accepted-history evidence did not execute')
@@ -531,7 +377,7 @@ def main() -> None:
                     ack = object_json(json.loads(realm.sql(sql)))
                     if ack.get('status') != 'success':
                         raise RuntimeError('Owned native source readback failed')
-                    if phase == 'prepare' and arguments.structure == 'bo3' and not arguments.bank_expiry:
+                    if phase == 'prepare' and arguments.structure == 'bo3':
                         from native_source_reader_acceptance import qualify_initial_clock_recovery
                         result['initialClockRecovery'] = qualify_initial_clock_recovery(realm, reservation, body)
                 if phase in ('advance','verify'):
@@ -923,15 +769,7 @@ def main() -> None:
                 'fullyQualifiedCards':0,'semanticFactsEventsQualified':False,'deckFormatAdmissionQualified':False,
                 'limits':'Actual incident pause and unrecoverable terminalization; own-seat operational prefix only, no full reveal'}
             output_file.unlink(missing_ok=True)
-        if supply:
-            terminal = stage_results[-1]
-            payload = object_json(json.loads(output_file.read_bytes()))
-            if len(stage_results)!=2 or terminal.get('phase')!='supply-participation' or terminal.get('coldTerminalVerified') is not True or terminal.get('originalHttpRetries') is not True or payload.get('ownTurns')!=['3','2']:
-                raise RuntimeError('Native participation and original retry controls failed')
-            result['scope']='Three-turn native participation for supply with independent cold terminal verification'
-            result['native']={'stages':stage_results,'payload':payload}
-            output_file.unlink()
-        if not supply and mode == 'results' and not arguments.unsupported_work and not arguments.rule_errors and not arguments.no_contest and not arguments.bank_expiry and not arguments.opening_response and not arguments.between_receipts:
+        if mode == 'results' and not arguments.unsupported_work and not arguments.rule_errors and not arguments.no_contest:
             terminal_metrics = stage_results[-1]
             if not (terminal_metrics.get('actualClockAccountingChecked') is True and terminal_metrics.get('actualWaitingActorChecked') is True):
                 raise RuntimeError('Actual native clock ownership/accounting checks did not execute')
@@ -966,46 +804,11 @@ def main() -> None:
                 expected = {'seatId':reservation['seatIds'][index], 'ownTurns':expected_counts[index], 'realGame':int(expected_counts[index])>=3, 'reason':'native_turn_starts_v1'}
                 if row != expected:
                     raise RuntimeError('Persisted participation differs from actual native chain')
-            from qualification_ranked_settlement import check_monthly_activity
-            result['monthlyActivity'] = check_monthly_activity(realm, uuid.UUID(game), [int(count) for count in expected_counts])
             if persisted.get('replayManifests') != 1:
                 raise RuntimeError('Portable replay must publish exactly one canonical manifest')
             if persisted.get('result') != {'outcome':'win','winners':[reservation['seatIds'][1]],'reason':'native_concession'} or persisted.get('results') != 1 or persisted.get('originals') != 1:
                 raise RuntimeError('Terminal SQL result/original retry is not source-once')
             result['native'] = {'stages':stage_results, 'targetOwnTurns':arguments.result_turns, 'actualTerminalCommitAndRetry':True, 'actualTerminalCommandHttp':True, 'actualTerminalStaleHttp':True, 'actualPlayerPathHttp':True, 'exactColdResultEvidence':True, 'persisted':persisted, 'actualClockIntentDerived':True,'actualClockAccountingChecked':True,'actualWaitingActorChecked':True,'matchStructure':arguments.structure, 'fullyQualifiedCards':0, 'semanticFactsEventsQualified':False, 'deckFormatAdmissionQualified':False, 'nativeTransitionEvidenceQualified':True, 'limits':'Actual result/participation, canonical transition evidence and derived clock intent; feature metrics, full cards and native timeout unsupported'}
-            output_file.unlink()
-        if arguments.between_receipts:
-            metrics = stage_results[-1]
-            if len(stage_results) != 2 or metrics.get('historicalOwnReceipts') != (1 if arguments.controller_between else 2) or metrics.get('possessedControllerReceipt') is not arguments.controller_between or metrics.get('foreignActorRejected') is not True or metrics.get('reservedNextGame') is not True:
-                raise RuntimeError('Expected both original between-game selections through authenticated HTTP')
-            result['native'] = {'stages':stage_results,'deckFormatAdmissionQualified':False}
-            output_file.unlink()
-        if arguments.ranked_no_contest:
-            from qualification_ranked_settlement import check_no_contest_refund
-            if len(stage_results) != 1 or stage_results[0].get('constructedFormatControls') is not True:
-                raise RuntimeError('A source-checked constructed opening is required')
-            result['native'] = {'stages':stage_results,'fullyQualifiedCards':0,'deckFormatAdmissionQualified':False}
-            result['rankedNoContest'] = check_no_contest_refund(realm, reservation, commitment)
-            output_file.unlink()
-        elif arguments.opening_response:
-            metrics = stage_results[-1]
-            scenario = os.environ.get('SPELLWAKE_OPENING_TIMEOUT_SCENARIO','')
-            continuation = {'priority':'priorityTimeout','combat-choice':'combatDecisionTimeout','restored':'restoredRemainingTime','entropy':'entropyPreservesDeadline','successive':'successiveTimeouts','bystander':'bystanderPreservesDeadline','second':'secondChooser','':'survivorCommand'}[scenario]
-            if len(stage_results) != 2 or stage_results[0].get('constructedFormatControls') is not True or any(metrics.get(key) is not True for key in ('databaseDue', 'exactRetry', 'coldHistory', continuation, 'matchSettled', 'publicDeadlineAndLateReplyVerified')):
-                raise RuntimeError('Three-player opening timeout and match settlement did not complete')
-            result['native'] = {'stages': stage_results, 'fullyQualifiedCards': 0, 'deckFormatAdmissionQualified': False}
-            if arguments.ranked_settlement:
-                from qualification_ranked_settlement import check_settlement
-                if metrics.get('roomOriginalsRecovered') is not True:
-                    raise RuntimeError('Expected the room command originals after the match started')
-                result['rankedSettlement'] = check_settlement(realm, reservation, commitment)
-            output_file.unlink()
-        if arguments.bank_expiry:
-            metrics = stage_results[-1]
-            required = ('actualEarlyAtomicRefusal','actualDueAcceptance','sameOriginalRetry','actualColdBankHistory','stateOnlyRefused','wholeMatchBankForfeit')
-            if len(stage_results) != 2 or not all(metrics.get(key) is True for key in required) or metrics.get('selectedBankMs') != 1800000 or metrics.get('multiplayerQualified') is not False:
-                raise RuntimeError('Actual bank acceptance requirements did not execute')
-            result['native'] = {'stages':stage_results,'fullyQualifiedCards':0,'deckFormatAdmissionQualified':False,'multiplayerQualified':False,'limits':'Genuine native bank bytes and actual owned SQL/Auth/Storage; controlled release/profile/admission fixture; not full N06'}
             output_file.unlink()
         if mode == 'results' and arguments.rule_errors:
             metrics = stage_results[-1]
@@ -1031,12 +834,9 @@ def main() -> None:
         primary = error
         result['primaryPassed'] = False
         result['primaryFailureType'] = type(error).__name__
-        import traceback
-        result['primaryFailureSite'] = [(Path(frame.filename).name, frame.name, frame.lineno) for frame in traceback.extract_tb(error.__traceback__)]
         if isinstance(error, QualificationCommandError):
             result['primaryCommandFailure'] = {'reason': error.reason, 'sequence': error.sequence}
     finally:
-        (realm.stage / 'native-qualification-test').unlink(missing_ok=True)
         if realm.status and bucket_attempted:
             try:
                 # This namespace belongs to this disposable fixture from creation.

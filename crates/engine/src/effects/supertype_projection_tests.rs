@@ -18,7 +18,7 @@ fn populated_supertype_views_preserve_root_receipts_stack_traits_and_ability_non
             ResolvedDuration, ResolvedPartSpec, SubtypeOperation, TypeChangeSpec, TypeOperation,
         },
         mana::{ManaCost, ManaPayment},
-        program::{BodyTarget, ExecutableBody, Instruction, SpellTargetFilter, Supertype},
+        program::{BodyTarget, ExecutableBody, Instruction, Supertype},
         targets::TargetRef,
     };
     use std::collections::BTreeSet;
@@ -77,7 +77,7 @@ fn populated_supertype_views_preserve_root_receipts_stack_traits_and_ability_non
             original,
             tr::spell(
                 4,
-                BodyTarget::SingleSpell(SpellTargetFilter::CopyableInstructionSpell),
+                BodyTarget::SingleSpell(crate::program::SpellFilter::copyable_instruction()),
                 vec![Instruction::CopySpell],
             ),
         ],

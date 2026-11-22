@@ -221,6 +221,7 @@ pub fn payment(cost: &ManaCost) -> ManaPayment {
         *old = old.plus(&cost.generic);
     }
     ManaPayment {
+        from_lots: Default::default(),
         spend: by_type
             .into_iter()
             .map(|(mana_type, amount)| ManaSpend { mana_type, amount })

@@ -320,8 +320,24 @@ impl Caller<'_> {
         )
     }
     fn payment(value: &Value) -> Result<ManaPayment, String> {
+        let (rows, from_lots) = if let Some(object) = value.as_object() {
+            if object.len() != 2 {
+                return Err("invalid mana allocation".into());
+            }
+            let lots = serde_json::from_value(
+                object
+                    .get("from_lots")
+                    .ok_or("missing mana lot selections")?
+                    .clone(),
+            )
+            .map_err(|_| "invalid mana lot selections")?;
+            (object.get("spend").ok_or("missing spend")?, lots)
+        } else {
+            (value, Default::default())
+        };
         Ok(ManaPayment {
-            spend: value
+            from_lots,
+            spend: rows
                 .as_array()
                 .ok_or("missing exact payment")?
                 .iter()

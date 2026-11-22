@@ -22,9 +22,9 @@ use spellwake_engine::{
     object_identity::{CardId, ObjectDestination},
     priority::SeatId,
     program::{
-        BodyTarget, CardType, ExecutableBody, Instruction, InstructionAmount, ObjectRelation,
-        OrdinaryCondition, PermanentDefinition, Program, ProgramKind, SpellDefinition,
-        SpellTargetFilter, Supertype, TriggerGrouping, TriggeredAbility, TriggeredAbilityId,
+        BodyTarget, CardType, ExecutableBody, Instruction, ObjectFilter, PermanentDefinition,
+        Program, ProgramKind, SpellDefinition, Supertype, TriggerGrouping, TriggeredAbility,
+        TriggeredAbilityId, ValueExpr,
     },
     token::{TokenCreation, TokenDefinition, TokenName, TokenRecipients, TokenSubtype},
 };
@@ -147,12 +147,16 @@ fn optional_colors(raw: &Value) -> Option<BTreeSet<Color>> {
     raw.as_array()
         .map(|values| values.iter().map(|v| color(v.as_str().unwrap())).collect())
 }
-fn relation(raw: &Value) -> ObjectRelation {
+fn relation(raw: &Value) -> ObjectFilter {
     match raw.as_str().unwrap() {
-        "SelfObject" => ObjectRelation::SelfObject,
-        "AnyCreature" => ObjectRelation::AnyCreature,
-        "AnotherCreature" => ObjectRelation::AnotherCreature,
-        "AnotherControlledCreature" => ObjectRelation::AnotherControlledCreature,
+        "SelfObject" => spellwake_engine::program::ObjectFilter::self_object(),
+        "AnyCreature" => spellwake_engine::program::ObjectFilter::creature(),
+        "AnotherCreature" => {
+            spellwake_engine::program::ObjectFilter::creature().other_than_ability_source()
+        }
+        "AnotherControlledCreature" => spellwake_engine::program::ObjectFilter::creature()
+            .controlled()
+            .other_than_ability_source(),
         _ => panic!("unlisted frozen object relation"),
     }
 }
@@ -163,9 +167,9 @@ fn adjustment(raw: &Value) -> LifeAdjustment {
         _ => panic!("unlisted frozen life adjustment"),
     }
 }
-fn amount(raw: &Value) -> InstructionAmount {
+fn amount(raw: &Value) -> ValueExpr {
     assert_eq!(raw["variant"], "Literal");
-    InstructionAmount::Literal(integer(&raw["value"]))
+    ValueExpr::Literal(integer(&raw["value"]))
 }
 /// Interpret the independently frozen declarative contract only in this test.
 /// Exhaustive Program struct construction checks every field/default, without
@@ -174,6 +178,51 @@ fn contract_program(raw: &Value, vocabulary: &CreatureTypeVocabulary) -> Program
     assert_eq!(raw["activated"], json!([]));
     assert!(raw["continuous"].is_null());
     Program {
+        adventure: None,
+        entry_copy: None,
+        splice: None,
+        nightbound_back: None,
+        transform_back: None,
+        split: None,
+        cast_reductions: vec![],
+        entry_counter_abilities: vec![],
+        conditional_cost: None,
+        plot: None,
+        exile_action: None,
+        madness: None,
+        miracle: None,
+        cast_from_own_exile: false,
+        flashback: None,
+        flashback_x_mana_symbols: 0,
+        sacrifice_creature_cast_cost: false,
+        reveal_colorless_creature_cast_cost: false,
+        discard_cast_cost: false,
+        graveyard_creature_exile_cost: 0,
+        graveyard_exile_x_cost: false,
+        graveyard_self_cast: None,
+        tap_creatures_cast_cost: false,
+        flashback_sacrifice_creatures: 0,
+        flashback_tap_white_creatures: 0,
+        flashback_life: 0,
+        additional_cast_costs: vec![],
+        activation_restrictions: Default::default(),
+        loyalty_costs: Default::default(),
+        variable_loyalty_costs: Default::default(),
+        face_up_abilities: Vec::new(),
+        printed_keywords: Default::default(),
+        printed_toxic: None,
+        x_mana_symbols: 0,
+        hybrid_symbols: Vec::new(),
+        cannot_be_countered: false,
+        attack_requirement: None,
+        combat_limits: Default::default(),
+        cast_during_own_combat: false,
+        additional_life_cost: None,
+        siege_back: None,
+        disturb: None,
+        meld_partner: None,
+        printed_defense: None,
+        printed_loyalty: None,
         zone_replacements: vec![],
         card_types: raw["card_types"]
             .as_array()
@@ -198,6 +247,10 @@ fn contract_program(raw: &Value, vocabulary: &CreatureTypeVocabulary) -> Program
             .iter()
             .map(|v| land_type(v.as_str().unwrap()))
             .collect(),
+        spell_subtypes: Default::default(),
+        artifact_subtypes: Default::default(),
+        enchantment_subtypes: Default::default(),
+        planeswalker_subtypes: Default::default(),
         names: names(&raw["names"]),
         supertypes: raw["supertypes"]
             .as_array()
@@ -210,6 +263,8 @@ fn contract_program(raw: &Value, vocabulary: &CreatureTypeVocabulary) -> Program
             .collect(),
         kind: match raw["kind"]["variant"].as_str().unwrap() {
             "Permanent" => ProgramKind::Permanent(PermanentDefinition {
+                entry_tap: None,
+                attachment: None,
                 casting_cost: (!raw["kind"]["casting_cost"].is_null())
                     .then(|| cost(&raw["kind"]["casting_cost"])),
                 printed_pt: (!raw["kind"]["printed_pt"].is_null()).then(|| {
@@ -221,6 +276,7 @@ fn contract_program(raw: &Value, vocabulary: &CreatureTypeVocabulary) -> Program
                 }),
             }),
             "Spell" => ProgramKind::Spell(SpellDefinition {
+                modes: None,
                 cost: cost(&raw["kind"]["cost"]),
                 body: contract_body(&raw["kind"]["body"], vocabulary),
             }),
@@ -259,12 +315,12 @@ fn contract_program(raw: &Value, vocabulary: &CreatureTypeVocabulary) -> Program
                 TriggeredAbility {
                     id: TriggeredAbilityId(v["id"]["value"].as_u64().unwrap()),
                     condition: match v["condition"]["variant"].as_str().unwrap() {
-                        "Enters" => {
-                            OrdinaryCondition::Enters(relation(&v["condition"]["object_relation"]))
-                        }
-                        "Dies" => {
-                            OrdinaryCondition::Dies(relation(&v["condition"]["object_relation"]))
-                        }
+                        "Enters" => spellwake_engine::program::TriggerSpec::enters(relation(
+                            &v["condition"]["object_relation"],
+                        )),
+                        "Dies" => spellwake_engine::program::TriggerSpec::dies(relation(
+                            &v["condition"]["object_relation"],
+                        )),
                         _ => panic!("unlisted frozen trigger condition"),
                     },
                     grouping: TriggerGrouping::EachOccurrence,
@@ -273,6 +329,7 @@ fn contract_program(raw: &Value, vocabulary: &CreatureTypeVocabulary) -> Program
             })
             .collect(),
         continuous: None,
+        additional_battlefield_abilities: Vec::new(),
     }
 }
 fn contract_body(raw: &Value, vocabulary: &CreatureTypeVocabulary) -> ExecutableBody {
@@ -285,7 +342,7 @@ fn contract_body(raw: &Value, vocabulary: &CreatureTypeVocabulary) -> Executable
                 raw["target"],
                 json!({"variant":"SingleSpell","filter":"AnySpell"})
             );
-            BodyTarget::SingleSpell(SpellTargetFilter::AnySpell)
+            BodyTarget::SingleSpell(spellwake_engine::program::SpellFilter::any())
         }
         _ => panic!("unlisted frozen target"),
     };
@@ -357,6 +414,8 @@ fn contract_body(raw: &Value, vocabulary: &CreatureTypeVocabulary) -> Executable
                             TokenCreation {
                                 definition,
                                 amount: amount(&c["amount"]),
+                                base_size: None,
+                                enters_tapped: false,
                                 recipients: TokenRecipients::Controller,
                             }
                         })

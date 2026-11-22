@@ -34,6 +34,8 @@ pub enum ColorFilter {
     #[default]
     Any,
     Has(Color),
+    /// Match objects that do not have this color.
+    Lacks(Color),
     Colorless,
     Monocolored,
     Multicolored,
@@ -43,6 +45,7 @@ impl ColorFilter {
         match self {
             Self::Any => true,
             Self::Has(color) => colors.contains(&color),
+            Self::Lacks(color) => !colors.contains(&color),
             Self::Colorless => colors.is_empty(),
             Self::Monocolored => colors.len() == 1,
             Self::Multicolored => colors.len() >= 2,

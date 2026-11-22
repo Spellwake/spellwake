@@ -163,7 +163,7 @@ fn actual_mixed_body_draws_and_bounces_without_a_followon_check_or_fake_ready() 
             BodyTarget::SingleCreature,
             vec![
                 Instruction::DrawController {
-                    amount: crate::program::InstructionAmount::Literal(1.into()),
+                    amount: crate::program::ValueExpr::Literal(1.into()),
                 },
                 Instruction::ReturnToOwnersHand,
                 Instruction::Damage { amount: 1.into() },
@@ -258,7 +258,7 @@ fn private_controller_receipt_preserves_outer_revisions_and_entry_draw_controlle
             vec![
                 Instruction::Damage { amount: 1.into() },
                 Instruction::DrawController {
-                    amount: crate::program::InstructionAmount::Literal(1.into()),
+                    amount: crate::program::ValueExpr::Literal(1.into()),
                 },
             ],
         ),
@@ -270,7 +270,7 @@ fn private_controller_receipt_preserves_outer_revisions_and_entry_draw_controlle
             ExecutableBody::new(
                 BodyTarget::None,
                 vec![Instruction::DrawController {
-                    amount: crate::program::InstructionAmount::Literal(0.into()),
+                    amount: crate::program::ValueExpr::Literal(0.into()),
                 }],
             ),
         ),
@@ -440,7 +440,7 @@ fn prepared_cleanup_defers_waiting_until_same_iteration_priority_without_entry_e
             ExecutableBody::new(
                 BodyTarget::None,
                 vec![Instruction::DrawController {
-                    amount: crate::program::InstructionAmount::Literal(0.into()),
+                    amount: crate::program::ValueExpr::Literal(0.into()),
                 }],
             ),
         ),
@@ -465,13 +465,14 @@ fn prepared_cleanup_defers_waiting_until_same_iteration_priority_without_entry_e
     watcher.triggered.push(crate::program::TriggeredAbility {
         grouping: spellwake_engine::program::TriggerGrouping::EachOccurrence,
         id: crate::program::TriggeredAbilityId(1),
-        condition: crate::program::OrdinaryCondition::Discarded(
+        condition: crate::program::TriggerSpec::player_action(
             crate::program::PlayerRelation::Controller,
+            crate::program::PlayerTriggerAction::Discarded,
         ),
         body: ExecutableBody::new(
             BodyTarget::None,
             vec![Instruction::DrawController {
-                amount: crate::program::InstructionAmount::Literal(1.into()),
+                amount: crate::program::ValueExpr::Literal(1.into()),
             }],
         ),
     });

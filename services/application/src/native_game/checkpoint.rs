@@ -1,4 +1,5 @@
 //! Private linked reconstruction manifests, never database acceptance or saved states.
+use super::input_codec::restore_response_timeout;
 use super::*;
 use crate::player_wire::NativeRevision;
 use serde::{Deserialize, Serialize};
@@ -70,14 +71,12 @@ impl From<NativeBridgeError> for NativeCheckpointError {
         Self::Binding(e)
     }
 }
-/// Explicit trusted retained-input kind; records do not grant durable authority.
+/// Explicit trusted retained-input discriminator; player input and host entropy differ.
 #[derive(Clone, Copy)]
 pub enum NativeCheckpointInput {
     Player,
     Entropy,
-    /// Private bank-expiry replay; SQL expiry authorization is separately required.
-    BankExpiry,
-    /// Private deterministic replay of a multiplayer response timeout.
+    /// Trusted timeout input. Exact expiry is checked separately on acceptance and replay.
     ResponseTimeout,
 }
 #[derive(Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -86,20 +85,17 @@ enum Kind {
     Initial,
     Player,
     Entropy,
-    BankExpiry,
-    /// Private deterministic replay of a multiplayer response timeout.
     ResponseTimeout,
 }
 impl Kind {
     fn version(self) -> &'static str {
         match self {
-            Self::BankExpiry => "native-bank-checkpoint-v1",
             Self::ResponseTimeout => "native-response-timeout-checkpoint-v1",
             Self::Initial | Self::Player | Self::Entropy => "native-checkpoint-v1",
         }
     }
 }
-#[derive(Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct Manifest {
     version: String,
@@ -130,7 +126,7 @@ impl Manifest {
                         && self.input_ref.is_none()
                         && self.viewer_seat_id.is_none()
                 }
-                Kind::Player | Kind::Entropy | Kind::BankExpiry | Kind::ResponseTimeout => {
+                Kind::Player | Kind::Entropy | Kind::ResponseTimeout => {
                     self.basis.revision.get() > 0
                         && self
                             .parent_ref
@@ -229,8 +225,7 @@ impl NativeRecoveryBudget {
             .ok_or(NativeCheckpointError::Budget)?;
         Self::new(records, bytes)
     }
-    /// Remaining (records, bytes), for owned budget measurements.
-    #[cfg(test)]
+    /// Remaining records and bytes in this recovery allowance.
     pub(crate) fn remaining(&self) -> (usize, u64) {
         (self.records, self.bytes)
     }
@@ -259,11 +254,12 @@ impl NativeRecoveryBudget {
 }
 /// Actual fully reconstructed or prepared checkpoint. No DB acceptance is implied.
 /// Original manifest bytes remain private; no Debug/Serialize is supplied.
+#[derive(Clone)]
 pub struct NativeCheckpoint {
     bytes: Vec<u8>,
     reference: NativeArtifactRef,
     manifest: Manifest,
-    candidate: NativeCandidate,
+    candidate: Arc<NativeCandidate>,
     pub(super) roster: Vec<NativeSeatBinding>,
     pub(super) activity: results::NativeActivity,
     provenance: Option<Arc<NativeInitialProvenance>>,
@@ -295,7 +291,7 @@ impl NativeCheckpoint {
             bytes,
             reference,
             manifest,
-            candidate,
+            candidate: Arc::new(candidate),
             roster,
             provenance,
             activity,
@@ -359,7 +355,6 @@ impl NativeCheckpoint {
             Kind::Initial => return None,
             Kind::Player => NativeCheckpointInput::Player,
             Kind::Entropy => NativeCheckpointInput::Entropy,
-            Kind::BankExpiry => NativeCheckpointInput::BankExpiry,
             Kind::ResponseTimeout => NativeCheckpointInput::ResponseTimeout,
         };
         Some((
@@ -490,10 +485,6 @@ fn apply(
         NativeCheckpointInput::ResponseTimeout => Ok((
             Kind::ResponseTimeout,
             restore_response_timeout(prior.state(), binding, artifact.bytes())?,
-        )),
-        NativeCheckpointInput::BankExpiry => Ok((
-            Kind::BankExpiry,
-            restore_bank_expiry(prior.state(), binding, artifact.bytes())?,
         )),
     }
 }
@@ -627,7 +618,6 @@ where
         let kind = match manifest.kind {
             Kind::Player => NativeCheckpointInput::Player,
             Kind::Entropy => NativeCheckpointInput::Entropy,
-            Kind::BankExpiry => NativeCheckpointInput::BankExpiry,
             Kind::ResponseTimeout => NativeCheckpointInput::ResponseTimeout,
             Kind::Initial => return Err(NativeCheckpointError::Invalid),
         };
@@ -655,7 +645,7 @@ where
             bytes,
             reference,
             manifest,
-            candidate,
+            candidate: Arc::new(candidate),
             roster: checkpoint.roster,
             provenance: checkpoint.provenance,
         };

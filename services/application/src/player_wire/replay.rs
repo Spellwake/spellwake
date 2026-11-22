@@ -145,16 +145,6 @@ impl PlayerReplayFrame {
             || &self.schema_revision != f.source.schema_revision
             || self.snapshot.basis.game_id != original.game_id
             || self.snapshot.basis.context_id != original.context_id
-            || self
-                .snapshot
-                .turn
-                .as_ref()
-                .is_some_and(|turn| turn.priority_deadline_at.is_some())
-            || self
-                .snapshot
-                .decisions
-                .iter()
-                .any(|choice| choice.deadline_at.is_some())
             || self.snapshot.viewer_seat_id != original.perspective_seat_id
             || self.snapshot.through_event_sequence != original.at_event_sequence
             || f.projection.authorized_full_disclosure != full

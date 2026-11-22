@@ -156,6 +156,12 @@ pub fn check_decision_view(
             .collect::<Result<Vec<_>, String>>()
     };
     Ok(match frame {
+        CheckDecision::BattleProtector(_) => {
+            return Err("historical check observer excludes battle protectors".into());
+        }
+        CheckDecision::ReturnCommanders(_) => {
+            return Err("historical check observer excludes commander choices".into());
+        }
         CheckDecision::CleanupSelect(_) => {
             return Err(
                 "historical check frame excludes replacement-aware cleanup selection".into(),
@@ -281,6 +287,12 @@ pub fn check_journal_view(
                     .collect::<Result<Vec<_>, String>>()
             };
             let payload = match &choice.choice {
+                CheckChoice::BattleProtector { .. } => {
+                    return Err("historical check journal excludes battle protectors".into());
+                }
+                CheckChoice::ReturnCommanders { .. } => {
+                    return Err("historical check journal excludes commander choices".into());
+                }
                 CheckChoice::CleanupSelected { .. } => {
                     return Err("historical check journal excludes CleanupSelected".into());
                 }

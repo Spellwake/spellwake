@@ -8,9 +8,8 @@ use spellwake_engine::{
     object_identity::ObjectDestination,
     priority::SeatId,
     program::{
-        BodyTarget, ExecutableBody, Instruction, InstructionAmount, OrdinaryCondition,
-        PlayerRelation, Program, ResolvingPlayer, SpellTargetFilter, TriggerGrouping,
-        TriggeredAbility, TriggeredAbilityId,
+        BodyTarget, ExecutableBody, Instruction, PlayerRelation, Program, ResolvingPlayer,
+        TriggerGrouping, TriggerSpec, TriggeredAbility, TriggeredAbilityId,
     },
     setup::GameSeed,
     token::{TokenCreation, TokenDefinition, TokenName},
@@ -23,7 +22,7 @@ fn gain() -> Instruction {
 }
 fn library(kind: LibraryActionKind, amount: i64) -> Instruction {
     let player = ResolvingPlayer::Controller;
-    let amount = InstructionAmount::Literal(amount.into());
+    let amount = spellwake_engine::program::ValueExpr::Literal(amount.into());
     match kind {
         LibraryActionKind::Scry => Instruction::Scry { player, amount },
         LibraryActionKind::Surveil => Instruction::Surveil { player, amount },
@@ -36,7 +35,7 @@ fn spell(body: Vec<Instruction>) -> Program {
         ExecutableBody::new(BodyTarget::None, body),
     )
 }
-fn watcher(condition: OrdinaryCondition, body: Vec<Instruction>) -> Program {
+fn watcher(condition: TriggerSpec, body: Vec<Instruction>) -> Program {
     let mut program = Program::artifact(None, vec![]);
     program.triggered.push(TriggeredAbility {
         id: TriggeredAbilityId(0),
@@ -89,7 +88,9 @@ fn initialize_control(
             program: Program::instant(
                 ManaCost::free(),
                 ExecutableBody::new(
-                    BodyTarget::SingleSpell(SpellTargetFilter::CopyableInstructionSpell),
+                    BodyTarget::SingleSpell(
+                        spellwake_engine::program::SpellFilter::copyable_instruction(),
+                    ),
                     vec![Instruction::CopySpell],
                 ),
             ),
@@ -241,8 +242,14 @@ fn zero_unreachable_and_inactive_condition_programs_refuse_without_new_frames_or
         }
     }
     for condition in [
-        OrdinaryCondition::Scried(PlayerRelation::Controller),
-        OrdinaryCondition::Surveilled(PlayerRelation::Opponent),
+        spellwake_engine::program::TriggerSpec::player_action(
+            PlayerRelation::Controller,
+            spellwake_engine::program::PlayerTriggerAction::Scried,
+        ),
+        spellwake_engine::program::TriggerSpec::player_action(
+            PlayerRelation::Opponent,
+            spellwake_engine::program::PlayerTriggerAction::Surveilled,
+        ),
     ] {
         let (fixture, initial) =
             initialize_control(watcher(condition, vec![gain()]), 0, None, false);
@@ -261,7 +268,10 @@ fn nested_uncreated_token_templates_are_checked_as_full_typed_programs() {
     };
     let inner = TokenDefinition::new(
         watcher(
-            OrdinaryCondition::Scried(PlayerRelation::Controller),
+            spellwake_engine::program::TriggerSpec::player_action(
+                PlayerRelation::Controller,
+                spellwake_engine::program::PlayerTriggerAction::Scried,
+            ),
             vec![library(LibraryActionKind::Scry, 0)],
         ),
         name(),
@@ -270,7 +280,10 @@ fn nested_uncreated_token_templates_are_checked_as_full_typed_programs() {
     .unwrap();
     let middle = TokenDefinition::new(
         watcher(
-            OrdinaryCondition::TokenCreated(PlayerRelation::Controller),
+            spellwake_engine::program::TriggerSpec::player_action(
+                PlayerRelation::Controller,
+                spellwake_engine::program::PlayerTriggerAction::TokenCreated,
+            ),
             vec![Instruction::CreateTokens {
                 creations: vec![TokenCreation::one(inner)],
             }],
@@ -280,7 +293,7 @@ fn nested_uncreated_token_templates_are_checked_as_full_typed_programs() {
     )
     .unwrap();
     let mut creation = TokenCreation::one(middle);
-    creation.amount = InstructionAmount::Literal(0.into());
+    creation.amount = spellwake_engine::program::ValueExpr::Literal(0.into());
     let (fixture, initial) = initialize_control(
         spell(vec![
             Instruction::Jump { destination: 2 },
@@ -312,9 +325,15 @@ fn completed_mill_reason_and_completed_action_trigger_causes_refuse_without_libr
     assert_all_predecessors(&fixture, &complete);
     for kind in [LibraryActionKind::Scry, LibraryActionKind::Surveil] {
         let condition = if kind == LibraryActionKind::Scry {
-            OrdinaryCondition::Scried(PlayerRelation::Controller)
+            spellwake_engine::program::TriggerSpec::player_action(
+                PlayerRelation::Controller,
+                spellwake_engine::program::PlayerTriggerAction::Scried,
+            )
         } else {
-            OrdinaryCondition::Surveilled(PlayerRelation::Controller)
+            spellwake_engine::program::TriggerSpec::player_action(
+                PlayerRelation::Controller,
+                spellwake_engine::program::PlayerTriggerAction::Surveilled,
+            )
         };
         let (fixture, initial) = initialize_control(
             spell(vec![library(kind, 1)]),
@@ -398,7 +417,7 @@ fn owned_copied_trigger_definitions_are_borrowed_from_actual_retained_payloads()
     let mut program = spell(vec![gain()]);
     program.triggered.push(TriggeredAbility {
         id: TriggeredAbilityId(0),
-        condition: OrdinaryCondition::SelfCast,
+        condition: spellwake_engine::program::TriggerSpec::self_cast(),
         grouping: TriggerGrouping::EachOccurrence,
         body: ExecutableBody::new(BodyTarget::None, vec![library(LibraryActionKind::Scry, 0)]),
     });

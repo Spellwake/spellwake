@@ -7,7 +7,6 @@ use replacements::CheckMoves;
 mod tests;
 use super::*;
 use crate::{
-    characteristics::ResolvedDuration,
     checks::{
         CheckBoundary, CheckChoice, CheckChoiceRecord, CheckEventId, CheckMoveCause,
         CheckMoveRecord, CleanupDiscardChoice, GraveyardOrderChoice, LegendChoice, LegendConflict,
@@ -47,7 +46,7 @@ enum CheckPhase {
         moves: CheckMoves,
     },
     Observe,
-    Actions(StateActions),
+    Actions(Box<StateActions>),
     Placement(PlacementCursor),
 }
 /// Frozen cohort references only. WaitingInstance remains the sole body/capture owner.
@@ -81,13 +80,7 @@ struct GraveyardGroup {
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct StagedLegend {
     conflict: LegendConflict,
-    accepted: Option<LegendKeepCertificate>,
-}
-/// Original authenticated choice evidence, retained through canonical cohort reindexing.
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct LegendKeepCertificate {
-    conflict: LegendConflict,
-    keep: ObjectId,
+    keep: Option<ObjectId>,
 }
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct StateMovements {
@@ -95,7 +88,24 @@ struct StateMovements {
     moves: CheckMoves,
 }
 #[derive(Debug, Clone, PartialEq, Eq)]
+struct CommanderGroup {
+    owner: SeatId,
+    domain: Vec<ObjectId>,
+    selected: Option<Vec<ObjectId>>,
+}
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ProtectorChange {
+    battle: ObjectId,
+    controller: SeatId,
+    domain: Vec<SeatId>,
+    selected: Option<SeatId>,
+}
+#[derive(Debug, Clone, PartialEq, Eq)]
 struct StateActions {
+    protectors: Vec<ProtectorChange>,
+    start_speed: BTreeSet<SeatId>,
+    commanders: Vec<CommanderGroup>,
+    detach: BTreeSet<ObjectId>,
     dead: BTreeMap<ObjectId, StateBasedMoveReasons>,
     cancellations: Vec<(ObjectId, PowerToughnessCounters)>,
     departed_copies: BTreeMap<StackEntryId, crate::stack_window::SpellCopyObject>,
@@ -106,7 +116,13 @@ struct StateActions {
 }
 impl StateActions {
     fn is_empty(&self) -> bool {
-        self.dead.is_empty()
+        self.commanders.is_empty() && self.other_actions_empty()
+    }
+    fn other_actions_empty(&self) -> bool {
+        self.start_speed.is_empty()
+            && self.protectors.is_empty()
+            && self.detach.is_empty()
+            && self.dead.is_empty()
             && self.legends.is_empty()
             && self.cancellations.is_empty()
             && self.departed_copies.is_empty()
@@ -146,22 +162,23 @@ impl EffectWindow {
         if self.pending_work.is_some() {
             return Err(EffectError::WrongPhase);
         }
+        let discard = self.cleanup_discard_phase()?;
         let mut next = self.clone();
         next.revision = revision;
         let mut append = RulesJournal::default();
-        let phase = if let Some(discard) = self.cleanup_discard_phase()? {
-            discard
-        } else {
-            next.cleanup_characteristics(turn, &mut append)?;
-            CheckPhase::Observe
+        let phase = match discard {
+            Some(phase) => phase,
+            None => {
+                next.cleanup_characteristics(turn, &mut append)?;
+                CheckPhase::Observe
+            }
         };
-        let discard_skipped = matches!(phase, CheckPhase::Observe);
         next.pending_work = Some(PendingWork::Checks(CheckProcess {
             boundary,
             // Slot zero belongs only to cleanup discard, even when none occurs.
             event: CheckEventId {
                 started_revision: revision,
-                pass: u64::from(discard_skipped),
+                pass: u64::from(phase == CheckPhase::Observe),
             },
             performed: false,
             phase,
@@ -197,10 +214,27 @@ impl EffectWindow {
             _ => Err(EffectError::WrongPhase),
         }
     }
+    fn cleanup_discard_count(&self, cards_in_hand: usize) -> Result<usize, EffectError> {
+        let excess = cards_in_hand.saturating_sub(7);
+        if excess == 0 {
+            return Ok(0);
+        }
+        let active = self.window.active_player();
+        let emblem = self.characteristics.emblems.values().any(|emblem| {
+            emblem.controller == active
+                && emblem.definition
+                    == crate::emblem::EmblemDefinition::UnlimitedHandWithGraveyardReturn
+        });
+        let no_limit = emblem || self.evaluated_characteristics()?.objects.values().any(|object| {
+            object.zone == ObjectZone::Battlefield && object.controller == Some(active)
+                && matches!(&object.printed_text.continuous,
+                    Some(crate::characteristics::StaticContinuousAbility::DrawRule { id, rule: crate::characteristics::StaticDrawRule::NoMaximumHandSize })
+                        if object.abilities.continuous == Some(*id))
+        });
+        Ok(if no_limit { 0 } else { excess })
+    }
     fn cleanup_hand(&self) -> Vec<ObjectId> {
-        let Some(active) = self.window.active_player() else {
-            return Vec::new();
-        };
+        let active = self.window.active_player();
         self.window
             .cards()
             .iter()
@@ -210,15 +244,16 @@ impl EffectWindow {
     }
     fn cleanup_discard_phase(&self) -> Result<Option<CheckPhase>, EffectError> {
         let domain = self.cleanup_hand();
-        let required = domain.len().saturating_sub(7);
+        let required = self.cleanup_discard_count(domain.len())?;
         if required == 0 {
             return Ok(None);
         }
-        Ok(Some(if self.has_cleanup_replacement_source()? {
+        let phase = if self.has_cleanup_replacement_source()? {
             CheckPhase::DiscardSelection { domain, required }
         } else {
             CheckPhase::Discard { domain, required }
-        }))
+        };
+        Ok(Some(phase))
     }
     fn check_process(&self) -> Result<&CheckProcess, EffectError> {
         match &self.pending_work {
@@ -237,11 +272,13 @@ impl EffectWindow {
         match &process.phase {
             CheckPhase::Discard { domain, required }
             | CheckPhase::DiscardSelection { domain, required } => {
-                if self.cleanup_hand() != *domain || domain.len().saturating_sub(7) != *required {
+                if self.cleanup_hand() != *domain
+                    || self.cleanup_discard_count(domain.len())? != *required
+                {
                     return Err(CheckError::WrongFrame.into());
                 }
                 let frame = CleanupDiscardChoice {
-                    player: self.window.turn_owner(),
+                    player: self.window.active_player(),
                     revision: self.revision,
                     boundary: process.boundary,
                     event: process.event,
@@ -258,26 +295,58 @@ impl EffectWindow {
             }
             CheckPhase::Actions(actions) => {
                 self.validate_state_actions(actions, process.event)?;
-                if let Some(controller) = actions
-                    .legends
-                    .iter()
-                    .find(|s| s.accepted.is_none())
-                    .map(|s| s.conflict.id.controller)
-                {
-                    return Ok(CheckDecision::Legend(LegendChoice {
-                        player: controller,
-                        revision: self.revision,
-                        boundary: process.boundary,
-                        event: process.event,
-                        conflicts: actions
-                            .legends
-                            .iter()
-                            .filter(|s| {
-                                s.accepted.is_none() && s.conflict.id.controller == controller
-                            })
-                            .map(|s| s.conflict.clone())
-                            .collect(),
-                    }));
+                for controller in self.window.apnap_players()? {
+                    if let Some(change) = actions
+                        .protectors
+                        .iter()
+                        .find(|p| p.controller == controller && p.selected.is_none())
+                    {
+                        return Ok(CheckDecision::BattleProtector(
+                            crate::checks::BattleProtectorChoice {
+                                player: controller,
+                                revision: self.revision,
+                                boundary: process.boundary,
+                                event: process.event,
+                                battle: change.battle,
+                                domain: change.domain.clone(),
+                            },
+                        ));
+                    }
+                    if let Some(group) = actions
+                        .commanders
+                        .iter()
+                        .find(|group| group.owner == controller && group.selected.is_none())
+                    {
+                        return Ok(CheckDecision::ReturnCommanders(
+                            crate::checks::CheckObjectDomain {
+                                player: group.owner,
+                                revision: self.revision,
+                                boundary: process.boundary,
+                                event: process.event,
+                                domain: group.domain.clone(),
+                            },
+                        ));
+                    }
+                    if actions
+                        .legends
+                        .iter()
+                        .any(|row| row.conflict.id.controller == controller && row.keep.is_none())
+                    {
+                        return Ok(CheckDecision::Legend(LegendChoice {
+                            player: controller,
+                            revision: self.revision,
+                            boundary: process.boundary,
+                            event: process.event,
+                            conflicts: actions
+                                .legends
+                                .iter()
+                                .filter(|s| {
+                                    s.keep.is_none() && s.conflict.id.controller == controller
+                                })
+                                .map(|s| s.conflict.clone())
+                                .collect(),
+                        }));
+                    }
                 }
                 let movements = actions.movements.as_ref().ok_or(EffectError::WrongPhase)?;
                 self.authorize_state_movements(actions, movements, process)?;
@@ -340,6 +409,21 @@ impl EffectWindow {
                     return Err(CheckError::InvalidDiscard.into());
                 }
                 CheckChoice::CleanupDiscard { ordered: rows }
+            }
+            (CheckDecision::BattleProtector(frame), DecisionReply::OpponentChoice(protector)) => {
+                if !frame.domain().contains(&protector) {
+                    return Err(CheckError::InvalidBattleProtector.into());
+                }
+                CheckChoice::BattleProtector {
+                    battle: frame.battle(),
+                    protector,
+                }
+            }
+            (CheckDecision::ReturnCommanders(frame), DecisionReply::ReturnCommanders(selected)) => {
+                if !valid_subset(&selected, frame.domain()) {
+                    return Err(CheckError::InvalidCommanderSelection.into());
+                }
+                CheckChoice::ReturnCommanders { selected }
             }
             (CheckDecision::GraveyardOrder(f), DecisionReply::OrderGraveyard(rows)) => {
                 if rows.len() != f.domain().len() || !valid_subset(&rows, f.domain()) {
@@ -441,7 +525,36 @@ impl EffectWindow {
                         after: change.after,
                     });
                 }
-                next.finish_cleanup_discard(turn.ok_or(EffectError::WrongPhase)?, &mut append)?;
+                next.cleanup_characteristics(turn.ok_or(EffectError::WrongPhase)?, &mut append)?;
+                let process = next.check_process_mut()?;
+                process.event.pass = process
+                    .event
+                    .pass
+                    .checked_add(1)
+                    .ok_or(CheckError::IterationExhausted)?;
+                process.phase = CheckPhase::Observe;
+            }
+            CheckChoice::BattleProtector { battle, protector } => {
+                let CheckPhase::Actions(actions) = &mut next.check_process_mut()?.phase else {
+                    return Err(EffectError::WrongPhase);
+                };
+                let change = actions
+                    .protectors
+                    .iter_mut()
+                    .find(|p| p.battle == battle && p.controller == actor && p.selected.is_none())
+                    .ok_or(CheckError::WrongFrame)?;
+                change.selected = Some(protector);
+            }
+            CheckChoice::ReturnCommanders { selected } => {
+                let CheckPhase::Actions(actions) = &mut next.check_process_mut()?.phase else {
+                    return Err(EffectError::WrongPhase);
+                };
+                let group = actions
+                    .commanders
+                    .iter_mut()
+                    .find(|g| g.owner == actor && g.selected.is_none())
+                    .ok_or(CheckError::WrongFrame)?;
+                group.selected = Some(selected);
             }
             CheckChoice::GraveyardOrder { ordered } => {
                 let moves = match &mut next.check_process_mut()?.phase {
@@ -467,30 +580,12 @@ impl EffectWindow {
                 let selected = actions
                     .legends
                     .iter_mut()
-                    .find(|s| s.conflict.id == conflict && s.accepted.is_none())
+                    .find(|s| s.conflict.id == conflict && s.keep.is_none())
                     .ok_or(CheckError::InvalidLegendConflict)?;
-                selected.accepted = Some(LegendKeepCertificate {
-                    conflict: selected.conflict.clone(),
-                    keep,
-                });
+                selected.keep = Some(keep);
             }
         }
         next.progress_checks(journal, append, turn)
-    }
-    fn finish_cleanup_discard(
-        &mut self,
-        turn: &TurnScheduler,
-        append: &mut RulesJournal,
-    ) -> Result<(), EffectError> {
-        self.cleanup_characteristics(turn, append)?;
-        let process = self.check_process_mut()?;
-        process.event.pass = process
-            .event
-            .pass
-            .checked_add(1)
-            .ok_or(CheckError::IterationExhausted)?;
-        process.phase = CheckPhase::Observe;
-        Ok(())
     }
     fn cleanup_characteristics(
         &mut self,
@@ -513,16 +608,28 @@ impl EffectWindow {
                 previous: previous.clone(),
             })
             .collect::<Vec<_>>();
+        let active = self.window.active_player();
+        let number = turn.position().number;
         let expiring = self
             .characteristics
             .effects()
-            .any(|effect| effect.duration == ResolvedDuration::UntilEndOfTurn);
-        if !expiring && marks_removed.is_empty() {
+            .any(|effect| effect.duration.expires_at_cleanup(active, number));
+        self.floating_mana.end_turn_effects();
+        self.damage_state.turn_preventions.clear();
+        self.damage_state.expire_reflecting_shields();
+        self.flash_through_cleanup.clear();
+        self.granted_flashback.clear();
+        self.creatures_required_to_attack.clear();
+        self.damage_exile_until_cleanup.clear();
+        self.triggers.expire_end_of_turn_watches();
+        self.regeneration_shields.clear();
+        if !expiring && marks_removed.is_empty() && self.characteristics.saddled.is_empty() {
             self.damage.clear();
             return Ok(());
         }
         let before = self.rules_snapshot(Some(turn))?;
-        let expired_effects = self.characteristics.expire_until_end_of_turn();
+        self.characteristics.saddled.clear();
+        let expired_effects = self.characteristics.expire_at_cleanup(active, number);
         self.damage.clear();
         self.emit_from(
             EventCause::CleanupCharacteristics {
@@ -554,26 +661,48 @@ impl EffectWindow {
         Ok(())
     }
     fn start_placement(&mut self) -> Result<(), EffectError> {
-        let groups = self
-            .window
-            .apnap_players()?
-            .map(|player| {
-                (
-                    player,
-                    self.triggers
-                        .waiting()
-                        .iter()
-                        .filter(|(_, waiting)| waiting.controller == player)
-                        .map(|(id, _)| *id)
-                        .collect::<Vec<_>>(),
-                )
-            })
-            .collect::<Vec<_>>();
-        if groups.iter().map(|(_, ids)| ids.len()).sum::<usize>() != self.triggers.waiting().len() {
+        let groups =
+            self.window
+                .apnap_players()?
+                .map(|player| {
+                    (
+                        player,
+                        self.triggers
+                            .waiting()
+                            .iter()
+                            .filter(|(_, waiting)| waiting.controller == player)
+                            .map(|(id, _)| *id)
+                            .chain(
+                                self.triggers
+                                    .speed_waiting()
+                                    .iter()
+                                    .filter_map(|(&id, &seat)| (seat == player).then_some(id)),
+                            )
+                            .chain(
+                                self.triggers
+                                    .monarch_waiting()
+                                    .iter()
+                                    .filter_map(|(&id, &(seat, _))| (seat == player).then_some(id)),
+                            )
+                            .chain(self.triggers.emblem_waiting().iter().filter_map(
+                                |(&id, waiting)| (waiting.controller == player).then_some(id),
+                            ))
+                            .chain(
+                                self.triggers.delayed_copy_waiting().iter().filter_map(
+                                    |(&id, (seat, _, _))| (*seat == player).then_some(id),
+                                ),
+                            )
+                            .collect::<BTreeSet<_>>()
+                            .into_iter()
+                            .collect::<Vec<_>>(),
+                    )
+                })
+                .collect::<Vec<_>>();
+        if groups.iter().map(|(_, ids)| ids.len()).sum::<usize>() != self.triggers.waiting_count() {
             return Err(EffectError::InvalidSetup);
         }
         let (triggers, wave) = std::mem::take(&mut self.triggers).start_wave()?;
-        self.triggers = triggers;
+        *self.triggers = triggers;
         self.check_process_mut()?.phase = CheckPhase::Placement(PlacementCursor {
             wave,
             groups,
@@ -596,12 +725,9 @@ impl EffectWindow {
             .ok_or(EffectError::WrongPhase)?;
         if instances.len() < 2
             || instances.windows(2).any(|ids| ids[0] >= ids[1])
-            || instances.iter().any(|id| {
-                self.triggers
-                    .waiting()
-                    .get(id)
-                    .is_none_or(|waiting| waiting.controller != *chooser)
-            })
+            || instances
+                .iter()
+                .any(|id| self.triggers.waiting_controller(*id) != Some(*chooser))
         {
             return Err(TriggerError::WrongOrderFrame.into());
         }
@@ -679,21 +805,29 @@ impl EffectWindow {
         let instance = *order
             .get(position)
             .ok_or(EffectError::InconsistentProgram)?;
-        let waiting = self
-            .triggers
-            .waiting()
-            .get(&instance)
-            .ok_or(EffectError::InconsistentProgram)?;
         let actual = self
             .window
             .entries()
             .last()
             .ok_or(EffectError::InconsistentProgram)?;
+        let valid_source = if let Some(waiting) = self.triggers.waiting().get(&instance) {
+            waiting.controller == *controller
+                && matches!(actual.kind(), StackKind::TriggeredAbility { source } if source == &waiting.source.object)
+        } else if let Some(waiting) = self.triggers.emblem_waiting().get(&instance) {
+            waiting.controller == *controller
+                && matches!(actual.kind(), StackKind::Emblem { emblem } if *emblem == waiting.emblem)
+        } else if let Some((seat, original, _)) =
+            self.triggers.delayed_copy_waiting().get(&instance)
+        {
+            *seat == *controller
+                && matches!(actual.kind(), StackKind::DelayedCopy { original: actual } if actual == original)
+        } else {
+            false
+        };
         if !cohort.contains(&instance)
-            || waiting.controller != *controller
+            || !valid_source
             || actual.id() != entry
             || actual.controller() != *controller
-            || !matches!(actual.kind(), StackKind::TriggeredAbility { source } if source == &waiting.source.object)
         {
             return Err(EffectError::InconsistentProgram);
         }
@@ -704,6 +838,22 @@ impl EffectWindow {
             position,
             entry,
         })
+    }
+    fn waiting_target_body(
+        &self,
+        id: TriggerInstanceId,
+    ) -> Option<(
+        &ExecutableBody,
+        Option<&crate::occurrence::SupportedAppearance>,
+    )> {
+        if let Some(waiting) = self.triggers.waiting().get(&id) {
+            Some((&waiting.body, Some(&waiting.source)))
+        } else {
+            self.triggers
+                .emblem_waiting()
+                .get(&id)
+                .map(|waiting| (&waiting.body, None))
+        }
     }
     /// Privileged metadata for one provisional entry whose payload remains waiting.
     /// Returns None outside a suspended placement-target stage; it does not expose
@@ -734,10 +884,10 @@ impl EffectWindow {
             .last()
             .ok_or(EffectError::InconsistentProgram)?;
         if self
-            .triggers
-            .waiting()
-            .get(&placement.instance)
-            .is_none_or(|waiting| waiting.body.target == BodyTarget::None)
+            .waiting_target_body(placement.instance)
+            .is_none_or(|(body, _)| {
+                body.target == BodyTarget::None && body.triggered_modes().is_none()
+            })
             || process.boundary != CheckBoundary::Priority
             || !matches!(
                 self.window.phase(),
@@ -750,21 +900,112 @@ impl EffectWindow {
         }
         Ok(Some(placement))
     }
+    fn trigger_modes_domain(
+        &self,
+        spec: &crate::program::TriggeredModes,
+        controller: SeatId,
+        source: Option<&crate::occurrence::SupportedAppearance>,
+    ) -> Result<crate::occurrence::TriggerModesChoice, EffectError> {
+        let mut modes = Vec::new();
+        for (index, body) in spec.options.iter().enumerate() {
+            let target_required = body.target != BodyTarget::None;
+            let bounds = body.permanent_target_bounds();
+            let targets = if target_required {
+                self.trigger_target_domain(body, controller, source)?
+            } else {
+                Vec::new()
+            };
+            if !target_required || targets.len() >= bounds.map_or(1, |(minimum, _)| minimum) {
+                modes.push(crate::occurrence::TriggerModeOption {
+                    index: u8::try_from(index).map_err(|_| EffectError::InconsistentProgram)?,
+                    multiple: bounds
+                        .map(|(minimum, maximum)| (minimum, maximum.min(targets.len()))),
+                    target_required,
+                    targets,
+                });
+            }
+        }
+        let maximum = spec
+            .maximum
+            .min(u8::try_from(modes.len()).map_err(|_| EffectError::InconsistentProgram)?);
+        Ok(crate::occurrence::TriggerModesChoice {
+            minimum: spec.minimum,
+            maximum,
+            distinct_targets: spec.distinct_targets,
+            modes,
+        })
+    }
+
     fn current_trigger_target(&self) -> Result<TriggerTargetChoice, EffectError> {
         let placement = self
             .pending_trigger_placement()?
             .ok_or(TriggerError::WrongTargetFrame)?;
+        self.available_trigger_target(&placement)?
+            .ok_or(EffectError::InconsistentProgram)
+    }
+
+    fn available_trigger_target(
+        &self,
+        placement: &TriggerPlacement,
+    ) -> Result<Option<TriggerTargetChoice>, EffectError> {
         let process = self.check_process()?;
-        let waiting = self
-            .triggers
-            .waiting()
-            .get(&placement.instance)
+        let (body, source) = self
+            .waiting_target_body(placement.instance)
             .ok_or(EffectError::InconsistentProgram)?;
-        let domain = self.trigger_target_domain(&waiting.body)?;
-        if domain.is_empty() || waiting.body.target == BodyTarget::None {
-            return Err(EffectError::InconsistentProgram);
+        let modal = body
+            .triggered_modes()
+            .map(|spec| self.trigger_modes_domain(spec, placement.controller, source))
+            .transpose()?;
+        let domain = if modal.is_some() {
+            Vec::new()
+        } else {
+            self.trigger_target_domain(body, placement.controller, source)?
+        };
+        let bounds = body
+            .permanent_target_bounds()
+            .or_else(|| body.ordered_any_target_bounds());
+        if modal
+            .as_ref()
+            .is_some_and(|modal| modal.maximum < modal.minimum)
+            || (modal.is_none()
+                && (domain.len() < bounds.map_or(1, |(min, _)| min)
+                    || body.target == BodyTarget::None))
+        {
+            return Ok(None);
         }
-        Ok(TriggerTargetChoice {
+        let secondary_targets = if let Some(relation) = body.dependent_targets() {
+            let current = self.evaluated_characteristics()?;
+            let objects = self.trigger_target_domain(
+                &ExecutableBody::new(BodyTarget::SingleCreature, Vec::new()),
+                placement.controller,
+                source,
+            )?;
+            Some(
+                domain
+                    .iter()
+                    .map(|&target| {
+                        let eligible = objects
+                            .iter()
+                            .copied()
+                            .filter(|&object| {
+                                self.legal_dependent_target(relation, target, object, &current)
+                            })
+                            .collect();
+                        (target, eligible)
+                    })
+                    .collect(),
+            )
+        } else {
+            None
+        };
+        Ok(Some(TriggerTargetChoice {
+            modal,
+            secondary_targets,
+            bounds,
+            ordered_any: body.ordered_any_target_bounds().is_some(),
+            divides_three_damage: body
+                .instructions
+                .contains(&Instruction::DivideThreeDamageAmongTargets),
             revision: self.revision,
             boundary: process.boundary,
             event: process.event,
@@ -773,7 +1014,7 @@ impl EffectWindow {
             instance: placement.instance,
             entry: placement.entry,
             domain,
-        })
+        }))
     }
     pub(super) fn resume_trigger_target(
         &self,
@@ -788,22 +1029,167 @@ impl EffectWindow {
         if frame.revision() != self.revision || &self.current_trigger_target()? != frame {
             return Err(TriggerError::WrongTargetFrame.into());
         }
-        self.validate_check_placement()?;
         if actor != frame.chooser() {
             return Err(EffectError::WrongChooser);
         }
-        let DecisionReply::TriggerTarget(target) = reply else {
-            return Err(EffectError::WrongDecisionKind);
+        if let Some(modal) = frame.modal() {
+            let DecisionReply::TriggerModes(modes) = reply else {
+                return Err(EffectError::WrongDecisionKind);
+            };
+            return self.place_selected_trigger_modes(frame, revision, modal, &modes, turn);
+        }
+        let bounds = frame
+            .permanent_target_bounds()
+            .or_else(|| frame.ordered_any_target_bounds());
+        let (minimum, maximum) = bounds.unwrap_or((1, 1));
+        let targets = match (reply, bounds) {
+            (DecisionReply::TriggerPermanentTargets(targets), Some(_)) => targets,
+            (DecisionReply::TriggerTarget(target), None) => vec![target],
+            _ => return Err(EffectError::WrongDecisionKind),
         };
-        if !frame.domain().contains(&target) {
+        if !(minimum..=maximum).contains(&targets.len()) {
             return Err(EffectError::IllegalTarget);
         }
-        let waiting = self
-            .triggers
-            .waiting()
-            .get(&frame.instance())
+        let (body, _) = self
+            .waiting_target_body(frame.instance())
             .ok_or(EffectError::InconsistentProgram)?;
-        if !self.legal_body_target(&waiting.body, target)? {
+        let dependent = frame.secondary_targets();
+        if let Some(dependent) = dependent {
+            let Some((&first, rest)) = targets.split_first() else {
+                return Err(EffectError::IllegalTarget);
+            };
+            if dependent
+                .get(&first)
+                .is_none_or(|legal| rest.iter().any(|target| !legal.contains(target)))
+            {
+                return Err(EffectError::IllegalTarget);
+            }
+        }
+        let mut choices = Vec::new();
+        for (ordinal, target) in targets.into_iter().enumerate() {
+            if dependent.is_none()
+                && (!frame.domain().contains(&target)
+                    || !self.legal_body_target(body, target, frame.chooser())?)
+            {
+                return Err(EffectError::IllegalTarget);
+            }
+            let id = u32::try_from(ordinal).map_err(|_| EffectError::IllegalTarget)?;
+            choices.push(TargetChoice {
+                id: TargetId(id),
+                clause: TargetClauseId(u32::from(dependent.is_some() && ordinal > 0)),
+                target,
+            });
+        }
+        let placement = self
+            .pending_trigger_placement()?
+            .ok_or(EffectError::InconsistentProgram)?;
+        let mut next = self.clone();
+        next.revision = revision;
+        let clause = TargetClause {
+            id: TargetClauseId(0),
+            minimum,
+            maximum,
+        };
+        next.window = if dependent.is_some() {
+            let clauses = vec![
+                TargetClause {
+                    id: TargetClauseId(0),
+                    minimum: 1,
+                    maximum: 1,
+                },
+                TargetClause {
+                    id: TargetClauseId(1),
+                    minimum: 0,
+                    maximum: body
+                        .dependent_targets()
+                        .ok_or(EffectError::InconsistentProgram)?
+                        .maximum(),
+                },
+            ];
+            next.window.bind_trigger_mode_targets(
+                next.window.revision(),
+                frame.entry(),
+                clauses,
+                choices.clone(),
+            )?
+        } else if bounds.is_some() {
+            next.window.bind_trigger_target_set(
+                next.window.revision(),
+                frame.entry(),
+                clause,
+                choices.clone(),
+            )?
+        } else {
+            next.window.bind_trigger_target(
+                next.window.revision(),
+                frame.entry(),
+                vec![clause],
+                choices.clone(),
+            )?
+        };
+        let mut append = RulesJournal::default();
+        for target in choices {
+            append.records.push(RulesRecord::TriggerTargetSelected {
+                placement: placement.clone(),
+                target,
+            });
+        }
+        let target_entry = placement.entry;
+        next.finish_trigger_placement(placement, None, &mut append)?;
+        let before = next.rules_snapshot(turn)?;
+        next.emit_from(
+            crate::occurrence::EventCause::TriggerTargetsBound {
+                entry: target_entry,
+            },
+            &before,
+            turn,
+            &mut append,
+            |_, _, _| Ok(Vec::new()),
+        )?;
+        next.progress_checks(CheckJournal::default(), append, turn)
+    }
+    fn place_selected_trigger_modes(
+        &self,
+        frame: &TriggerTargetChoice,
+        revision: u64,
+        modal: &crate::occurrence::TriggerModesChoice,
+        modes: &[crate::mana::CastMode],
+        turn: Option<&TurnScheduler>,
+    ) -> Result<RuleProgress, EffectError> {
+        let (body, _) = self
+            .waiting_target_body(frame.instance())
+            .ok_or(EffectError::InconsistentProgram)?;
+        let spec = body
+            .triggered_modes()
+            .ok_or(EffectError::InconsistentProgram)?;
+        let bodies = spec.options.iter().collect::<Vec<_>>();
+        if modes
+            .iter()
+            .any(|mode| !modal.modes.iter().any(|offered| offered.index == mode.mode))
+        {
+            return Err(EffectError::IllegalTarget);
+        }
+        let (body, selected, choices) = self.compose_modes(
+            &bodies,
+            modes,
+            (usize::from(modal.minimum), usize::from(modal.maximum)),
+            false,
+            |index, _, target| {
+                modal
+                    .modes
+                    .iter()
+                    .find(|offered| offered.index == index)
+                    .is_some_and(|offered| offered.targets.contains(&target))
+            },
+        )?;
+        if modal.distinct_targets
+            && choices
+                .iter()
+                .map(|choice| choice.target)
+                .collect::<BTreeSet<_>>()
+                .len()
+                != choices.len()
+        {
             return Err(EffectError::IllegalTarget);
         }
         let placement = self
@@ -811,61 +1197,158 @@ impl EffectWindow {
             .ok_or(EffectError::InconsistentProgram)?;
         let mut next = self.clone();
         next.revision = revision;
-        next.window = next.window.bind_trigger_target(
-            next.window.revision(),
-            frame.entry(),
-            vec![TargetClause {
-                id: TargetClauseId(0),
-                minimum: 1,
-                maximum: 1,
-            }],
-            vec![TargetChoice {
-                id: TargetId(0),
-                clause: TargetClauseId(0),
-                target,
-            }],
-        )?;
-        let selected = next
-            .window
-            .entries()
-            .last()
-            .and_then(|entry| entry.targets().targets().first())
-            .ok_or(EffectError::InconsistentProgram)?
-            .choice();
-        if selected.target != target
-            || selected.id != TargetId(0)
-            || selected.clause != TargetClauseId(0)
-        {
-            return Err(EffectError::InconsistentProgram);
+        let has_targets = !choices.is_empty();
+        if has_targets {
+            let clauses = selected
+                .iter()
+                .filter_map(|mode| mode.clause.clone())
+                .collect();
+            next.window = next.window.bind_trigger_mode_targets(
+                next.window.revision(),
+                frame.entry(),
+                clauses,
+                choices.clone(),
+            )?;
         }
         let mut append = RulesJournal::default();
-        append.records.push(RulesRecord::TriggerTargetSelected {
-            placement: placement.clone(),
-            target: selected,
-        });
-        next.finish_trigger_placement(placement, None, &mut append)?;
+        for target in choices {
+            append.records.push(RulesRecord::TriggerTargetSelected {
+                placement: placement.clone(),
+                target,
+            });
+        }
+        let entry = placement.entry;
+        next.finish_trigger_with_modes(placement, None, Some((body, selected)), &mut append)?;
+        if has_targets {
+            let before = next.rules_snapshot(turn)?;
+            next.emit_from(
+                EventCause::TriggerTargetsBound { entry },
+                &before,
+                turn,
+                &mut append,
+                |_, _, _| Ok(Vec::new()),
+            )?;
+        }
         next.progress_checks(CheckJournal::default(), append, turn)
     }
+
     fn finish_trigger_placement(
         &mut self,
         placement: TriggerPlacement,
         removed: Option<TriggerRemovalReason>,
         append: &mut RulesJournal,
     ) -> Result<(), EffectError> {
-        let (triggers, mut waiting) =
-            std::mem::take(&mut self.triggers).take_waiting(&[placement.instance])?;
-        self.triggers = triggers;
-        if waiting.len() != 1 {
-            return Err(EffectError::InconsistentProgram);
-        }
-        let waiting = waiting.pop().ok_or(EffectError::InconsistentProgram)?;
-        if let Some(reason) = removed {
-            append
-                .records
-                .push(RulesRecord::TriggerRemoved { placement, reason });
-        } else {
-            self.install_waiting_payload(placement.entry, waiting)?;
+        self.finish_trigger_with_modes(placement, removed, None, append)
+    }
+
+    fn finish_trigger_with_modes(
+        &mut self,
+        placement: TriggerPlacement,
+        removed: Option<TriggerRemovalReason>,
+        selected: Option<(ExecutableBody, Vec<super::modes::SelectedMode>)>,
+        append: &mut RulesJournal,
+    ) -> Result<(), EffectError> {
+        if let Some((_, _, action)) = self.triggers.take_delayed_copy(placement.instance) {
+            if let Some(reason) = removed {
+                append
+                    .records
+                    .push(RulesRecord::TriggerRemoved { placement, reason });
+            } else {
+                use crate::occurrence::DelayedCopyAction;
+                let instructions = match &action {
+                    DelayedCopyAction::ReturnExiled(objects) => {
+                        vec![Instruction::ReturnDelayedExile(objects.clone())]
+                    }
+                    DelayedCopyAction::ReturnExiledWithCounters(objects) => {
+                        vec![Instruction::ReturnDelayedExileWithCounters(objects.clone())]
+                    }
+                    DelayedCopyAction::Draw(amount, _) => vec![Instruction::DrawController {
+                        amount: ValueExpr::Literal(amount.clone()),
+                    }],
+                    DelayedCopyAction::Sacrifice(objects) => {
+                        vec![Instruction::SacrificeDelayedObjects(objects.clone())]
+                    }
+                    DelayedCopyAction::SpellTwice(..) => vec![Instruction::CopyOnCast(
+                        crate::program::CastCopyKeyword::CopyObservedSpell,
+                    )],
+                    DelayedCopyAction::AbilityTwice(..) => vec![
+                        Instruction::CopyCapturedAbility,
+                        Instruction::CopyCapturedAbility,
+                    ],
+                    DelayedCopyAction::GrantCastCardAbilities { recipient, donor } => {
+                        vec![Instruction::GainCastCardAbilities {
+                            recipient: *recipient,
+                            donor: donor.clone(),
+                        }]
+                    }
+                };
+                let mut payload = StackPayload::from_body(
+                    ExecutableBody::new(BodyTarget::None, instructions),
+                    None,
+                );
+                if let StackPayload::Instructions(p) = &mut payload
+                    && matches!(
+                        action,
+                        DelayedCopyAction::Draw(..)
+                            | DelayedCopyAction::SpellTwice(..)
+                            | DelayedCopyAction::AbilityTwice(..)
+                    )
+                {
+                    p.delayed_copy_action = Some(action);
+                }
+                self.payloads.insert(placement.entry, payload);
+                append.records.push(RulesRecord::TriggerPlaced(placement));
+            }
+        } else if let Some(waiting) = self.triggers.take_emblem(placement.instance) {
+            if let Some(reason) = removed {
+                append
+                    .records
+                    .push(RulesRecord::TriggerRemoved { placement, reason });
+            } else {
+                self.payloads
+                    .insert(placement.entry, StackPayload::from_body(waiting.body, None));
+                append.records.push(RulesRecord::TriggerPlaced(placement));
+            }
+        } else if let Some((_, beneficiary)) = self.triggers.take_monarch(placement.instance) {
+            let instruction = match beneficiary {
+                Some(player) => Instruction::BecomeMonarch(Some(player)),
+                None => Instruction::DrawController {
+                    amount: crate::program::ValueExpr::Literal(1.into()),
+                },
+            };
+            self.payloads.insert(
+                placement.entry,
+                StackPayload::from_body(
+                    ExecutableBody::new(BodyTarget::None, vec![instruction]),
+                    None,
+                ),
+            );
             append.records.push(RulesRecord::TriggerPlaced(placement));
+        } else if self.triggers.take_speed(placement.instance).is_some() {
+            self.payloads.insert(
+                placement.entry,
+                StackPayload::from_body(
+                    ExecutableBody::new(BodyTarget::None, vec![Instruction::IncreaseSpeed]),
+                    None,
+                ),
+            );
+            append.records.push(RulesRecord::TriggerPlaced(placement));
+        } else {
+            let (triggers, mut waiting) =
+                std::mem::take(&mut self.triggers).take_waiting(&[placement.instance])?;
+            *self.triggers = triggers;
+            if waiting.len() != 1 {
+                return Err(EffectError::InconsistentProgram);
+            }
+            let waiting = waiting.pop().ok_or(EffectError::InconsistentProgram)?;
+            if let Some(reason) = removed {
+                append
+                    .records
+                    .push(RulesRecord::TriggerRemoved { placement, reason });
+            } else {
+                self.install_waiting_payload(placement.entry, waiting, selected)?;
+                append.records.push(RulesRecord::TriggerPlaced(placement));
+            }
         }
         let CheckPhase::Placement(cursor) = &mut self.check_process_mut()?.phase else {
             return Err(EffectError::WrongPhase);
@@ -895,6 +1378,99 @@ impl EffectWindow {
         let instance = *order
             .get(position)
             .ok_or(EffectError::InconsistentProgram)?;
+        if let Some(waiting) = self.triggers.emblem_waiting().get(&instance).cloned() {
+            let (window, entry) = self
+                .window
+                .record_emblem_trigger(waiting.controller, waiting.emblem)?;
+            self.window = window;
+            let placement = self.placement_metadata(order, position, entry)?;
+            append
+                .records
+                .push(RulesRecord::TriggerPlacementStarted(placement.clone()));
+            if waiting.body.target == BodyTarget::None {
+                return self.finish_trigger_placement(placement, None, append);
+            }
+            if self
+                .trigger_target_domain(&waiting.body, waiting.controller, None)?
+                .len()
+                < waiting
+                    .body
+                    .permanent_target_bounds()
+                    .or_else(|| waiting.body.ordered_any_target_bounds())
+                    .map_or(1, |(min, _)| min)
+            {
+                self.window = self
+                    .window
+                    .remove_unbound_trigger(self.window.revision(), entry)?;
+                return self.finish_trigger_placement(
+                    placement,
+                    Some(TriggerRemovalReason::NoLegalTargets),
+                    append,
+                );
+            }
+            let CheckPhase::Placement(cursor) = &mut self.check_process_mut()?.phase else {
+                return Err(EffectError::WrongPhase);
+            };
+            let PlacementStage::Placing { order, position } =
+                std::mem::replace(&mut cursor.stage, PlacementStage::Ordering)
+            else {
+                return Err(EffectError::InconsistentProgram);
+            };
+            cursor.stage = PlacementStage::Targets {
+                order,
+                position,
+                entry,
+            };
+            return Ok(());
+        }
+        if let Some((controller, original, _)) = self.triggers.delayed_copy_waiting().get(&instance)
+        {
+            let (window, entry) = self
+                .window
+                .record_delayed_copy_trigger(*controller, *original)?;
+            self.window = window;
+            let placement = self.placement_metadata(order, position, entry)?;
+            append
+                .records
+                .push(RulesRecord::TriggerPlacementStarted(placement.clone()));
+            return self.finish_trigger_placement(placement, None, append);
+        }
+        if let Some(&(controller, _)) = self.triggers.monarch_waiting().get(&instance) {
+            let (window, entry) = self.window.record_monarch_trigger(controller)?;
+            self.window = window;
+            let CheckPhase::Placement(cursor) = &self.check_process()?.phase else {
+                return Err(EffectError::WrongPhase);
+            };
+            let placement = TriggerPlacement {
+                instance,
+                wave: cursor.wave,
+                controller,
+                position,
+                entry,
+            };
+            append
+                .records
+                .push(RulesRecord::TriggerPlacementStarted(placement.clone()));
+            return self.finish_trigger_placement(placement, None, append);
+        }
+        if let Some(&controller) = self.triggers.speed_waiting().get(&instance) {
+            let (window, entry) = self.window.record_speed_trigger(controller)?;
+            self.window = window;
+            let CheckPhase::Placement(cursor) = &self.check_process()?.phase else {
+                return Err(EffectError::WrongPhase);
+            };
+            let placement = TriggerPlacement {
+                instance,
+                wave: cursor.wave,
+                controller,
+                position,
+                entry,
+            };
+            append
+                .records
+                .push(RulesRecord::TriggerPlacementStarted(placement.clone()));
+            return self.finish_trigger_placement(placement, None, append);
+        }
         let waiting = self
             .triggers
             .waiting()
@@ -922,10 +1498,22 @@ impl EffectWindow {
             .waiting()
             .get(&instance)
             .ok_or(EffectError::InconsistentProgram)?;
-        if waiting.body.target == BodyTarget::None {
+        let has_legal_choice = if let Some(spec) = waiting.body.triggered_modes() {
+            let domain =
+                self.trigger_modes_domain(spec, placement.controller, Some(&waiting.source))?;
+            domain.maximum >= domain.minimum
+        } else if waiting.body.target == BodyTarget::None {
             return self.finish_trigger_placement(placement, None, append);
-        }
-        if self.trigger_target_domain(&waiting.body)?.is_empty() {
+        } else {
+            self.trigger_target_domain(&waiting.body, placement.controller, Some(&waiting.source))?
+                .len()
+                >= waiting
+                    .body
+                    .permanent_target_bounds()
+                    .or_else(|| waiting.body.ordered_any_target_bounds())
+                    .map_or(1, |(min, _)| min)
+        };
+        if !has_legal_choice {
             self.window = self
                 .window
                 .remove_unbound_trigger(self.window.revision(), entry)?;
@@ -950,6 +1538,21 @@ impl EffectWindow {
         };
         Ok(())
     }
+    fn chapter_ability_pending(&self, object: ObjectId) -> bool {
+        let chapter = |causes: &crate::occurrence::TriggerCauseSet| {
+            causes.members().iter().any(|member| {
+                matches!(
+                    member.related,
+                    crate::occurrence::TriggerRelated::SagaChapter { .. }
+                )
+            })
+        };
+        self.waiting_triggers().any(|waiting| waiting.source.object.id() == object && chapter(&waiting.causes))
+            || self.window.entries().iter().any(|entry|
+                matches!(entry.kind(), StackKind::TriggeredAbility { source } if source.id() == object)
+                && matches!(self.payloads.get(&entry.id()), Some(StackPayload::Instructions(payload))
+                    if payload.bindings.trigger.as_ref().is_some_and(|binding| chapter(&binding.causes))))
+    }
     fn collect_state_actions(&self, event: CheckEventId) -> Result<StateActions, EffectError> {
         let current = self.evaluated_characteristics()?;
         let mut dead: BTreeMap<_, _> = current
@@ -962,28 +1565,203 @@ impl EffectWindow {
                 }
                 let derived = &characteristics.power_toughness.as_ref()?.derived;
                 let damage = self.damage.get(object).cloned().unwrap_or_else(|| 0.into());
-                let reason = if derived.toughness <= 0.into() {
-                    StateBasedMoveReason::ZeroToughness
-                } else if damage >= derived.toughness {
-                    StateBasedMoveReason::LethalDestruction
+                if derived.toughness <= 0.into() {
+                    return Some((
+                        *object,
+                        StateBasedMoveReasons::new(StateBasedMoveReason::ZeroToughness),
+                    ));
+                }
+                if characteristics.has_keyword(KeywordAbility::Indestructible) {
+                    return None;
+                }
+                let mut causes = if damage.is_positive()
+                    && damage >= current.lethal_damage_threshold(characteristics)?
+                {
+                    StateBasedMoveReasons::new(StateBasedMoveReason::LethalDestruction)
+                } else if self.deathtouch_damage.contains(object) {
+                    return Some((
+                        *object,
+                        StateBasedMoveReasons::new(StateBasedMoveReason::DeathtouchDestruction),
+                    ));
                 } else {
                     return None;
                 };
-                Some((*object, StateBasedMoveReasons::new(reason)))
+                if self.deathtouch_damage.contains(object) {
+                    causes.insert(StateBasedMoveReason::DeathtouchDestruction);
+                }
+                Some((*object, causes))
             })
             .collect();
+        let mut protectors = Vec::new();
+        for (&object, view) in &current.objects {
+            if view.zone == ObjectZone::Battlefield
+                && view.has_type(CardType::Battle)
+                && !self.combat.as_ref().is_some_and(|combat| {
+                    combat
+                        .attackers()
+                        .any(|a| a.defending_planeswalker() == Some(object))
+                })
+            {
+                let controller = view.controller.ok_or(EffectError::InconsistentProgram)?;
+                let domain = if self
+                    .copiable_program(object)
+                    .is_some_and(|p| p.siege_back.is_some())
+                {
+                    self.opponents_of(controller)?
+                } else {
+                    vec![controller]
+                };
+                if !self
+                    .battle_protector(object)
+                    .is_some_and(|seat| domain.contains(&seat))
+                {
+                    if domain.is_empty() {
+                        dead.entry(object)
+                            .and_modify(|reasons| {
+                                reasons.insert(StateBasedMoveReason::NoBattleProtector)
+                            })
+                            .or_insert_with(|| {
+                                StateBasedMoveReasons::new(StateBasedMoveReason::NoBattleProtector)
+                            });
+                    } else {
+                        let selected = match domain.as_slice() {
+                            [only] => Some(*only),
+                            _ => None,
+                        };
+                        protectors.push(ProtectorChange {
+                            battle: object,
+                            controller,
+                            selected,
+                            domain,
+                        });
+                    }
+                }
+            }
+            if view.zone == ObjectZone::Battlefield
+                && let Some(chapter) = view.final_saga_chapter()
+                && self
+                    .characteristics
+                    .lore
+                    .get(&object)
+                    .is_some_and(|count| *count >= i64::from(chapter).into())
+                && !self.chapter_ability_pending(object)
+            {
+                dead.entry(object)
+                    .and_modify(|causes| causes.insert(StateBasedMoveReason::CompletedSaga))
+                    .or_insert_with(|| {
+                        StateBasedMoveReasons::new(StateBasedMoveReason::CompletedSaga)
+                    });
+            }
+            if view.zone == ObjectZone::Battlefield && view.has_type(CardType::Battle)
+                && !self.counters_of_kind(object, CounterKind::Defense).is_positive()
+                && (!self.copiable_program(object).is_some_and(|p| p.siege_back.is_some())
+                    || !(self.waiting_triggers().any(|waiting| waiting.source.object.id() == object)
+                        || self.window.entries().iter().any(|entry| matches!(entry.kind(), StackKind::TriggeredAbility { source } if source.id() == object))))
+            {
+                dead.entry(object).and_modify(|causes| causes.insert(StateBasedMoveReason::ZeroDefense))
+                    .or_insert_with(|| StateBasedMoveReasons::new(StateBasedMoveReason::ZeroDefense));
+            }
+            if view.zone == ObjectZone::Battlefield
+                && view.has_type(CardType::Planeswalker)
+                && !self
+                    .characteristics
+                    .loyalty
+                    .get(&object)
+                    .is_some_and(RulesInteger::is_positive)
+            {
+                dead.entry(object)
+                    .and_modify(|causes| causes.insert(StateBasedMoveReason::ZeroLoyalty))
+                    .or_insert_with(|| {
+                        StateBasedMoveReasons::new(StateBasedMoveReason::ZeroLoyalty)
+                    });
+            }
+        }
         for object in self.characteristics.world_eliminations(&current)? {
             dead.entry(object)
                 .and_modify(|causes| causes.insert(StateBasedMoveReason::World))
                 .or_insert_with(|| StateBasedMoveReasons::new(StateBasedMoveReason::World));
         }
+        let mut detach = BTreeSet::new();
+        for (&id, object) in &current.objects {
+            if object.zone != ObjectZone::Battlefield {
+                continue;
+            }
+            let host = self.attached_to(id);
+            if host.is_none() && !object.has_type(CardType::Enchantment) {
+                continue;
+            }
+            if self.attachment_permitted(object, host, &current) {
+                continue;
+            }
+            if self.characteristics.bestowed_auras.contains_key(&id) {
+                detach.insert(id);
+            } else if object.has_type(CardType::Enchantment)
+                && matches!(
+                    self.attachment_kind(id),
+                    Some(crate::attachment::AttachmentKind::Aura(_))
+                )
+            {
+                dead.entry(id)
+                    .and_modify(|causes| causes.insert(StateBasedMoveReason::IllegalAura))
+                    .or_insert_with(|| {
+                        StateBasedMoveReasons::new(StateBasedMoveReason::IllegalAura)
+                    });
+            } else if host.is_some() {
+                detach.insert(id);
+            }
+        }
         let mut losses = self.failed_draws.clone();
+        losses.extend(self.life.nonpositive_players());
+        losses.extend(self.commander_damage_losses().map(|(player, _)| player));
         losses.extend(
-            self.life
-                .nonpositive_players()
-                .filter(|player| self.window.participants().contains(player)),
+            self.window
+                .participants()
+                .iter()
+                .copied()
+                .filter(|&player| {
+                    self.poison
+                        .get(&player)
+                        .is_some_and(|count| count >= &10.into())
+                }),
         );
+        losses.retain(|player| self.window.participants().contains(player));
+        let mut by_owner: BTreeMap<SeatId, Vec<ObjectId>> = BTreeMap::new();
+        for record in self.commanders.values() {
+            if let Some(object) = record
+                .return_eligible
+                .and_then(|id| self.window.cards().get(id))
+            {
+                by_owner
+                    .entry(object.owner())
+                    .or_default()
+                    .push(object.id());
+            }
+        }
+        let commanders = self
+            .window
+            .apnap_players()?
+            .filter_map(|owner| {
+                by_owner.remove(&owner).map(|domain| CommanderGroup {
+                    owner,
+                    domain,
+                    selected: None,
+                })
+            })
+            .collect();
         Ok(StateActions {
+            protectors,
+            start_speed: current
+                .objects
+                .values()
+                .filter(|c| {
+                    c.zone == ObjectZone::Battlefield
+                        && c.has_keyword(KeywordAbility::StartYourEngines)
+                })
+                .filter_map(|c| c.controller)
+                .filter(|p| self.speed(*p) == 0)
+                .collect(),
+            commanders,
+            detach,
             dead,
             cancellations: self
                 .characteristics
@@ -1015,13 +1793,27 @@ impl EffectWindow {
             movements: None,
         })
     }
-    fn progress_checks(
+    pub(super) fn progress_checks(
         mut self,
         mut journal: CheckJournal,
         mut append: RulesJournal,
         turn: Option<&TurnScheduler>,
     ) -> Result<RuleProgress, EffectError> {
         loop {
+            if let Some(frame) = self.linked_return_decision()? {
+                return Ok(RuleProgress::new(
+                    self,
+                    RuleResult::Pending {
+                        checks: journal,
+                        frame,
+                        journal: DamageJournal::default(),
+                        declarations: vec![],
+                        assignments: vec![],
+                        draws: DrawJournal::default(),
+                    },
+                    append,
+                ));
+            }
             let process = self.check_process()?.clone();
             match process.phase {
                 CheckPhase::Discard { .. } | CheckPhase::DiscardSelection { .. } => {
@@ -1053,6 +1845,10 @@ impl EffectWindow {
                     self.commit_cleanup_moves(&mut journal, &mut append, turn)?;
                 }
                 CheckPhase::Observe => {
+                    if self.window.participants().len() != self.window.original_participants().len()
+                    {
+                        self.triggers.retain_waiting_for(self.window.participants());
+                    }
                     let actions = self.collect_state_actions(process.event)?;
                     #[cfg(test)]
                     super::characteristic_observations::checks_observed(
@@ -1062,8 +1858,10 @@ impl EffectWindow {
                         actions.is_empty(),
                     );
                     if actions.is_empty() {
+                        self.deathtouch_damage.clear();
                         if process.boundary == CheckBoundary::Priority
-                            && !self.triggers.waiting().is_empty()
+                            && !self.ending_turn
+                            && self.triggers.waiting_count() != 0
                         {
                             self.start_placement()?;
                             continue;
@@ -1075,11 +1873,14 @@ impl EffectWindow {
                             append,
                         );
                     }
-                    self.check_process_mut()?.phase = CheckPhase::Actions(actions);
+                    self.check_process_mut()?.phase = CheckPhase::Actions(Box::new(actions));
                 }
                 CheckPhase::Actions(actions) => {
                     self.validate_state_actions(&actions, process.event)?;
-                    if actions.legends.iter().any(|s| s.accepted.is_none()) {
+                    if actions.protectors.iter().any(|p| p.selected.is_none())
+                        || actions.commanders.iter().any(|g| g.selected.is_none())
+                        || actions.legends.iter().any(|s| s.keep.is_none())
+                    {
                         return self.pending_checks(journal, append);
                     }
                     let Some(movements) = &actions.movements else {
@@ -1111,17 +1912,57 @@ impl EffectWindow {
                         &moves.orders()?,
                         moves.replacements(),
                     )?;
+                    let selected: Vec<_> = actions
+                        .commanders
+                        .iter()
+                        .filter_map(|g| g.selected.as_ref())
+                        .flatten()
+                        .copied()
+                        .collect();
+                    for record in self.commanders.values_mut() {
+                        record.return_eligible = None;
+                    }
+                    if selected.is_empty() && actions.other_actions_empty() {
+                        self.check_process_mut()?.phase = CheckPhase::Observe;
+                        continue;
+                    }
                     // CR704.8: retain the before-all-components world through publication.
                     let before = self.rules_snapshot(turn)?;
-                    let mut occurrences = Vec::new();
+                    let mut occurrences = self.apply_regenerations(moves.replacements())?;
+                    for change in &actions.protectors {
+                        self.characteristics.battle_protectors.insert(
+                            change.battle,
+                            change.selected.ok_or(CheckError::WrongFrame)?,
+                        );
+                    }
+                    for &player in &actions.start_speed {
+                        self.characteristics.speed.insert(player, 1);
+                        occurrences.push(RulesOccurrence::SpeedChanged {
+                            player,
+                            before: 0,
+                            after: 1,
+                        });
+                    }
                     let mut logical_changes = Vec::new();
                     let logical = plan.logical;
                     let application = plan
                         .application
                         .into_iter()
-                        .map(|(id, destination)| (id, destination.physical()))
-                        .collect::<Vec<_>>();
-                    let expected: BTreeSet<_> = movements.dead.keys().copied().collect();
+                        .map(|(id, destination)| {
+                            Ok((
+                                id,
+                                destination
+                                    .physical(None)
+                                    .ok_or(EffectError::InconsistentProgram)?,
+                            ))
+                        })
+                        .collect::<Result<Vec<_>, EffectError>>()?;
+                    let expected: BTreeSet<_> = movements
+                        .dead
+                        .keys()
+                        .copied()
+                        .filter(|id| !moves.replacements().is_some_and(|b| b.regenerated(*id)))
+                        .collect();
                     if logical.len() != expected.len()
                         || application.len() != expected.len()
                         || logical.iter().copied().collect::<BTreeSet<_>>() != expected
@@ -1159,6 +2000,29 @@ impl EffectWindow {
                         if !by_before.is_empty() {
                             return Err(EffectError::InconsistentProgram);
                         }
+                    }
+                    let mut commander_changes = Vec::new();
+                    if !selected.is_empty() {
+                        let (window, changes) = self.window.return_commanders(&selected)?;
+                        self.window = window;
+                        for change in &changes {
+                            journal.moves.push(CheckMoveRecord {
+                                event: process.event,
+                                boundary: process.boundary,
+                                cause: CheckMoveCause::StateBasedAction,
+                                before: change.before.clone(),
+                                after: change.after.clone(),
+                            });
+                        }
+                        commander_changes = changes;
+                    }
+                    for &source in &actions.detach {
+                        let before = self.characteristics.detach(source);
+                        occurrences.push(RulesOccurrence::AttachmentChanged {
+                            source,
+                            before,
+                            after: None,
+                        });
                     }
                     for (object, after) in &actions.cancellations {
                         let previous = before.view().characteristics.counters(*object);
@@ -1200,6 +2064,18 @@ impl EffectWindow {
                     for player in self.window.apnap_players()? {
                         if actions.losses.contains(&player) {
                             let mut reasons = BTreeSet::new();
+                            if self
+                                .poison
+                                .get(&player)
+                                .is_some_and(|count| count >= &10.into())
+                            {
+                                reasons.insert(PlayerLossReason::TenPoisonCounters);
+                            }
+                            reasons.extend(
+                                self.commander_damage_losses()
+                                    .filter(|(damaged, _)| *damaged == player)
+                                    .map(|(_, card)| PlayerLossReason::CommanderCombatDamage(card)),
+                            );
                             if self.failed_draws.contains(&player) {
                                 reasons.insert(PlayerLossReason::FailedDraw);
                             }
@@ -1211,6 +2087,7 @@ impl EffectWindow {
                     }
                     self.state_based_losses.extend(actions.losses);
                     self.failed_draws.clear();
+                    self.deathtouch_damage.clear();
                     self.emit_from(
                         EventCause::StateBasedActions {
                             event: process.event,
@@ -1237,21 +2114,25 @@ impl EffectWindow {
                                     )
                                 })
                                 .collect::<Result<Vec<_>, _>>()?;
+                            for change in &commander_changes {
+                                moves.push(zone_occurrence_at(
+                                    previous,
+                                    current,
+                                    change,
+                                    ZoneReason::CommanderReturn,
+                                    controllers,
+                                )?);
+                            }
                             moves.append(&mut occurrences);
                             Ok(moves)
                         },
                     )?;
                     if !self.state_based_losses.is_empty() {
-                        let leaving = self.state_based_losses.clone();
-                        if self.window.participants().len() - leaving.len() <= 1 {
+                        if self.window.participants().len() - self.state_based_losses.len() <= 1 {
                             return self.complete_checks(process.boundary, true, journal, append);
                         }
-                        let cursor = self.pending_work.take();
-                        let (mut survivors, (), departures) =
-                            self.depart_players(&leaving, turn, None)?.into_parts();
-                        append.append(departures);
-                        survivors.pending_work = cursor;
-                        self = survivors;
+                        let departed = std::mem::take(&mut self.state_based_losses);
+                        self.apply_player_departures(&departed, turn, &mut append)?;
                     }
                     let current = self.check_process_mut()?;
                     current.performed = true;
@@ -1341,11 +2222,15 @@ impl EffectWindow {
         checks: CheckJournal,
         append: RulesJournal,
     ) -> Result<RuleProgress, EffectError> {
-        let waiting_triggers = !self.triggers.waiting().is_empty();
+        let waiting_triggers = self.triggers.waiting_count() != 0;
         self.prune_payloads();
         self.pending_work = None;
         if boundary == CheckBoundary::Priority && self.state_based_losses.is_empty() {
-            self.window = self.window.finish_checks(self.window.revision())?;
+            self.window = if self.ending_turn {
+                self.window.finish_end_turn_checks()?
+            } else {
+                self.window.finish_checks(self.window.revision())?
+            };
         }
         Ok(RuleProgress::new(
             self,

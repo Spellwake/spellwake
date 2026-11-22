@@ -7,9 +7,8 @@ use crate::{
         AbilityChange, AbilityRemoval, ResolvedDuration, ResolvedPartSpec, ResolvedPartsSpec,
     },
     program::{
-        DefinitionError, ObjectRelation, OrdinaryCondition, PlayerRelation,
-        PublicZoneDestination as Destination, TriggerGrouping, TriggeredAbility,
-        TriggeredAbilityId, ZoneActionKind, ZoneActionPredicate, ZoneObjectKind,
+        DefinitionError, PlayerRelation, PublicZoneDestination as Destination, TriggerGrouping,
+        TriggeredAbility, TriggeredAbilityId, ZoneActionKind, ZoneActionPredicate, ZoneObjectKind,
         ZoneReplacementAbility, ZoneReplacementAbilityId, ZoneReplacementChoice,
         ZoneReplacementSubject,
     },
@@ -212,7 +211,7 @@ fn mandatory_sacrifice_uses_actual_exile_and_has_no_dies_capture() {
     )]);
     p.triggered.push(TriggeredAbility {
         id: TriggeredAbilityId(1),
-        condition: OrdinaryCondition::Dies(ObjectRelation::AnyCreature),
+        condition: crate::program::TriggerSpec::dies(crate::program::ObjectFilter::creature()),
         grouping: TriggerGrouping::EachOccurrence,
         body: ExecutableBody::new(BodyTarget::None, vec![gain(1)]),
     });
@@ -245,14 +244,17 @@ fn optional_singleton_discard_apply_and_decline_remain_discard_actions() {
         )]);
         p.triggered.push(TriggeredAbility {
             id: TriggeredAbilityId(1),
-            condition: OrdinaryCondition::Discarded(PlayerRelation::AnyParticipant),
+            condition: crate::program::TriggerSpec::player_action(
+                PlayerRelation::AnyParticipant,
+                crate::program::PlayerTriggerAction::Discarded,
+            ),
             grouping: TriggerGrouping::EachOccurrence,
             body: ExecutableBody::new(BodyTarget::None, vec![gain(1)]),
         });
         let mut t = start(
             vec![Instruction::Discard {
                 players: AffectedPlayers::One(ResolvingPlayer::Controller),
-                amount: InstructionAmount::Literal(1.into()),
+                amount: crate::program::ValueExpr::Literal(1.into()),
             }],
             vec![
                 bf(50, B, p),
@@ -819,7 +821,11 @@ fn admission_codec_and_predecessor_visitor_are_strict_without_source_card_claims
     let encoded = codec::view(&p);
     assert_eq!(codec::decode(encoded.clone(), &v).unwrap(), p);
     assert!(p.check_current10().is_err());
-    for action in [ZoneActionKind::CleanupDiscard, ZoneActionKind::StateBased] {
+    for action in [
+        ZoneActionKind::CleanupDiscard,
+        ZoneActionKind::StateBased,
+        ZoneActionKind::SacrificeCost,
+    ] {
         let mut admitted = p.clone();
         admitted.zone_replacements[0].actions =
             ZoneActionPredicate::OneOf(BTreeSet::from([action]));
@@ -827,12 +833,23 @@ fn admission_codec_and_predecessor_visitor_are_strict_without_source_card_claims
         assert_eq!(codec::decode(codec::view(&admitted), &v).unwrap(), admitted);
         assert!(admitted.check_current10().is_err());
     }
+    let mut mixed_sacrifice = p.clone();
+    let ZoneActionPredicate::OneOf(actions) = &mut mixed_sacrifice.zone_replacements[0].actions
+    else {
+        unreachable!()
+    };
+    actions.insert(ZoneActionKind::SacrificeCost);
+    assert_eq!(mixed_sacrifice.validate(&v), Ok(()));
+    assert_eq!(
+        codec::decode(codec::view(&mixed_sacrifice), &v).unwrap(),
+        mixed_sacrifice
+    );
+    assert!(mixed_sacrifice.check_current10().is_err());
     let mut invalids = vec![];
     let mut any = p.clone();
     any.zone_replacements[0].actions = ZoneActionPredicate::Any;
     invalids.push((any, DefinitionError::UnsupportedZoneReplacementScope));
     for action in [
-        ZoneActionKind::SacrificeCost,
         ZoneActionKind::Surveil,
         ZoneActionKind::Mill,
         ZoneActionKind::Draw,
@@ -976,7 +993,7 @@ fn predecessor_refusal_isolates_retained_text_roster_copy_work_frames_and_replie
             .is_err()
     );
     // Strip easier authored/captured/copy paths: the pending selected owner alone refuses.
-    execution.characteristics = CharacteristicState::default();
+    *execution.characteristics = CharacteristicState::default();
     for program in Arc::make_mut(&mut execution.programs).values_mut() {
         *program = creature();
     }

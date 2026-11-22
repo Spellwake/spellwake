@@ -15,7 +15,7 @@ use spellwake_engine::{
     mana::{ManaCost, ManaPayment},
     object_identity::CardId,
     priority::SeatId,
-    program::{BodyTarget, ExecutableBody, Instruction, Program, SpellTargetFilter},
+    program::{BodyTarget, ExecutableBody, Instruction, Program},
     targets::TargetRef,
 };
 use std::collections::BTreeSet;
@@ -181,7 +181,7 @@ fn copied_player_target_spell_can_retarget_a_creature_independently() {
             spell(2, BodyTarget::SingleCreatureOrPlayer, vec![damage()]),
             spell(
                 3,
-                BodyTarget::SingleSpell(SpellTargetFilter::AnySpell),
+                BodyTarget::SingleSpell(spellwake_engine::program::SpellFilter::any()),
                 vec![Instruction::CopySpell],
             ),
         ],

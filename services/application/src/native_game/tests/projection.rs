@@ -11,13 +11,11 @@ use spellwake_engine::{
     token::TokenEntryPreview,
 };
 use std::{cell::RefCell, io::Write, sync::Mutex};
-mod checks_cleanup;
-mod checks_legend;
-mod checks_order;
-mod checks_target;
-mod chooser_replacement;
-mod library;
-mod selection;
+mod cascade;
+mod face_down;
+mod madness;
+mod mutate;
+mod ninja;
 mod stored_view;
 
 #[derive(Clone, PartialEq, Eq)]
@@ -92,6 +90,7 @@ impl NativeDisplaySource for Display {
                 printed_power: None,
                 printed_toughness: None,
                 printed_loyalty: None,
+                printed_defense: None,
             },
         })
     }
@@ -153,146 +152,6 @@ fn metadata() -> NativeProjectionMetadata {
         deadline_at: None,
         disclosure: NativeDisclosure::LiveParticipant,
     }
-}
-
-#[test]
-#[ignore = "requires genuine vocabulary; multiplayer adapter mechanism, not card qualification"]
-fn departed_active_turn_projects_empty_active_seats_and_retained_eliminated_roster() {
-    let c = SeatId(29);
-    let viewer_c = Uuid::from_u128(104);
-    let mut initial = seed(vec![]);
-    initial.seats.push(c);
-    initial.life.push(spellwake_engine::setup::StartingLife {
-        player: c,
-        total: 20.into(),
-    });
-    let source = GameState::initialize_scheduled(
-        GameId(90),
-        context(&initial.creature_vocabulary),
-        initial,
-        spellwake_engine::turn::TurnStart {
-            number: 1,
-            step: spellwake_engine::turn::Step::PrecombatMain,
-        },
-    )
-    .unwrap()
-    .into_state();
-    let source = source
-        .advance(spellwake_engine::game::GameInput {
-            basis: source.basis().clone(),
-            actor: A,
-            command: GameCommand::Concede,
-        })
-        .unwrap()
-        .into_state();
-    let binding = NativeBinding::new(
-        context_id(),
-        source.basis().clone(),
-        vec![
-            NativeSeatBinding {
-                seat_id: viewer_a(),
-                native_seat: A,
-            },
-            NativeSeatBinding {
-                seat_id: viewer_b(),
-                native_seat: B,
-            },
-            NativeSeatBinding {
-                seat_id: viewer_c,
-                native_seat: c,
-            },
-        ],
-        viewer_b(),
-    )
-    .unwrap();
-    let mut scope = NativeScope::new(&source, binding).unwrap();
-    let projected = scope
-        .project_with_facts(&metadata(), &Display::default())
-        .unwrap();
-    let facts = projected
-        .facts(source.execution().creature_vocabulary())
-        .unwrap();
-    projected.snapshot().validate(&facts).unwrap();
-    capture(projected.snapshot());
-    assert!(
-        projected
-            .snapshot()
-            .turn
-            .as_ref()
-            .unwrap()
-            .active_seat_ids
-            .is_empty()
-    );
-    let decoded: PlayerSnapshot =
-        crate::decode_wire_object(&serde_json::to_vec(projected.snapshot()).unwrap()).unwrap();
-    decoded.validate(&facts).unwrap();
-    assert_eq!(
-        projected
-            .snapshot()
-            .turn
-            .as_ref()
-            .unwrap()
-            .priority_seat_ids,
-        vec![viewer_b()]
-    );
-    let departed = projected
-        .snapshot()
-        .players
-        .iter()
-        .find(|player| player.seat_id == viewer_a())
-        .unwrap();
-    assert!(departed.eliminated);
-    assert_eq!(departed.life, 20.into());
-    let mut invalid = projected.snapshot().clone();
-    invalid
-        .turn
-        .as_mut()
-        .unwrap()
-        .priority_seat_ids
-        .push(viewer_a());
-    assert!(invalid.validate(&facts).is_err());
-    let mut invalid = projected.snapshot().clone();
-    invalid
-        .players
-        .iter_mut()
-        .for_each(|player| player.eliminated = false);
-    assert!(invalid.validate(&facts).is_err());
-    let terminal = source
-        .advance(spellwake_engine::game::GameInput {
-            basis: source.basis().clone(),
-            actor: B,
-            command: GameCommand::Concede,
-        })
-        .unwrap()
-        .into_state();
-    let binding = NativeBinding::new(
-        context_id(),
-        terminal.basis().clone(),
-        scope.binding.seats.clone(),
-        viewer_c,
-    )
-    .unwrap();
-    let result = crate::native_game::results::NativeTerminal::derive(&terminal, &binding)
-        .unwrap()
-        .unwrap();
-    assert_eq!(result.winner_seat_ids(), &[viewer_c]);
-    assert_eq!(
-        result
-            .losing_seat_ids()
-            .iter()
-            .copied()
-            .collect::<BTreeSet<_>>(),
-        BTreeSet::from([viewer_a(), viewer_b()])
-    );
-    assert_eq!(result.reason(), "native_concession");
-    let mut scope = NativeScope::new(&terminal, binding).unwrap();
-    let projected = scope
-        .project_with_facts(&metadata(), &Display::default())
-        .unwrap();
-    let facts = projected
-        .facts(terminal.execution().creature_vocabulary())
-        .unwrap();
-    projected.snapshot().validate(&facts).unwrap();
 }
 #[test]
 #[ignore = "requires genuine vocabulary; independent projection metadata, not source/card qualification"]
@@ -467,7 +326,7 @@ pub(super) fn verify_view(view: &mut NativeScope<'_>, original: Option<&PlayerCo
         .iter()
         .filter(|object| {
             matches!(object.zone(), ObjectZone::Library(_))
-                || matches!(object.zone(),ObjectZone::Hand(seat) if seat!=view.binding.actor)
+                || matches!(object.zone(),ObjectZone::Hand(seat) if seat!=view.binding.actor && !source.execution().revealed_by_ninjutsu(object.id()))
         })
         .map(GameObject::id)
         .collect();
@@ -1019,7 +878,6 @@ fn hidden_identity_and_library_order_do_not_change_permitted_projection() {
 #[test]
 #[ignore = "requires explicitly supplied genuine vocabulary; actual snapshot mechanisms, not card qualification"]
 fn stack_targets_leave_anonymous_occurrence_counts_without_incarnation_rebinding() {
-    use spellwake_engine::program::SpellTargetFilter;
     let initial = state(vec![
         card(
             1,
@@ -1092,7 +950,7 @@ fn stack_targets_leave_anonymous_occurrence_counts_without_incarnation_rebinding
             A,
             ObjectDestination::Hand,
             instant(
-                BodyTarget::SingleSpell(SpellTargetFilter::AnySpell),
+                BodyTarget::SingleSpell(spellwake_engine::program::SpellFilter::any()),
                 vec![Instruction::CounterSpell],
             ),
         ),
@@ -1101,7 +959,7 @@ fn stack_targets_leave_anonymous_occurrence_counts_without_incarnation_rebinding
             A,
             ObjectDestination::Hand,
             instant(
-                BodyTarget::SingleSpell(SpellTargetFilter::AnySpell),
+                BodyTarget::SingleSpell(spellwake_engine::program::SpellFilter::any()),
                 vec![Instruction::CounterSpell],
             ),
         ),
@@ -1213,7 +1071,31 @@ fn assert_display_trace(snapshot: &PlayerSnapshot, view: &NativeScope<'_>, displ
             ));
         }
     }
+    let public_reveals = source
+        .search_reveals()
+        .into_iter()
+        .chain(source.cascade_reveals())
+        .chain(source.face_down_reveals());
+    for (object, definition) in public_reveals {
+        if view
+            .binding
+            .seats
+            .iter()
+            .any(|seat| seat.native_seat == object.owner())
+        {
+            expected.push(DisplayCall::Object(object.clone(), definition.clone()));
+        }
+    }
     for entry in source.execution().window().entries() {
+        if matches!(
+            entry.kind(),
+            spellwake_engine::stack_window::StackKind::Speed
+                | spellwake_engine::stack_window::StackKind::Monarch
+                | spellwake_engine::stack_window::StackKind::DelayedCopy { .. }
+                | spellwake_engine::stack_window::StackKind::Emblem { .. }
+        ) {
+            continue;
+        }
         expected.push(DisplayCall::Stack(
             entry.clone(),
             source.execution().stack_body(entry.id()).cloned(),
@@ -1232,6 +1114,9 @@ fn assert_display_trace(snapshot: &PlayerSnapshot, view: &NativeScope<'_>, displ
             }
             RuleFrame::Triggers(frame) => {
                 for id in frame.instances() {
+                    if source.execution().waiting_speed_trigger(*id).is_some() {
+                        continue;
+                    }
                     expected.push(DisplayCall::Trigger(
                         source
                             .execution()
@@ -1270,11 +1155,11 @@ fn projected_current_control_counters_damage_tap_and_copy_use_actual_native_owne
         StaticAbilityId, StaticContinuousAbility, StaticPart, StaticParts,
     };
     use spellwake_engine::program::{
-        CardType, ObjectRelation, OrdinaryCondition, Supertype, TriggerGrouping, TriggeredAbility,
-        TriggeredAbilityId,
+        CardType, Supertype, TriggerGrouping, TriggeredAbility, TriggeredAbilityId,
     };
     let elf = vocabulary().resolve_label("Elf").unwrap();
     let mut target = Program::creature(None, 1.into(), 5.into(), BTreeSet::from([elf]));
+    target.printed_keywords.insert(KeywordAbility::Flying);
     target.names = ObjectNames::new(vec![
         EnglishCardName::new("Named resource creature".into()).unwrap(),
         EnglishCardName::new("\u{e000}".into()).unwrap(),
@@ -1294,7 +1179,9 @@ fn projected_current_control_counters_damage_tap_and_copy_use_actual_native_owne
     });
     target.triggered = vec![TriggeredAbility {
         id: TriggeredAbilityId(8),
-        condition: OrdinaryCondition::BecomesTapped(ObjectRelation::SelfObject),
+        condition: spellwake_engine::program::TriggerSpec::becomes_tapped(
+            spellwake_engine::program::ObjectFilter::self_object(),
+        ),
         grouping: TriggerGrouping::EachOccurrence,
         body: ExecutableBody::new(
             BodyTarget::None,
@@ -1437,7 +1324,14 @@ fn projected_current_control_counters_damage_tap_and_copy_use_actual_native_owne
     assert!(properties.colors == vec![ManaColor::Blue]);
     assert!(properties.land_types == vec![PlayerLandType::Forest]);
     assert_eq!(properties.creature_types[0].as_str(), "Elf");
-    assert!(properties.keywords == vec![PlayerKeyword::Haste, PlayerKeyword::Vigilance]);
+    assert!(
+        properties.keywords
+            == vec![
+                PlayerKeyword::Haste,
+                PlayerKeyword::Vigilance,
+                PlayerKeyword::Flying
+            ]
+    );
     assert!(
         projected
             .abilities
@@ -1631,7 +1525,7 @@ fn captured_damage_sources_keep_public_provenance_after_departure() {
             ObjectDestination::Hand,
             instant(
                 BodyTarget::SingleSpell(
-                    spellwake_engine::program::SpellTargetFilter::CopyableInstructionSpell,
+                    spellwake_engine::program::SpellFilter::copyable_instruction(),
                 ),
                 vec![Instruction::CopySpell],
             ),
@@ -1674,4 +1568,522 @@ fn captured_damage_sources_keep_public_provenance_after_departure() {
     assert!(ensure_public_damage_source(&provenance, B).is_ok());
     // This tests the typed provenance gate, not a fabricated Allocation frame:
     // current singleton copied-spell damage cannot issue a multi-attempt domain.
+}
+
+#[test]
+#[ignore = "requires source-qualified creature vocabulary"]
+fn typecycling_private_search_and_public_reveal_replay_through_player_inputs() {
+    use spellwake_engine::program::LibrarySearch;
+    let mut cycler = Program::artifact(Some(ManaCost::free()), vec![]);
+    cycler.activated.push(ActivatedAbility::typecycling(
+        ActivatedAbilityId(6),
+        ManaCost::free(),
+        LibrarySearch::land_subtype_to_hand(LandType::Island),
+    ));
+    let source = main_state(vec![
+        card(1, A, ObjectDestination::Hand, cycler),
+        card(
+            2,
+            A,
+            ObjectDestination::LibraryBottom,
+            Program::land(BTreeSet::from([LandType::Island]), vec![]),
+        ),
+        card(
+            3,
+            A,
+            ObjectDestination::LibraryBottom,
+            Program::land(BTreeSet::from([LandType::Forest]), vec![]),
+        ),
+        card(
+            4,
+            B,
+            ObjectDestination::LibraryBottom,
+            Program::land(BTreeSet::from([LandType::Island]), vec![]),
+        ),
+    ]);
+    let mut caller = scope(&source, viewer_a());
+    let snapshot = caller.project(&metadata(), &Display::default()).unwrap();
+    let hand = &snapshot.visible_objects[0];
+    let ability = hand
+        .abilities
+        .iter()
+        .find(|a| a.kind == PlayerAbilityKind::Cycling)
+        .expect("hand ability visible");
+    let original = command(
+        &caller,
+        PlayerAction::Cycle {
+            source: hand.handle.clone(),
+            ability: ability.handle.clone(),
+            payment: None,
+        },
+    );
+    let paid = caller.propose(&original).unwrap();
+    super::input_codec::verify(&caller, &paid);
+    let first = bridged(paid.candidate().state(), viewer_a(), |_| {
+        PlayerAction::Pass {}
+    });
+    let pending = bridged(&first, viewer_b(), |_| PlayerAction::Pass {});
+    let mut chooser = scope(&pending, viewer_a());
+    let display = Display::default();
+    let searching = chooser.project(&metadata(), &display).unwrap();
+    let [decision] = searching.decisions.as_slice() else {
+        panic!("expected one private search");
+    };
+    let PlayerDomain::LibrarySearch {
+        inspected,
+        eligible,
+        ..
+    } = &decision.domain
+    else {
+        panic!("expected search contents")
+    };
+    assert_eq!(inspected.len(), 2);
+    assert_eq!(eligible.len(), 1);
+    assert!(display.seen.borrow().contains(&Some(CardId(2))));
+    assert!(display.seen.borrow().contains(&Some(CardId(3))));
+    assert!(!display.seen.borrow().contains(&Some(CardId(4))));
+    let mut observer = scope(&pending, viewer_b());
+    let display = Display::default();
+    assert!(
+        observer
+            .project(&metadata(), &display)
+            .unwrap()
+            .decisions
+            .is_empty()
+    );
+    assert!(!display.seen.borrow().contains(&Some(CardId(2))));
+    assert!(!display.seen.borrow().contains(&Some(CardId(3))));
+    let choice = command(
+        &chooser,
+        PlayerAction::Choose {
+            decision: decision.decision.clone(),
+            response: PlayerChoice::Objects {
+                objects: vec![eligible[0].handle.clone()],
+            },
+        },
+    );
+    decision
+        .validate_response(&choice, viewer_a(), &[viewer_a(), viewer_b()], &[])
+        .unwrap();
+    let found = chooser.propose(&choice).unwrap();
+    super::input_codec::verify(&chooser, &found);
+    for viewer in [viewer_a(), viewer_b()] {
+        let display = Display::default();
+        let seen = scope(found.candidate().state(), viewer)
+            .project(&metadata(), &display)
+            .unwrap();
+        let seat = seen
+            .players
+            .iter()
+            .find(|p| p.seat_id == viewer_a())
+            .unwrap();
+        assert!(seat.search_reveal.is_some());
+        assert!(display.seen.borrow().contains(&Some(CardId(2))));
+        assert!(!display.seen.borrow().contains(&Some(CardId(3))));
+        assert!(!display.seen.borrow().contains(&Some(CardId(4))));
+        if viewer == viewer_b() {
+            assert_eq!(seen.visible_objects.len(), 1); // Only the discarded cycler is public.
+        }
+    }
+}
+
+#[test]
+#[ignore = "requires source-qualified creature vocabulary"]
+fn cast_escape_from_graveyard_replays_the_alternative_and_exact_object_payment() {
+    use spellwake_engine::program::ConditionalCastCost;
+    let mut spell = instant(
+        BodyTarget::None,
+        vec![Instruction::AdjustControllerLife {
+            adjustment: LifeAdjustment::Gain(2.into()),
+        }],
+    );
+    spell.conditional_cost = Some(ConditionalCastCost::Escape {
+        mana: ManaCost::free(),
+        exile: 2,
+        entry_counters: 0,
+    });
+    let resource = Program::artifact(None, vec![]);
+    let state = main_state(vec![
+        card(1, A, ObjectDestination::Graveyard, spell),
+        card(2, A, ObjectDestination::Graveyard, resource.clone()),
+        card(3, A, ObjectDestination::Graveyard, resource),
+    ]);
+    let mut view = scope(&state, viewer_a());
+    let source = view
+        .issue(NativeReference::Object(object(&state, 1)))
+        .unwrap();
+    let resources = [2, 3]
+        .into_iter()
+        .map(|n| PlayerCastResource::Escape {
+            source: view
+                .issue(NativeReference::Object(object(&state, n)))
+                .unwrap(),
+        })
+        .collect();
+    let request = command(
+        &view,
+        PlayerAction::CastWithResources {
+            face: None,
+            adventure: false,
+            hybrid_choices: Vec::new(),
+            fixed_targets: vec![],
+            chosen_x: None,
+            permanent_targets: vec![],
+            target_division: vec![],
+            modes: vec![],
+            source,
+            target: None,
+            payment: None,
+            use_alternative: true,
+            resources,
+            additional: vec![],
+        },
+    );
+    let proposed = view.propose(&request).unwrap();
+    super::input_codec::verify(&view, &proposed);
+    let cast = proposed.candidate().state();
+    for n in [2, 3] {
+        assert_eq!(
+            cast.execution()
+                .window()
+                .cards()
+                .get(object(cast, n))
+                .unwrap()
+                .zone(),
+            ObjectZone::Exile
+        );
+    }
+    let step = bridged(cast, viewer_a(), |_| PlayerAction::Pass {});
+    let done = bridged(&step, viewer_b(), |_| PlayerAction::Pass {});
+    assert_eq!(done.execution().life_total(A), Some(&22.into()));
+    assert_eq!(
+        done.execution()
+            .window()
+            .cards()
+            .get(object(&done, 1))
+            .unwrap()
+            .zone(),
+        ObjectZone::Graveyard(A)
+    );
+}
+
+#[test]
+#[ignore = "requires source-qualified creature vocabulary"]
+fn suspend_projects_only_legal_targets_and_replays_the_cast_during_resolution() {
+    check_triggered_exile_cast(false);
+}
+
+#[test]
+#[ignore = "requires source-qualified creature vocabulary"]
+fn rebound_projects_its_own_targeted_cast_and_replays_both_resolutions() {
+    check_triggered_exile_cast(true);
+}
+fn check_triggered_exile_cast(rebound: bool) {
+    use spellwake_engine::{
+        combat::CombatDecision,
+        game::{DecisionReply, RuleFrame},
+        priority::PriorityPhase,
+        program::ExileAction,
+        stack_window::WindowPhase,
+    };
+    let mut spell = instant(
+        BodyTarget::SinglePermanent,
+        vec![Instruction::ReturnToOwnersHand],
+    );
+    if rebound {
+        spell
+            .printed_keywords
+            .insert(spellwake_engine::characteristics::KeywordAbility::Rebound);
+    } else {
+        spell.exile_action = Some(ExileAction::Suspend {
+            counters: 1,
+            price: ManaCost::free(),
+        });
+    }
+    let thing = Program::artifact(None, vec![]);
+    let mut cards = vec![
+        card(1, A, ObjectDestination::Hand, spell),
+        card(
+            2,
+            B,
+            ObjectDestination::Battlefield { controller: B },
+            thing.clone(),
+        ),
+        card(3, B, ObjectDestination::LibraryBottom, thing.clone()),
+        card(4, A, ObjectDestination::LibraryBottom, thing.clone()),
+    ];
+    if rebound {
+        cards.push(card(
+            5,
+            B,
+            ObjectDestination::Battlefield { controller: B },
+            thing,
+        ));
+    }
+    let base = main_state(cards);
+    let mut state = if rebound {
+        let cast = bridged(&base, viewer_a(), |scope| PlayerAction::CastTargeted {
+            source: scope
+                .issue(NativeReference::Object(object(&base, 1)))
+                .unwrap(),
+            target: PlayerTarget::Object {
+                handle: scope
+                    .issue(NativeReference::Object(object(&base, 5)))
+                    .unwrap(),
+            },
+            payment: None,
+        });
+        let passed = bridged(&cast, viewer_a(), |_| PlayerAction::Pass {});
+        bridged(&passed, viewer_b(), |_| PlayerAction::Pass {})
+    } else {
+        bridged(&base, viewer_a(), |scope| PlayerAction::Suspend {
+            source: scope
+                .issue(NativeReference::Object(object(&base, 1)))
+                .unwrap(),
+            payment: None,
+        })
+    };
+    let exiled = object(&state, 1);
+    assert_eq!(
+        state.execution().time_counters().get(&exiled).cloned(),
+        (!rebound).then(|| 1.into())
+    );
+    for _ in 0..100 {
+        let (actor, command) = if let Some(decision) = state.pending_decision() {
+            let choice = match decision.frame() {
+                RuleFrame::OptionalEffect(_) => break,
+                RuleFrame::Combat(CombatDecision::Attackers(_)) => {
+                    DecisionReply::DeclareAttackers(vec![])
+                }
+                RuleFrame::Combat(CombatDecision::Blockers(_)) => {
+                    DecisionReply::DeclareBlockers(vec![])
+                }
+                other => panic!("unexpected {other:?}"),
+            };
+            (
+                decision.chooser(),
+                GameCommand::Reply {
+                    decision: decision.id(),
+                    choice,
+                },
+            )
+        } else {
+            let WindowPhase::Priority(PriorityPhase::Ready { holder }) =
+                state.execution().window().phase()
+            else {
+                panic!("expected priority");
+            };
+            (holder, GameCommand::Pass)
+        };
+        state = state
+            .advance(GameInput {
+                basis: state.basis().clone(),
+                actor,
+                command,
+            })
+            .unwrap()
+            .into_state();
+    }
+    assert!(
+        scope(&state, viewer_b())
+            .project(&metadata(), &Display::default())
+            .unwrap()
+            .decisions
+            .is_empty()
+    );
+    let cast = bridged(&state, viewer_a(), |access| {
+        let snap = access.project(&metadata(), &Display::default()).unwrap();
+        let decision = &snap.decisions[0];
+        let (spell, target_required, targets) = match &decision.domain {
+            PlayerDomain::SuspendedCast {
+                allows_x: _,
+                spell,
+                target_required,
+                targets,
+            } if !rebound => (spell, target_required, targets),
+            PlayerDomain::ReboundCast {
+                allows_x: _,
+                spell,
+                target_required,
+                targets,
+            } if rebound => (spell, target_required, targets),
+            _ => panic!("expected exile cast opportunity"),
+        };
+        assert!(spell == &access.issue(NativeReference::Object(exiled)).unwrap());
+        assert!(target_required);
+        let target = PlayerTarget::Object {
+            handle: access
+                .issue(NativeReference::Object(object(&state, 2)))
+                .unwrap(),
+        };
+        assert!(targets.as_slice() == std::slice::from_ref(&target));
+        PlayerAction::Choose {
+            decision: decision.decision.clone(),
+            response: if rebound {
+                PlayerChoice::ReboundCast {
+                    face: None,
+                    adventure: false,
+                    chosen_x: None,
+                    target: Some(target),
+                    payment: None,
+                    resources: vec![],
+                    additional: vec![],
+                }
+            } else {
+                PlayerChoice::SuspendCast {
+                    face: None,
+                    adventure: false,
+                    chosen_x: None,
+                    target: Some(target),
+                    payment: None,
+                    resources: vec![],
+                    additional: vec![],
+                }
+            },
+        }
+    });
+    let a_pass = bridged(&cast, viewer_a(), |_| PlayerAction::Pass {});
+    let done = bridged(&a_pass, viewer_b(), |_| PlayerAction::Pass {});
+    for (id, zone) in [(1, ObjectZone::Graveyard(A)), (2, ObjectZone::Hand(B))] {
+        assert_eq!(
+            done.execution()
+                .window()
+                .cards()
+                .get(object(&done, id))
+                .unwrap()
+                .zone(),
+            zone
+        );
+    }
+}
+
+#[test]
+#[ignore = "requires retained source-qualified vocabulary"]
+fn cast_bestowed_replays_its_target_and_projects_the_aura_to_both_seats() {
+    use spellwake_engine::program::{CardType, ConditionalCastCost};
+    let mut bestow = Program::creature(Some(ManaCost::free()), 2.into(), 3.into(), BTreeSet::new());
+    bestow.card_types.insert(CardType::Enchantment);
+    bestow.conditional_cost = Some(ConditionalCastCost::Bestow(ManaCost::free()));
+    let host = Program::creature(None, 3.into(), 3.into(), BTreeSet::new());
+    let state = main_state(vec![
+        card(1, A, ObjectDestination::Hand, bestow),
+        card(2, B, ObjectDestination::Battlefield { controller: B }, host),
+    ]);
+    let cast = bridged(&state, viewer_a(), |view| PlayerAction::CastWithResources {
+        face: None,
+        adventure: false,
+        hybrid_choices: Vec::new(),
+        fixed_targets: vec![],
+        chosen_x: None,
+        permanent_targets: vec![],
+        target_division: vec![],
+        modes: vec![],
+        source: view
+            .issue(NativeReference::Object(object(&state, 1)))
+            .unwrap(),
+        target: Some(PlayerTarget::Object {
+            handle: view
+                .issue(NativeReference::Object(object(&state, 2)))
+                .unwrap(),
+        }),
+        use_alternative: true,
+        payment: None,
+        additional: vec![],
+        resources: vec![],
+    });
+    let first = bridged(&cast, viewer_a(), |_| PlayerAction::Pass {});
+    let done = bridged(&first, viewer_b(), |_| PlayerAction::Pass {});
+    for viewer in [viewer_a(), viewer_b()] {
+        for (state, attached) in [(&cast, false), (&done, true)] {
+            let seen = scope(state, viewer)
+                .project(&metadata(), &Display::default())
+                .unwrap();
+            let aura = seen
+                .visible_objects
+                .iter()
+                .find(|object| object.bestowed)
+                .unwrap();
+            assert_eq!(aura.attached_to.is_some(), attached);
+            assert_eq!(
+                seen.visible_objects.iter().filter(|o| o.bestowed).count(),
+                1
+            );
+        }
+    }
+}
+
+#[test]
+#[ignore = "requires explicitly supplied genuine vocabulary"]
+fn both_seats_see_player_speed_and_its_sourceless_stack_ability() {
+    use spellwake_engine::characteristics::KeywordAbility;
+    let mut engines = Program::creature(None, 2.into(), 2.into(), BTreeSet::new());
+    engines
+        .printed_keywords
+        .insert(KeywordAbility::StartYourEngines);
+    let start = main_state(vec![
+        card(
+            1,
+            A,
+            ObjectDestination::Battlefield { controller: A },
+            engines,
+        ),
+        card(
+            2,
+            A,
+            ObjectDestination::Hand,
+            instant(
+                BodyTarget::SinglePlayer,
+                vec![Instruction::AdjustTargetLife {
+                    adjustment: LifeAdjustment::Lose(1.into()),
+                }],
+            ),
+        ),
+    ]);
+    let cast = bridged(&start, viewer_a(), |view| PlayerAction::CastTargeted {
+        source: view
+            .issue(NativeReference::Object(object(&start, 2)))
+            .unwrap(),
+        target: PlayerTarget::Seat {
+            seat_id: viewer_b(),
+        },
+        payment: None,
+    });
+    let resolve = |state: &GameState| {
+        let first = bridged(state, viewer_a(), |_| PlayerAction::Pass {});
+        bridged(&first, viewer_b(), |_| PlayerAction::Pass {})
+    };
+    let trigger = resolve(&cast);
+    let done = resolve(&trigger);
+    for viewer in [viewer_a(), viewer_b()] {
+        for (state, speed) in [(&trigger, 1), (&done, 2)] {
+            let seen = scope(state, viewer)
+                .project(&metadata(), &Display::default())
+                .unwrap();
+            assert_eq!(
+                seen.players
+                    .iter()
+                    .find(|s| s.seat_id == viewer_a())
+                    .unwrap()
+                    .speed,
+                speed
+            );
+            assert_eq!(
+                seen.players
+                    .iter()
+                    .find(|s| s.seat_id == viewer_b())
+                    .unwrap()
+                    .speed,
+                0
+            );
+            if speed == 1 {
+                let [entry] = seen.stack.as_slice() else {
+                    panic!("one inherent trigger");
+                };
+                assert_eq!(entry.label, "Increase speed");
+                assert!(entry.source_object.is_none());
+            } else {
+                assert!(seen.stack.is_empty());
+            }
+        }
+    }
 }

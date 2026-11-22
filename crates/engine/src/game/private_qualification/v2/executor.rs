@@ -105,7 +105,7 @@ impl EffectAttempt {
             },
             Self::Mana(value) => match value.as_ref() {
                 Ok(value) => {
-                    json!({"tag":"Ok","state":projection::effect(value.state(),aliases)?,"result":match value.result() {crate::effects::ManaActivationResult::Complete {production}=>json!({"tag":"Complete","production":projection::production(production)}),crate::effects::ManaActivationResult::Pending {frame}=>json!({"tag":"Pending","frame":{"source":projection::opaque(frame.source()),"ability":crate::test_support::mana_ref::view(frame.ability()),"chooser":frame.chooser().0,"amount":frame.amount(),"colors":frame.colors().iter().map(projection::opaque).collect::<Vec<_>>()}})},"append":projection::journal(value.append())})
+                    json!({"tag":"Ok","state":projection::effect(value.state(),aliases)?,"result":match value.result() {crate::effects::ManaActivationResult::Complete {production}=>json!({"tag":"Complete","production":projection::production(production)}),crate::effects::ManaActivationResult::Pending {frame}=>json!({"tag":"Pending","frame":{"source":projection::opaque(frame.source()),"ability":crate::test_support::mana_ref::view(frame.ability()),"chooser":frame.chooser().0,"amount":frame.amount(),"colors":frame.colors().iter().map(projection::opaque).collect::<Vec<_>>()}}),crate::effects::ManaActivationResult::PendingRule {frame}=>json!({"tag":"PendingRule","frame":projection::effect_frame(frame,value.state())?})},"append":projection::journal(value.append())})
                 }
                 Err(error) => projection::effect_error(error),
             },

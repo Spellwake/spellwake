@@ -26,7 +26,7 @@ async fn execute(state: ApiState, request: Request, operation: Operation) -> Res
         Ok(token) => token,
         Err(error) => return actor_error(error),
     };
-    if !single_content_type(request.headers()).is_some_and(|value| value == "application/json") {
+    if !is_json_content_type(request.headers()) {
         return fail(StatusCode::BAD_REQUEST, "body", "json_required");
     }
     let input: ChangeProfileDefaults = match to_bytes(request.into_body(), 2048)

@@ -19,16 +19,42 @@ mod tests;
 /// require their own represented relationship/operand contracts.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TokenRecipients {
+    CombatDamageSourceController,
+    /// Last known controller of the target this resolution exiled.
+    ExiledTargetController,
+    /// Controller of the legal target before this spell attempts to destroy it.
+    RememberedTargetController,
     Controller,
     EachPlayer,
     EachOpponent,
 }
 
+/// The ordered resolution phases of a multiplayer token offer.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TemptingTokenPhase {
+    Initial,
+    Opponents,
+    Reward,
+}
+
+/// Copiable token sizing. A value may be fixed at creation or track a permanent.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TokenSize {
+    /// Evaluate once while resolving the creating effect.
+    AtCreation(crate::program::ValueExpr),
+    /// Continually read counters on the exact source of the creating ability.
+    AbilitySourceCounters(crate::effects::CounterKind),
+}
+
 /// One authored group; every group in a CreateTokens instruction enters together.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TokenCreation {
+    /// Initial tapped status specified by the creating effect. It is not copiable.
+    pub enters_tapped: bool,
     pub definition: TokenDefinition,
-    pub amount: crate::program::InstructionAmount,
+    pub amount: crate::program::ValueExpr,
+    /// A size expression that overrides the template's base power and toughness.
+    pub base_size: Option<TokenSize>,
     pub recipients: TokenRecipients,
 }
 impl TokenCreation {
@@ -36,7 +62,9 @@ impl TokenCreation {
     pub fn one(definition: TokenDefinition) -> Self {
         Self {
             definition,
-            amount: crate::program::InstructionAmount::Literal(1.into()),
+            amount: crate::program::ValueExpr::Literal(1.into()),
+            base_size: None,
+            enters_tapped: false,
             recipients: TokenRecipients::Controller,
         }
     }
@@ -58,9 +86,105 @@ impl TokenBatchMember {
 /// Owned creation preview. No actual incarnation has been allocated yet.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TokenEntryPreview {
+    pub enters_tapped: bool,
     pub member: TokenBatchMember,
     pub creator: crate::priority::SeatId,
     pub definition: Program,
+}
+
+/// One pre-entry decision for a token preview, before any token is created.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TokenEntryChoiceFrame {
+    pub(crate) revision: u64,
+    pub(crate) chooser: crate::priority::SeatId,
+    pub(crate) member: TokenBatchMember,
+    pub(crate) preview: TokenEntryPreview,
+    pub(crate) rule: crate::land::EntryTap,
+    pub(crate) eligible_reveals: Vec<crate::object_identity::ObjectId>,
+}
+impl TokenEntryChoiceFrame {
+    pub fn card_names(&self) -> &[spellwake_contracts::names::EnglishCardName] {
+        self.preview
+            .definition
+            .nonland_card_names()
+            .map_or(&[], |names| names.options())
+    }
+
+    /// Revision at which this preview was issued.
+    pub fn revision(&self) -> u64 {
+        self.revision
+    }
+    /// The controller who makes this token's entry decision.
+    pub fn chooser(&self) -> crate::priority::SeatId {
+        self.chooser
+    }
+    /// Stable coordinate within the current simultaneous token batch.
+    pub fn member(&self) -> TokenBatchMember {
+        self.member
+    }
+    /// Complete authored preview of this pending token.
+    pub fn preview(&self) -> &TokenEntryPreview {
+        &self.preview
+    }
+    /// The entry rule defining the available decision.
+    pub fn rule(&self) -> crate::land::EntryTap {
+        self.rule
+    }
+    /// The chooser's private hand-card domain for an optional reveal.
+    pub fn eligible_reveals(&self) -> &[crate::object_identity::ObjectId] {
+        &self.eligible_reveals
+    }
+}
+
+/// A pending Aura token’s non-targeted attachment decision.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TokenAuraChoiceFrame {
+    pub(crate) revision: u64,
+    pub(crate) chooser: crate::priority::SeatId,
+    pub(crate) preview: TokenEntryPreview,
+    pub(crate) domain: Vec<crate::targets::TargetRef>,
+}
+
+impl TokenAuraChoiceFrame {
+    /// Revision at which the Aura preview and its attachment choices were issued.
+    pub fn revision(&self) -> u64 {
+        self.revision
+    }
+    /// The Aura’s controller as it enters.
+    pub fn chooser(&self) -> crate::priority::SeatId {
+        self.chooser
+    }
+    /// The token that will enter attached.
+    pub fn preview(&self) -> &TokenEntryPreview {
+        &self.preview
+    }
+    /// The currently legal permanents or players to attach to.
+    pub fn domain(&self) -> &[crate::targets::TargetRef] {
+        &self.domain
+    }
+}
+
+/// An untargeted choice of who or what one token attacks as its entire batch enters.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TokenDefenderFrame {
+    pub(crate) revision: u64,
+    pub(crate) entry: crate::stack_window::StackEntryId,
+    pub(crate) instruction: usize,
+    pub(crate) member: TokenBatchMember,
+    pub(crate) chooser: crate::priority::SeatId,
+    pub(crate) defenders:
+        std::collections::BTreeMap<crate::targets::TargetRef, crate::priority::SeatId>,
+}
+impl TokenDefenderFrame {
+    pub fn chooser(&self) -> crate::priority::SeatId {
+        self.chooser
+    }
+    pub fn member(&self) -> TokenBatchMember {
+        self.member
+    }
+    pub fn defenders(&self) -> impl Iterator<Item = crate::targets::TargetRef> + '_ {
+        self.defenders.keys().copied()
+    }
 }
 
 /// Executor-issued earliest-to-latest order for one APNAP player's newcomers.
@@ -93,6 +217,7 @@ impl TokenTimestampOrder {
 /// Authored subtype words in name order, independent of set iteration order.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum TokenSubtype {
+    Artifact(crate::program::ArtifactSubtype),
     Creature(CreatureTypeId),
     Land(LandType),
 }
@@ -179,6 +304,13 @@ impl TokenDefinition {
                 .map(TokenSubtype::Creature)
                 .chain(
                     self.program
+                        .artifact_subtypes
+                        .iter()
+                        .copied()
+                        .map(TokenSubtype::Artifact),
+                )
+                .chain(
+                    self.program
                         .land_subtypes
                         .iter()
                         .copied()
@@ -211,6 +343,7 @@ impl TokenDefinition {
                             .label(*value)
                             .ok_or(TokenDefinitionError::ForeignCreatureType),
                         TokenSubtype::Land(value) => Ok(value.rules_label()),
+                        TokenSubtype::Artifact(value) => Ok(value.wire_label()),
                     })
                     .collect::<Result<Vec<_>, _>>()?;
                 words.push("Token");

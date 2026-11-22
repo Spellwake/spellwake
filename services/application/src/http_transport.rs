@@ -1,4 +1,5 @@
 //! Credential-agnostic HTTP mechanics. Typed facades decide which key may enter.
+use lru::LruCache;
 use reqwest::{
     Method, Url,
     blocking::{Client, RequestBuilder, Response},
@@ -6,7 +7,69 @@ use reqwest::{
     redirect::Policy,
 };
 use serde::de::DeserializeOwned;
-use std::{fmt, io::Read, sync::Arc, time::Duration};
+use sha2::{Digest, Sha256};
+use std::{
+    fmt,
+    io::Read,
+    num::NonZeroUsize,
+    sync::{Arc, Mutex, OnceLock},
+    time::Duration,
+};
+
+#[derive(Clone, PartialEq, Eq, Hash)]
+struct PoolKey {
+    origin: String,
+    key_digest: [u8; 32],
+    user_agent: &'static str,
+    timeout_ms: u128,
+}
+
+fn client_pool() -> &'static Mutex<LruCache<PoolKey, Client>> {
+    static POOL: OnceLock<Mutex<LruCache<PoolKey, Client>>> = OnceLock::new();
+    POOL.get_or_init(|| {
+        // Safe constant capacity > 0; 64 distinct (origin, credential, agent, timeout) pools.
+        Mutex::new(LruCache::new(
+            NonZeroUsize::new(64).expect("non-zero pool capacity"),
+        ))
+    })
+}
+
+fn pooled_client(
+    origin: &Origin,
+    key: HeaderValue,
+    user_agent: &'static str,
+    timeout: Duration,
+) -> Result<Client, BackendError> {
+    let key_digest: [u8; 32] = Sha256::digest(key.as_bytes()).into();
+    let pool_key = PoolKey {
+        origin: origin.0.as_str().to_owned(),
+        key_digest,
+        user_agent,
+        timeout_ms: timeout.as_millis(),
+    };
+    if let Ok(mut guard) = client_pool().lock()
+        && let Some(existing) = guard.get(&pool_key)
+    {
+        return Ok(existing.clone());
+    }
+    let mut headers = HeaderMap::new();
+    headers.insert("apikey", key);
+    // Construct on a dedicated OS thread so blocking client init never panics
+    // if invoked from a Tokio async context (including async tests).
+    let created = std::thread::spawn(move || standard_client(headers, user_agent, timeout))
+        .join()
+        .map_err(|_| BackendError::Configuration)?
+        .map_err(|_| BackendError::Configuration)?;
+    if let Ok(mut guard) = client_pool().lock() {
+        if let Some((_, evicted)) = guard.push(pool_key, created.clone()) {
+            // Drop any evicted blocking client off the caller thread so Tokio never panics.
+            let _ = std::thread::Builder::new()
+                .name("http-pool-drop".into())
+                .spawn(move || drop(evicted));
+        }
+    }
+    Ok(created)
+}
 
 #[derive(Clone)]
 pub(crate) struct Origin(Url);
@@ -63,11 +126,11 @@ impl HttpTransport {
         user_agent: &'static str,
         timeout: Duration,
     ) -> Result<Self, BackendError> {
-        let mut headers = HeaderMap::new();
-        headers.insert("apikey", key);
-        let http = standard_client(headers, user_agent, timeout)
-            .map_err(|_| BackendError::Configuration)?;
+        let http = pooled_client(&origin, key, user_agent, timeout)?;
         Ok(Self { origin, http })
+    }
+    pub(crate) fn origin_str(&self) -> &str {
+        self.origin.0.as_str()
     }
     pub(crate) fn from_client(origin: Origin, http: Client) -> Self {
         Self { origin, http }
@@ -114,7 +177,10 @@ pub(crate) fn standard_client(
         .redirect(Policy::none())
         .retry(reqwest::retry::never())
         .no_proxy()
-        .connect_timeout(Duration::from_secs(20).min(timeout))
+        .pool_max_idle_per_host(64)
+        .pool_idle_timeout(Duration::from_secs(90))
+        .tcp_keepalive(Duration::from_secs(30))
+        .connect_timeout(Duration::from_secs(10).min(timeout))
         .timeout(timeout)
         .no_gzip()
         .no_brotli()

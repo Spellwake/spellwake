@@ -12,16 +12,15 @@ work; then read the skill for the layer you're touching.
 - **Backend things** (APIs, server code, database, orchestration, edge functions): read
   `quzzar-backend`.
 
-A change spanning both layers needs both.
+A change spanning both layers needs both. For any new UI, also read `quzzar-ui-ux-design`
+for image-first design, interaction coverage, faithful implementation, and consolidation review.
 
 ## First: read the repo's own context
 
-`CLAUDE.md` at the repo root carries this repo's real stack and commands, written by the
-`setup` skill. Repo facts beat anything general in this skill. If they disagree, the repo
-is right.
-
-If `CLAUDE.md` has no `<!-- quzzar-skills:start -->` block, this repo hasn't been set up.
-Run the `setup` skill first.
+Read the applicable repository instructions, starting with `AGENTS.md`, and inspect the
+project configuration for its real stack and commands. Honor other instruction files used
+by the active agent. Repo facts beat general preferences in this skill. No generated
+marker block or bootstrap skill is required.
 
 ---
 
@@ -36,8 +35,9 @@ comment it out, don't rename it to `*.old`, don't leave it behind a dead flag, d
 `legacy/` copy "just in case."
 
 - Old code is recoverable from commit history. That is what history is for.
-- Deleting isn't breaking. The change that replaces an old system *ships without it*, and it
-  gets exercised at `dev` and `staging` before it reaches `main`.
+- Delete superseded code when its replacement is live and verified. For live-data changes,
+  expand additively, then migrate and remove old structures in a tracked cleanup phase once
+  deployed consumers no longer need them. Temporary compatibility has an explicit end.
 - Dead code found while working on something else is a finding: say so, and delete it as part
   of the release that supersedes it.
 
@@ -46,23 +46,22 @@ entries, and any now-orphaned dependency.
 
 ## 2. CONSOLIDATE repetition
 
-If what you're building repeats something that already exists elsewhere, stop and investigate
-before you duplicate it. This shows up most when expanding an existing system.
+Avoid repeating or duplicating an existing responsibility. Before adding another implementation,
+investigate where the behavior already lives and consolidate the shared responsibility into one
+maintained implementation. Reuse or deepen existing modules, keep feature-specific behavior at
+its boundary, and delete superseded copies.
 
-The procedure:
+Make routine consolidation decisions autonomously. Ask only when the decision would materially
+change the requested outcome or depends on information the code and session do not supply.
+Investigation is expected; a subagent and user approval are not prerequisites for routine reuse.
+For UI consolidation that changes an approved appearance, follow `quzzar-ui-ux-design` and
+present the rendered tradeoff for user approval. Exact-output consolidation remains routine.
 
-1. **Spin up a subagent** to investigate the overlap: where else this pattern lives, how much
-   is genuinely shared, and what the seam would be.
-2. **Then ask, with `AskUserQuestion`.** Present the finding and real options: consolidate into
-   one thing, keep them separate and why, or extract only the shared part.
+## 3. Ask with the available question tool
 
-Do not silently consolidate, and do not silently duplicate. Both are decisions that belong to
-the user.
-
-## 3. Ask with the question tool, not in prose
-
-When you need alignment or have a real question, you **MUST** use the `AskUserQuestion` tool,
-the UI tool that renders selectable options. Give a few distinct options to pick from.
+When you need alignment or have a real question, use the active agent's question tool when
+available. Give a few distinct options to pick from. If the host has no question tool,
+ask a concise question in chat.
 
 This is the preferred way to resolve ambiguity. Reach for it early rather than guessing and
 building the wrong thing.
@@ -75,8 +74,9 @@ building the wrong thing.
 - **Rust uses its native type system.** Model states and invariants with structs, enums,
   ownership, and `Result`. Use safe Rust by default and validate external input at runtime.
 - **Python uses type annotations and runtime boundary validation.**
-- Use each language's documentation conventions: JSDoc for TypeScript, rustdoc for Rust,
-  docstrings for Python. Keep the code clean, readable, and documented.
+- Use each language's documentation conventions: **JSDoc for TypeScript and JavaScript**,
+  rustdoc for Rust, and docstrings for Python. Document APIs, contracts, and non-obvious
+  behavior; keep the code clean and readable.
 
 ## 5. Standard API response shape
 
@@ -100,36 +100,51 @@ The distinction matters and isn't optional:
 
 # The stack
 
-These are our main solutions to problems, the core tools we should be building with. Reach
-for something outside this table only with a reason.
+These are the preferred tools. Reuse project choices and choose libraries for the actual
+requirements; this is a recommended stack rather than a closed dependency allowlist.
 
 ## Language selection
 
-**TypeScript is the default. Rust and Python are first-class choices when they fit the work.**
+**Rust with Cargo is the default for application logic, domain engines, backends, services,
+and workers.** Favor one reusable Rust implementation instead of duplicating behavior across
+platforms. Read the bundled `rust-skills` index and its task-relevant rules before writing,
+reviewing, or refactoring Rust.
 
 | Language | When to choose it | Toolchain |
 | --- | --- | --- |
-| **TypeScript** | Web apps, product APIs, integrations, and orchestration. | **Bun** for the runtime, packages, and scripts; Deno where the host requires it, such as Supabase edge functions. |
-| **Python** | Work that benefits from Python's data, ML, scientific, or automation ecosystem. | **uv** for dependencies, environments, and execution. |
-| **Rust** | Backend services, workers, and complex processing where performance, memory control, concurrency safety, or strongly modeled invariants materially improve the result. | **Cargo** for dependencies, builds, tests, and execution. |
+| **Rust** | Default for application logic, services, processing, and native integration. | **Cargo** for dependencies, builds, tests, and execution. |
+| **TypeScript** | React UI, browser/host adapters, and integrations that need JavaScript. | **Bun** for runtime, packages, and scripts; Deno only where required by the host. |
+| **Python** | Work that needs Python's data, ML, scientific, or automation ecosystem. | **uv** for dependencies, environments, and execution. |
 
-Actively consider Rust for CPU-heavy processing, parsers, concurrent systems, resource-limited
-services, and domain engines where ownership and exhaustive state modeling prevent costly
-mistakes. It can be the right choice for a whole service or a focused component from the start.
-Its compiler feedback is useful during AI-assisted development; passing compilation still
-needs behavioral tests.
+Use TypeScript or Python when the runtime or ecosystem makes it appropriate; use the toolchain
+above. Do not rewrite an existing system merely to change its language unless the task calls
+for it. Rust is the preferred starting point, not evidence that a particular implementation
+is fast: measure performance claims and test behavior as well as compiling.
 
-Choose against the actual requirements, deployment target, libraries, and maintenance cost.
-Routine CRUD and integration glue usually stay in TypeScript; complexity alone is not a reason
-to switch languages. For a performance-driven rewrite, profile the existing code and compare
-the affected workload. Keep an existing codebase's language unless a concrete benefit warrants
-the change, and explain that benefit when introducing Rust or another language boundary.
+## One application source for web, desktop, and mobile
+
+**Use Rust + Tauri with a shared React frontend, normally built with Vite.** The same
+application source should build as a website and as desktop/mobile applications. Keep browser
+support a small addition to the shared app, not a separate product implementation.
+
+Share UI components, state, contracts, and reusable domain logic. Isolate native/browser
+capabilities behind a small typed host adapter; do not fork screens, flows, or business rules
+by platform. Tauri hosts the native builds. The browser loads the same frontend with an
+explicit web transport to the Rust service, or a shared Rust/WASM core where suitable. Browser
+support does not imply that Tauri IPC is available in a website.
+
+Keep reusable Rust logic independent of Tauri-specific commands, with thin host bindings.
+Validate the supported targets independently: a shared source tree or successful desktop
+build is not proof that the web, iOS, Android, Windows, Linux, and macOS builds all work.
+Do not introduce a new hosted service solely to satisfy this pattern when the app does not
+need one. Respect the existing application boundary and requested platforms.
 
 ## Frontend: the base of every web app
 
 | Tool | Role |
 | --- | --- |
-| **React + Vite + TypeScript** | UI · dev/build · types. The base of every web app, both layers. |
+| **React + Vite + TypeScript** | Shared UI and frontend build for browser and Tauri targets. |
+| **Tauri + Rust + Cargo** | Native desktop/mobile host and reusable Rust application logic. |
 | **React Router** (`react-router-dom`) | Client-side routing, host-aware: marketing vs. portal. |
 | **vanilla-extract** | Styling, both layers. Zero-runtime CSS-in-TypeScript. Styles compile to static CSS at build time, so nothing ships a style engine to the browser. Type-safe class names, variables, and theme contracts, via the official Vite integration. |
 
@@ -174,11 +189,11 @@ the change, and explain that benefit when introducing Rust or another language b
 | **Bun** | Runtime + package manager for TypeScript service packages and JavaScript workspace tooling. **Never npm.** |
 | **uv** | Python dependencies, environments, and execution. |
 | **Cargo** | Rust dependencies, builds, tests, and execution. |
-| **Temporal** | Durable orchestration for long-running pipelines. One task queue per pipeline, each with its own worker entry point so a local `pkill` can't cross-kill the others. |
+| **Temporal** | Optional when long-running workflows need durable orchestration. Adopt only for a concrete requirement. |
 | **Deno** | The edge-function runtime (Supabase functions). **Not bun.** |
-| **Supabase** | Postgres (control plane + RLS), Auth, Storage. The whole managed backend. **Don't add a second datastore or auth vendor.** |
+| **Supabase** | Preferred managed Postgres, Auth, and Storage; RLS protects user reads and writes. |
 | **GitHub Actions** | Hosts the runner today (free tier, ~2000 min/mo). An always-on VM is the upgrade path. |
-| **Langfuse** | Tracing + quality scores for pipeline runs. |
+| **Langfuse** | Instrument every application AI/model call across languages and hosts; include quality scores where applicable. |
 
 ---
 
@@ -230,19 +245,19 @@ sit half-empty in most of them. Add a file when there's something to write.
 
 Two paths under `docs/` are reserved, and are not topic files:
 
-| Path | Holds | Written by |
-| --- | --- | --- |
-| `docs/adr/` | Architecture decision records, numbered | Matt's `domain-modeling` skill |
-| `docs/agents/` | Agent config: issue tracker, domain layout, triage labels | `/setup-matt-pocock-skills` |
+| Path | Holds |
+| --- | --- |
+| `docs/adr/` | Architecture decision records, numbered |
+| `docs/agents/` | Agent config: issue tracker, domain layout, triage labels |
 
-`CONTEXT.md` at the repo root is the domain glossary, owned by that same `domain-modeling`
-skill. Terminology goes there, not into a `docs/` topic file.
+`CONTEXT.md` at the repo root is the domain glossary. Terminology goes there, not into a
+`docs/` topic file. Maintain these records directly; no external skill package is required.
 
 ## Read it, and keep it current
 
 **Before working in an area, read the `docs/` topic covering it.** Start at `docs/README.md`.
-This is the `CLAUDE.md` habit one level down: `CLAUDE.md` carries the repo's facts in every
-session, `docs/` carries the depth you pull in when the work touches it.
+Repository instructions carry the session-level context; `docs/` carries the depth you
+pull in when the work touches it.
 
 **When a change moves what a doc describes, update that doc in the same change.** Not a
 follow-up, not a ticket. The doc ships with the code or it's already wrong.
@@ -310,8 +325,9 @@ files gets a subdirectory in the layer it belongs to: `components/site-view/`, n
 Shared UI packages organize by component instead: one lowercase directory per component
 (`button/`, `accordion/`, `input-cards/`), with named exports barrelled through `src/index.ts`.
 
-A file earns promotion into a shared package when a second surface needs it, not when you
-anticipate one might.
+Keep shared packages focused on proven responsibilities rather than speculative future use.
+For an approved UI/UX build, assemble the scoped component families and states required by
+the approved image set before composing screens, following `quzzar-ui-ux-design`.
 
 ## Em dashes
 
@@ -368,8 +384,8 @@ run the repo's configured lint and format tools through uv.
 
 - The five core guidelines are not negotiable and not context-dependent. Apply them without
   being asked.
-- `CLAUDE.md` overrides this file. This skill holds durable preferences that travel between
-  repos; `CLAUDE.md` holds the facts of the repo in front of you.
+- Repository instructions and actual project configuration override general preferences here.
+  This skill holds durable preferences that travel between repos.
 - Read the `docs/` topic before working in its area, and update it in the same change. A stale
   doc gets believed.
 - Where this file is silent, the surrounding code is the convention. Match it and say so.

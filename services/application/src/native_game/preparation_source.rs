@@ -361,6 +361,7 @@ impl NativePreparationRepository {
         }
         Ok(row.key)
     }
+
     /// Read an exact room revision before native deck qualification.
     /// # Errors
     /// Rejects nil identifiers before IO, malformed/duplicate/non-object payloads,

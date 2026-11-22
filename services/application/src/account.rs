@@ -108,6 +108,27 @@ pub struct DeckSummary {
     pub format: FormatSummary,
     #[serde(deserialize_with = "crate::provider_json::object")]
     pub appearance: AppearanceSelection,
+    /// The card shown on the deck box, or null for a deck without cards.
+    #[serde(default, deserialize_with = "crate::provider_json::optional_object")]
+    pub face_card: Option<DeckFaceCard>,
+}
+/// A deck's face card and its official art, where the catalogue has it.
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct DeckFaceCard {
+    #[serde(deserialize_with = "crate::identifiers::uuid")]
+    pub definition_id: Uuid,
+    pub art_url: Option<String>,
+}
+impl DeckFaceCard {
+    fn is_valid(&self) -> bool {
+        !self.definition_id.is_nil()
+            && self.art_url.as_deref().is_none_or(|url| {
+                url.starts_with("https://")
+                    && url.len() <= 2048
+                    && !url.contains(char::is_whitespace)
+            })
+    }
 }
 impl DeckSummary {
     /// Validate saved metadata without asserting legality or match admission.
@@ -123,6 +144,7 @@ impl DeckSummary {
             || self.format.key.is_empty()
             || self.format.name.is_empty()
             || !valid_appearance(&self.appearance)
+            || self.face_card.as_ref().is_some_and(|face| !face.is_valid())
         {
             return Err("invalid deck metadata projection");
         }

@@ -17,9 +17,7 @@ use spellwake_engine::{
     mana::{ManaCost, ManaPayment},
     object_identity::{CardId, ObjectDestination, ObjectZone},
     occurrence::{RulesOccurrence, RulesRecord, ZoneReason},
-    program::{
-        BodyTarget, CardType, ExecutableBody, Instruction, InstructionAmount, Program, ProgramKind,
-    },
+    program::{BodyTarget, CardType, ExecutableBody, Instruction, Program, ProgramKind},
     targets::TargetRef,
 };
 use std::collections::BTreeSet;
@@ -365,7 +363,7 @@ fn actual_draw_overlay_preserves_all_types_and_zero_pt_without_battlefield_sba()
         ExecutableBody::new(
             BodyTarget::None,
             vec![Instruction::DrawController {
-                amount: InstructionAmount::Literal(1.into()),
+                amount: spellwake_engine::program::ValueExpr::Literal(1.into()),
             }],
         ),
     );

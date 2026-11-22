@@ -3,7 +3,7 @@ use super::native_delivery_routes as delivery;
 use super::*;
 use crate::{
     native_game::{NativeReadOutcome, NativeReplayRead},
-    player_wire::PlayerReplayRequest,
+    player_wire::{MAX_COMPLETED_REPLAY_BYTES, PlayerReplayMode, PlayerReplayRequest},
 };
 
 pub(super) async fn read(
@@ -48,7 +48,11 @@ pub(super) async fn read(
             let repository = delivery::repository(config, "spellwake-native-replay")?;
             let response = match runtime.replay_frame(&repository, &actor, &query) {
                 Ok(NativeReadOutcome::Ready(NativeReplayRead::Frame(frame))) => {
-                    delivery::bounded_success(*frame)
+                    if query.mode == PlayerReplayMode::CompletedFullInformation {
+                        delivery::bounded_success_with_limit(*frame, MAX_COMPLETED_REPLAY_BYTES)
+                    } else {
+                        delivery::bounded_success(*frame)
+                    }
                 }
                 Ok(NativeReadOutcome::Ready(NativeReplayRead::ModeUnavailable)) => {
                     fail(StatusCode::CONFLICT, "mode", "unavailable")

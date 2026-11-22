@@ -1,6 +1,6 @@
 //! Independently derived cases frozen in damage-replacement-scenarios.md before
 //! test authoring or new implementation output. This is a bounded native slice.
-use spellwake_engine::program::{BodyTarget, ExecutableBody, SpellTargetFilter};
+use spellwake_engine::program::{BodyTarget, ExecutableBody};
 #[path = "support/damage.rs"]
 pub mod damage_support;
 use spellwake_contracts::RulesInteger;
@@ -1280,7 +1280,9 @@ fn copied_multiplier_records_survive_copy_cessation_and_original_countering() {
                     2,
                     B,
                     ExecutableBody::new(
-                        BodyTarget::SingleSpell(SpellTargetFilter::CopyableInstructionSpell),
+                        BodyTarget::SingleSpell(
+                            spellwake_engine::program::SpellFilter::copyable_instruction(),
+                        ),
                         vec![Instruction::CopySpell],
                     ),
                 ),
@@ -1288,7 +1290,7 @@ fn copied_multiplier_records_survive_copy_cessation_and_original_countering() {
                     3,
                     A,
                     ExecutableBody::new(
-                        BodyTarget::SingleSpell(SpellTargetFilter::AnySpell),
+                        BodyTarget::SingleSpell(spellwake_engine::program::SpellFilter::any()),
                         vec![Instruction::CounterSpell],
                     ),
                 ),
@@ -1438,7 +1440,7 @@ fn countered_and_all_illegal_multiplier_creations_allocate_no_effect_or_attempt(
                 2,
                 A,
                 ExecutableBody::new(
-                    BodyTarget::SingleSpell(SpellTargetFilter::AnySpell),
+                    BodyTarget::SingleSpell(spellwake_engine::program::SpellFilter::any()),
                     vec![Instruction::CounterSpell],
                 ),
             ),

@@ -280,7 +280,7 @@ fn prepared_end_wrap_stamps_only_the_newly_active_controller_once() {
     let next = pass_round(&game);
     assert_eq!(next.state().turn().unwrap().position().number, 13);
     assert_eq!(next.state().turn().unwrap().position().step, Step::Upkeep);
-    assert_eq!(next.state().execution().window().turn_owner(), B);
+    assert_eq!(next.state().execution().window().active_player(), B);
     assert_eq!(object(next.state(), 4).control_epoch(), epoch);
     assert_eq!(
         object(next.state(), 4).has_continuous_control_since_turn_start(),

@@ -277,7 +277,7 @@ fn all_twenty_selected_shared_policy_stops_and_twenty_six_probes_replay_complete
                             let mut seats = run.fixture.setup.seed.seats.clone();
                             let first = seats
                                 .iter()
-                                .position(|s| *s == run.state.execution().window().turn_owner())
+                                .position(|s| *s == run.state.execution().window().active_player())
                                 .unwrap();
                             seats.rotate_left(first);
                             assert_eq!(

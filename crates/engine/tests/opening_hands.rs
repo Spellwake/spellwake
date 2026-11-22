@@ -1099,7 +1099,7 @@ fn all_keeps_handoff_once_through_real_turn_one_untap_to_upkeep_then_normal_draw
         assert_eq!(state.turn().unwrap().position().number, 1);
         assert_eq!(state.turn().unwrap().position().step, Step::Upkeep);
         assert_eq!(state.turn().unwrap().stage(), TurnStage::Priority);
-        assert_eq!(state.execution().window().turn_owner(), starting);
+        assert_eq!(state.execution().window().active_player(), starting);
         assert_eq!(
             state.execution().window().phase(),
             WindowPhase::Priority(PriorityPhase::Ready { holder: starting })

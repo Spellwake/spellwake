@@ -154,7 +154,7 @@ fn counted_mana_reads_current_required_and_forbidden_supertypes() {
     source.mana.push(ManaAbility {
         id: ManaAbilityId(1),
         output: ManaOutput::Counted {
-            mana_type: ManaType::Green,
+            mana_type: Some(ManaType::Green),
             permanents: PermanentSelector {
                 required_supertypes: set(&[Snow]),
                 forbidden_supertypes: set(&[Legendary]),
