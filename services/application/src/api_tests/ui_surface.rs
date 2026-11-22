@@ -261,3 +261,57 @@ async fn sensitive_unauthenticated_route_is_rate_limited_per_client_ip() {
     );
     assert!(backend.finish().is_empty());
 }
+
+#[tokio::test]
+async fn internal_reconcile_enforces_secret_and_runs_bounded_sweep() {
+    let backend = Mock::new(vec![]);
+    let unconfigured = router(config(&backend.base));
+    let resp = unconfigured
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/internal/reconcile")
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from("{}"))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::SERVICE_UNAVAILABLE);
+
+    let mut cfg = config(&backend.base);
+    cfg.reconcile_secret = Some("a".repeat(64));
+    let app = router(cfg);
+
+    let bad = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/internal/reconcile")
+                .header("x-spellwake-reconcile", "b".repeat(64))
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(r#"{"domains":[]}"#))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(bad.status(), StatusCode::UNAUTHORIZED);
+
+    let ok = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/internal/reconcile")
+                .header("x-spellwake-reconcile", "a".repeat(64))
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(r#"{"domains":[]}"#))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(ok.status(), StatusCode::OK);
+    let payload = body(ok).await;
+    assert_eq!(payload["status"], "success");
+    assert_eq!(payload["data"]["deletion"]["acknowledged"], 0);
+}
