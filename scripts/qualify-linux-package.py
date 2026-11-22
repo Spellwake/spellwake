@@ -70,28 +70,6 @@ class NativeSession:
             raise AssertionError("Screenshot is missing or unexpectedly small")
         path.write_bytes(png)
 
-    def click_overview(self) -> None:
-        wait_for(
-            lambda: (
-                self.evaluate(
-                    "return document.querySelector('.table-overview-toggle')?.disabled === false;"
-                )
-                is True
-            ),
-            "camera travel and navigation availability",
-        )
-        element = self.command(
-            "POST",
-            "/element",
-            {"using": "css selector", "value": ".table-overview-toggle"},
-        )
-        if not isinstance(element, dict):
-            raise TypeError("Overview button is missing")
-        element_id = element.get("element-6066-11e4-a52e-4f735466cecf")
-        if not isinstance(element_id, str):
-            raise TypeError("Invalid WebDriver element")
-        self.command("POST", f"/element/{element_id}/click", {})
-
 
 def wait_for(check: Callable[[], bool], description: str, seconds: int = 45) -> None:
     """Poll a bounded readiness signal instead of assuming that process survival means ready."""
@@ -104,23 +82,16 @@ def wait_for(check: Callable[[], bool], description: str, seconds: int = 45) -> 
 
 
 SNAPSHOT = """
-const canvas = document.querySelector('#play-canvas');
-const gl = canvas?.getContext('webgl2');
-const overview = document.querySelector('.table-overview');
-const toggle = document.querySelector('.table-overview-toggle');
-const bounds = toggle?.getBoundingClientRect();
+const ready = document.querySelector('[data-frame], [data-entry-card]');
+const styled = ready ? getComputedStyle(ready) : null;
 return {
   runtime: document.documentElement.dataset.runtime ?? null,
   version: document.documentElement.dataset.nativeVersion ?? null,
-  status: document.querySelector('#play-status')?.textContent ?? null,
-  width: canvas?.width ?? 0,
-  height: canvas?.height ?? 0,
-  webgl2: typeof WebGL2RenderingContext !== 'undefined' && gl instanceof WebGL2RenderingContext && !gl.isContextLost(),
-  renderer: gl ? gl.getParameter(gl.RENDERER) : null,
-  overview: document.querySelector('.table-overview-toggle')?.getAttribute('aria-pressed') ?? null,
-  overviewPosition: overview ? getComputedStyle(overview).position : null,
-  overviewStylesApplied: Boolean(overview?.querySelector('style')?.sheet),
-  toggleBounds: bounds ? {left: bounds.left, top: bounds.top, width: bounds.width, height: bounds.height} : null,
+  ready: ready?.getAttribute('data-frame') ?? (ready ? 'entry' : null),
+  stylesApplied: Boolean(styled && styled.display !== 'inline' && document.styleSheets.length > 0),
+  width: document.documentElement.clientWidth,
+  height: document.documentElement.clientHeight,
+  overflowX: document.documentElement.scrollWidth > document.documentElement.clientWidth + 1,
 };
 """
 
@@ -128,7 +99,7 @@ return {
 def qualify(
     application: Path, output: Path, version: str, application_args: list[str]
 ) -> None:
-    """Verify bridge, renderer, view navigation and resize in the unmodified release binary."""
+    """Verify the bridge, the application's first screen, its styles and resize in the release binary."""
     output.mkdir(parents=True, exist_ok=True)
     environment = dict(os.environ)
     environment["XDG_DATA_HOME"] = str(output.resolve() / "profile")
@@ -172,63 +143,41 @@ def qualify(
             raise TypeError("Invalid native session response")
         session.session_id = value["sessionId"]
         session.command("POST", "/window/rect", {"width": 1440, "height": 960})
+        # The application opens on its frame, or on the entry card when signed out.
         wait_for(
             lambda: (
                 session.evaluate(
-                    "return document.querySelector('#play-status')?.textContent === 'Table preview ready';"
+                    "return Boolean(document.querySelector('[data-frame], [data-entry-card]')) && document.documentElement.dataset.nativeVersion !== undefined;"
                 )
                 is True
             ),
-            "packaged tabletop readiness",
+            "packaged application readiness",
         )
         snapshot = session.evaluate(SNAPSHOT)
         if not isinstance(snapshot, dict):
-            raise TypeError("Invalid tabletop readiness snapshot")
-        evidence["board"] = snapshot
+            raise TypeError("Invalid application readiness snapshot")
+        evidence["first"] = snapshot
         if snapshot.get("runtime") != "tauri" or snapshot.get("version") != version:
             raise AssertionError("Native bridge/version check failed")
-        if snapshot.get("webgl2") is not True:
-            raise AssertionError("WebGL2 context is unavailable or lost")
-        if (
-            snapshot.get("overviewPosition") != "absolute"
-            or snapshot.get("overviewStylesApplied") is not True
-        ):
-            raise AssertionError(
-                "Native content security policy blocked overview styles"
-            )
-        session.screenshot(output / "board.png")
-        session.click_overview()
-        wait_for(
-            lambda: (
-                session.evaluate(
-                    "const toggle = document.querySelector('.table-overview-toggle'); return toggle?.getAttribute('aria-pressed') === 'true' && !toggle.disabled;"
-                )
-                is True
-            ),
-            "overview navigation",
-        )
-        session.screenshot(output / "overview.png")
-        session.click_overview()
-        wait_for(
-            lambda: (
-                session.evaluate(
-                    "const toggle = document.querySelector('.table-overview-toggle'); return toggle?.getAttribute('aria-pressed') === 'false' && !toggle.disabled;"
-                )
-                is True
-            ),
-            "return to board",
-        )
+        if snapshot.get("stylesApplied") is not True:
+            raise AssertionError("Native content security policy blocked styles")
+        if snapshot.get("overflowX") is True:
+            raise AssertionError("First screen overflows the window sideways")
+        session.screenshot(output / "first.png")
         session.command("POST", "/window/rect", {"width": 1024, "height": 768})
         wait_for(
             lambda: (
                 session.evaluate(
-                    "const c = document.querySelector('#play-canvas'); return c.width > 0 && c.clientWidth <= 1024 && c.clientWidth >= 900 && document.querySelector('.table-overview-toggle')?.disabled === false;"
+                    "return document.documentElement.clientWidth <= 1024 && document.documentElement.clientWidth >= 900 && Boolean(document.querySelector('[data-frame], [data-entry-card]'));"
                 )
                 is True
             ),
-            "canvas resize",
+            "window resize",
         )
-        evidence["resized"] = session.evaluate(SNAPSHOT)
+        resized = session.evaluate(SNAPSHOT)
+        if not isinstance(resized, dict) or resized.get("overflowX") is True:
+            raise AssertionError("Resized screen overflows the window sideways")
+        evidence["resized"] = resized
         session.screenshot(output / "resized.png")
         evidence["result"] = "passed"
     except Exception as error:

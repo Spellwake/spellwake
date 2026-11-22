@@ -74,6 +74,12 @@ const probes: RouteObject[] = import.meta.env.DEV
         }),
       },
       {
+        path: "probe/league",
+        lazy: async () => ({
+          Component: (await import("./probes/LeagueProbe")).LeagueProbe,
+        }),
+      },
+      {
         path: "probe/predictions",
         lazy: async () => ({
           Component: (await import("./probes/PredictionsProbe"))

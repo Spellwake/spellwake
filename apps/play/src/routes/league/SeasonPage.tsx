@@ -1,218 +1,133 @@
-import { useEffect, useState, type ReactElement } from "react";
-import { RefreshCw, Swords } from "lucide-react";
+import type { ReactElement } from "react";
+import { CoinAmount, RankIdentity, RankProgress } from "@spellwake/ui";
 import {
-  ActionButton,
-  CoinAmount,
-  EmptyState,
-  FeedbackMessages,
-  LoadingShape,
-  LoadingState,
-  RankIdentity,
-  RankProgress,
-  SelectMenu,
-} from "@spellwake/ui";
-import type { SeasonSource } from "../../league/league-sources";
+  emblemUrl,
+  progressOf,
+  ratingText,
+  recordLong,
+  rewardOf,
+  tierOf,
+  type FormatRank,
+  type LeagueSource,
+} from "../../league/league-sources";
 import { COIN } from "../market/ListingDialogs";
+import { GAP_COPY, LeagueHead, LeagueNotice } from "./LeagueParts";
 import * as s from "./league.css";
 
-export function SeasonPage({ source }: { source: SeasonSource }): ReactElement {
-  const ready = source.status === "ready" ? source : null;
-  const [formatId, setFormatId] = useState("");
-  const [deckId, setDeckId] = useState("");
-
-  useEffect(() => {
-    if (!ready) return;
-    if (!formatId && ready.formats[0]) setFormatId(ready.formats[0].id);
-  }, [ready, formatId]);
-
-  const matchingDecks = ready
-    ? ready.decks.filter((d) => !formatId || d.formatId === formatId)
-    : [];
-
-  useEffect(() => {
-    if (
-      matchingDecks.length > 0 &&
-      !matchingDecks.some((d) => d.id === deckId)
-    ) {
-      setDeckId(matchingDecks[0]!.id);
-    }
-  }, [matchingDecks, deckId]);
-
-  if (source.status === "loading") {
-    return (
-      <section className={s.center} aria-label="This season">
-        <LoadingState label="Loading season…">
-          <LoadingShape width={260} height={36} />
-        </LoadingState>
-      </section>
-    );
-  }
-  if (source.status !== "ready") {
-    return (
-      <section className={s.center} aria-label="This season">
-        <EmptyState
-          title="Season unavailable"
-          description="Sign in to view your seasonal ranks and quests."
-        />
-      </section>
-    );
-  }
-
+function SeasonRow({ row }: { row: FormatRank }): ReactElement {
+  const tier = tierOf(row.rating);
+  const progress = progressOf(row.rating);
+  const reward = rewardOf(row.rating, row.record);
   return (
-    <section className={s.page} aria-label="This season">
-      <div className={s.header}>
-        <h1 className={s.title}>{source.seasonName ?? "This season"}</h1>
-        {source.seasonDates && (
-          <p className={s.subtitle}>{source.seasonDates}</p>
-        )}
-      </div>
-
-      <div className={s.grid}>
-        {/* Ranked Queue */}
-        <div className={s.panel}>
-          <h2 className={s.panelTitle}>Play ranked</h2>
-          {source.activeQueue ? (
-            <div className={s.controlsRow}>
-              <span className={s.recordText}>
-                Searching {source.activeQueue.formatName}…
-              </span>
-              <ActionButton
-                disabled={source.queueBusy}
-                pending={source.queueBusy}
-                onClick={() => void source.cancelQueue()}
-              >
-                Cancel queue
-              </ActionButton>
-            </div>
-          ) : (
-            <div className={s.controlsRow}>
-              {source.formats.length > 0 && (
-                <SelectMenu
-                  label="Ranked format"
-                  value={formatId}
-                  onValueChange={setFormatId}
-                  options={source.formats.map((f) => ({
-                    value: f.id,
-                    label: f.name,
-                  }))}
-                />
-              )}
-              {matchingDecks.length > 0 ? (
-                <>
-                  <SelectMenu
-                    label="Ranked deck"
-                    value={deckId}
-                    onValueChange={setDeckId}
-                    options={matchingDecks.map((d) => ({
-                      value: d.id,
-                      label: d.name,
-                    }))}
-                  />
-                  <ActionButton
-                    disabled={!formatId || !deckId || source.queueBusy}
-                    pending={source.queueBusy}
-                    onClick={() => void source.joinQueue(formatId, deckId)}
-                  >
-                    <Swords size={18} aria-hidden="true" />
-                    Find match
-                  </ActionButton>
-                </>
-              ) : (
-                <p className={s.subtitle}>
-                  Build a deck in this format to enter ranked play.
-                </p>
-              )}
-            </div>
-          )}
-        </div>
-
-        {/* Daily Quests */}
-        <div className={s.panel}>
-          <h2 className={s.panelTitle}>Daily quests</h2>
-          {source.quests.length === 0 ? (
-            <p className={s.subtitle}>No active quests right now.</p>
-          ) : (
-            source.quests.map((quest) => (
-              <div key={quest.id} className={s.questRow}>
-                <div className={s.questMeta}>
-                  <span className={s.formatName}>{quest.title}</span>
-                  <span className={s.recordText}>
-                    {quest.progress} / {quest.target} ·{" "}
-                    <CoinAmount amount={quest.rewardCoins} iconSrc={COIN} />
-                  </span>
-                </div>
-                {quest.canReroll && (
-                  <ActionButton
-                    disabled={source.rerollingQuestId === quest.id}
-                    pending={source.rerollingQuestId === quest.id}
-                    onClick={() => void source.rerollQuest(quest.id)}
-                  >
-                    <RefreshCw size={16} aria-hidden="true" />
-                    Reroll
-                  </ActionButton>
-                )}
-              </div>
-            ))
-          )}
-        </div>
-      </div>
-
-      {/* Format Ranks */}
-      <div className={s.panel}>
-        <h2 className={s.panelTitle}>Your ranks</h2>
-        {source.ranks.length === 0 ? (
-          <EmptyState
-            title="No ranked matches yet"
-            description="Complete a ranked match to place on the ladder."
-          />
+    <div className={s.seasonRow} role="row">
+      <span className={s.format} role="rowheader">
+        {row.format.name}
+      </span>
+      <span className={s.rankCell} role="cell">
+        <RankIdentity
+          presentation="season"
+          tier={tier.name}
+          emblemSrc={emblemUrl(tier.name)}
+          ratingLabel={`Rating ${ratingText(row.rating)}`}
+        />
+      </span>
+      <span className={s.progressCell} role="cell">
+        {progress.highest ? (
+          <RankProgress highest label={progress.label} />
         ) : (
-          <div className={s.grid}>
-            {source.ranks.map((rank) => (
-              <div key={rank.formatId} className={s.rankCard}>
-                <div className={s.rankHead}>
-                  <span className={s.formatName}>{rank.formatName}</span>
-                  <span className={s.recordText}>
-                    {rank.wins}W–{rank.losses}L
-                    {rank.draws > 0 ? `–${rank.draws}D` : ""}
-                  </span>
-                </div>
-                <RankIdentity
-                  tier={rank.tier}
-                  emblemSrc={rank.emblemUrl}
-                  presentation="season"
-                  ratingLabel={`${rank.rating} rating`}
-                />
-                {rank.isHighest ? (
-                  <RankProgress highest label={rank.progressLabel} />
-                ) : (
-                  <RankProgress
-                    rating={rank.rating}
-                    lowerBound={rank.lowerBound}
-                    nextBound={rank.nextBound}
-                    label={rank.progressLabel}
-                  />
-                )}
-              </div>
-            ))}
-          </div>
+          <RankProgress
+            rating={row.rating}
+            lowerBound={progress.lowerBound}
+            nextBound={progress.nextBound}
+            label={progress.label}
+          />
         )}
-      </div>
+      </span>
+      <span className={s.recordCell} role="cell">
+        {recordLong(row.record)}
+      </span>
+      <span className={s.rewardCell} role="cell">
+        {reward === null ? (
+          <span className={s.none} aria-label="No season reward yet">
+            —
+          </span>
+        ) : (
+          <CoinAmount amount={reward} iconSrc={COIN} />
+        )}
+      </span>
+    </div>
+  );
+}
 
-      <FeedbackMessages
-        label="Season notices"
-        presentation="toast"
-        items={
-          source.notice
-            ? [
-                {
-                  id: "league-notice",
-                  text: source.notice,
-                  onDismiss: source.dismissNotice,
-                },
-              ]
-            : []
-        }
-      />
+function SkeletonRows(): ReactElement {
+  return (
+    <div aria-hidden="true">
+      {[0, 1, 2, 3].map((index) => (
+        <div key={index} className={`${s.seasonRow} ${s.skeletonRow}`}>
+          <span className={s.skeleton} style={{ width: "70%" }} />
+          <span style={{ display: "flex", gap: 18, alignItems: "center" }}>
+            <span className={s.skeletonGem} />
+            <span className={s.skeleton} style={{ width: "50%" }} />
+          </span>
+          <span className={s.skeleton} style={{ width: "85%" }} />
+          <span className={s.skeleton} style={{ width: "70%" }} />
+          <span
+            className={s.skeletonDot}
+            style={{ width: 22, height: 22, justifySelf: "end" }}
+          />
+        </div>
+      ))}
+    </div>
+  );
+}
+
+/**
+ * League · This season, as approved (LS-01 to LS-05): every ranked format in
+ * one read-only table, with its rank and rating, progress to the next tier,
+ * the season's record and the reward its current tier would earn. More
+ * formats than fit scroll inside the table under fixed headings.
+ */
+export function SeasonPage({ source }: { source: LeagueSource }): ReactElement {
+  const ranks = source.status === "ready" ? source.ranks : null;
+  let body: ReactElement;
+  if (source.status === "loading" || ranks?.state === "loading")
+    body = <SkeletonRows />;
+  else if (source.status === "signed-out" || source.status === "unregistered")
+    body = <p className={s.quiet}>{GAP_COPY[source.status]}</p>;
+  else if (source.status === "unavailable")
+    body = <p className={s.quiet}>Your ranks are unavailable.</p>;
+  else if (ranks && ranks.rows.length > 0)
+    body = (
+      <div role="rowgroup">
+        {ranks.rows.map((row) => (
+          <SeasonRow key={row.format.id} row={row} />
+        ))}
+      </div>
+    );
+  // A failed first read leaves the body neutral; the notice says why.
+  else body = <div className={s.neutral} />;
+  return (
+    <section className={s.root} aria-label="This season" role="region">
+      <LeagueHead title="League" source={source} />
+      <div className={s.panel} role="table" aria-label="Your ranks this season">
+        <div className={s.headRow} data-table="season" role="row">
+          <span role="columnheader">Format</span>
+          <span role="columnheader">Rank</span>
+          <span role="columnheader">Progress</span>
+          <span role="columnheader">Record</span>
+          <span
+            role="columnheader"
+            className={s.end}
+            aria-description="The reward your current rank would earn this season"
+          >
+            Season reward
+          </span>
+        </div>
+        <div className={s.body} tabIndex={0} aria-label="Formats">
+          {body}
+        </div>
+      </div>
+      <LeagueNotice source={source} />
     </section>
   );
 }
