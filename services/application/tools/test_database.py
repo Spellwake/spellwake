@@ -29,9 +29,9 @@ SHARED_STATE_TESTS = (
 LOCK_SCHEDULE_TESTS = (
     'native_foundation::races::concurrent_same_original_installs_one_native_frame_and_both_callers_recover_it',
     'native_foundation::races::concurrent_view_and_cursor_issuers_retain_the_first_semantic_winner',
-    'native_foundation::controller_ante::committed_writer_precedes_rebind_and_funds_exactly_once',
-    'native_foundation::controller_ante::known_pending_and_same_original_wait_never_repeat_the_economic_write',
-    'native_foundation::controller_ante::lower_sorted_other_participant_wait_does_not_lock_controller_sponsor_first',
+    'native_foundation::races::controller_ante::committed_writer_precedes_rebind_and_funds_exactly_once',
+    'native_foundation::races::controller_ante::known_pending_and_same_original_wait_never_repeat_the_economic_write',
+    'native_foundation::races::controller_ante::lower_sorted_other_participant_wait_does_not_lock_controller_sponsor_first',
 )
 PRIVATE_DATABASE_TESTS = SHARED_STATE_TESTS + LOCK_SCHEDULE_TESTS
 
@@ -104,8 +104,9 @@ def main() -> None:
     inventory = [line.removesuffix(': test') for line in listing.splitlines() if line.endswith(': test')]
     if not inventory or len(inventory) != len(set(inventory)):
         raise RuntimeError('Empty or duplicate actual ignored database inventory')
-    if not set(PRIVATE_DATABASE_TESTS).issubset(inventory):
-        raise RuntimeError('Private-database test classification no longer matches actual inventory')
+    missing_classifications = sorted(set(PRIVATE_DATABASE_TESTS) - set(inventory))
+    if missing_classifications:
+        raise RuntimeError('Private-database test classifications absent from inventory: ' + ', '.join(missing_classifications))
     # libtest --skip is a substring. Do not silently exclude another test if a
     # future name embeds one of these full names.
     if any(private in name and private != name for private in PRIVATE_DATABASE_TESTS for name in inventory):
