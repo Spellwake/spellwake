@@ -379,8 +379,34 @@ fn reply(fixture: &Fixture, history: &History, value: &DecisionReply) -> Result<
             .collect::<Result<Vec<_>, _>>()
     };
     Ok(match value {
-        DecisionReply::ReplacementChooser(_) => {
-            return Err("ordinary historical scopes exclude chooser replacement replies".into());
+        DecisionReply::RemoveCounters(_) => {
+            return Err("counter removal exceeds historical scope".into());
+        }
+        DecisionReply::Proliferate(_) => return Err("proliferate exceeds historical scope".into()),
+        DecisionReply::PayAttackCost { .. }
+        | DecisionReply::RedeclareReversingMana(_)
+        | DecisionReply::RedeclareKeepingMana
+        | DecisionReply::RedeclareAttackers => {
+            return Err("attack costs exceed historical ordinary-game scope".into());
+        }
+        DecisionReply::ApplyCounterDoublersFirst(_) => {
+            return Err("historical scope excludes counter replacement ordering".into());
+        }
+        DecisionReply::TriggerModes(_) => {
+            return Err("historical scope excludes modal triggers".into());
+        }
+        DecisionReply::TriggerPermanentTargets(_) => {
+            return Err("historical scope excludes multiple-target trigger selection".into());
+        }
+        DecisionReply::CastRecovery(_) => {
+            return Err("historical ordinary scopes exclude cast recovery".into());
+        }
+        DecisionReply::EntryChoice(_)
+        | DecisionReply::TokenEntryChoice(_)
+        | DecisionReply::TokenAuraChoice(_)
+        | DecisionReply::LinkedReturnOrder(_)
+        | DecisionReply::LinkedAuraChoice(_) => {
+            return Err("historical ordinary scopes exclude pre-entry choices".into());
         }
         DecisionReply::ZoneReplacement(_) => {
             return Err("ordinary observer does not admit zone replacement replies".into());
@@ -394,12 +420,25 @@ fn reply(fixture: &Fixture, history: &History, value: &DecisionReply) -> Result<
                     .into(),
             );
         }
+        DecisionReply::ImpulseCast { .. }
+        | DecisionReply::CascadeCast { .. }
+        | DecisionReply::MadnessCast { .. }
+        | DecisionReply::ReboundCast { .. }
+        | DecisionReply::SuspendCast { .. } => {
+            return Err("historical ordinary scopes exclude triggered casting from exile".into());
+        }
         DecisionReply::OptionalEffect(choice) => {
             require_optional_scope(fixture, "replies")?;
             ReplyView::OptionalEffect {
                 choice: match choice {
                     spellwake_engine::effects::OptionalEffectChoice::Take => "take",
                     spellwake_engine::effects::OptionalEffectChoice::Decline => "decline",
+                    spellwake_engine::effects::OptionalEffectChoice::PermanentTypeOrder(_)
+                    | spellwake_engine::effects::OptionalEffectChoice::PermanentType(_) => {
+                        return Err(
+                            "historical ordinary fixtures exclude permanent type ordering".into(),
+                        );
+                    }
                 },
             }
         }
@@ -431,6 +470,23 @@ fn reply(fixture: &Fixture, history: &History, value: &DecisionReply) -> Result<
                 target: target(fixture, history, *value)?,
             }
         }
+        DecisionReply::TransformOrder(_) => {
+            return Err("historical ordinary profile excludes transforming permanents".into());
+        }
+        DecisionReply::ChooseLandKind(_)
+        | DecisionReply::MutateOnTop(_)
+        | DecisionReply::ChoosePile(_)
+        | DecisionReply::PlaneswalkerType(_)
+        | DecisionReply::AttackDirection(_)
+        | DecisionReply::DrawReplacement(_)
+        | DecisionReply::ChooseDamageRecipient(_)
+        | DecisionReply::OpponentChoice(_)
+        | DecisionReply::ReplacementChooser(_)
+        | DecisionReply::MyriadDefender(_)
+        | DecisionReply::ReselectAttackDefender(_)
+        | DecisionReply::TokenDefender(_) => {
+            return Err("historical ordinary fixtures exclude attacking token choices".into());
+        }
         DecisionReply::TimestampOrder(values) => ReplyView::TimestampOrder {
             ordered: values.iter().map(|v| v.ordinal()).collect(),
         },
@@ -442,6 +498,9 @@ fn reply(fixture: &Fixture, history: &History, value: &DecisionReply) -> Result<
             keep: history.exact(fixture, *keep)?,
         },
         DecisionReply::Discard(v) => ReplyView::Discard { ordered: refs(v)? },
+        DecisionReply::ReturnCommanders(_) => {
+            return Err("historical ordinary scopes exclude commander choices".into());
+        }
         DecisionReply::OrderGraveyard(v) => ReplyView::OrderGraveyard { ordered: refs(v)? },
         DecisionReply::OrderTriggers(v) => ReplyView::OrderTriggers {
             ordered: v.iter().map(|id| id.sequence().to_string()).collect(),
@@ -453,6 +512,9 @@ fn reply(fixture: &Fixture, history: &History, value: &DecisionReply) -> Result<
                 MulliganChoice::Mulligan => "mulligan",
             },
         },
+        DecisionReply::DeclareBandedAttackers { .. } => {
+            return Err("historical ordinary scopes exclude bands".into());
+        }
         DecisionReply::DeclareAttackers(v) => ReplyView::DeclareAttackers {
             attackers: v
                 .iter()
@@ -507,6 +569,9 @@ fn reply(fixture: &Fixture, history: &History, value: &DecisionReply) -> Result<
                 })
                 .collect(),
         },
+        DecisionReply::SplitMana(_) => {
+            return Err("historical scope excludes split mana allocation".into());
+        }
         DecisionReply::ManaColor(v) => ReplyView::ManaColor {
             mana_type: mana_type(*v),
         },
@@ -571,6 +636,55 @@ pub(super) fn input(
         basis: observed_basis,
         actor: value.actor.0,
         command: match &value.command {
+            GameCommand::ActivateWithCostObjects { .. }
+            | GameCommand::ActivateEmblem { .. }
+            | GameCommand::ActivatePermanentTargets { .. }
+            | GameCommand::ActivateGranted { .. } => {
+                return Err(
+                    "ordinary predecessor projection excludes granted activated abilities".into(),
+                );
+            }
+            GameCommand::ActivateLoyaltyX { .. } => {
+                return Err(
+                    "ordinary predecessor projection excludes variable loyalty costs".into(),
+                );
+            }
+            GameCommand::Foretell { .. }
+            | GameCommand::Suspend { .. }
+            | GameCommand::Plot { .. }
+            | GameCommand::CastWithResources { .. } => {
+                return Err(
+                    "ordinary predecessor projection excludes casting with additional resources"
+                        .into(),
+                );
+            }
+            GameCommand::PlayLandWithEntryColor { .. }
+            | GameCommand::PlayLandWithEntryReveal { .. } => {
+                return Err("ordinary predecessor projection excludes pre-entry choices".into());
+            }
+            GameCommand::ActivateWithRestrictedMana { .. }
+            | GameCommand::ActivateManaWithRestrictedPayment { .. }
+            | GameCommand::ActivateHybridMana { .. }
+            | GameCommand::ActivateManaWithPayment { .. }
+            | GameCommand::ActivateManaWithBundle { .. }
+            | GameCommand::ActivateManaWithCostObjects { .. }
+            | GameCommand::ActivateManaForPlayer { .. } => {
+                return Err("ordinary predecessor projection excludes mana abilities with activation payments".into());
+            }
+            GameCommand::CastFaceDown { .. }
+            | GameCommand::TurnFaceUp { .. }
+            | GameCommand::ActivateWithCreatures { .. }
+            | GameCommand::ActivateUntargetedAbility { .. } => {
+                return Err(
+                    "ordinary predecessor projection excludes untargeted battlefield activation"
+                        .into(),
+                );
+            }
+            GameCommand::Ninjutsu { .. }
+            | GameCommand::Transmute { .. }
+            | GameCommand::Cycle { .. } => {
+                return Err("ordinary predecessor projection excludes cycling".into());
+            }
             GameCommand::Concede => {
                 return Err("ordinary predecessor projection excludes concession inputs".into());
             }
@@ -671,19 +785,9 @@ pub(super) fn world(
         matches!(
             c.cause(),
             spellwake_engine::game::GameConclusionCause::Conceded { .. }
-                | spellwake_engine::game::GameConclusionCause::ConcededLastSurvivor { .. }
         )
     }) {
         return Err("ordinary predecessor projection excludes conceded roots".into());
-    }
-    if state.conclusion().is_some_and(|c| {
-        matches!(
-            c.cause(),
-            spellwake_engine::game::GameConclusionCause::BankExpired { .. }
-                | spellwake_engine::game::GameConclusionCause::ResponseExpiredLastSurvivor { .. }
-        )
-    }) {
-        return Err("ordinary predecessor projection excludes clock-expired roots".into());
     }
     let evaluated = state
         .execution()
@@ -912,6 +1016,11 @@ pub(super) struct TargetOccurrenceView {
 #[derive(Debug, Clone, Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub(super) enum StackKindView {
+    Speed,
+    Monarch,
+    Emblem {
+        id: u64,
+    },
     CardSpell {
         card: ExactRef,
     },
@@ -961,6 +1070,10 @@ pub(super) enum CombatFrameView {
         chooser: u32,
         eligible_blockers: Vec<ExactRef>,
         attackers: Vec<ExactRef>,
+        #[serde(skip_serializing_if = "Vec::is_empty")]
+        restricted_blockers: Vec<RestrictedBlockerView>,
+        #[serde(skip_serializing_if = "Vec::is_empty")]
+        minimum_if_blocked: Vec<BlockMinimumView>,
     },
     DamageAssignments {
         revision: String,
@@ -968,6 +1081,16 @@ pub(super) enum CombatFrameView {
         position: damage_trace::TurnPositionView,
         domains: Vec<AssignmentDomainView>,
     },
+}
+#[derive(Debug, Clone, Serialize)]
+pub(super) struct RestrictedBlockerView {
+    blocker: ExactRef,
+    attackers: Vec<ExactRef>,
+}
+#[derive(Debug, Clone, Serialize)]
+pub(super) struct BlockMinimumView {
+    attacker: ExactRef,
+    minimum: usize,
 }
 #[derive(Debug, Clone, Serialize)]
 pub(super) struct AssignmentDomainView {
@@ -1031,8 +1154,21 @@ fn decision(
             .collect::<Result<Vec<_>, _>>()
     };
     let frame = match value.frame() {
-        RuleFrame::ReplacementChooser(_) => {
-            return Err("ordinary historical scopes exclude chooser replacement frames".into());
+        RuleFrame::LoyaltyRemoval(_) => {
+            return Err("historical ordinary scopes exclude loyalty removal choices".into());
+        }
+        RuleFrame::ResolutionManaColor(_) => {
+            return Err("historical ordinary scopes exclude resolution mana choices".into());
+        }
+        RuleFrame::CastRecovery(_) => {
+            return Err("historical ordinary scopes exclude cast recovery".into());
+        }
+        RuleFrame::EntryChoice(_)
+        | RuleFrame::TokenEntryChoice(_)
+        | RuleFrame::TokenAuraChoice(_)
+        | RuleFrame::LinkedReturnOrder(_)
+        | RuleFrame::LinkedAuraChoice(_) => {
+            return Err("historical ordinary scopes exclude pre-entry frames".into());
         }
         RuleFrame::ZoneReplacement(_) => {
             return Err("ordinary observer does not admit zone replacement frames".into());
@@ -1057,6 +1193,10 @@ fn decision(
                 frame: projection::frame(value.frame(), state)?,
             }
         }
+        RuleFrame::CounterRemoval(_) => {
+            return Err("counter removal exceeds historical scope".into());
+        }
+        RuleFrame::Proliferate(_) => return Err("proliferate exceeds historical scope".into()),
         RuleFrame::TriggerTarget(value) => {
             if !matches!(
                 fixture.case.observation_contract().observation_scope,
@@ -1113,6 +1253,24 @@ fn decision(
                     chooser: v.chooser().0,
                     eligible_blockers: refs(v.eligible_blockers())?,
                     attackers: refs(v.attackers())?,
+                    restricted_blockers: v
+                        .restricted_blockers()
+                        .map(|(id, targets)| {
+                            Ok(RestrictedBlockerView {
+                                blocker: history.known(fixture, id)?,
+                                attackers: refs(targets)?,
+                            })
+                        })
+                        .collect::<Result<_, String>>()?,
+                    minimum_if_blocked: v
+                        .group_minimums()
+                        .map(|(id, minimum)| {
+                            Ok(BlockMinimumView {
+                                attacker: history.known(fixture, id)?,
+                                minimum,
+                            })
+                        })
+                        .collect::<Result<_, String>>()?,
                 },
                 CombatDecision::DamageAssignments(v) => CombatFrameView::DamageAssignments {
                     revision: v.revision().to_string(),
@@ -1147,6 +1305,25 @@ fn decision(
             }
         }
         RuleFrame::Damage(_) => return Err("unsupported ordinary fixture frame: damage".into()),
+        RuleFrame::CounterReplacement(_) => {
+            return Err("historical scope excludes counter replacement ordering".into());
+        }
+        RuleFrame::TransformOrder(_) => {
+            return Err("historical ordinary profile excludes transforming permanents".into());
+        }
+        RuleFrame::Mutation(_)
+        | RuleFrame::RevealedPiles(_)
+        | RuleFrame::PlaneswalkerType(_)
+        | RuleFrame::AttackDirection(_)
+        | RuleFrame::DrawReplacement(_)
+        | RuleFrame::DamageRecipientChoice(_)
+        | RuleFrame::OpponentChoice(_)
+        | RuleFrame::ReplacementChooser(_)
+        | RuleFrame::MyriadDefender(_)
+        | RuleFrame::ReselectAttackDefender(_)
+        | RuleFrame::TokenDefender(_) => {
+            return Err("historical ordinary fixtures exclude attacking token choices".into());
+        }
         RuleFrame::TimestampOrder(_) => {
             if !matches!(
                 fixture.case.observation_contract().observation_scope,
@@ -1236,6 +1413,16 @@ pub(super) fn header(
                         StackKind::SpellCopy { copied_from, owner } => StackKindView::SpellCopy {
                             copied_from: opaque(copied_from),
                             owner: owner.0,
+                        },
+                        StackKind::Speed => StackKindView::Speed,
+                        StackKind::Monarch => StackKindView::Monarch,
+                        StackKind::DelayedCopy { .. } => {
+                            return Err(
+                                "historical ordinary scopes exclude delayed-copy triggers".into()
+                            );
+                        }
+                        StackKind::Emblem { emblem } => StackKindView::Emblem {
+                            id: emblem.sequence(),
                         },
                         StackKind::ActivatedAbility { source } => StackKindView::ActivatedAbility {
                             source: snapshot(source),
@@ -1383,7 +1570,7 @@ pub(super) fn header(
         window_revision: window.revision().to_string(),
         registry_revision: window.cards().revision().to_string(),
         participants: window.participants().iter().map(|v| v.0).collect(),
-        active: window.turn_owner().0,
+        active: window.active_player().0,
         combat_rules: match state.execution().combat_rules() {
             spellwake_engine::combat::CombatRules::UnrestrictedFreeForAll => {
                 "unrestricted_free_for_all"
@@ -1398,26 +1585,17 @@ pub(super) fn header(
             lands_played: v.lands_played().clone(),
         }),
         pending_turn_work: match state.conclusion().map(|c| c.cause()) {
-            Some(
-                spellwake_engine::game::GameConclusionCause::CheckedLosses { .. }
-                | spellwake_engine::game::GameConclusionCause::CheckedLossesAfterDepartures {
-                    ..
-                },
-            ) => match state.turn().map(|turn| turn.stage()) {
-                Some(TurnStage::Work(retained)) => Some(work(retained)),
-                Some(TurnStage::Priority) | None => None,
-            },
-            Some(
-                spellwake_engine::game::GameConclusionCause::Conceded { .. }
-                | spellwake_engine::game::GameConclusionCause::ConcededLastSurvivor { .. },
-            ) => {
-                return Err("ordinary predecessor projection excludes conceded roots".into());
+            Some(spellwake_engine::game::GameConclusionCause::CheckedLosses { .. }) => {
+                match state.turn().map(|turn| turn.stage()) {
+                    Some(TurnStage::Work(retained)) => Some(work(retained)),
+                    Some(TurnStage::Priority) | None => None,
+                }
             }
             Some(
-                spellwake_engine::game::GameConclusionCause::BankExpired { .. }
-                | spellwake_engine::game::GameConclusionCause::ResponseExpiredLastSurvivor { .. },
+                spellwake_engine::game::GameConclusionCause::Conceded { .. }
+                | spellwake_engine::game::GameConclusionCause::WonByEffect { .. },
             ) => {
-                return Err("ordinary predecessor projection excludes clock-expired roots".into());
+                return Err("ordinary predecessor projection excludes this terminal cause".into());
             }
             None => state.pending_turn_work().map(work),
         },
@@ -1690,14 +1868,14 @@ fn check_ordinary_projection_scope(
 /// Admission here bounds this diagnostic projection; the source-qualified
 /// Registry remains responsible for the exact finite card identities and traits.
 fn interaction_program(program: &spellwake_engine::program::Program) -> bool {
-    use spellwake_engine::program::{
-        BodyTarget, CardType, Instruction, InstructionAmount, ProgramKind, SpellTargetFilter,
-    };
-    if !program.mana.is_empty()
+    use spellwake_engine::program::{BodyTarget, CardType, Instruction, ProgramKind};
+    if !program.printed_keywords.is_empty()
+        || !program.mana.is_empty()
         || program.card_types.len() != 1
         || !program.activated.is_empty()
         || !program.triggered.is_empty()
         || program.continuous.is_some()
+        || !program.additional_battlefield_abilities.is_empty()
     {
         return false;
     }
@@ -1709,16 +1887,17 @@ fn interaction_program(program: &spellwake_engine::program::Program) -> bool {
             if program.has_type(CardType::Instant) || program.has_type(CardType::Sorcery) =>
         {
             match (spell.body.target, spell.body.instructions.as_slice()) {
-                (BodyTarget::SingleCreature, [Instruction::ReturnToOwnersHand])
-                | (
-                    BodyTarget::SingleSpell(SpellTargetFilter::AnySpell),
-                    [Instruction::CounterSpell],
-                ) => true,
+                (BodyTarget::SingleCreature, [Instruction::ReturnToOwnersHand]) => true,
+                (BodyTarget::SingleSpell(filter), [Instruction::CounterSpell])
+                    if filter == spellwake_engine::program::SpellFilter::any() =>
+                {
+                    true
+                }
                 (
                     BodyTarget::None,
                     [
                         Instruction::DrawController {
-                            amount: InstructionAmount::Literal(amount),
+                            amount: spellwake_engine::program::ValueExpr::Literal(amount),
                         },
                     ],
                 ) => *amount == 2.into(),
@@ -1731,18 +1910,27 @@ fn interaction_program(program: &spellwake_engine::program::Program) -> bool {
 fn check_predecessor_rules_journal(journal: &RulesJournal) -> Result<(), String> {
     for record in &journal.records {
         match record {
-            RulesRecord::ChooserReplaced { .. } => {
+            RulesRecord::AttackDeclarationReversed { .. }
+            | RulesRecord::CastAnnouncementReversed { .. } => {
                 return Err(
-                    "ordinary predecessor projection excludes chooser replacement records".into(),
+                    "ordinary predecessor projection excludes reversed cast announcements".into(),
                 );
             }
-            RulesRecord::PlayersDeparted { .. } => {
-                return Err("ordinary predecessor projection excludes departure records".into());
+            RulesRecord::SpeedTriggerDiscovered { .. } => {
+                return Err("ordinary predecessor projection excludes speed triggers".into());
+            }
+            RulesRecord::DelayedCopyTriggerDiscovered { .. }
+            | RulesRecord::MonarchTriggerDiscovered { .. }
+            | RulesRecord::EmblemTriggerDiscovered { .. } => {
+                return Err(
+                    "ordinary predecessor projection excludes source-independent triggers".into(),
+                );
             }
             RulesRecord::GameConcluded { .. } => {
                 return Err("ordinary predecessor projection excludes terminal records".into());
             }
             RulesRecord::OptionalEffectOutcome { .. }
+            | RulesRecord::ChooserReplaced { .. }
             | RulesRecord::ResolutionPaymentOutcome { .. } => {
                 return Err("ordinary Report1–3 exclude resolution choice controls".into());
             }
@@ -1894,10 +2082,42 @@ pub(super) fn facts(
             .map(|v| {
                 Ok::<_, String>(ActivationView {
                     source: object(&v.source),
-                    source_cost: match v.source_cost {
-                        spellwake_engine::activated::SourceCost::None => "none",
-                        spellwake_engine::activated::SourceCost::Tap => "tap",
-                        spellwake_engine::activated::SourceCost::Sacrifice => "sacrifice",
+                    source_cost: {
+                        use spellwake_engine::activated::{
+                            DiscardCostMode, SelectedSacrificeFilter, SourceCost,
+                        };
+                        match v.source_cost {
+                            SourceCost::TapPermanents { .. }
+                            | SourceCost::ExileGraveyard { .. }
+                            | SourceCost::PayLife {
+                                sacrifice: Some(_), ..
+                            }
+                            | SourceCost::Discard {
+                                mode: DiscardCostMode::SelectedOne,
+                                ..
+                            } => {
+                                return Err(
+                                    "historical scope excludes selected activation costs".into()
+                                );
+                            }
+                            SourceCost::SacrificeSelected { filter, .. }
+                                if filter != SelectedSacrificeFilter::GrantingPermanent =>
+                            {
+                                return Err(
+                                    "historical scope excludes selected activation costs".into()
+                                );
+                            }
+                            SourceCost::Exile {
+                                from_graveyard: true,
+                                ..
+                            }
+                            | SourceCost::GraveyardSelf { unearth: false } => {
+                                return Err(
+                                    "historical scope excludes graveyard-source activation".into(),
+                                );
+                            }
+                            other => other.trace_label(),
+                        }
                     },
                     resulting_source: history.required(fixture, v.resulting_source)?,
                     entry: opaque(v.entry),
@@ -2000,10 +2220,7 @@ mod tests {
         mana::{ManaAbility, ManaAbilityId, ManaOutput},
         object_identity::ObjectDestination,
         program::Program,
-        program::{
-            BodyTarget, ExecutableBody, Instruction, ObjectRelation, OrdinaryCondition,
-            TriggeredAbility, TriggeredAbilityId,
-        },
+        program::{BodyTarget, ExecutableBody, Instruction, TriggeredAbility, TriggeredAbilityId},
         setup::GameSeed,
         turn::{Step, TurnStart},
     };
@@ -2031,16 +2248,20 @@ mod tests {
             program.triggered.push(TriggeredAbility {
                 grouping: spellwake_engine::program::TriggerGrouping::EachOccurrence,
                 id: TriggeredAbilityId(index as u64),
-                condition: OrdinaryCondition::BecomesTapped(ObjectRelation::SelfObject),
+                condition: spellwake_engine::program::TriggerSpec::becomes_tapped(
+                    spellwake_engine::program::ObjectFilter::self_object(),
+                ),
                 body: ExecutableBody::new(
                     target,
                     vec![match target {
                         BodyTarget::None => Instruction::DrawController {
-                            amount: spellwake_engine::program::InstructionAmount::Literal(1.into()),
+                            amount: spellwake_engine::program::ValueExpr::Literal(1.into()),
                         },
-                        BodyTarget::SinglePlayer => Instruction::AdjustTargetLife {
-                            adjustment: spellwake_engine::life::LifeAdjustment::Gain(1.into()),
-                        },
+                        BodyTarget::SingleOpponent | BodyTarget::SinglePlayer => {
+                            Instruction::AdjustTargetLife {
+                                adjustment: spellwake_engine::life::LifeAdjustment::Gain(1.into()),
+                            }
+                        }
                         BodyTarget::SingleCreature => Instruction::Damage { amount: 1.into() },
                         _ => panic!("unsupported test target family"),
                     }],

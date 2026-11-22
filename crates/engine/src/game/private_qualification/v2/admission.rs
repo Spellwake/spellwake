@@ -96,7 +96,7 @@ mod tests {
             ExecutableBody::new(
                 BodyTarget::None,
                 vec![crate::program::Instruction::DrawController {
-                    amount: crate::program::InstructionAmount::Literal(0.into()),
+                    amount: crate::program::ValueExpr::Literal(0.into()),
                 }],
             ),
         ));

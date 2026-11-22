@@ -10,9 +10,7 @@ use spellwake_engine::{
     mana::ManaCost,
     object_identity::{CardId, ObjectDestination},
     priority::{PriorityPhase, SeatId},
-    program::{
-        AffectedPlayers, BodyTarget, ExecutableBody, Instruction, InstructionAmount, Program,
-    },
+    program::{AffectedPlayers, BodyTarget, ExecutableBody, Instruction, Program},
     stack_window::WindowPhase,
 };
 use std::{collections::BTreeSet, panic::AssertUnwindSafe, sync::Arc};
@@ -45,7 +43,7 @@ fn seed() -> (GameContext, GameSeed) {
                     BodyTarget::None,
                     vec![Instruction::Discard {
                         players: AffectedPlayers::EachPlayer,
-                        amount: InstructionAmount::Literal(1.into()),
+                        amount: spellwake_engine::program::ValueExpr::Literal(1.into()),
                     }],
                 ),
             ),

@@ -5,10 +5,7 @@ use crate::{
     effects::{EffectError, ResolutionSelectionKind},
     life::LifeAdjustment,
     mana::ManaAbilityRef,
-    program::{
-        AffectedPlayers, CardType, InstructionAmount, ObjectRelation, PermanentTypeFilter,
-        ResolvingPlayer, TriggerGrouping,
-    },
+    program::{AffectedPlayers, CardType, PermanentTypeFilter, ResolvingPlayer, TriggerGrouping},
 };
 use std::collections::BTreeSet;
 
@@ -100,22 +97,20 @@ fn selected_trigger_finishes_in_cleanup_priority_before_the_real_repeat() {
     let mut source = observer(
         1,
         A,
-        OrdinaryCondition::StepBegan {
-            step: Step::Cleanup,
-            player: PlayerRelation::Controller,
-        },
+        crate::program::TriggerSpec::step_began(Step::Cleanup, PlayerRelation::Controller),
     );
     source.program.triggered[0].body = ExecutableBody::new(
         BodyTarget::None,
         vec![
             Instruction::Discard {
                 players: AffectedPlayers::EachPlayer,
-                amount: InstructionAmount::Literal(2.into()),
+                amount: crate::program::ValueExpr::Literal(2.into()),
             },
             Instruction::Sacrifice {
                 players: AffectedPlayers::One(ResolvingPlayer::Controller),
-                amount: InstructionAmount::Literal(1.into()),
+                amount: crate::program::ValueExpr::Literal(1.into()),
                 filter: PermanentTypeFilter {
+                    any_types: Default::default(),
                     required_types: BTreeSet::from([CardType::Artifact]),
                     forbidden_types: BTreeSet::new(),
                 },
@@ -315,7 +310,7 @@ fn selected_trigger_finishes_in_cleanup_priority_before_the_real_repeat() {
     assert_eq!(state.execution().mana(A, ManaType::Blue), 0.into());
     assert_eq!(state.turn().unwrap().position().number, 2);
     assert_eq!(state.turn().unwrap().position().step, Step::Upkeep);
-    assert_eq!(state.execution().window().turn_owner(), B);
+    assert_eq!(state.execution().window().active_player(), B);
     for (owner, old) in [A, B].into_iter().zip(libraries_before) {
         assert_eq!(state.execution().window().cards().library(owner), &old);
     }
@@ -336,7 +331,7 @@ fn simultaneous_selected_deaths_capture_the_dying_observer_for_every_occurrence(
     watcher.triggered.push(TriggeredAbility {
         id: TriggeredAbilityId(1),
         grouping: TriggerGrouping::EachOccurrence,
-        condition: OrdinaryCondition::Dies(ObjectRelation::AnyCreature),
+        condition: crate::program::TriggerSpec::dies(crate::program::ObjectFilter::creature()),
         body: trigger_body.clone(),
     });
     let mut cards = libraries(&[A, B]);
@@ -365,8 +360,9 @@ fn simultaneous_selected_deaths_capture_the_dying_observer_for_every_occurrence(
                 BodyTarget::None,
                 vec![Instruction::Sacrifice {
                     players: AffectedPlayers::EachPlayer,
-                    amount: InstructionAmount::Literal(1.into()),
+                    amount: crate::program::ValueExpr::Literal(1.into()),
                     filter: PermanentTypeFilter {
+                        any_types: Default::default(),
                         required_types: BTreeSet::from([CardType::Creature]),
                         forbidden_types: BTreeSet::new(),
                     },

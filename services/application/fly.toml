@@ -1,0 +1,39 @@
+app = "spellwake-api"
+primary_region = "iad"
+kill_signal = "SIGTERM"
+kill_timeout = "30s"
+
+[env]
+  SPELLWAKE_API_BIND = "0.0.0.0:8080"
+  SPELLWAKE_API_ORIGINS = "https://app.spellwake.com"
+  SPELLWAKE_API_MAX_CONCURRENT_REQUESTS = "256"
+  SPELLWAKE_API_MAX_CONCURRENT_STREAMS = "512"
+  SPELLWAKE_NATIVE_ARTIFACT_CACHE_BYTES = "67108864"
+  RUST_LOG = "spellwake_application=info,application_api=info"
+
+[http_service]
+  internal_port = 8080
+  force_https = true
+  auto_stop_machines = "stop"
+  auto_start_machines = true
+  min_machines_running = 0
+
+  [http_service.concurrency]
+    type = "connections"
+    hard_limit = 1000
+    soft_limit = 750
+
+  [[http_service.checks]]
+    method = "GET"
+    path = "/health"
+    interval = "30s"
+    timeout = "5s"
+    grace_period = "15s"
+
+[[files]]
+  guest_path = "/opt/spellwake/runtime/pilot-manifest.json"
+  secret_name = "SPELLWAKE_FLY_PILOT_MANIFEST"
+
+[[vm]]
+  size = "shared-cpu-1x"
+  memory = "1gb"

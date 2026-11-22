@@ -6,10 +6,7 @@ use crate::{
     life::LifeAdjustment,
     mana::{ManaAbilityRef, ManaCost, ManaType},
     object_identity::{CardId, ObjectDestination},
-    program::{
-        Instruction, OrdinaryCondition, PlayerRelation, Program, TriggeredAbility,
-        TriggeredAbilityId,
-    },
+    program::{Instruction, PlayerRelation, Program, TriggeredAbility, TriggeredAbilityId},
     token::{TokenDefinition, TokenName},
 };
 fn prepare() -> GameState {
@@ -35,7 +32,9 @@ fn prepare_grouped_count(count: i64, grouping: crate::program::TriggerGrouping) 
             vec![Instruction::CreateTokens {
                 creations: vec![crate::token::TokenCreation {
                     definition,
-                    amount: crate::program::InstructionAmount::Literal(count.into()),
+                    amount: crate::program::ValueExpr::Literal(count.into()),
+                    base_size: None,
+                    enters_tapped: false,
                     recipients: crate::token::TokenRecipients::Controller,
                 }],
             }],
@@ -46,7 +45,10 @@ fn prepare_grouped_count(count: i64, grouping: crate::program::TriggerGrouping) 
         observer.triggered.push(TriggeredAbility {
             grouping,
             id: TriggeredAbilityId(id),
-            condition: OrdinaryCondition::TokenCreated(PlayerRelation::Controller),
+            condition: crate::program::TriggerSpec::player_action(
+                PlayerRelation::Controller,
+                crate::program::PlayerTriggerAction::TokenCreated,
+            ),
             body: ExecutableBody::new(
                 BodyTarget::None,
                 vec![Instruction::AdjustControllerLife {

@@ -217,6 +217,7 @@ impl ActorConfig {
 }
 
 /// Reusable HTTP connection pool; a caller bearer is attached only to one request.
+#[derive(Clone)]
 pub struct ActorClient {
     http: HttpTransport,
     issuer: String,
@@ -1382,6 +1383,28 @@ impl ActorClient {
             },
         )
     }
+    /// Execute one original-bearer authenticated Postgres RPC returning the standard
+    /// `ApiResponse<Value>` envelope while preserving strict claim/issuer validation.
+    pub(crate) fn authenticated_rpc(
+        &self,
+        bearer: &str,
+        name: &str,
+        payload: &Value,
+    ) -> Result<ApiResponse<Value>, ActorError> {
+        parse_claims(bearer, &self.issuer)?;
+        let response = self.caller_rpc(bearer, name, payload)?;
+        let result: ApiResponse<Value> = read_object_response(response)?;
+        if let ApiResponse::Fail { data } = &result
+            && data.len() == 1
+            && data
+                .get("session")
+                .is_some_and(|value| value == "unauthorized")
+        {
+            return Err(ActorError::Unauthorized);
+        }
+        Ok(result)
+    }
+
     fn caller_rpc(
         &self,
         bearer: &str,

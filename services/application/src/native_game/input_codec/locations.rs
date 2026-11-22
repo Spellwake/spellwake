@@ -3,10 +3,7 @@ use super::*;
 use crate::player_wire::{ManaColor, PlayerZoneKind};
 use spellwake_engine::{
     checks::CheckDecision,
-    effects::{
-        CopyTargetChoice, DamageDecision, OptionalEffectChoice, PendingWorkKind, ZoneApplication,
-        ZoneOptionalAnswer, ZoneReplacementRequest,
-    },
+    effects::{CopyTargetChoice, DamageDecision, OptionalEffectChoice},
     game::RuleFrame,
     mana::ManaType,
     object_identity::{ObjectId, ObjectZone},
@@ -103,45 +100,6 @@ fn current(
         .map_err(|cause| NativeBridgeError::Observation(Box::new(cause)))?
         .ok_or(NativeCodecError::InvalidRecord)
 }
-fn library_owner(scope: &NativeScope<'_>) -> Result<(), NativeCodecError> {
-    if scope.source.execution().pending_work_kind() != Some(PendingWorkKind::LibraryTop) {
-        return Err(NativeCodecError::InvalidRecord);
-    }
-    Ok(())
-}
-fn library_cards<'a>(scope: &'a NativeScope<'_>) -> Result<&'a [ObjectId], NativeCodecError> {
-    library_owner(scope)?;
-    match frame(scope)? {
-        RuleFrame::LibraryTop(f) => Ok(f.domain_top_first()),
-        RuleFrame::ResolutionGraveyardOrder(f) => Ok(f.domain()),
-        _ => Err(NativeCodecError::InvalidRecord),
-    }
-}
-fn replacement_owner(scope: &NativeScope<'_>) -> Result<(), NativeCodecError> {
-    if !crate::native_game::handles::supports_zone_replacement(scope.source) {
-        return Err(NativeCodecError::InvalidRecord);
-    }
-    Ok(())
-}
-fn zone_applications<'a>(
-    scope: &'a NativeScope<'_>,
-) -> Result<&'a [ZoneApplication], NativeCodecError> {
-    replacement_owner(scope)?;
-    if let RuleFrame::ZoneReplacement(f) = frame(scope)?
-        && let ZoneReplacementRequest::Select { applications } = f.request()
-    {
-        return Ok(applications);
-    }
-    Err(NativeCodecError::InvalidRecord)
-}
-fn zone_optional(scope: &NativeScope<'_>) -> Result<(), NativeCodecError> {
-    replacement_owner(scope)?;
-    if matches!(frame(scope)?,RuleFrame::ZoneReplacement(f) if matches!(f.request(),ZoneReplacementRequest::ConfirmOptional {..}))
-    {
-        return Ok(());
-    }
-    Err(NativeCodecError::InvalidRecord)
-}
 #[derive(Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "kebab-case", deny_unknown_fields)]
 pub(super) enum Target {
@@ -188,19 +146,6 @@ impl Target {
 #[derive(Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "kebab-case", deny_unknown_fields)]
 pub(super) enum Location {
-    LibraryCard {
-        index: NativeRevision,
-    },
-    ZoneApplication {
-        index: NativeRevision,
-    },
-    ZoneOptional {
-        apply: bool,
-    },
-    ReplacementChooser {
-        #[serde(deserialize_with = "crate::provider_json::object")]
-        target: Target,
-    },
     Zone {
         zone: PlayerZoneKind,
         #[serde(deserialize_with = "Option::deserialize")]
@@ -217,6 +162,14 @@ pub(super) enum Location {
         index: NativeRevision,
     },
     Stack {
+        index: NativeRevision,
+    },
+    GrantedAbility {
+        object: NativeRevision,
+        index: NativeRevision,
+    },
+    AdditionalContinuous {
+        object: NativeRevision,
         index: NativeRevision,
     },
     Activated {
@@ -243,6 +196,27 @@ pub(super) enum Location {
     DamageAttempt {
         index: NativeRevision,
     },
+    ZoneReplacement {
+        index: NativeRevision,
+    },
+    DrawLandKind {
+        land: Option<bool>,
+    },
+    MiracleReveal {
+        reveal: bool,
+    },
+    PlaneswalkerType {
+        label: String,
+    },
+    AttackDirection {
+        left: bool,
+    },
+    PermanentTypeOrder {
+        index: NativeRevision,
+    },
+    PermanentType {
+        index: NativeRevision,
+    },
     Optional {
         take: bool,
     },
@@ -260,6 +234,9 @@ pub(super) enum Location {
     CreatureType {
         index: NativeRevision,
     },
+    CardName {
+        index: NativeRevision,
+    },
 }
 impl Location {
     pub(super) fn encode(
@@ -267,21 +244,6 @@ impl Location {
         reference: NativeReference,
     ) -> Result<Self, NativeCodecError> {
         Ok(match reference {
-            NativeReference::LibraryCard(value) => Self::LibraryCard {
-                index: find(library_cards(scope)?, &value)?,
-            },
-            NativeReference::ZoneApplication(value) => Self::ZoneApplication {
-                index: find(zone_applications(scope)?, &value)?,
-            },
-            NativeReference::ZoneOptional(value) => {
-                zone_optional(scope)?;
-                Self::ZoneOptional {
-                    apply: value == ZoneOptionalAnswer::Apply,
-                }
-            }
-            NativeReference::ReplacementChooser(player) => Self::ReplacementChooser {
-                target: Target::encode(scope, TargetRef::Player(player))?,
-            },
             NativeReference::Zone(zone) => {
                 let (zone, owner) = match zone {
                     ObjectZone::Library(seat) => (PlayerZoneKind::Library, Some(seat)),
@@ -311,11 +273,16 @@ impl Location {
                 index: find(&current(scope, source)?.abilities.triggered, &ability)?,
             },
             NativeReference::ContinuousAbility { source, ability } => {
-                if current(scope, source)?.abilities.continuous != Some(ability) {
-                    return Err(NativeCodecError::InvalidRecord);
-                }
-                Self::Continuous {
-                    object: object_index(scope, source)?,
+                let roster = current(scope, source)?.abilities;
+                if roster.continuous == Some(ability) {
+                    Self::Continuous {
+                        object: object_index(scope, source)?,
+                    }
+                } else {
+                    Self::AdditionalContinuous {
+                        object: object_index(scope, source)?,
+                        index: find(&roster.additional_battlefield_abilities, &ability)?,
+                    }
                 }
             }
             NativeReference::Object(value) => Self::Object {
@@ -323,6 +290,16 @@ impl Location {
             },
             NativeReference::Stack(value) => Self::Stack {
                 index: stack_index(scope, value)?,
+            },
+            NativeReference::GrantedAbility { source, effect } => Self::GrantedAbility {
+                object: object_index(scope, source)?,
+                index: ordinal(
+                    current(scope, source)?
+                        .granted_activated
+                        .keys()
+                        .position(|key| *key == effect)
+                        .ok_or(NativeCodecError::InvalidRecord)?,
+                )?,
             },
             NativeReference::ActivatedAbility { source, ability } => Self::Activated {
                 object: object_index(scope, source)?,
@@ -407,11 +384,48 @@ impl Location {
                     )?,
                 }
             }
-            NativeReference::OptionalEffect(value) => Self::Optional {
-                take: match value {
-                    OptionalEffectChoice::Take => true,
-                    OptionalEffectChoice::Decline => false,
-                },
+            NativeReference::ZoneReplacement(index) => Self::ZoneReplacement {
+                index: ordinal(index)?,
+            },
+            NativeReference::MiracleReveal(reveal) => Self::MiracleReveal { reveal },
+            NativeReference::DrawLandKind(land) => Self::DrawLandKind { land },
+            NativeReference::PlaneswalkerType(kind) => Self::PlaneswalkerType {
+                label: kind.label().to_owned(),
+            },
+            NativeReference::AttackDirection(value) => Self::AttackDirection {
+                left: value == spellwake_engine::effects::AttackDirection::Left,
+            },
+            NativeReference::OptionalEffect(value) => match value {
+                OptionalEffectChoice::Take => Self::Optional { take: true },
+                OptionalEffectChoice::Decline => Self::Optional { take: false },
+                OptionalEffectChoice::PermanentType(_) => {
+                    let RuleFrame::OptionalEffect(choice) = frame(scope)? else {
+                        return Err(NativeCodecError::InvalidRecord);
+                    };
+                    Self::PermanentType {
+                        index: ordinal(
+                            choice
+                                .options()
+                                .iter()
+                                .position(|option| *option == value)
+                                .ok_or(NativeCodecError::InvalidRecord)?,
+                        )?,
+                    }
+                }
+                OptionalEffectChoice::PermanentTypeOrder(_) => {
+                    let RuleFrame::OptionalEffect(choice) = frame(scope)? else {
+                        return Err(NativeCodecError::InvalidRecord);
+                    };
+                    Self::PermanentTypeOrder {
+                        index: ordinal(
+                            choice
+                                .options()
+                                .iter()
+                                .position(|option| *option == value)
+                                .ok_or(NativeCodecError::InvalidRecord)?,
+                        )?,
+                    }
+                }
             },
             NativeReference::Mulligan(value) => Self::Mulligan {
                 keep: match value {
@@ -435,6 +449,11 @@ impl Location {
                     ManaType::Colourless => ManaColor::Colourless,
                 },
             },
+            NativeReference::CardName(index) => Self::CardName {
+                index: u64::try_from(index.0)
+                    .map_err(|_| NativeCodecError::InvalidRecord)?
+                    .into(),
+            },
             NativeReference::CreatureType(value) => Self::CreatureType {
                 index: u64::from(value.ordinal()).into(),
             },
@@ -445,20 +464,6 @@ impl Location {
         scope: &NativeScope<'_>,
     ) -> Result<NativeReference, NativeCodecError> {
         Ok(match self {
-            Self::LibraryCard { index } => {
-                NativeReference::LibraryCard(at(library_cards(scope)?, *index)?)
-            }
-            Self::ZoneApplication { index } => {
-                NativeReference::ZoneApplication(at(zone_applications(scope)?, *index)?)
-            }
-            Self::ZoneOptional { apply } => {
-                zone_optional(scope)?;
-                NativeReference::ZoneOptional(if *apply {
-                    ZoneOptionalAnswer::Apply
-                } else {
-                    ZoneOptionalAnswer::Decline
-                })
-            }
             Self::Zone { zone, owner } => {
                 let seat = owner
                     .map(|value| {
@@ -500,6 +505,30 @@ impl Location {
             }
             Self::Object { index } => NativeReference::Object(object_at(scope, *index)?),
             Self::Stack { index } => NativeReference::Stack(stack_at(scope, *index)?),
+            Self::GrantedAbility { object, index } => {
+                let source = object_at(scope, *object)?;
+                let effects = current(scope, source)?
+                    .granted_activated
+                    .keys()
+                    .copied()
+                    .collect::<Vec<_>>();
+                NativeReference::GrantedAbility {
+                    source,
+                    effect: at(&effects, *index)?,
+                }
+            }
+            Self::AdditionalContinuous { object, index } => {
+                let source = object_at(scope, *object)?;
+                NativeReference::ContinuousAbility {
+                    source,
+                    ability: at(
+                        &current(scope, source)?
+                            .abilities
+                            .additional_battlefield_abilities,
+                        *index,
+                    )?,
+                }
+            }
             Self::Activated { object, index } => {
                 let source = object_at(scope, *object)?;
                 NativeReference::ActivatedAbility {
@@ -582,11 +611,41 @@ impl Location {
                         .attempt(),
                 )
             }
-            Self::ReplacementChooser { target } => {
-                let TargetRef::Player(player) = target.resolve(scope)? else {
+            Self::ZoneReplacement { index: value } => {
+                NativeReference::ZoneReplacement(index(*value)?)
+            }
+            Self::MiracleReveal { reveal } => NativeReference::MiracleReveal(*reveal),
+            Self::DrawLandKind { land } => NativeReference::DrawLandKind(*land),
+            Self::PlaneswalkerType { label } => NativeReference::PlaneswalkerType(
+                spellwake_engine::program::PlaneswalkerSubtype::from_label(label)
+                    .ok_or(NativeCodecError::InvalidRecord)?,
+            ),
+            Self::AttackDirection { left } => NativeReference::AttackDirection(if *left {
+                spellwake_engine::effects::AttackDirection::Left
+            } else {
+                spellwake_engine::effects::AttackDirection::Right
+            }),
+            Self::PermanentType { index: selected } => {
+                let RuleFrame::OptionalEffect(choice) = frame(scope)? else {
                     return Err(NativeCodecError::InvalidRecord);
                 };
-                NativeReference::ReplacementChooser(player)
+                let Some(value @ OptionalEffectChoice::PermanentType(_)) =
+                    choice.options().iter().copied().nth(index(*selected)?)
+                else {
+                    return Err(NativeCodecError::InvalidRecord);
+                };
+                NativeReference::OptionalEffect(value)
+            }
+            Self::PermanentTypeOrder { index: selected } => {
+                let RuleFrame::OptionalEffect(choice) = frame(scope)? else {
+                    return Err(NativeCodecError::InvalidRecord);
+                };
+                let Some(value @ OptionalEffectChoice::PermanentTypeOrder(_)) =
+                    choice.options().iter().copied().nth(index(*selected)?)
+                else {
+                    return Err(NativeCodecError::InvalidRecord);
+                };
+                NativeReference::OptionalEffect(value)
             }
             Self::Optional { take } => NativeReference::OptionalEffect(if *take {
                 OptionalEffectChoice::Take
@@ -610,6 +669,11 @@ impl Location {
                 ManaColor::Green => ManaType::Green,
                 ManaColor::Colourless => ManaType::Colourless,
             }),
+            Self::CardName { index } => {
+                NativeReference::CardName(spellwake_engine::land::CardNameIndex(
+                    usize::try_from(index.get()).map_err(|_| NativeCodecError::InvalidRecord)?,
+                ))
+            }
             Self::CreatureType { index } => {
                 let vocabulary = scope.source.execution().creature_vocabulary();
                 let member = u16::try_from(index.get())

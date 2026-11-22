@@ -11,7 +11,7 @@ fn frame(state: &GameState) -> Result<Value, PreparedError> {
     };
     let value = match decision.frame() {
         RuleFrame::LibraryTop(f) => {
-            json!({"tag":"LibraryTop","kind":match f.kind() { LibraryChoiceKind::Scry => "Scry", LibraryChoiceKind::Surveil => "Surveil" },
+            json!({"tag":"LibraryTop","kind":match f.kind() { LibraryChoiceKind::Search => return Err("search outside this prepared profile".into()), LibraryChoiceKind::Scry => "Scry", LibraryChoiceKind::Surveil => "Surveil" },
             "revision":f.revision().to_string(),"entry":projection::opaque(f.entry()),"instruction":f.instruction(),"chooser":f.chooser().0,
             "domain_top_first":f.domain_top_first().iter().map(projection::opaque).collect::<Vec<_>>()})
         }

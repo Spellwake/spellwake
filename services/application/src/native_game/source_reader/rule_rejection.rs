@@ -61,7 +61,18 @@ fn effect(error: &EffectError) -> Option<(&'static str, &'static str)> {
         EffectError::TargetRequired
         | EffectError::UnexpectedTarget
         | EffectError::IllegalTarget => Some(("target", "invalid")),
-        EffectError::InsufficientMana => Some(("payment", "not permitted")),
+        EffectError::ActivationConditionNotMet | EffectError::AlreadyExhausted => {
+            Some(("action", "not permitted"))
+        }
+        EffectError::InvalidPowerContributors => Some(("payment", "not permitted")),
+        EffectError::InvalidCastResource | EffectError::InsufficientMana => {
+            Some(("payment", "not permitted"))
+        }
+        EffectError::IllegalHybridManaPayment => Some(("payment", "invalid")),
+        EffectError::IllegalManaBundle | EffectError::IllegalEntryColor => {
+            Some(("response", "invalid"))
+        }
+        EffectError::EntryColorChoiceRequired => Some(("response", "required")),
         EffectError::InvalidManaPayment(ManaPaymentError::InvalidCost) => None,
         EffectError::InvalidManaPayment(
             ManaPaymentError::NonPositiveSpend
@@ -71,13 +82,17 @@ fn effect(error: &EffectError) -> Option<(&'static str, &'static str)> {
             | ManaPaymentError::InsufficientMana
             | ManaPaymentError::PaymentRequired,
         ) => Some(("payment", "invalid")),
-        EffectError::LegendarySpellPrerequisite
+        EffectError::SplitSecond
+        | EffectError::CastingFromZoneProhibited
+        | EffectError::ManaActivationConditionNotMet
+        | EffectError::LegendarySpellPrerequisite
         | EffectError::CreatureTapRestricted
         | EffectError::Timing(
             TimingError::PriorityRequired
             | TimingError::NotPriorityHolder
             | TimingError::NotActivePlayer
             | TimingError::MainPhaseRequired
+            | TimingError::BeforeAttackersRequired
             | TimingError::StackNotEmpty,
         ) => Some(("action", "not permitted")),
         // Cost and turn state originate from the trusted source, not the intent.
@@ -91,8 +106,7 @@ fn effect(error: &EffectError) -> Option<(&'static str, &'static str)> {
         | EffectError::IllegalManaColor
         | EffectError::IllegalCreatureType => Some(("response", "invalid")),
         EffectError::WrongChooser => Some(("actor", "not permitted")),
-        EffectError::WrongReplacementChooserFrame
-        | EffectError::WrongSelectionFrame
+        EffectError::WrongSelectionFrame
         | EffectError::WrongLibraryTopFrame
         | EffectError::WrongOptionalEffectFrame
         | EffectError::WrongResolutionPaymentFrame
@@ -112,6 +126,7 @@ fn effect(error: &EffectError) -> Option<(&'static str, &'static str)> {
             | CombatError::IllegalDamageSource
             | CombatError::IllegalDamageRecipient
             | CombatError::InvalidDamageAmount
+            | CombatError::InsufficientTrampleAssignment
             | CombatError::IncorrectDamageTotal => Some(("response", "invalid")),
         },
         EffectError::Window(

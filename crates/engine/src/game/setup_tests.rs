@@ -118,7 +118,7 @@ fn failed_new_turn_preserves_the_accepted_pass_resources_life_and_unstamped_card
         assert_eq!(state, before);
         assert_eq!(state.turn().unwrap().position().step, Step::End);
         assert_eq!(state.turn().unwrap().position().number, 8);
-        assert_eq!(state.execution.window().turn_owner(), A);
+        assert_eq!(state.execution.window().active_player(), A);
         assert_eq!(state.execution.mana(A, ManaType::Green), 7.into());
         assert_eq!(state.execution.mana(B, ManaType::Blue), 11.into());
         for player in [A, B] {

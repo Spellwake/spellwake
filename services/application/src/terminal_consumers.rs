@@ -1,10 +1,9 @@
-//! Private terminal and progression contracts, including the bounded daily quest worker.
-mod quest_worker;
+//! Private normalized terminal/progression contracts. Canonical SQL stays closed;
+//! no runtime consumer, quest selector, scheduler or reward-claim API is installed.
 use crate::{
     ApiResponse, amount::Amount, ante::AnteState, commands::CommandAck,
     source_protocol::valid_digest,
 };
-pub use quest_worker::QuestWorker;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -75,7 +74,7 @@ impl QuestActivityBatch {
     }
 }
 /// The cursor ID is not the input game ID, and reward count may exceed event count.
-#[derive(Deserialize, Serialize)]
+#[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct QuestActivityAck {
     #[serde(deserialize_with = "crate::identifiers::uuid")]

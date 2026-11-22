@@ -259,6 +259,22 @@ def qualify(
         driver_log.close()
 
 
+def qualify_with_transport_retry(
+    application: Path, output: Path, version: str, application_args: list[str]
+) -> None:
+    """Repeat a disconnected package exercise with a fresh native session."""
+    try:
+        qualify(application, output, version, application_args)
+    except http.client.RemoteDisconnected:
+        # A click may already have been delivered. Discard the session rather
+        # than repeating any individual command that changes application state.
+        first_attempt = output.with_name(f"{output.name}-webdriver-disconnect")
+        if first_attempt.exists():
+            raise
+        output.rename(first_attempt)
+        qualify(application, output, version, application_args)
+
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--application", type=Path, required=True)
@@ -266,7 +282,7 @@ if __name__ == "__main__":
     parser.add_argument("--version", required=True)
     parser.add_argument("--extract-and-run", action="store_true")
     arguments = parser.parse_args()
-    qualify(
+    qualify_with_transport_retry(
         arguments.application,
         arguments.output,
         arguments.version,

@@ -16,8 +16,7 @@ use spellwake_engine::{
     object_identity::{CardId, ObjectDestination},
     priority::{PriorityPhase, SeatId},
     program::{
-        AffectedPlayers, InstructionAmount, OrdinaryCondition, PermanentTypeFilter, PlayerRelation,
-        TriggerGrouping, TriggeredAbilityId,
+        AffectedPlayers, PermanentTypeFilter, PlayerRelation, TriggerGrouping, TriggeredAbilityId,
     },
     stack_window::WindowPhase,
     token::{TokenCreation, TokenDefinition, TokenName},
@@ -32,8 +31,9 @@ pub(crate) fn selection(sacrifice: bool) -> Instruction {
     if sacrifice {
         Instruction::Sacrifice {
             players: AffectedPlayers::EachPlayer,
-            amount: InstructionAmount::Literal(1.into()),
+            amount: spellwake_engine::program::ValueExpr::Literal(1.into()),
             filter: PermanentTypeFilter {
+                any_types: Default::default(),
                 required_types: BTreeSet::new(),
                 forbidden_types: BTreeSet::new(),
             },
@@ -41,7 +41,7 @@ pub(crate) fn selection(sacrifice: bool) -> Instruction {
     } else {
         Instruction::Discard {
             players: AffectedPlayers::EachPlayer,
-            amount: InstructionAmount::Literal(1.into()),
+            amount: spellwake_engine::program::ValueExpr::Literal(1.into()),
         }
     }
 }
@@ -218,7 +218,10 @@ fn applicability_rejects_both_authored_operations_in_each_body_family() {
         permanent.activated.clear();
         permanent.triggered.push(TriggeredAbility {
             id: TriggeredAbilityId(1),
-            condition: OrdinaryCondition::Discarded(PlayerRelation::Controller),
+            condition: spellwake_engine::program::TriggerSpec::player_action(
+                PlayerRelation::Controller,
+                spellwake_engine::program::PlayerTriggerAction::Discarded,
+            ),
             grouping: TriggerGrouping::EachOccurrence,
             body,
         });
@@ -240,7 +243,9 @@ fn applicability_visits_unreachable_instructions_and_zero_count_nested_token_tem
     let mut token = creature();
     token.triggered.push(TriggeredAbility {
         id: TriggeredAbilityId(1),
-        condition: OrdinaryCondition::Enters(spellwake_engine::program::ObjectRelation::SelfObject),
+        condition: spellwake_engine::program::TriggerSpec::enters(
+            spellwake_engine::program::ObjectFilter::self_object(),
+        ),
         grouping: TriggerGrouping::EachOccurrence,
         body: ExecutableBody::new(
             spellwake_engine::program::BodyTarget::None,
@@ -262,7 +267,9 @@ fn applicability_visits_unreachable_instructions_and_zero_count_nested_token_tem
             vec![Instruction::CreateTokens {
                 creations: vec![TokenCreation {
                     definition,
-                    amount: InstructionAmount::Literal(0.into()),
+                    amount: spellwake_engine::program::ValueExpr::Literal(0.into()),
+                    base_size: None,
+                    enters_tapped: false,
                     recipients: spellwake_engine::token::TokenRecipients::Controller,
                 }],
             }],
@@ -461,7 +468,7 @@ fn applicability_actual_owner_order_frame_and_effect_operands_are_excluded() {
     let Instruction::Discard { amount, .. } = &mut spell.body.instructions[0] else {
         unreachable!()
     };
-    *amount = InstructionAmount::Literal(2.into());
+    *amount = spellwake_engine::program::ValueExpr::Literal(2.into());
     let (context, mut seed) = seed(program);
     seed.cards.push(SeedCard {
         card: CardId(4),
@@ -652,7 +659,9 @@ fn declaration_carrier(selected: bool) -> Vec<spellwake_engine::combat::CombatDe
     let mut token = creature();
     token.triggered.push(TriggeredAbility {
         id: TriggeredAbilityId(86),
-        condition: OrdinaryCondition::Enters(spellwake_engine::program::ObjectRelation::SelfObject),
+        condition: spellwake_engine::program::TriggerSpec::enters(
+            spellwake_engine::program::ObjectFilter::self_object(),
+        ),
         grouping: TriggerGrouping::EachOccurrence,
         body: ExecutableBody::new(
             spellwake_engine::program::BodyTarget::None,
@@ -660,7 +669,7 @@ fn declaration_carrier(selected: bool) -> Vec<spellwake_engine::combat::CombatDe
                 selection(false)
             } else {
                 Instruction::DrawController {
-                    amount: InstructionAmount::Literal(0.into()),
+                    amount: spellwake_engine::program::ValueExpr::Literal(0.into()),
                 }
             }],
         ),
@@ -688,6 +697,7 @@ fn declaration_carrier(selected: bool) -> Vec<spellwake_engine::combat::CombatDe
         attackers: vec![AttackDeclaration {
             attacker: tapped.after.id(),
             defender: B,
+            defending_planeswalker: None,
         }],
         taps: vec![AttackTap {
             before: tapped.before.unwrap(),
@@ -741,5 +751,34 @@ fn applicability_declaration_only_input_retains_token_program_visibility() {
             selected,
             "selection-bearing attack tap must not hide inside otherwise old operands"
         );
+    }
+}
+
+#[test]
+fn current10_refuses_printed_keywords_and_new_grants() {
+    use spellwake_engine::characteristics::{ResolvedDuration, ResolvedPartsSpec};
+    for (keyword, old_grant) in [
+        (KeywordAbility::Haste, true),
+        (KeywordAbility::Vigilance, true),
+        (KeywordAbility::Flying, false),
+    ] {
+        assert_eq!(
+            creature()
+                .with_printed_keywords([keyword])
+                .check_current10(),
+            Err(ApplicabilityError)
+        );
+        let change = AbilityChange::grant_keywords([keyword]);
+        let program = Program::instant(
+            ManaCost::free(),
+            ExecutableBody::new(
+                spellwake_engine::program::BodyTarget::SinglePermanent,
+                vec![Instruction::CreateContinuousEffect {
+                    parts: ResolvedPartsSpec(vec![ResolvedPartSpec::Abilities(change)]),
+                    duration: ResolvedDuration::UntilEndOfTurn,
+                }],
+            ),
+        );
+        assert_eq!(program.check_current10().is_ok(), old_grant);
     }
 }

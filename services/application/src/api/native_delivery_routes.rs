@@ -20,7 +20,7 @@ pub(super) async fn parse<T: serde::de::DeserializeOwned>(
     let token = bearer(request.headers()).map_err(|error| Box::new(actor_error(error)))?;
     let game = identifier(path)
         .map_err(|reason| Box::new(fail(StatusCode::BAD_REQUEST, "game", reason)))?;
-    if !single_content_type(request.headers()).is_some_and(|kind| kind == "application/json") {
+    if !is_json_content_type(request.headers()) {
         return Err(Box::new(fail(
             StatusCode::BAD_REQUEST,
             "body",
@@ -53,8 +53,12 @@ pub(super) fn repository(
 /// Success whose entire encoded API value stays within the player wire bound.
 /// A larger value is the safe unavailable response, never an oversized body.
 pub(super) fn bounded_success(data: impl Serialize) -> Response {
+    bounded_success_with_limit(data, MAX_PLAYER_WIRE_BYTES)
+}
+
+pub(super) fn bounded_success_with_limit(data: impl Serialize, max_bytes: usize) -> Response {
     match serde_json::to_vec(&ApiResponse::Success { data }) {
-        Ok(body) if body.len() <= MAX_PLAYER_WIRE_BYTES => (
+        Ok(body) if body.len() <= max_bytes => (
             [(axum::http::header::CONTENT_TYPE, "application/json")],
             body,
         )

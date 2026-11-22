@@ -27,8 +27,9 @@ use crate::{
     },
     priority::SeatId,
     program::{
-        CreatureTypeSlot, ExecutableBody, ObjectRelation, OrdinaryCondition, PlayerRelation,
-        TriggeredAbility, TriggeredAbilityId,
+        AttackTriggerMode, CreatureTypeSlot, ExecutableBody, ObjectFilter, PlayerRelation,
+        PlayerTriggerAction, SpellFilter, TriggerCondition, TriggerEvent, TriggerGrouping,
+        TriggerKeywordEvent, TriggeredAbility, TriggeredAbilityId,
     },
     shuffle::ShuffleRecord,
     stack_window::{SpellCopyObject, StackEntryId, StackKind, StackWindow},
@@ -39,8 +40,12 @@ use spellwake_contracts::{RulesInteger, creature_types::CreatureTypeId};
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
+mod combat_draw;
+pub(crate) use combat_draw::{CombatDrawSource, CombatDrawSubject};
 mod causes;
 pub use causes::{TriggerCauseKey, TriggerCauseMember, TriggerCauseSet};
+mod matching;
+use matching::{match_trigger_event, player_matches};
 
 #[cfg(test)]
 mod transport_tests;
@@ -93,6 +98,14 @@ pub enum TriggerError {
 /// Bounded trigger-time information from one evaluated physical cut.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SupportedAppearance {
+    /// Actual casting player and whether they cast this stack incarnation from their hand.
+    pub cast_origin: Option<(SeatId, bool)>,
+    /// X on this exact stack incarnation, including a copy of a permanent spell.
+    pub spell_x: Option<RulesInteger>,
+    /// Current attachment host captured at the event cut.
+    pub attached_to: Option<crate::targets::TargetRef>,
+    /// This exact permanent has resolved a saddle ability this turn.
+    pub saddled: bool,
     pub object: GameObject,
     pub copiable_names: spellwake_contracts::names::ObjectNames,
     pub current_names: spellwake_contracts::names::ObjectNames,
@@ -101,19 +114,44 @@ pub struct SupportedAppearance {
     pub copiable_card_types: BTreeSet<CardType>,
     pub copiable_creature_subtypes: BTreeSet<CreatureTypeId>,
     pub copiable_land_subtypes: BTreeSet<crate::land::LandType>,
+    pub copiable_spell_subtypes: BTreeSet<crate::program::SpellSubtype>,
+    pub copiable_artifact_subtypes: BTreeSet<crate::program::ArtifactSubtype>,
+    pub copiable_enchantment_subtypes: BTreeSet<crate::program::EnchantmentSubtype>,
     pub types: BTreeSet<CardType>,
     pub creature_subtypes: BTreeSet<CreatureTypeId>,
     pub land_subtypes: BTreeSet<crate::land::LandType>,
+    pub spell_subtypes: BTreeSet<crate::program::SpellSubtype>,
+    pub artifact_subtypes: BTreeSet<crate::program::ArtifactSubtype>,
+    pub enchantment_subtypes: BTreeSet<crate::program::EnchantmentSubtype>,
     pub intrinsic_mana: BTreeSet<crate::land::BasicLandType>,
     pub colors: BTreeSet<Color>,
     pub abilities: PrintedAbilityRoster,
     /// Layer-3 printed definitions at this exact cut, including removed printed
     /// abilities; the separate roster determines which ones actually exist.
     pub printed_text: PrintedText,
-    /// Current granted keywords from the same evaluated world as types/abilities.
+    /// Surviving printed and granted keywords at this appearance.
     pub keywords: BTreeSet<KeywordAbility>,
+    /// Boundary preceding the captured upkeep for an echo source. The acquired control epoch is on its physical appearance.
+    pub previous_upkeep: Option<crate::object_identity::ControlEpoch>,
+    pub time_counters: Option<RulesInteger>,
+    pub fade_counters: Option<RulesInteger>,
+    pub renowned: bool,
+    pub toxic_value: Option<RulesInteger>,
+    /// Whether the creature had the granted evasion ability at this cut.
+    pub granted_unblockable: bool,
+    /// Current independent exalted grants at this cut.
+    pub granted_exalted: BTreeMap<crate::characteristics::EffectInstanceKey, u16>,
+    /// Ordinary triggers keyed by the effect granting each instance at this cut.
+    pub granted_triggers: BTreeMap<crate::characteristics::EffectInstanceKey, TriggeredAbility>,
+    /// Surviving combat keyword instances indexed by the effect that granted them.
+    pub granted_combat_keywords: BTreeMap<
+        crate::characteristics::EffectInstanceKey,
+        Vec<crate::program::CombatTriggerKeyword>,
+    >,
     pub copiable_power_toughness: Option<PrintedPowerToughness>,
     pub battlefield_counters: Option<PowerToughnessCounters>,
+    /// All counter kinds on the battlefield incarnation at the captured cut.
+    pub battlefield_total_counters: Option<RulesInteger>,
     pub battlefield_marked_damage: Option<RulesInteger>,
     /// Current numeric values in this appearance's exact zone (CR 208.3).
     pub current_power_toughness: Option<PowerToughness>,
@@ -131,6 +169,12 @@ pub struct MarkedDamageRemoval {
     pub previous: RulesInteger,
 }
 impl SupportedAppearance {
+    /// CR 702.30a checks acquisition since the start of the controller's previous upkeep.
+    pub(crate) fn echo_condition(&self) -> bool {
+        self.object
+            .control_epoch()
+            .is_some_and(|epoch| self.previous_upkeep.is_none_or(|cut| epoch > cut))
+    }
     pub fn is_creature(&self) -> bool {
         self.types.contains(&CardType::Creature)
     }
@@ -140,11 +184,30 @@ impl SupportedAppearance {
 /// The immutable capture survives later countering, resolution or source departure.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CastOccurrence {
+    cast_from_graveyard: bool,
+    cast_from_library: Option<SeatId>,
+    pub(crate) ordinal_this_turn: Option<RulesInteger>,
+    mana_value: RulesInteger,
+    pub(crate) copy_source: Option<Box<crate::effects::cast_copies::CastCopySource>>,
+    cast_original_object: Option<ObjectId>,
+    spent_for_increment: Option<RulesInteger>,
     entry: StackEntryId,
     controller: SeatId,
     spell: SupportedAppearance,
 }
 impl CastOccurrence {
+    /// Mana value of the resulting stack spell when the cast completed.
+    pub fn ordinal_this_turn(&self) -> Option<&RulesInteger> {
+        self.ordinal_this_turn.as_ref()
+    }
+    pub fn mana_value(&self) -> &RulesInteger {
+        &self.mana_value
+    }
+    /// Actual mana spent when an increment ability could observe this cast.
+    pub fn spent_for_increment(&self) -> Option<&RulesInteger> {
+        self.spent_for_increment.as_ref()
+    }
+
     /// The actual canonical stack entry created by this cast.
     pub fn entry(&self) -> StackEntryId {
         self.entry
@@ -173,16 +236,32 @@ pub enum OpeningShufflePhase {
 /// replacements or controller choices. Further SBA families qualify separately.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum StateBasedMoveReason {
+    IllegalAura,
     ZeroToughness,
+    /// A planeswalker with no loyalty counters (CR 704.5i).
+    ZeroLoyalty,
+    /// A battle with zero defense, after any pending Siege trigger leaves the stack.
+    ZeroDefense,
+    /// No active player can protect this battle (CR 310.11).
+    NoBattleProtector,
+    /// The final chapter has been reached and all chapter abilities have left the stack.
+    CompletedSaga,
     LethalDestruction,
+    DeathtouchDestruction,
     Legend,
     World,
 }
 impl StateBasedMoveReason {
     const fn bit(self) -> u16 {
         match self {
+            Self::IllegalAura => 32,
             Self::ZeroToughness => 1,
+            Self::ZeroLoyalty => 64,
+            Self::ZeroDefense => 256,
+            Self::NoBattleProtector => 512,
+            Self::CompletedSaga => 128,
             Self::LethalDestruction => 2,
+            Self::DeathtouchDestruction => 16,
             Self::Legend => 4,
             Self::World => 8,
         }
@@ -205,9 +284,15 @@ impl StateBasedMoveReasons {
     pub fn iter(self) -> impl Iterator<Item = StateBasedMoveReason> {
         [
             StateBasedMoveReason::ZeroToughness,
+            StateBasedMoveReason::ZeroLoyalty,
+            StateBasedMoveReason::ZeroDefense,
+            StateBasedMoveReason::NoBattleProtector,
+            StateBasedMoveReason::CompletedSaga,
             StateBasedMoveReason::LethalDestruction,
+            StateBasedMoveReason::DeathtouchDestruction,
             StateBasedMoveReason::Legend,
             StateBasedMoveReason::World,
+            StateBasedMoveReason::IllegalAura,
         ]
         .into_iter()
         .filter(move |reason| self.contains(*reason))
@@ -218,10 +303,23 @@ impl StateBasedMoveReasons {
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ZoneReason {
-    /// CR 800.4c: the last surviving control effect ended after default control left.
-    DefaultControllerDeparted,
-    /// CR 800.4a exile after owned objects and control effects leave.
+    /// An object is exiled when its controller has left the game (CR 800.4a, 800.4c).
     PlayerDeparture,
+    CascadeExile,
+    CascadeBottom,
+    /// A madness trigger resolved without casting the exiled card.
+    MadnessDeclined,
+    Ingest {
+        player: SeatId,
+    },
+    CommanderReturn,
+    Plot,
+    Foretell,
+    Suspend,
+    DelveCost,
+    /// Other graveyard card exiled while paying an escape cost.
+    EscapeCost,
+    AlternativeHandExileCost,
     Surveil {
         player: SeatId,
     },
@@ -234,9 +332,63 @@ pub enum ZoneReason {
     PermanentResolution,
     ResolutionExit,
     AllTargetsIllegalExit,
+    Destroyed,
+    /// Exiled by a resolving instruction.
+    ExiledByEffect,
+    /// A searched card was put into its owner's hand.
+    SearchToHand,
+    /// A searched library card was put into its owner’s graveyard.
+    SearchToGraveyard,
+    /// Revealed library cards put into their owner’s graveyard.
+    RevealedToGraveyard,
+    PutLibraryCohortIntoGraveyard,
+    /// A graveyard card moved into its owner’s library for a shuffle.
+    ShuffleGraveyardIntoLibrary,
+    ShuffleHandAndGraveyardIntoLibrary,
+    /// A permanent moves into its owner’s library before shuffling.
+    ShufflePermanentIntoLibrary,
+    /// An effect put a card or token at the specified end of its owner's library.
+    PutIntoOwnersLibrary(crate::program::LibraryPlacement),
+    /// Previously exiled land cards move to the bottom in a random order.
+    ExiledCardsToLibraryBottom,
+    /// A card from a looked-at library segment moved to hand.
+    LookTopToHand,
+    SearchToExile,
+    /// A searched library card entered the battlefield.
+    SearchToBattlefield,
+    /// A looked-at library card was put onto the battlefield.
+    LookTopToBattlefield,
+    HandToBattlefield,
+    ExileToBattlefield,
+    Manifest,
+    /// A targeted creature card returned from its controller's graveyard.
+    ReturnFromGraveyardToBattlefield,
+    ReturnFromSacrifice,
+    /// A card returned as the linked source's exile duration ended.
+    ReturnFromLinkedExile,
+    /// A library creature entered as its controller resolved transfigure.
+    TransfigureEntry,
+    /// Returned by an unearth ability on resolution.
+    NinjutsuEntry,
+    UnearthReturn,
+    PersistReturn,
+    UndyingReturn,
+    /// Exiled by the delayed unearth trigger.
+    UnearthExile,
+    DashReturn,
+    WarpExile,
     ReturnToOwnersHand,
     Countered,
     SacrificeCost,
+    ExileCost,
+    /// Discarded to pay a transmute activation, independent of cycling.
+    TransmuteDiscard {
+        player: SeatId,
+    },
+    /// This card was discarded to pay for a particular cycling activation.
+    CycleDiscard {
+        player: SeatId,
+    },
     /// An affected controller's selected-object effect, distinct from payment.
     Sacrifice {
         player: SeatId,
@@ -253,12 +405,19 @@ pub enum ZoneReason {
 }
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ZoneOccurrence {
+    /// Other destination objects for the same single permanent departure.
+    pub additional_arrivals: Vec<SupportedAppearance>,
+    /// This discard was actually replaced by its own madness ability.
+    pub madness: bool,
     pub before: SupportedAppearance,
     pub after: SupportedAppearance,
     pub reason: ZoneReason,
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum StatusReason {
+    Effect,
+    Regeneration,
+    CastObjectCost,
     UntapTurn,
     ManaAbilityCost,
     ActivatedAbilityCost,
@@ -267,13 +426,79 @@ pub enum StatusReason {
 }
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TriggerRelated {
-    /// A phased-in permanent left the game; outside the game is not a zone.
-    LeftGame {
-        before: SupportedAppearance,
+    MiracleRevealed(ObjectId),
+    /// Mana actually paid for the separately targeted graveyard return.
+    GraveyardReturnPaid {
+        mana_value: RulesInteger,
+    },
+    /// A nonland discard created this reflexive damage trigger.
+    ReflexiveDiscardDamage {
+        amount: RulesInteger,
+    },
+    CardDrawn {
+        player: SeatId,
+    },
+    PlayerLost(SeatId),
+    LeftGame(ObjectId),
+    SagaChapter {
+        number: u8,
+    },
+    FinalSagaChapter {
+        saga: ObjectId,
+        mana_value: RulesInteger,
+    },
+    SubtypeCombatDamage {
+        creature: ObjectId,
+        player: SeatId,
+        attempt: DamageAttemptId,
+    },
+    AttachedCreatureDamaged {
+        creature: ObjectId,
+        attempt: DamageAttemptId,
+        amount: RulesInteger,
+    },
+    DamageToOpponent {
+        player: SeatId,
+        attempt: DamageAttemptId,
+    },
+    DamageReceived {
+        attempt: DamageAttemptId,
+        amount: RulesInteger,
+    },
+    DamageSource(crate::damage::DamageSourceId),
+    TargetingEntry(StackEntryId),
+    /// A permanent observed as a target, bound without targeting it with the trigger.
+    TargetedPermanent(ObjectId),
+    CounterSource(ObjectId),
+    StateTriggerSource(ObjectId),
+    Phased(ObjectId),
+    Mutated(ObjectId),
+    /// Exact battlefield object from the declaration. It is not a spell or ability target.
+    AttackedAlone(ObjectId),
+    AttackedWithTotalPower(RulesInteger),
+    DeclaredSubtypeAttackers(Vec<ObjectId>),
+    /// Exact permanent that attacked, blocked, became blocked, or blocked the trigger source.
+    Combatant(ObjectId),
+    ManaSource(ObjectId),
+    AttackGroup {
+        attacked: crate::targets::TargetRef,
+        creatures: Vec<ObjectId>,
+    },
+    CombatDamageToPlaneswalker {
+        planeswalker: ObjectId,
+        attempt: DamageAttemptId,
+    },
+    CombatDamageToPlayer {
+        source: ObjectId,
+        amount: RulesInteger,
+        player: SeatId,
+        attempt: DamageAttemptId,
     },
     LibraryAction(crate::effects::LibraryAction),
     /// Own the complete causing spell, not a later lookup or a printed-name alias.
     SpellCast(Box<CastOccurrence>),
+    SpellCopied(StackEntryId),
+    AbilityForCopy(std::sync::Arc<crate::effects::CapturedAbilityCopy>),
     TokenCreated {
         creator: SeatId,
         after: SupportedAppearance,
@@ -296,13 +521,34 @@ pub enum TriggerRelated {
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum PlayerLossReason {
+    /// At least 21 combat damage dealt by this same physical commander.
+    CommanderCombatDamage(crate::object_identity::CardId),
     NonpositiveLife,
+    TenPoisonCounters,
     FailedDraw,
+    Conceded,
+}
+/// A source-attributed poison-counter result. Multiple contributions can share a simultaneous cut.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PoisonContribution {
+    pub origin: PoisonOrigin,
+    pub source: crate::damage::DamageSourceId,
+    pub controller: SeatId,
+    pub amount: RulesInteger,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PoisonOrigin {
+    Infect(DamageAttemptId),
+    Toxic(DamageAttemptId),
+    Poisonous(StackEntryId),
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum EntryCompletion {
     Resolved,
     AllTargetsIllegal,
+    /// An intervening-if trigger's condition failed immediately before resolution.
+    InterveningIfFalse,
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DrawOrigin {
@@ -319,8 +565,41 @@ pub enum DrawOrigin {
 /// Family/context identity is typed; arbitrary strings cannot subscribe as triggers.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum EventCause {
-    PlayerDeparture {
-        players: BTreeSet<SeatId>,
+    TurnFaceUp {
+        actor: SeatId,
+        source: ObjectId,
+        payment: crate::mana::ManaPayment,
+    },
+    /// Face-up special action paid from hand without creating a stack entry.
+    Foretell {
+        actor: SeatId,
+        source: ObjectId,
+        payment: crate::mana::ManaPayment,
+    },
+    Suspend {
+        actor: SeatId,
+        source: ObjectId,
+        payment: crate::mana::ManaPayment,
+    },
+    Plot {
+        actor: SeatId,
+        source: ObjectId,
+        payment: crate::mana::ManaPayment,
+    },
+    TriggerTargetsBound {
+        entry: StackEntryId,
+    },
+    /// Other graveyard cards exiled together as one escape cost.
+    EscapePayment {
+        entry: StackEntryId,
+    },
+    /// One selected object contributed to the cost of the identified spell.
+    CastLifePayment {
+        entry: StackEntryId,
+    },
+    CastObjectPayment {
+        entry: StackEntryId,
+        resource: crate::mana::CastResource,
     },
     OpeningShuffle {
         player: SeatId,
@@ -393,6 +672,8 @@ pub enum EventCause {
         event: CheckEventId,
         boundary: CheckBoundary,
     },
+    /// Immediate CR 800.4a consequences, following any checked player losses.
+    PlayerDeparture,
     DamageAdjusted {
         batch: DamageBatchId,
     },
@@ -401,6 +682,10 @@ pub enum EventCause {
     },
     DamageResults {
         batch: DamageBatchId,
+    },
+    AttackCostPaid {
+        position: TurnPosition,
+        player: SeatId,
     },
     AttackTaps {
         position: TurnPosition,
@@ -425,6 +710,10 @@ pub enum EventCause {
     ManaPoolsEmptied {
         ended: TurnPosition,
     },
+    /// The scheduler passed departed seats before opening the next actual turn.
+    TurnOrderAdvanced {
+        position: TurnPosition,
+    },
     StepBegan {
         position: TurnPosition,
     },
@@ -433,9 +722,222 @@ pub enum EventCause {
 /// One canonical occurrence. Overlapping move properties share its one identity.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RulesOccurrence {
-    /// CR 603.6c lookback evidence, without a fabricated destination or death.
-    ObjectLeftGame {
+    /// A scheduled turn of a departed player would have started (CR 800.4k, 800.4m).
+    TurnsSkipped {
+        players: BTreeSet<SeatId>,
+        expired_effects: Vec<ContinuousEffectId>,
+    },
+    /// A visible permanent left the game without moving to another zone.
+    PermanentLeftGame {
         before: Box<SupportedAppearance>,
+    },
+    /// Result of a fair rules-engine coin flip for the resolving player.
+    CoinFlipped {
+        player: SeatId,
+        won: bool,
+    },
+    /// A public vote for one exact card during a resolving spell or ability.
+    CardVoteCast {
+        player: SeatId,
+        object: ObjectId,
+    },
+    GraveyardReturnPaid {
+        source: Box<SupportedAppearance>,
+        controller: SeatId,
+        mana_value: RulesInteger,
+    },
+    StackExiledToEndTurn {
+        entries: Vec<StackEntryId>,
+    },
+    /// A qualifying discard generated a separately targeted reflexive trigger.
+    ReflexiveDiscardDamage {
+        source: Box<SupportedAppearance>,
+        controller: SeatId,
+        amount: RulesInteger,
+    },
+    CommanderTypeManaSpent {
+        source: Box<SupportedAppearance>,
+        player: SeatId,
+        units: RulesInteger,
+    },
+    /// Mana added by a resolving effect, not a mana-ability activation.
+    ManaAddedByEffect {
+        entry: StackEntryId,
+        player: SeatId,
+        produced: BTreeMap<ManaType, RulesInteger>,
+        before: BTreeMap<ManaType, RulesInteger>,
+        after: BTreeMap<ManaType, RulesInteger>,
+    },
+    /// A persistent source-independent emblem was created in the command zone.
+    Phased {
+        objects: Vec<ObjectId>,
+        out: bool,
+    },
+    Mutated {
+        permanent: ObjectId,
+    },
+    AttackDefenderChanged {
+        attacker: ObjectId,
+        from: crate::targets::TargetRef,
+        to: crate::targets::TargetRef,
+    },
+    EmblemActivated {
+        entry: StackEntryId,
+        emblem: crate::emblem::EmblemId,
+        controller: SeatId,
+    },
+    EmblemCreated {
+        emblem: crate::emblem::Emblem,
+    },
+    SpeedChanged {
+        player: SeatId,
+        before: u8,
+        after: u8,
+    },
+    /// A player gained or changed the unique monarch designation.
+    MonarchChanged {
+        before: Option<SeatId>,
+        after: Option<SeatId>,
+    },
+    CityBlessingGained {
+        player: SeatId,
+    },
+    DayNightChanged {
+        before: crate::day_night::DayNight,
+        after: crate::day_night::DayNight,
+    },
+    Transformed {
+        before: Box<SupportedAppearance>,
+        after: Box<SupportedAppearance>,
+    },
+    TurnedFaceUp {
+        before: Box<SupportedAppearance>,
+        after: Box<SupportedAppearance>,
+        ability: usize,
+    },
+    TurnedFaceUpByEffect {
+        before: Box<SupportedAppearance>,
+        after: Box<SupportedAppearance>,
+    },
+    FaceDownRevealed {
+        object: GameObject,
+    },
+    /// A card revealed from a looked-at library segment.
+    LibraryCardRevealed {
+        object: GameObject,
+    },
+    /// The permanent explored, including when its library was empty.
+    Explored {
+        source: GameObject,
+        controller: SeatId,
+    },
+    /// A card revealed from hand while choosing how a permanent enters.
+    HandCardRevealed {
+        object: GameObject,
+    },
+    /// A privately offered first draw was revealed for its Miracle ability.
+    MiracleRevealed {
+        object: Box<SupportedAppearance>,
+    },
+    /// Actual object and opposing controller captured when the target was chosen.
+    PermanentTargeted {
+        object: ObjectId,
+        entry: StackEntryId,
+        controller: SeatId,
+        instant_or_sorcery: bool,
+    },
+    /// An extra turn was scheduled for this player.
+    AdditionalCombatCreated,
+    ExtraTurnCreated {
+        player: SeatId,
+    },
+    RegenerationShieldCreated {
+        object: ObjectId,
+        entry: StackEntryId,
+        instruction: usize,
+    },
+    PermanentRegenerated {
+        object: ObjectId,
+        entry: StackEntryId,
+        instruction: usize,
+        removed_damage: RulesInteger,
+        removed_from_combat: bool,
+    },
+    CreaturesGoaded {
+        player: SeatId,
+        objects: Vec<ObjectId>,
+    },
+    TurnPreventionCreated {
+        creator: StackEntryId,
+        instruction: usize,
+        controller: SeatId,
+        filter: crate::damage::TurnPreventionFilter,
+    },
+    /// Damage prevented by a persistent source-independent emblem.
+    EmblemDamagePrevented {
+        emblem: crate::emblem::EmblemId,
+        source: crate::damage::DamageSourceId,
+        batch: crate::damage::DamageBatchId,
+        stage: u64,
+        recipient: crate::damage::DamageRecipient,
+        allocations: Vec<crate::damage::DamageAllocation>,
+    },
+    StaticDamageMultiplied {
+        source: ObjectId,
+        batch: crate::damage::DamageBatchId,
+        stage: u64,
+        attempt: crate::damage::DamageAttemptId,
+        before: RulesInteger,
+        after: RulesInteger,
+    },
+    DamageReplacedWithMill {
+        source: ObjectId,
+        batch: crate::damage::DamageBatchId,
+        stage: u64,
+        player: SeatId,
+        allocations: Vec<crate::damage::DamageAllocation>,
+    },
+    StaticDamagePrevented {
+        source: ObjectId,
+        batch: crate::damage::DamageBatchId,
+        stage: u64,
+        recipient: crate::damage::DamageRecipient,
+        allocations: Vec<crate::damage::DamageAllocation>,
+    },
+    TurnDamagePrevented {
+        creator: StackEntryId,
+        instruction: usize,
+        batch: crate::damage::DamageBatchId,
+        stage: u64,
+        recipient: crate::damage::DamageRecipient,
+        allocations: Vec<crate::damage::DamageAllocation>,
+    },
+    /// One existing stack object acquired the final target plan after a retarget effect.
+    SpellControllerChanged {
+        entry: StackEntryId,
+        before: SeatId,
+        after: SeatId,
+    },
+    StackTargetsChanged {
+        entry: StackEntryId,
+        before: Vec<TargetChoice>,
+        after: Vec<TargetChoice>,
+    },
+    AbilityCountered {
+        entry: StackEntryId,
+    },
+    /// A creature-powered activation resolved on its source.
+    PowerAbilityResolved {
+        source: ObjectId,
+        kind: crate::activated::PowerAbility,
+        contributors: Vec<ObjectId>,
+        /// Actual charge counters placed by a station activation, including zero.
+        charge_placed: Option<spellwake_contracts::RulesInteger>,
+    },
+    AttachmentChanged {
+        source: ObjectId,
+        before: Option<crate::targets::TargetRef>,
+        after: Option<crate::targets::TargetRef>,
     },
     LibraryAction(crate::effects::LibraryAction),
     TokenCreated {
@@ -488,13 +990,37 @@ pub enum RulesOccurrence {
         before: RulesInteger,
         after: RulesInteger,
     },
+    /// Unprotected mana expired while other units remained in the same pool.
+    ManaExpired {
+        player: SeatId,
+        expired: BTreeMap<ManaType, RulesInteger>,
+        remaining: BTreeMap<ManaType, RulesInteger>,
+    },
+    ArtifactTappedForMana {
+        source: ObjectId,
+        actor: SeatId,
+    },
+    CardDrawOrdinal {
+        player: SeatId,
+        number: RulesInteger,
+    },
     ManaPoolEmptied {
         player: SeatId,
         previous: BTreeMap<ManaType, RulesInteger>,
     },
+    AbilityCopied {
+        entry: StackEntryId,
+        original: StackEntryId,
+        controller: SeatId,
+        targets: Vec<TargetChoice>,
+    },
     CopyCreated {
+        copiable_keywords: BTreeSet<KeywordAbility>,
         copiable_card_types: BTreeSet<CardType>,
         copiable_creature_subtypes: BTreeSet<CreatureTypeId>,
+        copiable_spell_subtypes: BTreeSet<crate::program::SpellSubtype>,
+        copiable_artifact_subtypes: BTreeSet<crate::program::ArtifactSubtype>,
+        copiable_enchantment_subtypes: BTreeSet<crate::program::EnchantmentSubtype>,
         copiable_names: spellwake_contracts::names::ObjectNames,
         copiable_supertypes: BTreeSet<crate::program::Supertype>,
         copiable_triggered: Vec<TriggeredAbility>,
@@ -512,9 +1038,18 @@ pub enum RulesOccurrence {
     CopyCeased {
         copy: SpellCopyObject,
     },
+    /// A resolved player acquires lasting protection from this chosen color.
+    PlayerProtectionGranted {
+        player: SeatId,
+        color: crate::characteristics::Color,
+    },
     ContinuousEffectCreated {
         effect: ResolvedContinuousEffect,
         appearances: Vec<CharacteristicAppearanceChange>,
+    },
+    /// Source-dependent continuous effects ended before the next game action.
+    SourceControlEffectsEnded {
+        effects: Vec<ContinuousEffectId>,
     },
     CleanupCharacteristics {
         expired_effects: Vec<ContinuousEffectId>,
@@ -524,6 +1059,73 @@ pub enum RulesOccurrence {
     CombatantsRemoved {
         participants: Vec<Combatant>,
     },
+    TimeCounterRemoved {
+        object: ObjectId,
+        before: RulesInteger,
+        after: RulesInteger,
+    },
+    FadeCounterRemoved {
+        object: ObjectId,
+        before: RulesInteger,
+        after: RulesInteger,
+    },
+    AgeCounterPlaced {
+        object: ObjectId,
+        before: RulesInteger,
+        after: RulesInteger,
+    },
+    /// Physical loyalty counters changed while paying an activated ability cost.
+    PermanentCountersDoubled {
+        selected: BTreeMap<crate::targets::TargetRef, BTreeSet<crate::effects::CounterKind>>,
+    },
+    Proliferated {
+        player: SeatId,
+        selected: BTreeMap<crate::targets::TargetRef, BTreeSet<crate::effects::CounterKind>>,
+    },
+    LoreCountersChanged {
+        object: ObjectId,
+        before: RulesInteger,
+        after: RulesInteger,
+        exact_chapter_only: bool,
+    },
+    /// A state-trigger condition became eligible and has no pending instance (CR 603.8).
+    CounterThresholdMet {
+        object: ObjectId,
+        definition: TriggeredAbilityId,
+        grant: Option<crate::characteristics::EffectInstanceKey>,
+        kind: crate::effects::CounterKind,
+    },
+    SubtypeThresholdMet {
+        object: ObjectId,
+        definition: TriggeredAbilityId,
+        grant: Option<crate::characteristics::EffectInstanceKey>,
+    },
+    PermanentCounterChanged {
+        object: ObjectId,
+        kind: crate::effects::CounterKind,
+        before: RulesInteger,
+        after: RulesInteger,
+    },
+    SuspectCountersChanged {
+        object: ObjectId,
+        before: RulesInteger,
+        after: RulesInteger,
+    },
+    ChargeCountersChanged {
+        object: ObjectId,
+        before: RulesInteger,
+        after: RulesInteger,
+    },
+    StorageCountersChanged {
+        object: ObjectId,
+        before: RulesInteger,
+        after: RulesInteger,
+    },
+    LoyaltyCountersChanged {
+        object: ObjectId,
+        before: RulesInteger,
+        after: RulesInteger,
+    },
     CountersPlaced {
         object: ObjectId,
         before: PowerToughnessCounters,
@@ -531,6 +1133,17 @@ pub enum RulesOccurrence {
         after: PowerToughnessCounters,
         before_appearance: Box<SupportedAppearance>,
         after_appearance: Box<SupportedAppearance>,
+    },
+    /// Counters removed by a resolving ordinary effect.
+    PowerToughnessCountersRemoved {
+        object: ObjectId,
+        before: PowerToughnessCounters,
+        after: PowerToughnessCounters,
+    },
+    CounterRemovedForGraft {
+        object: ObjectId,
+        before: PowerToughnessCounters,
+        after: PowerToughnessCounters,
     },
     CountersCancelled {
         object: ObjectId,
@@ -544,9 +1157,11 @@ pub enum RulesOccurrence {
         damage_before: BTreeMap<DamageAttemptId, RulesInteger>,
         shield_before: RulesInteger,
     },
+    ProtectionPrevented(crate::damage::ProtectionPrevention),
     DamageMultiplied(DamageMultiplication),
     DamageDealt {
         damage: AppliedDamage,
+        source_subtypes: BTreeSet<CreatureTypeId>,
         kind: DamageKind,
         origin: DamageOrigin,
     },
@@ -556,9 +1171,36 @@ pub enum RulesOccurrence {
         after: RulesInteger,
         components: Vec<DamageAttemptId>,
     },
+    CreatureEvolved {
+        object: ObjectId,
+    },
+    CreatureMentored {
+        source: ObjectId,
+        target: ObjectId,
+    },
+    BecameRenowned {
+        object: ObjectId,
+    },
+    ExperienceCountersChanged {
+        player: SeatId,
+        before: RulesInteger,
+        after: RulesInteger,
+    },
+    PlayerPoisoned {
+        player: SeatId,
+        before: RulesInteger,
+        after: RulesInteger,
+        contributions: Vec<PoisonContribution>,
+    },
     PlayerLost {
         player: SeatId,
         reasons: BTreeSet<PlayerLossReason>,
+    },
+    AttackCostPaid {
+        player: SeatId,
+        cost: crate::combat::AttackCost,
+        white_symbols_paid_with_life: RulesInteger,
+        mana: Vec<crate::mana::ManaSpend>,
     },
     AttackersDeclared {
         origin: DeclarationOrigin,
@@ -575,6 +1217,11 @@ pub enum RulesOccurrence {
     CombatEnded {
         previous: Option<CombatState>,
     },
+    FinalSagaChapterCompleted {
+        saga: ObjectId,
+        controller: SeatId,
+        mana_value: RulesInteger,
+    },
     EntryCompleted {
         entry: StackEntryId,
         controller: SeatId,
@@ -583,7 +1230,7 @@ pub enum RulesOccurrence {
     },
     StepBegan {
         position: TurnPosition,
-        active: Option<SeatId>,
+        active: SeatId,
     },
 }
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -597,10 +1244,29 @@ pub struct RulesEvent {
     pub cause: EventCause,
     pub occurrences: Vec<EventOccurrence>,
 }
+impl RulesOccurrence {
+    /// Previous battlefield appearance for effects that need a departed permanent's information.
+    pub(crate) fn departing_permanent(&self) -> Option<&SupportedAppearance> {
+        match self {
+            Self::PermanentLeftGame { before } => Some(before),
+            Self::ZoneChange(change)
+                if change.before.object.zone() == ObjectZone::Battlefield
+                    && change.after.object.zone() != ObjectZone::Battlefield =>
+            {
+                Some(&change.before)
+            }
+            _ => None,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WaitingInstance {
     pub id: TriggerInstanceId,
+    /// Printed definition ID or zero-based occurrence within this grant.
     pub definition: TriggeredAbilityId,
+    /// Together with the source and definition ID, identifies a granted ability instance.
+    pub granting_effect: Option<crate::characteristics::EffectInstanceKey>,
     pub causes: TriggerCauseSet,
     pub source: SupportedAppearance,
     pub controller: SeatId,
@@ -610,7 +1276,10 @@ pub struct WaitingInstance {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TriggerBinding {
     pub instance: TriggerInstanceId,
+    /// Printed definition ID or zero-based occurrence within this grant.
     pub definition: TriggeredAbilityId,
+    /// Together with the source and definition ID, identifies a granted ability instance.
+    pub granting_effect: Option<crate::characteristics::EffectInstanceKey>,
     pub causes: TriggerCauseSet,
     pub source: SupportedAppearance,
 }
@@ -623,6 +1292,7 @@ impl WaitingInstance {
         let binding = TriggerBinding {
             instance: self.id,
             definition: self.definition,
+            granting_effect: self.granting_effect,
             causes: self.causes,
             source: self.source,
         };
@@ -641,6 +1311,12 @@ pub struct TriggerPlacement {
 /// Its private fields describe one exact pending native revision, not host authority.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TriggerTargetChoice {
+    pub(crate) modal: Option<TriggerModesChoice>,
+    pub(crate) secondary_targets:
+        Option<BTreeMap<crate::targets::TargetRef, Vec<crate::targets::TargetRef>>>,
+    pub(crate) bounds: Option<(usize, usize)>,
+    pub(crate) ordered_any: bool,
+    pub(crate) divides_three_damage: bool,
     pub(crate) revision: u64,
     pub(crate) boundary: CheckBoundary,
     pub(crate) event: CheckEventId,
@@ -650,7 +1326,46 @@ pub struct TriggerTargetChoice {
     pub(crate) entry: StackEntryId,
     pub(crate) domain: Vec<crate::targets::TargetRef>,
 }
+/// Available printed modes and the exact current domain of each mode's target.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TriggerModesChoice {
+    pub minimum: u8,
+    pub maximum: u8,
+    pub distinct_targets: bool,
+    pub modes: Vec<TriggerModeOption>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TriggerModeOption {
+    pub index: u8,
+    pub multiple: Option<(usize, usize)>,
+    pub target_required: bool,
+    pub targets: Vec<crate::targets::TargetRef>,
+}
+
 impl TriggerTargetChoice {
+    pub fn modal(&self) -> Option<&TriggerModesChoice> {
+        self.modal.as_ref()
+    }
+    /// Legal optional creature targets grouped by the chosen first target.
+    pub fn secondary_targets(
+        &self,
+    ) -> Option<&BTreeMap<crate::targets::TargetRef, Vec<crate::targets::TargetRef>>> {
+        self.secondary_targets.as_ref()
+    }
+    /// Multiple objects picked for the same printed occurrence of "target".
+    pub fn permanent_target_bounds(&self) -> Option<(usize, usize)> {
+        if self.ordered_any { None } else { self.bounds }
+    }
+    /// Ordered choice of any-target recipients, with the first chosen separately meaningful.
+    pub fn ordered_any_target_bounds(&self) -> Option<(usize, usize)> {
+        if self.ordered_any { self.bounds } else { None }
+    }
+    /// Divide three damage among the ordered recipients, assigning any remainder to the first.
+    pub fn divides_three_damage(&self) -> bool {
+        self.divides_three_damage
+    }
+
     /// Malformed-frame probe with no change to the owning wave allocator.
     #[cfg(test)]
     pub(crate) fn qualification_with_next_wave(&self) -> Result<Self, TriggerError> {
@@ -749,23 +1464,46 @@ impl TriggerOrder {
 }
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RulesRecord {
-    /// CR 800.4g object choice reassignment; no Magic event or instruction restart.
-    ChooserReplaced {
-        entry: StackEntryId,
-        instruction: usize,
-        departed: SeatId,
-        controller: SeatId,
-        candidates: Vec<SeatId>,
-        selected: SeatId,
+    /// Declaring attackers was reversed before the attack cost was paid.
+    AttackDeclarationReversed {
+        player: SeatId,
+        attackers: Vec<ObjectId>,
+        kept_mana_abilities: bool,
+        reversed_mana: BTreeSet<crate::game::AttackManaId>,
+        retracted_tap_triggers: BTreeSet<TriggerInstanceId>,
     },
-    /// One atomic CR 800.4a cut, distinct from state-based loss and zone changes.
-    PlayersDeparted {
-        players: BTreeSet<SeatId>,
-        owned_objects: Vec<GameObject>,
-        ended_control: Vec<ResolvedContinuousEffect>,
-        ceased_entries: Vec<crate::stack_window::StackEntry>,
-        ceased_copies: Vec<SpellCopyObject>,
-        discarded_triggers: Vec<WaitingInstance>,
+    /// An unfinished child cast was reversed after irreversible mana effects.
+    CastAnnouncementReversed {
+        entry: StackEntryId,
+        stack_object: ObjectId,
+        restored: ObjectId,
+    },
+    /// A source-independent emblem triggered from one actual spell cast.
+    EmblemTriggerDiscovered {
+        instance: TriggerInstanceId,
+        controller: SeatId,
+        emblem: crate::emblem::EmblemId,
+        cause: OccurrenceId,
+    },
+    /// A source-free inherent monarch trigger, controlled by the former monarch.
+    MonarchTriggerDiscovered {
+        instance: TriggerInstanceId,
+        controller: SeatId,
+        beneficiary: Option<SeatId>,
+        causes: Vec<OccurrenceId>,
+    },
+    /// A source-independent delayed trigger from an already resolved spell copy.
+    DelayedCopyTriggerDiscovered {
+        instance: TriggerInstanceId,
+        controller: SeatId,
+        original: StackEntryId,
+        cause: OccurrenceId,
+    },
+    /// A player's inherent speed trigger has no object source (CR 718).
+    SpeedTriggerDiscovered {
+        instance: TriggerInstanceId,
+        controller: SeatId,
+        causes: Vec<OccurrenceId>,
     },
     /// Root-owned immediate end; not a triggerable event or child allocation.
     GameConcluded {
@@ -779,12 +1517,21 @@ pub enum RulesRecord {
         outcome: crate::effects::OptionalEffectChoice,
         next: usize,
     },
+    /// The resolving instruction's original chooser has been replaced under CR 800.4g.
+    ChooserReplaced {
+        entry: StackEntryId,
+        instruction: usize,
+        departed: SeatId,
+        chooser: SeatId,
+        selected: SeatId,
+    },
     /// Actual quoted resolution cost and explicit result; not a Magic event.
     ResolutionPaymentOutcome {
         entry: StackEntryId,
         instruction: usize,
         payer: SeatId,
         cost: crate::mana::ManaCost,
+        restricted_colors: Option<[crate::mana::ManaType; 2]>,
         outcome: crate::effects::ResolutionPaymentOutcome,
         next: usize,
     },
@@ -829,14 +1576,14 @@ impl RulesJournal {
 /// A successful local transition always transports its current append with its state/result.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RulesTransition<S, R> {
-    state: S,
+    state: Box<S>,
     result: R,
     append: RulesJournal,
 }
 impl<S, R> RulesTransition<S, R> {
     pub(crate) fn new(state: S, result: R, append: RulesJournal) -> Self {
         Self {
-            state,
+            state: Box::new(state),
             result,
             append,
         }
@@ -851,6 +1598,9 @@ impl<S, R> RulesTransition<S, R> {
         &self.append
     }
     pub fn into_parts(self) -> (S, R, RulesJournal) {
+        (*self.state, self.result, self.append)
+    }
+    pub(crate) fn into_boxed_parts(self) -> (Box<S>, R, RulesJournal) {
         (self.state, self.result, self.append)
     }
     /// Change a typed result without dropping the successor or its current append.
@@ -863,23 +1613,109 @@ impl<S, R> RulesTransition<S, R> {
     }
     /// Explicitly discard the operation result and append outside receipt-preserving paths.
     pub fn into_state(self) -> S {
-        self.state
+        *self.state
     }
 }
 
 /// Complete relevant immutable queries at one actual cut, not a replayed journal world.
 pub(crate) struct RulesView<'a> {
+    pub(crate) morbid: bool,
+    pub(crate) previous_turn_casts: Option<crate::program::PreviousTurnCastCondition>,
     pub(crate) window: &'a StackWindow,
     pub(crate) cards: &'a GameObjects,
+    pub(crate) name_rules: &'a spellwake_contracts::names::NameRules,
+    pub(crate) programs: &'a BTreeMap<crate::object_identity::CardId, crate::program::Program>,
     pub(crate) characteristics: &'a CharacteristicState,
     pub(crate) evaluated: Arc<EvaluatedCharacteristics>,
     pub(crate) marks: &'a BTreeMap<ObjectId, RulesInteger>,
     pub(crate) mana: &'a BTreeMap<(SeatId, ManaType), RulesInteger>,
     pub(crate) life: &'a LifeState,
     pub(crate) combat: Option<&'a CombatState>,
+    pub(crate) step: Option<crate::turn::Step>,
     pub(crate) turn: Option<&'a TurnScheduler>,
 }
 impl RulesView<'_> {
+    pub(crate) fn opponent_lost_life(&self, controller: SeatId, minimum: u8) -> bool {
+        self.characteristics
+            .life_lost_this_turn
+            .iter()
+            .any(|(&seat, amount)| {
+                player_matches(PlayerRelation::Opponent, controller, seat, self)
+                    && amount >= &i64::from(minimum).into()
+            })
+    }
+    pub(crate) fn controls_own_commander(&self, controller: SeatId) -> bool {
+        self.evaluated.objects.values().any(|view| {
+            view.zone == ObjectZone::Battlefield
+                && view.commander_owner == Some(controller)
+                && view.controller == Some(controller)
+        })
+    }
+    /// Whether a controller has an artifact tied for the greatest current mana value.
+    pub(crate) fn controls_greatest_artifact(&self, controller: SeatId) -> bool {
+        let mut greatest: Option<RulesInteger> = None;
+        let mut greatest_owned: Option<RulesInteger> = None;
+        for object in self.evaluated.objects.values().filter(|object| {
+            object.zone == ObjectZone::Battlefield
+                && object.has_type(crate::program::CardType::Artifact)
+        }) {
+            let Some(physical) = self.cards.get(object.object) else {
+                return false;
+            };
+            let value = if physical.face_down().is_some() {
+                Some(0.into())
+            } else if physical.transformed()
+                && self
+                    .characteristics
+                    .copied_definition(object.object)
+                    .is_none()
+            {
+                physical
+                    .card_id()
+                    .and_then(|id| self.programs.get(&id))
+                    .map(crate::program::Program::mana_value)
+            } else {
+                self.characteristics
+                    .copiable_definition(physical, self.programs)
+                    .map(|(program, _)| program.mana_value())
+            };
+            let Some(value) = value else {
+                return false;
+            };
+            if greatest.as_ref().is_none_or(|old| &value > old) {
+                greatest = Some(value.clone());
+            }
+            if object.controller == Some(controller)
+                && greatest_owned.as_ref().is_none_or(|old| &value > old)
+            {
+                greatest_owned = Some(value);
+            }
+        }
+        greatest.is_some() && greatest == greatest_owned
+    }
+    fn land_count(&self, seat: SeatId) -> usize {
+        self.evaluated
+            .objects
+            .values()
+            .filter(|object| {
+                object.zone == ObjectZone::Battlefield
+                    && object.controller == Some(seat)
+                    && object.has_type(crate::program::CardType::Land)
+            })
+            .count()
+    }
+    pub(crate) fn opponent_has_more_lands(&self, controller: SeatId) -> bool {
+        self.players_with_more_lands(controller) > 0
+    }
+    pub(crate) fn players_with_more_lands(&self, controller: SeatId) -> usize {
+        let own = self.land_count(controller);
+        self.window
+            .participants()
+            .iter()
+            .copied()
+            .filter(|&seat| seat != controller && self.land_count(seat) > own)
+            .count()
+    }
     /// Capture only the canonical physical spell in this actual completed world.
     ///
     /// # Errors
@@ -889,6 +1725,8 @@ impl RulesView<'_> {
         &self,
         entry: StackEntryId,
         controller: SeatId,
+        spend: &[crate::mana::ManaSpend],
+        mana_value: RulesInteger,
     ) -> Result<CastOccurrence, TriggerError> {
         let actual = self
             .window
@@ -917,7 +1755,26 @@ impl RulesView<'_> {
         {
             return Err(TriggerError::InvalidWorld);
         }
+        let increment = self.evaluated.objects.values().any(|current| {
+            current.zone == ObjectZone::Battlefield
+                && current.controller == Some(controller)
+                && current.printed_text.triggered.iter().any(|ability| {
+                    ability.condition.event == TriggerEvent::Keyword(TriggerKeywordEvent::Increment)
+                        && current.abilities.triggered.contains(&ability.id)
+                })
+        });
         Ok(CastOccurrence {
+            cast_from_library: actual.cast_from_library,
+            cast_from_graveyard: actual.cast_from_graveyard,
+            cast_original_object: actual.cast_original_object,
+            ordinal_this_turn: None,
+            mana_value,
+            copy_source: None,
+            spent_for_increment: increment.then(|| {
+                spend
+                    .iter()
+                    .fold(RulesInteger::from(0), |sum, mana| sum.plus(&mana.amount))
+            }),
             entry,
             controller,
             spell,
@@ -943,7 +1800,20 @@ impl RulesView<'_> {
         let physical = self.cards.get(object)?;
         let current = self.evaluated.get(object)?;
         let battlefield = physical.zone() == ObjectZone::Battlefield;
+        let stack_spell = (physical.zone() == ObjectZone::Stack)
+            .then(|| {
+                self.window
+                    .entries()
+                    .iter()
+                    .chain(self.window.resolving())
+                    .find(|entry| self.window.spell_object(entry) == Some(object))
+            })
+            .flatten();
         Some(SupportedAppearance {
+            cast_origin: stack_spell.and_then(crate::stack_window::StackEntry::cast_origin),
+            spell_x: stack_spell
+                .and_then(crate::stack_window::StackEntry::chosen_x)
+                .cloned(),
             object: physical.clone(),
             copiable_names: current.defined.names.clone(),
             current_names: current.current_names.clone(),
@@ -952,15 +1822,51 @@ impl RulesView<'_> {
             copiable_card_types: current.defined.types.clone(),
             copiable_creature_subtypes: current.defined.creature_subtypes.clone(),
             copiable_land_subtypes: current.defined.land_subtypes.clone(),
+            copiable_spell_subtypes: current.defined.spell_subtypes.clone(),
+            copiable_artifact_subtypes: current.defined.artifact_subtypes.clone(),
+            copiable_enchantment_subtypes: current.defined.enchantment_subtypes.clone(),
             types: current.current_types.clone(),
             creature_subtypes: current.current_creature_subtypes.clone(),
             land_subtypes: current.current_land_subtypes.clone(),
+            spell_subtypes: current.current_spell_subtypes.clone(),
+            artifact_subtypes: current.current_artifact_subtypes.clone(),
+            enchantment_subtypes: current.current_enchantment_subtypes.clone(),
             intrinsic_mana: current.intrinsic_mana.clone(),
             colors: current.current_colors.clone(),
             abilities: current.abilities.clone(),
             printed_text: current.printed_text.clone(),
+            saddled: current.saddled,
+            attached_to: current.attached_to,
             keywords: current.keywords.clone(),
+            time_counters: self.characteristics.time_counters.get(&object).cloned(),
+            fade_counters: self.characteristics.fade.get(&object).cloned(),
+            previous_upkeep: current
+                .printed_text
+                .triggered
+                .iter()
+                .any(|a| {
+                    a.condition.event
+                        == TriggerEvent::Keyword(TriggerKeywordEvent::Upkeep(
+                            crate::program::UpkeepKeyword::Echo,
+                        ))
+                })
+                .then(|| {
+                    self.characteristics
+                        .upkeep_cuts
+                        .as_ref()?
+                        .get(&physical.controller()?)
+                        .copied()
+                })
+                .flatten(),
+            renowned: self.characteristics.renowned.contains(&object),
+            toxic_value: current.toxic_value.clone(),
+            granted_triggers: current.granted_triggers.clone(),
+            granted_unblockable: current.granted_unblockable,
+            granted_exalted: current.granted_exalted.clone(),
+            granted_combat_keywords: current.granted_combat_keywords.clone(),
             copiable_power_toughness: current.defined.printed_pt.clone(),
+            battlefield_total_counters: battlefield
+                .then(|| self.characteristics.total_permanent_counters(object)),
             battlefield_counters: battlefield.then(|| self.characteristics.counters(object)),
             battlefield_marked_damage: battlefield
                 .then(|| self.marks.get(&object).cloned().unwrap_or_else(|| 0.into())),
@@ -981,21 +1887,138 @@ pub(crate) fn validate_event_shape(values: &[RulesOccurrence]) -> Result<(), Tri
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum DelayedStepAction {
+    ReturnExiledWithCounters(Vec<ObjectId>),
+    Exile {
+        step: crate::turn::Step,
+        objects: Vec<ObjectId>,
+    },
+    Sacrifice {
+        step: crate::turn::Step,
+        objects: Vec<ObjectId>,
+    },
+    Cast {
+        object: ObjectId,
+        kind: crate::program::EndStepCast,
+    },
+    ReturnFromExile(Vec<ObjectId>),
+    ReturnFromGraveyard {
+        object: ObjectId,
+        while_source_remains: bool,
+    },
+    ReturnFromGraveyardTransformed(ObjectId),
+    ReturnGraveyardToHand(ObjectId),
+    ReturnPermanentToHand(ObjectId),
+    PhaseOut(Vec<ObjectId>),
+    Unearth(ObjectId),
+    Rebound(ObjectId),
+}
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct DelayedStepTrigger {
+    source: SupportedAppearance,
+    controller: SeatId,
+    action: DelayedStepAction,
+}
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct WaitingEmblem {
+    pub controller: SeatId,
+    pub emblem: crate::emblem::EmblemId,
+    pub body: ExecutableBody,
+}
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum AbilityCopyWatch {
+    NextLoyalty,
+    PlaneswalkerType(crate::program::PlaneswalkerSubtype),
+}
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum DelayedCopyAction {
+    Draw(RulesInteger, BTreeSet<crate::characteristics::Color>),
+    ReturnExiledWithCounters(Vec<ObjectId>),
+    ReturnExiled(Vec<ObjectId>),
+    Sacrifice(Vec<ObjectId>),
+    SpellTwice(Box<CastOccurrence>, BTreeSet<crate::characteristics::Color>),
+    AbilityTwice(
+        Arc<crate::effects::CapturedAbilityCopy>,
+        BTreeSet<crate::characteristics::Color>,
+    ),
+    GrantCastCardAbilities {
+        recipient: ObjectId,
+        donor: Box<crate::characteristics::ObjectCharacteristics>,
+    },
+}
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct GraveyardCastWatch {
+    player: SeatId,
+    original: StackEntryId,
+    recipient: ObjectId,
+    card: ObjectId,
+}
+
 /// Only checked counters and owned waiting instances survive acceptance.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct TriggerState {
     next_event: u64,
     next_instance: u64,
+    watched_graveyard_casts: Vec<GraveyardCastWatch>,
     next_wave: u64,
     waiting: BTreeMap<TriggerInstanceId, WaitingInstance>,
+    speed_waiting: BTreeMap<TriggerInstanceId, SeatId>,
+    monarch_waiting: BTreeMap<TriggerInstanceId, (SeatId, Option<SeatId>)>,
+    emblem_waiting: BTreeMap<TriggerInstanceId, WaitingEmblem>,
+    combat_draws: Vec<combat_draw::CombatDrawWatch>,
+    weakening_attack_triggers: Vec<(SupportedAppearance, SeatId, BTreeSet<SeatId>)>,
+    delayed_emblem_returns: Vec<(crate::emblem::EmblemId, SeatId, ObjectId)>,
+    delayed_copy_waiting: BTreeMap<TriggerInstanceId, (SeatId, StackEntryId, DelayedCopyAction)>,
+    delayed_copy_steps: Vec<(SeatId, StackEntryId, crate::turn::Step, DelayedCopyAction)>,
+    token_leave_triggers: BTreeMap<ObjectId, (SupportedAppearance, SeatId)>,
+    speed_triggered_turn: Option<(u64, SeatId)>,
+    current_speed_turn: Option<(u64, SeatId)>,
+    declared_attackers_this_turn: BTreeSet<ObjectId>,
+    once_this_turn: BTreeSet<(
+        ObjectId,
+        Option<crate::characteristics::EffectInstanceKey>,
+        TriggeredAbilityId,
+    )>,
+    used_optional_trigger_effects: BTreeSet<(
+        ObjectId,
+        Option<crate::characteristics::EffectInstanceKey>,
+        TriggeredAbilityId,
+        SeatId,
+    )>,
+    delayed_steps: Vec<DelayedStepTrigger>,
+    next_spell_or_loyalty: Vec<(
+        SeatId,
+        StackEntryId,
+        BTreeSet<crate::characteristics::Color>,
+    )>,
+    ability_copy_watches: Vec<(SupportedAppearance, SeatId, AbilityCopyWatch)>,
 }
 impl Default for TriggerState {
     fn default() -> Self {
         Self {
             next_event: 1,
             next_instance: 1,
+            watched_graveyard_casts: Vec::new(),
             next_wave: 1,
             waiting: BTreeMap::new(),
+            speed_waiting: BTreeMap::new(),
+            monarch_waiting: BTreeMap::new(),
+            emblem_waiting: BTreeMap::new(),
+            delayed_emblem_returns: Vec::new(),
+            combat_draws: Vec::new(),
+            weakening_attack_triggers: Vec::new(),
+            delayed_copy_waiting: BTreeMap::new(),
+            delayed_copy_steps: Vec::new(),
+            token_leave_triggers: BTreeMap::new(),
+            speed_triggered_turn: None,
+            current_speed_turn: None,
+            declared_attackers_this_turn: BTreeSet::new(),
+            once_this_turn: BTreeSet::new(),
+            used_optional_trigger_effects: BTreeSet::new(),
+            delayed_steps: vec![],
+            next_spell_or_loyalty: Vec::new(),
+            ability_copy_watches: vec![],
         }
     }
 }
@@ -1006,40 +2029,448 @@ pub(crate) fn next_occurrence_index(index: u64) -> Result<(u64, u64), TriggerErr
         .ok_or(TriggerError::OccurrenceIndexExhausted)?;
     Ok((index, next))
 }
-/// Test-only inconsistencies in a genuinely reached capture, not source producers.
-#[cfg(test)]
-#[derive(Debug, Clone)]
-pub(crate) enum QualificationCaptureFault {
-    Targetless,
-    Source(GameObject),
-}
 impl TriggerState {
-    #[cfg(test)]
-    pub(crate) fn qualification_corrupt_capture(
-        &mut self,
-        id: TriggerInstanceId,
-        fault: QualificationCaptureFault,
-    ) {
-        let waiting = self.waiting.get_mut(&id).expect("actual captured instance");
-        match fault {
-            QualificationCaptureFault::Targetless => {
-                waiting.body.target = crate::program::BodyTarget::None
-            }
-            QualificationCaptureFault::Source(object) => waiting.source.object = object,
-        }
+    pub(crate) fn retain_waiting_for(&mut self, players: &[SeatId]) {
+        self.waiting
+            .retain(|_, instance| players.contains(&instance.controller));
+        self.speed_waiting
+            .retain(|_, player| players.contains(player));
+        self.monarch_waiting
+            .retain(|_, (player, _)| players.contains(player));
+        self.emblem_waiting
+            .retain(|_, instance| players.contains(&instance.controller));
+        self.delayed_copy_waiting
+            .retain(|_, (player, _, _)| players.contains(player));
+    }
+    pub(crate) fn attack_allocation_mark(&self) -> [u64; 3] {
+        [self.next_event, self.next_instance, self.next_wave]
+    }
+    pub(crate) fn retain_attack_mark(&mut self, mark: [u64; 3]) {
+        self.next_event = self.next_event.max(mark[0]);
+        self.next_instance = self.next_instance.max(mark[1]);
+        self.next_wave = self.next_wave.max(mark[2]);
     }
 
-    pub(crate) fn remove_departed(&mut self, players: &BTreeSet<SeatId>) -> Vec<WaitingInstance> {
-        let mut removed = Vec::new();
-        self.waiting.retain(|_, instance| {
-            if players.contains(&instance.controller) {
-                removed.push(instance.clone());
-                false
-            } else {
-                true
-            }
+    pub(crate) fn reset_once_each_turn(&mut self) {
+        self.combat_draws.clear();
+        self.once_this_turn.clear();
+        self.used_optional_trigger_effects.clear();
+        self.declared_attackers_this_turn.clear();
+        self.ability_copy_watches.clear();
+        self.next_spell_or_loyalty.clear();
+    }
+    pub(crate) fn optional_trigger_effect_used(
+        &self,
+        trigger: &TriggerBinding,
+        controller: SeatId,
+    ) -> bool {
+        self.used_optional_trigger_effects.contains(&(
+            trigger.source.object.id(),
+            trigger.granting_effect,
+            trigger.definition,
+            controller,
+        ))
+    }
+    pub(crate) fn use_optional_trigger_effect(
+        &mut self,
+        source: ObjectId,
+        grant: Option<crate::characteristics::EffectInstanceKey>,
+        definition: TriggeredAbilityId,
+        controller: SeatId,
+    ) {
+        self.used_optional_trigger_effects
+            .insert((source, grant, definition, controller));
+    }
+
+    pub(crate) fn watch_ability_copy(
+        &mut self,
+        source: SupportedAppearance,
+        player: SeatId,
+        watch: AbilityCopyWatch,
+    ) {
+        self.ability_copy_watches.push((source, player, watch));
+    }
+    pub(crate) fn expire_end_of_turn_watches(&mut self) {
+        self.combat_draws.clear();
+        self.ability_copy_watches.clear();
+        self.next_spell_or_loyalty.clear();
+        self.watched_graveyard_casts.clear();
+    }
+
+    pub(crate) fn watch_graveyard_cast(
+        &mut self,
+        player: SeatId,
+        original: StackEntryId,
+        recipient: ObjectId,
+        card: ObjectId,
+    ) {
+        self.watched_graveyard_casts.push(GraveyardCastWatch {
+            player,
+            original,
+            recipient,
+            card,
         });
-        removed
+    }
+
+    fn match_graveyard_cast(
+        &mut self,
+        occurrence: OccurrenceId,
+        cast: &CastOccurrence,
+        current: &RulesView<'_>,
+        discoveries: &mut Vec<RulesRecord>,
+    ) -> Result<(), TriggerError> {
+        for watch in std::mem::take(&mut self.watched_graveyard_casts) {
+            if Some(watch.card) != cast.cast_original_object || watch.player != cast.controller() {
+                self.watched_graveyard_casts.push(watch);
+                continue;
+            }
+            let donor = current
+                .evaluated
+                .get(cast.spell().object.id())
+                .ok_or(TriggerError::InvalidWorld)?;
+            let instance = TriggerInstanceId(self.next_instance);
+            self.next_instance = self
+                .next_instance
+                .checked_add(1)
+                .ok_or(TriggerError::InstanceIdentityExhausted)?;
+            let action = DelayedCopyAction::GrantCastCardAbilities {
+                recipient: watch.recipient,
+                donor: Box::new(donor.clone()),
+            };
+            self.delayed_copy_waiting
+                .insert(instance, (watch.player, watch.original, action));
+            discoveries.push(RulesRecord::DelayedCopyTriggerDiscovered {
+                instance,
+                controller: watch.player,
+                original: watch.original,
+                cause: occurrence,
+            });
+        }
+        Ok(())
+    }
+    pub(crate) fn watch_next_spell_or_loyalty(
+        &mut self,
+        player: SeatId,
+        source: StackEntryId,
+        colors: BTreeSet<crate::characteristics::Color>,
+    ) {
+        self.next_spell_or_loyalty.push((player, source, colors));
+    }
+    pub(crate) fn watches_next_spell(&self, player: SeatId) -> bool {
+        self.next_spell_or_loyalty
+            .iter()
+            .any(|(controller, _, _)| *controller == player)
+    }
+    pub(crate) fn watches_ability_copies(&self) -> bool {
+        !self.ability_copy_watches.is_empty() || !self.next_spell_or_loyalty.is_empty()
+    }
+    fn match_next_spell_or_loyalty(
+        &mut self,
+        id: OccurrenceId,
+        controller: SeatId,
+        journal: &mut Vec<RulesRecord>,
+        action: impl Fn(BTreeSet<crate::characteristics::Color>) -> DelayedCopyAction,
+    ) -> Result<(), TriggerError> {
+        for (player, original, colors) in std::mem::take(&mut self.next_spell_or_loyalty) {
+            if controller != player {
+                self.next_spell_or_loyalty.push((player, original, colors));
+                continue;
+            }
+            let instance = TriggerInstanceId(self.next_instance);
+            self.next_instance = self
+                .next_instance
+                .checked_add(1)
+                .ok_or(TriggerError::InstanceIdentityExhausted)?;
+            self.delayed_copy_waiting
+                .insert(instance, (player, original, action(colors)));
+            journal.push(RulesRecord::DelayedCopyTriggerDiscovered {
+                instance,
+                controller,
+                original,
+                cause: id,
+            });
+        }
+        Ok(())
+    }
+    pub(crate) fn discover_ability_copies(
+        &mut self,
+        occurrence: OccurrenceId,
+        controller: SeatId,
+        source: std::sync::Arc<crate::effects::CapturedAbilityCopy>,
+        loyalty: bool,
+        types: &BTreeSet<crate::program::PlaneswalkerSubtype>,
+        journal: &mut RulesJournal,
+    ) -> Result<(), TriggerError> {
+        if loyalty {
+            self.match_next_spell_or_loyalty(
+                occurrence,
+                controller,
+                &mut journal.records,
+                |colors| DelayedCopyAction::AbilityTwice(source.clone(), colors),
+            )?;
+        }
+        for (appearance, player, watch) in std::mem::take(&mut self.ability_copy_watches) {
+            let matches = player == controller
+                && match watch {
+                    AbilityCopyWatch::NextLoyalty => loyalty,
+                    AbilityCopyWatch::PlaneswalkerType(kind) => types.contains(&kind),
+                };
+            if matches {
+                let causes = TriggerCauseSet::new(
+                    occurrence.event,
+                    TriggerCauseKey::Occurrence(occurrence),
+                    vec![TriggerCauseMember {
+                        occurrence,
+                        related_player: Some(player),
+                        related: TriggerRelated::AbilityForCopy(source.clone()),
+                    }],
+                )?;
+                let instance = WaitingInstance {
+                    id: TriggerInstanceId(self.next_instance),
+                    definition: TriggeredAbilityId(0),
+                    granting_effect: None,
+                    source: appearance.clone(),
+                    controller: player,
+                    causes,
+                    body: ExecutableBody::new(
+                        crate::program::BodyTarget::None,
+                        vec![crate::program::Instruction::CopyCapturedAbility],
+                    ),
+                };
+                self.next_instance = self
+                    .next_instance
+                    .checked_add(1)
+                    .ok_or(TriggerError::InstanceIdentityExhausted)?;
+                self.waiting.insert(instance.id, instance.clone());
+                journal
+                    .records
+                    .push(RulesRecord::TriggerDiscovered(Box::new(instance)));
+            }
+            if !matches || watch != AbilityCopyWatch::NextLoyalty {
+                self.ability_copy_watches.push((appearance, player, watch));
+            }
+        }
+        Ok(())
+    }
+    /// Undo discoveries caused solely by a reversed cast announcement; later
+    /// mana-ability events and their triggers remain intact.
+    pub(crate) fn reverse_cast_announcement(&mut self, event: EventId) {
+        self.waiting
+            .retain(|_, instance| instance.causes.event() != event);
+    }
+    pub(crate) fn delay_token_leave(
+        &mut self,
+        token: ObjectId,
+        source: SupportedAppearance,
+        controller: SeatId,
+    ) {
+        self.token_leave_triggers
+            .insert(token, (source, controller));
+    }
+    pub(crate) fn delay_return_with_counters(
+        &mut self,
+        source: SupportedAppearance,
+        controller: SeatId,
+        objects: Vec<ObjectId>,
+    ) {
+        self.delayed_steps.push(DelayedStepTrigger {
+            source,
+            controller,
+            action: DelayedStepAction::ReturnExiledWithCounters(objects),
+        });
+    }
+    pub(crate) fn delay_copy_return_with_counters(
+        &mut self,
+        original: StackEntryId,
+        controller: SeatId,
+        objects: Vec<ObjectId>,
+    ) {
+        self.delayed_copy_steps.push((
+            controller,
+            original,
+            crate::turn::Step::End,
+            DelayedCopyAction::ReturnExiledWithCounters(objects),
+        ));
+    }
+    pub(crate) fn delay_copy_exile_return(
+        &mut self,
+        original: StackEntryId,
+        controller: SeatId,
+        objects: Vec<ObjectId>,
+    ) {
+        self.delayed_copy_steps.push((
+            controller,
+            original,
+            crate::turn::Step::End,
+            DelayedCopyAction::ReturnExiled(objects),
+        ));
+    }
+    pub(crate) fn delay_copy_sacrifice(
+        &mut self,
+        original: StackEntryId,
+        controller: SeatId,
+        step: crate::turn::Step,
+        objects: Vec<ObjectId>,
+    ) {
+        self.delayed_copy_steps.push((
+            controller,
+            original,
+            step,
+            DelayedCopyAction::Sacrifice(objects),
+        ));
+    }
+    pub(crate) fn attacked_this_turn(&self, object: ObjectId) -> bool {
+        self.declared_attackers_this_turn.contains(&object)
+    }
+    pub(crate) fn delayed_copy_waiting(
+        &self,
+    ) -> &BTreeMap<TriggerInstanceId, (SeatId, StackEntryId, DelayedCopyAction)> {
+        &self.delayed_copy_waiting
+    }
+    pub(crate) fn take_delayed_copy(
+        &mut self,
+        id: TriggerInstanceId,
+    ) -> Option<(SeatId, StackEntryId, DelayedCopyAction)> {
+        self.delayed_copy_waiting.remove(&id)
+    }
+    pub(crate) fn delay_exile_return(
+        &mut self,
+        source: SupportedAppearance,
+        controller: SeatId,
+        objects: Vec<ObjectId>,
+    ) {
+        self.delayed_steps.push(DelayedStepTrigger {
+            source,
+            controller,
+            action: DelayedStepAction::ReturnFromExile(objects),
+        });
+    }
+    pub(crate) fn delay_graveyard_to_hand(
+        &mut self,
+        source: SupportedAppearance,
+        controller: SeatId,
+        object: ObjectId,
+    ) {
+        self.delayed_steps.push(DelayedStepTrigger {
+            source,
+            controller,
+            action: DelayedStepAction::ReturnGraveyardToHand(object),
+        });
+    }
+    pub(crate) fn delay_transformed_return(
+        &mut self,
+        source: SupportedAppearance,
+        controller: SeatId,
+        object: ObjectId,
+    ) {
+        self.delayed_steps.push(DelayedStepTrigger {
+            source,
+            controller,
+            action: DelayedStepAction::ReturnFromGraveyardTransformed(object),
+        });
+    }
+    pub(crate) fn delay_graveyard_return(
+        &mut self,
+        source: SupportedAppearance,
+        controller: SeatId,
+        object: ObjectId,
+        while_source_remains: bool,
+    ) {
+        self.delayed_steps.push(DelayedStepTrigger {
+            source,
+            controller,
+            action: DelayedStepAction::ReturnFromGraveyard {
+                object,
+                while_source_remains,
+            },
+        });
+    }
+    pub(crate) fn delay_phasing(
+        &mut self,
+        source: SupportedAppearance,
+        controller: SeatId,
+        objects: Vec<ObjectId>,
+    ) {
+        self.delayed_steps.push(DelayedStepTrigger {
+            source,
+            controller,
+            action: DelayedStepAction::PhaseOut(objects),
+        });
+    }
+    pub(crate) fn delay_permanent_return_to_hand(
+        &mut self,
+        source: SupportedAppearance,
+        controller: SeatId,
+        object: ObjectId,
+    ) {
+        self.delayed_steps.push(DelayedStepTrigger {
+            source,
+            controller,
+            action: DelayedStepAction::ReturnPermanentToHand(object),
+        });
+    }
+    pub(crate) fn delay_exile(
+        &mut self,
+        source: SupportedAppearance,
+        controller: SeatId,
+        step: crate::turn::Step,
+        objects: Vec<ObjectId>,
+    ) {
+        self.delayed_steps.push(DelayedStepTrigger {
+            source,
+            controller,
+            action: DelayedStepAction::Exile { step, objects },
+        });
+    }
+    pub(crate) fn delay_sacrifice(
+        &mut self,
+        source: SupportedAppearance,
+        controller: SeatId,
+        step: crate::turn::Step,
+        objects: Vec<ObjectId>,
+    ) {
+        self.delayed_steps.push(DelayedStepTrigger {
+            source,
+            controller,
+            action: DelayedStepAction::Sacrifice { step, objects },
+        });
+    }
+    pub(crate) fn delay_cast(
+        &mut self,
+        source: SupportedAppearance,
+        object: ObjectId,
+        kind: crate::program::EndStepCast,
+        controller: SeatId,
+    ) {
+        self.delayed_steps.push(DelayedStepTrigger {
+            source,
+            controller,
+            action: DelayedStepAction::Cast { object, kind },
+        });
+    }
+    pub(crate) fn delay_unearth(
+        &mut self,
+        source: SupportedAppearance,
+        object: ObjectId,
+        controller: SeatId,
+    ) {
+        self.delayed_steps.push(DelayedStepTrigger {
+            source,
+            controller,
+            action: DelayedStepAction::Unearth(object),
+        });
+    }
+    pub(crate) fn delay_rebound(
+        &mut self,
+        source: SupportedAppearance,
+        object: ObjectId,
+        controller: SeatId,
+    ) {
+        self.delayed_steps.push(DelayedStepTrigger {
+            source,
+            controller,
+            action: DelayedStepAction::Rebound(object),
+        });
     }
     pub(crate) fn counters(&self) -> (u64, u64, u64) {
         (self.next_event, self.next_instance, self.next_wave)
@@ -1055,6 +2486,95 @@ impl TriggerState {
     #[cfg(test)]
     pub(crate) fn set_test_next_wave(&mut self, next: u64) {
         self.next_wave = next;
+    }
+    pub(crate) fn enter_speed_turn(&mut self, number: u64, active: SeatId) {
+        self.current_speed_turn = Some((number, active));
+    }
+    pub(crate) fn speed_waiting(&self) -> &BTreeMap<TriggerInstanceId, SeatId> {
+        &self.speed_waiting
+    }
+    pub(crate) fn monarch_waiting(&self) -> &BTreeMap<TriggerInstanceId, (SeatId, Option<SeatId>)> {
+        &self.monarch_waiting
+    }
+    pub(crate) fn take_monarch(
+        &mut self,
+        id: TriggerInstanceId,
+    ) -> Option<(SeatId, Option<SeatId>)> {
+        self.monarch_waiting.remove(&id)
+    }
+    pub(crate) fn weaken_opposing_attackers(
+        &mut self,
+        source: SupportedAppearance,
+        controller: SeatId,
+        opponents: BTreeSet<SeatId>,
+    ) {
+        self.weakening_attack_triggers
+            .push((source, controller, opponents));
+    }
+    pub(crate) fn expire_attack_triggers(&mut self, active: SeatId, skipped: &BTreeSet<SeatId>) {
+        self.weakening_attack_triggers
+            .retain(|(_, controller, _)| *controller != active && !skipped.contains(controller));
+    }
+    pub(crate) fn delay_emblem_return(
+        &mut self,
+        emblem: crate::emblem::EmblemId,
+        controller: SeatId,
+        object: ObjectId,
+    ) {
+        self.delayed_emblem_returns
+            .push((emblem, controller, object));
+    }
+    pub(crate) fn emblem_waiting(&self) -> &BTreeMap<TriggerInstanceId, WaitingEmblem> {
+        &self.emblem_waiting
+    }
+    pub(crate) fn take_emblem(&mut self, id: TriggerInstanceId) -> Option<WaitingEmblem> {
+        self.emblem_waiting.remove(&id)
+    }
+    pub(crate) fn take_speed(&mut self, id: TriggerInstanceId) -> Option<SeatId> {
+        self.speed_waiting.remove(&id)
+    }
+    pub(crate) fn waiting_count(&self) -> usize {
+        self.waiting.len()
+            + self.speed_waiting.len()
+            + self.monarch_waiting.len()
+            + self.emblem_waiting.len()
+            + self.delayed_copy_waiting.len()
+    }
+    pub(crate) fn waiting_controller(&self, id: TriggerInstanceId) -> Option<SeatId> {
+        self.waiting
+            .get(&id)
+            .map(|x| x.controller)
+            .or_else(|| self.speed_waiting.get(&id).copied())
+            .or_else(|| {
+                self.monarch_waiting
+                    .get(&id)
+                    .map(|(controller, _)| *controller)
+            })
+            .or_else(|| {
+                self.emblem_waiting
+                    .get(&id)
+                    .map(|waiting| waiting.controller)
+            })
+            .or_else(|| self.delayed_copy_waiting.get(&id).map(|waiting| waiting.0))
+    }
+    /// CR 724.1a only removes triggered abilities which are already waiting.
+    pub(crate) fn clear_waiting_at_end_turn(&mut self) {
+        self.waiting.clear();
+        self.speed_waiting.clear();
+        self.monarch_waiting.clear();
+        self.emblem_waiting.clear();
+        self.delayed_copy_waiting.clear();
+    }
+    pub(crate) fn discard_undone_attack_taps(&mut self, ids: &BTreeSet<TriggerInstanceId>) {
+        for id in ids {
+            if let Some(instance) = self.waiting.remove(id) {
+                self.once_this_turn.remove(&(
+                    instance.source.object.id(),
+                    instance.granting_effect,
+                    instance.definition,
+                ));
+            }
+        }
     }
     pub(crate) fn waiting(&self) -> &BTreeMap<TriggerInstanceId, WaitingInstance> {
         &self.waiting
@@ -1116,10 +2636,41 @@ impl TriggerState {
             occurrences,
         };
         let mut discoveries = Vec::new();
+        for (source, _) in self.token_leave_triggers.values_mut() {
+            if let Some(current) = before.appearance(source.object.id()) {
+                *source = current;
+            }
+        }
         let mut sources = BTreeMap::new();
+        let cycled: BTreeSet<_> = event
+            .occurrences
+            .iter()
+            .filter_map(|row| match &row.value {
+                RulesOccurrence::ZoneChange(change)
+                    if matches!(change.reason, ZoneReason::CycleDiscard { .. }) =>
+                {
+                    Some(change.after.object.id())
+                }
+                _ => None,
+            })
+            .collect();
+        let check_suspended = event.occurrences.iter().any(|row| match &row.value {
+            RulesOccurrence::StepBegan { position, .. } => {
+                position.step == crate::turn::Step::Upkeep
+            }
+            RulesOccurrence::TimeCounterRemoved { after, .. } => !after.is_positive(),
+            _ => false,
+        });
+        let check_graveyard_planeswalker=event.occurrences.iter().any(|row|matches!(&row.value,RulesOccurrence::CastCompleted(cast) if cast.spell().types.contains(&CardType::Planeswalker)));
+        let check_graveyard_upkeep = event.occurrences.iter().any(|row| matches!(&row.value, RulesOccurrence::StepBegan { position, .. } if position.step == crate::turn::Step::Upkeep));
         for (view, lookback) in [(before, true), (after, false)] {
             for object in view.cards.iter().filter(|object| {
                 matches!(object.zone(), ObjectZone::Battlefield | ObjectZone::Stack)
+                    || (!lookback
+                        && (((check_graveyard_upkeep || check_graveyard_planeswalker)
+                            && matches!(object.zone(), ObjectZone::Graveyard(_)))
+                            || (check_suspended && object.zone() == ObjectZone::Exile)
+                            || cycled.contains(&object.id())))
             }) {
                 let current = view
                     .evaluated
@@ -1132,10 +2683,51 @@ impl TriggerState {
                 {
                     return Err(TriggerError::InvalidWorld);
                 }
-                if current.abilities.triggered.is_empty() {
+                let suspend = object.zone() == ObjectZone::Exile
+                    && check_suspended
+                    && matches!(
+                        current.printed_text.exile_action,
+                        Some(crate::program::ExileAction::Suspend { .. })
+                    );
+                if object.zone() == ObjectZone::Exile && !suspend && !cycled.contains(&object.id())
+                {
+                    continue;
+                }
+                if !suspend
+                    && current.abilities.triggered.is_empty()
+                    && current.granted_triggers.is_empty()
+                    && current.granted_exalted.is_empty()
+                    && current.granted_combat_keywords.is_empty()
+                {
                     continue;
                 }
                 let mut abilities = Vec::new();
+                if suspend {
+                    use crate::program::CounterKeyword;
+                    let mut free_ids = (0..=u64::MAX).map(TriggeredAbilityId).filter(|id| {
+                        !current
+                            .printed_text
+                            .triggered
+                            .iter()
+                            .any(|ability| ability.id == *id)
+                    });
+                    for kind in [
+                        CounterKeyword::SuspendUpkeep,
+                        CounterKeyword::SuspendLastCounter,
+                    ] {
+                        let id = free_ids
+                            .next()
+                            .ok_or(TriggerError::InstanceIdentityExhausted)?;
+                        abilities.push((None, std::borrow::Cow::Owned(kind.ability(id))));
+                    }
+                }
+                for (effect, ability) in &current.granted_triggers {
+                    if ability.condition.functions_in_zone(object.zone())
+                        && ability.condition.is_lookback() == lookback
+                    {
+                        abilities.push((Some(*effect), std::borrow::Cow::Borrowed(ability)));
+                    }
+                }
                 for definition in &current.abilities.triggered {
                     let ability = current
                         .printed_text
@@ -1143,10 +2735,56 @@ impl TriggerState {
                         .iter()
                         .find(|ability| ability.id == *definition)
                         .ok_or(TriggerError::InvalidWorld)?;
-                    if functions_in_zone(ability.condition, object.zone())
-                        && is_lookback(ability.condition) == lookback
+                    if ability.condition.functions_in_zone(object.zone())
+                        && ability.condition.is_lookback() == lookback
                     {
-                        abilities.push(ability);
+                        abilities.push((None, std::borrow::Cow::Borrowed(ability)));
+                    }
+                }
+                if !lookback
+                    && object.zone() == ObjectZone::Battlefield
+                    && event
+                        .occurrences
+                        .iter()
+                        .any(|row| matches!(row.value, RulesOccurrence::AttackersDeclared { .. }))
+                {
+                    for (&grant, &count) in &current.granted_exalted {
+                        for ordinal in 0..count {
+                            abilities.push((
+                                Some(grant),
+                                std::borrow::Cow::Owned(TriggeredAbility::exalted(
+                                    TriggeredAbilityId(u64::from(ordinal)),
+                                )),
+                            ));
+                        }
+                    }
+                }
+                if !lookback
+                    && object.zone() == ObjectZone::Battlefield
+                    && event.occurrences.iter().any(|row| {
+                        matches!(
+                            row.value,
+                            RulesOccurrence::CastCompleted(_)
+                                | RulesOccurrence::DamageDealt { .. }
+                                | RulesOccurrence::AttackersDeclared { .. }
+                                | RulesOccurrence::BlockersDeclared { .. }
+                        )
+                    })
+                {
+                    for (&grant, keywords) in &current.granted_combat_keywords {
+                        for (index, keyword) in keywords.iter().enumerate() {
+                            // Exalted occupies [0, granted_exalted) in the same effect's definition namespace.
+                            let exalted = current.granted_exalted.get(&grant).copied().unwrap_or(0);
+                            let ordinal = u64::try_from(index)
+                                .ok()
+                                .and_then(|index| index.checked_add(u64::from(exalted)))
+                                .ok_or(TriggerError::InstanceIdentityExhausted)?;
+                            let ability = TriggeredAbility::combat_keyword(
+                                TriggeredAbilityId(ordinal),
+                                keyword.clone(),
+                            );
+                            abilities.push((Some(grant), std::borrow::Cow::Owned(ability)));
+                        }
                     }
                 }
                 if abilities.is_empty() {
@@ -1155,19 +2793,110 @@ impl TriggerState {
                 let source = view
                     .appearance(object.id())
                     .ok_or(TriggerError::InvalidWorld)?;
-                let controller = current.controller.ok_or(TriggerError::InvalidWorld)?;
-                for ability in abilities {
+                let controller = current
+                    .controller
+                    .or_else(|| {
+                        (suspend
+                            || cycled.contains(&object.id())
+                            || matches!(object.zone(), ObjectZone::Graveyard(_)))
+                        .then_some(object.owner())
+                    })
+                    .ok_or(TriggerError::InvalidWorld)?;
+                for (grant, ability) in abilities {
                     sources.insert(
-                        (object.id(), ability.id),
+                        (object.id(), grant, ability.id),
                         (source.clone(), controller, ability),
                     );
                 }
             }
         }
-        for (_, (source, controller, ability)) in sources {
-            // CR 800.4d: a departing player's lookback sources may exist in
-            // the predecessor snapshot, but cannot create new waiting work.
-            if !after.window.participants().contains(&controller) {
+        // The spell owns each granted trigger. Eligibility is checked after all
+        // casting costs have been paid, when a granting permanent may have left.
+        for row in &event.occurrences {
+            let RulesOccurrence::CastCompleted(cast) = &row.value else {
+                continue;
+            };
+            let spell = cast.spell();
+            if !spell.colors.is_empty() || spell.cast_origin != Some((cast.controller(), true)) {
+                continue;
+            }
+            for permanent in after.evaluated.objects.values().filter(|p| {
+                p.zone == ObjectZone::Battlefield && p.controller == Some(cast.controller())
+            }) {
+                for rule in permanent
+                    .printed_text
+                    .continuous
+                    .iter()
+                    .chain(&permanent.printed_text.additional_battlefield_abilities)
+                {
+                    let crate::characteristics::StaticContinuousAbility::CastPermission {
+                        id,
+                        permission:
+                            crate::characteristics::CastPermissionRule::ColorlessHandSpellsHaveCascade {
+                                minimum_mana_value,
+                                count,
+                            },
+                    } = rule
+                    else {
+                        continue;
+                    };
+                    if !(permanent.abilities.continuous == Some(*id)
+                        || permanent
+                            .abilities
+                            .additional_battlefield_abilities
+                            .contains(id))
+                        || cast.mana_value() < &i64::from(*minimum_mana_value).into()
+                    {
+                        continue;
+                    }
+                    let grant = crate::characteristics::EffectInstanceKey::Static {
+                        source: permanent.object,
+                        ability: *id,
+                    };
+                    for n in 0..count.get() {
+                        let ability = TriggeredAbility::cascade(TriggeredAbilityId(u64::from(n)));
+                        sources.insert(
+                            (spell.object.id(), Some(grant), ability.id),
+                            (
+                                spell.clone(),
+                                cast.controller(),
+                                std::borrow::Cow::Owned(ability),
+                            ),
+                        );
+                    }
+                }
+            }
+        }
+        self.match_combat_draws(&event, after, &mut discoveries)?;
+        for ((object, granting_effect, ability_id), (source, controller, ability)) in sources {
+            if ability
+                .body
+                .instructions
+                .contains(&crate::program::Instruction::CopyEntrantOnceEachTurn)
+                && self.used_optional_trigger_effects.contains(&(
+                    object,
+                    granting_effect,
+                    ability_id,
+                    controller,
+                ))
+            {
+                continue;
+            }
+            if (matches!(
+                ability.condition.event,
+                TriggerEvent::Attacks {
+                    mode: AttackTriggerMode::FirstThisTurn { .. },
+                    ..
+                }
+            ) || ability.condition.intervening_if
+                == Some(TriggerCondition::SourceDidNotAttackThisTurn))
+                && self.attacked_this_turn(object)
+            {
+                continue;
+            }
+            let once_key = (object, granting_effect, ability_id);
+            let once_each_turn = ability.grouping == TriggerGrouping::OneOrMoreOnceEachTurn;
+            if once_each_turn && self.once_this_turn.contains(&once_key) {
                 continue;
             }
             let mut members = Vec::new();
@@ -1175,314 +2904,821 @@ impl TriggerState {
                 .try_reserve(event.occurrences.len())
                 .map_err(|_| TriggerError::TriggerCauseCapacity)?;
             for occurrence in &event.occurrences {
-                if let Some((player, related)) =
-                    match_related(ability, &source, controller, &occurrence.value, after)?
-                {
-                    members.push(TriggerCauseMember {
-                        occurrence: occurrence.id,
-                        related_player: Some(player),
-                        related,
-                    });
-                }
+                match_trigger_event(
+                    &ability.condition.event,
+                    ability.condition.intervening_if,
+                    &ability,
+                    &source,
+                    controller,
+                    occurrence,
+                    &event.cause,
+                    object,
+                    ability_id,
+                    granting_effect,
+                    after,
+                    &mut members,
+                )?;
+            }
+            if once_each_turn && !members.is_empty() {
+                self.once_this_turn.insert(once_key);
             }
             for causes in causes::group_matches(id, ability.grouping, members)? {
-                let next = self
+                let death = source.object.zone() == ObjectZone::Battlefield
+                    && !matches!(
+                        ability.condition.event,
+                        TriggerEvent::PlayerAction {
+                            action: PlayerTriggerAction::Sacrificed(_),
+                            ..
+                        }
+                    )
+                    && causes.members().iter().any(|member|matches!(&member.related, TriggerRelated::ZoneChange {before,after}
+                        if before.object.zone()==ObjectZone::Battlefield && before.is_creature() && matches!(after.object.zone(),ObjectZone::Graveyard(_))));
+                let extra = if death {
+                    let cut = if ability.condition.is_lookback() {
+                        before
+                    } else {
+                        after
+                    };
+                    cut.evaluated.controlled_rules(controller, |ability| matches!(ability,crate::characteristics::StaticContinuousAbility::Modifier { rule: crate::characteristics::StaticModifierRule::AdditionalCreatureDeathTrigger, .. }))
+                } else {
+                    0
+                };
+                let mut body = ability.body.clone();
+                use crate::program::BodyTarget;
+                for target in std::iter::once(&mut body.target).chain(
+                    body.triggered_modes.iter_mut().flat_map(|modes| {
+                        modes.options.iter_mut().map(|option| &mut option.target)
+                    }),
+                ) {
+                    *target = target.with_ability_source(source.object.id());
+                    if let BodyTarget::FilteredPermanent(filter) = target
+                        && filter.has_related_player()
+                    {
+                        let player = causes
+                            .members()
+                            .first()
+                            .and_then(|c| c.related_player)
+                            .ok_or(TriggerError::InvalidTriggerCauses)?;
+                        if causes
+                            .members()
+                            .iter()
+                            .any(|c| c.related_player != Some(player))
+                        {
+                            return Err(TriggerError::InvalidTriggerCauses);
+                        }
+                        *filter = filter.bind_related_player(player);
+                    }
+                }
+                for _ in 0..=extra {
+                    let instance = WaitingInstance {
+                        id: TriggerInstanceId(self.next_instance),
+                        definition: ability.id,
+                        granting_effect,
+                        causes: causes.clone(),
+                        source: source.clone(),
+                        controller,
+                        body: body.clone(),
+                    };
+                    self.next_instance = self
+                        .next_instance
+                        .checked_add(1)
+                        .ok_or(TriggerError::InstanceIdentityExhausted)?;
+                    self.waiting.insert(instance.id, instance.clone());
+                    discoveries.push(RulesRecord::TriggerDiscovered(Box::new(instance)));
+                }
+            }
+        }
+        for occurrence in &event.occurrences {
+            if let RulesOccurrence::CastCompleted(cast) = &occurrence.value
+                && let Some(stack) = after
+                    .window
+                    .entries()
+                    .iter()
+                    .find(|entry| entry.id() == cast.entry())
+                && !stack.granted_replicate.is_empty()
+                && let Some(spell) = after.evaluated.get(cast.spell().object.id())
+            {
+                for grant in after.evaluated.replicate_grants(cast.controller(), spell) {
+                    let Some(&index) = stack.granted_replicate.get(&grant) else {
+                        continue;
+                    };
+                    let ability = TriggeredAbility::spell_copies(
+                        TriggeredAbilityId(0),
+                        crate::program::CastCopyKeyword::Replicate(index),
+                    );
+                    let causes = TriggerCauseSet::new(
+                        id,
+                        TriggerCauseKey::Occurrence(occurrence.id),
+                        vec![TriggerCauseMember {
+                            occurrence: occurrence.id,
+                            related_player: Some(cast.controller()),
+                            related: TriggerRelated::SpellCast(cast.clone()),
+                        }],
+                    )?;
+                    let instance = WaitingInstance {
+                        id: TriggerInstanceId(self.next_instance),
+                        definition: ability.id,
+                        granting_effect: Some(grant),
+                        causes,
+                        source: cast.spell().clone(),
+                        controller: cast.controller(),
+                        body: ability.body,
+                    };
+                    self.next_instance = self
+                        .next_instance
+                        .checked_add(1)
+                        .ok_or(TriggerError::InstanceIdentityExhausted)?;
+                    self.waiting.insert(instance.id, instance.clone());
+                    discoveries.push(RulesRecord::TriggerDiscovered(Box::new(instance)));
+                }
+            }
+            if let RulesOccurrence::CastCompleted(cast) = &occurrence.value
+                && cast.cast_from_graveyard
+                && !self.watched_graveyard_casts.is_empty()
+            {
+                self.match_graveyard_cast(occurrence.id, cast, after, &mut discoveries)?;
+            }
+            if let RulesOccurrence::CastCompleted(cast) = &occurrence.value
+                && SpellFilter::instant_or_sorcery().matches_spell_appearance(cast.spell())
+                && self.watches_next_spell(cast.controller())
+            {
+                if cast.copy_source.is_none() {
+                    return Err(TriggerError::InvalidWorld);
+                }
+                self.match_next_spell_or_loyalty(
+                    occurrence.id,
+                    cast.controller(),
+                    &mut discoveries,
+                    |colors| DelayedCopyAction::SpellTwice(cast.clone(), colors),
+                )?;
+            }
+            if let RulesOccurrence::ZoneChange(change) = &occurrence.value
+                && change.before.object.zone() == ObjectZone::Battlefield
+                && change.after.object.zone() != ObjectZone::Battlefield
+                && let Some((source, controller)) =
+                    self.token_leave_triggers.remove(&change.before.object.id())
+            {
+                let causes = TriggerCauseSet::new(
+                    id,
+                    TriggerCauseKey::Occurrence(occurrence.id),
+                    vec![TriggerCauseMember {
+                        occurrence: occurrence.id,
+                        related_player: Some(controller),
+                        related: TriggerRelated::ZoneChange {
+                            before: change.before.clone(),
+                            after: change.after.clone(),
+                        },
+                    }],
+                )?;
+                let instance = WaitingInstance {
+                    id: TriggerInstanceId(self.next_instance),
+                    definition: TriggeredAbilityId(0),
+                    granting_effect: None,
+                    causes,
+                    source,
+                    controller,
+                    body: ExecutableBody::new(
+                        crate::program::BodyTarget::None,
+                        vec![crate::program::Instruction::ReturnTokenLinkedExile],
+                    ),
+                };
+                self.next_instance = self
                     .next_instance
                     .checked_add(1)
                     .ok_or(TriggerError::InstanceIdentityExhausted)?;
+                self.waiting.insert(instance.id, instance.clone());
+                discoveries.push(RulesRecord::TriggerDiscovered(Box::new(instance)));
+            }
+        }
+        for occurrence in &event.occurrences {
+            if let RulesOccurrence::AttackersDeclared { selected, .. } = &occurrence.value {
+                for (source, controller, opponents) in &self.weakening_attack_triggers {
+                    for attack in selected {
+                        let Some(attacker) = after.evaluated.get(attack.attacker) else {
+                            return Err(TriggerError::InvalidWorld);
+                        };
+                        if !attacker.is_creature()
+                            || !attacker
+                                .controller
+                                .is_some_and(|owner| opponents.contains(&owner))
+                        {
+                            continue;
+                        }
+                        let causes = TriggerCauseSet::new(
+                            id,
+                            TriggerCauseKey::Occurrence(occurrence.id),
+                            vec![TriggerCauseMember {
+                                occurrence: occurrence.id,
+                                related_player: attacker.controller,
+                                related: TriggerRelated::Combatant(attack.attacker),
+                            }],
+                        )?;
+                        let instance = WaitingInstance {
+                            id: TriggerInstanceId(self.next_instance),
+                            definition: TriggeredAbilityId(0),
+                            granting_effect: None,
+                            causes,
+                            source: source.clone(),
+                            controller: *controller,
+                            body: ExecutableBody::new(
+                                crate::program::BodyTarget::None,
+                                vec![crate::program::Instruction::WeakenDelayedAttacker(
+                                    attack.attacker,
+                                )],
+                            ),
+                        };
+                        self.next_instance = self
+                            .next_instance
+                            .checked_add(1)
+                            .ok_or(TriggerError::InstanceIdentityExhausted)?;
+                        self.waiting.insert(instance.id, instance.clone());
+                        discoveries.push(RulesRecord::TriggerDiscovered(Box::new(instance)));
+                    }
+                }
+            }
+            if let RulesOccurrence::CommanderTypeManaSpent {
+                source,
+                player,
+                units,
+            } = &occurrence.value
+            {
+                let causes = TriggerCauseSet::new(
+                    id,
+                    TriggerCauseKey::Occurrence(occurrence.id),
+                    vec![TriggerCauseMember {
+                        occurrence: occurrence.id,
+                        related_player: Some(*player),
+                        related: TriggerRelated::ManaSource(source.object.id()),
+                    }],
+                )?;
+                for _ in 0..units
+                    .to_usize()
+                    .ok_or(TriggerError::InstanceIdentityExhausted)?
+                {
+                    let instance = WaitingInstance {
+                        id: TriggerInstanceId(self.next_instance),
+                        definition: TriggeredAbilityId(0),
+                        granting_effect: None,
+                        causes: causes.clone(),
+                        source: source.as_ref().clone(),
+                        controller: *player,
+                        body: ExecutableBody::new(
+                            crate::program::BodyTarget::None,
+                            vec![crate::program::Instruction::Scry {
+                                player: crate::program::ResolvingPlayer::Controller,
+                                amount: crate::program::ValueExpr::Literal(1.into()),
+                            }],
+                        ),
+                    };
+                    self.next_instance = self
+                        .next_instance
+                        .checked_add(1)
+                        .ok_or(TriggerError::InstanceIdentityExhausted)?;
+                    self.waiting.insert(instance.id, instance.clone());
+                    discoveries.push(RulesRecord::TriggerDiscovered(Box::new(instance)));
+                }
+            }
+            if let RulesOccurrence::GraveyardReturnPaid {
+                source,
+                controller,
+                mana_value,
+            } = &occurrence.value
+            {
+                let causes = TriggerCauseSet::new(
+                    id,
+                    TriggerCauseKey::Occurrence(occurrence.id),
+                    vec![TriggerCauseMember {
+                        occurrence: occurrence.id,
+                        related_player: Some(*controller),
+                        related: TriggerRelated::GraveyardReturnPaid {
+                            mana_value: mana_value.clone(),
+                        },
+                    }],
+                )?;
                 let instance = WaitingInstance {
                     id: TriggerInstanceId(self.next_instance),
-                    definition: ability.id,
+                    definition: TriggeredAbilityId(0),
+                    granting_effect: None,
+                    causes,
+                    source: source.as_ref().clone(),
+                    controller: *controller,
+                    body: ExecutableBody::new(
+                        crate::program::BodyTarget::FilteredOwnGraveyardCard(
+                            crate::program::ObjectFilter::creature(),
+                        ),
+                        vec![
+                            crate::program::Instruction::ReturnGraveyardCreatureWithCorpse(
+                                mana_value.clone(),
+                            ),
+                        ],
+                    ),
+                };
+                self.next_instance = self
+                    .next_instance
+                    .checked_add(1)
+                    .ok_or(TriggerError::InstanceIdentityExhausted)?;
+                self.waiting.insert(instance.id, instance.clone());
+                discoveries.push(RulesRecord::TriggerDiscovered(Box::new(instance)));
+            }
+            if let RulesOccurrence::ReflexiveDiscardDamage {
+                source,
+                controller,
+                amount,
+            } = &occurrence.value
+            {
+                let causes = TriggerCauseSet::new(
+                    id,
+                    TriggerCauseKey::Occurrence(occurrence.id),
+                    vec![TriggerCauseMember {
+                        occurrence: occurrence.id,
+                        related_player: Some(*controller),
+                        related: TriggerRelated::ReflexiveDiscardDamage {
+                            amount: amount.clone(),
+                        },
+                    }],
+                )?;
+                let instance = WaitingInstance {
+                    id: TriggerInstanceId(self.next_instance),
+                    definition: TriggeredAbilityId(0),
+                    granting_effect: None,
+                    causes,
+                    source: source.as_ref().clone(),
+                    controller: *controller,
+                    body: ExecutableBody::new(
+                        crate::program::BodyTarget::FilteredPermanent(
+                            crate::program::ObjectFilter::creature_or_planeswalker(),
+                        ),
+                        vec![crate::program::Instruction::DamageAmount(
+                            crate::program::ValueExpr::Literal(amount.clone()),
+                        )],
+                    ),
+                };
+                self.next_instance = self
+                    .next_instance
+                    .checked_add(1)
+                    .ok_or(TriggerError::InstanceIdentityExhausted)?;
+                self.waiting.insert(instance.id, instance.clone());
+                discoveries.push(RulesRecord::TriggerDiscovered(Box::new(instance)));
+            }
+            if let RulesOccurrence::MiracleRevealed { object } = &occurrence.value {
+                let controller = object.object.owner();
+                if object.object.zone() != ObjectZone::Hand(controller)
+                    || object.printed_text.miracle.is_none()
+                {
+                    return Err(TriggerError::InvalidWorld);
+                }
+                let causes = TriggerCauseSet::new(
+                    id,
+                    TriggerCauseKey::Occurrence(occurrence.id),
+                    vec![TriggerCauseMember {
+                        occurrence: occurrence.id,
+                        related_player: Some(controller),
+                        related: TriggerRelated::MiracleRevealed(object.object.id()),
+                    }],
+                )?;
+                let instance = WaitingInstance {
+                    id: TriggerInstanceId(self.next_instance),
+                    definition: TriggeredAbilityId(0),
+                    granting_effect: None,
+                    causes,
+                    source: object.as_ref().clone(),
+                    controller,
+                    body: ExecutableBody::new(
+                        crate::program::BodyTarget::None,
+                        vec![crate::program::Instruction::MiracleCast(object.object.id())],
+                    ),
+                };
+                self.next_instance = self
+                    .next_instance
+                    .checked_add(1)
+                    .ok_or(TriggerError::InstanceIdentityExhausted)?;
+                self.waiting.insert(instance.id, instance.clone());
+                discoveries.push(RulesRecord::TriggerDiscovered(Box::new(instance)));
+            }
+            if let RulesOccurrence::ZoneChange(change) = &occurrence.value
+                && change.madness
+            {
+                let source = &change.after;
+                let controller = source.object.owner();
+                if source.object.zone() != ObjectZone::Exile
+                    || change.before.object.zone() != ObjectZone::Hand(controller)
+                    || change.before.printed_text.madness.is_none()
+                {
+                    return Err(TriggerError::InvalidWorld);
+                }
+                let causes = TriggerCauseSet::new(
+                    id,
+                    TriggerCauseKey::Occurrence(occurrence.id),
+                    vec![TriggerCauseMember {
+                        occurrence: occurrence.id,
+                        related_player: Some(controller),
+                        related: TriggerRelated::Discard {
+                            player: controller,
+                            before: change.before.clone(),
+                            after: source.clone(),
+                        },
+                    }],
+                )?;
+                let instance = WaitingInstance {
+                    id: TriggerInstanceId(self.next_instance),
+                    definition: TriggeredAbilityId(0),
+                    granting_effect: None,
                     causes,
                     source: source.clone(),
                     controller,
-                    body: ability.body.clone(),
+                    body: ExecutableBody::new(
+                        crate::program::BodyTarget::None,
+                        vec![crate::program::Instruction::MadnessCast],
+                    ),
                 };
-                self.next_instance = next;
+                self.next_instance = self
+                    .next_instance
+                    .checked_add(1)
+                    .ok_or(TriggerError::InstanceIdentityExhausted)?;
                 self.waiting.insert(instance.id, instance.clone());
                 discoveries.push(RulesRecord::TriggerDiscovered(Box::new(instance)));
+            }
+            if let RulesOccurrence::StepBegan { position, active } = &occurrence.value {
+                use crate::{program::Instruction, turn::Step};
+                if position.step == Step::End {
+                    for (emblem, controller, object) in
+                        std::mem::take(&mut self.delayed_emblem_returns)
+                    {
+                        let instance = TriggerInstanceId(self.next_instance);
+                        self.next_instance = self
+                            .next_instance
+                            .checked_add(1)
+                            .ok_or(TriggerError::InstanceIdentityExhausted)?;
+                        self.emblem_waiting.insert(
+                            instance,
+                            WaitingEmblem {
+                                emblem,
+                                controller,
+                                body: ExecutableBody::new(
+                                    crate::program::BodyTarget::None,
+                                    vec![Instruction::ReturnDelayedGraveyardCard(object)],
+                                ),
+                            },
+                        );
+                        discoveries.push(RulesRecord::EmblemTriggerDiscovered {
+                            instance,
+                            controller,
+                            emblem,
+                            cause: occurrence.id,
+                        });
+                    }
+                }
+                let ready = self
+                    .delayed_steps
+                    .extract_if(.., |delay| match &delay.action {
+                        DelayedStepAction::Exile { step, .. }
+                        | DelayedStepAction::Sacrifice { step, .. } => position.step == *step,
+                        DelayedStepAction::ReturnExiledWithCounters(_)
+                        | DelayedStepAction::PhaseOut(_)
+                        | DelayedStepAction::ReturnGraveyardToHand(_)
+                        | DelayedStepAction::ReturnPermanentToHand(_)
+                        | DelayedStepAction::ReturnFromExile(_)
+                        | DelayedStepAction::ReturnFromGraveyard { .. }
+                        | DelayedStepAction::ReturnFromGraveyardTransformed(_)
+                        | DelayedStepAction::Cast { .. }
+                        | DelayedStepAction::Unearth(_) => position.step == Step::End,
+                        DelayedStepAction::Rebound(_) => {
+                            position.step == Step::Upkeep && *active == delay.controller
+                        }
+                    })
+                    .collect::<Vec<_>>();
+                let copies = self
+                    .delayed_copy_steps
+                    .extract_if(.., |(_, _, step, _)| position.step == *step)
+                    .collect::<Vec<_>>();
+                for (controller, original, _, action) in copies {
+                    let instance = TriggerInstanceId(self.next_instance);
+                    self.next_instance = self
+                        .next_instance
+                        .checked_add(1)
+                        .ok_or(TriggerError::InstanceIdentityExhausted)?;
+                    self.delayed_copy_waiting
+                        .insert(instance, (controller, original, action));
+                    discoveries.push(RulesRecord::DelayedCopyTriggerDiscovered {
+                        instance,
+                        controller,
+                        original,
+                        cause: occurrence.id,
+                    });
+                }
+                for DelayedStepTrigger {
+                    source,
+                    controller,
+                    action,
+                } in ready
+                {
+                    let instructions = match action {
+                        DelayedStepAction::Exile { objects, .. } => {
+                            vec![Instruction::ExileDelayedObjects(objects)]
+                        }
+                        DelayedStepAction::Sacrifice { objects, .. } => {
+                            vec![Instruction::SacrificeDelayedObjects(objects)]
+                        }
+                        DelayedStepAction::Cast { object, kind } => {
+                            vec![Instruction::EndStepCast {
+                                kind,
+                                permanent: object,
+                                turn: position.number,
+                            }]
+                        }
+                        DelayedStepAction::ReturnExiledWithCounters(objects) => {
+                            vec![Instruction::ReturnDelayedExileWithCounters(objects)]
+                        }
+                        DelayedStepAction::PhaseOut(objects) => {
+                            vec![Instruction::PhaseOutObjects(objects)]
+                        }
+                        DelayedStepAction::ReturnGraveyardToHand(object) => {
+                            vec![Instruction::ReturnDelayedGraveyardToHand(object)]
+                        }
+                        DelayedStepAction::ReturnPermanentToHand(object) => {
+                            vec![Instruction::ReturnDelayedPermanentToHand(object)]
+                        }
+                        DelayedStepAction::ReturnFromExile(object) => {
+                            vec![Instruction::ReturnDelayedExile(object)]
+                        }
+                        DelayedStepAction::Unearth(object) => {
+                            vec![Instruction::ExileUnearthed(object)]
+                        }
+                        DelayedStepAction::Rebound(object) => {
+                            vec![Instruction::ReboundCast(object)]
+                        }
+                        DelayedStepAction::ReturnFromGraveyardTransformed(object) => {
+                            vec![Instruction::ReturnDelayedGraveyardCardTransformed(object)]
+                        }
+                        DelayedStepAction::ReturnFromGraveyard {
+                            object,
+                            while_source_remains: true,
+                        } => {
+                            if !after
+                                .cards
+                                .get(source.object.id())
+                                .is_some_and(|card| card.zone() == ObjectZone::Battlefield)
+                            {
+                                continue;
+                            }
+                            vec![
+                                Instruction::RequireCondition(
+                                    crate::program::InterveningCondition::ReturnSourceOnBattlefield,
+                                ),
+                                Instruction::OptionalEffect {
+                                    chooser: crate::program::ResolvingPlayer::Controller,
+                                },
+                                Instruction::ReturnDelayedGraveyardCard(object),
+                            ]
+                        }
+                        DelayedStepAction::ReturnFromGraveyard {
+                            object,
+                            while_source_remains: false,
+                        } => vec![Instruction::ReturnDelayedGraveyardCard(object)],
+                    };
+                    let causes = TriggerCauseSet::new(
+                        id,
+                        TriggerCauseKey::Occurrence(occurrence.id),
+                        vec![TriggerCauseMember {
+                            occurrence: occurrence.id,
+                            related_player: Some(*active),
+                            related: TriggerRelated::Step {
+                                position: *position,
+                                active: *active,
+                            },
+                        }],
+                    )?;
+                    let instance = WaitingInstance {
+                        id: TriggerInstanceId(self.next_instance),
+                        definition: TriggeredAbilityId(0),
+                        granting_effect: None,
+                        causes,
+                        source,
+                        controller,
+                        body: ExecutableBody::new(crate::program::BodyTarget::None, instructions),
+                    };
+                    self.next_instance = self
+                        .next_instance
+                        .checked_add(1)
+                        .ok_or(TriggerError::InstanceIdentityExhausted)?;
+                    self.waiting.insert(instance.id, instance.clone());
+                    discoveries.push(RulesRecord::TriggerDiscovered(Box::new(instance)));
+                }
+            }
+        }
+        if let Some(turn_id @ (_, active)) = self.current_speed_turn {
+            let speed = before
+                .characteristics
+                .speed
+                .get(&active)
+                .copied()
+                .unwrap_or(0);
+            if (1..4).contains(&speed) && self.speed_triggered_turn != Some(turn_id) {
+                let causes=event.occurrences.iter().filter_map(|row|matches!(&row.value,RulesOccurrence::LifeChanged(change) if change.kind==crate::life::LifeChangeKind::Loss && change.player!=active).then_some(row.id)).collect::<Vec<_>>();
+                if !causes.is_empty() {
+                    let instance = TriggerInstanceId(self.next_instance);
+                    self.next_instance = self
+                        .next_instance
+                        .checked_add(1)
+                        .ok_or(TriggerError::InstanceIdentityExhausted)?;
+                    self.speed_triggered_turn = Some(turn_id);
+                    self.speed_waiting.insert(instance, active);
+                    discoveries.push(RulesRecord::SpeedTriggerDiscovered {
+                        instance,
+                        controller: active,
+                        causes,
+                    });
+                }
+            }
+        }
+        if let Some(monarch) = before.characteristics.monarch {
+            for row in &event.occurrences {
+                let action = match &row.value {
+                    RulesOccurrence::StepBegan { position, active }
+                        if *active == monarch && position.step == crate::turn::Step::End =>
+                    {
+                        Some(None)
+                    }
+                    RulesOccurrence::DamageDealt {
+                        damage,
+                        kind: DamageKind::Combat,
+                        ..
+                    } if damage.target == crate::damage::DamageRecipient::Player(monarch)
+                        && matches!(damage.source.id(), crate::damage::DamageSourceId::Object(id) if before.evaluated.get(id).is_some_and(|object| object.is_creature())) =>
+                    {
+                        Some(Some(damage.source.controller()))
+                    }
+                    _ => None,
+                };
+                if let Some(beneficiary) = action {
+                    let instance = TriggerInstanceId(self.next_instance);
+                    self.next_instance = self
+                        .next_instance
+                        .checked_add(1)
+                        .ok_or(TriggerError::InstanceIdentityExhausted)?;
+                    self.monarch_waiting
+                        .insert(instance, (monarch, beneficiary));
+                    discoveries.push(RulesRecord::MonarchTriggerDiscovered {
+                        instance,
+                        controller: monarch,
+                        beneficiary,
+                        causes: vec![row.id],
+                    });
+                }
+            }
+        }
+        for row in &event.occurrences {
+            let RulesOccurrence::StepBegan { position, active } = &row.value else {
+                continue;
+            };
+            if position.step != crate::turn::Step::Upkeep {
+                continue;
+            }
+            for emblem in before.characteristics.emblems.values() {
+                let crate::emblem::EmblemDefinition::UpkeepDamage { amount } = &emblem.definition
+                else {
+                    continue;
+                };
+                if emblem.controller != *active {
+                    continue;
+                }
+                let instance = TriggerInstanceId(self.next_instance);
+                self.next_instance = self
+                    .next_instance
+                    .checked_add(1)
+                    .ok_or(TriggerError::InstanceIdentityExhausted)?;
+                self.emblem_waiting.insert(
+                    instance,
+                    WaitingEmblem {
+                        controller: emblem.controller,
+                        emblem: emblem.id,
+                        body: ExecutableBody::new(
+                            crate::program::BodyTarget::None,
+                            vec![crate::program::Instruction::DamageGroup {
+                                group: crate::program::DamageGroup::Controller,
+                                amount: amount.clone(),
+                            }],
+                        ),
+                    },
+                );
+                discoveries.push(RulesRecord::EmblemTriggerDiscovered {
+                    instance,
+                    controller: emblem.controller,
+                    emblem: emblem.id,
+                    cause: row.id,
+                });
+            }
+        }
+        for row in &event.occurrences {
+            let RulesOccurrence::ZoneChange(change) = &row.value else {
+                continue;
+            };
+            let ObjectZone::Graveyard(owner) = change.after.object.zone() else {
+                continue;
+            };
+            for emblem in after
+                .characteristics
+                .emblems
+                .values()
+                .filter(|emblem| emblem.controller == owner)
+            {
+                use crate::{
+                    emblem::EmblemDefinition,
+                    program::{BodyTarget, Instruction, ResolvingPlayer},
+                };
+                let object = change.after.object.id();
+                let instructions = match emblem.definition {
+                    EmblemDefinition::ReturnFallenArtifacts
+                        if change.before.object.zone() == ObjectZone::Battlefield
+                            && change.before.types.contains(&CardType::Artifact) =>
+                    {
+                        vec![Instruction::ScheduleArtifactReturn(object)]
+                    }
+                    EmblemDefinition::UnlimitedHandWithGraveyardReturn
+                        if change.after.object.card_id().is_some() =>
+                    {
+                        vec![
+                            Instruction::OptionalSequence {
+                                chooser: ResolvingPlayer::Controller,
+                                instructions: 1,
+                            },
+                            Instruction::ReturnDelayedGraveyardToHand(object),
+                        ]
+                    }
+                    _ => continue,
+                };
+                let instance = TriggerInstanceId(self.next_instance);
+                self.next_instance = self
+                    .next_instance
+                    .checked_add(1)
+                    .ok_or(TriggerError::InstanceIdentityExhausted)?;
+                self.emblem_waiting.insert(
+                    instance,
+                    WaitingEmblem {
+                        emblem: emblem.id,
+                        controller: owner,
+                        body: ExecutableBody::new(BodyTarget::None, instructions),
+                    },
+                );
+                discoveries.push(RulesRecord::EmblemTriggerDiscovered {
+                    instance,
+                    controller: owner,
+                    emblem: emblem.id,
+                    cause: row.id,
+                });
+            }
+        }
+        for row in &event.occurrences {
+            let RulesOccurrence::CastCompleted(cast) = &row.value else {
+                continue;
+            };
+            for emblem in before.characteristics.emblems.values() {
+                let crate::emblem::EmblemDefinition::SpellcastDamage {
+                    amount,
+                    noncreature_only,
+                } = &emblem.definition
+                else {
+                    continue;
+                };
+                if cast.controller() != emblem.controller
+                    || (*noncreature_only && cast.spell().is_creature())
+                {
+                    continue;
+                }
+                let instance = TriggerInstanceId(self.next_instance);
+                self.next_instance = self
+                    .next_instance
+                    .checked_add(1)
+                    .ok_or(TriggerError::InstanceIdentityExhausted)?;
+                self.emblem_waiting.insert(
+                    instance,
+                    WaitingEmblem {
+                        controller: emblem.controller,
+                        emblem: emblem.id,
+                        body: ExecutableBody::new(
+                            crate::program::BodyTarget::SingleAnyTarget,
+                            vec![crate::program::Instruction::Damage {
+                                amount: amount.clone(),
+                            }],
+                        ),
+                    },
+                );
+                discoveries.push(RulesRecord::EmblemTriggerDiscovered {
+                    instance,
+                    controller: emblem.controller,
+                    emblem: emblem.id,
+                    cause: row.id,
+                });
+            }
+        }
+        for occurrence in &event.occurrences {
+            if let RulesOccurrence::AttackersDeclared { selected, .. } = &occurrence.value {
+                self.declared_attackers_this_turn
+                    .extend(selected.iter().map(|attack| attack.attacker));
             }
         }
         let mut records = vec![RulesRecord::Event(event)];
         records.append(&mut discoveries);
         Ok(RulesTransition::new(self, id, RulesJournal { records }))
     }
-}
-fn is_lookback(condition: OrdinaryCondition) -> bool {
-    match condition {
-        OrdinaryCondition::LeavesBattlefield(_) | OrdinaryCondition::Dies(_) => true,
-        OrdinaryCondition::Scried(_)
-        | OrdinaryCondition::Surveilled(_)
-        | OrdinaryCondition::SelfCast
-        | OrdinaryCondition::SpellCast { .. }
-        | OrdinaryCondition::TokenCreated(_)
-        | OrdinaryCondition::LifeChanged { .. }
-        | OrdinaryCondition::Enters(_)
-        | OrdinaryCondition::BecomesTapped(_)
-        | OrdinaryCondition::Discarded(_)
-        | OrdinaryCondition::StepBegan { .. } => false,
-    }
-}
-/// Represented function zones only; every added condition must choose its policy.
-fn functions_in_zone(condition: OrdinaryCondition, zone: ObjectZone) -> bool {
-    match condition {
-        OrdinaryCondition::SelfCast => zone == ObjectZone::Stack,
-        OrdinaryCondition::Scried(_)
-        | OrdinaryCondition::Surveilled(_)
-        | OrdinaryCondition::SpellCast { .. }
-        | OrdinaryCondition::TokenCreated(_)
-        | OrdinaryCondition::LifeChanged { .. }
-        | OrdinaryCondition::Enters(_)
-        | OrdinaryCondition::LeavesBattlefield(_)
-        | OrdinaryCondition::Dies(_)
-        | OrdinaryCondition::BecomesTapped(_)
-        | OrdinaryCondition::Discarded(_)
-        | OrdinaryCondition::StepBegan { .. } => zone == ObjectZone::Battlefield,
-    }
-}
-fn object_matches(
-    relation: ObjectRelation,
-    source: &SupportedAppearance,
-    controller: SeatId,
-    object: &SupportedAppearance,
-) -> bool {
-    let same = source.object.id() == object.object.id();
-    match relation {
-        ObjectRelation::SelfObject => same,
-        ObjectRelation::AnyCreature => object.is_creature(),
-        ObjectRelation::AnotherCreature => object.is_creature() && !same,
-        ObjectRelation::ControlledCreature => {
-            object.is_creature() && object.object.controller() == Some(controller)
-        }
-        ObjectRelation::AnotherControlledCreature => {
-            object.is_creature() && !same && object.object.controller() == Some(controller)
-        }
-    }
-}
-fn player_matches(
-    relation: PlayerRelation,
-    controller: SeatId,
-    player: SeatId,
-    view: &RulesView<'_>,
-) -> bool {
-    view.window.participants().contains(&player)
-        && match relation {
-            PlayerRelation::Controller => player == controller,
-            PlayerRelation::Opponent => player != controller,
-            PlayerRelation::AnyParticipant => true,
-        }
-}
-fn match_related(
-    ability: &TriggeredAbility,
-    source: &SupportedAppearance,
-    controller: SeatId,
-    value: &RulesOccurrence,
-    after: &RulesView<'_>,
-) -> Result<Option<(SeatId, TriggerRelated)>, TriggerError> {
-    if let RulesOccurrence::CastCompleted(cast) = value {
-        return match_cast(ability.condition, source, controller, cast, after);
-    }
-    if let OrdinaryCondition::Enters(relation) = ability.condition {
-        let object = match value {
-            RulesOccurrence::ZoneChange(change)
-                if change.after.object.zone() == ObjectZone::Battlefield
-                    && change.before.object.zone() != ObjectZone::Battlefield =>
-            {
-                &change.after
-            }
-            RulesOccurrence::TokenCreated { after, .. } => after.as_ref(),
-            _ => return Ok(None),
-        };
-        if !object_matches(relation, source, controller, object) {
-            return Ok(None);
-        }
-        let player = object
-            .object
-            .controller()
-            .ok_or(TriggerError::InvalidWorld)?;
-        return Ok(match value {
-            RulesOccurrence::ZoneChange(change) => Some((
-                player,
-                TriggerRelated::ZoneChange {
-                    before: change.before.clone(),
-                    after: change.after.clone(),
-                },
-            )),
-            RulesOccurrence::TokenCreated { creator, after } => Some((
-                player,
-                TriggerRelated::TokenCreated {
-                    creator: *creator,
-                    after: after.as_ref().clone(),
-                },
-            )),
-            _ => None,
-        });
-    }
-    Ok(match (ability.condition, value) {
-        (
-            OrdinaryCondition::TokenCreated(player),
-            RulesOccurrence::TokenCreated {
-                creator,
-                after: appearance,
-            },
-        ) if player_matches(player, controller, *creator, after) => Some((
-            *creator,
-            TriggerRelated::TokenCreated {
-                creator: *creator,
-                after: appearance.as_ref().clone(),
-            },
-        )),
-        (OrdinaryCondition::Scried(player), RulesOccurrence::LibraryAction(action))
-        | (OrdinaryCondition::Surveilled(player), RulesOccurrence::LibraryAction(action))
-            if action.requested.is_positive()
-                && ((matches!(ability.condition, OrdinaryCondition::Scried(_))
-                    && action.kind == crate::effects::LibraryActionKind::Scry)
-                    || (matches!(ability.condition, OrdinaryCondition::Surveilled(_))
-                        && action.kind == crate::effects::LibraryActionKind::Surveil))
-                && player_matches(player, controller, action.player, after) =>
-        {
-            Some((action.player, TriggerRelated::LibraryAction(action.clone())))
-        }
-        (OrdinaryCondition::LifeChanged { kind, player }, RulesOccurrence::LifeChanged(change))
-            if change.kind == kind && player_matches(player, controller, change.player, after) =>
-        {
-            Some((change.player, TriggerRelated::LifeChanged(change.clone())))
-        }
-        (
-            OrdinaryCondition::LeavesBattlefield(relation),
-            RulesOccurrence::ObjectLeftGame { before },
-        ) if before.object.zone() == ObjectZone::Battlefield
-            && object_matches(relation, source, controller, before) =>
-        {
-            Some((
-                before
-                    .object
-                    .controller()
-                    .ok_or(TriggerError::InvalidWorld)?,
-                TriggerRelated::LeftGame {
-                    before: before.as_ref().clone(),
-                },
-            ))
-        }
-        (OrdinaryCondition::LeavesBattlefield(relation), RulesOccurrence::ZoneChange(change))
-            if change.before.object.zone() == ObjectZone::Battlefield
-                && change.after.object.zone() != ObjectZone::Battlefield
-                && object_matches(relation, source, controller, &change.before) =>
-        {
-            Some((
-                change
-                    .before
-                    .object
-                    .controller()
-                    .ok_or(TriggerError::InvalidWorld)?,
-                TriggerRelated::ZoneChange {
-                    before: change.before.clone(),
-                    after: change.after.clone(),
-                },
-            ))
-        }
-        (OrdinaryCondition::Dies(relation), RulesOccurrence::ZoneChange(change))
-            if change.before.object.zone() == ObjectZone::Battlefield
-                && matches!(change.after.object.zone(), ObjectZone::Graveyard(_))
-                && change.before.is_creature()
-                && object_matches(relation, source, controller, &change.before) =>
-        {
-            Some((
-                change
-                    .before
-                    .object
-                    .controller()
-                    .ok_or(TriggerError::InvalidWorld)?,
-                TriggerRelated::ZoneChange {
-                    before: change.before.clone(),
-                    after: change.after.clone(),
-                },
-            ))
-        }
-        (
-            OrdinaryCondition::BecomesTapped(relation),
-            RulesOccurrence::StatusChange { change, .. },
-        ) if change.before.zone() == ObjectZone::Battlefield
-            && change.after.zone() == ObjectZone::Battlefield
-            && change.before.id() == change.after.id()
-            && change.before.tapped() == Some(false)
-            && change.after.tapped() == Some(true) =>
-        {
-            let object = after
-                .appearance(change.after.id())
-                .ok_or(TriggerError::InvalidWorld)?;
-            if object_matches(relation, source, controller, &object) {
-                Some((
-                    object
-                        .object
-                        .controller()
-                        .ok_or(TriggerError::InvalidWorld)?,
-                    TriggerRelated::StatusChange(change.clone()),
-                ))
-            } else {
-                None
-            }
-        }
-        (OrdinaryCondition::Discarded(relation), RulesOccurrence::ZoneChange(change)) => {
-            let ZoneReason::Discard { player } = change.reason else {
-                return Ok(None);
-            };
-            player_matches(relation, controller, player, after).then(|| {
-                (
-                    player,
-                    TriggerRelated::Discard {
-                        player,
-                        before: change.before.clone(),
-                        after: change.after.clone(),
-                    },
-                )
-            })
-        }
-        (
-            OrdinaryCondition::StepBegan { step, player },
-            RulesOccurrence::StepBegan {
-                position,
-                active: Some(active),
-            },
-        ) if position.step == step && player_matches(player, controller, *active, after) => Some((
-            *active,
-            TriggerRelated::Step {
-                position: *position,
-                active: *active,
-            },
-        )),
-        _ => None,
-    })
-}
-
-fn match_cast(
-    condition: OrdinaryCondition,
-    source: &SupportedAppearance,
-    controller: SeatId,
-    cast: &CastOccurrence,
-    after: &RulesView<'_>,
-) -> Result<Option<(SeatId, TriggerRelated)>, TriggerError> {
-    let matched = match condition {
-        OrdinaryCondition::SelfCast => {
-            let same = source.object.id() == cast.spell().object.id();
-            if same && controller != cast.controller() {
-                return Err(TriggerError::InvalidWorld);
-            }
-            same
-        }
-        OrdinaryCondition::SpellCast { player, filter } => {
-            player_matches(player, controller, cast.controller(), after)
-                && filter.matches(&cast.spell().types)
-        }
-        _ => return Ok(None),
-    };
-    if !after.window.participants().contains(&cast.controller()) {
-        return Err(TriggerError::InvalidWorld);
-    }
-    Ok(matched.then(|| {
-        (
-            cast.controller(),
-            TriggerRelated::SpellCast(Box::new(cast.clone())),
-        )
-    }))
 }

@@ -21,12 +21,10 @@ mod checkpoint;
 mod clocks;
 mod events;
 mod evidence;
-pub(crate) use clocks::NativeBankTimeout;
-pub use clocks::{NativeBankExpiryIntent, NativeClockIntent};
+pub use clocks::NativeClockIntent;
 pub use events::PreparedNativeEvent;
 mod handles;
 mod initial_source;
-pub(crate) use initial_source::AdmissionManifest;
 mod input_codec;
 pub mod preparation_source;
 mod projection;
@@ -37,6 +35,75 @@ pub(crate) use source_reader::{
     NativeHistoryRead, NativeReadOutcome, NativeReadRefusal, NativeReplayRead,
 };
 mod translate;
+
+// Player-facing counter names exclude counters that only a player can have.
+impl From<crate::player_wire::PlayerCounterKind> for spellwake_engine::effects::CounterKind {
+    fn from(value: crate::player_wire::PlayerCounterKind) -> Self {
+        use crate::player_wire::PlayerCounterKind as Wire;
+        match value {
+            Wire::PlusOne => Self::PlusOne,
+            Wire::MinusOne => Self::MinusOne,
+            Wire::Page => Self::Page,
+            Wire::Quest => Self::Quest,
+            Wire::Verse => Self::Verse,
+            Wire::Suspect => Self::Suspect,
+            Wire::Charge => Self::Charge,
+            Wire::Storage => Self::Storage,
+            Wire::Lore => Self::Lore,
+            Wire::Loyalty => Self::Loyalty,
+            Wire::Time => Self::Time,
+            Wire::Fade => Self::Fade,
+            Wire::Age => Self::Age,
+            Wire::Indestructible => Self::Indestructible,
+            Wire::Corpse => Self::Corpse,
+            Wire::Defense => Self::Defense,
+            Wire::Vow => Self::Vow,
+            Wire::Blessing => Self::Blessing,
+            Wire::Despair => Self::Despair,
+            Wire::Hatchling => Self::Hatchling,
+            Wire::Study => Self::Study,
+            Wire::Eyeball => Self::Eyeball,
+            Wire::Slime => Self::Slime,
+        }
+    }
+}
+
+impl TryFrom<spellwake_engine::effects::CounterKind> for crate::player_wire::PlayerCounterKind {
+    type Error = NativeBridgeError;
+
+    fn try_from(value: spellwake_engine::effects::CounterKind) -> Result<Self, Self::Error> {
+        use spellwake_engine::effects::CounterKind as Native;
+        Ok(match value {
+            Native::PlusOne => Self::PlusOne,
+            Native::MinusOne => Self::MinusOne,
+            Native::Page => Self::Page,
+            Native::Quest => Self::Quest,
+            Native::Verse => Self::Verse,
+            Native::Suspect => Self::Suspect,
+            Native::Charge => Self::Charge,
+            Native::Storage => Self::Storage,
+            Native::Lore => Self::Lore,
+            Native::Loyalty => Self::Loyalty,
+            Native::Time => Self::Time,
+            Native::Fade => Self::Fade,
+            Native::Age => Self::Age,
+            Native::Indestructible => Self::Indestructible,
+            Native::Corpse => Self::Corpse,
+            Native::Defense => Self::Defense,
+            Native::Vow => Self::Vow,
+            Native::Blessing => Self::Blessing,
+            Native::Despair => Self::Despair,
+            Native::Hatchling => Self::Hatchling,
+            Native::Study => Self::Study,
+            Native::Eyeball => Self::Eyeball,
+            Native::Slime => Self::Slime,
+            Native::Poison | Native::Experience => {
+                return Err(NativeBridgeError::WrongReferenceKind);
+            }
+        })
+    }
+}
+
 pub use artifacts::{
     MAX_NATIVE_ARTIFACT_BYTES, NativeArtifact, NativeArtifactError, NativeArtifactFailure,
     NativeArtifactRef, NativeArtifactRole, NativeArtifactStore,
@@ -46,18 +113,20 @@ pub use checkpoint::{
     NativeRecoveryBudget, load_checkpoint,
 };
 pub use handles::NativeReference;
+pub(crate) use initial_source::AdmissionManifest;
+pub(crate) use initial_source::commander_admission::CommanderRelease;
 pub use initial_source::{
     NativeImmutableDisplay, NativeInitialCard, NativeInitialError, NativeInitialExpected,
     NativeInitialIds, NativeInitialParticipant, NativeInitialProvenance, NativeInitialSelection,
     NativeInitialSpec, NativeInitialZone, NativePhysicalCardSource, NativePrintedCard,
-    NativeProgramPool, NativeProgramSource, PreparedNativeOpening, inspect_constructed_room,
-    inspect_release_candidate, load_initial, native_runtime_identity, prepare_initial,
+    NativeProgramPool, NativeProgramSource, PreparedNativeOpening, load_initial,
+    native_runtime_identity, prepare_initial, prepare_reserved_commander_opening,
     prepare_selected_initial, restore_initial,
 };
-pub use input_codec::{
-    NativeCodecError, PreparedNativeBankExpiry, PreparedNativeClockExpiry, PreparedNativeEntropy,
-    restore_bank_expiry, restore_entropy, restore_input, restore_response_timeout,
+pub use initial_source::{
+    inspect_constructed_room, inspect_limited_deck, inspect_release_candidate,
 };
+pub use input_codec::{NativeCodecError, PreparedNativeEntropy, restore_entropy, restore_input};
 pub use input_codec::{
     NativeViewError, NativeViewExpected, PreparedNativeView, RestoredNativeView, load_view,
     prepare_view, restore_view,
@@ -67,15 +136,16 @@ pub use projection::{
     NativeObjectDisplay, NativeProjectedSnapshot, NativeProjectionError, NativeProjectionMetadata,
 };
 pub use source_reader::{
-    IssuedNativeCursor, IssuedNativeHumanView, IssuedNativePlayerView, NativeActivityFactSource,
-    NativeArchiveScan, NativeControllerAccess, NativeControllerAccessOutcome, NativeGameRuntime,
-    NativeGameSource, NativeHistoricalObservation, NativeHistoryEvidence, NativeHostInputKind,
+    CommanderWorker, IssuedNativeCursor, IssuedNativeHumanView, IssuedNativePlayerView,
+    NativeActivityFactSource, NativeArchiveScan, NativeControllerAccess,
+    NativeControllerAccessOutcome, NativeGameRuntime, NativeGameSource,
+    NativeHistoricalObservation, NativeHistoryEvidence, NativeHostInputKind,
     NativeHostOriginalFields, NativeHostOwner, NativeHumanAccess, NativeHumanAccessOutcome,
-    NativeHumanCommit, NativeHumanHistory, NativeHumanPresentation, NativeMatchWorker,
-    NativeOpeningArtifacts, NativeOpeningOriginalFields, NativeOpeningResponseWait,
-    NativeOpeningSource, NativePresentationOutcome, NativeResponseJobOutcome, NativeSourceError,
+    NativeHumanCommit, NativeHumanHistory, NativeHumanPresentation, NativeOpeningArtifacts,
+    NativeOpeningOriginalFields, NativeOpeningSource, NativePresentationOutcome, NativeSourceError,
     NativeSourceRepository, NativeSystemAck, NativeSystemDisposition, NativeSystemOriginal,
-    NativeTransitionSources, NativeViewOutcome, RecoveredNativeGame, run_owned_response_job,
+    NativeTransitionSources, NativeViewOutcome, RecoveredNativeGame, ReleaseOpeningWorker,
+    open_commander_game_from_env, open_qualified_game_from_env,
 };
 
 /// One accepted application seat mapped to its actual local native participant.
@@ -149,6 +219,8 @@ impl NativeBinding {
     fn validate_source(&self, source: &GameState) -> Result<(), NativeBridgeError> {
         if *source.basis() != self.basis
             || source
+                .execution()
+                .window()
                 .original_participants()
                 .iter()
                 .copied()

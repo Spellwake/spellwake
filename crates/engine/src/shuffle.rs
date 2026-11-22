@@ -66,6 +66,17 @@ impl EntropyTape {
             }
         }
     }
+    pub(crate) fn uniform_index(&self, bound: usize) -> Result<(usize, Self), EntropyError> {
+        let mut next = self.clone();
+        let index = next.below(bound)?;
+        Ok((index, next))
+    }
+
+    pub(crate) fn flip_coin(&self) -> Result<(bool, Self), EntropyError> {
+        let mut next = self.clone();
+        let won = next.below(2)? == 1;
+        Ok((won, next))
+    }
     pub(crate) fn shuffled(
         &self,
         mut order: Vec<ObjectId>,

@@ -14,8 +14,8 @@ use spellwake_engine::{
     },
     priority::{PriorityPhase, SeatId},
     program::{
-        BodyTarget, ExecutableBody, Instruction, ObjectRelation, OrdinaryCondition, Program,
-        TriggeredAbility, TriggeredAbilityId,
+        BodyTarget, ExecutableBody, Instruction, Program, TriggerSpec, TriggeredAbility,
+        TriggeredAbilityId,
     },
     setup::GameSeed,
     stack_window::WindowPhase,
@@ -44,7 +44,7 @@ fn library(card: u64, owner: SeatId) -> SeedCard {
 }
 fn draw() -> Instruction {
     Instruction::DrawController {
-        amount: spellwake_engine::program::InstructionAmount::Literal(1.into()),
+        amount: spellwake_engine::program::ValueExpr::Literal(1.into()),
     }
 }
 fn context() -> GameContext {
@@ -138,7 +138,7 @@ fn events(candidate: &NativeCandidate) -> Vec<&RulesEvent> {
         })
         .collect()
 }
-fn watched(mut program: Program, condition: OrdinaryCondition, id: u64) -> Program {
+fn watched(mut program: Program, condition: TriggerSpec, id: u64) -> Program {
     program.triggered.push(TriggeredAbility {
         grouping: spellwake_engine::program::TriggerGrouping::EachOccurrence,
         id: TriggeredAbilityId(id),
@@ -343,7 +343,9 @@ fn paid_mana_choice_captures_the_actual_tap_and_reply_emits_only_production() {
                 },
             }],
         ),
-        OrdinaryCondition::BecomesTapped(ObjectRelation::SelfObject),
+        spellwake_engine::program::TriggerSpec::becomes_tapped(
+            spellwake_engine::program::ObjectFilter::self_object(),
+        ),
         4,
     );
     // Owner differs from controller. The captured stack controller will draw.
@@ -434,10 +436,14 @@ fn entry_and_death_capture_distinct_events_before_a_zero_toughness_source_leaves
                 0.into(),
                 std::collections::BTreeSet::new(),
             ),
-            OrdinaryCondition::Enters(ObjectRelation::SelfObject),
+            spellwake_engine::program::TriggerSpec::enters(
+                spellwake_engine::program::ObjectFilter::self_object(),
+            ),
             1,
         ),
-        OrdinaryCondition::Dies(ObjectRelation::SelfObject),
+        spellwake_engine::program::TriggerSpec::dies(
+            spellwake_engine::program::ObjectFilter::self_object(),
+        ),
         2,
     );
     let initial = game(

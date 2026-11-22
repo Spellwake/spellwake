@@ -30,8 +30,7 @@ impl TryFrom<String> for PlayMode {
 pub struct DeckSection(String);
 
 impl DeckSection {
-    /// Canonical section key captured with a selected revision.
-    pub fn as_str(&self) -> &str {
+    pub(crate) fn as_str(&self) -> &str {
         &self.0
     }
 }
@@ -170,6 +169,10 @@ impl ChangeDeckSettings {
     content = "command",
     rename_all = "snake_case",
     deny_unknown_fields
+)]
+#[allow(
+    clippy::large_enum_variant,
+    reason = "Keep the existing value constructors used by command recovery."
 )]
 pub enum DeckCommand {
     Create(CreateDeck),

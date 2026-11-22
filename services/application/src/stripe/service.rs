@@ -224,6 +224,14 @@ impl StripeService {
         };
         let mut checkout = client.checkout(checkout_id)?;
         client.match_checkout(&checkout, &ticket)?;
+        if let Some(customer_id) = checkout.customer.as_deref()
+            && customer_id.starts_with("cus_")
+        {
+            let _ = self.backend.rpc::<Value>(
+                "record_account_stripe_customer",
+                &json!({"p_account": ticket.account_id, "p_customer_id": customer_id}),
+            );
+        }
         if ticket.account_state != "active" && checkout.status == "open" {
             checkout = client.expire(checkout_id, &format!("{}-expire", ticket.request_key))?;
         }

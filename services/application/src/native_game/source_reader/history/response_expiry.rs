@@ -37,45 +37,15 @@ impl ResponseExpiryEvidence {
             .iter()
             .find(|s| s.seat_id == self.seat_id)
             .ok_or(NativeCheckpointError::Invalid)?;
-        let exact_departure = next
-            .candidate()
-            .rules_journal()
-            .records
-            .iter()
-            .filter_map(|record| match record {
-                spellwake_engine::occurrence::RulesRecord::PlayersDeparted { players, .. } => {
-                    Some(players)
-                }
-                _ => None,
-            })
-            .collect::<Vec<_>>();
         let expires =
             parse_utc_microsecond(&self.expires_at).ok_or(NativeCheckpointError::Invalid)?;
         let accepted =
             parse_utc_microsecond(&self.accepted_at).ok_or(NativeCheckpointError::Invalid)?;
+        let remaining = next.state().execution().window().participants();
         let correct_departure = match next.state().conclusion().map(|end| end.cause()) {
-            None
-            | Some(spellwake_engine::game::GameConclusionCause::CheckedLossesAfterDepartures {
-                ..
-            }) => {
-                // Expiry removes its exact waiter first. Driving that successor
-                // may then produce independent simultaneous state-based losses.
-                exact_departure.first().is_some_and(|players| {
-                    players.len() == 1 && players.contains(&departing.native_seat)
-                }) && !next
-                    .state()
-                    .execution()
-                    .window()
-                    .participants()
-                    .contains(&departing.native_seat)
-            }
-            Some(spellwake_engine::game::GameConclusionCause::ResponseExpiredLastSurvivor {
-                player,
-                earlier_departures,
-            }) => {
+            None => !remaining.contains(&departing.native_seat),
+            Some(spellwake_engine::game::GameConclusionCause::Conceded { player }) => {
                 *player == departing.native_seat
-                    && exact_departure.is_empty()
-                    && earlier_departures.len().checked_add(2) == Some(next.roster.len())
             }
             _ => false,
         };
@@ -86,7 +56,7 @@ impl ResponseExpiryEvidence {
             || host.basis.epoch != next.basis().epoch
             || host.input_ref != input
             || &self.decision_ref != parent
-            || next.roster.len() < 3
+            || next.roster.len() < 2
             || !correct_departure
             || accepted < expires
         {

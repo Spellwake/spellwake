@@ -43,7 +43,7 @@ fn attacks(cards: &GameObjects, selected: &[(u64, SeatId)]) -> CombatState {
 /// These fixtures represent already-established creatures. This closure tests
 /// canonical identity/control intervals, not full creature/type/layer integration.
 fn reconcile(combat: &mut CombatState, cards: &GameObjects) {
-    combat.reconcile(|member| {
+    combat.reconcile(|member, _| {
         cards.get(member.object()).is_some_and(|card| {
             card.zone() == ObjectZone::Battlefield
                 && card.controller() == Some(member.controller())
@@ -352,4 +352,59 @@ fn unrestricted_opponents_follow_canonical_apnap_order_with_irregular_seat_ids()
         Err(CombatError::UnknownPlayer)
     );
     assert_eq!(rules.opponents(&[], A), Err(CombatError::UnknownPlayer));
+}
+
+#[test]
+fn must_be_blocked_scores_once_per_attacker() {
+    let cards = cards();
+    let left = object(&cards, 1);
+    let right = object(&cards, 2);
+    let first = object(&cards, 11);
+    let second = object(&cards, 12);
+    let decision = BlockersDecision::new(
+        0,
+        B,
+        vec![left, right],
+        BTreeMap::from([(first, vec![left, right]), (second, vec![left, right])]),
+        BTreeMap::new(),
+    )
+    .with_block_requirements(&BTreeMap::new(), &BTreeMap::new(), [left, right].into());
+    let block = |blocker, attacker| BlockDeclaration { blocker, attacker };
+    assert_eq!(
+        decision.validate(&[block(first, left), block(second, left)]),
+        Err(CombatError::IllegalBlocker)
+    );
+    assert!(
+        decision
+            .validate(&[block(first, left), block(second, right)])
+            .is_ok()
+    );
+}
+
+#[test]
+fn a_block_requirement_respects_the_attacker_minimum() {
+    let cards = cards();
+    let left = object(&cards, 1);
+    let right = object(&cards, 2);
+    let first = object(&cards, 11);
+    let second = object(&cards, 12);
+    let decision = BlockersDecision::new(
+        0,
+        B,
+        vec![left, right],
+        BTreeMap::from([(first, vec![left, right]), (second, vec![left, right])]),
+        BTreeMap::from([(left, 2)]),
+    )
+    .with_block_requirements(&BTreeMap::new(), &BTreeMap::new(), [left, right].into());
+    let block = |blocker, attacker| BlockDeclaration { blocker, attacker };
+    assert!(
+        decision
+            .validate(&[block(first, left), block(second, left)])
+            .is_ok()
+    );
+    assert!(decision.validate(&[block(first, right)]).is_ok());
+    assert_eq!(
+        decision.validate(&[block(first, left), block(second, right)]),
+        Err(CombatError::IllegalBlockTarget)
+    );
 }

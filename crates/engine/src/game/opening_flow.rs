@@ -8,7 +8,7 @@ impl GameState {
         let order = self.execution.window().participants();
         let start = order
             .iter()
-            .position(|p| *p == self.execution.window().turn_owner())
+            .position(|p| *p == self.execution.window().active_player())
             .ok_or(GameError::UnexpectedKernelPhase)?;
         Ok(order
             .iter()
@@ -269,9 +269,9 @@ impl GameState {
                     }
                     let schedule = TurnScheduler::new(
                         TurnStart::default(),
-                        self.original_participants.len() == 2,
+                        self.execution.window().original_participants().len() == 2,
                     )?;
-                    let active = self.execution.window().turn_owner();
+                    let active = self.execution.window().active_player();
                     let transition = self.execution.enter_calendar(
                         self.execution.revision(),
                         None,
@@ -310,12 +310,16 @@ impl GameState {
             .revision
             .checked_add(1)
             .ok_or(GameError::RevisionExhausted)?;
+        let empty = EntropyTape::new(vec![]);
+        let searching = matches!(self.pending.as_ref().map(|p| &p.frame), Some(RuleFrame::LibraryTop(frame)) if frame.kind() == crate::effects::LibraryChoiceKind::Search);
         let random = self
             .random
             .as_ref()
+            .or((searching || self.execution.has_stacked_random_operation()).then_some(&empty))
             .ok_or(OpeningError::NotOpening)?
             .appended(words)?;
         let mut next = self.clone();
+        next.cascade_reveals.clear();
         next.random = Some(random);
         next.basis.revision = revision;
         if let Some(pending) = &self.pending {

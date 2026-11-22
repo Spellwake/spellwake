@@ -4,10 +4,7 @@ use crate::player_wire::PlayerChoice;
 use spellwake_engine::{
     effects::OptionalEffectChoice,
     game::{DecisionReply, RuleFrame},
-    program::{
-        AffectedPlayers, CardType, CreatureTypeSlot, InstructionAmount, PermanentTypeFilter,
-        ResolvingPlayer,
-    },
+    program::{AffectedPlayers, CardType, CreatureTypeSlot, PermanentTypeFilter, ResolvingPlayer},
     token::{TokenCreation, TokenDefinition, TokenName},
 };
 
@@ -247,8 +244,9 @@ fn sacrifice_selection_and_resolution_graveyard_order_keep_native_identity_and_o
     let source = start(
         vec![Instruction::Sacrifice {
             players: AffectedPlayers::One(ResolvingPlayer::Controller),
-            amount: InstructionAmount::Literal(2.into()),
+            amount: spellwake_engine::program::ValueExpr::Literal(2.into()),
             filter: PermanentTypeFilter {
+                any_types: Default::default(),
                 required_types: BTreeSet::from([CardType::Creature]),
                 forbidden_types: BTreeSet::new(),
             },
@@ -555,7 +553,7 @@ fn opening_mulligan_and_bottom_preserve_order_and_reject_ordering_syntax() {
 #[test]
 #[ignore = "requires explicitly supplied source-qualified vocabulary; native adapter composition, not card qualification"]
 fn copied_spell_retain_and_changed_targets_are_bound_options() {
-    use spellwake_engine::{effects::CopyTargetChoice, program::SpellTargetFilter};
+    use spellwake_engine::effects::CopyTargetChoice;
     let source = state(vec![
         card(
             1,
@@ -571,7 +569,9 @@ fn copied_spell_retain_and_changed_targets_are_bound_options() {
             A,
             ObjectDestination::Hand,
             instant(
-                BodyTarget::SingleSpell(SpellTargetFilter::CopyableInstructionSpell),
+                BodyTarget::SingleSpell(
+                    spellwake_engine::program::SpellFilter::copyable_instruction(),
+                ),
                 vec![Instruction::CopySpell],
             ),
         ),
@@ -640,17 +640,16 @@ fn copied_spell_retain_and_changed_targets_are_bound_options() {
 #[ignore = "requires explicitly supplied source-qualified vocabulary; native adapter composition, not card qualification"]
 fn trigger_order_then_target_use_actual_instances_and_controller() {
     use spellwake_engine::program::{
-        OrdinaryCondition, PlayerRelation, SpellCastFilter, TriggerGrouping, TriggeredAbility,
-        TriggeredAbilityId,
+        PlayerRelation, TriggerGrouping, TriggeredAbility, TriggeredAbilityId,
     };
     let mut watcher = Program::artifact(None, vec![]);
     watcher.triggered = (1..=2)
         .map(|id| TriggeredAbility {
             id: TriggeredAbilityId(id),
-            condition: OrdinaryCondition::SpellCast {
-                player: PlayerRelation::Controller,
-                filter: SpellCastFilter::AnySpell,
-            },
+            condition: spellwake_engine::program::TriggerSpec::spell_cast(
+                PlayerRelation::Controller,
+                spellwake_engine::program::SpellFilter::any(),
+            ),
             grouping: TriggerGrouping::EachOccurrence,
             body: if id == 1 {
                 ExecutableBody::new(
@@ -914,6 +913,7 @@ fn combat_declarations_damage_order_and_prevention_use_actual_simultaneous_frame
             decision,
             response: PlayerChoice::Attackers {
                 assignments: vec![AttackerAssignment {
+                    band: None,
                     attacker: attacker.clone(),
                     defender: PlayerTarget::Object { handle: attacker },
                 }],
@@ -931,6 +931,7 @@ fn combat_declarations_damage_order_and_prevention_use_actual_simultaneous_frame
             assignments: attackers
                 .iter()
                 .map(|id| AttackerAssignment {
+                    band: None,
                     attacker: view.issue(NativeReference::Object(*id)).unwrap(),
                     defender: PlayerTarget::Seat {
                         seat_id: viewer_b(),
@@ -944,6 +945,7 @@ fn combat_declarations_damage_order_and_prevention_use_actual_simultaneous_frame
                 .map(|id| AttackDeclaration {
                     attacker: *id,
                     defender: B,
+                    defending_planeswalker: None,
                 })
                 .collect(),
         ),
@@ -1090,7 +1092,9 @@ fn combat_declarations_damage_order_and_prevention_use_actual_simultaneous_frame
                 .map(|entry| CombatAllocation {
                     source: view.issue(NativeReference::Object(entry.source)).unwrap(),
                     target: match entry.target {
-                        DamageRecipient::Creature(id) => PlayerTarget::Object {
+                        DamageRecipient::Creature(id)
+                        | DamageRecipient::Planeswalker(id)
+                        | DamageRecipient::Battle(id) => PlayerTarget::Object {
                             handle: view.issue(NativeReference::Object(id)).unwrap(),
                         },
                         DamageRecipient::Player(B) => PlayerTarget::Seat {
@@ -1151,4 +1155,78 @@ fn combat_declarations_damage_order_and_prevention_use_actual_simultaneous_frame
             .damage,
         1.into()
     );
+}
+
+#[test]
+#[ignore = "requires explicitly supplied source-qualified creature vocabulary"]
+fn storm_controller_selects_each_copy_target_through_player_actions() {
+    use spellwake_engine::{
+        effects::CopyTargetChoice,
+        life::LifeAdjustment,
+        program::{CastCopyKeyword, TriggeredAbility, TriggeredAbilityId},
+    };
+    let mut storm = instant(
+        BodyTarget::SinglePlayer,
+        vec![Instruction::AdjustTargetLife {
+            adjustment: LifeAdjustment::Lose(2.into()),
+        }],
+    );
+    storm.triggered.push(TriggeredAbility::spell_copies(
+        TriggeredAbilityId(31),
+        CastCopyKeyword::Storm,
+    ));
+    let source = state(vec![
+        card(
+            1,
+            A,
+            ObjectDestination::Hand,
+            instant(
+                BodyTarget::None,
+                vec![Instruction::AdjustControllerLife {
+                    adjustment: LifeAdjustment::Gain(1.into()),
+                }],
+            ),
+        ),
+        card(2, A, ObjectDestination::Hand, storm),
+    ]);
+    let first = bridged(&source, viewer_a(), |v| PlayerAction::CastUntargeted {
+        source: v
+            .issue(NativeReference::Object(object(&source, 1)))
+            .unwrap(),
+        payment: None,
+    });
+    let first = resolve(&first);
+    let cast = bridged(&first, viewer_a(), |v| PlayerAction::CastTargeted {
+        source: v.issue(NativeReference::Object(object(&first, 2))).unwrap(),
+        target: PlayerTarget::Seat {
+            seat_id: viewer_b(),
+        },
+        payment: None,
+    });
+    let pending = resolve(&cast);
+    assert_eq!(pending.pending_decision().unwrap().chooser(), A);
+    for choice in [
+        CopyTargetChoice::Retain,
+        CopyTargetChoice::Change(TargetRef::Player(A)),
+    ] {
+        let copied = reply(
+            &pending,
+            |v| PlayerChoice::Option {
+                option: v.issue(NativeReference::CopyTargets(choice)).unwrap(),
+            },
+            DecisionReply::CopyTargets(choice),
+        );
+        assert_eq!(copied.execution().window().spell_copies().len(), 1);
+        let done = resolve(&resolve(&copied));
+        let remaining = if choice == CopyTargetChoice::Retain {
+            16
+        } else {
+            18
+        };
+        assert_eq!(done.execution().life_total(B), Some(&remaining.into()));
+        assert_eq!(
+            done.execution().cast_turn_history().unwrap().spells,
+            2.into()
+        );
+    }
 }

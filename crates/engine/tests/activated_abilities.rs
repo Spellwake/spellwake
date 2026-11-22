@@ -1,6 +1,6 @@
 //! Independent bounded activation acceptance, frozen before implementation in
 //! activated-abilities/reviews/native-scenarios.md. No complete-card qualification.
-use spellwake_engine::program::{BodyTarget, ExecutableBody, SpellTargetFilter};
+use spellwake_engine::program::{BodyTarget, ExecutableBody};
 #[path = "support/damage.rs"]
 pub mod damage_support;
 use spellwake_contracts::RulesInteger;
@@ -232,14 +232,16 @@ fn world_with(
                 A,
                 ManaCost::free(),
                 vec![Instruction::CounterSpell],
-                BodyTarget::SingleSpell(SpellTargetFilter::AnySpell),
+                BodyTarget::SingleSpell(spellwake_engine::program::SpellFilter::any()),
             ),
             instant(
                 93,
                 A,
                 ManaCost::free(),
                 vec![Instruction::CopySpell],
-                BodyTarget::SingleSpell(SpellTargetFilter::CopyableInstructionSpell),
+                BodyTarget::SingleSpell(
+                    spellwake_engine::program::SpellFilter::copyable_instruction(),
+                ),
             ),
             SeedCard {
                 card: CardId(10),
@@ -349,6 +351,7 @@ fn activate(
 }
 fn payment(spend: &[(ManaType, i64)]) -> ManaPayment {
     ManaPayment {
+        from_lots: Default::default(),
         spend: spend
             .iter()
             .map(|&(mana_type, amount)| ManaSpend {
@@ -630,6 +633,7 @@ fn huge_cost_debit_and_receipt_are_exact() {
         1,
         TargetRef::Object(object(&game, TARGET)),
         Some(ManaPayment {
+            from_lots: Default::default(),
             spend: vec![
                 ManaSpend {
                     mana_type: ManaType::Colourless,
@@ -1092,7 +1096,7 @@ fn illegal_creature_and_stack_targets_do_not_pay_costs() {
         SourceCost::Tap,
         ManaCost::free(),
         vec![Instruction::CopySpell],
-        BodyTarget::SingleSpell(SpellTargetFilter::CopyableInstructionSpell),
+        BodyTarget::SingleSpell(spellwake_engine::program::SpellFilter::copyable_instruction()),
     );
     reject_effect(
         &game,
@@ -1598,7 +1602,7 @@ fn counter_ability_removes_real_spell_without_refunding_either_cost() {
         SourceCost::Sacrifice,
         ManaCost::one(ManaType::Blue),
         vec![Instruction::CounterSpell],
-        BodyTarget::SingleSpell(SpellTargetFilter::AnySpell),
+        BodyTarget::SingleSpell(spellwake_engine::program::SpellFilter::any()),
     );
     let cast = cast_spell(&game, A, 90, TargetRef::Object(object(&game, TARGET)));
     let spell = cast.mana_payment().unwrap().source;
@@ -1638,7 +1642,7 @@ fn copy_ability_uses_same_exact_decision_and_creates_an_independent_spell() {
         SourceCost::Sacrifice,
         ManaCost::one(ManaType::Blue),
         vec![Instruction::CopySpell],
-        BodyTarget::SingleSpell(SpellTargetFilter::CopyableInstructionSpell),
+        BodyTarget::SingleSpell(spellwake_engine::program::SpellFilter::copyable_instruction()),
     );
     let cast = cast_spell(&game, A, 90, TargetRef::Object(object(&game, TARGET)));
     let original = cast.mana_payment().unwrap().source;
@@ -1747,7 +1751,7 @@ fn two_copy_instructions_resume_indices_without_repeating_first_copy() {
         SourceCost::Sacrifice,
         ManaCost::free(),
         vec![Instruction::CopySpell, Instruction::CopySpell],
-        BodyTarget::SingleSpell(SpellTargetFilter::CopyableInstructionSpell),
+        BodyTarget::SingleSpell(spellwake_engine::program::SpellFilter::copyable_instruction()),
     );
     let cast = cast_spell(&game, A, 90, TargetRef::Object(object(&game, TARGET)));
     let original = cast.mana_payment().unwrap().source;
@@ -1822,7 +1826,9 @@ fn ability_can_counter_a_real_spell_copy_while_original_remains() {
                     SourceCost::Tap,
                     ManaCost::free(),
                     vec![Instruction::CopySpell],
-                    BodyTarget::SingleSpell(SpellTargetFilter::CopyableInstructionSpell),
+                    BodyTarget::SingleSpell(
+                        spellwake_engine::program::SpellFilter::copyable_instruction(),
+                    ),
                 )],
             ),
             artifact(
@@ -1834,7 +1840,7 @@ fn ability_can_counter_a_real_spell_copy_while_original_remains() {
                     SourceCost::Sacrifice,
                     ManaCost::free(),
                     vec![Instruction::CounterSpell],
-                    BodyTarget::SingleSpell(SpellTargetFilter::AnySpell),
+                    BodyTarget::SingleSpell(spellwake_engine::program::SpellFilter::any()),
                 )],
             ),
             instant(
@@ -2319,7 +2325,9 @@ fn ability_can_copy_a_spell_copy_with_another_independent_payload() {
                     SourceCost::Tap,
                     ManaCost::free(),
                     vec![Instruction::CopySpell],
-                    BodyTarget::SingleSpell(SpellTargetFilter::CopyableInstructionSpell),
+                    BodyTarget::SingleSpell(
+                        spellwake_engine::program::SpellFilter::copyable_instruction(),
+                    ),
                 )],
             ),
             artifact(
@@ -2331,7 +2339,9 @@ fn ability_can_copy_a_spell_copy_with_another_independent_payload() {
                     SourceCost::Sacrifice,
                     ManaCost::free(),
                     vec![Instruction::CopySpell],
-                    BodyTarget::SingleSpell(SpellTargetFilter::CopyableInstructionSpell),
+                    BodyTarget::SingleSpell(
+                        spellwake_engine::program::SpellFilter::copyable_instruction(),
+                    ),
                 )],
             ),
             instant(

@@ -212,7 +212,7 @@ fn other_sources_color_selectors_and_mana_counts_read_definition_result() {
     mana.mana = vec![ManaAbility {
         id: ManaAbilityId(1),
         output: ManaOutput::Counted {
-            mana_type: ManaType::Green,
+            mana_type: Some(ManaType::Green),
             permanents: selector,
         },
     }];

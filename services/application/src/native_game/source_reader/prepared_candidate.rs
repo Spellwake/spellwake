@@ -22,12 +22,6 @@ struct Terminal<'a> {
 #[serde(rename_all = "camelCase")]
 struct Frame<'a> {
     event_schema_revision: NativeEventSchema,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    opening_response_seat_id: Option<Uuid>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    turn_response: Option<crate::admission_ports::TurnResponse>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    turn_response_protocol: Option<crate::admission_ports::TurnResponseProtocol>,
     context_id: Uuid,
     state_ref: &'a NativeArtifactRef,
     facts_ref: &'a NativeArtifactRef,
@@ -37,7 +31,7 @@ struct Frame<'a> {
     participation: Vec<Participation>,
     terminal: Option<Terminal<'a>>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    bank_timeout: Option<crate::native_game::NativeBankTimeout>,
+    opening_response_seat_id: Option<Uuid>,
 }
 impl RecoveredNativeGame {
     /// Prepare the canonical trusted frame for a genuine linked native successor.
@@ -53,7 +47,7 @@ impl RecoveredNativeGame {
         &self,
         next: &NativeCheckpoint,
     ) -> Result<HostCandidate, NativeSourceError> {
-        self.prepare_candidate_schema(next, NativeEventSchema::TransitionV1, false)
+        self.prepare_candidate_schema(next, NativeEventSchema::TransitionV1)
     }
     /// Prepare the additive physical-cast activity frame from actual native operands.
     /// Human facts use the selected immutable roster; AI casts never credit sponsors.
@@ -63,31 +57,16 @@ impl RecoveredNativeGame {
         &self,
         next: &NativeCheckpoint,
     ) -> Result<HostCandidate, NativeSourceError> {
-        self.prepare_candidate_schema(next, next.activity_schema(), false)
-    }
-    /// Prepare a tentative native bank expiry; SQL still owns due-time acceptance.
-    /// # Errors
-    /// Rejects nonbank/stale/ineligible source or artifact/terminal encoding failure.
-    pub fn prepare_bank_candidate(
-        &self,
-        next: &NativeCheckpoint,
-    ) -> Result<HostCandidate, NativeSourceError> {
-        self.prepare_candidate_schema(next, NativeEventSchema::TransitionV1, true)
+        self.prepare_candidate_schema(next, NativeEventSchema::ActivityV1)
     }
     fn prepare_candidate_schema(
         &self,
         next: &NativeCheckpoint,
         schema: NativeEventSchema,
-        bank: bool,
     ) -> Result<HostCandidate, NativeSourceError> {
         let checkpoint_error = |error| NativeSourceError(Failure::Checkpoint(error));
         // Existing clock producer owns exact source/parent/basis validation.
-        let (clocks, bank_timeout) = if bank {
-            let intent = self.bank_expiry_intent(next).map_err(checkpoint_error)?;
-            (intent.clocks, Some(intent.timeout))
-        } else {
-            (self.clock_intent(next).map_err(checkpoint_error)?, None)
-        };
+        let clocks = self.clock_intent(next).map_err(checkpoint_error)?;
         let event = next
             .prepare_event_schema(schema)
             .map_err(checkpoint_error)?;
@@ -111,24 +90,21 @@ impl RecoveredNativeGame {
         };
         let frame = Frame {
             event_schema_revision: schema,
-            opening_response_seat_id: next.opening_response_seat()?,
-            turn_response_protocol: next.turn_response_protocol(),
-            turn_response: next.turn_response_after(self.checkpoint().logical_wait().as_ref())?,
             context_id: next.basis().context_id,
             state_ref: next.reference(),
             facts_ref: results.reference(),
             events: [event.reference()],
             facts: match schema {
                 NativeEventSchema::TransitionV1 => vec![],
-                NativeEventSchema::ActivityV1 | NativeEventSchema::LandPlayV1 => self
+                NativeEventSchema::ActivityV1 => self
                     .source()
                     .cast_accounts()
-                    .and_then(|accounts| accounts.facts_for_schema(next, schema))
+                    .and_then(|accounts| accounts.facts(next))
                     .map_err(checkpoint_error)?,
             },
             clocks,
-            bank_timeout,
             participation,
+            opening_response_seat_id: next.opening_response_seat()?,
             terminal: terminal.as_ref().map(|result| Terminal {
                 outcome: result.outcome(),
                 winner_seat_ids: result.winner_seat_ids(),

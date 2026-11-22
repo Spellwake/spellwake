@@ -13,8 +13,6 @@ pub enum NativeHistoryEvidence {
     /// Every cut has checked transition evidence; some have physical-cast metrics.
     /// Older V1 cuts retain result-only scope and are never backfilled.
     ActivityTransitionsV1,
-    /// At least one accepted play-land action was independently recomputed.
-    LandPlayTransitionsV1,
     /// The State chain was checked against all accepted cuts, but at least one
     /// historical cut has no transition codec. Its opaque evidence is unqualified.
     HistoricalUnqualified,
@@ -23,7 +21,7 @@ pub enum NativeHistoryEvidence {
 impl NativeHistoryEvidence {
     pub(super) fn transitions_verified(self) -> bool {
         match self {
-            Self::TransitionV1 | Self::ActivityTransitionsV1 | Self::LandPlayTransitionsV1 => true,
+            Self::TransitionV1 | Self::ActivityTransitionsV1 => true,
             Self::StateOnly | Self::HistoricalUnqualified => false,
         }
     }
@@ -33,8 +31,6 @@ pub(super) struct HistoryReplay<'a> {
     next: usize,
     historical: bool,
     activity: bool,
-    land_play: bool,
-    previous_wait: Option<super::response_wait::LogicalWait>,
 }
 impl<'a> HistoryReplay<'a> {
     pub(super) fn new(sources: &'a NativeTransitionSources) -> Self {
@@ -43,8 +39,6 @@ impl<'a> HistoryReplay<'a> {
             next: 0,
             historical: false,
             activity: false,
-            land_play: false,
-            previous_wait: None,
         }
     }
     pub(super) fn observe(
@@ -63,50 +57,20 @@ impl<'a> HistoryReplay<'a> {
         {
             return Err(NativeCheckpointError::Invalid);
         }
-        if let Some(seat) = group.opening_response_seat_id
-            && checkpoint
-                .opening_response_seat()
-                .map_err(|_| NativeCheckpointError::Invalid)?
-                != Some(seat)
-        {
-            return Err(NativeCheckpointError::Invalid);
-        }
-        match group.turn_response_protocol {
-            Some(protocol)
-                if checkpoint.turn_response_protocol().is_some()
-                    && checkpoint
-                        .turn_response_for(self.previous_wait.as_ref(), protocol)
-                        .map_err(|_| NativeCheckpointError::Invalid)?
-                        == group.turn_response => {}
-            None if group.turn_response.is_none() => {}
-            _ => return Err(NativeCheckpointError::Invalid),
-        }
-        self.previous_wait = if group.turn_response.is_some()
-            || self.next + 1 < self.sources.groups.len()
-                && self.sources.groups[self.next + 1].turn_response.is_some()
-        {
-            checkpoint.logical_wait()
-        } else {
-            None
-        };
         let response_timeout = matches!(
             checkpoint.retained_input(),
             Some((NativeCheckpointInput::ResponseTimeout, _, _))
         );
-        match (response_timeout, &group.opening_response_expiry) {
-            (true, Some(evidence)) if group.event_schema_revision.is_some() => {
-                evidence.verify(checkpoint)?
-            }
-            (false, None) => {}
-            _ => return Err(NativeCheckpointError::Invalid),
+        if (response_timeout || group.opening_response_seat_id.is_some())
+            && checkpoint
+                .opening_response_seat()
+                .map_err(|_| NativeCheckpointError::Invalid)?
+                != group.opening_response_seat_id
+        {
+            return Err(NativeCheckpointError::Invalid);
         }
-        let bank_input = checkpoint
-            .retained_input()
-            .is_some_and(|(kind, _, _)| matches!(kind, NativeCheckpointInput::BankExpiry));
-        match (bank_input, &group.bank_expiry) {
-            (true, Some(evidence)) if group.event_schema_revision.is_some() => {
-                evidence.verify(checkpoint)?
-            }
+        match (response_timeout, &group.opening_response_expiry) {
+            (true, Some(evidence)) => evidence.verify(checkpoint)?,
             (false, None) => {}
             _ => return Err(NativeCheckpointError::Invalid),
         }
@@ -120,14 +84,8 @@ impl<'a> HistoryReplay<'a> {
                         return Err(NativeCheckpointError::Invalid);
                     }
                 }
-                crate::admission_ports::NativeEventSchema::ActivityV1
-                | crate::admission_ports::NativeEventSchema::LandPlayV1 => {
-                    let expected = self
-                        .sources
-                        .cast_accounts
-                        .facts_for_schema(checkpoint, schema)?;
-                    self.land_play |=
-                        schema == crate::admission_ports::NativeEventSchema::LandPlayV1;
+                crate::admission_ports::NativeEventSchema::ActivityV1 => {
+                    let expected = self.sources.cast_accounts.facts(checkpoint)?;
                     if !crate::native_game::NativeCastFact::matches_set(
                         &expected,
                         event.facts.iter().map(|row| {
@@ -187,8 +145,6 @@ impl<'a> HistoryReplay<'a> {
         }
         Ok(if self.historical {
             NativeHistoryEvidence::HistoricalUnqualified
-        } else if self.land_play {
-            NativeHistoryEvidence::LandPlayTransitionsV1
         } else if self.activity {
             NativeHistoryEvidence::ActivityTransitionsV1
         } else {

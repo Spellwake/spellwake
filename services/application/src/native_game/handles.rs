@@ -7,10 +7,7 @@ use spellwake_engine::{
     characteristics::{EvaluatedCharacteristics, ObjectCharacteristics, StaticAbilityId},
     checks::{CheckDecision, LegendConflictId},
     damage::{DamageApplication, DamageAttemptId},
-    effects::{
-        CopyTargetChoice, DamageDecision, OptionalEffectChoice, PendingWorkKind, ZoneApplication,
-        ZoneOptionalAnswer, ZoneReplacementRequest,
-    },
+    effects::{CopyTargetChoice, DamageDecision, OptionalEffectChoice},
     game::{DecisionId, RuleFrame},
     mana::{ManaAbilityRef, ManaType},
     object_identity::{ObjectId, ObjectZone},
@@ -20,26 +17,18 @@ use spellwake_engine::{
     token::TokenBatchMember,
 };
 
-/// Supported owners only; actual frame/chooser/source checks remain mandatory.
-pub(super) fn supports_zone_replacement(source: &GameState) -> bool {
-    matches!(
-        source.execution().pending_work_kind(),
-        Some(PendingWorkKind::LibraryTop | PendingWorkKind::ResolutionSelection)
-    )
-}
-
 /// Trusted native identities/options, not a serializable client grammar.
 /// The issuer must choose player-visible/interactable references. Registration
 /// proves current presence/frame membership, not disclosure or full legality.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum NativeReference {
-    LibraryCard(ObjectId),
-    ZoneApplication(ZoneApplication),
-    ZoneOptional(ZoneOptionalAnswer),
-    ReplacementChooser(SeatId),
     Object(ObjectId),
     Zone(ObjectZone),
     Stack(StackEntryId),
+    GrantedAbility {
+        source: ObjectId,
+        effect: spellwake_engine::characteristics::EffectInstanceKey,
+    },
     ActivatedAbility {
         source: ObjectId,
         ability: ActivatedAbilityId,
@@ -62,11 +51,17 @@ pub enum NativeReference {
     TokenMember(TokenBatchMember),
     DamageApplication(DamageApplication),
     DamageAttempt(DamageAttemptId),
+    DrawLandKind(Option<bool>),
+    MiracleReveal(bool),
+    PlaneswalkerType(spellwake_engine::program::PlaneswalkerSubtype),
+    AttackDirection(spellwake_engine::effects::AttackDirection),
     OptionalEffect(OptionalEffectChoice),
+    ZoneReplacement(usize),
     Mulligan(MulliganChoice),
     CopyTargets(CopyTargetChoice),
     ManaColor(ManaType),
     CreatureType(CreatureTypeId),
+    CardName(spellwake_engine::land::CardNameIndex),
 }
 impl NativeScope<'_> {
     /// Issue an opaque handle only after current native identity/frame checks.
@@ -86,7 +81,8 @@ impl NativeScope<'_> {
         evaluated: &EvaluatedCharacteristics,
     ) -> Result<PlayerHandle, NativeBridgeError> {
         match reference {
-            NativeReference::ActivatedAbility { source, .. }
+            NativeReference::GrantedAbility { source, .. }
+            | NativeReference::ActivatedAbility { source, .. }
             | NativeReference::ManaAbility { source, .. }
             | NativeReference::TriggeredAbility { source, .. }
             | NativeReference::ContinuousAbility { source, .. } => {
@@ -190,22 +186,6 @@ impl NativeScope<'_> {
         value: NativeReference,
     ) -> Result<(), NativeBridgeError> {
         let valid = match value {
-            NativeReference::LibraryCard(id) => {
-                self.source.execution().pending_work_kind() == Some(PendingWorkKind::LibraryTop)
-                    && match self.frame()? {
-                        RuleFrame::LibraryTop(f) => f.domain_top_first().contains(&id),
-                        RuleFrame::ResolutionGraveyardOrder(f) => f.domain().contains(&id),
-                        _ => false,
-                    }
-            }
-            NativeReference::ZoneApplication(application) => {
-                supports_zone_replacement(self.source)
-                    && matches!(self.frame()?,RuleFrame::ZoneReplacement(f) if matches!(f.request(),ZoneReplacementRequest::Select { applications } if applications.contains(&application)))
-            }
-            NativeReference::ZoneOptional(_) => {
-                supports_zone_replacement(self.source)
-                    && matches!(self.frame()?,RuleFrame::ZoneReplacement(f) if matches!(f.request(),ZoneReplacementRequest::ConfirmOptional { .. }))
-            }
             NativeReference::Object(id) => {
                 self.source.execution().window().cards().get(id).is_some()
             }
@@ -229,7 +209,8 @@ impl NativeScope<'_> {
                 .entries()
                 .iter()
                 .any(|entry| entry.id() == id),
-            NativeReference::ActivatedAbility { source, .. }
+            NativeReference::GrantedAbility { source, .. }
+            | NativeReference::ActivatedAbility { source, .. }
             | NativeReference::ManaAbility { source, .. }
             | NativeReference::TriggeredAbility { source, .. }
             | NativeReference::ContinuousAbility { source, .. } => self
@@ -259,8 +240,21 @@ impl NativeScope<'_> {
             NativeReference::DamageAttempt(attempt) => {
                 matches!(self.frame()?, RuleFrame::Damage(DamageDecision::Allocation(frame)) if frame.eligible().iter().any(|domain| domain.attempt() == attempt))
             }
-            NativeReference::ReplacementChooser(player) => {
-                matches!(self.frame()?, RuleFrame::ReplacementChooser(frame) if frame.candidates().contains(&player))
+            NativeReference::ZoneReplacement(index) => {
+                matches!(self.frame()?,RuleFrame::ZoneReplacement(frame) if frame.reply_at(index).is_some())
+            }
+            NativeReference::MiracleReveal(_) => {
+                matches!(self.frame()?, RuleFrame::DrawReplacement(frame)
+                if matches!(frame.domain, spellwake_engine::effects::DrawReplacementDomain::Miracle { .. }))
+            }
+            NativeReference::DrawLandKind(_) => {
+                matches!(self.frame()?,RuleFrame::DrawReplacement(frame) if matches!(frame.domain,spellwake_engine::effects::DrawReplacementDomain::LandKind))
+            }
+            NativeReference::PlaneswalkerType(_) => {
+                matches!(self.frame()?, RuleFrame::PlaneswalkerType(_))
+            }
+            NativeReference::AttackDirection(_) => {
+                matches!(self.frame()?, RuleFrame::AttackDirection(_))
             }
             NativeReference::OptionalEffect(choice) => {
                 matches!(self.frame()?, RuleFrame::OptionalEffect(frame) if frame.options().contains(&choice))
@@ -277,9 +271,17 @@ impl NativeScope<'_> {
             }
             NativeReference::ManaColor(color) => {
                 matches!(self.frame()?, RuleFrame::ManaColor(frame) if frame.colors().contains(&color))
+                    || matches!(self.frame()?, RuleFrame::EntryChoice(frame) if matches!(frame.rule(), spellwake_engine::land::EntryTap::AlwaysChooseColorExcept(excluded) if color != excluded && color != ManaType::Colourless))
+                    || matches!(self.frame()?, RuleFrame::TokenEntryChoice(frame) if matches!(frame.rule(), spellwake_engine::land::EntryTap::AlwaysChooseColorExcept(excluded) if color != excluded && color != ManaType::Colourless))
+            }
+            NativeReference::CardName(index) => {
+                matches!(self.frame()?, RuleFrame::EntryChoice(frame) if frame.card_names().get(index.0).is_some())
+                    || matches!(self.frame()?, RuleFrame::TokenEntryChoice(frame) if frame.card_names().get(index.0).is_some())
             }
             NativeReference::CreatureType(member) => {
                 matches!(self.frame()?, RuleFrame::CreatureType(frame) if frame.vocabulary() == member.vocabulary() && !frame.excluding().contains(&member) && self.source.execution().creature_vocabulary().label(member).is_some())
+                    || matches!(self.frame()?, RuleFrame::EntryChoice(frame) if matches!(frame.rule(), spellwake_engine::land::EntryTap::ChooseCreatureType) && self.source.execution().creature_vocabulary().label(member).is_some())
+                    || matches!(self.frame()?, RuleFrame::TokenEntryChoice(frame) if matches!(frame.rule(), spellwake_engine::land::EntryTap::ChooseCreatureType) && self.source.execution().creature_vocabulary().label(member).is_some())
             }
         };
         if valid {
@@ -292,6 +294,9 @@ impl NativeScope<'_> {
 
 fn ability_matches(reference: NativeReference, current: &ObjectCharacteristics) -> bool {
     match reference {
+        NativeReference::GrantedAbility { source, effect } => {
+            current.object == source && current.granted_activated.contains_key(&effect)
+        }
         NativeReference::ActivatedAbility { source, ability } => {
             current.object == source && current.abilities.activated.contains(&ability)
         }
@@ -302,7 +307,12 @@ fn ability_matches(reference: NativeReference, current: &ObjectCharacteristics) 
             current.object == source && current.abilities.triggered.contains(&ability)
         }
         NativeReference::ContinuousAbility { source, ability } => {
-            current.object == source && current.abilities.continuous == Some(ability)
+            current.object == source
+                && (current.abilities.continuous == Some(ability)
+                    || current
+                        .abilities
+                        .additional_battlefield_abilities
+                        .contains(&ability))
         }
         _ => false,
     }

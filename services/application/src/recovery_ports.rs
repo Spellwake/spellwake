@@ -13,8 +13,7 @@ use serde::Deserialize;
 use uuid::Uuid;
 
 /// Verified incident category; network disconnects are not server incidents.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
-#[serde(rename_all = "snake_case")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum IncidentKind {
     ServerProcess,
     Storage,
@@ -36,15 +35,6 @@ fn incident_time(value: DateTime<Utc>) -> bool {
     // no caller-side retry clock or leap-second/submicrosecond rounding is allowed.
     value.nanosecond() < 1_000_000_000 && value.nanosecond().is_multiple_of(1000)
 }
-pub(crate) fn incident_timestamp<'de, D: serde::Deserializer<'de>>(
-    input: D,
-) -> Result<DateTime<Utc>, D::Error> {
-    let instant = DateTime::<Utc>::deserialize(input)?;
-    if !incident_time(instant) {
-        return Err(serde::de::Error::custom("invalid incident precision"));
-    }
-    Ok(instant)
-}
 fn advanced(value: &Amount, basis: &Amount) -> bool {
     basis
         .checked_add(&Amount::from(1))
@@ -52,34 +42,24 @@ fn advanced(value: &Amount, basis: &Amount) -> bool {
 }
 /// Frozen trusted186 incident source. The kind/proof require an independent detector.
 /// Original timestamps and request IDs must survive retry unchanged.
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct PauseGame {
-    #[serde(deserialize_with = "crate::identifiers::uuid")]
     pub game_id: Uuid,
     pub owner_ref: SourceProof,
     pub epoch: Amount,
     pub operational_revision: Amount,
-    #[serde(deserialize_with = "incident_timestamp")]
     pub incident_at: DateTime<Utc>,
     pub kind: IncidentKind,
     pub proof_ref: SourceProof,
-    #[serde(deserialize_with = "crate::identifiers::uuid")]
     pub request_id: Uuid,
 }
 /// Trusted186 exact-checkpoint restoration, not a browser reconnect action.
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct RestoreGame {
-    #[serde(deserialize_with = "crate::identifiers::uuid")]
     pub game_id: Uuid,
     pub epoch: Amount,
     pub operational_revision: Amount,
-    #[serde(deserialize_with = "crate::identifiers::uuid")]
     pub checkpoint_id: Uuid,
     pub new_owner_ref: SourceProof,
     pub restoration_ref: SourceProof,
-    #[serde(deserialize_with = "crate::identifiers::uuid")]
     pub request_id: Uuid,
 }
 /// Durable checkpoint source and new fence; clockRevision is required nullable
@@ -167,32 +147,22 @@ impl RestoreGame {
     }
 }
 /// Trusted193 match-only incident; no live native game is invented before opening.
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct PauseMatch {
-    #[serde(deserialize_with = "crate::identifiers::uuid")]
     pub match_id: Uuid,
     pub basis: Amount,
     pub availability_basis: Amount,
-    #[serde(deserialize_with = "incident_timestamp")]
     pub incident_at: DateTime<Utc>,
     pub kind: IncidentKind,
     pub proof_ref: SourceProof,
-    #[serde(deserialize_with = "crate::identifiers::uuid")]
     pub request_id: Uuid,
 }
 /// Trusted193 exact incident restoration. Timers/bank rebasing remains SQL-owned.
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ResumeMatch {
-    #[serde(deserialize_with = "crate::identifiers::uuid")]
     pub match_id: Uuid,
     pub basis: Amount,
     pub availability_basis: Amount,
-    #[serde(deserialize_with = "crate::identifiers::uuid")]
     pub incident_id: Uuid,
     pub proof_ref: SourceProof,
-    #[serde(deserialize_with = "crate::identifiers::uuid")]
     pub request_id: Uuid,
 }
 /// Incident identity is the newly accepted command receipt, not match/request UUID.
@@ -285,14 +255,10 @@ impl ResumeMatch {
     }
 }
 ///185 failed-restore source. incidentId is also request identity, with no replacement UUID.
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct FinalizeUnrecoverableMatch {
-    #[serde(deserialize_with = "crate::identifiers::uuid")]
     pub match_id: Uuid,
     pub basis: Amount,
     pub availability_basis: Amount,
-    #[serde(deserialize_with = "crate::identifiers::uuid")]
     pub incident_id: Uuid,
     pub failure_ref: SourceProof,
 }

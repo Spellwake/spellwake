@@ -154,6 +154,16 @@ async fn market_reads_preserve_public_active_and_private_terminal_visibility() -
     assert_eq!(public["listing"]["asset"]["kind"], "pack");
     assert!(public["listing"].get("holdId").is_none());
     assert!(public["listing"].get("assessment").is_none());
+    let market_search =
+        "SELECT app.search_market_listings(NULL,'pack',NULL,1500,1500,false,NULL,0,100)";
+    let search = data(read(&client, market_search, &[]).await?);
+    assert!(
+        search["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|item| item["id"] == json!(listing))
+    );
     set_auth_claims(&client, seller_subject).await?;
     let own = data(read(&client, "SELECT app.read_my_market(NULL,8,true)", &[]).await?);
     serde_json::from_value::<spellwake_application::exchange_reads::ListingPage>(own.clone())?
@@ -163,6 +173,14 @@ async fn market_reads_preserve_public_active_and_private_terminal_visibility() -
     client.batch_execute("RESET ROLE").await?;
     resource(super::market::buy(&client, buyer, listing, "1500", Uuid::new_v4()).await?);
     set_auth_claims(&client, outsider).await?;
+    let search = data(read(&client, market_search, &[]).await?);
+    assert!(
+        !search["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|item| item["id"] == json!(listing))
+    );
     assert_eq!(
         read(
             &client,

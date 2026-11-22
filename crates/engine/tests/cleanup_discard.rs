@@ -262,7 +262,7 @@ fn ordered_cleanup_subset_preserves_old_pile_and_kept_incarnations() {
     let completed = reply(game, DecisionReply::Discard(selected.clone()));
     let next = completed.state();
     assert!(next.pending_decision().is_none());
-    assert_eq!(next.execution().window().turn_owner(), B);
+    assert_eq!(next.execution().window().active_player(), B);
     assert_eq!(next.turn().unwrap().position().number, 6);
     assert_eq!(next.turn().unwrap().position().step, Step::Upkeep);
     assert_eq!(holder(next), B);
@@ -323,7 +323,7 @@ fn ordinary_limit_is_seven_and_only_the_active_hand_matters() {
         assert!(next.pending_decision().is_none());
         assert!(completed.check_journal().choices.is_empty());
         assert!(completed.check_journal().moves.is_empty());
-        assert_eq!(next.execution().window().turn_owner(), B);
+        assert_eq!(next.execution().window().active_player(), B);
         assert_eq!(next.turn().unwrap().position().step, Step::Upkeep);
         assert_eq!(
             next.execution()
@@ -777,7 +777,7 @@ fn cleanup_discards_before_zero_toughness_checks_and_real_sba_repeats_cleanup() 
     assert_eq!(transitions[1].to.step, Step::Untap);
     assert_eq!(transitions[1].to.number, 6);
     assert_eq!(transitions[2].to.step, Step::Upkeep);
-    assert_eq!(repeated.state().execution().window().turn_owner(), B);
+    assert_eq!(repeated.state().execution().window().active_player(), B);
     assert!(repeated.state().pending_decision().is_none());
     assert!(repeated.check_journal().choices.is_empty());
     assert!(repeated.check_journal().moves.is_empty());
@@ -1054,6 +1054,7 @@ fn accepted_damage_payment_and_effects_survive_discard_rejection_until_marks_cle
                 spell,
                 target: TargetRef::Object(target),
                 payment: ManaPayment {
+                    from_lots: Default::default(),
                     spend: vec![ManaSpend {
                         mana_type: ManaType::Red,
                         amount: 1.into(),
@@ -1172,7 +1173,7 @@ fn accepted_damage_payment_and_effects_survive_discard_rejection_until_marks_cle
     assert!(completed.damage_journal().applied.is_empty());
     assert_eq!(completed.check_journal().choices.len(), 1);
     assert_eq!(completed.check_journal().moves.len(), 2);
-    assert_eq!(completed.state().execution().window().turn_owner(), B);
+    assert_eq!(completed.state().execution().window().active_player(), B);
 }
 
 #[path = "support/vocabulary.rs"]

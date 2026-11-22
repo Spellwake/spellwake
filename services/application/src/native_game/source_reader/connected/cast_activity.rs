@@ -26,17 +26,9 @@ struct Case {
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct Input {
-    objective: Option<CastObjective>,
     cases: Vec<Case>,
     owner_account_id: Uuid,
     quest_assignment_id: Uuid,
-}
-#[derive(Deserialize)]
-#[serde(rename_all = "kebab-case")]
-enum CastObjective {
-    RedGreen20,
-    BlackGreen20,
-    RedGreen30,
 }
 struct LostAck {
     armed: AtomicBool,
@@ -95,7 +87,7 @@ fn named<'a>(
 ) -> impl Iterator<Item = &'a crate::player_wire::PlayerObject> {
     snapshot.visible_objects.iter().filter(move |o|matches!(&o.identity,PlayerObjectIdentity::Known{characteristics,..}if characteristics.name==name))
 }
-pub(super) fn choose(
+fn choose(
     snapshot: &PlayerSnapshot,
     recovered: &RecoveredNativeGame,
     issued: &IssuedNativePlayerView<'_>,
@@ -133,7 +125,7 @@ pub(super) fn choose(
         };
     }
     let turn = checkpoint.state().turn().unwrap();
-    let native = checkpoint.state().execution().window().turn_owner();
+    let native = checkpoint.state().execution().window().active_player();
     let active = checkpoint
         .roster
         .iter()
@@ -178,6 +170,12 @@ pub(super) fn choose(
         let action = PlayerAction::CastUntargeted {
             source: bear.handle.clone(),
             payment: Some(PlayerPayment {
+                from_lots: Default::default(),
+                exile_cast_type: None,
+                alternative_cost_source: None,
+                graveyard_permission: None,
+                use_granted_flashback: false,
+                restricted_mana: Vec::new(),
                 spend: vec![ManaSpend {
                     color: ManaColor::Green,
                     amount: "2".to_owned().try_into().unwrap(),
@@ -235,14 +233,6 @@ fn consume_with_rollback_and_competitor(database: &str, game: Uuid) -> Value {
 #[test]
 #[ignore = "requires owned real Auth/SQL/Storage and genuine source inputs; finite cast-to-quest qualification"]
 fn owned_native_cast_activity_to_quest_consumption() {
-    qualify_activity(false);
-}
-#[test]
-#[ignore = "requires owned Auth, SQL, private Storage and two selected native games"]
-fn owned_land_play_to_quest_and_ai_exclusion() {
-    qualify_activity(true);
-}
-fn qualify_activity(land_case: bool) {
     assert_eq!(
         std::env::var("SPELLWAKE_NATIVE_STORAGE_QUALIFY").unwrap(),
         "1"
@@ -251,20 +241,7 @@ fn qualify_activity(land_case: bool) {
         &fs::read(std::env::var_os("SPELLWAKE_NATIVE_ACTIVITY_INPUT").unwrap()).unwrap(),
     )
     .unwrap();
-    // The original two-game run starts at 19. The full run starts at zero,
-    // excludes the first Open game and consumes twenty distinct Collection games.
-    let (target, coins, fact_kind): (u32, u32, &str) = if land_case {
-        (1, 500, "native:land-play")
-    } else {
-        match input.objective.unwrap_or(CastObjective::RedGreen20) {
-            CastObjective::RedGreen20 => (20, 500, "native:cast-red-or-green"),
-            CastObjective::BlackGreen20 => (20, 500, "native:cast-black-or-green"),
-            CastObjective::RedGreen30 => (30, 750, "native:cast-red-or-green"),
-        }
-    };
-    let from_zero = !land_case && input.cases.len() == target as usize + 1;
-    assert!(from_zero || input.cases.len() == 2);
-    let mut credited = if from_zero || land_case { 0 } else { 19 };
+    assert_eq!(input.cases.len(), 2);
     let read = |name| fs::read(std::env::var_os(name).unwrap()).unwrap();
     let programs = NativeProgramSource::from_bytes(
         NativeProgramPool::ResolutionSelectionNaturalMana,
@@ -293,66 +270,13 @@ fn qualify_activity(land_case: bool) {
         std::env::var("SPELLWAKE_NATIVE_STORAGE_CALLER").unwrap(),
         std::env::var("SPELLWAKE_NATIVE_SOURCE_PEER_BEARER").unwrap(),
     ];
-    let free: [Uuid; 3] = serde_json::from_value(lifecycle_reads::sql(
-        &database,
-        "SELECT jsonb_agg((SELECT id FROM app.cosmetic WHERE kind=k AND is_free ORDER BY id LIMIT 1) ORDER BY i) FROM unnest(ARRAY['back','sleeve','dice']) WITH ORDINALITY AS kinds(k,i)",
-        &[],
-    )).unwrap();
-    let quest_http = http::HttpProbe::serve(
-        crate::api::ApiConfig::new(
-            base.clone(),
-            std::env::var("SPELLWAKE_SUPABASE_PUBLISHABLE_KEY").unwrap(),
-            key.clone(),
-            format!("{}/auth/v1", base.trim_end_matches('/')),
-            free,
-            vec![],
-        )
-        .unwrap(),
-    );
-    let quest_id = input.quest_assignment_id;
-    let check_quest = |expected: u32, completed: bool| {
-        let page = quest_http.quests(&tokens[0]);
-        assert_eq!(page["data"]["accountId"], json!(input.owner_account_id));
-        let item = page["data"]["items"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .find(|item| item["id"] == json!(quest_id))
-            .unwrap();
-        assert_eq!(item["progress"], expected.to_string());
-        assert_eq!(item["completedAt"].is_string(), completed);
-        assert_eq!(item["objective"]["rewardCoins"], coins.to_string());
-        let other = quest_http.quests(&tokens[1]);
-        assert_ne!(other["data"]["accountId"], page["data"]["accountId"]);
-        assert!(
-            other["data"]["items"]
-                .as_array()
-                .unwrap()
-                .iter()
-                .all(|item| item["id"] != json!(quest_id))
-        );
-    };
-    check_quest(credited, false);
     let actors = [
         auth.resolve(&tokens[0]).unwrap(),
         auth.resolve(&tokens[1]).unwrap(),
     ];
     let mut cases = Vec::new();
     let mut tampered = 0;
-    assert_eq!(
-        progress(&database, input.quest_assignment_id)["progress"],
-        credited.to_string()
-    );
-    for (index_in_run, case) in input.cases.into_iter().enumerate() {
-        let collection = index_in_run > 0;
-        assert_eq!(
-            case.mixed_ai,
-            if land_case {
-                index_in_run == 1
-            } else {
-                collection && credited + 1 == target
-            }
-        );
+    for case in input.cases {
         let reserved = NativePreparationRepository::from_env()
             .unwrap()
             .reserved_game(case.game_id)
@@ -472,23 +396,16 @@ fn qualify_activity(land_case: bool) {
         let mut human_casts = 0;
         let mut ai_casts = 0;
         let mut turns = 0;
-        let mut qualified_land = None;
-        let mut last_committed: Option<RecoveredNativeGame> = None;
         for _ in 0..300 {
-            let recovered = if let Some(accepted) = last_committed.take() {
-                accepted
-            } else {
-                repository
-                    .recover_owned_history(
-                        case.game_id,
-                        &store,
-                        &programs,
-                        NativeRecoveryBudget::new(10000, 100_000_000).unwrap(),
-                        &owner,
-                    )
-                    .unwrap()
-                    .unwrap()
-            };
+            let recovered = repository
+                .recover_with_history(
+                    case.game_id,
+                    &store,
+                    &programs,
+                    NativeRecoveryBudget::new(10000, 100_000_000).unwrap(),
+                )
+                .unwrap()
+                .unwrap();
             let checkpoint = recovered.checkpoint();
             let native = if let Some(decision) = checkpoint.state().pending_decision() {
                 decision.chooser()
@@ -506,13 +423,10 @@ fn qualify_activity(land_case: bool) {
             let human_access = if is_ai {
                 None
             } else {
-                let read_access =
-                    || repository.human_access(&actors[index], case.game_id, case.context_id);
-                let observation = match read_access() {
-                    Err(NativeSourceError(Failure::Backend(_))) => read_access(),
-                    observation => observation,
-                };
-                let NativeHumanAccessOutcome::Granted(access) = observation.unwrap() else {
+                let NativeHumanAccessOutcome::Granted(access) = repository
+                    .human_access(&actors[index], case.game_id, case.context_id)
+                    .unwrap()
+                else {
                     panic!("actual human access")
                 };
                 Some(access)
@@ -555,13 +469,12 @@ fn qualify_activity(land_case: bool) {
             let snapshot = issued.view().snapshot();
             let action = choose(snapshot, &recovered, &issued);
             let casting = matches!(action, PlayerAction::CastUntargeted { .. });
-            let verify_land = land_case && matches!(action, PlayerAction::PlayLand { .. });
             let original = crate::player_wire::PlayerCommand {
                 request_id: Uuid::new_v4(),
                 basis: checkpoint.basis().clone(),
                 action,
             };
-            if casting || verify_land || from_zero {
+            if casting {
                 let proposal = issued.view().scope().propose(&original).unwrap();
                 let bytes = issued.view().scope().encode_input(&proposal).unwrap();
                 let reference = store
@@ -590,63 +503,8 @@ fn qualify_activity(land_case: bool) {
                     .retain(&store)
                     .unwrap();
                 let produced = recovered.prepare_activity_candidate(&next).unwrap();
-                if from_zero && !casting {
-                    let commit = || {
-                        repository.commit_player(
-                            &store,
-                            NativePlayerCommit {
-                                authority,
-                                recovered: &recovered,
-                                issued: &issued,
-                                original: &original,
-                                next: &next,
-                                candidate: &produced,
-                            },
-                        )
-                    };
-                    let ack = match commit() {
-                        Ok(response) => response,
-                        Err(error) => match authority.original(&repository, &original).unwrap() {
-                            Some(accepted) => accepted,
-                            None if matches!(
-                                error.0,
-                                Failure::Backend(_) | Failure::Artifact(_)
-                            ) =>
-                            {
-                                commit().unwrap()
-                            }
-                            None => panic!(
-                                "preparatory command failed at revision {}",
-                                original.basis.revision.get()
-                            ),
-                        },
-                    };
-                    assert!(matches!(ack, ApiResponse::Success { .. }));
-                    turns += 1;
-                    last_committed = Some(
-                        recovered
-                            .advance_observed_for_fixture(&repository, next)
-                            .unwrap(),
-                    );
-                    continue;
-                }
                 let mut body: Value = serde_json::from_str(produced.original_json()).unwrap();
-                if verify_land {
-                    assert_eq!(
-                        body["eventSchemaRevision"],
-                        "native-transition-land-play-v1"
-                    );
-                    let fact = json!({"eventIndex":"0","accountId":input.owner_account_id,"kind":"native:land-play","revision":"native-land-play-v1","value":"1"});
-                    assert_eq!(
-                        body["facts"],
-                        if is_ai {
-                            json!([])
-                        } else {
-                            json!([fact.clone()])
-                        }
-                    );
-                    body["facts"] = if is_ai { json!([fact]) } else { json!([]) };
-                } else if is_ai {
+                if is_ai {
                     assert_eq!(body["facts"], json!([]));
                     body["facts"] = json!([{"eventIndex":"0","accountId":input.owner_account_id,"kind":"native:cast-red-or-green","revision":"native-cast-colors-v1","value":"1"}]);
                 } else {
@@ -684,12 +542,12 @@ fn qualify_activity(land_case: bool) {
                     submit_attempts
                 );
                 tampered += 1;
-                if !land_case && case.mixed_ai && !is_ai {
+                if case.mixed_ai && !is_ai {
                     faults.armed.store(true, Ordering::SeqCst);
                 }
             }
             let result = if let Some(access) = human_access.as_ref() {
-                runtime.command_current(
+                runtime.command_current_checked(
                     if faults.armed.load(Ordering::SeqCst) {
                         &proxied
                     } else {
@@ -709,61 +567,8 @@ fn qualify_activity(land_case: bool) {
                     &original,
                 )
             };
-            let ack = result.unwrap();
-            assert!(matches!(ack, ApiResponse::Success { .. }));
+            assert!(matches!(result.unwrap(), ApiResponse::Success { .. }));
             turns += 1;
-            if verify_land {
-                let repeated = if let Some(access) = human_access.as_ref() {
-                    runtime.command_current(&repository, &actors[index], &owner, access, &original)
-                } else {
-                    runtime.controller_command(
-                        &repository,
-                        &secrets,
-                        &controller.as_ref().unwrap().1,
-                        &owner,
-                        &original,
-                    )
-                }
-                .unwrap();
-                assert_eq!(
-                    serde_json::to_value(repeated).unwrap(),
-                    serde_json::to_value(ack).unwrap()
-                );
-                let observed = lifecycle_reads::sql(
-                    &database,
-                    "SELECT coalesce(jsonb_agg(jsonb_build_array(f.account_id,f.kind,f.fact_revision,f.value::text,e.accepted_revision::text)),'[]') FROM app.game_activity_fact f JOIN app.game_event e ON e.id=f.source_event_id WHERE f.game_id=$1",
-                    &[&case.game_id],
-                );
-                let revision = (checkpoint.basis().revision.get() + 1).to_string();
-                assert_eq!(
-                    observed,
-                    if is_ai {
-                        json!([])
-                    } else {
-                        json!([[
-                            input.owner_account_id,
-                            "native:land-play",
-                            "native-land-play-v1",
-                            "1",
-                            revision
-                        ]])
-                    }
-                );
-                let consumption = consume(&database, case.game_id);
-                assert_eq!(
-                    consumption["data"]["rewards"],
-                    if is_ai { "0" } else { "1" }
-                );
-                assert_eq!(consume(&database, case.game_id)["data"]["events"], "0");
-                assert_eq!(
-                    progress(&database, input.quest_assignment_id)["progress"],
-                    "1"
-                );
-                qualified_land = Some(
-                    json!({"game":case.game_id,"controller":is_ai,"revision":revision,"facts":observed,"consumption":consumption}),
-                );
-                break;
-            }
             if casting {
                 let current = lifecycle_reads::sql(
                     &database,
@@ -780,7 +585,7 @@ fn qualify_activity(land_case: bool) {
                     assert_eq!(consumed["data"]["rewards"], "0");
                     assert_eq!(
                         progress(&database, input.quest_assignment_id)["progress"],
-                        credited.to_string()
+                        "19"
                     );
                 } else {
                     human_casts += 1;
@@ -798,7 +603,7 @@ fn qualify_activity(land_case: bool) {
                         assert!(faults.lost.load(Ordering::SeqCst));
                         assert_eq!(faults.forbidden.load(Ordering::SeqCst), 0);
                         let repeated = runtime
-                            .command_current(
+                            .command_current_checked(
                                 &proxied,
                                 &actors[index],
                                 &owner,
@@ -808,18 +613,19 @@ fn qualify_activity(land_case: bool) {
                             .unwrap();
                         assert!(matches!(repeated, ApiResponse::Success { .. }));
                         assert_eq!(faults.submits.load(Ordering::SeqCst), 1);
-                    } else if !collection {
+                    } else {
                         assert_eq!(consume(&database, case.game_id)["data"]["rewards"], "0");
                         assert_eq!(
                             progress(&database, input.quest_assignment_id)["progress"],
-                            credited.to_string()
+                            "19"
                         );
                     }
                     break;
                 }
             }
         }
-
+        assert_eq!(human_casts, 1);
+        assert_eq!(ai_casts, usize::from(case.mixed_ai));
         let recovered = repository
             .recover_with_history(
                 case.game_id,
@@ -831,65 +637,39 @@ fn qualify_activity(land_case: bool) {
             .unwrap();
         assert_eq!(
             recovered.history_evidence(),
-            NativeHistoryEvidence::LandPlayTransitionsV1
+            NativeHistoryEvidence::ActivityTransitionsV1
         );
-        if land_case {
-            cases.push(qualified_land.expect("expected a genuine accepted land-play action"));
-            continue;
-        }
-        assert_eq!(human_casts, 1);
-        assert_eq!(ai_casts, usize::from(case.mixed_ai));
         let reward = if case.mixed_ai {
             let result = consume_with_rollback_and_competitor(&database, case.game_id);
             assert_eq!(
                 progress(&database, input.quest_assignment_id)["progress"],
-                target.to_string()
+                "20"
             );
             assert_eq!(consume(&database, case.game_id)["data"]["events"], "0");
             result
-        } else if collection {
-            let receipt = consume(&database, case.game_id);
-            assert_eq!(receipt["data"]["rewards"], "0");
-            credited += 1;
-            let assignment = progress(&database, input.quest_assignment_id);
-            assert_eq!(assignment["progress"], credited.to_string());
-            assert_eq!(assignment["completed"], false);
-            assert!(assignment["operation"].is_null());
-            assert_eq!(consume(&database, case.game_id)["data"]["events"], "0");
-            json!({"collectionProgress":credited,"rewards":"0"})
         } else {
-            json!({"openProgress":credited.to_string(),"rewards":"0"})
+            json!({"openProgress":"19","rewards":"0"})
         };
-        cases.push(json!({"gameId":case.game_id,"mixedAi":case.mixed_ai,"humanCasts":human_casts,"aiCasts":ai_casts,"originalCommands":turns,"acceptedRevision":recovered.checkpoint().basis().revision,"checkedHistory":"LandPlayTransitionsV1","reward":reward}));
-    }
-    check_quest(target, true);
-    if land_case {
-        assert_eq!(tampered, 2);
-        println!(
-            "OWNED_NATIVE_LAND_ACTIVITY_OK {}",
-            json!({"games":cases,"tamperedFramesRefusedBeforeSubmit":tampered,"duplicateAcknowledgmentsVerified":true,"coldHistoriesVerified":2,"ownerQuestHttpVerified":true})
-        );
-        return;
+        cases.push(json!({"gameId":case.game_id,"mixedAi":case.mixed_ai,"humanCasts":human_casts,"aiCasts":ai_casts,"originalCommands":turns,"acceptedRevision":recovered.checkpoint().basis().revision,"checkedHistory":"ActivityTransitionsV1","reward":reward}));
     }
     let accounting = lifecycle_reads::sql(
         &database,
         "SELECT jsonb_build_object('progress',q.progress::text,'reward',d.reward_coins::text,'target',d.target::text,'completedAtMatchesFact',q.completed_at=e.accepted_at,'operationState',o.state,'ledgerOperations',(SELECT count(*) FROM app.ledger_operation WHERE source_scope='quest_reward_v1' AND source_ref=q.id::text),'rewardReceipts',(SELECT count(*) FROM app.command_receipt WHERE scope='quest_reward_v1' AND target_ref=q.id::text AND state='accepted'),'credited',(SELECT sum(quantity)::text FROM app.ledger_posting WHERE operation_id=o.id),'sourceKind',f.kind,'sourceValue',f.value::text,'wallet',(SELECT sum(i.owned_quantity)::text FROM app.inventory_asset i JOIN app.asset_owner owner ON owner.id=i.owner_id JOIN app.asset_definition a ON a.id=i.asset_definition_id WHERE owner.account_id=q.account_id AND a.currency_key='coin')) FROM app.quest_assignment q JOIN app.quest_definition_revision d ON d.id=q.definition_id JOIN app.game_activity_fact f ON f.id=q.reward_source_fact_id JOIN app.game_event e ON e.id=f.source_event_id JOIN app.ledger_operation o ON o.id=q.reward_operation_id WHERE q.id=$1",
         &[&input.quest_assignment_id],
     );
-    assert_eq!(accounting["reward"], coins.to_string());
-    assert_eq!(accounting["target"], target.to_string());
-    assert_eq!(accounting["progress"], target.to_string());
-    assert_eq!(accounting["sourceKind"], fact_kind);
+    assert_eq!(accounting["reward"], "500");
+    assert_eq!(accounting["target"], "20");
+    assert_eq!(accounting["progress"], "20");
     assert_eq!(accounting["sourceValue"], "1");
-    assert_eq!(accounting["credited"], coins.to_string());
-    assert_eq!(accounting["wallet"], (14500 + coins).to_string());
+    assert_eq!(accounting["credited"], "500");
+    assert_eq!(accounting["wallet"], "15000");
     assert_eq!(accounting["ledgerOperations"], 1);
     assert_eq!(accounting["rewardReceipts"], 1);
     assert_eq!(accounting["completedAtMatchesFact"], true);
     assert_eq!(accounting["operationState"], "committed");
-    assert_eq!(tampered, if from_zero { target + 2 } else { 3 });
+    assert_eq!(tampered, 3);
     println!(
         "OWNED_NATIVE_CAST_ACTIVITY_OK {}",
-        json!({"cases":cases,"tamperedFramesRefusedBeforeSubmit":tampered,"accounting":accounting,"ownerQuestHttpVerified":true,"priorQuestProgressFixture":if from_zero {"0"} else {"19"},"nativeCreditedCurrentCast":if from_zero {target.to_string()} else {"1".to_owned()},"fullAdmissionQualified":false,"fullObjectiveRosterQualified":false})
+        json!({"cases":cases,"tamperedFramesRefusedBeforeSubmit":tampered,"accounting":accounting,"priorQuestProgressFixture":"19","nativeCreditedCurrentCast":"1","fullAdmissionQualified":false,"fullObjectiveRosterQualified":false})
     );
 }

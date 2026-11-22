@@ -5,7 +5,8 @@ use crate::{
 };
 use serde::Serialize;
 use spellwake_engine::{
-    checks::CheckDecision, game::RuleFrame, priority::PriorityPhase, stack_window::WindowPhase,
+    checks::CheckDecision, effects::PendingWorkKind, game::RuleFrame, priority::PriorityPhase,
+    stack_window::WindowPhase,
 };
 
 #[derive(Clone, Copy)]
@@ -17,7 +18,10 @@ pub(super) enum Waiting {
 }
 /// Keep clock eligibility aligned with the maintained public decision families.
 pub(super) fn supported_wait(source: &GameState) -> Result<(), NativeBridgeError> {
-    if source.execution().has_check_replacement_work() {
+    let searching = matches!(source.pending_decision().map(|decision|decision.frame()), Some(RuleFrame::LibraryTop(frame)) if frame.kind() == spellwake_engine::effects::LibraryChoiceKind::Search);
+    if (source.execution().pending_work_kind() == Some(PendingWorkKind::LibraryTop) && !searching)
+        || source.execution().has_check_replacement_work()
+    {
         return Err(NativeBridgeError::Unsupported);
     }
     Ok(())
@@ -51,8 +55,7 @@ pub(super) fn waiting(
         ) {
             return Err(NativeBridgeError::Unsupported);
         }
-        if matches!(decision.frame(), RuleFrame::ZoneReplacement(_))
-            && !crate::native_game::handles::supports_zone_replacement(source)
+        if matches!(decision.frame(), RuleFrame::LibraryTop(frame) if frame.kind() != spellwake_engine::effects::LibraryChoiceKind::Search)
         {
             return Err(NativeBridgeError::Unsupported);
         }
@@ -185,24 +188,17 @@ fn bank_intent(
         eligibility,
     })
 }
-/// Sealed provisional bank-forfeit operands; SQL alone authorizes due time.
-pub struct NativeBankExpiryIntent {
-    pub(crate) clocks: NativeClockIntent,
-    pub(crate) timeout: NativeBankTimeout,
-}
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-pub(crate) struct NativeBankTimeout {
-    pub(crate) kind: &'static str,
-    pub(crate) seat_id: Uuid,
-    pub(crate) clock_revision: Amount,
-    pub(crate) proof_ref: NativeArtifactRef,
-}
 impl RecoveredNativeGame {
-    fn validate_clock_successor(
+    /// Compose exact clock intent for a genuine linked player/entropy successor.
+    /// Stored banks and clock revisions are copied unchanged. Only SQL computes
+    /// elapsed debit at its locked acceptance timestamp.
+    /// # Errors
+    /// Rejects foreign/unlinked bases, unavailable source, unsupported native
+    /// waiting boundaries, unknown policies and already exhausted BO3 banks.
+    pub fn clock_intent(
         &self,
         next: &NativeCheckpoint,
-    ) -> Result<(), NativeCheckpointError> {
+    ) -> Result<NativeClockIntent, NativeCheckpointError> {
         let prior = self.checkpoint();
         let source = self.source();
         let basis = prior.basis();
@@ -223,114 +219,6 @@ impl RecoveredNativeGame {
         {
             return Err(NativeCheckpointError::Invalid);
         }
-        if self.source().checkpoint_reference() != prior.reference()
-            || next.roster != prior.roster
-            || self
-                .source()
-                .controllers()
-                .map(|v| v.0)
-                .ne(prior.roster.iter().map(|v| v.seat_id))
-        {
-            return Err(NativeCheckpointError::Invalid);
-        }
-        Ok(())
-    }
-    /// Derive a provisional bank-forfeit frame from actual source and native input.
-    /// No local clock or caller proof is accepted. SQL must authenticate expiry
-    /// atomically before the tentative successor is installed or acknowledged.
-    /// # Errors
-    /// Rejects foreign/stale linkage, nonbank input/result, unavailable/nonactive
-    /// source, unsupported policy/roster, paused positive loser and other zero banks.
-    pub fn bank_expiry_intent(
-        &self,
-        next: &NativeCheckpoint,
-    ) -> Result<NativeBankExpiryIntent, NativeCheckpointError> {
-        self.validate_clock_successor(next)?;
-        let Some((NativeCheckpointInput::BankExpiry, _, input)) = next.retained_input() else {
-            return Err(NativeCheckpointError::Invalid);
-        };
-        if self.source().phases()
-            != (
-                crate::match_history::GamePhase::Active,
-                crate::match_history::MatchPhase::Active,
-            )
-            || next.roster.len() != 2
-        {
-            return Err(NativeCheckpointError::Invalid);
-        }
-        let terminal = next.terminal()?.ok_or(NativeCheckpointError::Invalid)?;
-        let [loser] = terminal.losing_seat_ids() else {
-            return Err(NativeCheckpointError::Invalid);
-        };
-        if terminal.reason() != "native_bank_expired" {
-            return Err(NativeCheckpointError::Invalid);
-        }
-        let viewer = self.checkpoint().roster[0].seat_id;
-        let waiting = waiting(
-            self.checkpoint().state(),
-            &self.checkpoint().binding(viewer)?,
-        )?;
-        if !matches!(waiting, Waiting::Priority(seat) | Waiting::Decision(seat) if seat == *loser) {
-            return Err(NativeCheckpointError::Invalid);
-        }
-        let mut rows = Vec::new();
-        let mut timeout = None;
-        for (seat, remaining, revision, paused, _) in self.source().clocks() {
-            if self.source().clock_policy(seat) != Some("bo3-overall-bank-v1")
-                || (seat == *loser && paused && !remaining.is_zero())
-                || (seat != *loser && remaining.is_zero())
-            {
-                return Err(NativeCheckpointError::Invalid);
-            }
-            if seat == *loser {
-                timeout = Some(NativeBankTimeout {
-                    kind: "overall_bank",
-                    seat_id: seat,
-                    clock_revision: revision.clone(),
-                    proof_ref: input.clone(),
-                });
-            }
-            rows.push(ClockIntentRow {
-                seat_id: seat,
-                clock_revision: revision.clone(),
-                remaining_ms: remaining.clone(),
-                paused: true,
-                eligibility: None,
-            });
-        }
-        if rows.len() != next.roster.len()
-            || rows
-                .iter()
-                .any(|row| !next.roster.iter().any(|v| v.seat_id == row.seat_id))
-        {
-            return Err(NativeCheckpointError::Invalid);
-        }
-        Ok(NativeBankExpiryIntent {
-            clocks: NativeClockIntent(rows),
-            timeout: timeout.ok_or(NativeCheckpointError::Invalid)?,
-        })
-    }
-
-    /// Compose exact clock intent for a genuine linked player/entropy successor.
-    /// Stored banks and clock revisions are copied unchanged. Only SQL computes
-    /// elapsed debit at its locked acceptance timestamp.
-    /// # Errors
-    /// Rejects foreign/unlinked bases, unavailable source, unsupported native
-    /// waiting boundaries, unknown policies and already exhausted BO3 banks.
-    pub fn clock_intent(
-        &self,
-        next: &NativeCheckpoint,
-    ) -> Result<NativeClockIntent, NativeCheckpointError> {
-        self.validate_clock_successor(next)?;
-        if matches!(
-            next.retained_input().map(|v| v.0),
-            Some(NativeCheckpointInput::BankExpiry)
-        ) {
-            return Err(NativeCheckpointError::Invalid);
-        }
-        let prior = self.checkpoint();
-        let basis = prior.basis();
-        let source = self.source();
         let viewer = next
             .roster
             .first()

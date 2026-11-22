@@ -20,8 +20,8 @@ use spellwake_engine::{
     occurrence::{RulesOccurrence, RulesRecord, SupportedAppearance, TriggerRelated},
     priority::{PriorityPhase, SeatId},
     program::{
-        BodyTarget, CardType, ExecutableBody, Instruction, InstructionAmount, ObjectRelation,
-        OrdinaryCondition, Program, Supertype, TriggeredAbility, TriggeredAbilityId,
+        BodyTarget, CardType, ExecutableBody, Instruction, Program, Supertype, TriggeredAbility,
+        TriggeredAbilityId,
     },
     setup::GameSeed,
     stack_window::WindowPhase,
@@ -49,7 +49,9 @@ fn creature() -> TokenDefinition {
 fn group(definition: TokenDefinition, count: i64, recipients: TokenRecipients) -> TokenCreation {
     TokenCreation {
         definition,
-        amount: InstructionAmount::Literal(count.into()),
+        amount: spellwake_engine::program::ValueExpr::Literal(count.into()),
+        base_size: None,
+        enters_tapped: false,
         recipients,
     }
 }
@@ -172,7 +174,9 @@ fn watcher(program: &mut Program) {
     program.triggered.push(TriggeredAbility {
         grouping: spellwake_engine::program::TriggerGrouping::EachOccurrence,
         id: TriggeredAbilityId(7),
-        condition: OrdinaryCondition::Enters(ObjectRelation::AnyCreature),
+        condition: spellwake_engine::program::TriggerSpec::enters(
+            spellwake_engine::program::ObjectFilter::creature(),
+        ),
         body: ExecutableBody::new(
             BodyTarget::None,
             vec![Instruction::AdjustControllerLife {
@@ -630,11 +634,21 @@ fn chosen_type_counts_read_before_batch_and_the_same_local_survives_ordering() {
             },
             create(vec![TokenCreation {
                 definition,
-                amount: InstructionAmount::ControlledPermanentsOfChosenType { chosen: slot },
+                amount: spellwake_engine::program::ValueExpr::count_battlefield(
+                    spellwake_engine::program::ObjectFilter::any()
+                        .controlled()
+                        .of_chosen_slot(slot),
+                ),
+                base_size: None,
+                enters_tapped: false,
                 recipients: TokenRecipients::Controller,
             }]),
             Instruction::DrawController {
-                amount: InstructionAmount::ControlledPermanentsOfChosenType { chosen: slot },
+                amount: spellwake_engine::program::ValueExpr::count_battlefield(
+                    spellwake_engine::program::ObjectFilter::any()
+                        .controlled()
+                        .of_chosen_slot(slot),
+                ),
             },
         ],
         cards,
@@ -723,7 +737,9 @@ fn oversized_materialization_rejects_without_a_rule_cap_or_partial_birth() {
         let game = start(
             vec![create(vec![TokenCreation {
                 definition: creature(),
-                amount: InstructionAmount::Literal(amount),
+                amount: spellwake_engine::program::ValueExpr::Literal(amount),
+                base_size: None,
+                enters_tapped: false,
                 recipients: TokenRecipients::Controller,
             }])],
             vec![],
@@ -799,16 +815,16 @@ fn legendary_batch_waits_for_full_resolution_then_uses_the_existing_keep_choice(
 }
 #[test]
 fn owned_copied_batch_creates_for_copy_controller_after_the_original_is_countered() {
-    use spellwake_engine::{program::SpellTargetFilter, targets::TargetRef};
+    use spellwake_engine::targets::TargetRef;
     let mut copier = spell(
         2,
-        BodyTarget::SingleSpell(SpellTargetFilter::AnySpell),
+        BodyTarget::SingleSpell(spellwake_engine::program::SpellFilter::any()),
         vec![Instruction::CopySpell],
     );
     copier.owner = P1;
     let counter = spell(
         3,
-        BodyTarget::SingleSpell(SpellTargetFilter::AnySpell),
+        BodyTarget::SingleSpell(spellwake_engine::program::SpellFilter::any()),
         vec![Instruction::CounterSpell],
     );
     let game = start(

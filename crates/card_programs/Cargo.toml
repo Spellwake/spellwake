@@ -10,6 +10,7 @@ private-card-fixtures = []
 [dependencies]
 spellwake-engine.workspace = true
 spellwake-contracts.workspace = true
+spellwake-oracle-compiler.workspace = true
 spellwake-content = { path = "../content" }
 serde.workspace = true
 serde_json.workspace = true

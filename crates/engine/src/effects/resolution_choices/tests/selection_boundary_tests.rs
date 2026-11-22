@@ -74,15 +74,16 @@ fn empty_selection_continues_the_same_body_without_prompts_or_selected_moves() {
     for operation in [
         Instruction::Sacrifice {
             players: AffectedPlayers::EachPlayer,
-            amount: InstructionAmount::Literal(1.into()),
+            amount: crate::program::ValueExpr::Literal(1.into()),
             filter: PermanentTypeFilter {
+                any_types: Default::default(),
                 required_types: BTreeSet::from([CardType::Creature]),
                 forbidden_types: BTreeSet::new(),
             },
         },
         Instruction::Discard {
             players: AffectedPlayers::One(ResolvingPlayer::Controller),
-            amount: InstructionAmount::Literal(0.into()),
+            amount: crate::program::ValueExpr::Literal(0.into()),
         },
     ] {
         let mut state = initialize(vec![gain(1), operation, gain(2)]).into_state();

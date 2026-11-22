@@ -5,8 +5,6 @@ use super::*;
 use std::fs;
 mod active_replay;
 mod archive_integrity;
-mod bank_expiry;
-mod between_receipts;
 mod cast_activity;
 mod command_failures;
 mod completed_history;
@@ -28,25 +26,20 @@ mod http;
 mod lifecycle_reads;
 mod mixed_replay;
 mod no_contest;
-mod opening_delivery;
 mod publication_budget;
 mod read_account;
 mod read_controls;
 mod replay_frames;
 mod replay_lost_ack;
 mod replay_publication;
-mod response_expiry;
 mod results;
 mod rule_errors;
 mod source_failures;
-mod turn_expiry;
 mod unsupported;
 mod write_failures;
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct Reservation {
-    room_receipts: Option<RoomReceipts>,
-    main_entries: Option<std::collections::BTreeMap<Uuid, FixtureMainEntry>>,
     #[serde(deserialize_with = "crate::identifiers::uuid")]
     game_id: Uuid,
     #[serde(deserialize_with = "crate::identifiers::uuid")]
@@ -57,7 +50,6 @@ struct Reservation {
     profile_id: Uuid,
     #[serde(deserialize_with = "crate::identifiers::uuid")]
     context_id: Uuid,
-    format: Option<crate::account::FormatSummary>,
     expected_match_revision: Amount,
     structure: crate::rooms::configuration::MatchStructure,
     #[serde(deserialize_with = "crate::identifiers::uuid_list")]
@@ -67,31 +59,7 @@ struct Reservation {
     #[serde(deserialize_with = "crate::identifiers::uuid")]
     printing_id: Uuid,
 }
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct RoomReceipts {
-    room: Uuid,
-    ready: OriginalReceipt,
-    countdown: OriginalReceipt,
-}
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct OriginalReceipt {
-    original: crate::qualified_intents::RoomAdmissionIntent,
-    ack: crate::commands::RevisionAck,
-}
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct FixtureMainEntry {
-    definition_id: Uuid,
-    printing_id: Uuid,
-    name: String,
-    quantity: usize,
-}
 impl Reservation {
-    fn deck_size(&self) -> usize {
-        if self.seat_ids.len() == 3 { 60 } else { 20 }
-    }
     fn bank_policy(&self) -> &'static str {
         match self.structure {
             crate::rooms::configuration::MatchStructure::Bo1 => "bo1-bank-inactive-v1",
@@ -110,27 +78,13 @@ fn selected_origin(
         (reservation.game_id, reservation.context_id)
     );
     let mut count = 0;
-    let mut occurrences = std::collections::BTreeMap::<Uuid, usize>::new();
     for object in state.execution().window().cards().iter() {
         let original = provenance.physical_card(object).unwrap();
-        if let Some(entries) = &reservation.main_entries {
-            let expected = &entries[&original.entry_id()];
-            assert_eq!(original.definition_id(), expected.definition_id);
-            assert_eq!(original.printing_id(), Some(expected.printing_id));
-            *occurrences.entry(original.entry_id()).or_default() += 1;
-        } else {
-            assert_eq!(original.definition_id(), reservation.definition_id);
-            assert_eq!(original.printing_id(), Some(reservation.printing_id));
-        }
+        assert_eq!(original.definition_id(), reservation.definition_id);
+        assert_eq!(original.printing_id(), Some(reservation.printing_id));
         count += 1;
     }
-    if let Some(entries) = &reservation.main_entries {
-        assert_eq!(occurrences.len(), entries.len());
-        for (id, entry) in entries {
-            assert_eq!(occurrences[id], entry.quantity);
-        }
-    }
-    assert_eq!(count, reservation.seat_ids.len() * reservation.deck_size());
+    assert_eq!(count, 40);
 }
 #[test]
 #[ignore = "requires owned managed RPC/Storage realm and genuine retained source"]
@@ -141,9 +95,7 @@ fn owned_native_source_reader_reconstructs_original_and_advanced_checkpoint() {
     );
     let file = std::env::var_os("SPELLWAKE_NATIVE_SOURCE_RESERVATION").unwrap();
     let reservation: Reservation = serde_json::from_slice(&fs::read(file).unwrap()).unwrap();
-    let multiplayer = std::env::var("SPELLWAKE_NATIVE_OPENING_RESPONSE").is_ok_and(|s| s == "1");
-    assert_eq!(reservation.seat_ids.len(), if multiplayer { 3 } else { 2 });
-    let deck_size = reservation.deck_size();
+    assert_eq!(reservation.seat_ids.len(), 2);
     let read = |name| fs::read(std::env::var_os(name).expect("genuine source required")).unwrap();
     let programs = NativeProgramSource::from_bytes(
         NativeProgramPool::ResolutionSelectionNaturalMana,
@@ -174,89 +126,58 @@ fn owned_native_source_reader_reconstructs_original_and_advanced_checkpoint() {
                 .reserved_game(ids.game_id)
                 .unwrap()
                 .unwrap();
-        let original = if multiplayer {
-            let format = reservation.format.as_ref().unwrap();
-            let open = |selected_format: &crate::account::FormatSummary| {
-                programs.prepare_selected_constructed_opening(
-                    ids.context_id,
-                    &source,
-                    selected_format,
-                    reservation.seat_ids[0],
-                    vec![0.into(); 2048],
-                )
-            };
-            for (id, key) in [
-                (Uuid::new_v4(), format.key.as_str()),
-                (format.id, "commander"),
-                (format.id, "modern"),
-            ] {
-                let foreign = crate::account::FormatSummary {
-                    id,
-                    key: key.to_owned(),
-                    name: format.name.clone(),
+        let selection = source
+            .metadata()
+            .seats
+            .iter()
+            .map(|seat| {
+                let [entry] = seat.entries.as_slice() else {
+                    panic!("owned one-entry fixture required")
                 };
-                assert!(open(&foreign).is_err());
-            }
-            open(format)
-        } else {
-            let selection = source
-                .metadata()
-                .seats
-                .iter()
-                .map(|seat| {
-                    let [entry] = seat.entries.as_slice() else {
-                        panic!("owned one-entry fixture required")
-                    };
-                    assert_eq!(
-                        entry.quantity,
-                        Amount::from(u64::try_from(deck_size).unwrap())
-                    );
-                    assert_eq!(entry.oracle_ref.as_str(), fixture_oracle);
-                    assert_eq!(entry.definition_id, reservation.definition_id);
-                    assert_eq!(entry.printing.as_ref().unwrap().id, reservation.printing_id);
-                    NativeInitialSelection {
-                        seat_id: seat.seat_id,
-                        entry_ids: vec![entry.entry_id; deck_size],
+                assert_eq!(entry.quantity, Amount::from(20));
+                assert_eq!(entry.oracle_ref.as_str(), fixture_oracle);
+                assert_eq!(entry.definition_id, reservation.definition_id);
+                assert_eq!(entry.printing.as_ref().unwrap().id, reservation.printing_id);
+                NativeInitialSelection {
+                    seat_id: seat.seat_id,
+                    entry_ids: vec![entry.entry_id; 20],
+                }
+            })
+            .collect();
+        let original = prepare_selected_initial(
+            ids.context_id,
+            &programs,
+            &source,
+            NativeInitialSpec {
+                first_player_seat_id: reservation.seat_ids[0],
+                participants: reservation
+                    .seat_ids
+                    .iter()
+                    .map(|seat| NativeInitialParticipant {
+                        seat_id: *seat,
+                        life: 20.into(),
+                        cards: (0..20)
+                            .map(|_| NativeInitialCard {
+                                oracle_id: spellwake_card_programs::OracleId::try_from(
+                                    fixture_oracle.to_owned(),
+                                )
+                                .unwrap(),
+                                zone: NativeInitialZone::Library,
+                            })
+                            .collect(),
+                    })
+                    .collect(),
+                entropy: vec![
+                    0.into();
+                    if std::env::var("SPELLWAKE_NATIVE_UNSUPPORTED_WORK").is_ok_and(|v| v == "1") {
+                        38
+                    } else {
+                        2048
                     }
-                })
-                .collect();
-            prepare_selected_initial(
-                ids.context_id,
-                &programs,
-                &source,
-                NativeInitialSpec {
-                    first_player_seat_id: reservation.seat_ids[0],
-                    participants: reservation
-                        .seat_ids
-                        .iter()
-                        .map(|seat| NativeInitialParticipant {
-                            seat_id: *seat,
-                            life: 20.into(),
-                            cards: (0..deck_size)
-                                .map(|_| NativeInitialCard {
-                                    oracle_id: spellwake_card_programs::OracleId::try_from(
-                                        fixture_oracle.to_owned(),
-                                    )
-                                    .unwrap(),
-                                    zone: NativeInitialZone::Library,
-                                })
-                                .collect(),
-                        })
-                        .collect(),
-                    entropy: vec![
-                        0.into();
-                        if std::env::var("SPELLWAKE_NATIVE_UNSUPPORTED_WORK")
-                            .is_ok_and(|v| v == "1")
-                        {
-                            38
-                        } else {
-                            2048
-                        }
-                    ],
-                },
-                selection,
-            )
-        }
+                ],
+            },
+            selection,
+        )
         .unwrap();
         assert!(original.provenance().unwrap().matches_reserved(&source));
         selected_origin(
@@ -292,17 +213,9 @@ fn owned_native_source_reader_reconstructs_original_and_advanced_checkpoint() {
                 .copiable_program(object.id())
                 .unwrap();
             let described = display.object(object, definition).unwrap();
-            if let Some(entries) = &reservation.main_entries {
-                let origin = first.provenance().unwrap().physical_card(object).unwrap();
-                let expected = &entries[&origin.entry_id()];
-                assert_eq!(described.definition_id, Some(expected.definition_id));
-                assert_eq!(described.printing_id, Some(expected.printing_id));
-                assert_eq!(described.characteristics.name, expected.name);
-            } else {
-                assert_eq!(described.definition_id, Some(reservation.definition_id));
-                assert_eq!(described.printing_id, Some(reservation.printing_id));
-                assert_eq!(described.characteristics.name, fixture_name);
-            }
+            assert_eq!(described.definition_id, Some(reservation.definition_id));
+            assert_eq!(described.printing_id, Some(reservation.printing_id));
+            assert_eq!(described.characteristics.name, fixture_name);
         }
         assert!(first.retain(&store).unwrap() == *first.reference());
         let facts = first.prepare_results().unwrap().retain(&store).unwrap();
@@ -448,20 +361,12 @@ fn owned_native_source_reader_reconstructs_original_and_advanced_checkpoint() {
         fs::write(output, serde_json::to_vec(&opening).unwrap()).unwrap();
         println!(
             "OWNED_NATIVE_SOURCE_READER_OK {}",
-            json!({"phase":"prepare","stateManifests":1,"fullyQualifiedCards":0,"actualNativeTransitionEvidence":true,"actualRustOpeningAcceptance":true,"actualInitialClockObservation":true,"constructedFormatControls":multiplayer,"falseOpeningClockRejected":true,"sameOriginalRetry":true,"initialVersion2":true,"selectedPrintingProvenance":true,"selectedSourceActualSql":true,"immutableSourceDisplay":true})
+            json!({"phase":"prepare","stateManifests":1,"fullyQualifiedCards":0,"actualNativeTransitionEvidence":true,"actualRustOpeningAcceptance":true,"actualInitialClockObservation":true,"falseOpeningClockRejected":true,"sameOriginalRetry":true,"initialVersion2":true,"selectedPrintingProvenance":true,"selectedSourceActualSql":true,"immutableSourceDisplay":true})
         );
         return;
     }
     if phase == "results" {
-        if std::env::var("SPELLWAKE_NATIVE_BETWEEN_RECEIPTS").is_ok_and(|v| v == "1") {
-            between_receipts::run(&reservation);
-        } else if multiplayer {
-            response_expiry::run(&reservation, &store, &programs);
-        } else if std::env::var("SPELLWAKE_NATIVE_BANK_EXPIRY").is_ok_and(|v| v == "1") {
-            bank_expiry::run(&reservation, &store, &programs);
-        } else {
-            results::run(&reservation, &store, &programs);
-        }
+        results::run(&reservation, &store, &programs);
         return;
     }
     if phase == "replay-lost-ack" {

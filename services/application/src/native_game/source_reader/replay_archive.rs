@@ -20,6 +20,7 @@
 //! every seat. An accepted operational no-contest archives only seat-filtered
 //! prefix pages for human seats. Games in progress are never archived.
 use super::cuts::{CutLineage, CutSource, HistoryCut, projection_error};
+use super::historical::ArchivePerspective;
 use super::*;
 use crate::{
     native_game::projection::{ArchivedProjection, RestoredProjection},
@@ -29,7 +30,7 @@ use crate::{
 };
 use serde::Serialize;
 use spellwake_contracts::creature_types::{CreatureTypeVocabulary, CreatureVocabularyId};
-use std::str::FromStr;
+use std::{str::FromStr, sync::Mutex, time::Instant};
 mod integrity;
 #[cfg(test)]
 pub(super) mod projection_fixture;
@@ -370,20 +371,20 @@ impl PortableReplay {
 impl NativeSourceRepository {
     fn retain_perspective(
         store: &NativeArtifactStore,
-        history: &NativeHumanHistory,
-        seat: Uuid,
+        history: &ArchivePerspective,
         budget: &mut NativeRecoveryBudget,
     ) -> Result<EncodedPerspective, NativeSourceError> {
-        let disclosure = label(history.disclosure());
+        let disclosure = label(history.disclosure);
+        let seat = history.seat;
         let tip = history
-            .observations()
+            .observations
             .last()
             .ok_or_else(invalid)?
             .projection()
             .snapshot();
         let (game, context) = (tip.basis.game_id, tip.basis.context_id);
         let mut pages = Vec::new();
-        for chunk in history.observations().chunks(MAX_CUTS_PER_PAGE) {
+        for chunk in history.observations.chunks(MAX_CUTS_PER_PAGE) {
             let (Some(first), Some(last)) = (chunk.first(), chunk.last()) else {
                 return Err(fault("empty page chunk"));
             };
@@ -428,17 +429,16 @@ impl NativeSourceRepository {
     }
     /// Build, retain and canonically publish the archive of a completed game or
     /// accepted operational no-contest, then return the SQL-winning manifest id.
-    /// The viewer's walk, reused for its own perspective, has one recovery
-    /// template; all other walks and all retained bytes share one aggregate
-    /// budget of a template per remaining walk. None is a per-cut full replay;
-    /// there is no wall-clock bound beyond the backend request timeouts.
+    /// One native walk proves completion and another projects every perspective.
+    /// The viewer retains its own allowance and the other views and archive
+    /// bytes share the scaled allowance.
     /// Deterministic encoding over SQL-winning Views lets concurrent builders
     /// converge on one publication; SQL rejects any different replacement.
     ///
     /// The caller must still renew participant access before delivery.
     /// # Errors
     /// Rejects games with neither actual native and SQL completion nor an
-    /// accepted operational no-contest, a full walk of an incident, cross-walk
+    /// accepted operational no-contest, a full walk of an incident,
     /// lineage drift, vocabulary mismatch, oversize archives, retention/budget
     /// failures and any publication fault. None means the game disappeared.
     pub(in crate::native_game) fn publish_portable_replay(
@@ -448,59 +448,21 @@ impl NativeSourceRepository {
         access: &NativeHumanAccess,
         template: &NativeRecoveryBudget,
     ) -> Result<Option<Uuid>, NativeSourceError> {
+        let started = Instant::now();
         let completed = access.completed_disclosure().is_some();
         if !completed && !access.operational_no_contest() {
             return Err(fault("not archivable"));
         }
-        let walk = |seat: Uuid, full: bool, budget: NativeRecoveryBudget| match (completed, full) {
-            (true, true) => self.project_completed_history(store, programs, access, seat, budget),
-            (true, false) => {
-                self.project_retained_seat_history(store, programs, access, seat, budget)
-            }
-            (false, false) => {
-                self.project_incident_seat_history(store, programs, access, seat, budget)
-            }
-            (false, true) => Err(fault("incident full reveal")),
-        };
-        let viewer = access.viewer_seat_id();
-        let Some(first) = walk(viewer, completed, template.clone())? else {
+        let Some(authority) =
+            self.archive_completion_authority(store, programs, access, template.clone())?
+        else {
             return Ok(None);
         };
-        let tip = first.observations().last().ok_or_else(invalid)?;
-        let tip_snapshot = tip.projection.snapshot();
-        let basis = tip_snapshot.basis.clone();
-        let through = tip_snapshot.through_event_sequence.clone();
-        let roster: Vec<Uuid> = tip_snapshot
-            .players
-            .iter()
-            .map(|seat| seat.seat_id)
-            .collect();
-        let source = first.recovered().source();
-        let humans: Vec<Uuid> = source.human_seats().collect();
-        let lineage: Vec<(Amount, Uuid, NativeArtifactRef)> = first
-            .observations()
-            .iter()
-            .map(|cut| {
-                (
-                    cut.projection.snapshot().through_event_sequence.clone(),
-                    cut.event_id,
-                    cut.state_ref.clone(),
-                )
-            })
-            .collect();
-        let release_id = source.context_ids().1;
-        let opening_source = first.recovered().opening();
-        let opening = opening_source.receipt_ids();
-        let opening_lineage = EncodedLineage::of(opening_source);
-        let vocabulary_id = first
-            .recovered()
-            .checkpoint()
-            .state()
-            .execution()
-            .creature_vocabulary()
-            .id();
-        if tip.terminal.is_some() != completed
-            || roster.is_empty()
+        let proof_elapsed = started.elapsed();
+        let roster = &authority.roster;
+        let humans = &authority.humans;
+        let viewer = access.viewer_seat_id();
+        if roster.is_empty()
             || roster.len() > 6
             || humans.is_empty()
             || !humans.contains(&viewer)
@@ -508,33 +470,69 @@ impl NativeSourceRepository {
         {
             return Err(fault("roster"));
         }
-        // Seat-filtered pages for human seats; full pages for every seat once
-        // completion authority exists. The first walk is the viewer's own.
-        let mut planned: Vec<(Uuid, bool)> = humans.iter().map(|seat| (*seat, false)).collect();
-        if completed {
-            planned.extend(roster.iter().map(|seat| (*seat, true)));
-        }
-        // The viewer's walk used its own template; every other walk and every
-        // retained byte share one budget of a template per remaining walk.
-        let mut budget = scaled(template, planned.len().saturating_sub(1).max(1))?;
-        #[cfg(test)]
-        let observed_first_remaining = first.remaining_budget().remaining();
+        let planned = humans.len() + if completed { roster.len() } else { 0 };
+        let mut first_budget = template.clone();
+        let mut budget = scaled(template, planned.saturating_sub(1).max(1))?;
         #[cfg(test)]
         let observed_shared_initial = budget.remaining();
+        authority.charge_recovery(&mut first_budget, 1)?;
+        authority.charge_recovery(&mut budget, planned.saturating_sub(1))?;
+        let first_budget = Mutex::new(first_budget);
+        let shared_budget = Mutex::new(budget);
+        let Some(history) = self.collect_archive_history(
+            store,
+            programs,
+            &authority,
+            template.clone(),
+            &first_budget,
+            &shared_budget,
+        )?
+        else {
+            return Ok(None);
+        };
         #[cfg(test)]
-        let observed_planned = planned.len();
+        let observed_first_remaining = first_budget
+            .into_inner()
+            .map_err(|_| invalid())?
+            .remaining();
+        let mut budget = shared_budget.into_inner().map_err(|_| invalid())?;
         #[cfg(test)]
-        let mut observed_walks = vec![
-            json!({"first":true,"seatIndex":roster.iter().position(|seat|*seat==viewer).unwrap(),
-            "fullInformation":completed,"spend":budget_spent(template.remaining(), observed_first_remaining)}),
-        ];
-        #[cfg(test)]
-        observe_publication_budget(
-            json!({"plannedWalks":observed_planned,
-            "firstTemplate":budget_amount(template.remaining()),"firstSpend":budget_spent(template.remaining(),observed_first_remaining),"firstRemaining":budget_amount(observed_first_remaining),
-            "sharedCapacity":budget_amount(observed_shared_initial)}),
-            false,
-        );
+        let observed_shared_views_remaining = budget.remaining();
+        let projections_elapsed = started.elapsed().saturating_sub(proof_elapsed);
+        let first = history
+            .perspectives
+            .iter()
+            .find(|part| {
+                part.seat == viewer
+                    && (part.disclosure == NativeDisclosure::CompletedParticipant) == completed
+            })
+            .ok_or_else(invalid)?;
+        let tip = first.observations.last().ok_or_else(invalid)?;
+        let snapshot = tip.projection.snapshot();
+        let basis = snapshot.basis.clone();
+        let through = snapshot.through_event_sequence.clone();
+        if tip.terminal.is_some() != completed
+            || !snapshot
+                .players
+                .iter()
+                .map(|player| player.seat_id)
+                .eq(roster.iter().copied())
+        {
+            return Err(fault("roster"));
+        }
+        let cuts = first.observations.len();
+        let source = history.recovered.source();
+        let release_id = source.context_ids().1;
+        let opening_source = history.recovered.opening();
+        let opening = opening_source.receipt_ids();
+        let opening_lineage = EncodedLineage::of(opening_source);
+        let vocabulary_id = history
+            .recovered
+            .checkpoint()
+            .state()
+            .execution()
+            .creature_vocabulary()
+            .id();
         let (game, context) = (basis.game_id, basis.context_id);
         let program_identity_ref = retain(
             store,
@@ -542,7 +540,6 @@ impl NativeSourceRepository {
             (game, context),
             programs.program_identity_bytes(),
         )?;
-        let mut first = Some(first);
         let input = programs.vocabulary_input();
         let original = crate::native_game::initial_source::decode_vocabulary_input(input)
             .map_err(|error| NativeSourceError(Failure::Initial(error)))?;
@@ -550,42 +547,16 @@ impl NativeSourceRepository {
             return Err(fault("vocabulary identity"));
         }
         let vocabulary_ref = retain(store, &mut budget, (game, context), input)?;
-        let mut perspectives = Vec::new();
-        for (seat, full) in planned {
-            let history = if seat == viewer && full == completed {
-                first.take().ok_or_else(invalid)?
-            } else {
-                #[cfg(test)]
-                let observed_before = budget.remaining();
-                let history = walk(seat, full, budget.clone())?.ok_or_else(invalid)?;
-                budget = history.remaining_budget();
-                #[cfg(test)]
-                observed_walks.push(json!({"first":false,"seatIndex":roster.iter().position(|candidate|*candidate==seat).unwrap(),
-                    "fullInformation":full,"spend":budget_spent(observed_before,budget.remaining())}));
-                history
-            };
-            let same = history.observations().len() == lineage.len()
-                && history
-                    .observations()
-                    .iter()
-                    .zip(&lineage)
-                    .all(|(cut, original)| {
-                        cut.projection.snapshot().through_event_sequence == original.0
-                            && cut.event_id == original.1
-                            && cut.state_ref == original.2
-                    })
-                && history.observations().last().is_some_and(|cut| {
+        let mut perspectives = Vec::with_capacity(planned);
+        for part in &history.perspectives {
+            if part.observations.len() != cuts
+                || !part.observations.last().is_some_and(|cut| {
                     cut.projection.snapshot().basis == basis && cut.terminal.is_some() == completed
-                });
-            if !same {
-                return Err(fault("cross-walk lineage"));
+                })
+            {
+                return Err(fault("archive lineage"));
             }
-            perspectives.push(Self::retain_perspective(
-                store,
-                &history,
-                seat,
-                &mut budget,
-            )?);
+            perspectives.push(Self::retain_perspective(store, part, &mut budget)?);
         }
         let revision = Amount::from(basis.revision.get());
         let index = EncodedIndex {
@@ -680,17 +651,24 @@ impl NativeSourceRepository {
                 .expect("bounded test publication payload sum");
             observe_publication_budget(
                 json!({"completed":completed,"humanSeats":humans.len(),"rosterSeats":roster.len(),
-                "plannedWalks":observed_planned,"firstTemplate":budget_amount(template.remaining()),
+                "plannedPerspectives":planned,"nativeWalks":2,"firstTemplate":budget_amount(template.remaining()),
                 "firstSpend":budget_spent(template.remaining(),observed_first_remaining),"firstRemaining":budget_amount(observed_first_remaining),
                 "sharedCapacity":budget_amount(observed_shared_initial),"sharedSpend":budget_spent(observed_shared_initial,budget.remaining()),
-                "sharedRemaining":budget_amount(budget.remaining()),"walks":observed_walks,
+                "sharedProjectionSpend":budget_spent(observed_shared_initial,observed_shared_views_remaining),
+                "sharedRemaining":budget_amount(budget.remaining()),
                 "retainedPayloadOperations":retained_sizes.len(),"retainedPayloadBytes":retained_bytes,
                 "pageCounts":index.perspectives.iter().map(|perspective|perspective.pages.len()).collect::<Vec<_>>(),
-                "cutsPerPerspective":lineage.len(),"publicationAckResponseCap":65536,
+                "cutsPerPerspective":cuts,"publicationAckResponseCap":65536,
                 "accounting":"recovery work and retained payload; excludes separate publication ack and total network IO"}),
                 true,
             );
         }
+        eprintln!(
+            "replay_archive outcome=published native_walks=2 perspectives={planned} cuts={cuts} proof_ms={} projection_ms={} total_ms={}",
+            proof_elapsed.as_millis(),
+            projections_elapsed.as_millis(),
+            started.elapsed().as_millis(),
+        );
         Ok(Some(ack.resource_id))
     }
 

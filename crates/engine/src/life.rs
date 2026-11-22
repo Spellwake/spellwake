@@ -1,6 +1,10 @@
 //! Exact life totals and ordinary life adjustments. Damage uses the same owner;
 //! life payment, replacement effects and shared team totals remain separate work.
-use crate::{priority::SeatId, setup::StartingLife};
+use crate::{
+    damage::{AppliedDamage, DamageAttemptId, DamageBatchId, DamageSourceId},
+    priority::SeatId,
+    setup::StartingLife,
+};
 use spellwake_contracts::RulesInteger;
 use std::collections::BTreeMap;
 
@@ -33,6 +37,17 @@ pub enum LifeChangeKind {
     Loss,
 }
 
+/// Positive damage components from one simultaneous lifelink source.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LifelinkOrigin {
+    /// Actual batch of simultaneous damage.
+    pub batch: DamageBatchId,
+    /// Physical object incarnation or spell copy that dealt the damage.
+    pub source: DamageSourceId,
+    /// Contributing attempts after effects have modified or prevented damage.
+    pub attempts: Vec<DamageAttemptId>,
+}
+
 /// One actual positive gain or loss, including changes caused by setting a total.
 /// Resolution entry/instruction or damage origin belongs to the enclosing event.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -41,18 +56,23 @@ pub struct LifeChange {
     pub player: SeatId,
     /// Direction of the actual change, independent of the authored operation.
     pub kind: LifeChangeKind,
-    /// Strictly positive difference between the totals.
+    /// Damage source responsible for this lifelink gain.
+    pub lifelink: Option<LifelinkOrigin>,
+    /// Positive magnitude of this gain or loss. Simultaneous events can offset it.
     pub amount: RulesInteger,
-    /// Total immediately before this occurrence.
+    /// Common total before the simultaneous event.
     pub before: RulesInteger,
-    /// Total immediately after this occurrence.
+    /// Common total after every simultaneous gain and loss.
     pub after: RulesInteger,
 }
 
 /// One current total per already-validated participant. Loss is adjudicated by
 /// the shared state-based checks, not by setup or an observation of this map.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct LifeState(BTreeMap<SeatId, RulesInteger>);
+pub(crate) struct LifeState {
+    current: BTreeMap<SeatId, RulesInteger>,
+    starting: BTreeMap<SeatId, RulesInteger>,
+}
 impl LifeState {
     pub(crate) fn new(players: &[SeatId], supplied: Vec<StartingLife>) -> Option<Self> {
         if supplied.len() != players.len() {
@@ -66,13 +86,20 @@ impl LifeState {
                 return None;
             }
         }
-        Some(Self(totals))
+        Some(Self {
+            starting: totals.clone(),
+            current: totals,
+        })
     }
     pub(crate) fn get(&self, player: SeatId) -> Option<&RulesInteger> {
-        self.0.get(&player)
+        self.current.get(&player)
     }
+    pub(crate) fn starting_total(&self, player: SeatId) -> Option<&RulesInteger> {
+        self.starting.get(&player)
+    }
+
     pub(crate) fn nonpositive_players(&self) -> impl Iterator<Item = SeatId> + '_ {
-        self.0
+        self.current
             .iter()
             .filter(|(_, total)| **total <= 0.into())
             .map(|(&player, _)| player)
@@ -213,6 +240,7 @@ mod tests {
         assert_eq!(
             changes,
             vec![LifeChange {
+                lifelink: None,
                 player,
                 kind: LifeChangeKind::Loss,
                 amount: huge.plus(&20.into()),
@@ -258,6 +286,68 @@ impl LifeState {
         self.apply_adjustments(&adjustments)
     }
 
+    /// Commit all CR 120.3 losses and source-grouped lifelink gains at the same physical cut.
+    pub(crate) fn apply_damage_changes(
+        &mut self,
+        losses: &BTreeMap<SeatId, RulesInteger>,
+        batch: DamageBatchId,
+        gains: &BTreeMap<(DamageSourceId, SeatId), Vec<&AppliedDamage>>,
+    ) -> Result<Vec<LifeChange>, LifeError> {
+        if gains.is_empty() {
+            return self.apply_losses(losses);
+        }
+        let losses = losses
+            .iter()
+            .map(|(&player, amount)| (player, LifeChangeKind::Loss, None, amount.clone()));
+        let gains = gains.iter().map(|(&(source, player), members)| {
+            let origin = LifelinkOrigin {
+                batch,
+                source,
+                attempts: members.iter().map(|member| member.attempt).collect(),
+            };
+            let amount = members.iter().fold(RulesInteger::from(0), |sum, member| {
+                sum.plus(&member.amount)
+            });
+            (player, LifeChangeKind::Gain, Some(origin), amount)
+        });
+        self.apply_life_components(gains.chain(losses))
+    }
+
+    /// Apply simultaneous losses and gains, including gain and loss by the same player.
+    pub(crate) fn apply_life_components(
+        &mut self,
+        components: impl IntoIterator<
+            Item = (SeatId, LifeChangeKind, Option<LifelinkOrigin>, RulesInteger),
+        >,
+    ) -> Result<Vec<LifeChange>, LifeError> {
+        let mut totals = self.current.clone();
+        let mut changes = Vec::new();
+        for (player, kind, lifelink, amount) in components {
+            if !amount.is_positive() {
+                return Err(LifeError::InvalidAdjustment);
+            }
+            let total = totals.get_mut(&player).ok_or(LifeError::UnknownPlayer)?;
+            *total = match kind {
+                LifeChangeKind::Gain => total.plus(&amount),
+                LifeChangeKind::Loss => total.minus(&amount),
+            };
+            changes.push((player, kind, lifelink, amount));
+        }
+        let records = changes
+            .into_iter()
+            .map(|(player, kind, lifelink, amount)| LifeChange {
+                player,
+                kind,
+                lifelink,
+                amount,
+                before: self.current[&player].clone(),
+                after: totals[&player].clone(),
+            })
+            .collect();
+        self.current = totals;
+        Ok(records)
+    }
+
     /// Prepare the complete batch before writing any total. An operational or
     /// validation error cannot expose a partially applied batch.
     pub(crate) fn apply_adjustments(
@@ -284,6 +374,7 @@ impl LifeState {
                 (LifeChangeKind::Loss, before.minus(&after))
             };
             changes.push(LifeChange {
+                lifelink: None,
                 player,
                 kind,
                 amount,
@@ -292,7 +383,7 @@ impl LifeState {
             });
         }
         for change in &changes {
-            self.0.insert(change.player, change.after.clone());
+            self.current.insert(change.player, change.after.clone());
         }
         Ok(changes)
     }

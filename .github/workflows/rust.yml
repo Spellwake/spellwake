@@ -30,6 +30,9 @@ jobs:
       - name: Lint
         run: cargo clippy --locked --workspace --all-targets -- -D warnings
       - name: Test
+        env:
+          # Match the stack allocation used by the native Linux qualification.
+          RUST_MIN_STACK: "67108864"
         run: >
           cargo test --locked --workspace -- --skip
           ordinary_game::record::staged::tests::complete_existing_fixture_uses_finalized_delivery_and_preserves_report_bytes

@@ -11,8 +11,6 @@ pub enum NativeEventSchema {
     TransitionV1,
     /// Completed physical cast activity with exact retained recomputation.
     ActivityV1,
-    /// Accepted play-land action, with the human attribution verified on native replay.
-    LandPlayV1,
 }
 impl NativeEventSchema {
     /// Canonical private wire label. This label grants no acceptance authority.
@@ -20,7 +18,6 @@ impl NativeEventSchema {
         match self {
             Self::TransitionV1 => "native-transition-v1",
             Self::ActivityV1 => "native-transition-activity-v1",
-            Self::LandPlayV1 => "native-transition-land-play-v1",
         }
     }
 }
@@ -30,7 +27,6 @@ impl TryFrom<String> for NativeEventSchema {
         match value.as_str() {
             "native-transition-v1" => Ok(Self::TransitionV1),
             "native-transition-activity-v1" => Ok(Self::ActivityV1),
-            "native-transition-land-play-v1" => Ok(Self::LandPlayV1),
             _ => Err(SourceResponseError::context()),
         }
     }

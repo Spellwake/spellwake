@@ -2,7 +2,7 @@
 use super::*;
 use crate::{
     mana::ManaCost,
-    program::{Instruction, InstructionAmount, Program},
+    program::{Instruction, Program},
     token::{TokenCreation, TokenDefinition, TokenName, TokenRecipients},
 };
 use spellwake_contracts::names::EnglishCardName;
@@ -22,7 +22,9 @@ pub(super) fn fixture(boundary: &str, actions: Value) -> packet::SelectedInput {
             vec![Instruction::CreateTokens {
                 creations: vec![TokenCreation {
                     definition,
-                    amount: InstructionAmount::Literal(2.into()),
+                    amount: crate::program::ValueExpr::Literal(2.into()),
+                    base_size: None,
+                    enters_tapped: false,
                     recipients: TokenRecipients::Controller,
                 }],
             }],
@@ -160,8 +162,9 @@ pub(super) fn grouped_fixture(boundary: &str, actions: Value) -> packet::Selecte
     let mut watcher = Program::artifact(None, vec![]);
     watcher.triggered.push(crate::program::TriggeredAbility {
         id: crate::program::TriggeredAbilityId(9),
-        condition: crate::program::OrdinaryCondition::TokenCreated(
+        condition: crate::program::TriggerSpec::player_action(
             crate::program::PlayerRelation::Controller,
+            crate::program::PlayerTriggerAction::TokenCreated,
         ),
         grouping: crate::program::TriggerGrouping::OneOrMoreTogether,
         body: ExecutableBody::new(

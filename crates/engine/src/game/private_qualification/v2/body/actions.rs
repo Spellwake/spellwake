@@ -29,7 +29,8 @@ impl Caller<'_> {
             }
             "trusted_prepare_cleanup_context" => {
                 if action["iteration"] != 0
-                    || packet::seat(string(action, "active")?)? != self.state.window().turn_owner()
+                    || packet::seat(string(action, "active")?)?
+                        != self.state.window().active_player()
                 {
                     return Err("unsupported prepared cleanup context".into());
                 }
@@ -45,7 +46,7 @@ impl Caller<'_> {
                 self.turn = Some(result.map_err(|error| {
                     format!("actual calendar construction rejected: {error:?}")
                 })?);
-                let active = self.state.window().turn_owner();
+                let active = self.state.window().active_player();
                 self.invoke_with_input(json!({"owner":"EffectWindow","method":"enter_turn_step","role":"prepared-Cleanup-TurnWork-no-StepBegan"}),projection::QualificationCall::EffectCall(projection::EffectCall::EnterTurnStep{expected:self.state.revision(),active,priority:false,empty_mana:false}),|s|EffectAttempt::Unit(Box::new(s.enter_turn_step(s.revision(),active,false,false))),true)
             }
             "trusted_complete_same_cleanup_priority_handoff" => {
@@ -71,7 +72,7 @@ impl Caller<'_> {
                 self.calendars.push((Some(old.clone()), result.clone()));
                 let next = result
                     .map_err(|error| format!("actual cleanup handoff rejected: {error:?}"))?;
-                let active = self.state.window().turn_owner();
+                let active = self.state.window().active_player();
                 self.invoke_with_input(json!({"owner":"EffectWindow","method":"enter_calendar","role":"actual-same-Cleanup-priority-handoff"}),projection::QualificationCall::EffectCall(projection::EffectCall::EnterCalendar{expected:self.state.revision(),previous:Some(&old),next_turn:&next,active}),|s|EffectAttempt::Unit(Box::new(s.enter_calendar(s.revision(),Some(&old),&next,active))),true)?;
                 self.turn = Some(next);
                 Ok(())

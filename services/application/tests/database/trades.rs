@@ -520,3 +520,41 @@ async fn stale_trade_acceptance_after_a_block_cannot_transfer_assets() -> TestRe
     assert_eq!(balance(&client, right).await?, "14500");
     Ok(())
 }
+
+#[tokio::test]
+#[ignore = "requires migrated isolated Postgres and SPELLWAKE_TEST_DATABASE_URL"]
+async fn invalid_live_trade_replacement_preserves_the_confirmed_terms() -> TestResult {
+    let client = connection().await?;
+    let (actor, subject) = account(&client).await?;
+    let (peer, _) = account(&client).await?;
+    let session: Uuid = client.query_one("INSERT INTO app.trade_session(initiator_id,counterparty_id,initiator_ready,counterparty_ready,counterparty_confirmed) VALUES($1,$2,true,true,true) RETURNING id", &[&actor,&peer]).await?.get(0);
+    let original = Uuid::new_v4();
+    let replacement = Uuid::new_v4();
+    for asset in [original, replacement] {
+        client.execute("INSERT INTO app.asset_definition(id,kind,currency_key) VALUES($1,'coin',$1::uuid::text)", &[&asset]).await?;
+    }
+    client.execute("INSERT INTO app.trade_session_item(session_id,owner_id,asset_definition_id,quantity) VALUES($1,$2,$3,1)", &[&session,&actor,&original]).await?;
+    super::set_auth_claims(&client, subject).await?;
+    let read = "SELECT app.read_my_trade_session($1)";
+    let before: Value = client.query_one(read, &[&session]).await?.get(0);
+    assert_eq!(before["status"], "success");
+    let items = json!([
+        {"assetId":replacement,"quantity":"2"},
+        {"assetId":Uuid::new_v4(),"quantity":"1"}
+    ]);
+    let rejected: Value = client
+        .query_one(
+            "SELECT app.update_trade_session_offer($1,1,0,$2)",
+            &[&session, &items],
+        )
+        .await?
+        .get(0);
+    assert_eq!(
+        rejected,
+        json!({"status":"fail","data":{"assets":"unavailable"}})
+    );
+    let after: Value = client.query_one(read, &[&session]).await?.get(0);
+    assert_eq!(after, before);
+    client.batch_execute("RESET ROLE").await?;
+    Ok(())
+}

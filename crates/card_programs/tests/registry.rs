@@ -4,7 +4,7 @@ use spellwake_card_programs::{
     UNSUMMON,
 };
 use spellwake_content::{Inventory, snapshot::decode};
-use spellwake_engine::program::{BodyTarget, ExecutableBody, SpellTargetFilter};
+use spellwake_engine::program::{BodyTarget, ExecutableBody};
 use spellwake_engine::{
     effects::{Instruction, Program},
     mana::{ManaCost, ManaType},
@@ -107,7 +107,7 @@ fn known_identities_bind_versioned_partial_programs_without_claiming_behavior_or
             Program::instant(
                 ManaCost::specific(ManaType::Blue, 2.into()),
                 ExecutableBody::new(
-                    BodyTarget::SingleSpell(SpellTargetFilter::AnySpell),
+                    BodyTarget::SingleSpell(spellwake_engine::program::SpellFilter::any()),
                     vec![Instruction::CounterSpell]
                 )
             ),

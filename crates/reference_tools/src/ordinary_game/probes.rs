@@ -246,6 +246,7 @@ pub(super) fn reached_probes(
                         vec![AttackDeclaration {
                             attacker: young,
                             defender: B,
+                            defending_planeswalker: None,
                         }],
                     ),
                     (
@@ -254,10 +255,12 @@ pub(super) fn reached_probes(
                             AttackDeclaration {
                                 attacker: old,
                                 defender: B,
+                                defending_planeswalker: None,
                             },
                             AttackDeclaration {
                                 attacker: young,
                                 defender: B,
+                                defending_planeswalker: None,
                             },
                         ],
                     ),
@@ -280,6 +283,7 @@ pub(super) fn reached_probes(
                 let first = AttackDeclaration {
                     attacker: object("A.L1")?,
                     defender: B,
+                    defending_planeswalker: None,
                 };
                 add(
                     "attack.duplicate",
@@ -313,6 +317,7 @@ pub(super) fn reached_probes(
                         DecisionReply::DeclareAttackers(vec![AttackDeclaration {
                             attacker: object("A.P7")?,
                             defender: B,
+                            defending_planeswalker: None,
                         }]),
                     ),
                     effect(EffectError::Combat(CombatError::IllegalAttacker)),
@@ -326,6 +331,7 @@ pub(super) fn reached_probes(
                         DecisionReply::DeclareAttackers(vec![AttackDeclaration {
                             attacker: historical_absent(fixture, policy, state, "A.P8")?,
                             defender: B,
+                            defending_planeswalker: None,
                         }]),
                     ),
                     effect(EffectError::Combat(CombatError::IllegalAttacker)),

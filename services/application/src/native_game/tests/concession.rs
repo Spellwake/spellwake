@@ -84,8 +84,8 @@ fn concession_replays_for_either_seat_without_priority_or_opening_chooser_author
 }
 
 #[test]
-#[ignore = "requires explicit genuine vocabulary; finite multiplayer adapter/replay composition"]
-fn multiplayer_concession_replays_with_original_roster_and_survivor_authority() {
+#[ignore = "requires explicit genuine vocabulary; adapter transition only"]
+fn multiplayer_concession_continues_with_the_original_binding() {
     let third = SeatId(99);
     let seed = GameSeed::with_uniform_life(
         vec![A, B, third],
@@ -123,52 +123,18 @@ fn multiplayer_concession_replays_with_original_roster_and_survivor_authority() 
     )
     .unwrap();
     let view = NativeScope::new(&source, bound).unwrap();
-    let prepared = view
+    let candidate = view
         .propose(&command(&view, PlayerAction::Concede {}))
         .unwrap();
-    input_codec::verify(&view, &prepared);
-    let next = prepared.candidate().state().clone();
-    assert_eq!(next.execution().window().participants(), &[B, third]);
-    assert_eq!(next.original_participants(), &[A, B, third]);
-    assert_eq!(next.execution().window().active_player(), None);
-    assert_eq!(next.outcome(), None);
-    let departed_binding = NativeBinding::new(
-        context_id(),
-        next.basis().clone(),
-        view.binding.seats.clone(),
-        viewer_a(),
-    )
-    .unwrap();
-    let departed = NativeScope::new(&next, departed_binding).unwrap();
-    assert!(
-        matches!(departed.propose(&command(&departed, PlayerAction::Concede {})),
-        Err(NativeBridgeError::Native(error)) if matches!(*error, GameError::UnknownActor))
-    );
-    let survivor_binding = NativeBinding::new(
-        context_id(),
-        next.basis().clone(),
-        view.binding.seats.clone(),
-        viewer_b(),
-    )
-    .unwrap();
-    let survivor = NativeScope::new(&next, survivor_binding).unwrap();
-    let prepared = survivor
-        .propose(&command(&survivor, PlayerAction::Concede {}))
-        .unwrap();
-    input_codec::verify(&survivor, &prepared);
     assert_eq!(
-        prepared.candidate().state().outcome(),
-        Some(GameOutcome::Winner(third))
-    );
-    assert_eq!(
-        prepared
+        candidate
             .candidate()
             .state()
-            .conclusion()
-            .unwrap()
-            .losing_players()
-            .collect::<BTreeSet<_>>(),
-        BTreeSet::from([A, B])
+            .execution()
+            .window()
+            .participants(),
+        &[B, third]
     );
+    assert_eq!(candidate.candidate().state().outcome(), None);
     assert_eq!(source, before);
 }

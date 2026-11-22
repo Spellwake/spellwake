@@ -621,9 +621,7 @@ import {
   roomCommandErrorsSchema,
   roomConfigurationErrorsSchema,
   roomConfigurationAckSchema,
-  roomGameSchema,
 } from "./rooms.ts";
-export const roomGameResponseSchema = apiResponseSchema(roomGameSchema);
 export const roomCommandDispositionSchema = makeCommandDispositionSchema(
   roomCommandErrorsSchema,
   commandAckSchema,
@@ -725,5 +723,6 @@ export * from "./ante.ts";
 export * from "./supply-ballot.ts";
 
 export * from "./player.ts";
+export * from "./ui-surface.ts";
 export { parseStrictJson, type RawJsonResult } from "./raw-json.ts";
 export * from "./ui-surface.ts";

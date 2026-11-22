@@ -4,7 +4,7 @@ use spellwake_content::InventoryCard;
 use std::collections::BTreeMap;
 
 pub(super) fn retain(
-    cards: Vec<InventoryCard>,
+    cards: &[InventoryCard],
     registry: &Registry,
 ) -> Result<BTreeMap<OracleId, InventoryCard>, NativeInitialError> {
     // Coverage supplies candidates, not readiness. Only an actual Registry key
@@ -27,7 +27,7 @@ pub(super) fn retain(
         let Some(id) = card.oracle_id.as_deref().and_then(|raw| keys.get(raw)) else {
             continue;
         };
-        if retained.insert((*id).clone(), card).is_some() {
+        if retained.insert((*id).clone(), card.clone()).is_some() {
             return Err(NativeInitialError::Invalid);
         }
     }

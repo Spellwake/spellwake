@@ -4,9 +4,7 @@ use crate::{
     combat::{AttackDeclaration, BlockDeclaration, BlockStatus},
     object_identity::ObjectIdentityError,
     occurrence::{RulesRecord, TriggerError, TriggerRelated},
-    program::{
-        ExecutableBody, ObjectRelation, OrdinaryCondition, TriggeredAbility, TriggeredAbilityId,
-    },
+    program::{ExecutableBody, TriggeredAbility, TriggeredAbilityId},
     turn::{Step, TurnStart},
 };
 
@@ -103,11 +101,15 @@ fn shared_tap_cut_discovers_distinct_related_objects_before_declaration_membersh
     observer.program.triggered.push(TriggeredAbility {
         grouping: spellwake_engine::program::TriggerGrouping::EachOccurrence,
         id: TriggeredAbilityId(7),
-        condition: OrdinaryCondition::BecomesTapped(ObjectRelation::AnotherControlledCreature),
+        condition: crate::program::TriggerSpec::becomes_tapped(
+            crate::program::ObjectFilter::creature()
+                .controlled()
+                .other_than_ability_source(),
+        ),
         body: ExecutableBody::new(
             BodyTarget::None,
             vec![Instruction::DrawController {
-                amount: crate::program::InstructionAmount::Literal(1.into()),
+                amount: crate::program::ValueExpr::Literal(1.into()),
             }],
         ),
     });
@@ -126,10 +128,12 @@ fn shared_tap_cut_discovers_distinct_related_objects_before_declaration_membersh
         AttackDeclaration {
             attacker: second,
             defender: C,
+            defending_planeswalker: None,
         },
         AttackDeclaration {
             attacker: first,
             defender: B,
+            defending_planeswalker: None,
         },
     ];
     let (next, _, append) = state
@@ -273,10 +277,12 @@ fn late_second_tap_or_later_declaration_allocation_failure_keeps_the_accepted_fr
         AttackDeclaration {
             attacker: object(&state, 1),
             defender: B,
+            defending_planeswalker: None,
         },
         AttackDeclaration {
             attacker: object(&state, 2),
             defender: B,
+            defending_planeswalker: None,
         },
     ];
     let mut physical = state.clone();
@@ -486,3 +492,6 @@ fn forced_empty_defender_publishes_before_the_next_defenders_pending_choice() {
         )]
     );
 }
+
+#[path = "keyword_tests.rs"]
+mod keyword_tests;

@@ -27,6 +27,23 @@ fn nullable_rules<'de, D: serde::Deserializer<'de>>(
 ) -> Result<Option<RulesInteger>, D::Error> {
     Option::<RulesInteger>::deserialize(d)
 }
+/// Additional effect carried by a floating unit of mana.
+#[derive(Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum PlayerManaSpendEffect {
+    CommanderEntryCounters,
+    SharedCommanderTypeScry,
+    RetainUntilCleanup,
+}
+
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct PlayerManaLot {
+    pub id: u64,
+    pub color: ManaColor,
+    pub effect: PlayerManaSpendEffect,
+    pub amount: RulesCount,
+}
 /// Public counter names and exact nonnegative counts.
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -49,6 +66,8 @@ pub struct PlayerCharacteristics {
     pub printed_toughness: Option<String>,
     #[serde(deserialize_with = "crate::provider_json::optional_string")]
     pub printed_loyalty: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub printed_defense: Option<String>,
 }
 impl PlayerCharacteristics {
     pub(crate) fn valid(&self) -> bool {
@@ -61,6 +80,7 @@ impl PlayerCharacteristics {
                 &self.printed_power,
                 &self.printed_toughness,
                 &self.printed_loyalty,
+                &self.printed_defense,
             ]
             .iter()
             .all(|x| x.as_ref().is_none_or(|s| display_text(s, 128)))
@@ -110,10 +130,24 @@ impl PlayerCreatureTypeLabel {
         &self.0
     }
 }
+/// Actual fixed-symbol cost of a Power-up activation in this game state.
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct PlayerPowerUpCost {
+    pub generic: RulesCount,
+    #[serde(deserialize_with = "crate::provider_json::objects")]
+    pub required: Vec<ManaSpend>,
+}
 /// An issued public ability reference, not a native ability ID or legality claim.
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct PlayerAbilityView {
+    /// Present on currently available Power-up ability definitions.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub power_up_cost: Option<PlayerPowerUpCost>,
+    /// The once-per-incarnation activation has already been used.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub exhausted: bool,
     pub handle: PlayerHandle,
     pub kind: PlayerAbilityKind,
     pub label: String,
@@ -124,6 +158,37 @@ pub struct PlayerAbilityBinding {
     pub handle: PlayerHandle,
     pub kind: PlayerAbilityKind,
 }
+/// Prospective mana price and ability index shown to the face-down permanent's controller.
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct PlayerFaceUpOption {
+    pub ability: u16,
+    pub generic: RulesCount,
+    #[serde(deserialize_with = "crate::provider_json::objects")]
+    pub required: Vec<ManaSpend>,
+}
+/// Combat damage attributed to one physical commander against a seat.
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct PlayerCommanderDamage {
+    #[serde(deserialize_with = "crate::identifiers::uuid")]
+    pub seat_id: Uuid,
+    pub amount: RulesCount,
+}
+/// Independent cast and damage records, retained after the commander changes zones.
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct PlayerCommanderView {
+    pub command_zone_casts: RulesCount,
+    #[serde(deserialize_with = "crate::provider_json::objects")]
+    pub combat_damage: Vec<PlayerCommanderDamage>,
+}
+/// Supported subtype of an instant or sorcery.
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+pub enum PlayerSpellSubtype {
+    Arcane,
+    Adventure,
+}
 /// Independently public effective values. No free name/oracle/identity field.
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -131,8 +196,20 @@ pub struct PlayerPublicProperties {
     pub card_types: Vec<PlayerCardType>,
     pub supertypes: Vec<PlayerSupertype>,
     pub creature_types: Vec<PlayerCreatureTypeLabel>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub chosen_creature_type: Option<PlayerCreatureTypeLabel>,
     pub land_types: Vec<PlayerLandType>,
+    /// Effective enchantment subtypes, independently of card names.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub enchantment_types: Vec<String>,
+    /// Effective planeswalker subtypes, kept separate from the card name.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub planeswalker_types: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub spell_types: Vec<PlayerSpellSubtype>,
     pub colors: Vec<ManaColor>,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub renowned: bool,
     pub keywords: Vec<PlayerKeyword>,
     #[serde(deserialize_with = "nullable_rules")]
     pub power: Option<RulesInteger>,
@@ -144,22 +221,40 @@ impl PlayerPublicProperties {
         &self,
         vocabulary: Option<&spellwake_contracts::creature_types::CreatureTypeVocabulary>,
     ) -> bool {
-        self.supertypes.len() <= 5
+        self.enchantment_types.iter().all(|kind| {
+            spellwake_engine::program::EnchantmentSubtype::from_wire_label(kind).is_some()
+        }) && self.chosen_creature_type.as_ref().is_none_or(|label| {
+            vocabulary.is_none_or(|v| v.resolve_label(label.as_str()).is_some())
+        }) && unique(self.enchantment_types.iter())
+            && (self.enchantment_types.is_empty()
+                || self.card_types.contains(&PlayerCardType::Enchantment))
+            && self.planeswalker_types.iter().all(|kind| {
+                spellwake_engine::program::PlaneswalkerSubtype::from_label(kind).is_some()
+            })
+            && unique(self.planeswalker_types.iter())
+            && (self.planeswalker_types.is_empty()
+                || self.card_types.contains(&PlayerCardType::Planeswalker))
+            && self.supertypes.len() <= 5
             && unique(self.supertypes.iter())
             && self.land_types.len() <= 17
             && unique(self.land_types.iter())
+            && self.spell_types.len() <= 1
+            && unique(self.spell_types.iter())
+            && (self.spell_types.is_empty()
+                || self.card_types.contains(&PlayerCardType::Instant)
+                || self.card_types.contains(&PlayerCardType::Sorcery))
             && list(&self.creature_types)
             && unique(self.creature_types.iter())
             && self
                 .creature_types
                 .iter()
                 .all(|label| vocabulary.is_some_and(|v| v.resolve_label(label.as_str()).is_some()))
-            && self.card_types.len() <= 7
+            && self.card_types.len() <= 8
             && unique(self.card_types.iter())
             && self.colors.len() <= 5
             && unique(self.colors.iter())
             && !self.colors.contains(&ManaColor::Colourless)
-            && self.keywords.len() <= 2
+            && list(&self.keywords)
             && unique(self.keywords.iter())
     }
 }
@@ -188,10 +283,41 @@ impl VisibleSubject {
         &self.0
     }
 }
+/// How an exile permission changes the mana that can pay for this spell.
+#[derive(Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum ExileManaPermission {
+    AnyColor,
+    AnyType,
+}
+
 /// A visible board record can have a concealed identity, e.g. a face-down permanent.
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct PlayerTransformFace {
+    pub back_face_up: bool,
+    pub opposite: PlayerCharacteristics,
+}
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct PlayerObject {
+    /// Number of successful merges in this battlefield incarnation (CR 730).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub times_mutated: Option<RulesCount>,
+    /// Current battle protector, if this visible object is a battle.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub protector_seat_id: Option<Uuid>,
+    /// Printed Adventure description visible to a viewer who knows the physical card.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub adventure_face: Option<PlayerCharacteristics>,
+    /// Left and right printed spell faces, in reading order.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub split_faces: Option<[PlayerCharacteristics; 2]>,
+    /// Opposite physical face only when this viewer knows the card's identity.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub transform_face: Option<PlayerTransformFace>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub commander: Option<PlayerCommanderView>,
     pub handle: PlayerHandle,
     pub zone: PlayerHandle,
     #[serde(deserialize_with = "crate::identifiers::uuid")]
@@ -210,6 +336,45 @@ pub struct PlayerObject {
     pub damage_marked: RulesCount,
     #[serde(deserialize_with = "crate::provider_json::optional_object")]
     pub attached_to: Option<VisibleSubject>,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub saddled: bool,
+    /// This spell or permanent is an Aura because it was cast bestowed.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub bestowed: bool,
+    /// Turn on which this visible exile incarnation became plotted.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub plotted_on_turn: Option<RulesCount>,
+    /// The viewer may play this exact exiled card for the remainder of this turn.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub may_play_from_exile: bool,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub may_cast_free_from_exile: bool,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub free_exile_types: Vec<PlayerCardType>,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub may_play_from_library: bool,
+    /// Whether mana of any color or any type may pay this spell’s mana requirements.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub exile_mana: Option<ExileManaPermission>,
+    /// Turn on which this exact publicly exiled card was warped.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub warped_on_turn: Option<RulesCount>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub face_down: Option<PlayerFaceDownKind>,
+    /// This card is face down in exile, independently of a foretell action.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub exiled_face_down: bool,
+    /// Relative order of the visible face-down objects in this zone, oldest first.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub face_down_order: Option<RulesCount>,
+    #[serde(
+        default,
+        skip_serializing_if = "Vec::is_empty",
+        deserialize_with = "crate::provider_json::objects"
+    )]
+    pub face_up_options: Vec<PlayerFaceUpOption>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub foretold_on_turn: Option<RulesCount>,
 }
 /// The concealed portion of any zone is anonymous, including mixed visibility.
 /// Order-unknown visible portions use sorted opaque handles, not native order.
@@ -320,10 +485,90 @@ impl PlayerZone {
             }
     }
 }
+fn zero_speed(value: &u8) -> bool {
+    *value == 0
+}
+/// Public source-independent emblem rules.
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "kebab-case", deny_unknown_fields)]
+pub enum PlayerEmblem {
+    PreventAllButOne {},
+    LoyaltyAnyTurn {},
+    ReturnFallenArtifacts {},
+    UnlimitedHandWithGraveyardReturn {},
+    SacrificeCreatureGainLifeDraw {},
+    UpkeepDamage {
+        amount: RulesInteger,
+    },
+    SpellcastDamage {
+        amount: RulesInteger,
+        noncreature_only: bool,
+    },
+    ControlledCreatureBonus {
+        power: RulesInteger,
+        toughness: RulesInteger,
+        keywords: Vec<PlayerKeyword>,
+    },
+}
+/// Public status of a permanent currently phased out of play.
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct PlayerPhasedPermanent {
+    pub names: Vec<String>,
+    pub face_down: bool,
+    pub tapped: bool,
+    pub phase_in_seat_id: Uuid,
+    pub loyalty: Option<RulesCount>,
+}
 /// Public per-seat numeric information, without account/controller secrets.
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct PlayerSeatView {
+    #[serde(
+        default,
+        skip_serializing_if = "Vec::is_empty",
+        deserialize_with = "crate::provider_json::objects"
+    )]
+    pub phased_out: Vec<PlayerPhasedPermanent>,
+    /// Persistent emblems controlled by this player.
+    #[serde(
+        default,
+        skip_serializing_if = "Vec::is_empty",
+        deserialize_with = "crate::provider_json::objects"
+    )]
+    pub emblems: Vec<PlayerEmblem>,
+    /// Whether this player currently holds the monarch designation.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub monarch: bool,
+    /// Whether this player earned the city's blessing during this game.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub city_blessing: bool,
+    /// Speed is zero before the player first starts their engines.
+    #[serde(default, skip_serializing_if = "zero_speed")]
+    pub speed: u8,
+    /// Description publicly revealed at this cut, independent of hidden-zone handles.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub search_reveal: Option<PlayerCharacteristics>,
+    /// All publicly revealed faces when a search reveals more than one card.
+    #[serde(
+        default,
+        skip_serializing_if = "Vec::is_empty",
+        deserialize_with = "crate::provider_json::objects"
+    )]
+    pub search_reveals: Vec<PlayerCharacteristics>,
+    /// Printed faces disclosed as the cards left play or as the game ended.
+    #[serde(
+        default,
+        skip_serializing_if = "Vec::is_empty",
+        deserialize_with = "crate::provider_json::objects"
+    )]
+    pub face_down_reveals: Vec<PlayerCharacteristics>,
+    #[serde(
+        default,
+        skip_serializing_if = "Vec::is_empty",
+        deserialize_with = "crate::provider_json::objects"
+    )]
+    pub cascade_reveals: Vec<PlayerCharacteristics>,
     #[serde(deserialize_with = "crate::identifiers::uuid")]
     pub seat_id: Uuid,
     pub life: RulesInteger,
@@ -332,32 +577,42 @@ pub struct PlayerSeatView {
     pub counters: Vec<PlayerCounter>,
     #[serde(deserialize_with = "crate::provider_json::objects")]
     pub mana_pool: Vec<ManaSpend>,
+    #[serde(
+        default,
+        skip_serializing_if = "Vec::is_empty",
+        deserialize_with = "crate::provider_json::objects"
+    )]
+    pub restricted_mana: Vec<super::actions::PlayerRestrictedManaSpend>,
+    #[serde(
+        default,
+        skip_serializing_if = "Vec::is_empty",
+        deserialize_with = "crate::provider_json::objects"
+    )]
+    pub mana_lots: Vec<PlayerManaLot>,
     pub hand_count: RulesCount,
     pub library_count: RulesCount,
     pub eliminated: bool,
 }
 /// Current native turn position; opening decisions can precede a turn entirely.
+#[derive(Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum PlayerDayNight {
+    Day,
+    Night,
+}
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct PlayerTurn {
+    /// Omitted while the game is neither day nor night.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub day_night: Option<PlayerDayNight>,
     pub number: RulesCount,
     #[serde(deserialize_with = "crate::identifiers::uuid_list")]
-    /// Empty while a departed multiplayer turn owner finishes their current turn.
     pub active_seat_ids: Vec<Uuid>,
     #[serde(deserialize_with = "crate::identifiers::uuid_list")]
     pub priority_seat_ids: Vec<Uuid>,
-    /// Server-owned expiry disclosed to the current priority holder on a live view.
-    #[serde(
-        default,
-        skip_serializing_if = "Option::is_none",
-        deserialize_with = "present_deadline"
-    )]
-    pub priority_deadline_at: Option<String>,
     pub phase: PlayerPhase,
     pub step: PlayerStep,
-}
-fn present_deadline<'de, D: serde::Deserializer<'de>>(de: D) -> Result<Option<String>, D::Error> {
-    String::deserialize(de).map(Some)
 }
 impl PlayerTurn {
     fn valid(&self, roster: &[Uuid]) -> bool {
@@ -385,6 +640,11 @@ impl PlayerTurn {
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct PlayerStackEntry {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub chosen_x: Option<RulesCount>,
+    /// Printed zero-based modes in resolution order, including repetitions.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub modes: Vec<u8>,
     pub handle: PlayerHandle,
     #[serde(deserialize_with = "crate::identifiers::uuid")]
     pub controller_seat_id: Uuid,
@@ -396,6 +656,9 @@ pub struct PlayerStackEntry {
     /// Bound occurrences with no current permitted public reference. This is
     /// not a legality judgment and never rebinds a departed incarnation.
     pub unavailable_targets: RulesCount,
+    /// Currently visible exact objects which paid this crew or saddle cost.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub visible_contributors: Vec<PlayerHandle>,
 }
 pub(super) fn counters_valid(values: &[PlayerCounter]) -> bool {
     list(values)
@@ -599,8 +862,59 @@ impl PlayerSnapshot {
                 || z.owner_seat_id().is_some_and(|x| x != o.owner_seat_id)
                 || !f.roster.contains(&o.owner_seat_id)
                 || !o.controller_seat_id.is_none_or(|x| f.roster.contains(&x))
+                || (o.bestowed
+                    && !matches!(
+                        z.zone_type(),
+                        PlayerZoneKind::Battlefield | PlayerZoneKind::Stack
+                    ))
+                || o.times_mutated.as_ref().is_some_and(|count| {
+                    !positive(count) || z.zone_type() != PlayerZoneKind::Battlefield
+                })
+                || o.commander.as_ref().is_some_and(|record| {
+                    !unique(record.combat_damage.iter().map(|hit| hit.seat_id))
+                        || record
+                            .combat_damage
+                            .iter()
+                            .any(|hit| !positive(&hit.amount) || !f.roster.contains(&hit.seat_id))
+                })
+                || (!o.free_exile_types.is_empty()
+                    && (!o.may_cast_free_from_exile
+                        || !unique(o.free_exile_types.iter())
+                        || o.free_exile_types.contains(&PlayerCardType::Land)))
+                || ((o.may_play_from_exile || o.may_cast_free_from_exile || o.exile_mana.is_some())
+                    && z.zone_type() != PlayerZoneKind::Exile)
+                || (o.may_play_from_library
+                    && (z.zone_type() != PlayerZoneKind::Library
+                        || z.objects().first() != Some(&o.handle)))
+                || (o.warped_on_turn.is_some() && z.zone_type() != PlayerZoneKind::Exile)
+                || (o.exiled_face_down && z.zone_type() != PlayerZoneKind::Exile)
                 || !counters_valid(&o.counters)
+                || o.face_down_order.is_some()
+                    != (o.face_down.is_some() || o.foretold_on_turn.is_some() || o.exiled_face_down)
+                || o.face_down_order
+                    .as_ref()
+                    .is_some_and(|number| !positive(number))
+                || !list(&o.face_up_options)
+                || !unique(o.face_up_options.iter().map(|offer| offer.ability))
+                || (!o.face_up_options.is_empty()
+                    && (o.face_down.is_none()
+                        || o.controller_seat_id != Some(self.viewer_seat_id)
+                        || !known.contains(&o.handle)
+                        || z.zone_type() != PlayerZoneKind::Battlefield))
+                || o.face_up_options.iter().any(|offer| {
+                    offer.required.len() > 6
+                        || !unique(offer.required.iter().map(|mana| mana.color))
+                        || offer.required.iter().any(|mana| !positive(&mana.amount))
+                })
                 || !list(&o.abilities)
+                || o.abilities
+                    .iter()
+                    .filter_map(|ability| ability.power_up_cost.as_ref())
+                    .any(|price| {
+                        price.required.len() > 6
+                            || !unique(price.required.iter().map(|m| m.color))
+                            || price.required.iter().any(|m| !positive(&m.amount))
+                    })
                 || !unique(o.abilities.iter().map(|x| &x.handle))
                 || o.abilities
                     .iter()
@@ -614,6 +928,38 @@ impl PlayerSnapshot {
                     .as_ref()
                     .is_none_or(|x| target_in(x.target(), &objects, &stack, f.roster))
             {
+                return false;
+            }
+            if o.protector_seat_id.is_some_and(|seat| {
+                !f.roster.contains(&seat)
+                    || z.zone_type() != PlayerZoneKind::Battlefield
+                    || !o
+                        .public_properties
+                        .as_ref()
+                        .is_some_and(|p| p.card_types.contains(&PlayerCardType::Battle))
+            }) {
+                return false;
+            }
+            if o.split_faces.as_ref().is_some_and(|faces| {
+                !known.contains(&o.handle) || faces.iter().any(|face| !face.valid())
+            }) {
+                return false;
+            }
+            if o.adventure_face
+                .as_ref()
+                .is_some_and(|face| !known.contains(&o.handle) || !face.valid())
+            {
+                return false;
+            }
+            if o.transform_face.as_ref().is_some_and(|f| {
+                !known.contains(&o.handle)
+                    || !f.opposite.valid()
+                    || (f.back_face_up
+                        && !matches!(
+                            z.zone_type(),
+                            PlayerZoneKind::Battlefield | PlayerZoneKind::Stack
+                        ))
+            }) {
                 return false;
             }
             match &o.identity {
@@ -636,10 +982,35 @@ impl PlayerSnapshot {
                 }
             }
         }
+        if self.players.iter().filter(|player| player.monarch).count() > 1 {
+            return false;
+        }
         for p in &self.players {
-            if !counters_valid(&p.counters)
+            if !list(&p.phased_out) || p.phased_out.iter().any(|permanent|permanent.phase_in_seat_id.is_nil() || !list(&permanent.names)
+                || permanent.face_down && !permanent.names.is_empty() || permanent.names.iter().any(|name|name.is_empty() || !display_text(name,256)))
+                || !list(&p.emblems)
+                || p.emblems.iter().any(|emblem| match emblem { PlayerEmblem::ReturnFallenArtifacts {} | PlayerEmblem::UnlimitedHandWithGraveyardReturn {} | PlayerEmblem::SacrificeCreatureGainLifeDraw { .. } | PlayerEmblem::LoyaltyAnyTurn { .. } | PlayerEmblem::PreventAllButOne { .. } => false, PlayerEmblem::ControlledCreatureBonus { keywords, .. } => !list(keywords) || !unique(keywords.iter()), PlayerEmblem::SpellcastDamage { amount, .. } | PlayerEmblem::UpkeepDamage { amount } => !amount.is_positive() })
+                || p.speed > 4
+                || !counters_valid(&p.counters)
+                || p.cascade_reveals.iter().any(|face| !face.valid())
+                || !list(&p.face_down_reveals)
+                || p.face_down_reveals.iter().any(|face| !face.valid())
+                || p.search_reveal.as_ref().is_some_and(|card| !card.valid())
+                || !list(&p.search_reveals)
+                || p.search_reveals.iter().any(|card| !card.valid())
                 || p.mana_pool.len() > 6
                 || !unique(p.mana_pool.iter().map(|x| x.color))
+                || !unique(p.mana_lots.iter().map(|lot| lot.id))
+                || p.mana_lots.iter().any(|lot| lot.id==0 || !lot.amount.as_rules_integer().is_positive() || !p.mana_pool.iter().any(|pool|pool.color==lot.color))
+                || p.mana_pool.iter().any(|pool| p.mana_lots.iter().filter(|lot|lot.color==pool.color).fold(RulesInteger::from(0), |sum,lot|sum.plus(lot.amount.as_rules_integer())) > *pool.amount.as_rules_integer())
+                || !list(&p.restricted_mana)
+                || !unique(p.restricted_mana.iter().map(|x| (x.color, x.restriction, &x.creature_type)))
+                || p.restricted_mana.iter().any(|item| !item.amount.as_rules_integer().is_positive()
+                    || (item.creature_type.is_some() && !matches!(item.restriction, super::actions::PlayerManaRestriction::CreatureSpellOfType | super::actions::PlayerManaRestriction::CreatureSpellOfTypeUncounterable | super::actions::PlayerManaRestriction::CreatureSpellOrAbilityOfType))
+                    || item.creature_type.as_ref().is_some_and(|label| f.creature_vocabulary.is_some_and(|v| v.resolve_label(label.as_str()).is_none()))
+                    || p.mana_pool.iter().find(|pool| pool.color == item.color).is_none_or(|pool| pool.amount.as_rules_integer() < item.amount.as_rules_integer()))
+                || p.mana_pool.iter().any(|pool| p.restricted_mana.iter().filter(|item| item.color == pool.color)
+                    .fold(spellwake_contracts::RulesInteger::from(0), |sum, item| sum.plus(item.amount.as_rules_integer())) > *pool.amount.as_rules_integer())
             {
                 return false;
             }
@@ -659,32 +1030,15 @@ impl PlayerSnapshot {
         if !self.turn.as_ref().is_none_or(|x| x.valid(f.roster)) {
             return false;
         }
-        if let Some(turn) = &self.turn {
-            if turn.active_seat_ids.is_empty()
-                && (f.roster.len() < 3 || !self.players.iter().any(|player| player.eliminated))
-            {
-                return false;
-            }
-            if let Some(deadline) = &turn.priority_deadline_at
-                && (f.roster.len() < 3
-                    || turn.priority_seat_ids.as_slice() != [self.viewer_seat_id]
-                    || !self.decisions.is_empty()
-                    || crate::source_protocol::parse_utc_microsecond(deadline).is_none())
-            {
-                return false;
-            }
-            if turn.priority_seat_ids.iter().any(|seat| {
-                self.players
-                    .iter()
-                    .any(|player| player.seat_id == *seat && player.eliminated)
-            }) {
-                return false;
-            }
-        }
         for s in &self.stack {
             if !f.roster.contains(&s.controller_seat_id)
                 || s.label.is_empty()
                 || !display_text(&s.label, 1024)
+                || !s
+                    .visible_contributors
+                    .iter()
+                    .all(|handle| objects.contains(handle))
+                || !unique(s.visible_contributors.iter())
                 || !s.source_object.as_ref().is_none_or(|x| objects.contains(x))
                 || !list(&s.targets)
                 || !s

@@ -1,4 +1,5 @@
 //! Issue/load the semantic SQL first-winner View, never regenerate its handles.
+use super::rpc::RecordBudget;
 use super::*;
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -28,7 +29,6 @@ fn disclosure(kind: NativeDisclosure) -> &'static str {
 pub struct IssuedNativePlayerView<'a> {
     receipt_id: Uuid,
     view: RestoredNativeView<'a>,
-    live_deadline: Option<String>,
     pub(super) disclosure: NativeDisclosure,
     pub(super) checkpoint_ref: NativeArtifactRef,
 }
@@ -36,39 +36,7 @@ impl<'a> IssuedNativePlayerView<'a> {
     /// Consume a read-only issuance and discard its private registry and locators.
     /// This moves only the public projection; native state remains borrowed.
     pub fn into_snapshot(self) -> crate::player_wire::PlayerSnapshot {
-        let mut snapshot = self.view.into_snapshot();
-        if let Some(deadline) = self.live_deadline {
-            if snapshot.decisions.is_empty()
-                && let Some(turn) = &mut snapshot.turn
-                && turn.priority_seat_ids.as_slice() == [snapshot.viewer_seat_id]
-            {
-                turn.priority_deadline_at = Some(deadline.clone());
-            }
-            for decision in &mut snapshot.decisions {
-                if decision
-                    .responding_seat_ids
-                    .contains(&snapshot.viewer_seat_id)
-                {
-                    decision.deadline_at = Some(deadline.clone());
-                }
-            }
-        }
-        snapshot
-    }
-    /// Attach the operational deadline only to a live response. The durable
-    /// View keeps its original decision handles across cached reads and retries.
-    pub(super) fn with_live_deadline(
-        mut self,
-        repository: &NativeSourceRepository,
-        checkpoint: &NativeCheckpoint,
-        viewer: Uuid,
-    ) -> Result<Self, NativeSourceError> {
-        if checkpoint.response_seat()? == Some(viewer)
-            && let Some(wait) = repository.opening_response_wait(checkpoint.basis().game_id)?
-        {
-            self.live_deadline = Some(wait.deadline_for(checkpoint, viewer)?.to_owned());
-        }
-        Ok(self)
+        self.view.into_snapshot()
     }
     /// Original SQL View identity for trusted native command preparation.
     pub fn receipt_id(&self) -> Uuid {
@@ -89,6 +57,7 @@ pub(super) struct ViewFrame<'a> {
     pub(super) opening_receipt_id: Uuid,
     pub(super) checkpoint_id: Uuid,
     pub(super) permit: Option<crate::native_game::projection::HistoricalProjectionPermit<'a>>,
+    pub(super) archive: bool,
 }
 /// A retained cut's claims, checked against SQL's existing semantic winner.
 pub(super) struct ArchivedViewClaim<'a> {
@@ -121,7 +90,7 @@ impl NativeSourceRepository {
         let record = self.view_record("read_native_view_source", &json!({
             "p_game":b.game_id,"p_context":b.context_id,"p_epoch":b.epoch,
             "p_revision":b.revision,"p_viewer":claim.viewer,"p_disclosure":disclosure(claim.disclosure)
-        }), Some(budget))?.ok_or_else(invalid)?;
+        }), &mut RecordBudget::Exclusive(budget))?.ok_or_else(invalid)?;
         if record.version != "native-view-v1"
             || record.basis != *b
             || record.viewer_seat_id != claim.viewer
@@ -168,15 +137,15 @@ impl NativeSourceRepository {
                 opening_receipt_id: recovered.opening().receipt_ids().0,
                 checkpoint_id: recovered.source().checkpoint_ids().0,
                 permit: None,
+                archive: false,
             },
             metadata,
             display,
-            None,
+            RecordBudget::Unmetered,
         )?;
         Ok(IssuedNativeHumanView {
             receipt_id,
             view,
-            live_deadline: None,
             disclosure: metadata.disclosure,
             checkpoint_ref: recovered.checkpoint().reference().clone(),
         })
@@ -207,15 +176,15 @@ impl NativeSourceRepository {
                 opening_receipt_id: recovered.opening().receipt_ids().0,
                 checkpoint_id: recovered.source().checkpoint_ids().0,
                 permit: None,
+                archive: false,
             },
             metadata,
             display,
-            None,
+            RecordBudget::Unmetered,
         )?;
         Ok(IssuedNativePlayerView {
             receipt_id,
             view,
-            live_deadline: None,
             disclosure: metadata.disclosure,
             checkpoint_ref: recovered.checkpoint().reference().clone(),
         })
@@ -226,15 +195,14 @@ impl NativeSourceRepository {
         frame: ViewFrame<'a>,
         metadata: &NativeProjectionMetadata,
         display: &dyn NativeDisplaySource,
-        mut budget: Option<&mut NativeRecoveryBudget>,
+        mut budget: RecordBudget<'_>,
     ) -> Result<(Uuid, RestoredNativeView<'a>), NativeSourceError> {
         let basis = frame.checkpoint.basis().clone();
         let viewer = frame.binding.viewer;
         let kind = disclosure(metadata.disclosure);
         let mut arguments = json!({"p_game":basis.game_id,"p_context":basis.context_id,"p_epoch":basis.epoch,"p_revision":basis.revision,"p_viewer":viewer,"p_disclosure":kind});
-        let mut record =
-            self.view_record("read_native_view_source", &arguments, budget.as_deref_mut())?;
-        if record.is_none() {
+        let mut record = self.view_record("read_native_view_source", &arguments, &mut budget)?;
+        let retained = if record.is_none() {
             let proposal = match frame.permit.as_ref() {
                 Some(permit) => crate::native_game::input_codec::prepare_historical_view(
                     frame.checkpoint.state(),
@@ -257,17 +225,25 @@ impl NativeSourceRepository {
                 .size()
                 .checked_mul(2)
                 .ok_or_else(invalid)?;
-            charge_view(budget.as_deref_mut(), bytes)?;
-            let reference = proposal
-                .retain(store)
-                .map_err(|error| NativeSourceError(Failure::View(error)))?;
-            arguments["p_view_ref"] = json!(reference.as_str());
-            record = self.view_record(
-                "publish_native_view_source",
-                &arguments,
-                budget.as_deref_mut(),
-            )?;
-        }
+            budget.charge(1, bytes)?;
+            let retained = if frame.archive {
+                let artifact = proposal
+                    .retain_for_archive(store)
+                    .map_err(|error| NativeSourceError(Failure::View(error)))?;
+                arguments["p_view_ref"] = json!(artifact.reference().as_str());
+                Some(artifact)
+            } else {
+                let reference = proposal
+                    .retain(store)
+                    .map_err(|error| NativeSourceError(Failure::View(error)))?;
+                arguments["p_view_ref"] = json!(reference.as_str());
+                None
+            };
+            record = self.view_record("publish_native_view_source", &arguments, &mut budget)?;
+            retained
+        } else {
+            None
+        };
         let record = record.ok_or_else(invalid)?;
         if record.version != "native-view-v1"
             || record.basis != basis
@@ -287,23 +263,38 @@ impl NativeSourceRepository {
             record.through_event_sequence,
         )
         .map_err(|error| NativeSourceError(Failure::View(error)))?;
-        charge_view(budget, expected.reference().size())?;
-        let view = match frame.permit.as_ref() {
-            Some(permit) => crate::native_game::input_codec::load_historical_view(
+        budget.charge(1, expected.reference().size())?;
+        // Archive builders may race. Reuse authenticated bytes only when SQL
+        // accepted our exact artifact. An earlier winner is opened independently.
+        let retained = retained.filter(|artifact| artifact.reference() == expected.reference());
+        let source = frame.checkpoint.state();
+        let view = match (retained, frame.permit.as_ref()) {
+            (Some(artifact), Some(permit)) => {
+                crate::native_game::input_codec::restore_historical_view(
+                    artifact,
+                    &expected,
+                    source,
+                    frame.binding,
+                    display,
+                    permit,
+                )
+            }
+            (Some(artifact), None) => crate::native_game::input_codec::restore_view(
+                artifact,
+                &expected,
+                source,
+                frame.binding,
+                display,
+            ),
+            (None, Some(permit)) => crate::native_game::input_codec::load_historical_view(
                 store,
                 &expected,
-                frame.checkpoint.state(),
+                source,
                 frame.binding,
                 display,
                 permit,
             ),
-            None => load_view(
-                store,
-                &expected,
-                frame.checkpoint.state(),
-                frame.binding,
-                display,
-            ),
+            (None, None) => load_view(store, &expected, source, frame.binding, display),
         }
         .map_err(|error| NativeSourceError(Failure::View(error)))?;
         Ok((record.receipt_id, view))
@@ -312,9 +303,10 @@ impl NativeSourceRepository {
         &self,
         name: &str,
         arguments: &serde_json::Value,
-        budget: Option<&mut NativeRecoveryBudget>,
+        budget: &mut RecordBudget<'_>,
     ) -> Result<Option<Record>, NativeSourceError> {
-        let response: ObjectResponse<Record> = self.native_record(name, arguments, budget)?;
+        let response: ObjectResponse<Record> =
+            self.native_record_metered(name, arguments, budget)?;
         match response.0 {
             ApiResponse::Success { data } => Ok(Some(data)),
             ApiResponse::Fail { data }
@@ -326,15 +318,4 @@ impl NativeSourceRepository {
             _ => Err(invalid()),
         }
     }
-}
-fn charge_view(
-    budget: Option<&mut NativeRecoveryBudget>,
-    bytes: u64,
-) -> Result<(), NativeSourceError> {
-    if let Some(budget) = budget {
-        budget
-            .charge_work(1, bytes)
-            .map_err(|error| NativeSourceError(Failure::Checkpoint(error)))?;
-    }
-    Ok(())
 }

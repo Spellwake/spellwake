@@ -255,9 +255,11 @@ fn skipped_local_definition() {
     )
     .unwrap();
     let mut creation = TokenCreation::one(definition);
-    creation.amount = InstructionAmount::ControlledPermanentsOfChosenType {
-        chosen: CreatureTypeSlot::new(0),
-    };
+    creation.amount = crate::program::ValueExpr::count_battlefield(
+        crate::program::ObjectFilter::any()
+            .controlled()
+            .of_chosen_slot(CreatureTypeSlot::new(0)),
+    );
     for first in [
         Instruction::OptionalEffect {
             chooser: ResolvingPlayer::Controller,
@@ -342,25 +344,31 @@ fn singular_related_player_definitions() {
     // This adds actual complete inputs/results to the existing packet capture;
     // no runtime cause, participant, root or observation is synthesized here.
     let conditions = [
-        OrdinaryCondition::SelfCast,
-        OrdinaryCondition::SpellCast {
-            player: PlayerRelation::Opponent,
-            filter: SpellCastFilter::AnySpell,
-        },
-        OrdinaryCondition::TokenCreated(PlayerRelation::AnyParticipant),
-        OrdinaryCondition::LifeChanged {
-            kind: crate::life::LifeChangeKind::Gain,
-            player: PlayerRelation::AnyParticipant,
-        },
-        OrdinaryCondition::Enters(ObjectRelation::AnyCreature),
-        OrdinaryCondition::LeavesBattlefield(ObjectRelation::AnyCreature),
-        OrdinaryCondition::Dies(ObjectRelation::AnyCreature),
-        OrdinaryCondition::BecomesTapped(ObjectRelation::SelfObject),
-        OrdinaryCondition::Discarded(PlayerRelation::AnyParticipant),
-        OrdinaryCondition::StepBegan {
-            step: crate::turn::Step::Upkeep,
-            player: PlayerRelation::AnyParticipant,
-        },
+        crate::program::TriggerSpec::self_cast(),
+        crate::program::TriggerSpec::spell_cast(
+            PlayerRelation::Opponent,
+            crate::program::SpellFilter::any(),
+        ),
+        crate::program::TriggerSpec::player_action(
+            PlayerRelation::AnyParticipant,
+            crate::program::PlayerTriggerAction::TokenCreated,
+        ),
+        crate::program::TriggerSpec::life_changed(
+            crate::life::LifeChangeKind::Gain,
+            PlayerRelation::AnyParticipant,
+        ),
+        crate::program::TriggerSpec::enters(crate::program::ObjectFilter::creature()),
+        crate::program::TriggerSpec::leaves_battlefield(crate::program::ObjectFilter::creature()),
+        crate::program::TriggerSpec::dies(crate::program::ObjectFilter::creature()),
+        crate::program::TriggerSpec::becomes_tapped(crate::program::ObjectFilter::self_object()),
+        crate::program::TriggerSpec::player_action(
+            PlayerRelation::AnyParticipant,
+            crate::program::PlayerTriggerAction::Discarded,
+        ),
+        crate::program::TriggerSpec::step_began(
+            crate::turn::Step::Upkeep,
+            PlayerRelation::AnyParticipant,
+        ),
     ];
     for condition in conditions {
         for instructions in [
@@ -387,7 +395,7 @@ fn singular_related_player_definitions() {
             ] {
                 let mut program = watched(
                     Program::artifact(None, vec![]),
-                    condition,
+                    condition.clone(),
                     instructions.clone(),
                 );
                 program.triggered[0].grouping = grouping;
@@ -590,6 +598,7 @@ fn saved_replay() -> Value {
             &mut trace,
             DecisionReply::ResolutionPayment(if optional.is_some() {
                 ResolutionPaymentReply::Pay(ManaPayment {
+                    from_lots: Default::default(),
                     spend: vec![ManaSpend {
                         mana_type: ManaType::Blue,
                         amount: 2.into(),

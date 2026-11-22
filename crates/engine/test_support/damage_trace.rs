@@ -29,6 +29,7 @@ pub enum ZoneView {
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum GameObjectOriginView {
     Card { card_id: u64 },
+    PermanentSpellCopy { definition: Value },
     Token { definition: Value },
 }
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -58,6 +59,11 @@ pub fn game_object_view(object: &GameObject) -> GameObjectView {
         object: format!("{:?}", object.id()),
         origin: match object.origin() {
             ObjectOrigin::Card(card) => GameObjectOriginView::Card { card_id: card.0 },
+            ObjectOrigin::PermanentSpellCopy { definition } => {
+                GameObjectOriginView::PermanentSpellCopy {
+                    definition: program::view(definition),
+                }
+            }
             ObjectOrigin::Token { definition } => GameObjectOriginView::Token {
                 definition: program::view(definition),
             },
@@ -75,6 +81,10 @@ pub fn game_object_view(object: &GameObject) -> GameObjectView {
 #[derive(Debug, Clone, Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum DamageSourceView {
+    Emblem {
+        emblem: String,
+        controller: u32,
+    },
     Object {
         object: GameObjectView,
         controller: u32,
@@ -86,6 +96,10 @@ pub enum DamageSourceView {
 }
 pub fn damage_source_view(source: &DamageSource) -> DamageSourceView {
     match source {
+        DamageSource::Emblem { emblem, controller } => DamageSourceView::Emblem {
+            emblem: format!("{emblem:?}"),
+            controller: controller.0,
+        },
         DamageSource::Object { object, controller } => DamageSourceView::Object {
             object: game_object_view(object),
             controller: controller.0,
@@ -99,11 +113,15 @@ pub fn damage_source_view(source: &DamageSource) -> DamageSourceView {
 #[derive(Debug, Clone, Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum DamageSourceIdView {
+    Emblem { emblem: String },
     Object { object: String },
     SpellCopy { entry: String },
 }
-fn source_id_view(source: DamageSourceId) -> DamageSourceIdView {
+pub fn source_id_view(source: DamageSourceId) -> DamageSourceIdView {
     match source {
+        DamageSourceId::Emblem(emblem) => DamageSourceIdView::Emblem {
+            emblem: format!("{emblem:?}"),
+        },
         DamageSourceId::Object(object) => DamageSourceIdView::Object {
             object: format!("{object:?}"),
         },
@@ -116,11 +134,19 @@ fn source_id_view(source: DamageSourceId) -> DamageSourceIdView {
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum DamageRecipientView {
     Creature { object: String },
+    Planeswalker { object: String },
+    Battle { object: String },
     Player { player: u32 },
 }
 pub fn damage_recipient_view(recipient: DamageRecipient) -> DamageRecipientView {
     match recipient {
         DamageRecipient::Creature(object) => DamageRecipientView::Creature {
+            object: format!("{object:?}"),
+        },
+        DamageRecipient::Battle(object) => DamageRecipientView::Battle {
+            object: format!("{object:?}"),
+        },
+        DamageRecipient::Planeswalker(object) => DamageRecipientView::Planeswalker {
             object: format!("{object:?}"),
         },
         DamageRecipient::Player(player) => DamageRecipientView::Player { player: player.0 },
@@ -130,6 +156,7 @@ pub fn damage_recipient_view(recipient: DamageRecipient) -> DamageRecipientView 
 #[derive(Debug, Clone, Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum DamageEffectTargetView {
+    PlayerAndPermanents { player: u32 },
     Permanent { object: String },
     Player { player: u32 },
 }
@@ -138,6 +165,9 @@ pub fn damage_effect_target_view(target: DamageEffectTarget) -> DamageEffectTarg
         DamageEffectTarget::Permanent(object) => DamageEffectTargetView::Permanent {
             object: format!("{object:?}"),
         },
+        DamageEffectTarget::PlayerAndPermanents(player) => {
+            DamageEffectTargetView::PlayerAndPermanents { player: player.0 }
+        }
         DamageEffectTarget::Player(player) => DamageEffectTargetView::Player { player: player.0 },
     }
 }
@@ -176,11 +206,19 @@ pub fn turn_position_view(position: TurnPosition) -> TurnPositionView {
 #[derive(Debug, Clone, Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum DamageOriginView {
+    PreventionFollowup { batch: String, creator: String },
     Resolution { entry: String, instruction: usize },
     Combat { position: TurnPositionView },
+    ManaAbility { source: String, ability: String },
 }
 pub fn damage_origin_view(origin: DamageOrigin) -> DamageOriginView {
     match origin {
+        DamageOrigin::PreventionFollowup { batch, creator } => {
+            DamageOriginView::PreventionFollowup {
+                batch: format!("{batch:?}"),
+                creator: format!("{creator:?}"),
+            }
+        }
         DamageOrigin::Resolution { entry, instruction } => DamageOriginView::Resolution {
             entry: format!("{entry:?}"),
             instruction,
@@ -188,16 +226,84 @@ pub fn damage_origin_view(origin: DamageOrigin) -> DamageOriginView {
         DamageOrigin::Combat { position } => DamageOriginView::Combat {
             position: turn_position_view(position),
         },
+        DamageOrigin::ManaAbility { source, ability } => DamageOriginView::ManaAbility {
+            source: format!("{source:?}"),
+            ability: format!("{ability:?}"),
+        },
     }
 }
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum EffectIdentityView {
+    StaticPreventionWithExile { source: String, ability: u64 },
+    CombatDamageToMill { source: String, ability: u64 },
+    RemovePlusOneToPreventDamage { source: String, ability: u64 },
+    UntilEndOfTurn { creator: String, instruction: usize },
+    StaticPrevention { source: String },
+    StaticDouble { source: String },
+    StaticHalfPrevention { permanent: String, source: String },
+    EmblemCap { emblem: String, source: String },
+    ProtectionMulticolored,
+    ProtectionSubtype { subtype: u16, creatures_only: bool },
+    Protection { color: String },
     Prevention { id: String },
     Multiplier { id: String },
 }
 pub fn damage_effect_view(effect: DamageEffectId) -> EffectIdentityView {
     match effect {
+        DamageEffectId::UntilEndOfTurn {
+            creator,
+            instruction,
+        } => EffectIdentityView::UntilEndOfTurn {
+            creator: format!("{creator:?}"),
+            instruction,
+        },
+        DamageEffectId::EmblemCap { emblem, source } => EffectIdentityView::EmblemCap {
+            emblem: format!("{emblem:?}"),
+            source: format!("{source:?}"),
+        },
+        DamageEffectId::StaticDouble(source)
+        | DamageEffectId::DoubleDamageFromEquippedCreature(source)
+        | DamageEffectId::DoubleDamageToEquippedCreature(source) => {
+            EffectIdentityView::StaticDouble {
+                source: format!("{source:?}"),
+            }
+        }
+        DamageEffectId::StaticHalfPrevention { permanent, source } => {
+            EffectIdentityView::StaticHalfPrevention {
+                permanent: format!("{permanent:?}"),
+                source: format!("{source:?}"),
+            }
+        }
+        DamageEffectId::RemovePlusOneToPreventDamage(source, ability) => {
+            EffectIdentityView::RemovePlusOneToPreventDamage {
+                source: format!("{source:?}"),
+                ability: ability.0,
+            }
+        }
+        DamageEffectId::CombatDamageToMill(source, ability) => {
+            EffectIdentityView::CombatDamageToMill {
+                source: format!("{source:?}"),
+                ability: ability.0,
+            }
+        }
+        DamageEffectId::StaticPreventionWithExile(source, ability) => {
+            EffectIdentityView::StaticPreventionWithExile {
+                source: format!("{source:?}"),
+                ability: ability.0,
+            }
+        }
+        DamageEffectId::StaticPrevention(source) => EffectIdentityView::StaticPrevention {
+            source: format!("{source:?}"),
+        },
+        DamageEffectId::ProtectionSubtype(quality) => EffectIdentityView::ProtectionSubtype {
+            subtype: quality.subtype.ordinal(),
+            creatures_only: quality.creatures_only,
+        },
+        DamageEffectId::ProtectionMulticolored => EffectIdentityView::ProtectionMulticolored,
+        DamageEffectId::Protection(color) => EffectIdentityView::Protection {
+            color: format!("{color:?}"),
+        },
         DamageEffectId::Prevention(id) => EffectIdentityView::Prevention {
             id: format!("{id:?}"),
         },
@@ -209,6 +315,7 @@ pub fn damage_effect_view(effect: DamageEffectId) -> EffectIdentityView {
 #[derive(Debug, Clone, Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum DamageScopeView {
+    ControlledRecipients { player: u32 },
     Component { attempt: String },
     Recipient { target: DamageRecipientView },
 }
@@ -221,6 +328,9 @@ pub fn damage_application_view(application: DamageApplication) -> DamageApplicat
     DamageApplicationView {
         effect: damage_effect_view(application.effect),
         scope: match application.scope {
+            DamageScope::ControlledRecipients(player) => {
+                DamageScopeView::ControlledRecipients { player: player.0 }
+            }
             DamageScope::Component(attempt) => DamageScopeView::Component {
                 attempt: format!("{attempt:?}"),
             },
@@ -344,6 +454,8 @@ pub struct DamageJournalView {
     pub created: Vec<CreationView>,
     pub attempts: Vec<AttemptView>,
     pub preventions: Vec<PreventionView>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub protections: Vec<Value>,
     pub multiplications: Vec<MultiplicationView>,
     pub applied: Vec<AttemptView>,
     pub completions: Vec<CompletionView>,
@@ -396,6 +508,7 @@ pub fn damage_journal_view(journal: &DamageJournal) -> DamageJournalView {
             })
             .collect(),
         attempts: journal.attempts.iter().map(damage_attempt_view).collect(),
+        protections: journal.protections.iter().map(protection_view).collect(),
         preventions: journal
             .preventions
             .iter()
@@ -458,6 +571,7 @@ pub fn damage_journal_view(journal: &DamageJournal) -> DamageJournalView {
                 let (outcome, dealt) = match &event.outcome {
                     DamageOutcome::Dealt(amount) => ("dealt", Some(amount.clone())),
                     DamageOutcome::FullyPrevented => ("fully-prevented", None),
+                    DamageOutcome::RecipientUnavailable => ("recipient-unavailable", None),
                 };
                 CompletionView {
                     batch: format!("{:?}", event.batch),
@@ -468,4 +582,26 @@ pub fn damage_journal_view(journal: &DamageJournal) -> DamageJournalView {
             })
             .collect(),
     }
+}
+
+pub fn protection_view(value: &spellwake_engine::damage::ProtectionPrevention) -> Value {
+    let recipient = match value.recipient {
+        DamageRecipient::Creature(object)
+        | DamageRecipient::Planeswalker(object)
+        | DamageRecipient::Battle(object) => serde_json::json!(format!("{object:?}")),
+        DamageRecipient::Player(player) => serde_json::json!({"player":player.0}),
+    };
+    let mut record = serde_json::json!({"batch":format!("{:?}",value.batch),"stage":value.stage,"recipient":recipient,"allocations":value.allocations.iter().map(|a|serde_json::json!({"attempt":format!("{:?}",a.attempt),"amount":a.amount})).collect::<Vec<_>>()});
+    match value.quality {
+        spellwake_engine::damage::ProtectionQuality::Color(
+            spellwake_engine::characteristics::ColorFilter::Has(color),
+        ) => record["color"] = serde_json::json!(format!("{color:?}")),
+        spellwake_engine::damage::ProtectionQuality::Color(quality) => {
+            record["quality"] = serde_json::json!(format!("{quality:?}"))
+        }
+        spellwake_engine::damage::ProtectionQuality::Subtype(quality) => {
+            record["quality"] = serde_json::json!({"subtype":quality.subtype.ordinal(),"creatures_only":quality.creatures_only})
+        }
+    }
+    record
 }

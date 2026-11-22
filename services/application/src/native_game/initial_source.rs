@@ -17,12 +17,13 @@ use spellwake_contracts::{
 mod admission_manifest;
 pub(crate) use admission_manifest::AdmissionManifest;
 mod catalogue;
+pub(super) mod commander_admission;
 mod constructed_policy;
-pub use constructed_policy::inspect_constructed_room;
-mod printed;
 mod release_candidate;
+pub use constructed_policy::inspect_constructed_room;
+pub use release_candidate::{inspect_limited_deck, inspect_release_candidate};
+mod printed;
 pub use printed::NativePrintedCard;
-pub use release_candidate::inspect_release_candidate;
 mod display;
 pub use display::NativeImmutableDisplay;
 mod selected;
@@ -32,7 +33,7 @@ mod root;
 pub use root::{
     NativeInitialCard, NativeInitialExpected, NativeInitialIds, NativeInitialParticipant,
     NativeInitialSpec, NativeInitialZone, PreparedNativeOpening, load_initial, prepare_initial,
-    prepare_selected_initial, restore_initial,
+    prepare_reserved_commander_opening, prepare_selected_initial, restore_initial,
 };
 
 /// Strict private initialization/source failure; underlying details stay private.
@@ -138,11 +139,14 @@ pub enum NativeProgramPool {
     ResolutionSelection,
     /// Twelve-source pool with natural-mana helpers (registry10).
     ResolutionSelectionNaturalMana,
+    /// Complete-face keyword compiler and the mana sources used in its games.
+    KeywordGameplay,
 }
 impl NativeProgramPool {
     /// Canonical source materialization profile, not a table/release approval.
     pub fn as_str(self) -> &'static str {
         match self {
+            Self::KeywordGameplay => spellwake_card_programs::CURRENT_KEYWORD_PROFILE,
             Self::ResolutionSelection => spellwake_card_programs::RESOLUTION_SELECTION_PROFILE,
             Self::ResolutionSelectionNaturalMana => {
                 spellwake_card_programs::RESOLUTION_SELECTION_NATURAL_MANA_PROFILE
@@ -274,7 +278,9 @@ pub(in crate::native_game) fn verify_program_identity(
 /// No Debug/Serialize and no mutable registry/vocabulary access is supplied.
 pub struct NativeProgramSource {
     registry: Registry,
+    commander_inventory: Option<spellwake_content::Inventory>,
     catalogue: std::collections::BTreeMap<OracleId, spellwake_content::InventoryCard>,
+    meld_results: std::collections::BTreeMap<OracleId, (OracleId, spellwake_content::CatalogFace)>,
     vocabulary: Arc<CreatureTypeVocabulary>,
     vocabulary_input: Box<[u8]>,
     program_identity_bytes: Box<[u8]>,
@@ -315,6 +321,9 @@ impl NativeProgramSource {
         let inventory = spellwake_content::snapshot::decode(metadata, snapshot)
             .map_err(|e| NativeInitialError::Snapshot(Box::new(e)))?;
         let registry = match pool {
+            NativeProgramPool::KeywordGameplay => {
+                Registry::from_current_keyword_inventory(&inventory, &native)?
+            }
             NativeProgramPool::ResolutionSelection => {
                 Registry::from_resolution_selection_inventory(&inventory, &native)?
             }
@@ -322,7 +331,46 @@ impl NativeProgramSource {
                 Registry::from_resolution_selection_natural_mana_inventory(&inventory, &native)?
             }
         };
-        let catalogue = catalogue::retain(inventory.cards, &registry)?;
+        let mut meld_results = std::collections::BTreeMap::new();
+        for card in inventory.cards.iter().filter(|row| row.layout == "meld") {
+            let Some(raw) = card.oracle_id.as_ref() else {
+                continue;
+            };
+            let Some(set) = inventory.meld_set(raw) else {
+                continue;
+            };
+            let id = OracleId::try_from(raw.clone()).map_err(|_| NativeInitialError::Invalid)?;
+            if !registry.resolve(&id).is_some_and(|bound| {
+                bound.program().triggered.iter().any(|ability| {
+                    ability.body.instructions.iter().any(|op| {
+                        matches!(
+                            op,
+                            spellwake_engine::program::Instruction::MeldExiledPair(_)
+                        )
+                    })
+                })
+            }) {
+                continue;
+            }
+            let result = inventory
+                .cards
+                .iter()
+                .find(|row| row.layout == "meld" && row.name == set.result)
+                .ok_or(NativeInitialError::Invalid)?;
+            let [face] = result.faces.as_slice() else {
+                return Err(NativeInitialError::Invalid);
+            };
+            let result_id = OracleId::try_from(
+                result
+                    .oracle_id
+                    .clone()
+                    .ok_or(NativeInitialError::Invalid)?,
+            )
+            .map_err(|_| NativeInitialError::Invalid)?;
+            meld_results.insert(id, (result_id, face.clone()));
+        }
+        let catalogue = catalogue::retain(&inventory.cards, &registry)?;
+        let commander_inventory = (pool == NativeProgramPool::KeywordGameplay).then_some(inventory);
         let names = Arc::new(NameRules::literal_names());
         let identity = SourceIdentity {
             version: "native-program-source-v1".into(),
@@ -343,7 +391,9 @@ impl NativeProgramSource {
         }
         Ok(Self {
             registry,
+            commander_inventory,
             catalogue,
+            meld_results,
             vocabulary: Arc::new(native),
             vocabulary_input: vocabulary.into(),
             names,
@@ -372,6 +422,58 @@ impl NativeProgramSource {
     /// Unsupported identities have no record here. This is immutable source
     /// metadata, not card/format readiness, visibility or collection ownership.
     /// Its external Scryfall printing reference does not identify the player's
+    /// Describe the exact guarded runtime and four cards in the Commander review fixture.
+    ///
+    /// # Errors
+    /// Rejects a source pool that does not bind every selected Oracle identity.
+    pub fn commander_pilot_source(&self) -> Result<serde_json::Value, NativeInitialError> {
+        let inventory = self
+            .commander_inventory
+            .as_ref()
+            .ok_or(NativeInitialError::ForeignSource)?;
+        let cards = [
+            "Rograkh, Son of Rohgahh",
+            "Ishai, Ojutai Dragonspeaker",
+            "Island",
+            "Plains",
+        ]
+        .into_iter()
+        .map(|name| {
+            let card = inventory
+                .cards
+                .iter()
+                .find(|card| card.name == name)
+                .ok_or(NativeInitialError::ForeignSource)?;
+            let oracle = OracleId::try_from(
+                card.oracle_id
+                    .clone()
+                    .ok_or(NativeInitialError::ForeignSource)?,
+            )
+            .map_err(|_| NativeInitialError::ForeignSource)?;
+            self.registry
+                .resolve(&oracle)
+                .ok_or(NativeInitialError::ForeignSource)?;
+            let proof = digest(
+                format!(
+                    "spellwake-commander-release-program-v1/{}/{}",
+                    self.identity().as_str(),
+                    oracle.as_str()
+                )
+                .as_bytes(),
+            );
+            Ok(serde_json::json!({"name":name,"oracleId":oracle.as_str(),"program":proof}))
+        })
+        .collect::<Result<Vec<_>, NativeInitialError>>()?;
+        Ok(serde_json::json!({
+            "scope":"commander-review-v1",
+            "kernelRef":format!("sha256:{}",native_runtime_identity()),
+            "rulesRef":hash_text(self.vocabulary.rules_sha256()),
+            "programManifestRef":self.identity(),
+            "catalogueSha256":inventory.compressed_sha256,
+            "cards":cards
+        }))
+    }
+
     /// chosen printing or an internal application definition/printing row.
     pub fn source_card(&self, oracle: &OracleId) -> Option<&spellwake_content::InventoryCard> {
         self.catalogue.get(oracle)

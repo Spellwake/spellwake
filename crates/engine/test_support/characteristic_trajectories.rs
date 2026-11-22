@@ -29,8 +29,8 @@ use spellwake_engine::{
     },
     priority::{PriorityPhase, SeatId},
     program::{
-        BodyTarget, CardType, CreatureTypeSlot, ExecutableBody, Instruction, InstructionAmount,
-        PermanentDefinition, Program, ProgramKind,
+        BodyTarget, CardType, CreatureTypeSlot, ExecutableBody, Instruction, PermanentDefinition,
+        Program, ProgramKind,
     },
     setup::GameSeed,
     stack_window::{StackEntryId, WindowPhase},
@@ -82,6 +82,8 @@ pub(crate) fn permanent(
         subtypes(vocabulary, labels),
         BTreeSet::new(),
         ProgramKind::Permanent(PermanentDefinition {
+            entry_tap: None,
+            attachment: None,
             printed_pt: printed_pt.map(|(power, toughness)| pt(power, toughness).into()),
             casting_cost: Some(ManaCost::free()),
         }),
@@ -882,7 +884,7 @@ pub(crate) fn new_tap(mana: bool) {
     checkpoint("turn3_final", done.state());
     // CL-TAP-NEW-MANA/a10; CL-TAP-NEW-PUMP/a10
     assert_eq!(done.state().turn().unwrap().position().number, 3);
-    assert_eq!(done.state().execution().window().turn_owner(), P0);
+    assert_eq!(done.state().execution().window().active_player(), P0);
     assert_eq!(done.state().outcome(), None);
     for player in [P0, P1] {
         assert_eq!(
@@ -990,9 +992,11 @@ pub(crate) fn type_choice_body() -> Instruction {
 
 pub(crate) fn chosen_draw() -> Instruction {
     Instruction::DrawController {
-        amount: InstructionAmount::ControlledPermanentsOfChosenType {
-            chosen: CreatureTypeSlot::new(0),
-        },
+        amount: spellwake_engine::program::ValueExpr::count_battlefield(
+            spellwake_engine::program::ObjectFilter::any()
+                .controlled()
+                .of_chosen_slot(CreatureTypeSlot::new(0)),
+        ),
     }
 }
 
@@ -1999,16 +2003,37 @@ pub(crate) fn started_nonempty() {
     source.continuous = Some(StaticContinuousAbility::Battlefield {
         id: StaticAbilityId(1),
         selector: PermanentSelector {
+            token: None,
+            combat_role: None,
+            requires_flying: false,
+            plus_one_counter: false,
+            minimum_plus_one_counters: 0,
+            any_counter: false,
+            source_has_imprinted_creature: false,
+            controlled_creatures_and_typed_tokens: None,
+            exclude_auras: false,
+            artifact_subtype: None,
+            matches_source_entry_type: false,
+            controller_type_threshold: None,
+            source_condition: None,
+            equipped_by_at_least: 0,
+            devotion_below: None,
+            while_controlling_own_commander: false,
+            station_at: None,
+            attached_to_source: false,
             land_subtype: None,
             required_supertypes: BTreeSet::new(),
             forbidden_supertypes: BTreeSet::new(),
             name: spellwake_engine::characteristics::NameFilter::Any,
             required_types: BTreeSet::from([CardType::Artifact]),
             forbidden_types: BTreeSet::from([CardType::Creature]),
+            forbidden_creature_subtype: None,
             creature_subtype: None,
             color: Default::default(),
             controller: ControllerSelector::Any,
             exclude_source: true,
+            requires_untapped: false,
+            sole_controlled_creature: false,
         },
         parts: StaticParts(vec![
             StaticPart::Type(StaticTypeChange {

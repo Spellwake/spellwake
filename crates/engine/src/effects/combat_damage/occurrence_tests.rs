@@ -356,7 +356,7 @@ fn zero_power_or_no_recipients_complete_without_assignment_or_batch() {
                 .combat
                 .as_mut()
                 .unwrap()
-                .reconcile(|combatant| combatant.controller() == A);
+                .reconcile(|combatant, _| combatant.controller() == A);
         }
         let (_, result, append) = state
             .begin_combat_damage(state.revision(), &turn)

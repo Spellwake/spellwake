@@ -48,7 +48,15 @@ pub(super) fn run(
             PlayerTarget::Seat {
                 seat_id: access.viewer_seat_id(),
             },
-            Some(PlayerPayment { spend: vec![] }),
+            Some(PlayerPayment {
+                from_lots: Default::default(),
+                exile_cast_type: None,
+                alternative_cost_source: None,
+                graveyard_permission: None,
+                use_granted_flashback: false,
+                restricted_mana: Vec::new(),
+                spend: vec![],
+            }),
             json!({"payment":"invalid"}),
         ),
     ]

@@ -534,10 +534,7 @@ fn invalid_actor_kind_keep_replayed_conflict_basis_and_token_preserve_the_whole_
 fn legend_deaths_capture_old_sources_then_suspend_for_the_distinct_trigger_order() {
     use spellwake_engine::{
         occurrence::RulesRecord,
-        program::{
-            ExecutableBody, InstructionAmount, ObjectRelation, OrdinaryCondition, TriggeredAbility,
-            TriggeredAbilityId,
-        },
+        program::{ExecutableBody, TriggeredAbility, TriggeredAbilityId},
     };
     let cards = (1..=3)
         .map(|n| {
@@ -549,11 +546,13 @@ fn legend_deaths_capture_old_sources_then_suspend_for_the_distinct_trigger_order
             c.program.triggered.push(TriggeredAbility {
                 grouping: spellwake_engine::program::TriggerGrouping::EachOccurrence,
                 id: TriggeredAbilityId(1),
-                condition: OrdinaryCondition::Dies(ObjectRelation::SelfObject),
+                condition: spellwake_engine::program::TriggerSpec::dies(
+                    spellwake_engine::program::ObjectFilter::self_object(),
+                ),
                 body: ExecutableBody::new(
                     BodyTarget::None,
                     vec![Instruction::DrawController {
-                        amount: InstructionAmount::Literal(1.into()),
+                        amount: spellwake_engine::program::ValueExpr::Literal(1.into()),
                     }],
                 ),
             });
@@ -660,9 +659,7 @@ fn cleanup_legend_deaths_stage_owner_order_then_trigger_order_before_repeated_cl
         checks::CheckBoundary,
         life::LifeAdjustment,
         occurrence::RulesRecord,
-        program::{
-            ExecutableBody, ObjectRelation, OrdinaryCondition, TriggeredAbility, TriggeredAbilityId,
-        },
+        program::{ExecutableBody, TriggeredAbility, TriggeredAbilityId},
     };
     let mut cards = vec![card(1, P0, P0, &["Alpha"])];
     for n in [2, 3] {
@@ -677,7 +674,9 @@ fn cleanup_legend_deaths_stage_owner_order_then_trigger_order_before_repeated_cl
         incoming.program.triggered.push(TriggeredAbility {
             grouping: spellwake_engine::program::TriggerGrouping::EachOccurrence,
             id: TriggeredAbilityId(1),
-            condition: OrdinaryCondition::Dies(ObjectRelation::SelfObject),
+            condition: spellwake_engine::program::TriggerSpec::dies(
+                spellwake_engine::program::ObjectFilter::self_object(),
+            ),
             body: ExecutableBody::new(
                 BodyTarget::None,
                 vec![Instruction::AdjustControllerLife {
