@@ -54,7 +54,11 @@ export const richCosmeticSchema = z.object({
   priceCents: z.number().int().nonnegative().nullable(),
   priceCoins: amountSchema.nullable(),
   owned: z.boolean(),
-  equipped: z.boolean(),
+  // Postgres IN returns NULL for an unmatched cosmetic when a slot is unset.
+  equipped: z
+    .boolean()
+    .nullable()
+    .transform((value) => value ?? false),
 });
 export type RichCosmetic = z.infer<typeof richCosmeticSchema>;
 
@@ -249,6 +253,7 @@ export const roomEnrichedDetailSchema = z.object({
       slotId: identifierSchema,
       seatIndex: z.number().int(),
       controllerKind: z.string(),
+      aiTier: z.enum(["normal", "advanced"]).nullable().optional(),
       accountId: identifierSchema.nullable(),
       username: z.string().nullable(),
       supporter: z.boolean(),
