@@ -129,9 +129,6 @@ impl HttpTransport {
         let http = pooled_client(&origin, key, user_agent, timeout)?;
         Ok(Self { origin, http })
     }
-    pub(crate) fn origin_str(&self) -> &str {
-        self.origin.0.as_str()
-    }
     pub(crate) fn from_client(origin: Origin, http: Client) -> Self {
         Self { origin, http }
     }
