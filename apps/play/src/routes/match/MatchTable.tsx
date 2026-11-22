@@ -100,6 +100,7 @@ export function MatchTable({
   faceOf,
   isPlayable,
   isOffered,
+  marks,
   clearBottom = 0,
   onCard,
   onPile,
@@ -110,6 +111,8 @@ export function MatchTable({
   faceOf: (object: PlayerObject) => string | undefined;
   /** A card in hand the viewer may play now. */
   isPlayable?: (object: PlayerObject) => boolean;
+  /** Rims for a declaration in progress, by card handle. */
+  marks?: ReadonlyMap<string, "eligible" | "copper" | "ivory"> | undefined;
   /** Height along the lower edge that floating controls cover, in pixels. */
   clearBottom?: number;
   /** A card offered as a choice for the action in progress. */
@@ -170,6 +173,7 @@ export function MatchTable({
       <motion.div
         key={placement.key}
         className={s.piece}
+        data-anchor={object ? `card:${object.handle}` : undefined}
         style={{ zIndex: placement.order }}
         initial={
           reduced
@@ -193,7 +197,12 @@ export function MatchTable({
         transition={transition}
       >
         {tooSmall ? (
-          <span className={s.cardButton} role="img" aria-label={label}>
+          <span
+            className={s.cardButton}
+            role="img"
+            aria-label={label}
+            data-mark={object ? marks?.get(object.handle) : undefined}
+          >
             <Face placement={placement} faceOf={faceOf} />
             {(kind === "library" || kind === "graveyard") && (
               <span className={s.countBadge} aria-hidden="true">
@@ -220,6 +229,7 @@ export function MatchTable({
                 : undefined
             }
             data-offered={object && isOffered?.(object) ? "true" : undefined}
+            data-mark={object ? marks?.get(object.handle) : undefined}
             aria-label={label}
             disabled={inert}
             onClick={() => {

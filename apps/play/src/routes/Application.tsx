@@ -49,6 +49,13 @@ const probes: RouteObject[] = import.meta.env.DEV
         }),
       },
       {
+        path: "probe/table",
+        handle: immersive,
+        lazy: async () => ({
+          Component: (await import("./probes/MatchTableProbe")).MatchTableProbe,
+        }),
+      },
+      {
         path: "probe/entry",
         handle: entry,
         lazy: async () => ({

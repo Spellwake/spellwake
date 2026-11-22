@@ -6,6 +6,8 @@ import {
   PREVIEW_GAME,
   PREVIEW_SEATS,
   PREVIEW_VIEWER,
+  previewAttackDecision,
+  previewBlockDecision,
   previewSnapshot,
 } from "./preview-table";
 import type {
@@ -27,8 +29,12 @@ const PHASE_ORDER = [
 ] as const;
 
 /** Local interactive preview match for unconfigured builds. */
-export function useDemoMatch(onLeave: () => void): MatchSource {
-  const [snapshot, setSnapshot] = useState<PlayerSnapshot>(previewSnapshot);
+export function useDemoMatch(
+  onLeave: () => void,
+  /** Where the table starts; the development probe starts part-way through combat. */
+  initial: () => PlayerSnapshot = previewSnapshot,
+): MatchSource {
+  const [snapshot, setSnapshot] = useState<PlayerSnapshot>(initial);
   const [commandError, setCommandError] = useState<string | null>(null);
   const [messages, setMessages] = useState<MatchChatEntry[]>([
     {
@@ -71,16 +77,78 @@ export function useDemoMatch(onLeave: () => void): MatchSource {
           );
           const next = PHASE_ORDER[(idx + 1) % PHASE_ORDER.length]!;
           const wrapped = idx === PHASE_ORDER.length - 1;
-          return {
+          const wasMine = prev.turn.activeSeatIds.includes(VIEWER_SEAT);
+          // The preview alternates your turn with Alex's.
+          const active = wrapped
+            ? wasMine
+              ? OPPONENT_SEAT
+              : VIEWER_SEAT
+            : (prev.turn.activeSeatIds[0] ?? VIEWER_SEAT);
+          const moved: PlayerSnapshot = {
             ...prev,
+            throughEventSequence: String(Number(prev.throughEventSequence) + 1),
+            // A new turn untaps its player's permanents.
+            visibleObjects: wrapped
+              ? prev.visibleObjects.map((object) =>
+                  object.controllerSeatId === active && object.tapped
+                    ? { ...object, tapped: false }
+                    : object,
+                )
+              : prev.visibleObjects,
+            players: prev.players.map((player) =>
+              player.manaPool.length > 0 ? { ...player, manaPool: [] } : player,
+            ),
             turn: {
               ...prev.turn,
               number: wrapped
                 ? String(Number(prev.turn.number) + 1)
                 : prev.turn.number,
+              activeSeatIds: [active],
               phase: next.phase,
               step: next.step,
             },
+          };
+          if (next.phase !== "combat") return moved;
+          if (active === VIEWER_SEAT) {
+            const offered = previewAttackDecision(moved);
+            return offered ? { ...moved, decisions: [offered] } : moved;
+          }
+          // Alex attacks you: the attackers tap, and you choose blocks.
+          const offered = previewBlockDecision(moved, active);
+          if (!offered || offered.domain.kind !== "blockers") return moved;
+          const attacking = new Set(
+            offered.domain.choices.flatMap((choice) => choice.attackers),
+          );
+          return {
+            ...moved,
+            turn: { ...moved.turn!, step: "declare-blockers" },
+            visibleObjects: moved.visibleObjects.map((object) =>
+              attacking.has(object.handle)
+                ? { ...object, tapped: true }
+                : object,
+            ),
+            decisions: [offered],
+          };
+        }
+        if (action.kind === "choose") {
+          const response = action.response;
+          const settled = {
+            ...prev,
+            decisions: [],
+            throughEventSequence: String(Number(prev.throughEventSequence) + 1),
+          };
+          if (response.kind !== "attackers") return settled;
+          // Declared attackers tap, as the returned table shows.
+          const attacking = new Set(
+            response.assignments.map((entry) => entry.attacker),
+          );
+          return {
+            ...settled,
+            visibleObjects: prev.visibleObjects.map((object) =>
+              attacking.has(object.handle)
+                ? { ...object, tapped: true }
+                : object,
+            ),
           };
         }
         if (action.kind === "play-land") {

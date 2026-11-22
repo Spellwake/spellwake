@@ -17,6 +17,7 @@ const grain = `url("data:image/svg+xml;utf8,${encodeURIComponent(
 )}")`;
 const ivory = "#f4ead2";
 const gold = "#e7cf9f";
+const copper = "#ee9a63";
 
 export const stage = style({
   position: "absolute",
@@ -37,7 +38,8 @@ export const layer = style({
   position: "absolute",
   inset: 0,
   transformOrigin: "50% 100%",
-  transformStyle: "preserve-3d",
+  // The tilted plane itself takes no presses: only the cards on it do.
+  pointerEvents: "none",
 });
 export const handLayer = style({
   position: "absolute",
@@ -105,6 +107,17 @@ globalStyle(`${cardButton}[data-offered="true"] ${face}`, {
 });
 globalStyle(`${cardButton}[data-playable="true"] ${face}`, {
   boxShadow: `0 0 0 3PX ${gold}cc, 0 0 22PX ${gold}77, 0 10PX 22PX #0009`,
+});
+
+/** While a declaration is made: a quiet rim for what may be chosen, copper for an attack, ivory for a block. */
+globalStyle(`${cardButton}[data-mark="eligible"] ${face}`, {
+  boxShadow: `0 0 0 3PX ${ivory}8c, 0 10PX 22PX #0009`,
+});
+globalStyle(`${cardButton}[data-mark="copper"] ${face}`, {
+  boxShadow: `0 0 0 5PX ${copper}, 0 0 26PX ${copper}aa, 0 10PX 22PX #0009`,
+});
+globalStyle(`${cardButton}[data-mark="ivory"] ${face}`, {
+  boxShadow: `0 0 0 5PX ${ivory}, 0 0 24PX ${ivory}88, 0 10PX 22PX #0009`,
 });
 
 /** A card with no picture: its printed text on a plain frame. */
@@ -185,4 +198,43 @@ export const srOnly = style({
   overflow: "hidden",
   clip: "rect(0 0 0 0)",
   whiteSpace: "nowrap",
+});
+
+/** Declaration lines, over the table and under the floating controls. */
+export const lines = style({
+  position: "absolute",
+  inset: 0,
+  width: "100%",
+  height: "100%",
+  overflow: "visible",
+  pointerEvents: "none",
+});
+export const line = style({
+  fill: "none",
+  strokeWidth: "2.2PX",
+  strokeLinecap: "round",
+  filter: "drop-shadow(0 1PX 3PX #000a)",
+  selectors: {
+    '&[data-tone="copper"]': { stroke: copper },
+    '&[data-tone="ivory"]': { stroke: ivory },
+  },
+});
+export const lineHead = style({
+  selectors: {
+    '&[data-tone="copper"]': { fill: copper },
+    '&[data-tone="ivory"]': { fill: ivory },
+  },
+});
+/** A player offered as a defender, or chosen as one. */
+export const seatAnchor = style({
+  display: "inline-flex",
+  borderRadius: "999PX",
+  selectors: {
+    '&[data-recipient="offered"]': {
+      boxShadow: `0 0 0 2PX ${copper}cc`,
+    },
+    '&[data-recipient="assigned"]': {
+      boxShadow: `0 0 0 3PX ${copper}, 0 0 18PX ${copper}99`,
+    },
+  },
 });
