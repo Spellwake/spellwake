@@ -11,7 +11,10 @@ BEGIN
     ('app.read_commander_clock_page(uuid,text,uuid,integer)', '80bb2e5c6fc9642c2871e4b9c47ead66f6d6169b49d91176fdd3a903bcbc1f66')
     ) expected(signature, body_hash)
     LEFT JOIN pg_catalog.pg_proc prior ON prior.oid=pg_catalog.to_regprocedure(expected.signature)
-    WHERE pg_catalog.encode(pg_catalog.sha256(pg_catalog.convert_to(prior.prosrc,'UTF8')),'hex')
+    -- The hosted wake routine was installed with the Cron job. A fresh database
+    -- has no prior routine. Any installed predecessor still requires its exact pin.
+    WHERE (prior.oid IS NOT NULL OR expected.signature <> 'app.enqueue_native_match_worker_wake()')
+      AND pg_catalog.encode(pg_catalog.sha256(pg_catalog.convert_to(prior.prosrc,'UTF8')),'hex')
           IS DISTINCT FROM expected.body_hash
  ) THEN
     RAISE EXCEPTION 'private pilot worker predecessor differs from the reviewed schema';
@@ -267,7 +270,8 @@ SELECT (
     FROM work CROSS JOIN vault.decrypted_secrets credential
     WHERE work.due AND credential.id='0d6fc74d-4eef-4937-a27b-2346f9faf528'::uuid);
 END$function$;
-
+REVOKE ALL ON FUNCTION app.enqueue_native_match_worker_wake()
+  FROM PUBLIC, anon, authenticated, service_role, supabase_auth_admin;
 
 CREATE FUNCTION app.enqueue_private_eight_format_pilot_wake(
     p_ordinary uuid,p_commander uuid,p_owner text,p_project_ref text
