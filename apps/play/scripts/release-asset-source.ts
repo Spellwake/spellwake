@@ -2,24 +2,28 @@ import { resolve } from "node:path";
 
 const root = resolve(import.meta.dir, "../../..");
 
-/** Select the declared asset input without changing the local transparent logo. */
-export function tableAssetSource(): string {
-  return resolve(
-    root,
-    process.env.SPELLWAKE_RELEASE_ASSETS === "true"
-      ? ".release-assets/tabletop"
-      : "benchmarks/browser-rendering/public",
-  );
+function previewRoot(): string {
+  const named = process.env.SPELLWAKE_PREVIEW_WORKSPACE;
+  return named ? resolve(named) : root;
 }
 
-/** Keep native icon derivation on the same asset package as the table. */
+/** Select the declared tabletop asset input without changing the local logo. */
+export function tableAssetSource(): string {
+  return process.env.SPELLWAKE_RELEASE_ASSETS === "true"
+    ? resolve(root, ".release-assets/tabletop")
+    : resolve(previewRoot(), "benchmarks/browser-rendering/public");
+}
+
+/** Select the declared application UI asset package root for release builds. */
+export function appAssetSource(): string {
+  return resolve(root, ".release-assets/app");
+}
+
+/** Keep native icon derivation on the same asset package as the application. */
 export function logoAssetSource(): string {
-  return resolve(
-    root,
-    process.env.SPELLWAKE_RELEASE_ASSETS === "true"
-      ? ".release-assets/logo.svg"
-      : "assets/logo/spellwake-gold-two-dots.svg",
-  );
+  return process.env.SPELLWAKE_RELEASE_ASSETS === "true"
+    ? resolve(root, ".release-assets/logo.svg")
+    : resolve(previewRoot(), "assets/logo/spellwake-gold-two-dots.svg");
 }
 
 export type AssetScope =
