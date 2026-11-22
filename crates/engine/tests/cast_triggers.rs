@@ -20,8 +20,8 @@ use spellwake_engine::{
     occurrence::{CastOccurrence, RulesOccurrence, RulesRecord, TriggerRelated, WaitingInstance},
     priority::{PriorityPhase, SeatId},
     program::{
-        BodyTarget, CardType, ExecutableBody, Instruction, OrdinaryCondition, PlayerRelation,
-        Program, SpellCastFilter, TriggerGrouping, TriggeredAbility, TriggeredAbilityId,
+        BodyTarget, CardType, ExecutableBody, Instruction, PlayerRelation, Program,
+        TriggerGrouping, TriggerSpec, TriggeredAbility, TriggeredAbilityId,
     },
     setup::GameSeed,
     stack_window::{StackEntryId, StackKind, WindowPhase},
@@ -36,7 +36,7 @@ fn gain(amount: i64) -> Instruction {
         adjustment: LifeAdjustment::Gain(amount.into()),
     }
 }
-fn ability(id: u64, condition: OrdinaryCondition) -> TriggeredAbility {
+fn ability(id: u64, condition: TriggerSpec) -> TriggeredAbility {
     TriggeredAbility {
         id: TriggeredAbilityId(id),
         condition,
@@ -44,7 +44,7 @@ fn ability(id: u64, condition: OrdinaryCondition) -> TriggeredAbility {
         body: ExecutableBody::new(BodyTarget::None, vec![gain(1)]),
     }
 }
-fn watched(mut program: Program, condition: OrdinaryCondition) -> Program {
+fn watched(mut program: Program, condition: TriggerSpec) -> Program {
     program.triggered.push(ability(1, condition));
     program
 }
@@ -150,6 +150,7 @@ fn fund(game: &GameState, actor: SeatId, index: u64) -> NativeCandidate {
 }
 fn payment() -> ManaPayment {
     ManaPayment {
+        from_lots: Default::default(),
         spend: vec![ManaSpend {
             mana_type: ManaType::Blue,
             amount: 1.into(),
@@ -251,7 +252,10 @@ fn assert_cause(waiting: &WaitingInstance, cast: &CastOccurrence) {
 
 #[test]
 fn permanent_self_cast_triggers_on_stack_before_entry_and_uses_exact_identity() {
-    let self_cast = named(watched(cast_permanent(false), OrdinaryCondition::SelfCast));
+    let self_cast = named(watched(
+        cast_permanent(false),
+        spellwake_engine::program::TriggerSpec::self_cast(),
+    ));
     let game = two(vec![
         tr::card(1, self_cast.clone(), false),
         tr::card(2, self_cast.clone(), true),
@@ -294,7 +298,13 @@ fn permanent_self_cast_triggers_on_stack_before_entry_and_uses_exact_identity() 
         cast.state()
             .execution()
             .stack_copiable_triggered_abilities(cause.entry()),
-        Some([ability(1, OrdinaryCondition::SelfCast)].as_slice())
+        Some(
+            [ability(
+                1,
+                spellwake_engine::program::TriggerSpec::self_cast()
+            )]
+            .as_slice()
+        )
     );
     let triggered = resolve(cast.state());
     assert_eq!(
@@ -340,7 +350,7 @@ fn instruction_self_cast_executes_independently_above_targeted_original() {
                 }],
             ),
         ),
-        OrdinaryCondition::SelfCast,
+        spellwake_engine::program::TriggerSpec::self_cast(),
     );
     let game = two(vec![tr::card(1, spell, false)]);
     let cast = paid(&game, P0, 1, 0, Some(TargetRef::Player(P1)));
@@ -370,11 +380,20 @@ fn watcher_relations_and_type_filters_use_the_actual_caster_and_current_types() 
             PlayerRelation::AnyParticipant,
         ] {
             for (filter, expected_types) in [
-                (SpellCastFilter::AnySpell, [true, true, true]),
-                (SpellCastFilter::Noncreature, [true, true, false]),
-                (SpellCastFilter::InstantOrSorcery, [true, false, false]),
                 (
-                    SpellCastFilter::HasType(CardType::Artifact),
+                    spellwake_engine::program::SpellFilter::any(),
+                    [true, true, true],
+                ),
+                (
+                    spellwake_engine::program::SpellFilter::noncreature(),
+                    [true, true, false],
+                ),
+                (
+                    spellwake_engine::program::SpellFilter::instant_or_sorcery(),
+                    [true, false, false],
+                ),
+                (
+                    spellwake_engine::program::SpellFilter::of_type(CardType::Artifact),
                     [false, true, false],
                 ),
             ] {
@@ -384,10 +403,7 @@ fn watcher_relations_and_type_filters_use_the_actual_caster_and_current_types() 
                 {
                     let observer = watched(
                         Program::artifact(None, vec![]),
-                        OrdinaryCondition::SpellCast {
-                            player: relation,
-                            filter,
-                        },
+                        spellwake_engine::program::TriggerSpec::spell_cast(relation, filter),
                     );
                     // Owner is deliberately different from watcher controller.
                     let owner = if controller == P0 { P1 } else { P0 };
@@ -428,17 +444,20 @@ fn watcher_relations_and_type_filters_use_the_actual_caster_and_current_types() 
 fn hidden_watchers_and_other_self_cast_sources_do_not_trigger() {
     let watcher = watched(
         Program::artifact(None, vec![]),
-        OrdinaryCondition::SpellCast {
-            player: PlayerRelation::AnyParticipant,
-            filter: SpellCastFilter::AnySpell,
-        },
+        spellwake_engine::program::TriggerSpec::spell_cast(
+            PlayerRelation::AnyParticipant,
+            spellwake_engine::program::SpellFilter::any(),
+        ),
     );
     let mut cards = vec![
         tr::card(1, instruction(), false),
         tr::card(2, watcher.clone(), false),
         tr::card(
             5,
-            watched(cast_permanent(false), OrdinaryCondition::SelfCast),
+            watched(
+                cast_permanent(false),
+                spellwake_engine::program::TriggerSpec::self_cast(),
+            ),
             true,
         ),
     ];
@@ -476,12 +495,12 @@ fn hidden_watchers_and_other_self_cast_sources_do_not_trigger() {
 #[test]
 fn cast_cohort_uses_nonfirst_active_apnap_order_and_rejects_malformed_replies() {
     let p2 = SeatId(2);
-    let condition = OrdinaryCondition::SpellCast {
-        player: PlayerRelation::AnyParticipant,
-        filter: SpellCastFilter::AnySpell,
-    };
-    let mut active_watcher = watched(Program::artifact(None, vec![]), condition);
-    active_watcher.triggered.push(ability(2, condition));
+    let condition = spellwake_engine::program::TriggerSpec::spell_cast(
+        PlayerRelation::AnyParticipant,
+        spellwake_engine::program::SpellFilter::any(),
+    );
+    let mut active_watcher = watched(Program::artifact(None, vec![]), condition.clone());
+    active_watcher.triggered.push(ability(2, condition.clone()));
     let game = initial(
         vec![
             SeedCard {
@@ -495,7 +514,7 @@ fn cast_cohort_uses_nonfirst_active_apnap_order_and_rejects_malformed_replies() 
                 3,
                 p2,
                 p2,
-                watched(Program::artifact(None, vec![]), condition),
+                watched(Program::artifact(None, vec![]), condition.clone()),
             ),
             tr::controlled(
                 4,
@@ -628,28 +647,31 @@ fn order_all(mut game: GameState) -> GameState {
 
 #[test]
 fn copies_and_copies_of_copies_keep_self_cast_definitions_without_becoming_casts() {
-    let condition = OrdinaryCondition::SpellCast {
-        player: PlayerRelation::Controller,
-        filter: SpellCastFilter::AnySpell,
-    };
+    let condition = spellwake_engine::program::TriggerSpec::spell_cast(
+        PlayerRelation::Controller,
+        spellwake_engine::program::SpellFilter::any(),
+    );
     let copier = Program::instant(
         ManaCost::one(ManaType::Blue),
         ExecutableBody::new(
-            BodyTarget::SingleSpell(spellwake_engine::program::SpellTargetFilter::AnySpell),
+            BodyTarget::SingleSpell(spellwake_engine::program::SpellFilter::any()),
             vec![Instruction::CopySpell],
         ),
     );
     let counter = Program::instant(
         ManaCost::free(),
         ExecutableBody::new(
-            BodyTarget::SingleSpell(spellwake_engine::program::SpellTargetFilter::AnySpell),
+            BodyTarget::SingleSpell(spellwake_engine::program::SpellFilter::any()),
             vec![Instruction::CounterSpell],
         ),
     );
     let game = two(vec![
         tr::card(
             1,
-            watched(instruction(), OrdinaryCondition::SelfCast),
+            watched(
+                instruction(),
+                spellwake_engine::program::TriggerSpec::self_cast(),
+            ),
             false,
         ),
         tr::card(2, copier.clone(), false),
@@ -707,7 +729,11 @@ fn copies_and_copies_of_copies_keep_self_cast_definitions_without_becoming_casts
         assert_eq!(*facts[0].1, donor);
         assert_eq!(
             facts[0].2.as_slice(),
-            [ability(1, OrdinaryCondition::SelfCast)].as_slice()
+            [ability(
+                1,
+                spellwake_engine::program::TriggerSpec::self_cast()
+            )]
+            .as_slice()
         );
         donor = copied
             .state()
@@ -723,7 +749,13 @@ fn copies_and_copies_of_copies_keep_self_cast_definitions_without_becoming_casts
                 .state()
                 .execution()
                 .stack_copiable_triggered_abilities(donor),
-            Some([ability(1, OrdinaryCondition::SelfCast)].as_slice())
+            Some(
+                [ability(
+                    1,
+                    spellwake_engine::program::TriggerSpec::self_cast()
+                )]
+                .as_slice()
+            )
         );
         copies.push(donor);
         game = copied.into_state();
@@ -747,7 +779,13 @@ fn copies_and_copies_of_copies_keep_self_cast_definitions_without_becoming_casts
     for copy in copies {
         assert_eq!(
             game.execution().stack_copiable_triggered_abilities(copy),
-            Some([ability(1, OrdinaryCondition::SelfCast)].as_slice())
+            Some(
+                [ability(
+                    1,
+                    spellwake_engine::program::TriggerSpec::self_cast()
+                )]
+                .as_slice()
+            )
         );
     }
     assert_eq!(game.execution().life_total(P0), Some(&24.into()));
@@ -762,7 +800,10 @@ fn failed_casts_preserve_the_whole_root_including_event_and_trigger_allocators()
     let game = two(vec![
         tr::card(
             1,
-            watched(instruction(), OrdinaryCondition::SelfCast),
+            watched(
+                instruction(),
+                spellwake_engine::program::TriggerSpec::self_cast(),
+            ),
             false,
         ),
         tr::card(2, cast_permanent(false), true),
@@ -804,14 +845,17 @@ fn countering_the_original_before_its_trigger_resolves_keeps_the_owned_cast_caus
     let counter = Program::instant(
         ManaCost::free(),
         ExecutableBody::new(
-            BodyTarget::SingleSpell(spellwake_engine::program::SpellTargetFilter::AnySpell),
+            BodyTarget::SingleSpell(spellwake_engine::program::SpellFilter::any()),
             vec![Instruction::CounterSpell],
         ),
     );
     let game = two(vec![
         tr::card(
             1,
-            watched(instruction(), OrdinaryCondition::SelfCast),
+            watched(
+                instruction(),
+                spellwake_engine::program::TriggerSpec::self_cast(),
+            ),
             false,
         ),
         SeedCard {
@@ -860,10 +904,10 @@ fn countering_the_original_before_its_trigger_resolves_keeps_the_owned_cast_caus
 
 #[test]
 fn watcher_departure_does_not_destroy_its_already_placed_body() {
-    let condition = OrdinaryCondition::SpellCast {
-        player: PlayerRelation::Controller,
-        filter: SpellCastFilter::HasType(CardType::Sorcery),
-    };
+    let condition = spellwake_engine::program::TriggerSpec::spell_cast(
+        PlayerRelation::Controller,
+        spellwake_engine::program::SpellFilter::of_type(CardType::Sorcery),
+    );
     let watcher = watched(
         Program::creature(None, 1.into(), 1.into(), BTreeSet::new()),
         condition,
@@ -938,10 +982,10 @@ fn watcher_departure_does_not_destroy_its_already_placed_body() {
 #[test]
 fn watcher_control_change_after_discovery_keeps_the_original_trigger_controller() {
     use spellwake_engine::characteristics::{ControlRecipient, ResolvedDuration, ResolvedPartSpec};
-    let condition = OrdinaryCondition::SpellCast {
-        player: PlayerRelation::Controller,
-        filter: SpellCastFilter::AnySpell,
-    };
+    let condition = spellwake_engine::program::TriggerSpec::spell_cast(
+        PlayerRelation::Controller,
+        spellwake_engine::program::SpellFilter::any(),
+    );
     let control = Program::instant(
         ManaCost::one(ManaType::Blue),
         ExecutableBody::new(
@@ -1050,10 +1094,10 @@ fn removed_watcher_ability_is_unavailable_at_the_completed_cast_cut() {
     use spellwake_engine::characteristics::{
         AbilityChange, AbilityRemoval, ResolvedDuration, ResolvedPartSpec,
     };
-    let condition = OrdinaryCondition::SpellCast {
-        player: PlayerRelation::Controller,
-        filter: SpellCastFilter::HasType(CardType::Artifact),
-    };
+    let condition = spellwake_engine::program::TriggerSpec::spell_cast(
+        PlayerRelation::Controller,
+        spellwake_engine::program::SpellFilter::of_type(CardType::Artifact),
+    );
     let removal = Program::instant(
         ManaCost::free(),
         ExecutableBody::new(
@@ -1096,18 +1140,22 @@ fn removed_watcher_ability_is_unavailable_at_the_completed_cast_cut() {
 
 #[test]
 fn each_grouping_uses_the_real_single_cast_cause_for_bound_draw_count() {
-    use spellwake_engine::program::InstructionAmount;
     for grouping in [
         TriggerGrouping::EachOccurrence,
         TriggerGrouping::OneOrMoreTogether,
         TriggerGrouping::OneOrMoreByPlayer,
     ] {
-        let mut spell = watched(instruction(), OrdinaryCondition::SelfCast);
+        let mut spell = watched(
+            instruction(),
+            spellwake_engine::program::TriggerSpec::self_cast(),
+        );
         spell.triggered[0].grouping = grouping;
         spell.triggered[0].body = ExecutableBody::new(
             BodyTarget::None,
             vec![Instruction::DrawController {
-                amount: InstructionAmount::MatchedOccurrences,
+                amount: spellwake_engine::program::ValueExpr::event(
+                    spellwake_engine::program::EventValueKind::MatchedOccurrences,
+                ),
             }],
         );
         let game = two(vec![tr::card(1, spell, false)]);
@@ -1132,7 +1180,7 @@ fn illegal_sorcery_timing_and_missing_target_reject_before_new_cast_facts() {
             ManaCost::one(ManaType::Blue),
             ExecutableBody::new(BodyTarget::None, vec![gain(2)]),
         ),
-        OrdinaryCondition::SelfCast,
+        spellwake_engine::program::TriggerSpec::self_cast(),
     );
     let targeted = watched(
         Program::instant(
@@ -1144,7 +1192,7 @@ fn illegal_sorcery_timing_and_missing_target_reject_before_new_cast_facts() {
                 }],
             ),
         ),
-        OrdinaryCondition::SelfCast,
+        spellwake_engine::program::TriggerSpec::self_cast(),
     );
     let game = two(vec![
         tr::card(1, instruction(), false),

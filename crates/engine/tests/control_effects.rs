@@ -21,7 +21,7 @@ use spellwake_engine::{
     object_identity::{CardId, ControllerChange, GameObject, ObjectId},
     occurrence::RulesOccurrence,
     priority::SeatId,
-    program::{BodyTarget, CardType, ExecutableBody, Instruction, Program, SpellTargetFilter},
+    program::{BodyTarget, CardType, ExecutableBody, Instruction, Program},
     targets::TargetRef,
 };
 use std::collections::BTreeSet;
@@ -302,6 +302,7 @@ fn changing_control_away_and_back_within_one_body_removes_the_attacker_permanent
         DecisionReply::DeclareAttackers(vec![AttackDeclaration {
             attacker: target,
             defender: P1,
+            defending_planeswalker: None,
         }]),
     );
     let controlled = resolve_as(attacking.state(), P1, 2, target);
@@ -617,7 +618,7 @@ fn copying_an_opponents_control_spell_binds_the_copy_controller_and_new_target()
             ),
             spell(
                 4,
-                BodyTarget::SingleSpell(SpellTargetFilter::AnySpell),
+                BodyTarget::SingleSpell(spellwake_engine::program::SpellFilter::any()),
                 vec![Instruction::CopySpell],
             ),
         ],

@@ -4,7 +4,7 @@ use crate::native_game::projection::HistoricalProjectionPermit;
 use crate::{
     amount::Amount,
     native_game::*,
-    player_wire::{MAX_PLAYER_WIRE_BYTES, PlayerBasis, PlayerSnapshot},
+    player_wire::{MAX_COMPLETED_REPLAY_BYTES, MAX_PLAYER_WIRE_BYTES, PlayerBasis, PlayerSnapshot},
 };
 use serde::{Deserialize, Serialize};
 use std::{collections::BTreeSet, error::Error, fmt};
@@ -69,6 +69,14 @@ impl From<NativeArtifactError> for NativeViewError {
 enum Disclosure {
     Live,
     Completed,
+}
+impl Disclosure {
+    fn snapshot_byte_limit(self) -> usize {
+        match self {
+            Self::Live => MAX_PLAYER_WIRE_BYTES,
+            Self::Completed => MAX_COMPLETED_REPLAY_BYTES,
+        }
+    }
 }
 impl From<NativeDisclosure> for Disclosure {
     fn from(value: NativeDisclosure) -> Self {
@@ -214,7 +222,7 @@ fn verify_retained_record(
         || serde_json::to_vec(&record.snapshot)
             .map_err(NativeViewError::Json)?
             .len()
-            > MAX_PLAYER_WIRE_BYTES
+            > expected.disclosure.snapshot_byte_limit()
     {
         return Err(NativeViewError::Size);
     }
@@ -254,6 +262,15 @@ impl PreparedNativeView {
             NativeArtifactRole::View,
             &self.bytes,
         )?)
+    }
+
+    /// Retain the validated proposal for an archive build that can reuse the
+    /// authenticated bytes if SQL chooses the same content reference.
+    pub(in crate::native_game) fn retain_for_archive(
+        self,
+        store: &NativeArtifactStore,
+    ) -> Result<NativeArtifact, NativeViewError> {
+        Ok(store.retain_new_view(self.reference, self.bytes)?)
     }
 }
 /// Restored registry and public snapshot from an independently issued artifact.
@@ -325,6 +342,7 @@ fn prepare_view_checked(
     if metadata.through_event_sequence < Amount::from(scope.basis().revision.get()) {
         return Err(NativeViewError::Invalid);
     }
+    let disclosure = Disclosure::from(metadata.disclosure);
     let snapshot = match permit {
         Some(permit) => scope
             .project_historical(metadata, display, permit)?
@@ -335,7 +353,7 @@ fn prepare_view_checked(
         || serde_json::to_vec(&snapshot)
             .map_err(NativeViewError::Json)?
             .len()
-            > MAX_PLAYER_WIRE_BYTES
+            > disclosure.snapshot_byte_limit()
     {
         return Err(NativeViewError::Size);
     }
@@ -353,7 +371,7 @@ fn prepare_view_checked(
         version: VERSION.into(),
         source: Source::from_scope(&scope),
         viewer_seat_id: scope.viewer_seat_id(),
-        disclosure: metadata.disclosure.into(),
+        disclosure,
         deadline_at: metadata.deadline_at.clone(),
         references,
         snapshot,
@@ -425,7 +443,7 @@ fn restore_view_checked<'a>(
         || serde_json::to_vec(&record.snapshot)
             .map_err(NativeViewError::Json)?
             .len()
-            > MAX_PLAYER_WIRE_BYTES
+            > expected.disclosure.snapshot_byte_limit()
     {
         return Err(NativeViewError::Invalid);
     }
@@ -482,6 +500,16 @@ pub(in crate::native_game) fn load_historical_view<'a>(
     permit: &HistoricalProjectionPermit<'_>,
 ) -> Result<RestoredNativeView<'a>, NativeViewError> {
     load_view_checked(store, expected, source, binding, display, Some(permit))
+}
+pub(in crate::native_game) fn restore_historical_view<'a>(
+    retained: NativeArtifact,
+    expected: &NativeViewExpected,
+    source: &'a GameState,
+    binding: NativeBinding,
+    display: &dyn NativeDisplaySource,
+    permit: &HistoricalProjectionPermit<'_>,
+) -> Result<RestoredNativeView<'a>, NativeViewError> {
+    restore_view_checked(retained, expected, source, binding, display, Some(permit))
 }
 fn load_view_checked<'a>(
     store: &NativeArtifactStore,

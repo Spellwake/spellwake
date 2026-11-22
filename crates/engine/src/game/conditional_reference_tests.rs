@@ -8,7 +8,7 @@ use crate::{
     life::LifeAdjustment,
     mana::{ManaAbilityRef, ManaCost, ManaPayment, ManaSpend, ManaType},
     object_identity::{CardId, ObjectDestination, ObjectId},
-    program::{Comparison, ConditionValue, Instruction, Program, ResolutionCondition},
+    program::{Comparison, Instruction, Program, ResolutionCondition},
     test_support::{creature_types, packet::AliasContext, projection},
 };
 use serde_json::json;
@@ -23,9 +23,11 @@ fn gain(amount: i64) -> Instruction {
 fn branch(threshold: i64, destination: usize) -> Instruction {
     Instruction::BranchIfFalse {
         condition: ResolutionCondition {
-            left: ConditionValue::ControllerLife,
+            left: crate::program::ValueExpr::PlayerStat(
+                crate::program::PlayerStatExpr::ControllerLife,
+            ),
             comparison: Comparison::GreaterOrEqual,
-            right: ConditionValue::Literal(threshold.into()),
+            right: crate::program::ValueExpr::Literal(threshold.into()),
         },
         destination,
     }
@@ -161,6 +163,7 @@ fn paid(
         },
     );
     let payment = ManaPayment {
+        from_lots: Default::default(),
         spend: vec![ManaSpend {
             mana_type: ManaType::Blue,
             amount: 1.into(),

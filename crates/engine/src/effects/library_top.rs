@@ -51,20 +51,212 @@ pub struct LibraryAction {
 /// Only operations that require a player partition have a library-choice frame.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LibraryChoiceKind {
+    Search,
     Scry,
     Surveil,
 }
 /// Private exact partition/order request, never a production seat-safe view.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LibraryTopFrame {
-    pub(crate) revision: u64,
+    look_top: bool,
+    look_reveals: bool,
+    reveal_only: bool,
+    explore_nonland: bool,
+    choose_land_kind: bool,
+    search_exile_owner: Option<SeatId>,
+    search_split: Option<SearchSplitMode>,
+    search_hand_graveyard: bool,
+    search_battlefield_batch: bool,
+    search_batch_limit: Option<usize>,
+    search_exile_batch: bool,
+    search_shared_land_type: bool,
+    search_forest_and_plains: bool,
+    search_required: bool,
+    search_entry_colors: BTreeMap<ObjectId, Vec<crate::mana::ManaType>>,
+    search_entry_reveals: BTreeMap<ObjectId, Vec<ObjectId>>,
+    revision: u64,
     entry: StackEntryId,
     instruction: usize,
     chooser: SeatId,
     kind: LibraryChoiceKind,
     domain_top_first: Vec<ObjectId>,
+    eligible: Vec<ObjectId>,
+}
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum SearchSplitMode {
+    TwoWithBattlefieldFirst,
+    OneWithChoiceOfDestination,
+}
+
+pub(super) struct SearchFrameMode {
+    pub(super) exile_owner: Option<SeatId>,
+    pub(super) split: Option<SearchSplitMode>,
+    pub(super) hand_graveyard: bool,
+    pub(super) battlefield_batch: bool,
+    pub(super) hand_limit: Option<usize>,
+    pub(super) exile_batch: bool,
+    pub(super) shared_land_type: bool,
+    pub(super) forest_and_plains: bool,
+    pub(super) required: bool,
+    pub(super) entry_colors: BTreeMap<ObjectId, Vec<crate::mana::ManaType>>,
+    pub(super) entry_reveals: BTreeMap<ObjectId, Vec<ObjectId>>,
 }
 impl LibraryTopFrame {
+    pub(super) fn search(
+        revision: u64,
+        entry: StackEntryId,
+        instruction: usize,
+        chooser: SeatId,
+        domain_top_first: Vec<ObjectId>,
+        eligible: Vec<ObjectId>,
+        mode: SearchFrameMode,
+    ) -> Self {
+        Self {
+            look_top: false,
+            look_reveals: false,
+            reveal_only: false,
+            explore_nonland: false,
+            choose_land_kind: false,
+            revision,
+            entry,
+            instruction,
+            chooser,
+            kind: LibraryChoiceKind::Search,
+            search_exile_owner: mode.exile_owner,
+            search_split: mode.split,
+            search_hand_graveyard: mode.hand_graveyard,
+            search_battlefield_batch: mode.battlefield_batch,
+            search_batch_limit: mode.hand_limit,
+            search_exile_batch: mode.exile_batch,
+            search_shared_land_type: mode.shared_land_type,
+            search_forest_and_plains: mode.forest_and_plains,
+            search_required: mode.required,
+            search_entry_colors: mode.entry_colors,
+            search_entry_reveals: mode.entry_reveals,
+            domain_top_first,
+            eligible,
+        }
+    }
+    // Internal frame constructor forwarding top-library look configuration fields.
+    #[allow(clippy::too_many_arguments)]
+    pub(super) fn looked_top(
+        revision: u64,
+        entry: StackEntryId,
+        instruction: usize,
+        chooser: SeatId,
+        domain: Vec<ObjectId>,
+        eligible: Vec<ObjectId>,
+        required: bool,
+        reveal: bool,
+        battlefield_pair: bool,
+        choose_land_kind: bool,
+        hand_limit: Option<usize>,
+        explore_nonland: bool,
+    ) -> Self {
+        let mut frame = Self::search(
+            revision,
+            entry,
+            instruction,
+            chooser,
+            domain,
+            eligible,
+            SearchFrameMode {
+                exile_owner: None,
+                split: None,
+                hand_graveyard: false,
+                battlefield_batch: battlefield_pair,
+                hand_limit,
+                exile_batch: false,
+                shared_land_type: false,
+                forest_and_plains: false,
+                required,
+                entry_colors: BTreeMap::new(),
+                entry_reveals: BTreeMap::new(),
+            },
+        );
+        frame.choose_land_kind = choose_land_kind;
+        frame.look_top = true;
+        frame.explore_nonland = explore_nonland;
+        frame.look_reveals = reveal;
+        frame
+    }
+    pub(super) fn with_reveal_only(mut self, reveal_only: bool) -> Self {
+        self.reveal_only = reveal_only;
+        self
+    }
+
+    /// The selected card is revealed and remains in its current position.
+    pub fn is_reveal_only(&self) -> bool {
+        self.reveal_only
+    }
+
+    /// This frame inspects only a fixed top segment and does not search the library.
+    pub fn is_look_top(&self) -> bool {
+        self.look_top
+    }
+    /// The controller chooses a card kind before seeing any library cards.
+    pub fn chooses_land_kind(&self) -> bool {
+        self.choose_land_kind
+    }
+    /// Whether the selected card is revealed to all players before it moves.
+    pub fn looked_card_is_revealed(&self) -> bool {
+        self.look_reveals
+    }
+    /// The library whose controller shuffles after this unrestricted search.
+    pub fn search_exile_owner(&self) -> Option<SeatId> {
+        self.search_exile_owner
+    }
+    pub fn requires_search_result(&self) -> bool {
+        self.search_required
+    }
+    /// Whether the search expects separately assigned battlefield and hand results.
+    pub fn is_split_search(&self) -> bool {
+        self.search_split.is_some()
+    }
+    /// Whether the chooser may send a single result to either battlefield or hand.
+    pub fn offers_search_destination(&self) -> bool {
+        self.search_split == Some(SearchSplitMode::OneWithChoiceOfDestination)
+    }
+    /// Search assigns distinct cards to hand and graveyard.
+    pub fn is_hand_graveyard_search(&self) -> bool {
+        self.search_hand_graveyard
+    }
+    /// Whether this search chooses up to two battlefield results in timestamp order.
+    pub fn is_battlefield_batch_search(&self) -> bool {
+        self.search_battlefield_batch
+    }
+    /// Whether the controller is choosing the destination of a publicly revealed explored card.
+    pub fn may_put_explored_card_in_graveyard(&self) -> bool {
+        self.explore_nonland
+    }
+    /// Whether the selected cards move to linked exile.
+    pub fn is_exile_batch_search(&self) -> bool {
+        self.search_exile_batch
+    }
+    /// Whether a single private reply selects a bounded number of cards.
+    pub fn is_bounded_batch_search(&self) -> bool {
+        self.search_batch_limit.is_some()
+    }
+    /// Maximum number of cards the controller may select in this batch.
+    pub fn search_batch_limit(&self) -> usize {
+        self.search_batch_limit.unwrap_or(0)
+    }
+    /// Whether two selected cards must share at least one land subtype.
+    pub fn requires_shared_land_type(&self) -> bool {
+        self.search_shared_land_type
+    }
+    /// Whether two selected cards must be assignable to distinct Forest and Plains slots.
+    pub fn requires_forest_and_plains(&self) -> bool {
+        self.search_forest_and_plains
+    }
+    /// Color choices keyed by eligible original library incarnation, when that card enters.
+    pub fn search_entry_color_options(&self) -> &BTreeMap<ObjectId, Vec<crate::mana::ManaType>> {
+        &self.search_entry_colors
+    }
+    /// Private eligible reveal cards keyed by the original entering library object.
+    pub fn search_entry_reveal_options(&self) -> &BTreeMap<ObjectId, Vec<ObjectId>> {
+        &self.search_entry_reveals
+    }
     /// Executor revision that authenticates this frame.
     pub fn revision(&self) -> u64 {
         self.revision
@@ -85,7 +277,11 @@ impl LibraryTopFrame {
     pub fn kind(&self) -> LibraryChoiceKind {
         self.kind
     }
-    /// Exact original top segment, not a public card view.
+    /// Eligible object incarnations for this private library search.
+    pub fn eligible_results(&self) -> &[ObjectId] {
+        &self.eligible
+    }
+    /// Privately inspected cards in library order.
     pub fn domain_top_first(&self) -> &[ObjectId] {
         &self.domain_top_first
     }
@@ -93,6 +289,34 @@ impl LibraryTopFrame {
 /// Both Scry vectors are top-to-bottom; Surveil's graveyard vector selects only.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum LibraryTopReply {
+    /// One eligible card or an intentional failure to find.
+    Search { selected: Option<ObjectId> },
+    /// Up to two distinct results; a lone result must be the battlefield choice.
+    SearchSplit {
+        battlefield: Option<ObjectId>,
+        hand: Option<ObjectId>,
+    },
+    /// Exact independent hand and graveyard assignments.
+    SearchHandGraveyard {
+        hand: Option<ObjectId>,
+        graveyard: Option<ObjectId>,
+    },
+    /// Distinct results in the controller's chosen relative timestamp order.
+    SearchBattlefield {
+        selected_in_timestamp_order: Vec<ObjectId>,
+    },
+    /// A search selection with explicit pre-entry colors keyed by selected library objects.
+    /// For a split search, the first selection enters and the optional second goes to hand;
+    /// for battlefield batches, selections are in relative timestamp order.
+    SearchWithEntryColors {
+        selected: Vec<ObjectId>,
+        colors: Vec<(ObjectId, crate::mana::ManaType)>,
+    },
+    /// Search results with every required entry decision keyed by its original object.
+    SearchWithEntryChoices {
+        selected: Vec<ObjectId>,
+        choices: Vec<(ObjectId, crate::land::EntryChoice)>,
+    },
     Scry {
         top_first: Vec<ObjectId>,
         bottom_top_first: Vec<ObjectId>,
@@ -125,14 +349,6 @@ enum LibraryStage {
         orders: Vec<ResolutionAcceptedGraveyardOrder>,
     },
 }
-/// Materialized operands sealed only by a validated trusted departure cut.
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct LibraryOperands {
-    cursor: ResolutionCursor,
-    instruction: Instruction,
-    player: SeatId,
-    requested: RulesInteger,
-}
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct LibraryTopWork {
     pub(super) cursor: ResolutionCursor,
@@ -143,7 +359,6 @@ pub(super) struct LibraryTopWork {
     library_before: Vec<ObjectId>,
     window_revision: u64,
     stage: LibraryStage,
-    operands: Option<LibraryOperands>,
 }
 impl LibraryTopWork {
     fn frame(&self, revision: u64) -> Option<EffectDecision> {
@@ -155,12 +370,29 @@ impl LibraryTopWork {
                     LibraryActionKind::Mill => return None,
                 };
                 Some(EffectDecision::LibraryTop(LibraryTopFrame {
+                    look_top: false,
+                    look_reveals: false,
+                    reveal_only: false,
+                    explore_nonland: false,
+                    choose_land_kind: false,
+                    search_exile_owner: None,
+                    search_split: None,
+                    search_hand_graveyard: false,
+                    search_battlefield_batch: false,
+                    search_batch_limit: None,
+                    search_exile_batch: false,
+                    search_shared_land_type: false,
+                    search_forest_and_plains: false,
+                    search_required: false,
+                    search_entry_colors: BTreeMap::new(),
+                    search_entry_reveals: BTreeMap::new(),
                     revision,
                     entry: self.cursor.entry,
                     instruction: self.cursor.instruction,
                     chooser: self.player,
                     kind,
                     domain_top_first: self.domain.clone(),
+                    eligible: Vec::new(),
                 }))
             }
             LibraryStage::Preparing { .. } => None,
@@ -183,145 +415,44 @@ impl LibraryTopWork {
     }
 }
 impl EffectWindow {
-    /// Actual pending library operation, without revealing its private cards.
-    /// Describers must still authenticate the current chooser and disclosure.
-    pub fn pending_library_kind(&self) -> Option<LibraryActionKind> {
-        match &self.pending_work {
-            Some(PendingWork::LibraryTop(work)) => Some(work.kind),
-            _ => None,
+    /// Reissue an uncommitted scry or surveil partition at the new object cut.
+    pub(super) fn library_departure_admitted(
+        &self,
+        issued: Option<&EffectDecision>,
+    ) -> Result<bool, EffectError> {
+        let Some(PendingWork::LibraryTop(work)) = &self.pending_work else {
+            return Ok(false);
+        };
+        if !matches!(work.stage, LibraryStage::Choosing)
+            || issued.is_none()
+            || self.library_top_frame().as_ref() != issued
+        {
+            return Ok(false);
         }
+        self.validate_library_authority(work)?;
+        Ok(true)
     }
+
+    pub(super) fn refresh_library_top_after_departure(&mut self) -> Result<(), EffectError> {
+        let Some(PendingWork::LibraryTop(mut work)) = self.pending_work.take() else {
+            return Err(EffectError::InconsistentLibraryTopWork);
+        };
+        if !self.window.participants().contains(&work.player) {
+            // This exact library no longer exists. Continue the saved spell cursor.
+            self.pending_work = Some(PendingWork::Resolution(work.cursor));
+            return self.advance_instruction();
+        }
+        work.window_revision = self.window.revision();
+        self.validate_library_authority(&work)?;
+        self.pending_work = Some(PendingWork::LibraryTop(work));
+        Ok(())
+    }
+
     pub(super) fn library_top_frame(&self) -> Option<EffectDecision> {
         match self.pending_work.as_ref() {
             Some(PendingWork::LibraryTop(work)) => work.frame(self.revision),
             _ => None,
         }
-    }
-    /// Preserve only authenticated, materialized library work across the final cut.
-    pub(super) fn refresh_library_after_departure(
-        &mut self,
-        before: &Self,
-    ) -> Result<(), EffectError> {
-        let Some(PendingWork::LibraryTop(held)) = &before.pending_work else {
-            return Err(EffectError::InconsistentLibraryTopWork);
-        };
-        before.validate_library_authority(held)?;
-        let mut work = held.as_ref().clone();
-        if self.window.resolving().map(|entry| entry.id()) != Some(work.cursor.entry) {
-            if self
-                .window
-                .entries()
-                .iter()
-                .any(|entry| entry.id() == work.cursor.entry)
-            {
-                return Err(EffectError::InconsistentLibraryTopWork);
-            }
-            self.pending_work = None;
-            return Ok(());
-        }
-        if !self.window.participants().contains(&work.player) {
-            self.pending_work = Some(PendingWork::Resolution(work.cursor));
-            self.advance_instruction()?;
-            return Ok(());
-        }
-        if work.operands.is_none() {
-            let instruction = before
-                .payloads
-                .get(&work.cursor.entry)
-                .and_then(StackPayload::instructions)
-                .and_then(|body| body.get(work.cursor.instruction))
-                .ok_or(EffectError::InconsistentLibraryTopWork)?
-                .clone();
-            work.operands = Some(LibraryOperands {
-                cursor: work.cursor.clone(),
-                instruction,
-                player: work.player,
-                requested: work.requested.clone(),
-            });
-        }
-        work.window_revision = self.window.revision();
-        self.validate_library_authority(&work)?;
-        let stage = std::mem::replace(&mut work.stage, LibraryStage::Choosing);
-        work.stage = match stage {
-            LibraryStage::Choosing => LibraryStage::Choosing,
-            LibraryStage::Preparing { .. } => return Err(EffectError::InconsistentLibraryTopWork),
-            LibraryStage::Replacing {
-                top_first,
-                bottom_top_first,
-                selected,
-                batch,
-            } => {
-                before.validate_library_partition(
-                    held,
-                    &top_first,
-                    &bottom_top_first,
-                    &selected,
-                )?;
-                let old = before
-                    .begin_library_replacements_at(held, &selected, true)?
-                    .ok_or(EffectError::InconsistentLibraryTopWork)?;
-                let fresh = self
-                    .begin_library_replacements_at(&work, &selected, true)?
-                    .ok_or(EffectError::InconsistentLibraryTopWork)?;
-                LibraryStage::Replacing {
-                    top_first,
-                    bottom_top_first,
-                    selected,
-                    batch: Box::new(batch.rebase_departure(*old, *fresh)?),
-                }
-            }
-            LibraryStage::Ordering {
-                top_first,
-                bottom_top_first,
-                selected,
-                replacements,
-                groups,
-                orders,
-            } => {
-                before.validate_library_partition(
-                    held,
-                    &top_first,
-                    &bottom_top_first,
-                    &selected,
-                )?;
-                let actual_groups = before.selection_arrival_groups(
-                    &[ResolutionAcceptedSelection {
-                        player: work.player,
-                        objects: selected.clone(),
-                    }],
-                    replacements.as_deref(),
-                )?;
-                // A published library ordering has just its sole owner group,
-                // and no accepted nonsingleton order before it.
-                if !orders.is_empty()
-                    || groups != actual_groups
-                    || groups.len() != 1
-                    || groups[0].owner != work.player
-                    || groups[0].entrants.len() < 2
-                {
-                    return Err(EffectError::InconsistentLibraryTopWork);
-                }
-                let fresh = self
-                    .begin_library_replacements_at(&work, &selected, true)?
-                    .ok_or(EffectError::InconsistentLibraryTopWork)?;
-                let batch = if let Some(retained) = replacements {
-                    let old = before
-                        .begin_library_replacements_at(held, &selected, true)?
-                        .ok_or(EffectError::InconsistentLibraryTopWork)?;
-                    Box::new(retained.rebase_departure(*old, *fresh)?)
-                } else {
-                    fresh
-                };
-                LibraryStage::Replacing {
-                    top_first,
-                    bottom_top_first,
-                    selected,
-                    batch,
-                }
-            }
-        };
-        self.pending_work = Some(PendingWork::LibraryTop(Box::new(work)));
-        Ok(())
     }
     pub(super) fn begin_library_top(
         &mut self,
@@ -335,23 +466,412 @@ impl EffectWindow {
             Instruction::Mill { player, amount } => (LibraryActionKind::Mill, *player, amount),
             Instruction::BranchIfFalse { .. }
             | Instruction::Jump { .. }
+            | Instruction::OptionalSequence { .. }
             | Instruction::OptionalEffect { .. }
             | Instruction::OfferManaPayment { .. }
+            | Instruction::BoostSaddledAttacker { .. }
+            | Instruction::SetControlledCreatureSizeToHand
+            | Instruction::ModifyGroupByAmount { .. }
+            | Instruction::AddExperienceCounter
+            | Instruction::ControlManaSourceThroughNextTurn
+            | Instruction::GrantControllerFlashUntilCleanup
+            | Instruction::RequireOpponentsCreaturesBlockThisTurn
+            | Instruction::RequireBlocksAgainstTargetThisTurn
+            | Instruction::SuppressGroupKeywords { .. }
+            | Instruction::ModifyGroupUntilEndOfTurn { .. }
+            | Instruction::BoostSource { .. }
+            | Instruction::ResolvePowerAbility(_)
+            | Instruction::Adapt(_)
+            | Instruction::PutCountersOnSource { .. }
+            | Instruction::UnattachEquipmentAndProtectHost
+            | Instruction::Unattach
+            | Instruction::CreateTokenAndAttach { .. }
+            | Instruction::CreateTokensToFight(_)
+            | Instruction::FightPairedCreatures(_)
+            | Instruction::OfferOpponentsDamage
+            | Instruction::TemptWithTokens { .. }
             | Instruction::CreateTokens { .. }
+            | Instruction::CreateAttackingTokens { .. }
+            | Instruction::GainControllerLife { .. }
+            | Instruction::DrainTargetAndGain(_)
             | Instruction::AdjustControllerLife { .. }
+            | Instruction::ExchangeLifeWithSourceToughness
             | Instruction::AdjustTargetLife { .. }
+            | Instruction::ChooseTypeThenDestroyUnchosen
+            | Instruction::OrderArtifactCreatureLandSacrifices
+            | Instruction::ChooseCreatureTypeForPlayer { .. }
             | Instruction::ChooseCreatureType { .. }
+            | Instruction::DamageFromPower(_)
+            | Instruction::CreatureDealsPowerDamageToOther { .. }
+            | Instruction::DamageAmount(_)
+            | Instruction::DamageAmountThenExileIfDies(_)
+            | Instruction::DamageCreatureAtSpellMastery { .. }
             | Instruction::Damage { .. }
+            | Instruction::RememberPermanentTarget
+            | Instruction::ControllerLosesRememberedManaValue
+            | Instruction::ExiledTargetControllerGainsPower
+            | Instruction::GoadOtherPlayersCreatures
+            | Instruction::AdditionalCombat { .. }
+            | Instruction::AdditionalCombatAfterUntappingAttackers
+            | Instruction::TakeExtraTurn
+            | Instruction::PreventDamageThisTurn(_)
+            | Instruction::MoveGroup { .. }
+            | Instruction::PutTargetInLibrary(_)
+            | Instruction::PutOwnHandCardOnLibraryBottom
+            | Instruction::PutGroupOnLibraryBottom(_)
+            | Instruction::ExileGraveyardTarget
+            | Instruction::ExileCapturedGraveyardCard
+            | Instruction::GrantGraveyardCastAndWatchAbilities
+            | Instruction::GainCastCardAbilities { .. }
+            | Instruction::ExileCardsFromGraveyard { .. }
+            | Instruction::ExileDefeatedSiege
+            | Instruction::ExileSourceAndGainLife(_)
+            | Instruction::ExileAbilitySource
+            | Instruction::ReturnSourceToHand
+            | Instruction::PutCounterOnRelatedPermanent
+            | Instruction::PutCountersOnControlledCreatures
+            | Instruction::PutCountersOnControlledSubtype(_)
+            | Instruction::PutCountersOnControlledCreaturesAndGrant(_)
+            | Instruction::PutCountersOnOtherCreatures
+            | Instruction::PutCreatureAndOtherPlaneswalkerCounters
+            | Instruction::PutChargeCounterOnSource
+            | Instruction::PutBlessingCounterOnSource
+            | Instruction::PutNamedCounterOnSource { .. }
+            | Instruction::PutQuestCounterOnSource
+            | Instruction::PutStorageCounterOnSource
+            | Instruction::AbilitySourceControllerLosesLife(_)
+            | Instruction::RelatedPlayerLosesLife(_)
+            | Instruction::LinkedPlayerLosesDamageAmount
+            | Instruction::RelatedPlayerLosesHalfLife
+            | Instruction::FightSourceWithTarget
+            | Instruction::ClearSourceCounters(_)
+            | Instruction::TransformSource
+            | Instruction::TransformSourceAndAttachToTarget
+            | Instruction::TransformSubtype(_)
+            | Instruction::UntapAbilitySource
+            | Instruction::TapAbilitySource
+            | Instruction::RegenerateSource
+            | Instruction::RegenerateControlledSubtype(_)
+            | Instruction::RegenerateTarget
+            | Instruction::DestroyGroupWithoutRegeneration(_)
+            | Instruction::DestroyGroup(_)
+            | Instruction::DoubleCountersOnTargets
+            | Instruction::ExileCombatDamagedCreature
+            | Instruction::DestroyCapturedDamageSource
+            | Instruction::RemoveCreatureCounters { .. }
+            | Instruction::UntapControlledLands
+            | Instruction::UntapControlledCreatures
+            | Instruction::TapAttackersAndSkipNextUntap
+            | Instruction::AttachOnEntry { .. }
+            | Instruction::ControlledSubtypeDamagesAttacker(_)
+            | Instruction::RevealTopAndRemoveAttackerIfForest
+            | Instruction::DamageCapturedBlocker(_)
+            | Instruction::ChangeControlledPlaneswalkers { .. }
+            | Instruction::ChangeAbilitySource { .. }
+            | Instruction::GiveControlOfAbilitySource
+            | Instruction::UntapAndControlCreatures
+            | Instruction::Proliferate
+            | Instruction::DamagePlayersHalfLife
+            | Instruction::DamageGroup { .. }
+            | Instruction::DamageTargetControllersCreatures { .. }
+            | Instruction::DrawAndDamageOpponents { .. }
+            | Instruction::RepeatOpponentLifeLoss
+            | Instruction::OpponentsLoseAndControllerGains(_)
+            | Instruction::AdjustEachOpponentLife { .. }
             | Instruction::CreatePreventionShield { .. }
+            | Instruction::CreateReflectingShield
             | Instruction::CreateDamageMultiplier { .. }
+            | Instruction::OfferSourceCounters { .. }
+            | Instruction::ResolveKeywordTrigger(_)
+            | Instruction::IncreaseSpeed
+            | Instruction::BecomeMonarch(_)
+            | Instruction::TapEnchantedCreature
+            | Instruction::RequireCondition(_)
+            | Instruction::PayControllerLife(_)
+            | Instruction::PutEquipmentFromHandOrGraveyard
+            | Instruction::EquipNewToken
+            | Instruction::Encore
+            | Instruction::GrantNewTokensHaste
+            | Instruction::RequireAttackSourceNextTurn
+            | Instruction::ChooseAttackDirection
+            | Instruction::ReselectAttackDefender
+            | Instruction::SetBlockDeclarations(_)
+            | Instruction::AdditionalLoyaltyActivation
+            | Instruction::MoveLoyaltyCounterToEnteringPermanent
+            | Instruction::CreateEmblem(_)
+            | Instruction::CreateOpponentEmblems(_)
+            | Instruction::ImpulseCastOrDamage(_)
+            | Instruction::RevealCreatureOfSacrificedType
+            | Instruction::SacrificeCombatContributor
+            | Instruction::ExileNonlandForFormerControllers
+            | Instruction::ExileMilledCreatures { .. }
+            | Instruction::VoteForGraveyardCards { .. }
+            | Instruction::ShuffleOnePermanentPerPlayer
+            | Instruction::ReturnExiledTargetCohort { .. }
+            | Instruction::ReturnCardsDestroyedThisWay
+            | Instruction::RevealCreatureForEachTargetController
+            | Instruction::ReturnOddGraveyardPermanentIfPaid { .. }
+            | Instruction::PutGraveyardCreatureAtMostX
+            | Instruction::PutLandFromExiledCohort
+            | Instruction::ExileTopForEachSpellType(_)
+            | Instruction::ExileTopFreeNoncreatureSpells(_)
+            | Instruction::ExileRelatedTopForCastThisTurn
+            | Instruction::ExileRelatedTopForPlay
+            | Instruction::ExileTopForPlay { .. }
+            | Instruction::ExileTopFaceDown
+            | Instruction::ScheduleCreatedTokenExile(_)
+            | Instruction::ScheduleCreatedTokenSacrifice
+            | Instruction::ExileDelayedObjects(_)
+            | Instruction::ExileRelatedPermanents(_)
+            | Instruction::ExileTargetWithLink(_)
+            | Instruction::ReturnCardsExiledWithLink(_)
+            | Instruction::ChooseAndReturnOwnGraveyardCardsByType
+            | Instruction::ReturnOwnGraveyardCardsOfTypeToHand(_)
+            | Instruction::TargetDamagesItsControllersOtherCreatures
+            | Instruction::OtherCreaturesReturnPowerDamage
+            | Instruction::DestroyCapturedCombatCreature { .. }
+            | Instruction::ReflectAttachedCreatureDamage
+            | Instruction::DestroyAttachedEnchantmentSubtype(_)
+            | Instruction::GrantFlashback(_)
+            | Instruction::TapTargetWhileControllingSource
+            | Instruction::RegisterTokenLinkedExile
+            | Instruction::ReturnTokenLinkedExile
+            | Instruction::AddMana(_)
+            | Instruction::AbandonSourceScheme
+            | Instruction::TabletopHonorAction { .. }
+            | Instruction::CreateNonlegendaryLoyaltyCopy
+            | Instruction::WeakenOpposingAttackersUntilNextTurn
+            | Instruction::PhaseOtherPlaneswalkersNextEndStep
+            | Instruction::ChooseMeldPartner(_)
+            | Instruction::ExileMeldPair
+            | Instruction::MeldExiledPair(_)
+            | Instruction::PairWithCreature { .. }
+            | Instruction::PhaseOut(_)
+            | Instruction::PhaseOutObjects(_)
+            | Instruction::ReturnOneNonlandPerOpponent
+            | Instruction::WeakenDelayedAttacker(_)
+            | Instruction::DrawRevealRemoveLoyalty
+            | Instruction::CreateReflexiveDiscardDamage
+            | Instruction::RemoveLoyaltyExileTopForPlay
+            | Instruction::DamageDamagedPlayersCreatures
+            | Instruction::DamageOpponentsAmount(_)
+            | Instruction::DamageRelatedPlayerAmount(_)
+            | Instruction::Ninjutsu
+            | Instruction::Unearth
+            | Instruction::FlipCoin { .. }
+            | Instruction::Cascade
+            | Instruction::CascadeBottom
+            | Instruction::Myriad
+            | Instruction::CopyForOtherCreatures
+            | Instruction::CopyResolvingSpell
+            | Instruction::WatchNextSpellOrLoyaltyTwice
+            | Instruction::WatchNextLoyaltyCopy
+            | Instruction::ChoosePlaneswalkerTypeForCopies
+            | Instruction::CopyCapturedAbility
+            | Instruction::CopyOnCast(_)
+            | Instruction::MadnessCast
+            | Instruction::MiracleCast(_)
+            | Instruction::CastDefeatedSiege
+            | Instruction::CastTargetGraveyardInstant
+            | Instruction::ReboundCast(_)
+            | Instruction::EndStepCast { .. }
+            | Instruction::SacrificeDelayedObjects(_)
+            | Instruction::ScheduleArtifactReturn(_)
+            | Instruction::ScheduleGraveyardReturnAtEndStep(_)
+            | Instruction::ReturnSacrificedCardToBattlefield
+            | Instruction::ReturnDyingCreatureAsForest
+            | Instruction::ReturnDyingSourceTapped
+            | Instruction::ReturnDelayedGraveyardCard(_)
+            | Instruction::ReturnDelayedGraveyardCardTransformed(_)
+            | Instruction::ReturnDelayedPermanentToHand(_)
+            | Instruction::ReturnDelayedExileWithCounters(_)
+            | Instruction::ReturnDelayedExile(_)
+            | Instruction::ExileUnearthed(_)
+            | Instruction::ResolveTransfer(_)
+            | Instruction::DrainOpponents(_)
+            | Instruction::ExtortDrain
+            | Instruction::ResolveGrowth(_)
+            | Instruction::ResolveCounterKeyword(_)
+            | Instruction::SacrificeEvoked
+            | Instruction::SacrificeStateTriggerSource
+            | Instruction::SacrificeUpkeepSource(_)
+            | Instruction::CounterWardSource
+            | Instruction::BoostSourceByCastManaValue
+            | Instruction::BoostLoneAttacker
+            | Instruction::Attach(_)
+            | Instruction::GoadTarget
+            | Instruction::RequireTargetAttack
+            | Instruction::RemoveTargetFromCombat
+            | Instruction::DestroyTarget
+            | Instruction::ReturnUpToOneRecentGraveyardCard
+            | Instruction::ExileUpToTwoGraveyardTargetsGainLife
+            | Instruction::ReturnTargetGraveyardCreatureToHand
+            | Instruction::ReturnRandomGraveyardCards { .. }
+            | Instruction::ChooseRevealedHandCard { .. }
+            | Instruction::ReturnUpToOneOwnGraveyardCreatureToHand
+            | Instruction::ReturnSourceGraveyardToBattlefield { .. }
+            | Instruction::ReturnSourceGraveyardToHand
+            | Instruction::ReturnOwnedCommandersToHand
+            | Instruction::ExileTopForFreePlay
+            | Instruction::ExileTargetUntilNonlandForFreeCast
+            | Instruction::ExileTopRepeatOnPermanentEntry
+            | Instruction::ShuffleEachHandAndGraveyard
+            | Instruction::EndControllerTurn
+            | Instruction::ShuffleOwnLibrary
+            | Instruction::ShuffleOwnGraveyardIntoLibrary
+            | Instruction::ShuffleTargetGraveyardCards { .. }
+            | Instruction::ExileCreaturesAndPlaneswalkersBelowRevealedManaValue
+            | Instruction::CastLinkedSpellMatchingX
+            | Instruction::DestroyDamagedPlayersNonlandsAtX
+            | Instruction::PutChosenXChargeCounters
+            | Instruction::DestroyNonlandsAtSourceChargeCount
+            | Instruction::AddCounterAndDischargeOnResolution(_)
+            | Instruction::ExileAllGraveyards
+            | Instruction::ExileCreatureAtMostRevealedPower
+            | Instruction::ExileTarget
+            | Instruction::ImprintTargetLand
+            | Instruction::ImprintTargetCreature
+            | Instruction::ExileTargetAsAbilityDonor
+            | Instruction::ExileTargetUntilSourceLeaves
+            | Instruction::ExileUntilNextEndStep
+            | Instruction::ExileTargetUntilOpponentMonarch
             | Instruction::ReturnToOwnersHand
+            | Instruction::ReturnOwnGraveyardCreatureToBattlefield
+            | Instruction::ReturnAnyGraveyardCreatureBlackSubtype(_)
+            | Instruction::ReturnAnyGraveyardCreatureOrPlaneswalker
+            | Instruction::ReturnOwnGraveyardPermanentToBattlefield { .. }
+            | Instruction::CounterSpellToExile
             | Instruction::CounterSpell
+            | Instruction::GainControlOfSpell
+            | Instruction::ChangeOnlyTarget
+            | Instruction::LoseLifeEqualToTargetSpellManaValue
+            | Instruction::ChooseNewTargets
+            | Instruction::CopyAbility
             | Instruction::CopySpell
             | Instruction::CopyTargetToSource { .. }
             | Instruction::CreateContinuousEffect { .. }
+            | Instruction::WeakenTargetByChosenX
+            | Instruction::BoostTargetPower { .. }
+            | Instruction::AnimateTargetAsCountedCreature { .. }
+            | Instruction::GrantProtectionChosenColor(_)
+            | Instruction::PutIndestructibleCounter
+            | Instruction::PutLoyaltyCounter
             | Instruction::PutPowerToughnessCounters { .. }
+            | Instruction::ReturnChosenXGraveyardCreatures
+            | Instruction::ReturnGraveyardTargetsTapped(_)
+            | Instruction::ReturnCapturedDyingCreature
+            | Instruction::ReturnCapturedDyingCreatureWithTypeAndColor { .. }
+            | Instruction::ReturnGraveyardCreatureWithSubtypeCounters { .. }
+            | Instruction::ReturnGraveyardCohort(_)
+            | Instruction::DivideThreeDamageAmongTargets
+            | Instruction::DistributePlusOneCounters { .. }
+            | Instruction::DamageOrderedTargets { .. }
+            | Instruction::ExileUntilOtherTargetLeaves
+            | Instruction::CopyOtherTargetAsArtifact
+            | Instruction::FixedTargetClause(_)
+            | Instruction::ExileResolvingSpell
+            | Instruction::DestroyFixedTargets
+            | Instruction::DestroyTargetAndAttachedEquipment
+            | Instruction::ReturnFixedTargets
+            | Instruction::FightFixedTargets
+            | Instruction::BindOrderedPermanents { .. }
+            | Instruction::ExileOrderedPermanent(_)
+            | Instruction::ExileLibraryTop { .. }
+            | Instruction::PutTargetOwnedExiledLandsOntoBattlefield
+            | Instruction::LookOpponentExileForCast { .. }
+            | Instruction::ExileFromTargetLibrary
+            | Instruction::OfferVariablePayment { .. }
+            | Instruction::DrawEachPlayerForPayments
+            | Instruction::CreateReflexiveGraveyardReturn
+            | Instruction::ReturnGraveyardCreatureWithCorpse(_)
+            | Instruction::ReturnRandomLinkedExile
+            | Instruction::ReturnLinkedSearchCards
+            | Instruction::PutHandPermanentsOntoBattlefield { .. }
+            | Instruction::RevealSharedTypeCreatureCastOrBottom
+            | Instruction::RevealOddCastOrDraw
+            | Instruction::MayTurnControlledCreatureFaceUp
+            | Instruction::ExploreSource
+            | Instruction::MayRevealLibraryTop
+            | Instruction::ManifestTop { .. }
+            | Instruction::ExileNonlandsToHandAndDamage { .. }
+            | Instruction::RevealTopHandLoseManaValue { .. }
+            | Instruction::RevealUntilLandKind
+            | Instruction::RevealOpponentChoosesCreature
+            | Instruction::ShuffleAbilitySourceIntoLibrary
+            | Instruction::RevealToNameAfterSourceShuffle(_)
+            | Instruction::WatchSmallCreatureCombatDraw(_)
+            | Instruction::WatchTargetCombatDamageDraw
+            | Instruction::ChooseOwnCommanderToCast
+            | Instruction::ChooseMatchingHandSpellToCast
+            | Instruction::SearchEachLibraryForFreeCast
+            | Instruction::ChooseFoundSpell
+            | Instruction::CastFoundSpell(_)
+            | Instruction::LookTopOneRestGraveyard { .. }
+            | Instruction::RevealTopHandRestGraveyard { .. }
+            | Instruction::LookTopOneRestBottom { .. }
+            | Instruction::LookTopCreatureSharingAttachedSubtype { .. }
+            | Instruction::RevealTopCreaturesAndLandsRestBottom { .. }
+            | Instruction::RevealHandAndBottomPiles
+            | Instruction::RevealDividePiles
+            | Instruction::DivideTargetPermanentsAndSacrificePile
+            | Instruction::DrawToChosenOpponentHandSize
+            | Instruction::LookTopPlaneswalkers
+            | Instruction::RevealTopPermanentOrHand
+            | Instruction::LookTopLandBattlefieldTapped
+            | Instruction::LookTopReveal { .. }
+            | Instruction::LookTopTakeOne { .. }
+            | Instruction::SearchLibrary { .. }
+            | Instruction::DrawTargetPlayer { .. }
+            | Instruction::DrawHighestEntrantController
+            | Instruction::DrawRelatedPlayer
+            | Instruction::DrawCombatDamageSourceController
+            | Instruction::DrawAndLoseLifeForTargetGraveyardCreatures
+            | Instruction::DrawControllerAndTarget { .. }
+            | Instruction::DrawEachPlayer { .. }
+            | Instruction::DrawPlayersControllingName(_)
             | Instruction::DrawController { .. }
+            | Instruction::ModifyAnyNumberOfPermanents { .. }
+            | Instruction::AffectPermanentTargets { .. }
+            | Instruction::MillEachPlayer(_)
+            | Instruction::PutLibraryCohortIntoGraveyard(_)
+            | Instruction::ExileOnePerPlayerUntilSourceLeaves
+            | Instruction::AttachControlledToSource { .. }
+            | Instruction::AttachBattlefieldAurasToSource
+            | Instruction::EnterHandOrGraveyardAurasAttachedToSource
+            | Instruction::ReturnDelayedGraveyardToHand(_)
+            | Instruction::LoseLifeAndScryForSubtype(_)
+            | Instruction::ExileForBlackToken { .. }
+            | Instruction::ExileForSubtypeToken(_)
+            | Instruction::GiveEquippedCreatureToUpkeepPlayer
+            | Instruction::CopyCreatureExiledForAbility
+            | Instruction::DamageFromGrantingPermanent { .. }
+            | Instruction::CopyEntrantAsArtifact
+            | Instruction::ReplaceSourceCreatedTokens
+            | Instruction::CopyEntrantOnceEachTurn
+            | Instruction::CopyCreatureAsToken
+            | Instruction::CopyDifferentlyNamedTokens
+            | Instruction::CopyOtherControlledNontokensAsEntryHost
+            | Instruction::Bolster(_)
+            | Instruction::CreateArmyIfAbsent { .. }
+            | Instruction::Amass { .. }
+            | Instruction::UntapUpTo { .. }
+            | Instruction::ChooseVowedCreatures
+            | Instruction::ChooseCreaturesToKeep
+            | Instruction::DestroyOtherCreatures
+            | Instruction::SacrificeOtherCreatures
+            | Instruction::SacrificeColoredPermanents
+            | Instruction::ExileChosenPermanents { .. }
+            | Instruction::ExileFromHandOrBattlefield(_)
+            | Instruction::ExileRelatedHandCardForPlay
+            | Instruction::PayLifeOrSacrificeCreatures
+            | Instruction::ReturnControlledPermanents { .. }
+            | Instruction::ChooseOtherControlledCreature { .. }
             | Instruction::Sacrifice { .. }
+            | Instruction::DiscardOneAtRandom(_)
+            | Instruction::SacrificeRandomUntilLand
+            | Instruction::DiscardUpTo { .. }
+            | Instruction::SacrificeToContinue { .. }
+            | Instruction::SacrificeMatching(_)
             | Instruction::Discard { .. } => return Ok(false),
         };
         let controller = self
@@ -359,15 +879,11 @@ impl EffectWindow {
             .resolving()
             .ok_or(EffectError::WrongResolutionFrame)?
             .controller();
-        let requested = self.resolve_instruction_amount(controller, amount)?;
+        let requested = self.resolve_value_expr(controller, amount)?;
         if requested < 0.into() {
             return Err(EffectError::InconsistentLibraryTopWork);
         }
-        let player = self.resolving_player_identity(role)?;
-        if !self.window.participants().contains(&player) {
-            self.advance_instruction()?;
-            return Ok(true);
-        }
+        let player = self.resolving_player(role)?;
         let library_before = self.window.cards().library(player).to_vec();
         let library = &library_before;
         let count = std::cmp::min(&requested, &RulesInteger::from_usize(library.len()))
@@ -400,7 +916,6 @@ impl EffectWindow {
             library_before,
             window_revision: self.window.revision(),
             stage,
-            operands: None,
         })));
         Ok(true)
     }
@@ -510,7 +1025,7 @@ impl EffectWindow {
                         orders,
                     };
                     if complete {
-                        self.commit_library_top(&work, append)?;
+                        self.commit_library_top(&mut work, append)?;
                         self.pending_work = Some(PendingWork::Resolution(work.cursor));
                         self.advance_instruction()?;
                         return Ok(None);
@@ -541,24 +1056,6 @@ impl EffectWindow {
             return Err(EffectError::WrongLibraryTopFrame);
         };
         self.validate_library_authority(owned)?;
-        if owned.operands.is_some() {
-            match &owned.stage {
-                LibraryStage::Replacing {
-                    selected, batch, ..
-                }
-                | LibraryStage::Ordering {
-                    selected,
-                    replacements: Some(batch),
-                    ..
-                } => {
-                    let fresh = self
-                        .begin_library_replacements_at(owned, selected, true)?
-                        .ok_or(EffectError::InconsistentLibraryTopWork)?;
-                    batch.verify_pending(*fresh)?;
-                }
-                _ => {}
-            }
-        }
         if self.library_top_frame().as_ref() != Some(frame) {
             return Err(EffectError::WrongLibraryTopFrame);
         }
@@ -688,25 +1185,12 @@ impl EffectWindow {
             Instruction::Mill { player, amount } => (LibraryActionKind::Mill, *player, amount),
             _ => return Err(EffectError::InconsistentLibraryTopWork),
         };
-        let requested = if let Some(operands) = &work.operands {
-            if operands.cursor != work.cursor
-                || operands.instruction != *actual
-                || operands.player != work.player
-                || operands.requested != work.requested
-            {
-                return Err(EffectError::InconsistentLibraryTopWork);
-            }
-            work.requested.clone()
-        } else {
-            let requested =
-                self.resolve_instruction_amount_at(entry.controller(), amount, Some(&work.cursor))?;
-            if self.resolving_player(role)? != work.player || requested != work.requested {
-                return Err(EffectError::InconsistentLibraryTopWork);
-            }
-            requested
-        };
+        let requested =
+            self.resolve_value_expr_at(entry.controller(), amount, Some(&work.cursor))?;
         if kind != work.kind
+            || self.resolving_player_at(role, Some(&work.cursor))? != work.player
             || requested < 0.into()
+            || requested != work.requested
             || self.window.revision() != work.window_revision
             || self.window.cards().library(work.player) != work.library_before
         {
@@ -759,14 +1243,6 @@ impl EffectWindow {
         work: &LibraryTopWork,
         selected: &[ObjectId],
     ) -> Result<Option<Box<ZoneReplacementBatch>>, EffectError> {
-        self.begin_library_replacements_at(work, selected, work.operands.is_some())
-    }
-    fn begin_library_replacements_at(
-        &self,
-        work: &LibraryTopWork,
-        selected: &[ObjectId],
-        retain_candidates: bool,
-    ) -> Result<Option<Box<ZoneReplacementBatch>>, EffectError> {
         self.validate_library_authority(work)?;
         if selected.is_empty() {
             return Ok(None);
@@ -791,24 +1267,21 @@ impl EffectWindow {
             ),
             _ => return Err(EffectError::InconsistentLibraryTopWork),
         };
-        let batch = self.begin_zone_replacements_authorized(
-            AuthorizedZoneBatch {
-                action,
-                cause: EventCause::Instruction {
-                    entry: work.cursor.entry,
-                    instruction: work.cursor.instruction,
-                },
-                intents: selected
-                    .iter()
-                    .map(|before| ZoneMoveIntent {
-                        before: *before,
-                        reason,
-                    })
-                    .collect(),
+        let batch = self.begin_zone_replacements(AuthorizedZoneBatch {
+            action,
+            cause: EventCause::Instruction {
+                entry: work.cursor.entry,
+                instruction: work.cursor.instruction,
             },
-            retain_candidates,
-        )?;
-        if batch.sources().is_empty() && !retain_candidates {
+            intents: selected
+                .iter()
+                .map(|before| ZoneMoveIntent {
+                    before: *before,
+                    reason,
+                })
+                .collect(),
+        })?;
+        if batch.sources().is_empty() {
             return Ok(None);
         }
         if batch.candidates().len() != selected.len() {
@@ -818,10 +1291,13 @@ impl EffectWindow {
     }
     fn commit_library_top(
         &mut self,
-        work: &LibraryTopWork,
+        work: &mut LibraryTopWork,
         append: &mut RulesJournal,
     ) -> Result<(), EffectError> {
         self.validate_library_authority(work)?;
+        if work.kind == LibraryActionKind::Mill {
+            work.cursor.results.milled_mana_values.clear();
+        }
         let LibraryStage::Ordering {
             top_first,
             bottom_top_first,
@@ -919,6 +1395,17 @@ impl EffectWindow {
                 })
             })
             .collect::<Result<Vec<_>, EffectError>>()?;
+        self.window = window;
+        if work.kind == LibraryActionKind::Mill {
+            work.cursor.results.milled_mana_values = public_zone_moves
+                .iter()
+                .map(|movement| {
+                    self.copiable_program(movement.after)
+                        .ok_or(EffectError::InconsistentProgram)
+                        .map(Program::mana_value)
+                })
+                .collect::<Result<Vec<_>, _>>()?;
+        }
         let action = LibraryAction {
             kind: work.kind,
             player: work.player,
@@ -935,7 +1422,6 @@ impl EffectWindow {
                 .map(|row| row.object)
                 .collect(),
         };
-        self.window = window;
         self.emit_from(
             EventCause::Instruction {
                 entry: work.cursor.entry,

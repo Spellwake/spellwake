@@ -154,7 +154,7 @@ async fn prepare_source_inner(
     if request.uri().query().is_some() {
         return fail(StatusCode::BAD_REQUEST, "query", "unsupported");
     }
-    if !single_content_type(request.headers()).is_some_and(|v| v == "application/json") {
+    if !is_json_content_type(request.headers()) {
         return fail(StatusCode::BAD_REQUEST, "body", "json_required");
     }
     let bytes = match to_bytes(request.into_body(), 64).await {
@@ -165,23 +165,28 @@ async fn prepare_source_inner(
     {
         return fail(StatusCode::BAD_REQUEST, "body", "invalid");
     }
-    let Ok(permit) = state.permits.clone().try_acquire_owned() else {
-        return unavailable();
+    let permit = match tokio::time::timeout(
+        Duration::from_millis(50),
+        state.permits.clone().acquire_owned(),
+    )
+    .await
+    {
+        Ok(Ok(permit)) => permit,
+        _ => return unavailable(),
     };
     let config = state.config.clone();
-    // Keep admission owned by each blocking operation even if its HTTP future is dropped.
+    // Keep admission owned by each blocking operation, then release before external Temporal gRPC.
     let resolved = tokio::task::spawn_blocking(move || {
+        let _permit = permit;
         let basis = config
             .actor()
             .and_then(|client| client.prediction_probe_basis(&token, printing));
-        (permit, config, token, basis)
+        (config, token, basis)
     })
     .await;
-    let (permit, config, token, basis) = match resolved {
-        Ok((permit, config, token, Ok(ApiResponse::Success { data }))) => {
-            (permit, config, token, data)
-        }
-        Ok((_, _, _, other)) => return source_projection(other),
+    let (config, token, basis) = match resolved {
+        Ok((config, token, Ok(ApiResponse::Success { data }))) => (config, token, data),
+        Ok((_, _, other)) => return source_projection(other),
         Err(_) => return unavailable(),
     };
     let runtime = match config.temporal.clone() {
@@ -196,8 +201,17 @@ async fn prepare_source_inner(
         Ok(status) => status,
         Err(_) => return unavailable(),
     };
+    let revalidate_permit = match tokio::time::timeout(
+        Duration::from_millis(50),
+        state.permits.clone().acquire_owned(),
+    )
+    .await
+    {
+        Ok(Ok(permit)) => permit,
+        _ => return unavailable(),
+    };
     tokio::task::spawn_blocking(move || {
-        let _permit = permit;
+        let _permit = revalidate_permit;
         // Shared public source work can finish after logout; revalidate delivery authority.
         match config.actor().and_then(|client| client.resolve(&token)) {
             Ok(actor)

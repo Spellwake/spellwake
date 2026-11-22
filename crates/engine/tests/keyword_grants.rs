@@ -1,5 +1,4 @@
 //! Granted haste/vigilance through layer 6, actual tap costs and declarations.
-//! Printed keyword intake and other keyword families remain unimplemented.
 #[path = "../test_support/creature_vocabulary.rs"]
 mod creature_vocabulary;
 #[path = "../test_support/characteristic_trajectories.rs"]
@@ -135,6 +134,7 @@ fn attack(game: &GameState, source: ObjectId) -> spellwake_engine::game::NativeC
         DecisionReply::DeclareAttackers(vec![AttackDeclaration {
             attacker: source,
             defender: P1,
+            defending_planeswalker: None,
         }]),
     )
 }
@@ -268,7 +268,13 @@ fn one_ability_component_removes_printed_abilities_then_grants_its_own_keywords(
                 vec![effect(
                     vec![ResolvedPartSpec::Abilities(AbilityChange {
                         removal: Some(AbilityRemoval::All),
+                        granted_exalted: 0,
+                        granted_toxic: None,
+                        grants_unblockable: false,
+                        granted_trigger: None,
+                        granted_combat_keywords: vec![],
                         granted_keywords: BTreeSet::from([Haste, Vigilance]),
+                        suppressed_keywords: BTreeSet::new(),
                     })],
                     ResolvedDuration::NoStatedDuration,
                 )],

@@ -7,8 +7,7 @@ use crate::{
     mana::{ManaAbilityRef, ManaCost, ManaType},
     object_identity::{CardId, ObjectDestination},
     program::{
-        OrdinaryCondition, PlayerRelation, Program, SpellCastFilter, TriggerGrouping,
-        TriggeredAbility, TriggeredAbilityId,
+        PlayerRelation, Program, TriggerGrouping, TriggerSpec, TriggeredAbility, TriggeredAbilityId,
     },
     test_support::{creature_types, packet::AliasContext, projection},
 };
@@ -104,7 +103,7 @@ fn gain(n: i64) -> ExecutableBody {
         }],
     )
 }
-fn trigger(condition: OrdinaryCondition) -> TriggeredAbility {
+fn trigger(condition: TriggerSpec) -> TriggeredAbility {
     TriggeredAbility {
         id: TriggeredAbilityId(1),
         condition,
@@ -122,7 +121,7 @@ fn run(case: &str) {
     if case != "watcher" {
         producer
             .triggered
-            .push(trigger(OrdinaryCondition::SelfCast));
+            .push(trigger(crate::program::TriggerSpec::self_cast()));
     }
     let mut cards = vec![SeedCard {
         card: CardId(1),
@@ -135,10 +134,10 @@ fn run(case: &str) {
         let mut watcher = Program::artifact(None, vec![]);
         watcher
             .triggered
-            .push(trigger(OrdinaryCondition::SpellCast {
-                player: PlayerRelation::Controller,
-                filter: SpellCastFilter::InstantOrSorcery,
-            }));
+            .push(trigger(crate::program::TriggerSpec::spell_cast(
+                PlayerRelation::Controller,
+                crate::program::SpellFilter::instant_or_sorcery(),
+            )));
         cards.push(SeedCard {
             card: CardId(2),
             owner: A,
@@ -164,7 +163,7 @@ fn run(case: &str) {
             program: Program::instant(
                 ManaCost::one(ManaType::Blue),
                 ExecutableBody::new(
-                    BodyTarget::SingleSpell(SpellTargetFilter::AnySpell),
+                    BodyTarget::SingleSpell(crate::program::SpellFilter::any()),
                     vec![crate::program::Instruction::CopySpell],
                 ),
             ),

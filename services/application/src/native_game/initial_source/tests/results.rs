@@ -94,7 +94,7 @@ fn genuine_turn_starts_and_terminal_survive_exact_cold_replay() {
         };
         let viewer = seats()[usize::try_from(holder.0).unwrap()];
         let turn = f.tip.state().turn().unwrap();
-        let active = f.tip.state().execution().window().turn_owner();
+        let active = f.tip.state().execution().window().active_player();
         if holder == active
             && turn.position().step == TurnStep::PrecombatMain
             && turn.lands_played() == &0.into()

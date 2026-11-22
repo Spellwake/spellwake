@@ -43,7 +43,10 @@ async fn webhook_inner(state: ApiState, request: Request) -> Response {
                     fail(StatusCode::BAD_REQUEST, "signature", "invalid")
                 }
                 Err(_) => {
-                    eprintln!("patreon_notification event=intake_unresolved");
+                    tracing::warn!(
+                        event = "intake_unresolved",
+                        "patreon notification intake unresolved"
+                    );
                     unavailable()
                 }
             }
@@ -80,7 +83,7 @@ async fn inner(state: ApiState, request: Request, mode: Mode) -> Response {
     if request.uri().query().is_some() {
         return fail(StatusCode::BAD_REQUEST, "query", "unsupported");
     }
-    if !single_content_type(request.headers()).is_some_and(|v| v == "application/json") {
+    if !is_json_content_type(request.headers()) {
         return fail(StatusCode::BAD_REQUEST, "body", "json_required");
     }
     let bytes = match to_bytes(request.into_body(), 16384).await {
@@ -148,7 +151,10 @@ fn outcome<T: Serialize>(
             (status, Json(ApiResponse::<Value>::Fail { data })).into_response()
         }
         _ => {
-            eprintln!("patreon_association event=unresolved");
+            tracing::warn!(
+                event = "unresolved",
+                "patreon association operation unresolved"
+            );
             unavailable()
         }
     }

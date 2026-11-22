@@ -74,22 +74,20 @@ impl OpeningState {
         order: &[SeatId],
         player: SeatId,
     ) -> Result<(), OpeningError> {
-        self.kept.remove(&player);
-        self.taken.remove(&player);
+        let order_index = order
+            .iter()
+            .position(|seat| *seat == player)
+            .ok_or(OpeningError::InvalidSetup)?;
         match &mut self.stage {
             OpeningStage::Declare { cursor, requested } => {
-                let index = order
-                    .iter()
-                    .position(|seat| *seat == player)
-                    .ok_or(OpeningError::InvalidSetup)?;
-                if index < *cursor {
+                if order_index < *cursor {
                     *cursor -= 1;
                 }
                 requested.retain(|seat| *seat != player);
             }
             OpeningStage::Bottom {
-                cursor,
                 cohort,
+                cursor,
                 selected,
             } => {
                 if let Some(index) = cohort.iter().position(|seat| *seat == player) {
@@ -102,6 +100,8 @@ impl OpeningState {
             }
             OpeningStage::Complete => return Err(OpeningError::WrongStage),
         }
+        self.kept.remove(&player);
+        self.taken.remove(&player);
         Ok(())
     }
     pub fn complete(&self) -> bool {

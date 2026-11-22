@@ -287,7 +287,7 @@ fn all_twenty_selected_identities_follow_guarded_ordinary_lifecycles() {
                 };
                 let position = state.turn().unwrap().position();
                 let own = position.number.div_ceil(2);
-                let active = state.execution().window().turn_owner();
+                let active = state.execution().window().active_player();
                 if !negatives && holder == case.owner && position.step == Step::Upkeep {
                     let input = GameInput {
                         basis: state.basis().clone(),
@@ -302,6 +302,7 @@ fn all_twenty_selected_identities_follow_guarded_ordinary_lifecycles() {
                     rejected(&state, foreign, GameError::UnknownActor);
                     if !land {
                         let payment = ManaPayment {
+                            from_lots: Default::default(),
                             spend: vec![ManaSpend {
                                 mana_type: color,
                                 amount: spellwake_contracts::RulesInteger::from_usize(
@@ -346,6 +347,7 @@ fn all_twenty_selected_identities_follow_guarded_ordinary_lifecycles() {
                                 command: GameCommand::CastUntargeted {
                                     spell: target,
                                     payment: Some(ManaPayment {
+                                        from_lots: Default::default(),
                                         spend: vec![ManaSpend {
                                             mana_type: color,
                                             amount: spellwake_contracts::RulesInteger::from_usize(
@@ -390,6 +392,7 @@ fn all_twenty_selected_identities_follow_guarded_ordinary_lifecycles() {
                                 GameCommand::CastUntargeted {
                                     spell: target,
                                     payment: Some(ManaPayment {
+                                        from_lots: Default::default(),
                                         spend: vec![ManaSpend {
                                             mana_type: color,
                                             amount: spellwake_contracts::RulesInteger::from_usize(

@@ -2,7 +2,7 @@
 //! Prepared phases and labelled scheduler controls do not qualify native combat.
 use spellwake_contracts::RulesInteger;
 use spellwake_engine::combat::CombatRules;
-use spellwake_engine::program::{BodyTarget, ExecutableBody, SpellTargetFilter};
+use spellwake_engine::program::{BodyTarget, ExecutableBody};
 use spellwake_engine::setup::GameSeed;
 use spellwake_engine::{
     actions::TimingError,
@@ -398,7 +398,7 @@ fn actual_postcombat_play_resets_only_when_root_enters_the_next_turn() {
     assert_eq!(end.turn().unwrap().position().step, Step::End);
     assert_eq!(count(&end), &1.into());
     let upkeep = round(&end);
-    assert_eq!(upkeep.execution().window().turn_owner(), B);
+    assert_eq!(upkeep.execution().window().active_player(), B);
     assert_eq!(upkeep.turn().unwrap().position().number, 4);
     assert_eq!(upkeep.turn().unwrap().position().step, Step::Upkeep);
     assert_eq!(count(&upkeep), &0.into());
@@ -977,8 +977,12 @@ fn invalid_sorcery_payment_and_targets_preserve_prior_land_and_nonzero_pool() {
     let played = play(&game, A, 1).into_state();
     let target = TargetRef::Object(object(&played, 90));
     for payment in [
-        ManaPayment { spend: vec![] },
         ManaPayment {
+            from_lots: Default::default(),
+            spend: vec![],
+        },
+        ManaPayment {
+            from_lots: Default::default(),
             spend: vec![ManaSpend {
                 mana_type: ManaType::Green,
                 amount: 4.into(),
@@ -1016,6 +1020,7 @@ fn invalid_sorcery_payment_and_targets_preserve_prior_land_and_nonzero_pool() {
             spell: object(&played, 10),
             target,
             payment: ManaPayment {
+                from_lots: Default::default(),
                 spend: vec![ManaSpend {
                     mana_type: ManaType::Green,
                     amount: 1.into(),
@@ -1045,7 +1050,7 @@ fn opponent_instant_response_counters_actual_sorcery() {
         false,
         ManaCost::free(),
         vec![Instruction::CounterSpell],
-        BodyTarget::SingleSpell(SpellTargetFilter::AnySpell),
+        BodyTarget::SingleSpell(spellwake_engine::program::SpellFilter::any()),
     ));
     let game = setup(Some(Step::PrecombatMain), cards);
     let target = object(&game, 90);
@@ -1082,7 +1087,7 @@ fn copying_actual_sorcery_uses_owned_reply_and_blocks_land_during_decision() {
         false,
         ManaCost::free(),
         vec![Instruction::CopySpell],
-        BodyTarget::SingleSpell(SpellTargetFilter::CopyableInstructionSpell),
+        BodyTarget::SingleSpell(spellwake_engine::program::SpellFilter::copyable_instruction()),
     ));
     let game = setup(Some(Step::PrecombatMain), cards);
     let target = object(&game, 90);

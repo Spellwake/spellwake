@@ -91,15 +91,7 @@ fn cards() -> Vec<SeedCard> {
         creature(40, A, ObjectDestination::Hand),
     ]
 }
-fn setup(seats: Vec<SeatId>, cards: Vec<SeedCard>, step: Step) -> NativeCandidate {
-    setup_with_life(seats, cards, step, 20)
-}
-fn setup_with_life(
-    seats: Vec<SeatId>,
-    mut cards: Vec<SeedCard>,
-    step: Step,
-    life: i64,
-) -> NativeCandidate {
+fn setup(seats: Vec<SeatId>, mut cards: Vec<SeedCard>, step: Step) -> NativeCandidate {
     for player in &seats {
         cards.push(creature(
             1000 + u64::from(player.0),
@@ -128,7 +120,7 @@ fn setup_with_life(
                 cards,
                 initial_battlefield_order,
                 vec![],
-                life.into(),
+                20.into(),
                 CombatRules::UnrestrictedFreeForAll,
                 test_vocabulary(),
                 std::sync::Arc::new(spellwake_contracts::names::NameRules::literal_names()),
@@ -198,6 +190,7 @@ fn declared(game: &GameState, selected: &[(u64, SeatId)]) -> NativeCandidate {
                 .map(|&(id, defender)| AttackDeclaration {
                     attacker: object(game, id).id(),
                     defender,
+                    defending_planeswalker: None,
                 })
                 .collect(),
         ),
@@ -717,11 +710,13 @@ fn accepted_attackers_tap_physical_incarnations_and_emit_only_real_snapshots() {
         &vec![
             AttackDeclaration {
                 attacker: first.id(),
-                defender: B
+                defender: B,
+                defending_planeswalker: None,
             },
             AttackDeclaration {
                 attacker: second.id(),
-                defender: B
+                defender: B,
+                defending_planeswalker: None,
             }
         ]
     );
@@ -894,6 +889,7 @@ fn illegal_whole_attack_declarations_preserve_cards_and_the_original_frame() {
     let good = AttackDeclaration {
         attacker: object(&game, 1).id(),
         defender: B,
+        defending_planeswalker: None,
     };
     let choices = [
         vec![good, good],
@@ -910,6 +906,7 @@ fn illegal_whole_attack_declarations_preserve_cards_and_the_original_frame() {
             AttackDeclaration {
                 attacker: object(&game, 3).id(),
                 defender: B,
+                defending_planeswalker: None,
             },
         ],
         vec![
@@ -917,6 +914,7 @@ fn illegal_whole_attack_declarations_preserve_cards_and_the_original_frame() {
             AttackDeclaration {
                 attacker: object(&game, 20).id(),
                 defender: B,
+                defending_planeswalker: None,
             },
         ],
         vec![
@@ -924,6 +922,7 @@ fn illegal_whole_attack_declarations_preserve_cards_and_the_original_frame() {
             AttackDeclaration {
                 attacker: object(&game, 40).id(),
                 defender: B,
+                defending_planeswalker: None,
             },
         ],
     ];
@@ -987,7 +986,8 @@ fn newly_cast_creatures_cannot_attack_but_fresh_defenders_can_block_many_to_one(
                 decision: pending.id(),
                 choice: DecisionReply::DeclareAttackers(vec![AttackDeclaration {
                     attacker: object(&game, 40).id(),
-                    defender: B
+                    defender: B,
+                    defending_planeswalker: None,
                 }]),
             }
         ))
@@ -1044,316 +1044,6 @@ fn newly_cast_creatures_cannot_attack_but_fresh_defenders_can_block_many_to_one(
     assert_eq!(frame.domains()[0].source(), object(blocking, 1).id());
     assert_eq!(frame.domains()[0].recipients().len(), 2);
     assert!(assignments.damage_journal().attempts.is_empty());
-}
-
-#[test]
-fn three_player_attacking_turn_owner_can_time_out_before_and_after_attacker_declaration() {
-    let ready = attackers(setup(vec![A, B, C], cards(), Step::Untap).state());
-    let attacking = declared(&ready, &[(1, B)]).into_state();
-    for before in [&ready, &attacking] {
-        let timeout = before.expire_response(before.basis(), A).unwrap();
-        assert_eq!(before.expire_response(before.basis(), A).unwrap(), timeout);
-        let mut next = timeout.into_state();
-        assert_eq!(next.execution().window().participants(), &[B, C]);
-        assert_eq!(next.execution().window().active_player(), None);
-        for _ in 0..60 {
-            if next.execution().window().active_player() == Some(B) {
-                break;
-            }
-            assert!(next.pending_decision().is_none());
-            let owner = holder(&next);
-            assert_ne!(owner, A);
-            next = next
-                .advance(input(&next, owner, GameCommand::Pass))
-                .unwrap()
-                .into_state();
-        }
-        assert_eq!(next.execution().window().active_player(), Some(B));
-        assert_eq!(next.execution().life_total(B), Some(&20.into()));
-        assert_eq!(before.execution().window().participants(), &[A, B, C]);
-    }
-}
-
-fn timeout_after_first_graveyard_order(seats: Vec<SeatId>) -> NativeCandidate {
-    let seeds = [(1, A), (2, A), (3, A), (4, B), (5, B)]
-        .into_iter()
-        .map(|(id, seat)| SeedCard {
-            program: Program::creature(None, 2.into(), 2.into(), Default::default()),
-            ..battlefield(id, seat)
-        })
-        .collect();
-    let start = setup_with_life(seats, seeds, Step::Untap, 2);
-    let attack = declared(&attackers(start.state()), &[(1, B), (2, B), (3, C)]);
-    let block = round(attack.state());
-    let blocked = blocked(block.state(), &[(4, 1), (5, 2)]);
-    let damage = round(blocked.state());
-    let first = damage.state();
-    let chosen_order = [2, 1].map(|id| object(first, id).id());
-    assert_eq!(first.pending_decision().unwrap().chooser(), A);
-    let ordered = reply(first, DecisionReply::OrderGraveyard(chosen_order.to_vec()));
-    let before = ordered.state();
-    assert_eq!(before.pending_decision().unwrap().chooser(), B);
-    assert_eq!(before.execution().life_total(C), Some(&0.into()));
-    assert!(before.conclusion().is_none());
-
-    let timeout = before.expire_response(before.basis(), B).unwrap();
-    assert_eq!(before.expire_response(before.basis(), B).unwrap(), timeout);
-    let next = timeout.state();
-    let graveyard = next.execution().window().cards().graveyard(A);
-    assert_eq!(graveyard, [2, 1].map(|id| object(next, id).id()));
-    assert!(before.execution().window().cards().graveyard(A).is_empty());
-    timeout
-}
-
-#[test]
-fn graveyard_order_timeout_settles_the_other_defenders_loss() {
-    let timeout = timeout_after_first_graveyard_order(vec![A, B, C]);
-    let next = timeout.state();
-    assert_eq!(
-        next.outcome(),
-        Some(spellwake_engine::draw::GameOutcome::Winner(A))
-    );
-    assert_eq!(
-        next.conclusion().unwrap().cause(),
-        &spellwake_engine::game::GameConclusionCause::CheckedLossesAfterDepartures {
-            players: [C].into(),
-            earlier_departures: [B].into(),
-        }
-    );
-}
-
-#[test]
-fn graveyard_order_timeout_leaves_two_survivors_acting_after_the_other_defender_loses() {
-    let timeout = timeout_after_first_graveyard_order(vec![A, B, C, D]);
-    let next = timeout.state();
-    assert!(next.conclusion().is_none());
-    assert_eq!(next.execution().window().participants(), &[A, D]);
-    let departures: Vec<_> = timeout
-        .rules_journal()
-        .records
-        .iter()
-        .filter_map(|record| match record {
-            spellwake_engine::occurrence::RulesRecord::PlayersDeparted { players, .. } => {
-                Some(players.clone())
-            }
-            _ => None,
-        })
-        .collect();
-    assert_eq!(departures, [[B].into(), [C].into()]);
-    let first = holder(next);
-    let after = act(next, first, GameCommand::Pass);
-    assert_ne!(holder(after.state()), first);
-}
-
-#[test]
-fn static_control_survives_a_bystander_but_ends_when_the_source_owner_leaves() {
-    use spellwake_engine::characteristics::{
-        CardType, PermanentSelector, StaticAbilityId, StaticContinuousAbility, StaticPart,
-        StaticParts,
-    };
-
-    let mut source = Program::artifact(None, vec![]);
-    source.continuous = Some(StaticContinuousAbility::Battlefield {
-        id: StaticAbilityId(1),
-        selector: PermanentSelector {
-            required_types: [CardType::Creature].into(),
-            ..PermanentSelector::default()
-        },
-        parts: StaticParts(vec![StaticPart::ControlSourceController]),
-    });
-    let start = setup(
-        vec![A, B, C],
-        vec![
-            SeedCard {
-                program: source,
-                ..battlefield(1, A)
-            },
-            battlefield(2, C),
-        ],
-        Step::PrecombatMain,
-    );
-    let before = start.state();
-    let original = object(before, 2);
-    assert_eq!(original.controller(), Some(A));
-    let bystander = act(before, B, GameCommand::Concede);
-    assert_eq!(object(bystander.state(), 2), original);
-    let expired = before.expire_response(before.basis(), A).unwrap();
-    let returned = object(expired.state(), 2);
-    assert_eq!(returned.id(), original.id());
-    assert_eq!(returned.controller(), Some(C));
-    assert_eq!(returned.zone(), ObjectZone::Battlefield);
-    assert_ne!(returned.control_epoch(), original.control_epoch());
-}
-
-#[test]
-fn combat_priority_bystander_can_concede_and_survivors_finish_the_attack() {
-    let game = attackers(setup(vec![A, B, C, D], cards(), Step::Untap).state());
-    let attacking = declared(&game, &[(1, B)]).into_state();
-    let before = attacking.execution().combat().unwrap().clone();
-    let leaving = input(&attacking, D, GameCommand::Concede);
-    let accepted = attacking.advance(leaving.clone()).unwrap();
-    assert_eq!(attacking.advance(leaving).unwrap(), accepted);
-    let next = accepted.state();
-    assert_eq!(next.execution().combat(), Some(&before));
-    assert_eq!(next.execution().window().participants(), &[A, B, C]);
-    assert_eq!(holder(next), A);
-    let block = round(next);
-    assert_eq!(block.state().pending_decision().unwrap().chooser(), B);
-    let unblocked = blocked(block.state(), &[]);
-    let damage = round(unblocked.state());
-    assert_eq!(
-        damage.state().turn().unwrap().position().step,
-        Step::CombatDamage
-    );
-    assert_eq!(damage.state().execution().life_total(B), Some(&18.into()));
-    assert_eq!(attacking.execution().combat(), Some(&before));
-}
-
-#[test]
-fn departing_defender_skips_only_their_block_choice_and_preserves_other_damage() {
-    let mut seeds = cards();
-    seeds.push(battlefield(5, C));
-    let game = attackers(setup(vec![A, B, C, D], seeds, Step::Untap).state());
-    let attacking = declared(&game, &[(1, B), (2, C)]).into_state();
-    let first = round(&attacking).into_state();
-    assert_eq!(first.pending_decision().unwrap().chooser(), B);
-    for departure in [
-        attacking
-            .advance(input(&attacking, B, GameCommand::Concede))
-            .unwrap(),
-        first.expire_response(first.basis(), B).unwrap(),
-    ] {
-        assert!(departure.combat_declarations().is_empty());
-        let mut next = departure.into_state();
-        if next.pending_decision().is_none() {
-            next = round(&next).into_state();
-        }
-        assert_eq!(next.pending_decision().unwrap().chooser(), C);
-        let after = blocked(&next, &[]);
-        assert_eq!(
-            after
-                .state()
-                .execution()
-                .combat()
-                .unwrap()
-                .attacker(object(&game, 1).id())
-                .unwrap()
-                .block_status(),
-            BlockStatus::Unblocked
-        );
-        let damage = round(after.state());
-        assert_eq!(damage.state().execution().life_total(C), Some(&18.into()));
-        assert_eq!(
-            damage.state().execution().life_total(B),
-            next.execution().life_total(B)
-        );
-    }
-    let second = blocked(&first, &[(3, 1)]).into_state();
-    let departure = second.expire_response(second.basis(), C).unwrap();
-    assert!(departure.combat_declarations().is_empty());
-    assert!(departure.state().pending_decision().is_none());
-    let combat = departure.state().execution().combat().unwrap();
-    assert_eq!(combat.blockers().count(), 1);
-    assert_eq!(
-        combat
-            .attacker(object(&game, 1).id())
-            .unwrap()
-            .block_status(),
-        BlockStatus::Blocked
-    );
-    let damage = round(departure.state());
-    assert_eq!(damage.state().execution().life_total(B), Some(&20.into()));
-    assert_eq!(first.execution().window().participants(), &[A, B, C, D]);
-}
-
-#[test]
-fn departure_during_damage_assignment_preserves_surviving_attacks() {
-    let game = attackers(setup(vec![A, B, C, D], cards(), Step::Untap).state());
-    let attacks = declared(&game, &[(1, B), (2, C)]);
-    let block = round(attacks.state());
-    let blocks = blocked(block.state(), &[(3, 1), (4, 1)]);
-    let assignment = round(blocks.state()).into_state();
-    assert!(matches!(assignment.pending_decision().unwrap().frame(),
-        RuleFrame::Combat(CombatDecision::DamageAssignments(frame)) if frame.chooser() == A));
-    // The active player leaves before committing an assignment.
-    let timed_out = assignment.expire_response(assignment.basis(), A).unwrap();
-    assert!(timed_out.state().pending_decision().is_none());
-    assert_eq!(
-        timed_out.state().execution().life_total(C),
-        Some(&20.into())
-    );
-    assert!(timed_out.combat_assignments().is_empty());
-    // If the blocker owner leaves instead, the other defender still takes damage.
-    let block_owner = assignment
-        .advance(input(&assignment, B, GameCommand::Concede))
-        .unwrap();
-    assert!(block_owner.state().pending_decision().is_none());
-    assert_eq!(
-        block_owner.state().execution().life_total(C),
-        Some(&18.into())
-    );
-    // A bystander leaving keeps the original assignment domain for the attacker.
-    let bystander = assignment
-        .advance(input(&assignment, D, GameCommand::Concede))
-        .unwrap();
-    let RuleFrame::Combat(CombatDecision::DamageAssignments(next)) =
-        bystander.state().pending_decision().unwrap().frame()
-    else {
-        panic!("expected damage assignment");
-    };
-    let RuleFrame::Combat(CombatDecision::DamageAssignments(before)) =
-        assignment.pending_decision().unwrap().frame()
-    else {
-        unreachable!()
-    };
-    assert_eq!(next.domains(), before.domains());
-    assert_eq!(next.chooser(), A);
-    assert!(bystander.combat_assignments().is_empty());
-}
-
-#[test]
-fn defending_player_departure_after_blocks_preserves_other_attacks_and_assigns_no_damage_to_them() {
-    for blocks in [vec![], vec![(3, 1)]] {
-        let game = attackers(setup(vec![A, B, C, D], cards(), Step::Untap).state());
-        let attacking = declared(&game, &[(1, B), (2, C)]);
-        let choice = round(attacking.state());
-        assert_eq!(choice.state().pending_decision().unwrap().chooser(), B);
-        let declarations = blocked(choice.state(), &blocks);
-        let before = declarations.state();
-        assert!(before.pending_decision().is_none());
-        let before_combat = before.execution().combat().unwrap().clone();
-        let historical_status = before_combat
-            .attacker(object(&game, 1).id())
-            .unwrap()
-            .block_status();
-        let request = input(before, B, GameCommand::Concede);
-        let departure = before.advance(request.clone()).unwrap();
-        assert_eq!(before.advance(request).unwrap(), departure);
-        let next = departure.state();
-        assert_eq!(next.execution().window().participants(), &[A, C, D]);
-        let combat = next.execution().combat().unwrap();
-        assert_eq!(combat.attackers().count(), 2);
-        assert_eq!(combat.blockers().count(), 0);
-        assert_eq!(
-            combat
-                .attacker(object(&game, 1).id())
-                .unwrap()
-                .block_status(),
-            historical_status
-        );
-        assert_eq!(before.execution().combat(), Some(&before_combat));
-        let damage = round(next);
-        assert_eq!(
-            damage.state().turn().unwrap().position().step,
-            Step::CombatDamage
-        );
-        assert_eq!(damage.state().execution().life_total(C), Some(&18.into()));
-        assert_eq!(
-            damage.state().execution().life_total(B),
-            next.execution().life_total(B)
-        );
-        assert_eq!(damage.state().execution().life_total(D), Some(&20.into()));
-    }
 }
 
 #[test]
@@ -1728,7 +1418,8 @@ fn returned_creature_incarnations_cannot_reuse_the_old_attack_handle_or_control_
                 decision: pending.id(),
                 choice: DecisionReply::DeclareAttackers(vec![AttackDeclaration {
                     attacker: old,
-                    defender: B
+                    defender: B,
+                    defending_planeswalker: None,
                 }])
             }
         ))
@@ -1747,3 +1438,36 @@ fn test_vocabulary() -> std::sync::Arc<spellwake_contracts::creature_types::Crea
 {
     synthetic_vocabulary::for_rules("cr-20260925")
 }
+
+#[path = "combat_keywords/damage.rs"]
+mod keyword_damage;
+
+#[path = "combat_keywords/blocking.rs"]
+mod keyword_blocking;
+
+#[path = "combat_keywords/triggers.rs"]
+mod keyword_triggers;
+
+#[path = "combat_keywords/poison.rs"]
+mod keyword_poison;
+
+#[path = "combat_keywords/advanced.rs"]
+mod advanced_combat_keywords;
+
+#[path = "combat_keywords/protection.rs"]
+mod protection_damage_keywords;
+
+#[path = "upkeep_keywords/behavior.rs"]
+mod upkeep_keywords;
+
+#[path = "upkeep_keywords/counters.rs"]
+mod counter_keywords;
+
+#[path = "combat_keywords/growth.rs"]
+mod growth_keywords;
+
+#[path = "combat_keywords/transfers.rs"]
+mod transfer_keywords;
+
+#[path = "combat_keywords/attacking_tokens.rs"]
+mod attacking_tokens;

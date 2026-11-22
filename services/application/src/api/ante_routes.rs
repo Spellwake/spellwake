@@ -63,7 +63,7 @@ async fn write(
         Ok(t) => t,
         Err(e) => return actor_error(e),
     };
-    if !single_content_type(request.headers()).is_some_and(|v| v == "application/json") {
+    if !is_json_content_type(request.headers()) {
         return fail(StatusCode::BAD_REQUEST, "body", "json_required");
     }
     let bytes = match to_bytes(request.into_body(), 32768).await {

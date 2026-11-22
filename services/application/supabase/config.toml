@@ -1,0 +1,69 @@
+# Isolated local integration stack. This does not configure a hosted project.
+project_id = "spellwake-application-local"
+
+[api]
+enabled = true
+port = 55431
+schemas = ["public", "app"]
+extra_search_path = ["public", "extensions"]
+max_rows = 1000
+auto_expose_new_tables = false
+
+[db]
+port = 55432
+shadow_port = 55430
+major_version = 17
+health_timeout = "3m"
+
+[db.seed]
+enabled = false
+
+[realtime]
+enabled = false
+
+[studio]
+enabled = false
+port = 55433
+
+[local_smtp]
+enabled = false
+port = 55434
+
+[storage]
+enabled = true
+file_size_limit = "2GiB"
+
+[storage.s3_protocol]
+enabled = false
+
+[storage.analytics]
+enabled = false
+
+[storage.vector]
+enabled = false
+
+[storage.buckets.spellwake-evidence]
+public = false
+file_size_limit = "2GiB"
+allowed_mime_types = ["application/json", "application/gzip"]
+
+# Auth supplies its real managed schemas for integration tests. Public signup and
+# external providers stay disabled until single-method ownership is qualified.
+[auth]
+enabled = true
+site_url = "http://127.0.0.1:5173"
+enable_signup = false
+enable_anonymous_sign_ins = false
+enable_manual_linking = false
+
+[auth.email]
+enable_signup = false
+
+[edge_runtime]
+enabled = false
+
+[analytics]
+enabled = false
+
+[experimental.pgdelta]
+enabled = false

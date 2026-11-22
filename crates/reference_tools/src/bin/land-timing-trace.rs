@@ -180,6 +180,7 @@ fn cast(s: &GameState, id: u64) -> GameCommand {
             spell: object(s, id),
             target,
             payment: ManaPayment {
+                from_lots: Default::default(),
                 spend: vec![ManaSpend {
                     mana_type: ManaType::Red,
                     amount: 2.into(),
@@ -288,12 +289,12 @@ fn observe(
         allowed,
         turn: s.turn().unwrap().position().number,
         step: step(s),
-        active: alias(s.execution().window().turn_owner()),
+        active: alias(s.execution().window().active_player()),
         actor: alias(actor),
         priority: alias(holder(s)),
         stack_size: s.execution().window().entries().len(),
         land_zone: zone(s, land_id),
-        lands_played: if actor == s.execution().window().turn_owner() {
+        lands_played: if actor == s.execution().window().active_player() {
             String::from(s.turn().unwrap().lands_played().clone())
                 .parse()
                 .unwrap()

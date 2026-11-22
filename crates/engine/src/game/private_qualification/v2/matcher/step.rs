@@ -24,7 +24,7 @@ pub(super) fn run(
     turn: u64,
     aliases: &packet::AliasContext,
 ) -> Result<(Value, MatcherWitness), String> {
-    if source.window().turn_owner() != active {
+    if source.window().active_player() != active {
         return Err("matcher step active differs from literal seeded active".into());
     }
     let mut state = source.clone();

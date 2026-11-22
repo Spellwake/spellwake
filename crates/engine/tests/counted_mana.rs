@@ -20,8 +20,8 @@ use spellwake_engine::{
     object_identity::{CardId, ObjectId},
     occurrence::RulesOccurrence,
     program::{
-        BodyTarget, CardType, CreatureTypeSlot, ExecutableBody, Instruction, ObjectRelation,
-        OrdinaryCondition, Program, TriggeredAbility, TriggeredAbilityId,
+        BodyTarget, CardType, CreatureTypeSlot, ExecutableBody, Instruction, Program,
+        TriggeredAbility, TriggeredAbilityId,
     },
 };
 use std::collections::BTreeMap;
@@ -37,7 +37,7 @@ fn counted(selector: PermanentSelector) -> ManaAbility {
     ManaAbility {
         id: ManaAbilityId(1),
         output: ManaOutput::Counted {
-            mana_type: ManaType::Green,
+            mana_type: Some(ManaType::Green),
             permanents: selector,
         },
     }
@@ -136,7 +136,9 @@ fn zero_count_keeps_cost_and_activation_without_production_and_still_triggers_a_
     p.triggered.push(TriggeredAbility {
         grouping: spellwake_engine::program::TriggerGrouping::EachOccurrence,
         id: TriggeredAbilityId(1),
-        condition: OrdinaryCondition::BecomesTapped(ObjectRelation::SelfObject),
+        condition: spellwake_engine::program::TriggerSpec::becomes_tapped(
+            spellwake_engine::program::ObjectFilter::self_object(),
+        ),
         body: ExecutableBody::new(
             BodyTarget::None,
             vec![Instruction::AdjustControllerLife {
@@ -251,7 +253,7 @@ fn a_chosen_word_updates_boost_and_mana_count_without_changing_the_mana_symbol()
         subtypes(&v, &["Vampire", "Druid"])
     );
     assert!(
-        matches!(&current.printed_text.mana[0].output, ManaOutput::Counted { mana_type: ManaType::Green, permanents } if permanents.creature_subtype == Some(v.resolve_label("Vampire").unwrap()))
+        matches!(&current.printed_text.mana[0].output, ManaOutput::Counted { mana_type: Some(ManaType::Green), permanents } if permanents.creature_subtype == Some(v.resolve_label("Vampire").unwrap()))
     );
     let done = activate(changed.state(), source);
     assert_eq!(done.state().execution().mana(P0, ManaType::Green), 3.into());

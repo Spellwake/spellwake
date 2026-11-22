@@ -12,60 +12,6 @@ const BEARS: &str = "14c8f55d-d177-4c25-a931-ebeb9e6062a0";
 fn is_spell(object: &spellwake_engine::object_identity::GameObject) -> bool {
     ((object.card_id().unwrap().0 - 1) % 36).is_multiple_of(3)
 }
-fn verify_land_play(f: &CheckpointFixture, viewer: Uuid) {
-    use crate::admission_ports::NativeEventSchema::{ActivityV1, LandPlayV1};
-    let human = Uuid::from_u128(0xc001);
-    let other = seats().into_iter().find(|seat| *seat != viewer).unwrap();
-    let accounts = NativeCastAccounts::new(
-        ids().game_id,
-        ids().context_id,
-        [(viewer, Some(human)), (other, None)],
-    )
-    .unwrap();
-    let ai = NativeCastAccounts::new(
-        ids().game_id,
-        ids().context_id,
-        [(viewer, None), (other, Some(human))],
-    )
-    .unwrap();
-    let recovered = replay(f);
-    let expected = json!([{"eventIndex":"0","accountId":human,"kind":"native:land-play","revision":"native-land-play-v1","value":"1"}]);
-    for tip in [&f.tip, &recovered] {
-        assert_eq!(tip.activity_schema(), LandPlayV1);
-        assert_eq!(tip.land_player().unwrap(), viewer);
-        assert_eq!(
-            serde_json::to_value(accounts.facts_for_schema(tip, LandPlayV1).unwrap()).unwrap(),
-            expected
-        );
-        assert!(ai.facts_for_schema(tip, LandPlayV1).unwrap().is_empty());
-        assert!(
-            accounts
-                .facts_for_schema(tip, ActivityV1)
-                .unwrap()
-                .is_empty()
-        );
-        let legacy: Value = serde_json::from_slice(
-            tip.prepare_results_schema(ActivityV1)
-                .unwrap()
-                .original_bytes(),
-        )
-        .unwrap();
-        assert_eq!(legacy["version"], "native-results-activity-v1");
-        assert!(legacy.get("landPlayer").is_none());
-        let result: Value =
-            serde_json::from_slice(tip.prepare_activity_results().unwrap().original_bytes())
-                .unwrap();
-        assert_eq!(result["landPlayer"], json!(viewer));
-        assert_eq!(result["version"], "native-results-land-play-v1");
-    }
-    assert_eq!(
-        f.tip.prepare_activity_results().unwrap().original_bytes(),
-        recovered
-            .prepare_activity_results()
-            .unwrap()
-            .original_bytes()
-    );
-}
 pub(in crate::native_game) fn cast_fixture(
     spell: &str,
     land: &str,
@@ -99,7 +45,8 @@ pub(in crate::native_game) fn cast_fixture(
         let viewer = seats()[usize::try_from(holder.0).unwrap()];
         let window = f.tip.state().execution().window();
         let turn = f.tip.state().turn().unwrap();
-        let main = holder == window.turn_owner() && turn.position().step == TurnStep::PrecombatMain;
+        let main =
+            holder == window.active_player() && turn.position().step == TurnStep::PrecombatMain;
         let mut scope = NativeScope::new(f.tip.state(), f.tip.binding(viewer).unwrap()).unwrap();
         let mut action = PlayerAction::Pass {};
         if main {
@@ -127,6 +74,12 @@ pub(in crate::native_game) fn cast_fixture(
                 if lands.len() >= 2 {
                     let handle = scope.issue(NativeReference::Object(bear.id())).unwrap();
                     let payment = Some(PlayerPayment {
+                        from_lots: Default::default(),
+                        exile_cast_type: None,
+                        alternative_cost_source: None,
+                        graveyard_permission: None,
+                        use_granted_flashback: false,
+                        restricted_mana: Vec::new(),
                         spend: vec![ManaSpend {
                             color,
                             amount: crate::player_wire::RulesCount::try_from("2".to_owned())
@@ -196,9 +149,6 @@ pub(in crate::native_game) fn cast_fixture(
         let proposal = scope.propose(&command).unwrap();
         let bytes = scope.encode_input(&proposal).unwrap();
         install(&mut f, viewer, bytes);
-        if matches!(command.action, PlayerAction::PlayLand { .. }) {
-            verify_land_play(&f, viewer);
-        }
         assert!(
             serde_json::from_slice::<Value>(
                 f.tip.prepare_activity_results().unwrap().original_bytes()

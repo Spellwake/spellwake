@@ -7,8 +7,7 @@ use spellwake_engine::{
     land::LandType,
     mana::ManaCost,
     program::{
-        BodyTarget, CardType, DefinitionError, ExecutableBody, Instruction, InstructionAmount,
-        Program, Supertype,
+        BodyTarget, CardType, DefinitionError, ExecutableBody, Instruction, Program, Supertype,
     },
 };
 use std::collections::BTreeSet;
@@ -757,7 +756,7 @@ fn counted_mana_uses_the_shared_current_land_filter_and_excludes_hand_and_oppone
     source.mana.push(ManaAbility {
         id: ManaAbilityId(1),
         output: ManaOutput::Counted {
-            mana_type: ManaType::Green,
+            mana_type: Some(ManaType::Green),
             permanents: PermanentSelector {
                 land_subtype: Some(LandType::Forest),
                 controller: ControllerSelector::SourceController,
@@ -1085,7 +1084,7 @@ fn authored_land_family_requires_land_independently_of_name_basic_and_creature_f
         ExecutableBody::new(
             BodyTarget::None,
             vec![Instruction::DrawController {
-                amount: InstructionAmount::Literal(0.into()),
+                amount: spellwake_engine::program::ValueExpr::Literal(0.into()),
             }],
         ),
     );

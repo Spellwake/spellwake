@@ -445,6 +445,7 @@ fn run_case(
         Value::Null,
     )?;
     let payment = ManaPayment {
+        from_lots: Default::default(),
         spend: vec![ManaSpend {
             mana_type: ManaType::Blue,
             amount: 1.into(),
@@ -508,6 +509,9 @@ fn run_case(
             "prepared operation kind mismatch",
         )?;
         let reply = DecisionReply::LibraryTop(match kind {
+            LibraryChoiceKind::Search => {
+                return Err("unexpected search in prepared scry/surveil".into());
+            }
             LibraryChoiceKind::Scry => LibraryTopReply::Scry {
                 top_first: top,
                 bottom_top_first: rest,
@@ -564,7 +568,7 @@ fn run_case(
             && run.state.pending_turn_work().is_none()
             && run.state.execution().window().entries().is_empty()
             && run.state.execution().window().resolving().is_none()
-            && run.state.execution().window().turn_owner() == A
+            && run.state.execution().window().active_player() == A
             && matches!(run.state.execution().window().phase(), WindowPhase::Priority(PriorityPhase::Ready { holder }) if holder == A)
             && run.state.turn().is_some_and(|t| {
                 t.position().number == 1 && t.position().step == Step::PrecombatMain

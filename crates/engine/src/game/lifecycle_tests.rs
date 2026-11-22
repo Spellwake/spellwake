@@ -11,8 +11,8 @@ use crate::{
         RulesRecord, ZoneReason,
     },
     program::{
-        BodyTarget, ExecutableBody, Instruction, OrdinaryCondition, PlayerRelation,
-        TriggeredAbility, TriggeredAbilityId,
+        BodyTarget, ExecutableBody, Instruction, PlayerRelation, TriggerSpec, TriggeredAbility,
+        TriggeredAbilityId,
     },
 };
 
@@ -54,7 +54,7 @@ fn libraries(seats: &[SeatId]) -> Vec<SeedCard> {
         })
         .collect()
 }
-fn observer(id: u64, owner: SeatId, condition: OrdinaryCondition) -> SeedCard {
+fn observer(id: u64, owner: SeatId, condition: TriggerSpec) -> SeedCard {
     let mut program = Program::artifact(None, vec![]);
     program.triggered.push(TriggeredAbility {
         grouping: spellwake_engine::program::TriggerGrouping::EachOccurrence,
@@ -63,7 +63,7 @@ fn observer(id: u64, owner: SeatId, condition: OrdinaryCondition) -> SeedCard {
         body: ExecutableBody::new(
             BodyTarget::None,
             vec![Instruction::DrawController {
-                amount: crate::program::InstructionAmount::Literal(1.into()),
+                amount: crate::program::ValueExpr::Literal(1.into()),
             }],
         ),
     });
@@ -169,10 +169,7 @@ fn actual_upkeep_entry_places_two_own_staff_bodies_without_prepared_untap_event(
         cards.push(observer(
             id,
             owner,
-            OrdinaryCondition::StepBegan {
-                step: Step::Upkeep,
-                player: PlayerRelation::Controller,
-            },
+            crate::program::TriggerSpec::step_began(Step::Upkeep, PlayerRelation::Controller),
         ));
     }
     let initial = scheduled(vec![A, B], A, Step::Untap, cards, vec![]);
@@ -212,10 +209,7 @@ fn waiting_only_cleanup_enters_priority_once_and_real_repeat_has_a_new_iteration
     cards.push(observer(
         1,
         A,
-        OrdinaryCondition::StepBegan {
-            step: Step::Cleanup,
-            player: PlayerRelation::Controller,
-        },
+        crate::program::TriggerSpec::step_began(Step::Cleanup, PlayerRelation::Controller),
     ));
     let initial = scheduled(vec![A, B], A, Step::Untap, cards, vec![]);
     let mut rows = initial.rules_journal().records.clone();
@@ -255,7 +249,10 @@ fn discard_draw_does_not_repeat_cleanup_work_or_step_entry_in_the_same_iteration
     cards.push(observer(
         1,
         A,
-        OrdinaryCondition::Discarded(PlayerRelation::Controller),
+        crate::program::TriggerSpec::player_action(
+            PlayerRelation::Controller,
+            crate::program::PlayerTriggerAction::Discarded,
+        ),
     ));
     for n in 0..8 {
         cards.push(SeedCard {
@@ -353,7 +350,7 @@ fn prepared_cleanup_rotation_clears_one_shared_event_in_old_active_apnap() {
         ]
     );
     let state = initial.state();
-    assert_eq!(state.execution().window().turn_owner(), A);
+    assert_eq!(state.execution().window().active_player(), A);
     assert_eq!(state.turn().unwrap().position().number, 2);
     for player in [A, B, C] {
         for kind in ManaType::ALL {
@@ -380,7 +377,10 @@ fn same_cleanup_priority_keeps_resources_until_the_real_repeated_step() {
     cards.push(observer(
         1,
         C,
-        OrdinaryCondition::Discarded(PlayerRelation::Controller),
+        crate::program::TriggerSpec::player_action(
+            PlayerRelation::Controller,
+            crate::program::PlayerTriggerAction::Discarded,
+        ),
     ));
     for n in 0..8 {
         cards.push(SeedCard {
@@ -650,10 +650,7 @@ fn real_turn_start_stamp_precedes_step_capture_and_actual_untap_status() {
     let mut source = observer(
         1,
         A,
-        OrdinaryCondition::StepBegan {
-            step: Step::Untap,
-            player: PlayerRelation::Controller,
-        },
+        crate::program::TriggerSpec::step_began(Step::Untap, PlayerRelation::Controller),
     );
     source.program.activated.push(ActivatedAbility {
         id: ActivatedAbilityId(1),

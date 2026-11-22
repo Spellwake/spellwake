@@ -39,8 +39,9 @@ fn real_until_end_of_turn_expiry_changes_the_cleanup_selection_domain_before_the
         vec![
             Instruction::Sacrifice {
                 players: AffectedPlayers::One(ResolvingPlayer::Controller),
-                amount: InstructionAmount::Literal(1.into()),
+                amount: crate::program::ValueExpr::Literal(1.into()),
                 filter: PermanentTypeFilter {
+                    any_types: Default::default(),
                     required_types: BTreeSet::from([CardType::Artifact]),
                     forbidden_types: BTreeSet::new(),
                 },
@@ -53,10 +54,7 @@ fn real_until_end_of_turn_expiry_changes_the_cleanup_selection_domain_before_the
     let mut source = observer(
         1,
         A,
-        OrdinaryCondition::StepBegan {
-            step: Step::Cleanup,
-            player: PlayerRelation::Controller,
-        },
+        crate::program::TriggerSpec::step_began(Step::Cleanup, PlayerRelation::Controller),
     );
     source.program.triggered[0].body = selected_body.clone();
     let mut cards = libraries(&[A, B]);
@@ -281,7 +279,7 @@ fn real_until_end_of_turn_expiry_changes_the_cleanup_selection_domain_before_the
     );
     assert_eq!(state.turn().unwrap().position().number, 2);
     assert_eq!(state.turn().unwrap().position().step, Step::Upkeep);
-    assert_eq!(state.execution().window().turn_owner(), B);
+    assert_eq!(state.execution().window().active_player(), B);
     for (player, original_library) in [A, B].into_iter().zip(old_libraries) {
         assert_eq!(
             state.execution().window().cards().library(player),
@@ -303,7 +301,7 @@ fn a_real_created_token_and_dying_observer_share_lookback_before_later_cessation
     watcher.triggered.push(TriggeredAbility {
         id: TriggeredAbilityId(1),
         grouping: TriggerGrouping::EachOccurrence,
-        condition: OrdinaryCondition::Dies(ObjectRelation::AnyCreature),
+        condition: crate::program::TriggerSpec::dies(crate::program::ObjectFilter::creature()),
         body: trigger_body.clone(),
     });
     let vocabulary =
@@ -347,8 +345,9 @@ fn a_real_created_token_and_dying_observer_share_lookback_before_later_cessation
                     vec![
                         Instruction::Sacrifice {
                             players: AffectedPlayers::EachPlayer,
-                            amount: InstructionAmount::Literal(1.into()),
+                            amount: crate::program::ValueExpr::Literal(1.into()),
                             filter: PermanentTypeFilter {
+                                any_types: Default::default(),
                                 required_types: BTreeSet::from([CardType::Creature]),
                                 forbidden_types: BTreeSet::new(),
                             },

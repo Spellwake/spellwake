@@ -14,9 +14,8 @@ use spellwake_engine::{
     life::LifeAdjustment,
     mana::{ManaAbility, ManaAbilityId, ManaCost, ManaOutput, ManaType},
     program::{
-        BodyTarget, ExecutableBody, Instruction, InstructionAmount, ObjectRelation,
-        OrdinaryCondition, PlayerRelation, ResolvingPlayer, SpellCastFilter, SpellTargetFilter,
-        Supertype, TriggerGrouping, TriggeredAbility, TriggeredAbilityId,
+        BodyTarget, ExecutableBody, Instruction, PlayerRelation, ResolvingPlayer, Supertype,
+        TriggerGrouping, TriggerSpec, TriggeredAbility, TriggeredAbilityId,
     },
     token::{TokenCreation, TokenDefinition, TokenName, TokenRecipients, TokenSubtype},
 };
@@ -154,7 +153,7 @@ struct AuthoredCard {
     name: &'static str,
     mana: &'static str,
     type_line: &'static str,
-    text_sha256: &'static str,
+    text: &'static str,
     power: Option<&'static str>,
     toughness: Option<&'static str>,
     kind: AuthoredKind,
@@ -238,7 +237,7 @@ impl AuthoredEffect {
                 vec![Instruction::ReturnToOwnersHand],
             ),
             Self::CounterUnlessPaidThree => ExecutableBody::new(
-                BodyTarget::SingleSpell(SpellTargetFilter::AnySpell),
+                BodyTarget::SingleSpell(spellwake_engine::program::SpellFilter::any()),
                 vec![
                     Instruction::OfferManaPayment {
                         payer: ResolvingPlayer::TargetSpellController,
@@ -250,17 +249,19 @@ impl AuthoredEffect {
                 ],
             ),
             Self::CopySpell => ExecutableBody::new(
-                BodyTarget::SingleSpell(SpellTargetFilter::CopyableInstructionSpell),
+                BodyTarget::SingleSpell(
+                    spellwake_engine::program::SpellFilter::copyable_instruction(),
+                ),
                 vec![Instruction::CopySpell],
             ),
             Self::CounterSpell => ExecutableBody::new(
-                BodyTarget::SingleSpell(SpellTargetFilter::AnySpell),
+                BodyTarget::SingleSpell(spellwake_engine::program::SpellFilter::any()),
                 vec![Instruction::CounterSpell],
             ),
             Self::DrawTwo => ExecutableBody::new(
                 BodyTarget::None,
                 vec![Instruction::DrawController {
-                    amount: InstructionAmount::Literal(2.into()),
+                    amount: spellwake_engine::program::ValueExpr::Literal(2.into()),
                 }],
             ),
             Self::CreateSoldiers => ExecutableBody::new(
@@ -268,7 +269,9 @@ impl AuthoredEffect {
                 vec![Instruction::CreateTokens {
                     creations: vec![TokenCreation {
                         definition: token_template("Soldier", Color::White, 1, vocabulary)?,
-                        amount: InstructionAmount::Literal(2.into()),
+                        amount: spellwake_engine::program::ValueExpr::Literal(2.into()),
+                        base_size: None,
+                        enters_tapped: false,
                         recipients: TokenRecipients::Controller,
                     }],
                 }],
@@ -278,7 +281,7 @@ impl AuthoredEffect {
 }
 
 struct AuthoredTrigger {
-    condition: OrdinaryCondition,
+    condition: TriggerSpec,
     effect: AuthoredTriggerEffect,
 }
 enum AuthoredTriggerEffect {
@@ -297,7 +300,7 @@ impl AuthoredTrigger {
         vocabulary: &CreatureTypeVocabulary,
     ) -> Result<TriggeredAbility, RegistryError> {
         let draw = Instruction::DrawController {
-            amount: InstructionAmount::Literal(1.into()),
+            amount: spellwake_engine::program::ValueExpr::Literal(1.into()),
         };
         let gain = Instruction::AdjustControllerLife {
             adjustment: LifeAdjustment::Gain(1.into()),
@@ -370,7 +373,7 @@ impl AuthoredTrigger {
         };
         Ok(TriggeredAbility {
             id: TriggeredAbilityId(1),
-            condition: self.condition,
+            condition: self.condition.clone(),
             grouping: TriggerGrouping::EachOccurrence,
             body: ExecutableBody::new(target, instructions),
         })
@@ -403,6 +406,8 @@ fn token_template(
     .map_err(RegistryError::TokenDefinition)
 }
 
+// Fixed 46-card teaching pool table referenced directly by compile-time lookup.
+#[allow(clippy::large_const_arrays)]
 const CARDS: [AuthoredCard; 46] = [
     AuthoredCard {
         membership: &[TeachingPool::Vanilla, TeachingPool::Interaction],
@@ -410,7 +415,7 @@ const CARDS: [AuthoredCard; 46] = [
         name: "Alpine Grizzly",
         mana: "{2}{G}",
         type_line: "Creature — Bear",
-        text_sha256: "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        text: "",
         power: Some("4"),
         toughness: Some("2"),
         kind: AuthoredKind::Creature {
@@ -434,7 +439,7 @@ const CARDS: [AuthoredCard; 46] = [
         name: "Centaur Courser",
         mana: "{2}{G}",
         type_line: "Creature — Centaur Warrior",
-        text_sha256: "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        text: "",
         power: Some("3"),
         toughness: Some("3"),
         kind: AuthoredKind::Creature {
@@ -454,7 +459,7 @@ const CARDS: [AuthoredCard; 46] = [
         name: "Elite Vanguard",
         mana: "{W}",
         type_line: "Creature — Human Soldier",
-        text_sha256: "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        text: "",
         power: Some("2"),
         toughness: Some("1"),
         kind: AuthoredKind::Creature {
@@ -478,7 +483,7 @@ const CARDS: [AuthoredCard; 46] = [
         name: "Forest",
         mana: "",
         type_line: "Basic Land — Forest",
-        text_sha256: "6215eab3372e7128de713b41e7758fc9b179ade5bc47d33a5af8cef9c9c7493b",
+        text: "({T}: Add {G}.)",
         power: None,
         toughness: None,
         kind: AuthoredKind::BasicLand(LandType::Forest),
@@ -489,7 +494,7 @@ const CARDS: [AuthoredCard; 46] = [
         name: "Glory Seeker",
         mana: "{1}{W}",
         type_line: "Creature — Human Soldier",
-        text_sha256: "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        text: "",
         power: Some("2"),
         toughness: Some("2"),
         kind: AuthoredKind::Creature {
@@ -513,7 +518,7 @@ const CARDS: [AuthoredCard; 46] = [
         name: "Grizzly Bears",
         mana: "{1}{G}",
         type_line: "Creature — Bear",
-        text_sha256: "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        text: "",
         power: Some("2"),
         toughness: Some("2"),
         kind: AuthoredKind::Creature {
@@ -537,7 +542,7 @@ const CARDS: [AuthoredCard; 46] = [
         name: "Kalonian Tusker",
         mana: "{G}{G}",
         type_line: "Creature — Beast",
-        text_sha256: "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        text: "",
         power: Some("3"),
         toughness: Some("3"),
         kind: AuthoredKind::Creature {
@@ -557,7 +562,7 @@ const CARDS: [AuthoredCard; 46] = [
         name: "Loxodon Wayfarer",
         mana: "{2}{W}",
         type_line: "Creature — Elephant Monk",
-        text_sha256: "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        text: "",
         power: Some("1"),
         toughness: Some("5"),
         kind: AuthoredKind::Creature {
@@ -577,7 +582,7 @@ const CARDS: [AuthoredCard; 46] = [
         name: "Nessian Courser",
         mana: "{2}{G}",
         type_line: "Creature — Centaur Warrior",
-        text_sha256: "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        text: "",
         power: Some("3"),
         toughness: Some("3"),
         kind: AuthoredKind::Creature {
@@ -597,7 +602,7 @@ const CARDS: [AuthoredCard; 46] = [
         name: "Oreskos Swiftclaw",
         mana: "{1}{W}",
         type_line: "Creature — Cat Warrior",
-        text_sha256: "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        text: "",
         power: Some("3"),
         toughness: Some("1"),
         kind: AuthoredKind::Creature {
@@ -617,7 +622,7 @@ const CARDS: [AuthoredCard; 46] = [
         name: "Pillarfield Ox",
         mana: "{3}{W}",
         type_line: "Creature — Ox",
-        text_sha256: "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        text: "",
         power: Some("2"),
         toughness: Some("4"),
         kind: AuthoredKind::Creature {
@@ -641,7 +646,7 @@ const CARDS: [AuthoredCard; 46] = [
         name: "Plains",
         mana: "",
         type_line: "Basic Land — Plains",
-        text_sha256: "f3f8e4a29db20544bd9a5b0ae8e10a23a2ae52112da77fa9111d60fb9d409d22",
+        text: "({T}: Add {W}.)",
         power: None,
         toughness: None,
         kind: AuthoredKind::BasicLand(LandType::Plains),
@@ -656,7 +661,7 @@ const CARDS: [AuthoredCard; 46] = [
         name: "Rumbling Baloth",
         mana: "{2}{G}{G}",
         type_line: "Creature — Beast",
-        text_sha256: "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        text: "",
         power: Some("4"),
         toughness: Some("4"),
         kind: AuthoredKind::Creature {
@@ -676,7 +681,7 @@ const CARDS: [AuthoredCard; 46] = [
         name: "Runeclaw Bear",
         mana: "{1}{G}",
         type_line: "Creature — Bear",
-        text_sha256: "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        text: "",
         power: Some("2"),
         toughness: Some("2"),
         kind: AuthoredKind::Creature {
@@ -696,7 +701,7 @@ const CARDS: [AuthoredCard; 46] = [
         name: "Savannah Lions",
         mana: "{W}",
         type_line: "Creature — Cat",
-        text_sha256: "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        text: "",
         power: Some("2"),
         toughness: Some("1"),
         kind: AuthoredKind::Creature {
@@ -716,7 +721,7 @@ const CARDS: [AuthoredCard; 46] = [
         name: "Silvercoat Lion",
         mana: "{1}{W}",
         type_line: "Creature — Cat",
-        text_sha256: "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        text: "",
         power: Some("2"),
         toughness: Some("2"),
         kind: AuthoredKind::Creature {
@@ -736,7 +741,7 @@ const CARDS: [AuthoredCard; 46] = [
         name: "Spined Wurm",
         mana: "{4}{G}",
         type_line: "Creature — Wurm",
-        text_sha256: "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        text: "",
         power: Some("5"),
         toughness: Some("4"),
         kind: AuthoredKind::Creature {
@@ -756,7 +761,7 @@ const CARDS: [AuthoredCard; 46] = [
         name: "Terrain Elemental",
         mana: "{1}{G}",
         type_line: "Creature — Elemental",
-        text_sha256: "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        text: "",
         power: Some("3"),
         toughness: Some("2"),
         kind: AuthoredKind::Creature {
@@ -776,7 +781,7 @@ const CARDS: [AuthoredCard; 46] = [
         name: "Traveling Philosopher",
         mana: "{1}{W}",
         type_line: "Creature — Human Advisor",
-        text_sha256: "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        text: "",
         power: Some("2"),
         toughness: Some("2"),
         kind: AuthoredKind::Creature {
@@ -796,7 +801,7 @@ const CARDS: [AuthoredCard; 46] = [
         name: "Yoked Ox",
         mana: "{W}",
         type_line: "Creature — Ox",
-        text_sha256: "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        text: "",
         power: Some("0"),
         toughness: Some("4"),
         kind: AuthoredKind::Creature {
@@ -816,7 +821,7 @@ const CARDS: [AuthoredCard; 46] = [
         name: "Armored Cancrix",
         mana: "{4}{U}",
         type_line: "Creature — Crab",
-        text_sha256: "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        text: "",
         power: Some("2"),
         toughness: Some("5"),
         kind: AuthoredKind::Creature {
@@ -836,7 +841,7 @@ const CARDS: [AuthoredCard; 46] = [
         name: "Cancel",
         mana: "{1}{U}{U}",
         type_line: "Instant",
-        text_sha256: "6e7e3fa9bb231a1c1910cd956dc7e5c91bb22e9705b39ed61a2ebd23201950e4",
+        text: "Counter target spell.",
         power: None,
         toughness: None,
         kind: AuthoredKind::Spell {
@@ -853,7 +858,7 @@ const CARDS: [AuthoredCard; 46] = [
         name: "Coral Merfolk",
         mana: "{1}{U}",
         type_line: "Creature — Merfolk",
-        text_sha256: "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        text: "",
         power: Some("2"),
         toughness: Some("1"),
         kind: AuthoredKind::Creature {
@@ -877,7 +882,7 @@ const CARDS: [AuthoredCard; 46] = [
         name: "Counterspell",
         mana: "{U}{U}",
         type_line: "Instant",
-        text_sha256: "6e7e3fa9bb231a1c1910cd956dc7e5c91bb22e9705b39ed61a2ebd23201950e4",
+        text: "Counter target spell.",
         power: None,
         toughness: None,
         kind: AuthoredKind::Spell {
@@ -894,7 +899,7 @@ const CARDS: [AuthoredCard; 46] = [
         name: "Divination",
         mana: "{2}{U}",
         type_line: "Sorcery",
-        text_sha256: "6fad500ac8bcb7545b9c91657704f68beb07f6b12e264edff0d07f3de3be9f36",
+        text: "Draw two cards.",
         power: None,
         toughness: None,
         kind: AuthoredKind::Spell {
@@ -911,7 +916,7 @@ const CARDS: [AuthoredCard; 46] = [
         name: "Fugitive Wizard",
         mana: "{U}",
         type_line: "Creature — Human Wizard",
-        text_sha256: "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        text: "",
         power: Some("1"),
         toughness: Some("1"),
         kind: AuthoredKind::Creature {
@@ -935,7 +940,7 @@ const CARDS: [AuthoredCard; 46] = [
         name: "Island",
         mana: "",
         type_line: "Basic Land — Island",
-        text_sha256: "a6050f1a6c1f21586486a1e21aa8be9bc41340fa0beb2ae1a5952cf26b7f4a57",
+        text: "({T}: Add {U}.)",
         power: None,
         toughness: None,
         kind: AuthoredKind::BasicLand(LandType::Island),
@@ -946,7 +951,7 @@ const CARDS: [AuthoredCard; 46] = [
         name: "Maritime Guard",
         mana: "{1}{U}",
         type_line: "Creature — Merfolk Soldier",
-        text_sha256: "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        text: "",
         power: Some("1"),
         toughness: Some("3"),
         kind: AuthoredKind::Creature {
@@ -966,7 +971,7 @@ const CARDS: [AuthoredCard; 46] = [
         name: "Merfolk of the Pearl Trident",
         mana: "{U}",
         type_line: "Creature — Merfolk",
-        text_sha256: "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        text: "",
         power: Some("1"),
         toughness: Some("1"),
         kind: AuthoredKind::Creature {
@@ -990,7 +995,7 @@ const CARDS: [AuthoredCard; 46] = [
         name: "Unsummon",
         mana: "{U}",
         type_line: "Instant",
-        text_sha256: "949ea0ec2b12afb4e8dd8a5b647f2ae7adfb1af38909f725f589c3cc8814dfa2",
+        text: "Return target creature to its owner's hand.",
         power: None,
         toughness: None,
         kind: AuthoredKind::Spell {
@@ -1007,7 +1012,7 @@ const CARDS: [AuthoredCard; 46] = [
         name: "Blood Artist",
         mana: "{1}{B}",
         type_line: "Creature — Vampire",
-        text_sha256: "1af647a916420dc2a89b2ed3ef88593597ee9de21baafaabaf0b7a6f823035f3",
+        text: "Whenever this creature or another creature dies, target player loses 1 life and you gain 1 life.",
         power: Some("0"),
         toughness: Some("1"),
         kind: AuthoredKind::Creature {
@@ -1018,7 +1023,9 @@ const CARDS: [AuthoredCard; 46] = [
             toughness: 1,
             subtypes: &["Vampire"],
             trigger: Some(AuthoredTrigger {
-                condition: OrdinaryCondition::Dies(ObjectRelation::AnyCreature),
+                condition: spellwake_engine::program::TriggerSpec::dies(
+                    spellwake_engine::program::ObjectFilter::creature(),
+                ),
                 effect: AuthoredTriggerEffect::TargetLoseOneGainOne,
             }),
             printed_mana: None,
@@ -1030,7 +1037,7 @@ const CARDS: [AuthoredCard; 46] = [
         name: "Doomed Dissenter",
         mana: "{1}{B}",
         type_line: "Creature — Human",
-        text_sha256: "00de6aebd80e7cbb14e5c390fe9ec8bdd82aae42436a64153d2371874fdf8eeb",
+        text: "When this creature dies, create a 2/2 black Zombie creature token.",
         power: Some("1"),
         toughness: Some("1"),
         kind: AuthoredKind::Creature {
@@ -1041,7 +1048,9 @@ const CARDS: [AuthoredCard; 46] = [
             toughness: 1,
             subtypes: &["Human"],
             trigger: Some(AuthoredTrigger {
-                condition: OrdinaryCondition::Dies(ObjectRelation::SelfObject),
+                condition: spellwake_engine::program::TriggerSpec::dies(
+                    spellwake_engine::program::ObjectFilter::self_object(),
+                ),
                 effect: AuthoredTriggerEffect::CreateZombie,
             }),
             printed_mana: None,
@@ -1053,7 +1062,7 @@ const CARDS: [AuthoredCard; 46] = [
         name: "Elvish Visionary",
         mana: "{1}{G}",
         type_line: "Creature — Elf Shaman",
-        text_sha256: "954aa7dc40bb1cfe288d1c50e2bed4168dc38f089005949ad05df397a1145308",
+        text: "When this creature enters, draw a card.",
         power: Some("1"),
         toughness: Some("1"),
         kind: AuthoredKind::Creature {
@@ -1064,7 +1073,9 @@ const CARDS: [AuthoredCard; 46] = [
             toughness: 1,
             subtypes: &["Elf", "Shaman"],
             trigger: Some(AuthoredTrigger {
-                condition: OrdinaryCondition::Enters(ObjectRelation::SelfObject),
+                condition: spellwake_engine::program::TriggerSpec::enters(
+                    spellwake_engine::program::ObjectFilter::self_object(),
+                ),
                 effect: AuthoredTriggerEffect::DrawOne,
             }),
             printed_mana: None,
@@ -1076,7 +1087,7 @@ const CARDS: [AuthoredCard; 46] = [
         name: "Impassioned Orator",
         mana: "{1}{W}",
         type_line: "Creature — Human Cleric",
-        text_sha256: "19a9122fce2cb9c19dbadc41abeaa495841a48eeedee416938bf6e76bd5d5510",
+        text: "Whenever another creature you control enters, you gain 1 life.",
         power: Some("2"),
         toughness: Some("2"),
         kind: AuthoredKind::Creature {
@@ -1087,7 +1098,11 @@ const CARDS: [AuthoredCard; 46] = [
             toughness: 2,
             subtypes: &["Human", "Cleric"],
             trigger: Some(AuthoredTrigger {
-                condition: OrdinaryCondition::Enters(ObjectRelation::AnotherControlledCreature),
+                condition: spellwake_engine::program::TriggerSpec::enters(
+                    spellwake_engine::program::ObjectFilter::creature()
+                        .controlled()
+                        .other_than_ability_source(),
+                ),
                 effect: AuthoredTriggerEffect::GainOne,
             }),
             printed_mana: None,
@@ -1099,7 +1114,7 @@ const CARDS: [AuthoredCard; 46] = [
         name: "Llanowar Visionary",
         mana: "{2}{G}",
         type_line: "Creature — Elf Druid",
-        text_sha256: "6e79f26560f4df6a2e38c1d3e82fbad15595ba046c867e17995e7a710d3275e0",
+        text: "When this creature enters, draw a card.\n{T}: Add {G}.",
         power: Some("2"),
         toughness: Some("2"),
         kind: AuthoredKind::Creature {
@@ -1110,7 +1125,9 @@ const CARDS: [AuthoredCard; 46] = [
             toughness: 2,
             subtypes: &["Elf", "Druid"],
             trigger: Some(AuthoredTrigger {
-                condition: OrdinaryCondition::Enters(ObjectRelation::SelfObject),
+                condition: spellwake_engine::program::TriggerSpec::enters(
+                    spellwake_engine::program::ObjectFilter::self_object(),
+                ),
                 effect: AuthoredTriggerEffect::DrawOne,
             }),
             printed_mana: Some(ManaType::Green),
@@ -1122,7 +1139,7 @@ const CARDS: [AuthoredCard; 46] = [
         name: "Novice Occultist",
         mana: "{1}{B}",
         type_line: "Creature — Human Wizard",
-        text_sha256: "fb456f010060df9566a7ca50434249367668e3658fe69e88bba82bb71ae882e0",
+        text: "When this creature dies, you draw a card and you lose 1 life.",
         power: Some("1"),
         toughness: Some("2"),
         kind: AuthoredKind::Creature {
@@ -1133,7 +1150,9 @@ const CARDS: [AuthoredCard; 46] = [
             toughness: 2,
             subtypes: &["Human", "Wizard"],
             trigger: Some(AuthoredTrigger {
-                condition: OrdinaryCondition::Dies(ObjectRelation::SelfObject),
+                condition: spellwake_engine::program::TriggerSpec::dies(
+                    spellwake_engine::program::ObjectFilter::self_object(),
+                ),
                 effect: AuthoredTriggerEffect::DrawOneLoseOne,
             }),
             printed_mana: None,
@@ -1145,7 +1164,7 @@ const CARDS: [AuthoredCard; 46] = [
         name: "Phyrexian Rager",
         mana: "{2}{B}",
         type_line: "Creature — Phyrexian Horror",
-        text_sha256: "bdf839b555c64392c0552feb2cb1c92219f01571e8537119cb928cf8dde6b977",
+        text: "When this creature enters, you draw a card and you lose 1 life.",
         power: Some("2"),
         toughness: Some("2"),
         kind: AuthoredKind::Creature {
@@ -1156,7 +1175,9 @@ const CARDS: [AuthoredCard; 46] = [
             toughness: 2,
             subtypes: &["Phyrexian", "Horror"],
             trigger: Some(AuthoredTrigger {
-                condition: OrdinaryCondition::Enters(ObjectRelation::SelfObject),
+                condition: spellwake_engine::program::TriggerSpec::enters(
+                    spellwake_engine::program::ObjectFilter::self_object(),
+                ),
                 effect: AuthoredTriggerEffect::DrawOneLoseOne,
             }),
             printed_mana: None,
@@ -1168,7 +1189,7 @@ const CARDS: [AuthoredCard; 46] = [
         name: "Raise the Alarm",
         mana: "{1}{W}",
         type_line: "Instant",
-        text_sha256: "b1ce38ee166582710fdfeb34be7ebfbacc2d51675956b1cea1ff59a5c460168d",
+        text: "Create two 1/1 white Soldier creature tokens.",
         power: None,
         toughness: None,
         kind: AuthoredKind::Spell {
@@ -1185,7 +1206,7 @@ const CARDS: [AuthoredCard; 46] = [
         name: "Soul Warden",
         mana: "{W}",
         type_line: "Creature — Human Cleric",
-        text_sha256: "d3938d0dcd6ceea3318c5d87220a4842f86a1b30fc1aff0908e41caaeabf828d",
+        text: "Whenever another creature enters, you gain 1 life.",
         power: Some("1"),
         toughness: Some("1"),
         kind: AuthoredKind::Creature {
@@ -1196,7 +1217,9 @@ const CARDS: [AuthoredCard; 46] = [
             toughness: 1,
             subtypes: &["Human", "Cleric"],
             trigger: Some(AuthoredTrigger {
-                condition: OrdinaryCondition::Enters(ObjectRelation::AnotherCreature),
+                condition: spellwake_engine::program::TriggerSpec::enters(
+                    spellwake_engine::program::ObjectFilter::creature().other_than_ability_source(),
+                ),
                 effect: AuthoredTriggerEffect::GainOne,
             }),
             printed_mana: None,
@@ -1208,7 +1231,7 @@ const CARDS: [AuthoredCard; 46] = [
         name: "Swamp",
         mana: "",
         type_line: "Basic Land — Swamp",
-        text_sha256: "5ad0718d1920ec4ca2dc64a9aff6383c8d801d418cfda034ed19aa016d16dfb4",
+        text: "({T}: Add {B}.)",
         power: None,
         toughness: None,
         kind: AuthoredKind::BasicLand(LandType::Swamp),
@@ -1219,7 +1242,7 @@ const CARDS: [AuthoredCard; 46] = [
         name: "Soul's Attendant",
         mana: "{W}",
         type_line: "Creature — Human Cleric",
-        text_sha256: "a14120106363d68c8ec25afec8c429102f5280479429e5dedfc312835f4da372",
+        text: "Whenever another creature enters, you may gain 1 life.",
         power: Some("1"),
         toughness: Some("1"),
         kind: AuthoredKind::Creature {
@@ -1230,7 +1253,9 @@ const CARDS: [AuthoredCard; 46] = [
             toughness: 1,
             subtypes: &["Human", "Cleric"],
             trigger: Some(AuthoredTrigger {
-                condition: OrdinaryCondition::Enters(ObjectRelation::AnotherCreature),
+                condition: spellwake_engine::program::TriggerSpec::enters(
+                    spellwake_engine::program::ObjectFilter::creature().other_than_ability_source(),
+                ),
                 effect: AuthoredTriggerEffect::OptionalGainOne,
             }),
             printed_mana: None,
@@ -1242,7 +1267,7 @@ const CARDS: [AuthoredCard; 46] = [
         name: "Oculus",
         mana: "{1}{U}",
         type_line: "Creature — Phyrexian Homunculus",
-        text_sha256: "a754a5201f5939da642a82cb86e41130437771fa0d3d0ebe807eef1d6c5b9897",
+        text: "When this creature dies, you may draw a card.",
         power: Some("1"),
         toughness: Some("1"),
         kind: AuthoredKind::Creature {
@@ -1253,7 +1278,9 @@ const CARDS: [AuthoredCard; 46] = [
             toughness: 1,
             subtypes: &["Phyrexian", "Homunculus"],
             trigger: Some(AuthoredTrigger {
-                condition: OrdinaryCondition::Dies(ObjectRelation::SelfObject),
+                condition: spellwake_engine::program::TriggerSpec::dies(
+                    spellwake_engine::program::ObjectFilter::self_object(),
+                ),
                 effect: AuthoredTriggerEffect::OptionalDrawOne,
             }),
             printed_mana: None,
@@ -1265,7 +1292,7 @@ const CARDS: [AuthoredCard; 46] = [
         name: "Mana Leak",
         mana: "{1}{U}",
         type_line: "Instant",
-        text_sha256: "d9c333febe909c6242ca125c47507735441811bdd40654e70ed7416a5e51f7d5",
+        text: "Counter target spell unless its controller pays {3}.",
         power: None,
         toughness: None,
         kind: AuthoredKind::Spell {
@@ -1282,7 +1309,7 @@ const CARDS: [AuthoredCard; 46] = [
         name: "Rhystic Study",
         mana: "{2}{U}",
         type_line: "Enchantment",
-        text_sha256: "b01edb4edf239cd0b4116ab58ea2fb90152ed9b83b068b6ea34ccbe8d67fd03c",
+        text: "Whenever an opponent casts a spell, you may draw a card unless that player pays {1}.",
         power: None,
         toughness: None,
         kind: AuthoredKind::Enchantment {
@@ -1290,10 +1317,10 @@ const CARDS: [AuthoredCard; 46] = [
             colored: 1,
             mana_type: ManaType::Blue,
             trigger: AuthoredTrigger {
-                condition: OrdinaryCondition::SpellCast {
-                    player: PlayerRelation::Opponent,
-                    filter: SpellCastFilter::AnySpell,
-                },
+                condition: spellwake_engine::program::TriggerSpec::spell_cast(
+                    PlayerRelation::Opponent,
+                    spellwake_engine::program::SpellFilter::any(),
+                ),
                 effect: AuthoredTriggerEffect::DrawUnlessRelatedPaysOne,
             },
         },
@@ -1304,7 +1331,7 @@ const CARDS: [AuthoredCard; 46] = [
         name: "Manalith",
         mana: "{3}",
         type_line: "Artifact",
-        text_sha256: "8f936f93056579215d4375dd86511c58e9c0a1a079579b6cea430d5f87bfcec0",
+        text: "{T}: Add one mana of any color.",
         power: None,
         toughness: None,
         kind: AuthoredKind::Artifact {
@@ -1325,7 +1352,7 @@ const CARDS: [AuthoredCard; 46] = [
         name: "Twincast",
         mana: "{U}{U}",
         type_line: "Instant",
-        text_sha256: "ca9a1d032a97c6511cab7dbf3a570b0b50f5035fe29d817d4c871ef7a4d04bf5",
+        text: "Copy target instant or sorcery spell. You may choose new targets for the copy.",
         power: None,
         toughness: None,
         kind: AuthoredKind::Spell {
@@ -1355,7 +1382,8 @@ pub(super) fn definition(
     vocabulary: &CreatureTypeVocabulary,
     pool: TeachingPool,
 ) -> Result<Option<Definition>, RegistryError> {
-    let Some(card) = CARDS
+    let cards = CARDS;
+    let Some(card) = cards
         .iter()
         .find(|card| card.oracle_id == id.as_str() && card.membership.contains(&pool))
     else {
@@ -1470,7 +1498,7 @@ pub(super) fn definition(
         name: card.name,
         mana: card.mana,
         type_line: card.type_line,
-        text_sha256: card.text_sha256,
+        text: card.text,
         power: card.power,
         toughness: card.toughness,
         program,

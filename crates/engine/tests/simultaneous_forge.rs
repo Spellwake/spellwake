@@ -18,8 +18,7 @@ use spellwake_engine::{
     occurrence::{RulesOccurrence, RulesRecord, TriggerRelated},
     priority::PriorityPhase,
     program::{
-        BodyTarget, ExecutableBody, Instruction, InstructionAmount, ObjectRelation,
-        OrdinaryCondition, Program, TriggeredAbility, TriggeredAbilityId,
+        BodyTarget, ExecutableBody, Instruction, Program, TriggeredAbility, TriggeredAbilityId,
     },
     setup::GameSeed,
     stack_window::{StackKind, WindowPhase},
@@ -105,19 +104,24 @@ fn trigger(scenario: &str) -> TriggeredAbility {
         },
         id: TriggeredAbilityId(7),
         condition: if scenario == "created" {
-            OrdinaryCondition::TokenCreated(spellwake_engine::program::PlayerRelation::Controller)
+            spellwake_engine::program::TriggerSpec::player_action(
+                spellwake_engine::program::PlayerRelation::Controller,
+                spellwake_engine::program::PlayerTriggerAction::TokenCreated,
+            )
         } else {
-            OrdinaryCondition::Enters(if grouped(scenario) {
-                ObjectRelation::ControlledCreature
+            spellwake_engine::program::TriggerSpec::enters(if grouped(scenario) {
+                spellwake_engine::program::ObjectFilter::creature().controlled()
             } else {
-                ObjectRelation::AnyCreature
+                spellwake_engine::program::ObjectFilter::creature()
             })
         },
         body: ExecutableBody::new(
             BodyTarget::None,
             if scenario == "count" {
                 vec![Instruction::DrawController {
-                    amount: InstructionAmount::MatchedOccurrences,
+                    amount: spellwake_engine::program::ValueExpr::event(
+                        spellwake_engine::program::EventValueKind::MatchedOccurrences,
+                    ),
                 }]
             } else {
                 vec![Instruction::AdjustControllerLife {
@@ -146,7 +150,11 @@ fn run(scenario: &str) {
     let mut instructions = vec![Instruction::CreateTokens {
         creations: vec![TokenCreation {
             definition,
-            amount: InstructionAmount::Literal(if scenario == "zero" { 0 } else { 2 }.into()),
+            amount: spellwake_engine::program::ValueExpr::Literal(
+                if scenario == "zero" { 0 } else { 2 }.into(),
+            ),
+            base_size: None,
+            enters_tapped: false,
             recipients: if scenario == "each" {
                 TokenRecipients::EachPlayer
             } else {

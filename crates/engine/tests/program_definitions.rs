@@ -9,9 +9,8 @@ use spellwake_engine::{
     object_identity::{CardId, ObjectDestination, ObjectId, ObjectZone},
     priority::SeatId,
     program::{
-        BodyTarget, CardType, ExecutableBody, Instruction, ObjectRelation, OrdinaryCondition,
-        PermanentDefinition, PlayerRelation, Program, ProgramKind, SpellTargetFilter,
-        TriggeredAbility, TriggeredAbilityId,
+        BodyTarget, CardType, ExecutableBody, Instruction, PermanentDefinition, PlayerRelation,
+        Program, ProgramKind, TriggerSpec, TriggeredAbility, TriggeredAbilityId,
     },
     setup::GameSeed,
     targets::TargetRef,
@@ -27,7 +26,7 @@ fn body(target: BodyTarget, instructions: Vec<Instruction>) -> ExecutableBody {
 }
 fn draw(amount: i64) -> Instruction {
     Instruction::DrawController {
-        amount: spellwake_engine::program::InstructionAmount::Literal(amount.into()),
+        amount: spellwake_engine::program::ValueExpr::Literal(amount.into()),
     }
 }
 fn damage(amount: i64) -> Instruction {
@@ -35,7 +34,7 @@ fn damage(amount: i64) -> Instruction {
         amount: amount.into(),
     }
 }
-fn trigger(condition: OrdinaryCondition) -> TriggeredAbility {
+fn trigger(condition: TriggerSpec) -> TriggeredAbility {
     TriggeredAbility {
         grouping: spellwake_engine::program::TriggerGrouping::EachOccurrence,
         id: TriggeredAbilityId(1),
@@ -74,11 +73,11 @@ fn reach() -> Program {
 }
 fn leave_sac() -> Program {
     let mut value = Program::artifact(None, vec![activation(SourceCost::Sacrifice)]);
-    value
-        .triggered
-        .push(trigger(OrdinaryCondition::LeavesBattlefield(
-            ObjectRelation::SelfObject,
-        )));
+    value.triggered.push(trigger(
+        spellwake_engine::program::TriggerSpec::leaves_battlefield(
+            spellwake_engine::program::ObjectFilter::self_object(),
+        ),
+    ));
     value
 }
 fn tap_self() -> Program {
@@ -92,21 +91,23 @@ fn tap_self() -> Program {
             },
         }],
     );
-    value
-        .triggered
-        .push(trigger(OrdinaryCondition::BecomesTapped(
-            ObjectRelation::SelfObject,
-        )));
+    value.triggered.push(trigger(
+        spellwake_engine::program::TriggerSpec::becomes_tapped(
+            spellwake_engine::program::ObjectFilter::self_object(),
+        ),
+    ));
     value
 }
 fn staff() -> Program {
     let mut ability = activation(SourceCost::Tap);
     ability.body = body(BodyTarget::SingleCreature, vec![damage(1)]);
     let mut value = Program::artifact(Some(ManaCost::generic(6.into())), vec![ability]);
-    value.triggered.push(trigger(OrdinaryCondition::StepBegan {
-        step: Step::Upkeep,
-        player: PlayerRelation::Controller,
-    }));
+    value
+        .triggered
+        .push(trigger(spellwake_engine::program::TriggerSpec::step_began(
+            Step::Upkeep,
+            PlayerRelation::Controller,
+        )));
     value
 }
 fn permanent(value: &mut Program) -> &mut PermanentDefinition {
@@ -146,7 +147,9 @@ fn nineteen_admitted_definitions_keep_their_distinct_characteristics_and_capabil
         std::collections::BTreeSet::new(),
     );
     sage.triggered
-        .push(trigger(OrdinaryCondition::Dies(ObjectRelation::SelfObject)));
+        .push(trigger(spellwake_engine::program::TriggerSpec::dies(
+            spellwake_engine::program::ObjectFilter::self_object(),
+        )));
     let mut cases = vec![
         ("DA-P01", forest()),
         ("DA-P02", creature()),
@@ -160,7 +163,7 @@ fn nineteen_admitted_definitions_keep_their_distinct_characteristics_and_capabil
             Program::instant(
                 ManaCost::one(ManaType::Blue),
                 body(
-                    BodyTarget::SingleSpell(SpellTargetFilter::AnySpell),
+                    BodyTarget::SingleSpell(spellwake_engine::program::SpellFilter::any()),
                     vec![Instruction::CounterSpell],
                 ),
             ),
@@ -226,7 +229,7 @@ fn nineteen_admitted_definitions_keep_their_distinct_characteristics_and_capabil
 }
 
 #[test]
-fn thirteen_malformed_or_unsupported_definitions_reject_the_entire_seed() {
+fn twelve_malformed_or_unsupported_definitions_reject_the_entire_seed() {
     let mut cases = Vec::new();
     let mut value = creature();
     value.card_types.clear();
@@ -252,9 +255,6 @@ fn thirteen_malformed_or_unsupported_definitions_reject_the_entire_seed() {
     let mut value = tap_self();
     value.triggered.push(value.triggered[0].clone());
     cases.push(("DA-N18", value));
-    let mut value = leave_sac();
-    value.activated[0].body = body(BodyTarget::None, vec![draw(1)]);
-    cases.push(("DA-N19", value));
     cases.push((
         "DA-N21",
         Program::instant(ManaCost::free(), body(BodyTarget::None, vec![draw(-1)])),
@@ -268,10 +268,62 @@ fn thirteen_malformed_or_unsupported_definitions_reject_the_entire_seed() {
     let mut value = leave_sac();
     value.activated[0].mana_cost = ManaCost::generic((-1).into());
     cases.push(("DA-N24", value));
-    assert_eq!(cases.len(), 13);
+    assert_eq!(cases.len(), 12);
     for (id, value) in cases {
         assert_eq!(seed(value), Err(EffectError::InvalidSetup), "{id}");
     }
+}
+
+#[test]
+fn historical_da_n19_now_draws_for_both_the_sacrifice_ability_and_the_leaves_trigger() {
+    let mut program = leave_sac();
+    program.activated[0].body = body(BodyTarget::None, vec![draw(1)]);
+    let game = game(vec![
+        card(
+            1,
+            A,
+            program,
+            ObjectDestination::Battlefield { controller: A },
+        ),
+        card(2, A, forest(), ObjectDestination::LibraryBottom),
+        card(3, A, forest(), ObjectDestination::LibraryBottom),
+    ]);
+    let mut state = act(
+        &game,
+        A,
+        GameCommand::ActivateUntargetedAbility {
+            source: object(&game, 1),
+            ability: ActivatedAbilityId(1),
+            payment: None,
+        },
+    )
+    .unwrap();
+    assert_eq!(
+        state
+            .execution()
+            .window()
+            .cards()
+            .get(object(&state, 1))
+            .unwrap()
+            .zone(),
+        ObjectZone::Graveyard(A)
+    );
+    assert_eq!(state.execution().window().entries().len(), 2);
+    for drawn in [2, 3] {
+        state = act(&state, A, GameCommand::Pass).unwrap();
+        state = act(&state, B, GameCommand::Pass).unwrap();
+        assert_eq!(
+            state
+                .execution()
+                .window()
+                .cards()
+                .get(object(&state, drawn))
+                .unwrap()
+                .zone(),
+            ObjectZone::Hand(A)
+        );
+    }
+    assert!(state.execution().window().entries().is_empty());
 }
 
 #[test]
@@ -286,17 +338,19 @@ fn historical_da_n20_has_a_current_targeted_trigger_admission_successor() {
 fn typed_ordinary_conditions_allow_only_the_shared_mandatory_body_contract() {
     let mut conditions = Vec::new();
     for relation in [
-        ObjectRelation::SelfObject,
-        ObjectRelation::AnyCreature,
-        ObjectRelation::AnotherCreature,
-        ObjectRelation::ControlledCreature,
-        ObjectRelation::AnotherControlledCreature,
+        spellwake_engine::program::ObjectFilter::self_object(),
+        spellwake_engine::program::ObjectFilter::creature(),
+        spellwake_engine::program::ObjectFilter::creature().other_than_ability_source(),
+        spellwake_engine::program::ObjectFilter::creature().controlled(),
+        spellwake_engine::program::ObjectFilter::creature()
+            .controlled()
+            .other_than_ability_source(),
     ] {
         conditions.extend([
-            OrdinaryCondition::Enters(relation),
-            OrdinaryCondition::LeavesBattlefield(relation),
-            OrdinaryCondition::Dies(relation),
-            OrdinaryCondition::BecomesTapped(relation),
+            spellwake_engine::program::TriggerSpec::enters(relation),
+            spellwake_engine::program::TriggerSpec::leaves_battlefield(relation),
+            spellwake_engine::program::TriggerSpec::dies(relation),
+            spellwake_engine::program::TriggerSpec::becomes_tapped(relation),
         ]);
     }
     for player in [
@@ -305,11 +359,11 @@ fn typed_ordinary_conditions_allow_only_the_shared_mandatory_body_contract() {
         PlayerRelation::AnyParticipant,
     ] {
         conditions.extend([
-            OrdinaryCondition::Discarded(player),
-            OrdinaryCondition::StepBegan {
-                step: Step::Draw,
+            spellwake_engine::program::TriggerSpec::player_action(
                 player,
-            },
+                spellwake_engine::program::PlayerTriggerAction::Discarded,
+            ),
+            spellwake_engine::program::TriggerSpec::step_began(Step::Draw, player),
         ]);
     }
     for condition in conditions {
@@ -338,11 +392,11 @@ fn body_validation_checks_every_scalar_and_all_consuming_operands() {
             vec![draw(2), damage(1), draw(0)],
         ),
         (
-            BodyTarget::SingleSpell(SpellTargetFilter::AnySpell),
+            BodyTarget::SingleSpell(spellwake_engine::program::SpellFilter::any()),
             vec![draw(1), Instruction::CounterSpell, Instruction::CopySpell],
         ),
         (
-            BodyTarget::SingleSpell(SpellTargetFilter::CopyableInstructionSpell),
+            BodyTarget::SingleSpell(spellwake_engine::program::SpellFilter::copyable_instruction()),
             vec![Instruction::CounterSpell, draw(1)],
         ),
     ] {
@@ -357,7 +411,7 @@ fn body_validation_checks_every_scalar_and_all_consuming_operands() {
         (BodyTarget::None, vec![damage(1)]),
         (BodyTarget::SingleCreature, vec![draw(1)]),
         (
-            BodyTarget::SingleSpell(SpellTargetFilter::AnySpell),
+            BodyTarget::SingleSpell(spellwake_engine::program::SpellFilter::any()),
             vec![draw(1)],
         ),
         (
@@ -369,7 +423,7 @@ fn body_validation_checks_every_scalar_and_all_consuming_operands() {
             vec![damage(1), Instruction::CounterSpell],
         ),
         (
-            BodyTarget::SingleSpell(SpellTargetFilter::AnySpell),
+            BodyTarget::SingleSpell(spellwake_engine::program::SpellFilter::any()),
             vec![Instruction::CopySpell, damage(1)],
         ),
         (BodyTarget::SingleCreature, vec![damage(1), damage(0)]),
@@ -499,8 +553,8 @@ fn spell_support_filter_is_explicit_and_independent_of_counter_copy_order() {
         vec![Instruction::CopySpell, Instruction::CounterSpell],
     ] {
         for filter in [
-            SpellTargetFilter::AnySpell,
-            SpellTargetFilter::CopyableInstructionSpell,
+            spellwake_engine::program::SpellFilter::any(),
+            spellwake_engine::program::SpellFilter::copyable_instruction(),
         ] {
             let game = game(vec![
                 card(
@@ -539,7 +593,7 @@ fn spell_support_filter_is_explicit_and_independent_of_counter_copy_order() {
                     target: TargetRef::Stack(original),
                 },
             );
-            if filter == SpellTargetFilter::CopyableInstructionSpell {
+            if filter == spellwake_engine::program::SpellFilter::copyable_instruction() {
                 assert_eq!(result, Err(GameError::Effect(EffectError::IllegalTarget)));
                 assert_eq!(game, saved);
             } else {
@@ -576,7 +630,9 @@ fn targetless_spell_rejects_supplied_target_but_is_copyable_and_counterable() {
             Program::instant(
                 ManaCost::free(),
                 body(
-                    BodyTarget::SingleSpell(SpellTargetFilter::CopyableInstructionSpell),
+                    BodyTarget::SingleSpell(
+                        spellwake_engine::program::SpellFilter::copyable_instruction(),
+                    ),
                     vec![Instruction::CopySpell],
                 ),
             ),
@@ -588,7 +644,7 @@ fn targetless_spell_rejects_supplied_target_but_is_copyable_and_counterable() {
             Program::instant(
                 ManaCost::free(),
                 body(
-                    BodyTarget::SingleSpell(SpellTargetFilter::AnySpell),
+                    BodyTarget::SingleSpell(spellwake_engine::program::SpellFilter::any()),
                     vec![Instruction::CounterSpell],
                 ),
             ),

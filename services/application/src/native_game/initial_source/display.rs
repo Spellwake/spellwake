@@ -106,6 +106,10 @@ impl NativeDisplaySource for NativeImmutableDisplay<'_> {
     ) -> Result<String, NativeProjectionError> {
         Ok(match entry.kind() {
             StackKind::CardSpell(_) => "Card spell",
+            StackKind::Speed => "Increase speed",
+            StackKind::Monarch => "Monarch ability",
+            StackKind::DelayedCopy { .. } => "Delayed triggered ability",
+            StackKind::Emblem { .. } => "Emblem ability",
             StackKind::SpellCopy { .. } => "Spell copy",
             StackKind::ActivatedAbility { .. } => "Activated ability",
             StackKind::TriggeredAbility { .. } => "Triggered ability",

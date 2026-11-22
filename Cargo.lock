@@ -575,6 +575,7 @@ dependencies = [
  "spellwake-content",
  "spellwake-contracts",
  "spellwake-engine",
+ "spellwake-oracle-compiler",
 ]
 
 [[package]]
@@ -606,6 +607,14 @@ dependencies = [
  "serde_json",
  "sha2",
  "spellwake-contracts",
+]
+
+[[package]]
+name = "spellwake-oracle-compiler"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

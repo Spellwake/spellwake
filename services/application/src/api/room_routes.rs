@@ -10,8 +10,13 @@ struct PageQuery {
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct SlotQuery {
-    #[serde(default, deserialize_with = "crate::identifiers::nullable_uuid")]
+    #[serde(
+        default,
+        alias = "after_slot",
+        deserialize_with = "crate::identifiers::nullable_uuid"
+    )]
     after_slot: Option<Uuid>,
+    #[serde(alias = "slot_limit")]
     slot_limit: Option<usize>,
 }
 pub(super) async fn list(State(state): State<ApiState>, request: Request) -> Response {

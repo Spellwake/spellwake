@@ -2,10 +2,9 @@
 use super::*;
 use crate::admission_ports::NativeEventSchema;
 use serde::Deserialize;
+mod response_expiry;
 const MAX_PAGE_BYTES: u64 = 8 * 1024 * 1024;
 const PAGE_LIMIT: usize = 32;
-mod bank_expiry;
-mod response_expiry;
 
 #[derive(Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -60,20 +59,6 @@ pub(super) struct Group {
     pub(super) event_schema_revision: Option<NativeEventSchema>,
     #[serde(default, deserialize_with = "crate::identifiers::nullable_uuid")]
     pub(super) opening_response_seat_id: Option<Uuid>,
-    #[serde(
-        default,
-        deserialize_with = "crate::admission_ports::present_turn_response"
-    )]
-    pub(super) turn_response: Option<crate::admission_ports::TurnResponse>,
-    #[serde(
-        default,
-        deserialize_with = "crate::admission_ports::present_turn_protocol"
-    )]
-    pub(super) turn_response_protocol: Option<crate::admission_ports::TurnResponseProtocol>,
-    // Historical ordinary groups keep their exact absence; new bank inputs
-    // require authenticated SQL evidence during native replay.
-    #[serde(default, deserialize_with = "crate::provider_json::optional_object")]
-    pub(super) bank_expiry: Option<bank_expiry::BankExpiryEvidence>,
     #[serde(default, deserialize_with = "crate::provider_json::optional_object")]
     pub(super) opening_response_expiry: Option<response_expiry::ResponseExpiryEvidence>,
     #[serde(deserialize_with = "crate::provider_json::objects")]
@@ -90,7 +75,7 @@ struct Page {
     next_after_revision: Option<NativeRevision>,
 }
 // ApiResponse's internally tagged enum buffers success data. That buffer cannot
-// carry the bank evidence's RawValue original. Select the status first, then
+// carry the timeout evidence's RawValue original. Select the status first, then
 // decode the complete strict success owner directly from the original JSON.
 #[derive(Deserialize)]
 struct PageStatus {

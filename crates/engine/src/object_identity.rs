@@ -3,16 +3,16 @@
 //! Trusted kernel continuations only: callers first resolve legality, replacements and
 //! any information retained by a CR 400.7 exception. This module does not implement
 //! those rules, hidden-information projections or planar ownership.
+mod components;
 use crate::draw::{DrawEvent, DrawJournal, LibraryDraw};
 use crate::priority::SeatId;
 use crate::program::{DefinitionError, Program};
 use crate::shuffle::{EntropyError, EntropyTape, LibraryShuffle, SHUFFLE_ALGORITHM, ShuffleRecord};
+use components::CombinedPermanent;
 use spellwake_contracts::RulesInteger;
 use std::collections::{BTreeMap, BTreeSet};
 #[cfg(test)]
 mod control_tests;
-#[cfg(test)]
-mod departure_tests;
 #[cfg(test)]
 mod token_tests;
 
@@ -110,12 +110,21 @@ impl ObjectDestination {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ObjectOrigin {
     Card(CardId),
+    PermanentSpellCopy { definition: Box<Program> },
     Token { definition: Box<Program> },
 }
 
 /// One current incarnation with its immutable origin and ordinary location/status.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GameObject {
+    combined: Option<Box<CombinedPermanent>>,
+    // On the top component’s destination incarnation, remember its simultaneous
+    // arrivals. Receipts reconstructed from exact before/after objects keep this cut.
+    other_arrivals: Option<std::sync::Arc<[ObjectId]>>,
+    adventure: bool,
+    split_half: Option<crate::program::SplitHalf>,
+    transformed: bool,
+    last_transformed_at: Option<u64>,
     id: ObjectId,
     origin: ObjectOrigin,
     owner: SeatId,
@@ -124,8 +133,39 @@ pub struct GameObject {
     default_controller: Option<SeatId>,
     tapped: Option<bool>,
     control_history: Option<ControlHistory>,
+    corpse_return: bool,
+    unearthed: bool,
+    face_down: Option<crate::face_down::FaceDownKind>,
 }
 impl GameObject {
+    /// A transforming permanent retains its exact identity when changing face.
+    pub fn transformed(&self) -> bool {
+        self.transformed
+    }
+    pub(crate) fn last_transformed_at(&self) -> Option<u64> {
+        self.last_transformed_at
+    }
+    /// Public face-down status of this incarnation, including the casting announcement.
+    pub fn face_down(&self) -> Option<crate::face_down::FaceDownKind> {
+        self.face_down
+    }
+
+    pub(crate) fn has_corpse_return(&self) -> bool {
+        self.corpse_return
+    }
+    /// Whether this exact permanent incarnation has an unearth departure replacement.
+    pub fn is_unearthed(&self) -> bool {
+        self.unearthed
+    }
+    pub(crate) fn unearth_destination(&self, destination: ObjectDestination) -> ObjectDestination {
+        if (self.unearthed || self.corpse_return)
+            && !matches!(destination, ObjectDestination::Battlefield { .. })
+        {
+            ObjectDestination::Exile
+        } else {
+            destination
+        }
+    }
     pub fn id(&self) -> ObjectId {
         self.id
     }
@@ -133,7 +173,7 @@ impl GameObject {
     pub fn card_id(&self) -> Option<CardId> {
         match self.origin {
             ObjectOrigin::Card(card) => Some(card),
-            ObjectOrigin::Token { .. } => None,
+            ObjectOrigin::PermanentSpellCopy { .. } | ObjectOrigin::Token { .. } => None,
         }
     }
     /// Immutable card provenance or the token's owned baseline definition.
@@ -149,9 +189,24 @@ impl GameObject {
         &'a self,
         programs: &'a BTreeMap<CardId, Program>,
     ) -> Option<&'a Program> {
+        if let Some(combined) = &self.combined {
+            return Some(&combined.definition);
+        }
         match &self.origin {
-            ObjectOrigin::Card(card) => programs.get(card),
-            ObjectOrigin::Token { definition } => Some(definition),
+            ObjectOrigin::Card(card) => {
+                let front = programs.get(card)?;
+                if let Some(half) = self.split_half {
+                    front.split.as_ref().map(|split| split.half(half))
+                } else if self.adventure {
+                    front.adventure.as_deref()
+                } else if self.transformed {
+                    front.reverse_face()
+                } else {
+                    Some(front)
+                }
+            }
+            ObjectOrigin::PermanentSpellCopy { definition }
+            | ObjectOrigin::Token { definition } => Some(definition),
         }
     }
     pub fn owner(&self) -> SeatId {
@@ -196,9 +251,13 @@ impl GameObject {
 /// Immutable native state for current cards/tokens; not a public API or durable commit.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GameObjects {
+    pub(crate) day_night: crate::day_night::DayNight,
+    pub(crate) daybound_cards: std::collections::BTreeSet<CardId>,
     revision: u64,
     next_identity: u64,
     current: BTreeMap<ObjectId, GameObject>,
+    /// Exact permanents treated as nonexistent until this player's untap, including indirect attachments.
+    phased_out: BTreeMap<ObjectId, SeatId>,
     by_card: BTreeMap<CardId, ObjectId>,
     ordered_zones: BTreeMap<OrderedZone, Vec<ObjectId>>,
 }
@@ -231,6 +290,19 @@ enum ControllerUpdate {
 pub struct ObjectMovement {
     pub before: GameObject,
     pub after: GameObject,
+}
+
+impl ObjectMovement {
+    /// Exact destination incarnations created by this movement. A combined permanent
+    /// leaves once, but produces a distinct arrival for each component (CR 730.3).
+    pub fn arrivals(&self) -> impl Iterator<Item = ObjectId> + '_ {
+        std::iter::once(self.after.id()).chain(
+            self.after
+                .other_arrivals
+                .iter()
+                .flat_map(|ids| ids.iter().copied()),
+        )
+    }
 }
 
 /// A legal attempted move may do nothing for a token that already left the
@@ -297,16 +369,6 @@ pub struct ObjectRemoval {
     pub object: GameObject,
 }
 
-/// Physical objects leaving with their owners, in ascending incarnation order.
-/// These are last-known snapshots, not zone-movement or token-cessation events.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct OwnedObjectDepartures {
-    /// Registry after removal of exactly the selected owners' current objects.
-    pub next: GameObjects,
-    /// Original snapshots for the enclosing kernel's departure publication.
-    pub objects: Vec<GameObject>,
-}
-
 /// Current-operation object status evidence without another registry owner.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ObjectStatusChange {
@@ -321,7 +383,6 @@ pub enum ObjectIdentityError {
     InvalidLibraryOrder,
     InconsistentLibrary,
     InconsistentOrderedZone,
-    InconsistentRemoval,
     NegativeDrawCount,
     StaleRevision,
     RevisionExhausted,
@@ -330,6 +391,8 @@ pub enum ObjectIdentityError {
     NotCard,
     UnknownObject,
     SameZone,
+    /// Invalid or stale component set for a merged or melded permanent.
+    InvalidCombination,
     NoController,
     NotPermanent,
     StatusUnchanged,
@@ -341,14 +404,81 @@ pub enum ObjectIdentityError {
 }
 
 impl GameObjects {
+    pub(crate) fn attack_allocation_mark(&self) -> [u64; 2] {
+        [self.revision, self.next_identity]
+    }
+    pub(crate) fn retain_attack_mark(&mut self, mark: [u64; 2]) {
+        self.revision = self.revision.max(mark[0]);
+        self.next_identity = self.next_identity.max(mark[1]);
+    }
+
+    /// Reverse an unfinished cast from exile, the graveyard or the top of a library, preserving every other object
+    /// and all later mana-ability side effects. This is not a new zone change.
+    pub(crate) fn reverse_cast_announcement(
+        &self,
+        before: &GameObject,
+        stack_object: ObjectId,
+        graveyard_below: &[ObjectId],
+    ) -> Result<Self, ObjectIdentityError> {
+        let actual = self
+            .current
+            .get(&stack_object)
+            .ok_or(ObjectIdentityError::UnknownObject)?;
+        let card = before.card_id().ok_or(ObjectIdentityError::NotCard)?;
+        if !matches!(
+            before.zone(),
+            ObjectZone::Graveyard(_)
+                | ObjectZone::Library(_)
+                | ObjectZone::Exile
+                | ObjectZone::Command
+        ) || actual.zone() != ObjectZone::Stack
+            || actual.card_id() != Some(card)
+            || self.current.contains_key(&before.id())
+            || self.by_card.get(&card) != Some(&stack_object)
+        {
+            return Err(ObjectIdentityError::UnknownObject);
+        }
+        let mut next = self.clone();
+        next.revision = self.next_revision(self.revision)?;
+        next.current.remove(&stack_object);
+        next.current.insert(before.id(), before.clone());
+        next.by_card.insert(card, before.id());
+        if let ObjectZone::Graveyard(owner) = before.zone() {
+            let cards = next
+                .ordered_zones
+                .entry(OrderedZone::Graveyard(owner))
+                .or_default();
+            let at = graveyard_below
+                .iter()
+                .find_map(|id| cards.iter().position(|current| current == id))
+                .unwrap_or(cards.len());
+            cards.insert(at, before.id());
+        }
+        if let ObjectZone::Library(owner) = before.zone() {
+            next.ordered_zones
+                .entry(OrderedZone::Library(owner))
+                .or_default()
+                .insert(0, before.id());
+        }
+        Ok(next)
+    }
     pub fn new(revision: u64) -> Self {
         Self {
             revision,
             next_identity: 1,
+            day_night: crate::day_night::DayNight::Neither,
+            daybound_cards: Default::default(),
             current: BTreeMap::new(),
+            phased_out: BTreeMap::new(),
             by_card: BTreeMap::new(),
             ordered_zones: BTreeMap::new(),
         }
+    }
+    pub(crate) fn next_incarnation(&self) -> ObjectId {
+        ObjectId(self.next_identity)
+    }
+    pub(crate) fn control_cut(&self) -> ControlEpoch {
+        ControlEpoch(self.revision)
     }
     pub fn revision(&self) -> u64 {
         self.revision
@@ -357,12 +487,203 @@ impl GameObjects {
     pub fn next_identity_sequence(&self) -> u64 {
         self.next_identity
     }
+    /// Select the alternative characteristics in a prospective cast or on the stack.
+    pub(crate) fn select_split_half(
+        &mut self,
+        id: ObjectId,
+        half: crate::program::SplitHalf,
+    ) -> Result<(), ObjectIdentityError> {
+        let object = self
+            .current
+            .get_mut(&id)
+            .ok_or(ObjectIdentityError::UnknownObject)?;
+        if object.card_id().is_none() || object.face_down.is_some() {
+            return Err(ObjectIdentityError::NotCard);
+        }
+        object.split_half = Some(half);
+        Ok(())
+    }
+    pub(crate) fn select_reverse_spell(&mut self, id: ObjectId) -> Result<(), ObjectIdentityError> {
+        let card = self
+            .current
+            .get_mut(&id)
+            .ok_or(ObjectIdentityError::UnknownObject)?;
+        if card.card_id().is_none()
+            || !matches!(
+                card.zone,
+                ObjectZone::Exile | ObjectZone::Graveyard(_) | ObjectZone::Stack
+            )
+        {
+            return Err(ObjectIdentityError::NotCard);
+        }
+        card.transformed = true;
+        Ok(())
+    }
+    pub(crate) fn select_adventure(&mut self, id: ObjectId) -> Result<(), ObjectIdentityError> {
+        let object = self
+            .current
+            .get_mut(&id)
+            .ok_or(ObjectIdentityError::UnknownObject)?;
+        if object.card_id().is_none() || object.face_down.is_some() {
+            return Err(ObjectIdentityError::NotCard);
+        }
+        object.adventure = true;
+        Ok(())
+    }
+    pub(crate) fn mark_corpse_return(&mut self, id: ObjectId) -> Result<(), ObjectIdentityError> {
+        let card = self
+            .current
+            .get_mut(&id)
+            .ok_or(ObjectIdentityError::UnknownObject)?;
+        if card.zone() != ObjectZone::Battlefield {
+            return Err(ObjectIdentityError::NotPermanent);
+        }
+        card.corpse_return = true;
+        Ok(())
+    }
+    pub(crate) fn mark_unearthed(&mut self, id: ObjectId) -> Result<(), ObjectIdentityError> {
+        let card = self
+            .current
+            .get_mut(&id)
+            .ok_or(ObjectIdentityError::UnknownObject)?;
+        if card.zone() != ObjectZone::Battlefield {
+            return Err(ObjectIdentityError::NotPermanent);
+        }
+        card.unearthed = true;
+        Ok(())
+    }
     pub fn get(&self, id: ObjectId) -> Option<&GameObject> {
-        self.current.get(&id)
+        self.current
+            .get(&id)
+            .filter(|_| !self.phased_out.contains_key(&id))
+    }
+    /// Current physical objects, including phased-out permanents, for persistence and status projection.
+    pub fn physical_objects(&self) -> impl Iterator<Item = &GameObject> {
+        self.current.values()
+    }
+
+    /// CR 800.4a removes owned objects in place, without a destination or new identity.
+    pub(crate) fn remove_departed_owners(
+        &mut self,
+        players: &BTreeSet<SeatId>,
+    ) -> Result<(), ObjectIdentityError> {
+        let revision = self.next_revision(self.revision)?;
+        self.current
+            .retain(|_, object| !players.contains(&object.owner()));
+        self.phased_out
+            .retain(|id, _| self.current.contains_key(id));
+        self.by_card.retain(|_, id| self.current.contains_key(id));
+        self.ordered_zones.retain(|zone, _| {
+            let owner = match zone {
+                OrderedZone::Library(owner) | OrderedZone::Graveyard(owner) => owner,
+            };
+            !players.contains(owner)
+        });
+        self.revision = revision;
+        Ok(())
+    }
+
+    /// Noncard stack objects controlled by a departed player cease to exist.
+    pub(crate) fn remove_departed_stack_copies(&mut self, players: &BTreeSet<SeatId>) {
+        self.current.retain(|_, object| {
+            !(object.zone() == ObjectZone::Stack
+                && object.card_id().is_none()
+                && object
+                    .controller()
+                    .is_some_and(|seat| players.contains(&seat)))
+        });
+    }
+    /// Player whose untap step phases this exact permanent back in.
+    pub fn phased_out_under(&self, id: ObjectId) -> Option<SeatId> {
+        self.phased_out.get(&id).copied()
+    }
+    pub(crate) fn phase_out(
+        &mut self,
+        roots: &[ObjectId],
+        attachments: &BTreeMap<ObjectId, crate::targets::TargetRef>,
+    ) -> Result<Vec<ObjectId>, ObjectIdentityError> {
+        let mut phased = BTreeMap::new();
+        for &root in roots {
+            let Some(mut controller) = self
+                .get(root)
+                .filter(|object| object.zone() == ObjectZone::Battlefield)
+                .and_then(GameObject::controller)
+            else {
+                continue;
+            };
+            // An object that would phase out both directly and indirectly phases out indirectly.
+            let mut host = root;
+            let mut seen = std::collections::BTreeSet::new();
+            while seen.insert(host) {
+                let Some(crate::targets::TargetRef::Object(parent)) = attachments.get(&host) else {
+                    break;
+                };
+                if roots.contains(parent)
+                    && let Some(player) = self.get(*parent).and_then(GameObject::controller)
+                {
+                    controller = player;
+                }
+                host = *parent;
+            }
+            phased.insert(root, controller);
+        }
+        loop {
+            let additions = attachments
+                .iter()
+                .filter_map(|(attachment, host)| {
+                    let crate::targets::TargetRef::Object(host) = host else {
+                        return None;
+                    };
+                    if phased.contains_key(attachment) || self.get(*attachment).is_none() {
+                        return None;
+                    }
+                    Some((*attachment, *phased.get(host)?))
+                })
+                .collect::<Vec<_>>();
+            if additions.is_empty() {
+                break;
+            }
+            phased.extend(additions);
+        }
+        if !phased.is_empty() {
+            self.revision = self.next_revision(self.revision)?;
+        }
+        let changed = phased.keys().copied().collect();
+        self.phased_out.extend(phased);
+        Ok(changed)
+    }
+
+    /// Apply both sides of the untap phasing event from the same pre-event state.
+    pub(crate) fn phase_at_untap(
+        &mut self,
+        active: SeatId,
+        roots: &[ObjectId],
+        skipped_turns: &BTreeSet<SeatId>,
+        attachments: &BTreeMap<ObjectId, crate::targets::TargetRef>,
+    ) -> Result<(Vec<ObjectId>, Vec<ObjectId>), ObjectIdentityError> {
+        let returned = self
+            .phased_out
+            .iter()
+            .filter_map(|(&id, &controller)| {
+                (controller == active || skipped_turns.contains(&controller)).then_some(id)
+            })
+            .collect::<Vec<_>>();
+        let departed = self.phase_out(roots, attachments)?;
+        if !returned.is_empty() {
+            if departed.is_empty() {
+                self.revision = self.next_revision(self.revision)?;
+            }
+            for id in &returned {
+                self.phased_out.remove(id);
+            }
+        }
+        Ok((departed, returned))
     }
     /// Canonical native objects; callers must project these before any client exposure.
     pub fn iter(&self) -> impl Iterator<Item = &GameObject> {
-        self.current.values()
+        self.current
+            .values()
+            .filter(|object| !self.phased_out.contains_key(&object.id()))
     }
     /// Privileged top-to-bottom current incarnations, never a public seat view.
     pub fn library(&self, owner: SeatId) -> &[ObjectId] {
@@ -392,6 +713,43 @@ impl GameObjects {
             .shuffled(before.clone())
             .map_err(ObjectIdentityError::Entropy)?;
         let next = self.reorder_library(expected, owner, after.clone())?;
+        Ok(LibraryShuffle {
+            next,
+            record: ShuffleRecord {
+                player: owner,
+                algorithm: SHUFFLE_ALGORITHM,
+                before,
+                after,
+                entropy_start: entropy.position(),
+                entropy_end: next_entropy.position(),
+            },
+            entropy: next_entropy,
+        })
+    }
+    /// Shuffle the unselected remainder and place the searched card on top,
+    /// retaining its library incarnation throughout the search.
+    pub(crate) fn shuffle_library_with_top(
+        &self,
+        expected: u64,
+        owner: SeatId,
+        selected: Option<ObjectId>,
+        entropy: &EntropyTape,
+    ) -> Result<LibraryShuffle, ObjectIdentityError> {
+        self.next_revision(expected)?;
+        let original = self.library(owner);
+        if selected.is_some_and(|id| !original.contains(&id)) {
+            return Err(ObjectIdentityError::UnknownObject);
+        }
+        let before = original
+            .iter()
+            .copied()
+            .filter(|id| Some(*id) != selected)
+            .collect::<Vec<_>>();
+        let (after, next_entropy) = entropy
+            .shuffled(before.clone())
+            .map_err(ObjectIdentityError::Entropy)?;
+        let order = selected.into_iter().chain(after.iter().copied()).collect();
+        let next = self.reorder_library(expected, owner, order)?;
         Ok(LibraryShuffle {
             next,
             record: ShuffleRecord {
@@ -527,6 +885,8 @@ impl GameObjects {
         let (id, next_identity) = self.allocate_identity()?;
         let (zone, controller) = destination.placement(owner);
         let after = GameObject {
+            combined: None,
+            other_arrivals: None,
             id,
             origin: ObjectOrigin::Card(card),
             owner,
@@ -534,6 +894,13 @@ impl GameObjects {
             controller,
             default_controller: controller,
             tapped: (zone == ObjectZone::Battlefield).then_some(false),
+            corpse_return: false,
+            unearthed: false,
+            adventure: false,
+            split_half: None,
+            transformed: false,
+            last_transformed_at: None,
+            face_down: None,
             control_history: (zone == ObjectZone::Battlefield)
                 .then(|| ControlHistory::new(revision)),
         };
@@ -548,6 +915,63 @@ impl GameObjects {
             before: None,
             after,
         })
+    }
+    /// Create a noncard permanent spell on the stack. Its definition was validated by the
+    /// card registry before being captured. CR 111.12 makes it a token only on entry.
+    pub(crate) fn insert_permanent_spell_copy(
+        &mut self,
+        owner: SeatId,
+        definition: Program,
+    ) -> Result<ObjectId, ObjectIdentityError> {
+        if definition.permanent().is_none() {
+            return Err(ObjectIdentityError::InvalidTokenDefinition(
+                DefinitionError::InvalidInstruction,
+            ));
+        }
+        let revision = self.next_revision(self.revision)?;
+        let (id, next) = self.allocate_identity()?;
+        self.current.insert(
+            id,
+            GameObject {
+                id,
+                combined: None,
+                other_arrivals: None,
+                origin: ObjectOrigin::PermanentSpellCopy {
+                    definition: Box::new(definition),
+                },
+                owner,
+                zone: ObjectZone::Stack,
+                controller: Some(owner),
+                default_controller: Some(owner),
+                tapped: None,
+                control_history: None,
+                corpse_return: false,
+                unearthed: false,
+                adventure: false,
+                split_half: None,
+                transformed: false,
+                last_transformed_at: None,
+                face_down: None,
+            },
+        );
+        self.revision = revision;
+        self.next_identity = next;
+        Ok(id)
+    }
+    pub(crate) fn cease_departed_permanent_copy(
+        &mut self,
+        id: ObjectId,
+    ) -> Result<(), ObjectIdentityError> {
+        if !self.get(id).is_some_and(|o| {
+            matches!(o.origin, ObjectOrigin::PermanentSpellCopy { .. })
+                && o.zone() != ObjectZone::Stack
+        }) {
+            return Err(ObjectIdentityError::UnknownObject);
+        }
+        let revision = self.next_revision(self.revision)?;
+        self.current.remove(&id);
+        self.revision = revision;
+        Ok(())
     }
     /// Trusted singular convenience over the same atomic token insertion core.
     ///
@@ -587,6 +1011,27 @@ impl GameObjects {
         tokens: Vec<(SeatId, Program)>,
         vocabulary: &spellwake_contracts::creature_types::CreatureTypeVocabulary,
     ) -> Result<ObjectInsertions, ObjectIdentityError> {
+        if tokens
+            .iter()
+            .any(|(_, definition)| definition.names.len() != 1)
+        {
+            if expected != self.revision {
+                return Err(ObjectIdentityError::StaleRevision);
+            }
+            return Err(ObjectIdentityError::InvalidTokenDefinition(
+                DefinitionError::InvalidInstruction,
+            ));
+        }
+        self.insert_materialized_tokens(expected, tokens, vocabulary)
+    }
+
+    /// Effect-generated copies retain a donor's complete name set, including a face-down donor's empty set.
+    pub(crate) fn insert_materialized_tokens(
+        &self,
+        expected: u64,
+        tokens: Vec<(SeatId, Program)>,
+        vocabulary: &spellwake_contracts::creature_types::CreatureTypeVocabulary,
+    ) -> Result<ObjectInsertions, ObjectIdentityError> {
         if expected != self.revision {
             return Err(ObjectIdentityError::StaleRevision);
         }
@@ -604,7 +1049,7 @@ impl GameObjects {
             definition
                 .validate(vocabulary)
                 .map_err(ObjectIdentityError::InvalidTokenDefinition)?;
-            if definition.permanent().is_none() || definition.names.len() != 1 {
+            if definition.permanent().is_none() {
                 return Err(ObjectIdentityError::InvalidTokenDefinition(
                     DefinitionError::InvalidInstruction,
                 ));
@@ -623,6 +1068,8 @@ impl GameObjects {
                 .checked_add(1)
                 .ok_or(ObjectIdentityError::RevisionExhausted)?;
             let object = GameObject {
+                combined: None,
+                other_arrivals: None,
                 id: ObjectId(identity),
                 origin: ObjectOrigin::Token {
                     definition: Box::new(definition),
@@ -632,6 +1079,13 @@ impl GameObjects {
                 controller: Some(creator),
                 default_controller: Some(creator),
                 tapped: Some(false),
+                corpse_return: false,
+                unearthed: false,
+                adventure: false,
+                split_half: None,
+                transformed: false,
+                last_transformed_at: None,
+                face_down: None,
                 control_history: Some(ControlHistory::new(next.revision)),
             };
             next.current.insert(object.id, object.clone());
@@ -703,8 +1157,17 @@ impl GameObjects {
         }
         let (id, next_identity) = self.allocate_identity()?;
         let after = GameObject {
+            combined: None,
+            other_arrivals: None,
             id,
-            origin: before.origin.clone(),
+            origin: match (&before.origin, zone) {
+                (ObjectOrigin::PermanentSpellCopy { definition }, ObjectZone::Battlefield) => {
+                    ObjectOrigin::Token {
+                        definition: definition.clone(),
+                    }
+                }
+                _ => before.origin.clone(),
+            },
             owner: before.owner,
             zone,
             controller,
@@ -716,6 +1179,35 @@ impl GameObjects {
                 controller
             },
             tapped: (zone == ObjectZone::Battlefield).then_some(false),
+            corpse_return: false,
+            unearthed: false,
+            adventure: false,
+            split_half: None,
+            last_transformed_at: None,
+            transformed: (zone == ObjectZone::Battlefield
+                && before.zone == ObjectZone::Stack
+                && before.transformed)
+                || zone == ObjectZone::Battlefield
+                    && before.face_down.is_none()
+                    && self.day_night == crate::day_night::DayNight::Night
+                    && before
+                        .card_id()
+                        .is_some_and(|id| self.daybound_cards.contains(&id)),
+            face_down: if matches!(
+                (before.zone, zone),
+                (_, ObjectZone::Stack) | (ObjectZone::Stack, ObjectZone::Battlefield)
+            ) || zone == ObjectZone::Battlefield
+                && matches!(
+                    before.face_down,
+                    Some(
+                        crate::face_down::FaceDownKind::Manifest
+                            | crate::face_down::FaceDownKind::Forest
+                    )
+                ) {
+                before.face_down
+            } else {
+                None
+            },
             control_history: (zone == ObjectZone::Battlefield)
                 .then(|| ControlHistory::new(revision)),
         };
@@ -740,6 +1232,15 @@ impl GameObjects {
             self.by_card.insert(card, id);
             self.insert_ordered_zone(id, before.owner, destination);
         }
+        let other_arrivals = self.separate_components(&before, &after, destination)?;
+        let after = if other_arrivals.is_empty() {
+            after
+        } else {
+            let mut arrival = after;
+            arrival.other_arrivals = Some(other_arrivals.into());
+            self.current.insert(id, arrival.clone());
+            arrival
+        };
         Ok(ZoneMoveOutcome::Moved {
             movement: ObjectMovement { before, after },
         })
@@ -761,112 +1262,57 @@ impl GameObjects {
             return Err(ObjectIdentityError::NotDepartedToken);
         }
         let mut next = self.clone();
-        next.remove_current_objects(std::slice::from_ref(object))?;
+        next.current.remove(&object.id());
         next.revision = revision;
         Ok(ObjectRemoval {
             next,
             object: object.clone(),
         })
     }
-    /// Remove current objects owned by the selected departing players (CR800.4a).
-    ///
-    /// The enclosing kernel must authenticate departure, roster and timing, then
-    /// end control effects and reconcile stack/work/resources. This operation
-    /// performs only physical registry removal in the maintained zones; it does
-    /// not exile survivor-owned objects controlled by a departing player.
-    ///
-    /// Each removed object consumes one registry revision, and no incarnation
-    /// identities. Empty selections or owners with no objects are unchanged,
-    /// including at maximum revision. Expected revision is checked even then.
-    /// Original snapshots are ordered by ObjectId, independently of owner input.
-    /// No ordinary zone movement or new incarnation is fabricated.
-    ///
-    /// # Errors
-    /// Rejects stale revision, insufficient revision capacity or inconsistent
-    /// current/card/ordered-pile indexes. All rejection leaves this registry intact.
-    pub fn remove_owned_objects(
-        &self,
-        expected: u64,
-        owners: &BTreeSet<SeatId>,
-    ) -> Result<OwnedObjectDepartures, ObjectIdentityError> {
-        if expected != self.revision {
-            return Err(ObjectIdentityError::StaleRevision);
-        }
-        let objects: Vec<_> = self
-            .current
-            .values()
-            .filter(|object| owners.contains(&object.owner()))
-            .cloned()
-            .collect();
-        let count =
-            u64::try_from(objects.len()).map_err(|_| ObjectIdentityError::RevisionExhausted)?;
-        let revision = self
-            .revision
-            .checked_add(count)
-            .ok_or(ObjectIdentityError::RevisionExhausted)?;
-        let mut next = self.clone();
-        next.remove_current_objects(&objects)?;
-        next.revision = revision;
-        Ok(OwnedObjectDepartures { next, objects })
-    }
-
-    /// One shared physical-removal owner. Validate all indexes before mutation.
-    /// It neither allocates nor publishes; callers own revision accounting.
-    fn remove_current_objects(
+    pub(crate) fn set_day_faces(
         &mut self,
-        objects: &[GameObject],
+        clock: crate::day_night::DayNight,
+        changed: &[ObjectId],
     ) -> Result<(), ObjectIdentityError> {
-        let mut ordered = BTreeSet::new();
-        for (zone, pile) in &self.ordered_zones {
-            for id in pile {
-                let Some(object) = self.current.get(id) else {
-                    return Err(ObjectIdentityError::InconsistentRemoval);
-                };
-                if object.card_id().is_none()
-                    || OrderedZone::from_zone(object.zone()) != Some(*zone)
-                    || !ordered.insert(*id)
-                {
-                    return Err(ObjectIdentityError::InconsistentRemoval);
-                }
-            }
+        let revision = self.next_revision(self.revision)?;
+        for id in changed {
+            let object = self
+                .current
+                .get_mut(id)
+                .ok_or(ObjectIdentityError::UnknownObject)?;
+            object.transformed = clock == crate::day_night::DayNight::Night;
+            object.last_transformed_at = Some(revision);
         }
-        for (id, object) in &self.current {
-            if matches!(object.zone(), ObjectZone::Library(owner) | ObjectZone::Hand(owner) | ObjectZone::Graveyard(owner) if owner != object.owner())
-                || *id != object.id()
-                || object
-                    .card_id()
-                    .is_some_and(|card| self.by_card.get(&card) != Some(id))
-                || ordered.contains(id)
-                    != (object.card_id().is_some()
-                        && OrderedZone::from_zone(object.zone()).is_some())
-            {
-                return Err(ObjectIdentityError::InconsistentRemoval);
-            }
-        }
-        if self
-            .by_card
-            .iter()
-            .any(|(card, id)| self.current.get(id).and_then(GameObject::card_id) != Some(*card))
-        {
-            return Err(ObjectIdentityError::InconsistentRemoval);
-        }
-        let removed: BTreeSet<_> = objects.iter().map(GameObject::id).collect();
-        if removed.len() != objects.len()
-            || objects
-                .iter()
-                .any(|object| self.current.get(&object.id()) != Some(object))
-        {
-            return Err(ObjectIdentityError::InconsistentRemoval);
-        }
-        self.current.retain(|id, _| !removed.contains(id));
-        self.by_card.retain(|_, id| !removed.contains(id));
-        for pile in self.ordered_zones.values_mut() {
-            pile.retain(|id| !removed.contains(id));
-        }
+        self.day_night = clock;
+        self.revision = revision;
         Ok(())
     }
-    /// Trusted completed status change, preserving incarnation. The enclosing
-    /// kernel establishes effect/cost legality; this is not a player action.
+    pub(crate) fn transform(&mut self, id: ObjectId) -> Result<(), ObjectIdentityError> {
+        let revision = self.next_revision(self.revision)?;
+        let object = self
+            .current
+            .get_mut(&id)
+            .ok_or(ObjectIdentityError::UnknownObject)?;
+        object.transformed = !object.transformed;
+        object.last_transformed_at = Some(revision);
+        self.revision = revision;
+        Ok(())
+    }
+    /// Set face-down orientation without moving the incarnation.
+    pub(crate) fn set_orientation(
+        &mut self,
+        object: ObjectId,
+        kind: Option<crate::face_down::FaceDownKind>,
+    ) -> Result<(), ObjectIdentityError> {
+        let revision = self.next_revision(self.revision)?;
+        self.current
+            .get_mut(&object)
+            .ok_or(ObjectIdentityError::UnknownObject)?
+            .face_down = kind;
+        self.revision = revision;
+        Ok(())
+    }
+    /// Apply a trusted tap status change while preserving the incarnation.
     pub fn set_tapped(
         &self,
         expected: u64,
@@ -906,6 +1352,9 @@ impl GameObjects {
         tapped: bool,
     ) -> Result<ObjectStatusChange, ObjectIdentityError> {
         let revision = self.next_revision(expected)?;
+        if self.phased_out.contains_key(&object) {
+            return Err(ObjectIdentityError::UnknownObject);
+        }
         let card = self
             .current
             .get_mut(&object)

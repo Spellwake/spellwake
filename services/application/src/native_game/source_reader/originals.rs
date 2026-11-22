@@ -13,7 +13,7 @@ use std::collections::BTreeMap;
 pub enum NativeHostInputKind {
     /// Actual retained entropy input; the maintained producer uses this kind.
     Entropy,
-    /// Historical SQL clock original, not native timeout authority.
+    /// Host clock input. The input alone never grants deadline authority.
     Clock,
     /// Historical SQL work original, not an admitted native executor by itself.
     NativeWork,
@@ -346,72 +346,38 @@ impl NativeSystemOriginal {
         source: &RecoveredNativeGame,
         next: &NativeCheckpoint,
     ) -> Result<Self, NativeSourceError> {
-        Self::prepare_host(request, source, next, NativeHostInputKind::Entropy)
+        Self::prepare_host(request, source, next, NativeCheckpointInput::Entropy)
     }
-    /// Freeze the actual tentative bank input as a clock original, not due proof.
-    /// # Errors
-    /// Rejects nonbank, unavailable, foreign or ineligible proposals. SQL alone
-    /// validates elapsed time when this unchanged original is committed.
-    pub fn prepare_bank_expiry(
+
+    pub(super) fn prepare_response_timeout(
         request: Uuid,
         source: &RecoveredNativeGame,
         next: &NativeCheckpoint,
     ) -> Result<Self, NativeSourceError> {
-        source
-            .bank_expiry_intent(next)
-            .map_err(|e| NativeSourceError(Failure::Checkpoint(e)))?;
-        Self::prepare_host(request, source, next, NativeHostInputKind::Clock)
-    }
-    /// Freeze the original response-timeout input before attempting database acceptance.
-    /// # Errors
-    /// Rejects a different input kind or a checkpoint that is not the successor of this opening.
-    pub fn prepare_response_timeout(
-        request: Uuid,
-        source: &RecoveredNativeGame,
-        next: &NativeCheckpoint,
-    ) -> Result<Self, NativeSourceError> {
-        if source.checkpoint().response_seat()?.is_none()
-            || !matches!(
-                next.retained_input(),
-                Some((NativeCheckpointInput::ResponseTimeout, _, _))
-            )
-        {
+        if source.checkpoint().opening_response_seat()?.is_none() {
             return Err(invalid());
         }
-        Self::prepare_host(request, source, next, NativeHostInputKind::Clock)
+        Self::prepare_host(
+            request,
+            source,
+            next,
+            NativeCheckpointInput::ResponseTimeout,
+        )
     }
-    pub(super) fn matches_bank_checkpoint(&self, next: &NativeCheckpoint) -> bool {
-        let Some((NativeCheckpointInput::BankExpiry, _, input)) = next.retained_input() else {
-            return false;
-        };
-        let Some(host) = self.host_fields() else {
-            return false;
-        };
-        let Ok(Some(terminal)) = next.terminal() else {
-            return false;
-        };
-        host.kind == NativeHostInputKind::Clock
-            && host.input_ref == input
-            && host.basis.game_id == next.basis().game_id
-            && host.basis.context_id == next.basis().context_id
-            && host.basis.epoch == next.basis().epoch
-            && host.basis.revision.get().checked_add(1) == Some(next.basis().revision.get())
-            && terminal.reason() == "native_bank_expired"
-    }
+
     fn prepare_host(
         request: Uuid,
         source: &RecoveredNativeGame,
         next: &NativeCheckpoint,
-        expected: NativeHostInputKind,
+        expected: NativeCheckpointInput,
     ) -> Result<Self, NativeSourceError> {
         let prior = source.checkpoint();
         let (kind, parent, input) = next.retained_input().ok_or_else(invalid)?;
         let wire = match (kind, expected) {
-            (NativeCheckpointInput::Entropy, NativeHostInputKind::Entropy) => "entropy",
-            (
-                NativeCheckpointInput::BankExpiry | NativeCheckpointInput::ResponseTimeout,
-                NativeHostInputKind::Clock,
-            ) => "clock",
+            (NativeCheckpointInput::Entropy, NativeCheckpointInput::Entropy) => "entropy",
+            (NativeCheckpointInput::ResponseTimeout, NativeCheckpointInput::ResponseTimeout) => {
+                "clock"
+            }
             _ => return Err(invalid()),
         };
         if parent != prior.reference()

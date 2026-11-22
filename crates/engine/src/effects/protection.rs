@@ -1,0 +1,255 @@
+use super::*;
+use crate::{characteristics::Color, occurrence::SupportedAppearance, stack_window::StackEntry};
+
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub(super) struct ProtectionSource {
+    colors: BTreeSet<Color>,
+    pub creature_subtypes: BTreeSet<CreatureTypeId>,
+    pub is_creature: bool,
+}
+impl From<&ObjectCharacteristics> for ProtectionSource {
+    fn from(source: &ObjectCharacteristics) -> Self {
+        Self {
+            colors: source.current_colors.clone(),
+            creature_subtypes: source.current_creature_subtypes.clone(),
+            is_creature: source.is_creature(),
+        }
+    }
+}
+impl From<&CopiableSpellTraits> for ProtectionSource {
+    fn from(source: &CopiableSpellTraits) -> Self {
+        Self {
+            colors: source.colors.clone(),
+            creature_subtypes: source.creature_subtypes.clone(),
+            is_creature: source.card_types.contains(&CardType::Creature),
+        }
+    }
+}
+impl From<&Program> for ProtectionSource {
+    fn from(source: &Program) -> Self {
+        Self {
+            colors: if source.printed_keywords.contains(&KeywordAbility::Devoid) {
+                BTreeSet::new()
+            } else {
+                source.defined_colors()
+            },
+            creature_subtypes: source.creature_subtypes.clone(),
+            is_creature: source.has_type(CardType::Creature),
+        }
+    }
+}
+
+impl EffectWindow {
+    /// Grant one color to a player and their current permanents in the same effect.
+    pub(super) fn grant_controller_protection(
+        &mut self,
+        entry: &StackEntry,
+        instruction: usize,
+        color: Color,
+        keyword: KeywordAbility,
+        append: &mut RulesJournal,
+    ) -> Result<(), EffectError> {
+        use crate::characteristics::{
+            AbilityChange, ResolvedDuration, ResolvedPart, ResolvedParts,
+        };
+        use crate::occurrence::{EventCause, RulesOccurrence};
+        let before = self.rules_snapshot(None)?;
+        let player = entry.controller();
+        let affected = self.effect_group(
+            entry,
+            crate::program::EffectSubject::Matching(
+                crate::program::ObjectFilter::any().controlled(),
+            ),
+        )?;
+        let effect = if affected.is_empty() {
+            None
+        } else {
+            Some(self.characteristics.add_effect_for_objects(
+                entry.id(),
+                affected,
+                ResolvedParts(vec![ResolvedPart::Abilities(
+                    AbilityChange::grant_keywords([keyword]),
+                )]),
+                ResolvedDuration::UntilEndOfTurn,
+            )?)
+        };
+        self.characteristics
+            .player_color_protection
+            .entry(player)
+            .or_default()
+            .insert(color);
+        self.emit_from(
+            EventCause::Instruction {
+                entry: entry.id(),
+                instruction,
+            },
+            &before,
+            None,
+            append,
+            |old, current, _| {
+                let mut rows = Vec::new();
+                if let Some(effect) = effect {
+                    let appearances = super::occurrence_flow::characteristic_appearance_changes(
+                        old,
+                        current,
+                        effect.affected.iter().copied(),
+                    )?;
+                    rows.push(RulesOccurrence::ContinuousEffectCreated {
+                        effect,
+                        appearances,
+                    });
+                }
+                rows.push(RulesOccurrence::PlayerProtectionGranted { player, color });
+                Ok(rows)
+            },
+        )
+    }
+
+    /// Copiable colors stored with an instruction spell, including noncard copies.
+    pub fn stack_copy_colors(&self, entry: StackEntryId) -> Option<&BTreeSet<Color>> {
+        match self.payloads.get(&entry)? {
+            StackPayload::Instructions(payload) => Some(&payload.copiable_traits.as_ref()?.colors),
+            StackPayload::Permanent => None,
+        }
+    }
+    pub(super) fn protected_target(
+        target: TargetRef,
+        source: &ProtectionSource,
+        current: &EvaluatedCharacteristics,
+    ) -> bool {
+        match target {
+            TargetRef::Object(id) => current.get(id).is_some_and(|object| {
+                object.zone == ObjectZone::Battlefield
+                    && (object.protected_from_colors(&source.colors)
+                        || object
+                            .protected_from_subtypes(&source.creature_subtypes, source.is_creature))
+            }),
+            TargetRef::Player(player) => current
+                .player_protection_colors(player)
+                .any(|color| source.colors.contains(&color)),
+            TargetRef::Stack(_) => false,
+        }
+    }
+    pub(super) fn spell_or_ability_source(
+        &self,
+        entry: &StackEntry,
+        current: &EvaluatedCharacteristics,
+    ) -> ProtectionSource {
+        match entry.kind() {
+            StackKind::ActivatedAbility { source } | StackKind::TriggeredAbility { source } => {
+                current
+                    .get(source.id())
+                    .map(ProtectionSource::from)
+                    .or_else(|| {
+                        self.departed_damage_sources
+                            .get(&source.id())
+                            .map(|source| ProtectionSource {
+                                colors: source.colors.clone(),
+                                creature_subtypes: source.creature_subtypes.clone(),
+                                is_creature: source.was_creature,
+                            })
+                    })
+                    .or_else(|| {
+                        self.execution_bindings(entry.id())
+                            .and_then(|binding| binding.trigger.as_ref())
+                            .map(|trigger| self.waiting_protection_source(&trigger.source, current))
+                    })
+                    .or_else(|| {
+                        source
+                            .base_program(&self.programs)
+                            .map(ProtectionSource::from)
+                    })
+                    .unwrap_or_default()
+            }
+            StackKind::CardSpell(_) | StackKind::SpellCopy { .. } => self
+                .window
+                .spell_object(entry)
+                .and_then(|id| current.get(id))
+                .map(ProtectionSource::from)
+                .or_else(|| match self.payloads.get(&entry.id()) {
+                    Some(StackPayload::Instructions(payload)) => {
+                        payload.copiable_traits.as_ref().map(ProtectionSource::from)
+                    }
+                    _ => None,
+                })
+                .unwrap_or_default(),
+            _ => ProtectionSource {
+                colors: self.targeting_entry_colors(entry, current),
+                ..Default::default()
+            },
+        }
+    }
+
+    pub(super) fn waiting_protection_source(
+        &self,
+        source: &SupportedAppearance,
+        current: &EvaluatedCharacteristics,
+    ) -> ProtectionSource {
+        current
+            .get(source.object.id())
+            .map(ProtectionSource::from)
+            .or_else(|| {
+                self.departed_damage_sources
+                    .get(&source.object.id())
+                    .map(|source| ProtectionSource {
+                        colors: source.colors.clone(),
+                        creature_subtypes: source.creature_subtypes.clone(),
+                        is_creature: source.was_creature,
+                    })
+            })
+            .unwrap_or_else(|| ProtectionSource {
+                colors: source.colors.clone(),
+                creature_subtypes: source.creature_subtypes.clone(),
+                is_creature: source.types.contains(&CardType::Creature),
+            })
+    }
+
+    pub(super) fn targeting_entry_colors(
+        &self,
+        entry: &StackEntry,
+        current: &EvaluatedCharacteristics,
+    ) -> BTreeSet<Color> {
+        match entry.kind() {
+            StackKind::DelayedCopy { .. } => match self.payloads.get(&entry.id()) {
+                Some(StackPayload::Instructions(p)) => match &p.delayed_copy_action {
+                    Some(
+                        crate::occurrence::DelayedCopyAction::Draw(_, colors)
+                        | crate::occurrence::DelayedCopyAction::SpellTwice(_, colors)
+                        | crate::occurrence::DelayedCopyAction::AbilityTwice(_, colors),
+                    ) => colors.clone(),
+                    _ => BTreeSet::new(),
+                },
+                _ => BTreeSet::new(),
+            },
+            StackKind::Speed | StackKind::Monarch | StackKind::Emblem { .. } => BTreeSet::new(),
+            StackKind::SpellCopy { .. } => self
+                .window
+                .spell_object(entry)
+                .and_then(|id| current.get(id))
+                .map(|view| view.current_colors.clone())
+                .or_else(|| self.stack_copy_colors(entry.id()).cloned())
+                .unwrap_or_default(),
+            StackKind::CardSpell(id) => current
+                .get(*id)
+                .map(|s| s.current_colors.clone())
+                .unwrap_or_default(),
+            StackKind::ActivatedAbility { source } | StackKind::TriggeredAbility { source } => {
+                current
+                    .get(source.id())
+                    .map(|s| s.current_colors.clone())
+                    .or_else(|| {
+                        self.departed_damage_sources
+                            .get(&source.id())
+                            .map(|s| s.colors.clone())
+                    })
+                    .or_else(|| {
+                        self.execution_bindings(entry.id())?
+                            .trigger
+                            .as_ref()
+                            .map(|t| t.source.colors.clone())
+                    })
+                    .unwrap_or_else(|| self.printed_source_colors(source))
+            }
+        }
+    }
+}

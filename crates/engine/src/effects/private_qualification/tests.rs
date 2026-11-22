@@ -1,10 +1,10 @@
 use super::*;
 use crate::{
     occurrence::{RulesOccurrence, RulesRecord, TriggerRelated},
-    program::{ObjectRelation, OrdinaryCondition, TriggeredAbility, TriggeredAbilityId},
+    program::{TriggerSpec, TriggeredAbility, TriggeredAbilityId},
 };
 
-fn watched(mut program: Program, condition: OrdinaryCondition) -> Program {
+fn watched(mut program: Program, condition: TriggerSpec) -> Program {
     program.triggered.push(TriggeredAbility {
         grouping: spellwake_engine::program::TriggerGrouping::EachOccurrence,
         id: TriggeredAbilityId(1),
@@ -12,7 +12,7 @@ fn watched(mut program: Program, condition: OrdinaryCondition) -> Program {
         body: ExecutableBody::new(
             BodyTarget::None,
             vec![Instruction::DrawController {
-                amount: crate::program::InstructionAmount::Literal(1.into()),
+                amount: crate::program::ValueExpr::Literal(1.into()),
             }],
         ),
     });
@@ -33,7 +33,11 @@ fn unordered_entry_batch_rejects_without_mutating_the_accepted_world() {
                 destination: ObjectDestination::Battlefield { controller: a },
                 program: watched(
                     Program::artifact(None, vec![]),
-                    OrdinaryCondition::Enters(ObjectRelation::AnotherControlledCreature),
+                    crate::program::TriggerSpec::enters(
+                        crate::program::ObjectFilter::creature()
+                            .controlled()
+                            .other_than_ability_source(),
+                    ),
                 ),
             },
             SeedCard {
@@ -42,7 +46,9 @@ fn unordered_entry_batch_rejects_without_mutating_the_accepted_world() {
                 destination: ObjectDestination::Hand,
                 program: watched(
                     Program::creature(None, 1.into(), 1.into(), std::collections::BTreeSet::new()),
-                    OrdinaryCondition::Enters(ObjectRelation::ControlledCreature),
+                    crate::program::TriggerSpec::enters(
+                        crate::program::ObjectFilter::creature().controlled(),
+                    ),
                 ),
             },
             SeedCard {
@@ -51,7 +57,9 @@ fn unordered_entry_batch_rejects_without_mutating_the_accepted_world() {
                 destination: ObjectDestination::Hand,
                 program: watched(
                     Program::creature(None, 1.into(), 1.into(), std::collections::BTreeSet::new()),
-                    OrdinaryCondition::Enters(ObjectRelation::ControlledCreature),
+                    crate::program::TriggerSpec::enters(
+                        crate::program::ObjectFilter::creature().controlled(),
+                    ),
                 ),
             },
         ],
@@ -104,7 +112,7 @@ fn first_checks_capture_opposing_counters_before_death_and_place_the_singleton()
             destination: ObjectDestination::Battlefield { controller: a },
             program: watched(
                 Program::creature(None, 0.into(), 0.into(), std::collections::BTreeSet::new()),
-                OrdinaryCondition::Dies(ObjectRelation::SelfObject),
+                crate::program::TriggerSpec::dies(crate::program::ObjectFilter::self_object()),
             ),
         }],
         vec![CardId(210001)],

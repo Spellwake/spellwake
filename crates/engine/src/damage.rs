@@ -21,6 +21,35 @@ pub struct DamageMultiplierId(u64);
 /// Effect families retain distinct identities with equal numeric ordinals.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum DamageEffectId {
+    /// Noncombat prevention supplied by an actual current permanent incarnation.
+    StaticPrevention(ObjectId),
+    StaticPreventionWithExile(ObjectId, crate::characteristics::StaticAbilityId),
+    CombatDamageToMill(ObjectId, crate::characteristics::StaticAbilityId),
+    RemovePlusOneToPreventDamage(ObjectId, crate::characteristics::StaticAbilityId),
+    /// Each eligible component is doubled once by this source's effect.
+    StaticDouble(ObjectId),
+    /// One of two independently ordered replacement effects from an Equipment.
+    DoubleDamageFromEquippedCreature(ObjectId),
+    DoubleDamageToEquippedCreature(ObjectId),
+    /// Round up half of one source's damage to one protected recipient.
+    StaticHalfPrevention {
+        permanent: ObjectId,
+        source: DamageSourceId,
+    },
+    /// An emblem caps one source's damage to a particular recipient.
+    EmblemCap {
+        emblem: crate::emblem::EmblemId,
+        source: DamageSourceId,
+    },
+    /// One lasting prevention effect created by a resolving instruction.
+    UntilEndOfTurn {
+        creator: StackEntryId,
+        instruction: usize,
+    },
+    /// Static protection of the affected permanent from the stated color.
+    Protection(crate::characteristics::Color),
+    ProtectionMulticolored,
+    ProtectionSubtype(crate::characteristics::SubtypeProtection),
     Prevention(PreventionShieldId),
     Multiplier(DamageMultiplierId),
 }
@@ -42,12 +71,37 @@ pub struct DamageBatchId(u64);
 /// Actual source identity, distinct from an instruction's execution origin.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum DamageSourceId {
+    Emblem(crate::emblem::EmblemId),
     Object(ObjectId),
     SpellCopy(StackEntryId),
+}
+/// Source incarnation and evaluated damage keywords at its actual battlefield departure.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DepartedDamageSource {
+    /// Equipment attached at this exact permanent's last battlefield appearance.
+    pub attached_equipment: RulesInteger,
+    pub attached_auras_and_equipment: RulesInteger,
+    /// Power at the last battlefield cut, if the object had power.
+    pub power: Option<RulesInteger>,
+    /// Evaluated creature status immediately before leaving the battlefield.
+    pub was_creature: bool,
+    /// Last evaluated creature subtypes before leaving the battlefield.
+    pub creature_subtypes: BTreeSet<spellwake_contracts::creature_types::CreatureTypeId>,
+    /// Last evaluated source colors at its battlefield departure.
+    pub colors: std::collections::BTreeSet<crate::characteristics::Color>,
+    /// Last battlefield object, including the controller when it left.
+    pub object: GameObject,
+    /// Keywords relevant to dealing damage from the departed incarnation.
+    pub keywords: std::collections::BTreeSet<crate::characteristics::KeywordAbility>,
 }
 /// Bounded readonly source evidence, not complete characteristics or LKI.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DamageSource {
+    /// The actual source is a command-zone emblem, not its former creating permanent.
+    Emblem {
+        emblem: crate::emblem::EmblemId,
+        controller: SeatId,
+    },
     Object {
         object: GameObject,
         controller: SeatId,
@@ -60,19 +114,24 @@ pub enum DamageSource {
 impl DamageSource {
     pub fn id(&self) -> DamageSourceId {
         match self {
+            Self::Emblem { emblem, .. } => DamageSourceId::Emblem(*emblem),
             Self::Object { object, .. } => DamageSourceId::Object(object.id()),
             Self::SpellCopy { entry, .. } => DamageSourceId::SpellCopy(*entry),
         }
     }
     pub fn controller(&self) -> SeatId {
         match self {
-            Self::Object { controller, .. } | Self::SpellCopy { controller, .. } => *controller,
+            Self::Emblem { controller, .. }
+            | Self::Object { controller, .. }
+            | Self::SpellCopy { controller, .. } => *controller,
         }
     }
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum DamageRecipient {
+    Battle(ObjectId),
     Creature(ObjectId),
+    Planeswalker(ObjectId),
     Player(SeatId),
 }
 /// Fixed identity for a future effect, independent of current creature status.
@@ -80,12 +139,19 @@ pub enum DamageRecipient {
 pub enum DamageEffectTarget {
     Permanent(ObjectId),
     Player(SeatId),
+    /// A player and all current permanents they control share one capacity.
+    PlayerAndPermanents(SeatId),
 }
 impl DamageEffectTarget {
     /// Match identity after the executor admits an actual damage recipient.
     pub fn matches(self, recipient: DamageRecipient) -> bool {
         match (self, recipient) {
-            (Self::Permanent(expected), DamageRecipient::Creature(actual)) => expected == actual,
+            (
+                Self::Permanent(expected),
+                DamageRecipient::Creature(actual)
+                | DamageRecipient::Planeswalker(actual)
+                | DamageRecipient::Battle(actual),
+            ) => expected == actual,
             (Self::Player(expected), DamageRecipient::Player(actual)) => expected == actual,
             _ => false,
         }
@@ -99,6 +165,16 @@ pub enum DamageKind {
 /// Sole parent metadata after its cursor moves into the active batch.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DamageOrigin {
+    /// Noncombat damage from the immediate consequence of an earlier prevention.
+    PreventionFollowup {
+        batch: DamageBatchId,
+        creator: StackEntryId,
+    },
+    /// Noncombat damage caused by an immediately resolving mana ability.
+    ManaAbility {
+        source: ObjectId,
+        ability: crate::mana::ManaAbilityRef,
+    },
     Resolution {
         entry: StackEntryId,
         instruction: usize,
@@ -120,6 +196,22 @@ impl DamageSourceFilter {
         }
     }
 }
+/// The damage a resolving effect prevents through the cleanup step.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TurnPreventionFilter {
+    ToAbilitySource,
+    CombatToOrFromAbilitySource,
+    ToTarget,
+    CombatFromCreaturesOtherThanTarget,
+    CombatToControlledCreatures,
+    CombatFromCreaturesWithoutSubtype(spellwake_contracts::creature_types::CreatureTypeId),
+    CombatFromCreaturesWithoutEitherSubtype(
+        spellwake_contracts::creature_types::CreatureTypeId,
+        spellwake_contracts::creature_types::CreatureTypeId,
+    ),
+    Combat,
+    CreaturesControlledByOpponents,
+}
 /// Creator provenance survives creator exit and never supplies source matching.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PreventionShield {
@@ -127,6 +219,16 @@ pub struct PreventionShield {
     pub creator: StackEntryId,
     pub target: DamageEffectTarget,
     pub remaining: RulesInteger,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct DamageReflection {
+    pub(crate) source: DamageSource,
+    pub(crate) colors: BTreeSet<crate::characteristics::Color>,
+    pub(crate) keywords: BTreeSet<crate::characteristics::KeywordAbility>,
+    pub(crate) creature_types: BTreeSet<spellwake_contracts::creature_types::CreatureTypeId>,
+    pub(crate) is_creature: bool,
+    pub(crate) target: crate::targets::TargetRef,
 }
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DamageMultiplier {
@@ -172,6 +274,8 @@ pub struct DamageBatchStarted {
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum DamageScope {
+    /// One shield shared by all damage recipients currently controlled by this seat.
+    ControlledRecipients(SeatId),
     Component(DamageAttemptId),
     Recipient(DamageRecipient),
 }
@@ -190,9 +294,17 @@ pub struct DamageAllocation {
 pub struct DamageComponent {
     attempt: DamageAttempt,
     remaining: RulesInteger,
+    preventable: bool,
+    recipient_unavailable: bool,
+    affected_player: Option<SeatId>,
     used_multipliers: BTreeSet<DamageMultiplierId>,
 }
 impl DamageComponent {
+    /// Whether the current amount can be reduced by an ordinary prevention effect.
+    pub fn can_prevent_damage(&self) -> bool {
+        self.preventable && self.remaining.is_positive()
+    }
+
     pub fn attempt(&self) -> &DamageAttempt {
         &self.attempt
     }
@@ -218,6 +330,254 @@ pub struct ActiveDamageBatch {
     phase: DamageBatchPhase,
 }
 impl ActiveDamageBatch {
+    pub(crate) fn disallow_prevention_from(&mut self, sources: &BTreeSet<DamageSourceId>) {
+        for component in self.components.values_mut() {
+            component.preventable = !sources.contains(&component.attempt.source.id());
+        }
+    }
+
+    pub(crate) fn prevent_by_protection(
+        &mut self,
+        application: DamageApplication,
+        eligible: Vec<DamageAttemptId>,
+    ) -> Result<ProtectionPrevention, DamageError> {
+        let DamageScope::Recipient(recipient) = application.scope else {
+            return Err(DamageError::InapplicableEffect);
+        };
+        let quality = match application.effect {
+            DamageEffectId::Protection(color) => {
+                ProtectionQuality::Color(crate::characteristics::ColorFilter::Has(color))
+            }
+            DamageEffectId::ProtectionMulticolored => {
+                ProtectionQuality::Color(crate::characteristics::ColorFilter::Multicolored)
+            }
+            DamageEffectId::ProtectionSubtype(quality) => ProtectionQuality::Subtype(quality),
+            _ => return Err(DamageError::InapplicableEffect),
+        };
+        let allocations = self.prevent_all(recipient, eligible)?;
+        Ok(ProtectionPrevention {
+            batch: self.id(),
+            stage: self.stage,
+            quality,
+            recipient,
+            allocations,
+        })
+    }
+    /// Use one side-effect-bearing prevention exactly once, retaining unpreventable damage.
+    pub(crate) fn prevent_all_with_followup(
+        &mut self,
+        application: DamageApplication,
+        eligible: &[DamageAttemptId],
+    ) -> Result<(Vec<DamageAllocation>, RulesInteger), DamageError> {
+        let DamageScope::Recipient(recipient) = application.scope else {
+            return Err(DamageError::InapplicableEffect);
+        };
+        if self.phase != DamageBatchPhase::Selecting
+            || eligible.is_empty()
+            || self.consumed_shields.contains(&application)
+        {
+            return Err(DamageError::InapplicableEffect);
+        }
+        let mut preventable = Vec::new();
+        let mut amount = 0.into();
+        for &id in eligible {
+            let component = self
+                .component(id)
+                .filter(|c| c.attempt().target == recipient && c.remaining().is_positive())
+                .ok_or(DamageError::InapplicableEffect)?;
+            amount = RulesInteger::plus(&amount, component.remaining());
+            if component.can_prevent_damage() {
+                preventable.push(id);
+            }
+        }
+        let allocations = if preventable.is_empty() {
+            self.stage = self
+                .stage
+                .checked_add(1)
+                .ok_or(DamageError::StageExhausted)?;
+            Vec::new()
+        } else {
+            self.prevent_all(recipient, preventable)?
+        };
+        self.consumed_shields.insert(application);
+        Ok((allocations, amount))
+    }
+
+    /// Prevent the full remaining amounts of all eligible components for one recipient.
+    pub(crate) fn prevent_all(
+        &mut self,
+        recipient: DamageRecipient,
+        eligible: Vec<DamageAttemptId>,
+    ) -> Result<Vec<DamageAllocation>, DamageError> {
+        self.remove_damage(recipient, eligible, true)
+    }
+
+    pub(crate) fn replace_damage_with_library_move(
+        &mut self,
+        recipient: DamageRecipient,
+        eligible: Vec<DamageAttemptId>,
+    ) -> Result<Vec<DamageAllocation>, DamageError> {
+        self.remove_damage(recipient, eligible, false)
+    }
+
+    fn remove_damage(
+        &mut self,
+        recipient: DamageRecipient,
+        eligible: Vec<DamageAttemptId>,
+        prevention: bool,
+    ) -> Result<Vec<DamageAllocation>, DamageError> {
+        if self.phase != DamageBatchPhase::Selecting || eligible.is_empty() {
+            return Err(DamageError::InapplicableEffect);
+        }
+        let stage = self
+            .stage
+            .checked_add(1)
+            .ok_or(DamageError::StageExhausted)?;
+        let mut allocations = Vec::with_capacity(eligible.len());
+        for id in eligible {
+            let component = self
+                .components
+                .get(&id)
+                .filter(|c| {
+                    (!prevention || c.can_prevent_damage()) && c.attempt.target == recipient
+                })
+                .ok_or(DamageError::InapplicableEffect)?;
+            allocations.push(DamageAllocation {
+                attempt: id,
+                amount: component.remaining.clone(),
+            });
+        }
+        for row in &allocations {
+            if let Some(component) = self.components.get_mut(&row.attempt) {
+                component.remaining = 0.into();
+            }
+        }
+        self.stage = stage;
+        Ok(allocations)
+    }
+    pub(crate) fn double_static_component(
+        &mut self,
+        application: DamageApplication,
+    ) -> Result<(RulesInteger, RulesInteger), DamageError> {
+        if self.phase != DamageBatchPhase::Selecting || self.consumed_shields.contains(&application)
+        {
+            return Err(DamageError::InapplicableEffect);
+        }
+        let (
+            DamageEffectId::StaticDouble(_)
+            | DamageEffectId::DoubleDamageFromEquippedCreature(_)
+            | DamageEffectId::DoubleDamageToEquippedCreature(_),
+            DamageScope::Component(attempt),
+        ) = (application.effect, application.scope)
+        else {
+            return Err(DamageError::InapplicableEffect);
+        };
+        let stage = self
+            .stage
+            .checked_add(1)
+            .ok_or(DamageError::StageExhausted)?;
+        let component = self
+            .components
+            .get_mut(&attempt)
+            .filter(|component| component.remaining.is_positive())
+            .ok_or(DamageError::InapplicableEffect)?;
+        let before = component.remaining.clone();
+        let after = before.plus(&before);
+        component.remaining = after.clone();
+        self.consumed_shields.insert(application);
+        self.stage = stage;
+        Ok((before, after))
+    }
+
+    pub(crate) fn prevent_all_but_one(
+        &mut self,
+        application: DamageApplication,
+        eligible: Vec<DamageAttemptId>,
+    ) -> Result<Vec<DamageAllocation>, DamageError> {
+        self.limit_damage(application, eligible, 1.into())
+    }
+
+    pub(crate) fn limit_damage(
+        &mut self,
+        application: DamageApplication,
+        eligible: Vec<DamageAttemptId>,
+        mut leave: RulesInteger,
+    ) -> Result<Vec<DamageAllocation>, DamageError> {
+        if self.phase != DamageBatchPhase::Selecting
+            || eligible.is_empty()
+            || self.consumed_shields.contains(&application)
+            || leave < 0.into()
+        {
+            return Err(DamageError::InapplicableEffect);
+        }
+        let stage = self
+            .stage
+            .checked_add(1)
+            .ok_or(DamageError::StageExhausted)?;
+        let mut allocations = Vec::new();
+        for id in eligible {
+            let component = self
+                .components
+                .get(&id)
+                .filter(|c| c.remaining.is_positive())
+                .ok_or(DamageError::InapplicableEffect)?;
+            let keep = leave.clone().min(component.remaining.clone());
+            let prevented = component.remaining.minus(&keep);
+            leave = leave.minus(&keep);
+            if prevented.is_positive() {
+                allocations.push(DamageAllocation {
+                    attempt: id,
+                    amount: prevented,
+                });
+            }
+        }
+        if allocations.is_empty() {
+            return Err(DamageError::InapplicableEffect);
+        }
+        for row in &allocations {
+            let component = self
+                .components
+                .get_mut(&row.attempt)
+                .ok_or(DamageError::InapplicableEffect)?;
+            component.remaining = component.remaining.minus(&row.amount);
+        }
+        self.consumed_shields.insert(application);
+        self.stage = stage;
+        Ok(allocations)
+    }
+    pub(crate) fn set_recipient_controllers(
+        &mut self,
+        controllers: &BTreeMap<DamageRecipient, SeatId>,
+    ) {
+        for component in self.components.values_mut() {
+            if let Some(&player) = controllers.get(&component.attempt.target) {
+                component.affected_player = Some(player);
+            }
+        }
+    }
+
+    /// Reconcile an in-progress event after a player leaves. Present components retain
+    /// their identities and all accepted modifications. Damage that can no longer be
+    /// dealt leaves the choice domain without debiting any prevention effect.
+    pub(crate) fn reconcile_departure(
+        &mut self,
+        controllers: &BTreeMap<DamageRecipient, SeatId>,
+    ) -> Result<(), DamageError> {
+        let stage = self
+            .stage
+            .checked_add(1)
+            .ok_or(DamageError::StageExhausted)?;
+        for component in self.components.values_mut() {
+            component.affected_player = controllers.get(&component.attempt.target).copied();
+            if component.affected_player.is_none() && component.remaining.is_positive() {
+                component.recipient_unavailable = true;
+                component.remaining = 0.into();
+            }
+        }
+        self.stage = stage;
+        Ok(())
+    }
+
     pub fn started(&self) -> &DamageBatchStarted {
         &self.started
     }
@@ -258,6 +618,20 @@ pub struct PreventionApplication {
     pub damage_remaining: BTreeMap<DamageAttemptId, RulesInteger>,
     pub shield_remaining: RulesInteger,
 }
+/// Damage prevented by one protection quality on a permanent or player (CR 702.16e).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ProtectionQuality {
+    Color(crate::characteristics::ColorFilter),
+    Subtype(crate::characteristics::SubtypeProtection),
+}
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProtectionPrevention {
+    pub batch: DamageBatchId,
+    pub stage: u64,
+    pub quality: ProtectionQuality,
+    pub recipient: DamageRecipient,
+    pub allocations: Vec<DamageAllocation>,
+}
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DamageMultiplication {
     pub batch: DamageBatchId,
@@ -283,6 +657,8 @@ pub struct AppliedDamage {
 pub enum DamageOutcome {
     Dealt(RulesInteger),
     FullyPrevented,
+    /// The remaining damage could not be dealt because its recipient ceased to be available.
+    RecipientUnavailable,
 }
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DamageCompletion {
@@ -297,6 +673,7 @@ pub struct DamageJournal {
     pub created: Vec<DamageEffectCreation>,
     pub attempts: Vec<DamageAttempt>,
     pub preventions: Vec<PreventionApplication>,
+    pub protections: Vec<ProtectionPrevention>,
     pub multiplications: Vec<DamageMultiplication>,
     pub applied: Vec<AppliedDamage>,
     pub completions: Vec<DamageCompletion>,
@@ -307,6 +684,7 @@ impl DamageJournal {
         self.created.append(&mut other.created);
         self.attempts.append(&mut other.attempts);
         self.preventions.append(&mut other.preventions);
+        self.protections.append(&mut other.protections);
         self.multiplications.append(&mut other.multiplications);
         self.applied.append(&mut other.applied);
         self.completions.append(&mut other.completions);
@@ -336,7 +714,16 @@ pub(crate) struct DamageState {
     next_multiplier: u64,
     next_batch: u64,
     next_attempt: u64,
+    pub(crate) turn_preventions: BTreeMap<
+        (StackEntryId, usize),
+        (
+            SeatId,
+            TurnPreventionFilter,
+            Option<crate::object_identity::ObjectId>,
+        ),
+    >,
     shields: BTreeMap<PreventionShieldId, PreventionShield>,
+    reflections: BTreeMap<PreventionShieldId, DamageReflection>,
     multipliers: BTreeMap<DamageMultiplierId, DamageMultiplier>,
 }
 impl Default for DamageState {
@@ -346,12 +733,29 @@ impl Default for DamageState {
             next_multiplier: 1,
             next_batch: 1,
             next_attempt: 1,
+            turn_preventions: BTreeMap::new(),
             shields: BTreeMap::new(),
+            reflections: BTreeMap::new(),
             multipliers: BTreeMap::new(),
         }
     }
 }
 impl DamageState {
+    pub(crate) fn attack_allocation_mark(&self) -> [u64; 4] {
+        [
+            self.next_shield,
+            self.next_multiplier,
+            self.next_batch,
+            self.next_attempt,
+        ]
+    }
+    pub(crate) fn retain_attack_mark(&mut self, mark: [u64; 4]) {
+        self.next_shield = self.next_shield.max(mark[0]);
+        self.next_multiplier = self.next_multiplier.max(mark[1]);
+        self.next_batch = self.next_batch.max(mark[2]);
+        self.next_attempt = self.next_attempt.max(mark[3]);
+    }
+
     pub(crate) fn counters(&self) -> (u64, u64, u64, u64) {
         (
             self.next_shield,
@@ -414,6 +818,26 @@ impl DamageState {
         self.next_shield = next;
         Ok(shield)
     }
+    pub(crate) fn add_reflecting_shield(
+        &mut self,
+        creator: StackEntryId,
+        player: SeatId,
+        amount: RulesInteger,
+        reflection: DamageReflection,
+    ) -> Result<PreventionShield, DamageError> {
+        let shield = self.add_shield(
+            creator,
+            DamageEffectTarget::PlayerAndPermanents(player),
+            amount,
+        )?;
+        self.reflections.insert(shield.id, reflection);
+        Ok(shield)
+    }
+
+    pub(crate) fn reflection(&self, id: PreventionShieldId) -> Option<&DamageReflection> {
+        self.reflections.get(&id)
+    }
+
     pub(crate) fn shield(&self, id: PreventionShieldId) -> Option<&PreventionShield> {
         self.shields.get(&id)
     }
@@ -465,6 +889,12 @@ impl DamageState {
                 attempt_id,
                 DamageComponent {
                     remaining: attempt.amount.clone(),
+                    preventable: true,
+                    recipient_unavailable: false,
+                    affected_player: match attempt.target {
+                        DamageRecipient::Player(player) => Some(player),
+                        _ => None,
+                    },
                     attempt: attempt.clone(),
                     used_multipliers: BTreeSet::new(),
                 },
@@ -528,13 +958,19 @@ impl DamageState {
         let mut applications = Vec::new();
         for shield in self.shields.values() {
             let Some(component) = batch.components.values().find(|component| {
-                shield.target.matches(component.attempt.target) && component.remaining.is_positive()
+                shield_applies_to(shield.target, component) && component.can_prevent_damage()
             }) else {
                 continue;
             };
+            let scope = match shield.target {
+                DamageEffectTarget::PlayerAndPermanents(player) => {
+                    DamageScope::ControlledRecipients(player)
+                }
+                _ => DamageScope::Recipient(component.attempt.target),
+            };
             let application = DamageApplication {
                 effect: shield.id.into(),
-                scope: DamageScope::Recipient(component.attempt.target),
+                scope,
             };
             if shield.remaining.is_positive() && !batch.consumed_shields.contains(&application) {
                 applications.push(application);
@@ -598,6 +1034,22 @@ impl DamageState {
         }
         Ok(None)
     }
+
+    /// Keep the already selected prevention effect if some valid capacity remains
+    /// after departure. An empty domain reopens ordering without spending capacity.
+    pub(crate) fn refresh_prevention_after_departure(
+        &self,
+        batch: &mut ActiveDamageBatch,
+    ) -> Result<(), DamageError> {
+        if let DamageBatchPhase::Allocating { application } = *batch.phase() {
+            match self.prevention_domain(batch, application) {
+                Ok(_) => {}
+                Err(DamageError::InapplicableEffect) => batch.phase = DamageBatchPhase::Selecting,
+                Err(error) => return Err(error),
+            }
+        }
+        Ok(())
+    }
     /// Reconstruct the exact eligible quantities and required total from owned state.
     pub(crate) fn prevention_domain(
         &self,
@@ -618,16 +1070,22 @@ impl DamageState {
             } if selected == application => {}
             DamageBatchPhase::Allocating { .. } => return Err(DamageError::WrongPhase),
         }
-        let (DamageEffectId::Prevention(id), DamageScope::Recipient(recipient)) =
-            (application.effect, application.scope)
-        else {
+        let DamageEffectId::Prevention(id) = application.effect else {
             return Err(DamageError::InapplicableEffect);
         };
         let shield = self
             .shields
             .get(&id)
             .ok_or(DamageError::InapplicableEffect)?;
-        if !shield.target.matches(recipient)
+        let scope_matches = match (application.scope, shield.target) {
+            (
+                DamageScope::ControlledRecipients(player),
+                DamageEffectTarget::PlayerAndPermanents(beneficiary),
+            ) => player == beneficiary,
+            (DamageScope::Recipient(recipient), target) => target.matches(recipient),
+            _ => false,
+        };
+        if !scope_matches
             || !shield.remaining.is_positive()
             || batch.consumed_shields.contains(&application)
         {
@@ -636,7 +1094,7 @@ impl DamageState {
         let eligible: BTreeMap<_, _> = batch
             .components
             .values()
-            .filter(|c| c.attempt.target == recipient && c.remaining.is_positive())
+            .filter(|c| shield_applies_to(shield.target, c) && c.can_prevent_damage())
             .map(|c| (c.attempt.id, c.remaining.clone()))
             .collect();
         if eligible.is_empty() {
@@ -656,8 +1114,10 @@ impl DamageState {
         allocations: Vec<DamageAllocation>,
     ) -> Result<PreventionApplication, DamageError> {
         let (shield, mut remaining, required) = self.prevention_domain(batch, application)?;
-        let DamageScope::Recipient(target) = application.scope else {
-            return Err(DamageError::InapplicableEffect);
+        let target = match application.scope {
+            DamageScope::Recipient(target) => target,
+            DamageScope::ControlledRecipients(player) => DamageRecipient::Player(player),
+            DamageScope::Component(_) => return Err(DamageError::InapplicableEffect),
         };
         let stage = batch
             .stage
@@ -716,6 +1176,7 @@ impl DamageState {
             }
         } else {
             self.shields.remove(&fact.shield);
+            self.reflections.remove(&fact.shield);
         }
         batch.consumed_shields.insert(application);
         batch.stage = stage;
@@ -796,6 +1257,8 @@ impl DamageState {
                     amount: component.remaining.clone(),
                 });
                 DamageOutcome::Dealt(component.remaining.clone())
+            } else if component.recipient_unavailable {
+                DamageOutcome::RecipientUnavailable
             } else {
                 DamageOutcome::FullyPrevented
             };
@@ -807,14 +1270,31 @@ impl DamageState {
         }
         Ok((applied, completions))
     }
+    pub(crate) fn expire_reflecting_shields(&mut self) {
+        self.shields
+            .retain(|id, _| !self.reflections.contains_key(id));
+        self.reflections.clear();
+    }
+
     pub(crate) fn retain_recipients(&mut self, live_battlefield: &BTreeSet<ObjectId>) {
         let live = |target: DamageEffectTarget| match target {
             DamageEffectTarget::Permanent(object) => live_battlefield.contains(&object),
-            DamageEffectTarget::Player(_) => true,
+            DamageEffectTarget::Player(_) | DamageEffectTarget::PlayerAndPermanents(_) => true,
         };
         self.shields.retain(|_, shield| live(shield.target));
+        self.reflections
+            .retain(|id, _| self.shields.contains_key(id));
         self.multipliers
             .retain(|_, multiplier| live(multiplier.target));
+    }
+}
+
+fn shield_applies_to(target: DamageEffectTarget, component: &DamageComponent) -> bool {
+    match target {
+        DamageEffectTarget::PlayerAndPermanents(player) => {
+            component.affected_player == Some(player)
+        }
+        _ => target.matches(component.attempt.target),
     }
 }
 

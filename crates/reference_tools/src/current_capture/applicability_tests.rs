@@ -8,10 +8,7 @@ use serde_json::json;
 use spellwake_engine::{
     game::RuleFrame,
     object_identity::ObjectDestination,
-    program::{
-        BodyTarget, ExecutableBody, OrdinaryCondition, TriggerGrouping, TriggeredAbility,
-        TriggeredAbilityId,
-    },
+    program::{BodyTarget, ExecutableBody, TriggerGrouping, TriggeredAbility, TriggeredAbilityId},
 };
 
 pub(crate) struct Reset;
@@ -103,7 +100,9 @@ fn token_objects() -> (GameObjects, ObjectId) {
     let mut token = fixture::creature();
     token.triggered.push(TriggeredAbility {
         id: TriggeredAbilityId(1),
-        condition: OrdinaryCondition::Enters(spellwake_engine::program::ObjectRelation::SelfObject),
+        condition: spellwake_engine::program::TriggerSpec::enters(
+            spellwake_engine::program::ObjectFilter::self_object(),
+        ),
         grouping: TriggerGrouping::EachOccurrence,
         body: ExecutableBody::new(BodyTarget::None, vec![fixture::selection(false)]),
     });
@@ -232,24 +231,20 @@ fn applicability_poison_preserves_the_first_unrelated_metadata_failure() {
 
 #[test]
 fn library_profile_denial_preserves_actual_initializer_cast_and_completed_native_results() {
-    use spellwake_engine::{
-        effects::Instruction,
-        mana::ManaCost,
-        program::{InstructionAmount, ResolvingPlayer},
-    };
+    use spellwake_engine::{effects::Instruction, mana::ManaCost, program::ResolvingPlayer};
     let _reset = Reset;
     for instruction in [
         Instruction::Scry {
             player: ResolvingPlayer::Controller,
-            amount: InstructionAmount::Literal(1.into()),
+            amount: spellwake_engine::program::ValueExpr::Literal(1.into()),
         },
         Instruction::Surveil {
             player: ResolvingPlayer::Controller,
-            amount: InstructionAmount::Literal(1.into()),
+            amount: spellwake_engine::program::ValueExpr::Literal(1.into()),
         },
         Instruction::Mill {
             player: ResolvingPlayer::Controller,
-            amount: InstructionAmount::Literal(1.into()),
+            amount: spellwake_engine::program::ValueExpr::Literal(1.into()),
         },
     ] {
         let program = spellwake_engine::program::Program::instant(

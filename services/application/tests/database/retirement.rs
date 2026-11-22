@@ -19,16 +19,12 @@ async fn retire<C: GenericClient + Sync>(
 #[tokio::test]
 #[ignore = "requires isolated migrated Postgres"]
 async fn large_retirement_preserves_exact_quantities_and_other_owners() -> TestResult {
-    let mut client = connection().await?;
+    let client = connection().await?;
     let (actor, _) = account(&client).await?;
     let (peer, _) = account(&client).await?;
     let product = pricing::product(&client, true).await?;
     let source = operation(&client, actor).await?;
-    // Seed 2,000 holdings in one statement, without changing the timeout for retirement itself.
-    let seed = client.transaction().await?;
-    seed.batch_execute("SET LOCAL statement_timeout = '60s'")
-        .await?;
-    let count = seed
+    let count = client
         .execute(
             "WITH printings AS (
                 INSERT INTO app.printing(definition_id,set_id,external_printing_ref,rarity,finish,image_ref)
@@ -43,7 +39,6 @@ async fn large_retirement_preserves_exact_quantities_and_other_owners() -> TestR
             &[&product.cards[0], &source, &actor],
         )
         .await?;
-    seed.commit().await?;
     assert_eq!(count, 2000);
     client
         .execute(

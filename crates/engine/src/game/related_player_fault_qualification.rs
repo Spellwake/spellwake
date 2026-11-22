@@ -27,7 +27,7 @@ impl GameState {
             .execution
             .qualification_with_related_player_cause_fault(fault)?;
         let next = Self {
-            execution,
+            execution: Box::new(execution),
             ..self.clone()
         };
         // All private root fields other than the separately checked executor are exact.

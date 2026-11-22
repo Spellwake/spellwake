@@ -15,14 +15,14 @@ use spellwake_engine::{
     object_identity::{CardId, ObjectDestination, ObjectZone},
     occurrence::RulesRecord,
     program::{
-        BodyTarget, ExecutableBody, Instruction, InstructionAmount, ObjectRelation,
-        OrdinaryCondition, Program, TriggeredAbility, TriggeredAbilityId,
+        BodyTarget, ExecutableBody, Instruction, Program, TriggerSpec, TriggeredAbility,
+        TriggeredAbilityId,
     },
     targets::TargetRef,
 };
 use std::collections::{BTreeMap, BTreeSet};
 
-fn source(condition: Option<OrdinaryCondition>) -> Program {
+fn source(condition: Option<TriggerSpec>) -> Program {
     let mut program =
         Program::creature(Some(ManaCost::free()), 3.into(), 3.into(), BTreeSet::new());
     program.mana.push(ManaAbility {
@@ -46,7 +46,7 @@ fn source(condition: Option<OrdinaryCondition>) -> Program {
             body: ExecutableBody::new(
                 BodyTarget::None,
                 vec![Instruction::DrawController {
-                    amount: InstructionAmount::Literal(1.into()),
+                    amount: spellwake_engine::program::ValueExpr::Literal(1.into()),
                 }],
             ),
         });
@@ -141,9 +141,11 @@ fn nonmana_removal_keeps_mana_but_prevents_tap_trigger_discovery() {
         vec![
             card(
                 1,
-                source(Some(OrdinaryCondition::BecomesTapped(
-                    ObjectRelation::SelfObject,
-                ))),
+                source(Some(
+                    spellwake_engine::program::TriggerSpec::becomes_tapped(
+                        spellwake_engine::program::ObjectFilter::self_object(),
+                    ),
+                )),
                 true,
             ),
             spell(
@@ -241,7 +243,9 @@ fn removing_a_dies_trigger_before_lethal_damage_prevents_lookback_discovery() {
         vec![
             card(
                 1,
-                source(Some(OrdinaryCondition::Dies(ObjectRelation::SelfObject))),
+                source(Some(spellwake_engine::program::TriggerSpec::dies(
+                    spellwake_engine::program::ObjectFilter::self_object(),
+                ))),
                 true,
             ),
             spell(
@@ -285,9 +289,11 @@ fn captured_tap_trigger_resolves_after_the_source_loses_all_abilities() {
         vec![
             card(
                 1,
-                source(Some(OrdinaryCondition::BecomesTapped(
-                    ObjectRelation::SelfObject,
-                ))),
+                source(Some(
+                    spellwake_engine::program::TriggerSpec::becomes_tapped(
+                        spellwake_engine::program::ObjectFilter::self_object(),
+                    ),
+                )),
                 true,
             ),
             spell(

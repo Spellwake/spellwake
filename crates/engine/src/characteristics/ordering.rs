@@ -28,15 +28,19 @@ fn reachable(
     seen
 }
 /// Original maximal SCCs, original inter-SCC waits and strict later-to-immediate-
-/// earlier chains determine eligibility. IDs never resolve timestamp ties.
+/// earlier chains determine eligibility. Static abilities of the same source share its
+/// timestamp and retain definition order when independent.
 pub(super) fn select(
     timestamps: &BTreeMap<EffectInstanceKey, CharacteristicTimestamp>,
     original_waits: &BTreeSet<ComponentWait>,
 ) -> Result<Selection, CharacteristicInvariantError> {
     let mut by_timestamp: Vec<_> = timestamps.keys().copied().collect();
-    by_timestamp.sort_by_key(|key| timestamps[key]);
+    by_timestamp.sort_by_key(|key| (timestamps[key], *key));
     for adjacent in by_timestamp.windows(2) {
-        if timestamps[&adjacent[0]] == timestamps[&adjacent[1]] {
+        let same_static_source = matches!((adjacent[0],adjacent[1]),(
+            EffectInstanceKey::Static{source:first,..}, EffectInstanceKey::Static{source:second,..}
+        ) if first==second);
+        if timestamps[&adjacent[0]] == timestamps[&adjacent[1]] && !same_static_source {
             return Err(CharacteristicInvariantError::DuplicateTimestamp(
                 timestamps[&adjacent[0]],
             ));
@@ -79,7 +83,7 @@ pub(super) fn select(
             })
         {
             let mut ordered: Vec<_> = component.iter().copied().collect();
-            ordered.sort_by_key(|key| timestamps[key]);
+            ordered.sort_by_key(|key| (timestamps[key], *key));
             for adjacent in ordered.windows(2) {
                 derived_timestamp_waits.insert(ComponentWait {
                     waiting: adjacent[1],
@@ -108,4 +112,56 @@ pub(super) fn select(
         eligible,
         chosen,
     })
+}
+
+#[cfg(test)]
+mod same_source_tests {
+    use super::*;
+    use crate::{
+        characteristics::StaticAbilityId,
+        object_identity::{CardId, GameObjects, ObjectDestination},
+        priority::SeatId,
+    };
+    #[test]
+    fn static_timestamp_ties_use_source_ability_order_only_after_dependencies() {
+        let first = GameObjects::new(0)
+            .seed_card(0, CardId(1), SeatId(0), ObjectDestination::Hand)
+            .unwrap();
+        let second = first
+            .next
+            .seed_card(
+                first.next.revision(),
+                CardId(2),
+                SeatId(0),
+                ObjectDestination::Hand,
+            )
+            .unwrap();
+        let static_key = |source, number| EffectInstanceKey::Static {
+            source,
+            ability: StaticAbilityId(number),
+        };
+        let a = static_key(first.after.id(), 1);
+        let b = static_key(first.after.id(), 2);
+        let unrelated = static_key(second.after.id(), 1);
+        let time = CharacteristicTimestamp(3);
+        let tied = [(a, time), (b, time)].into();
+        assert_eq!(select(&tied, &BTreeSet::new()).unwrap().chosen, a);
+        let dependent = ComponentWait {
+            waiting: a,
+            prerequisite: b,
+        };
+        assert_eq!(select(&tied, &[dependent].into()).unwrap().chosen, b);
+        let cyclic = [
+            dependent,
+            ComponentWait {
+                waiting: b,
+                prerequisite: a,
+            },
+        ]
+        .into();
+        assert_eq!(select(&tied, &cyclic).unwrap().chosen, a);
+        assert!(
+            matches!(select(&[(a,time),(unrelated,time)].into(),&BTreeSet::new()),Err(CharacteristicInvariantError::DuplicateTimestamp(t)) if t==time)
+        );
+    }
 }

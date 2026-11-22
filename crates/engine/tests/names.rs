@@ -104,7 +104,7 @@ fn counted_mana_reads_current_names_with_the_same_filter_as_static_counts() {
     source.mana.push(ManaAbility {
         id: ManaAbilityId(1),
         output: ManaOutput::Counted {
-            mana_type: ManaType::Green,
+            mana_type: Some(ManaType::Green),
             permanents: PermanentSelector {
                 name: NameFilter::Named(EnglishCardName::new("Elf".into()).unwrap()),
                 ..PermanentSelector::default()
@@ -331,9 +331,7 @@ fn game_context_binds_the_actual_supplied_name_relation_before_initialization() 
 
 #[test]
 fn renamed_self_trigger_keeps_old_appearance_after_later_rename_exit_and_stale_rejection() {
-    use spellwake_engine::program::{
-        InstructionAmount, ObjectRelation, OrdinaryCondition, TriggeredAbility, TriggeredAbilityId,
-    };
+    use spellwake_engine::program::{TriggeredAbility, TriggeredAbilityId};
     let mut source = creature("Original");
     source.supertypes = BTreeSet::from([spellwake_engine::program::Supertype::Snow]);
     source.mana.push(ManaAbility {
@@ -346,11 +344,13 @@ fn renamed_self_trigger_keeps_old_appearance_after_later_rename_exit_and_stale_r
     source.triggered.push(TriggeredAbility {
         grouping: spellwake_engine::program::TriggerGrouping::EachOccurrence,
         id: TriggeredAbilityId(1),
-        condition: OrdinaryCondition::BecomesTapped(ObjectRelation::SelfObject),
+        condition: spellwake_engine::program::TriggerSpec::becomes_tapped(
+            spellwake_engine::program::ObjectFilter::self_object(),
+        ),
         body: ExecutableBody::new(
             BodyTarget::None,
             vec![Instruction::DrawController {
-                amount: InstructionAmount::Literal(0.into()),
+                amount: spellwake_engine::program::ValueExpr::Literal(0.into()),
             }],
         ),
     });

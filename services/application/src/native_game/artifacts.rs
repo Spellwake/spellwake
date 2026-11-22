@@ -262,16 +262,64 @@ impl NativeArtifact {
 }
 /// Server-only private Store. Distributed browser/Tauri clients must not own it.
 /// The caller supplies independently authorized expected refs and scoped identity.
+const DEFAULT_ARTIFACT_CACHE_BYTES: usize = 64 * 1024 * 1024;
+
+struct ArtifactByteCache {
+    entries: lru::LruCache<String, std::sync::Arc<[u8]>>,
+    total_bytes: usize,
+    max_bytes: usize,
+}
+
+impl ArtifactByteCache {
+    fn new(max_bytes: usize) -> Self {
+        Self {
+            entries: lru::LruCache::unbounded(),
+            total_bytes: 0,
+            max_bytes,
+        }
+    }
+
+    fn get(&mut self, key: &str) -> Option<Vec<u8>> {
+        self.entries.get(key).map(|bytes| bytes.as_ref().to_vec())
+    }
+
+    fn insert(&mut self, key: String, bytes: &[u8]) {
+        if self.max_bytes == 0 || bytes.len() > self.max_bytes / 4 {
+            return;
+        }
+        if let Some(previous) = self.entries.put(key, std::sync::Arc::from(bytes)) {
+            self.total_bytes = self.total_bytes.saturating_sub(previous.len());
+        }
+        self.total_bytes = self.total_bytes.saturating_add(bytes.len());
+        while self.total_bytes > self.max_bytes {
+            let Some((_, evicted)) = self.entries.pop_lru() else {
+                self.total_bytes = 0;
+                break;
+            };
+            self.total_bytes = self.total_bytes.saturating_sub(evicted.len());
+        }
+    }
+}
+
 pub struct NativeArtifactStore {
     backend: BackendClient,
     bucket: String,
+    cache: std::sync::Arc<std::sync::Mutex<ArtifactByteCache>>,
 }
 impl NativeArtifactStore {
     pub(crate) fn new(backend: BackendClient, bucket: String) -> Result<Self, NativeArtifactError> {
         if !private_storage::bucket_name(&bucket) {
             return Err(invalid());
         }
-        Ok(Self { backend, bucket })
+        let max_bytes = std::env::var("SPELLWAKE_NATIVE_ARTIFACT_CACHE_BYTES")
+            .ok()
+            .and_then(|v| v.parse::<usize>().ok())
+            .unwrap_or(DEFAULT_ARTIFACT_CACHE_BYTES);
+        Ok(Self {
+            backend,
+            bucket,
+            cache: std::sync::Arc::new(std::sync::Mutex::new(ArtifactByteCache::new(max_bytes))),
+        })
     }
     /// Read existing server configuration and the private native bucket setting.
     /// This does not create a bucket, activate a service or grant source authority.
@@ -301,7 +349,33 @@ impl NativeArtifactStore {
     ) -> Result<NativeArtifactRef, NativeArtifactError> {
         let reference = NativeArtifactRef::for_bytes(game, context, role, bytes)?;
         private_storage::retain_bytes(&self.backend, &self.bucket, reference.as_str(), bytes)?;
+        if let Ok(mut guard) = self.cache.lock() {
+            guard.insert(reference.as_str().to_owned(), bytes);
+        }
         Ok(reference)
+    }
+    /// Keep proof of the authenticated, exact private readback for the newly
+    /// generated View. SQL must still select this exact immutable reference
+    /// before its bytes can be used to restore an issued View.
+    pub(super) fn retain_new_view(
+        &self,
+        reference: NativeArtifactRef,
+        bytes: Vec<u8>,
+    ) -> Result<NativeArtifact, NativeArtifactError> {
+        let expected = NativeArtifactRef::for_bytes(
+            reference.game,
+            reference.context,
+            NativeArtifactRole::View,
+            &bytes,
+        )?;
+        if expected != reference {
+            return Err(invalid());
+        }
+        private_storage::retain_new_bytes(&self.backend, &self.bucket, reference.as_str(), &bytes)?;
+        if let Ok(mut guard) = self.cache.lock() {
+            guard.insert(reference.as_str().to_owned(), &bytes);
+        }
+        Ok(NativeArtifact { reference, bytes })
     }
     /// Read a reference obtained from an independently authorized accepted source.
     /// Never use a player-provided path/hash as that authority.
@@ -318,6 +392,16 @@ impl NativeArtifactStore {
         if reference.game != game || reference.context != context || reference.role != role {
             return Err(NativeArtifactError::new(NativeArtifactFailure::WrongScope));
         }
+        // Content-addressed immutable artifacts verified by full SHA-256 digest can be
+        // served directly from the bounded in-memory LRU cache without repeating HTTP I/O.
+        if let Ok(mut guard) = self.cache.lock()
+            && let Some(bytes) = guard.get(reference.as_str())
+        {
+            return Ok(NativeArtifact {
+                reference: reference.clone(),
+                bytes,
+            });
+        }
         private_storage::private_bucket(&self.backend, &self.bucket)?;
         let bytes = private_storage::read_bytes(
             &self.backend,
@@ -327,6 +411,9 @@ impl NativeArtifactStore {
             &reference.hash,
         )?
         .ok_or_else(|| NativeArtifactError::new(NativeArtifactFailure::Missing))?;
+        if let Ok(mut guard) = self.cache.lock() {
+            guard.insert(reference.as_str().to_owned(), &bytes);
+        }
         Ok(NativeArtifact {
             reference: reference.clone(),
             bytes,

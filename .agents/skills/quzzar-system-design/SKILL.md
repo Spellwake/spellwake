@@ -37,7 +37,7 @@ Keep these artifacts separate:
 - `system.md`: the full specification of the approved system.
 - `current/`: the verified map of how the system works before changes.
 - `proposed/`: a copy of the current map, iterated with the user.
-- `plan.md`: the exhaustive checklist for reaching the approved proposed system.
+- `plan.md`: the exhaustive, ordered build checklist and any after-live migration/removal list.
 - `reviews/`: independent audit, plan, and implementation review reports.
 - `implemented/`: a fresh map of what the code actually does after implementation.
 
@@ -51,6 +51,24 @@ considering one, explicitly ask the user whether it should be added before inclu
 in the design or building it. The quzzar-flow diagram is the visualization requested by
 this workflow.
 
+## Schema-backed tables and data flow
+
+Read [references/data-contracts.md](references/data-contracts.md) when designing or auditing
+tables, structured data, or connections between systems. Use quzzar-flow's actual input/output
+contracts and validation, not only boxes, arrows, table labels, or processing prose.
+
+Define each table's row schema from its columns and wire representation. Model each consumer's
+required input, the supplied projection or collection, and the output of each transformation.
+Connect real producers to those inputs and inspect the resulting field bindings. Keep table
+relationships distinct from payload delivery: a foreign-key label is not a data contract.
+
+Run contract validation for each meaningful design iteration and retain its status, issues,
+and binding evidence with the map. Fix invalid proposed contracts and resolve or explicitly
+report unverified constraints. In current-state audits, keep genuine mismatches visible as
+findings rather than changing the map to make it pass. A valid graph proves only the supported
+contract checks; it does not execute transformations, validate SQL/RLS, or prove application
+behavior. Carry these contracts into specification, implementation, and independent reviews.
+
 ## Phase 1: full, honest audit
 
 Do the deep investigation yourself so the user can understand the system at a higher
@@ -59,10 +77,10 @@ and construct the full current-state map before redesigning it.
 
 Map the full system under review:
 
-- Database structures and their relationships.
+- Database structures, columns, row schemas, and relationships.
 - How the backend consumes those structures and transforms their data.
 - How the frontend consumes the backend's data.
-- Connections between systems, including the data passed through each connection.
+- Connections between systems, including the schema and consumed fields of each payload.
 
 Use groups to categorize meaningful sections, such as database, backend, and frontend,
 while keeping their relationships visible. For each processing step, show what data
@@ -125,14 +143,24 @@ Explicitly ask the user unless they have already answered for this change:
 - Does the changed system need backward compatibility?
 - Does existing work or data need to be migrated? If so, what migration flow do we want?
 
-Add backward compatibility only when the user explicitly requires it. A migration
-requirement does not imply permission to add compatibility layers or fallback behavior.
-Resolve these questions before finalizing the relevant plan items.
+For live data, default to additive expansion and a separately tracked after-live migration
+and removal phase. Agree on the compatibility period, migration/cutover order, and removal
+conditions. Add compatibility behavior only for the agreed need; a migration does not imply
+permission for fallback behavior. Resolve these questions before finalizing relevant items.
 
 Write `plan.md` as a full, exhaustive checklist of everything required to build the
 approved system or turn the existing system into it. Cover changes to database structures and relationships,
 backend processing, frontend consumers, contracts, connections, required migrations,
 superseded code, and verification wherever those are affected.
+
+Include table row schemas, consumer projections, transformation input/output contracts,
+explicit mappings, and contract validation in the specification and checklist. Preserve one
+authoritative wire contract across Rust, TypeScript, and Python boundaries as applicable.
+
+Order the checklist using [references/implementation-order.md](references/implementation-order.md):
+database changes, RLS/access tests, contracts and endpoints, required services, typed client
+functions, then UI integration. Include each stage's verification and exit condition. Track
+after-live migration and removal separately whenever live-data changes defer deletion.
 
 Make each item concrete: what changes, where it changes, what it depends on, and how to
 confirm it is complete. Account for every requirement in the approved specification and, for an existing system,
@@ -151,9 +179,12 @@ If a finding requires changing the approved design, return to the user in the ap
 
 ## Phase 4: implement
 
-Implement the full reviewed checklist. Track completed work in `plan.md`, with the
-verification supporting completion. Keep the implementation aligned with the approved
-structure and the user's compatibility and migration decisions.
+Follow [references/implementation-order.md](references/implementation-order.md). Build and
+verify the database foundation first, then progress through the affected layers in order.
+Implement the full reviewed checklist and track each stage's evidence in `plan.md`. Keep
+the implementation aligned with the approved structure and migration/compatibility decisions.
+Separate build/rollout completion from pending after-live data migration and destructive cleanup;
+execute those phases only when their prerequisites and authorization hold.
 
 If implementation exposes a design change, return to the applicable design-iteration step for that decision, then
 update and recheck the affected plan. Do not silently substitute a different system.
@@ -166,7 +197,9 @@ Do not produce the final map merely by relabeling the proposal or ticking the ch
 Render the implemented map and compare it with the approved proposal and every checklist
 item. Run the independent review below against the resulting implementation.
 Confirm that the data structures, relationships, inputs, outputs, transformations, and
-required migration behavior actually match what was agreed.
+required migration behavior actually match what was agreed. Check stage evidence and the
+after-live migration/removal list. Report any release, data migration, or cleanup still pending
+without claiming the entire change is complete.
 
 Fix verified discrepancies and recheck the affected work. Show the user the final layout,
 the comparison, and any remaining gaps. Report completion only when the implementation
@@ -181,7 +214,9 @@ feeding them your conclusions or each other's findings.
 - One checks coverage against raw requirements and specification, and against code when
   it exists: omitted systems, structures, consumers, connections, and unsupported claims.
 - One follows the data end to end: inputs, outputs, transformations, relationships, and
-  whether the map, plan, or implementation fulfills the intended flow at that phase.
+  whether the map, plan, or implementation fulfills the intended flow at that phase. Inspect
+  row schemas, projections, mappings, validation issues, and field bindings; do not treat
+  labeled arrows or empty consumer contracts as evidence of checked data delivery.
 
 Require each reviewer to report evidence, gaps, and the limits of what they inspected.
 Synthesize their findings only after both finish. Correct verified issues and have those

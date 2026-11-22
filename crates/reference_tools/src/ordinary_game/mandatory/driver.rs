@@ -433,7 +433,7 @@ impl FinitePolicy {
             t.position().number == b.turn
                 && t.position().step == b.step.native()
                 && t.position().cleanup_iteration == 0
-        }) && state.execution().window().turn_owner() == b.active.seat()
+        }) && state.execution().window().active_player() == b.active.seat()
             && state.execution().window().phase()
                 == WindowPhase::Priority(PriorityPhase::Ready {
                     holder: b.holder.seat(),
@@ -740,7 +740,10 @@ impl FinitePolicy {
             }
             spend.push(ManaSpend { mana_type, amount });
         }
-        Ok(ManaPayment { spend })
+        Ok(ManaPayment {
+            from_lots: Default::default(),
+            spend,
+        })
     }
     fn mana(value: Mana) -> ManaType {
         match value {
@@ -1117,7 +1120,7 @@ impl FinitePolicy {
                 ) => {
                     if state.turn().is_some_and(|t| {
                         t.position().number == *turn && t.position().step == Step::CombatDamage
-                    }) && state.execution().window().turn_owner() == active.seat()
+                    }) && state.execution().window().active_player() == active.seat()
                     {
                         p.stage = Stage::Settlement;
                         continue;
@@ -1285,7 +1288,7 @@ impl FinitePolicy {
                 if state.turn().is_none_or(|t| {
                     t.position().number != boundary.turn
                         || t.position().step != boundary.step.native()
-                }) || state.execution().window().turn_owner() != boundary.active.seat()
+                }) || state.execution().window().active_player() != boundary.active.seat()
                     || state
                         .execution()
                         .window()
@@ -1322,7 +1325,7 @@ impl FinitePolicy {
                 if state.turn().is_none_or(|t| {
                     t.position().number > *turn
                         || (t.position().number == *turn
-                            && state.execution().window().turn_owner() != active.seat())
+                            && state.execution().window().active_player() != active.seat())
                 }) || !self.ready_empty(state)
                 {
                     return Err("combat seek initial boundary mismatch".into());
@@ -1333,7 +1336,7 @@ impl FinitePolicy {
                 if state.turn().is_none_or(|t| {
                     t.position().number > *turn
                         || (t.position().number == *turn
-                            && state.execution().window().turn_owner() != active.seat())
+                            && state.execution().window().active_player() != active.seat())
                 }) || !self.ready_empty(state)
                 {
                     return Err("combat seek encountered unexpected stack/work".into());
@@ -1624,6 +1627,7 @@ impl FinitePolicy {
                                 .map(|attacker| AttackDeclaration {
                                     attacker,
                                     defender: other(active.seat()).expect("validated finite seat"),
+                                    defending_planeswalker: None,
                                 })
                                 .collect(),
                         ),
@@ -2673,7 +2677,7 @@ impl FinitePolicy {
                     || state.turn().is_none_or(|t| {
                         t.position().number != *turn || t.position().step != step.native()
                     })
-                    || state.execution().window().turn_owner() != active.seat()
+                    || state.execution().window().active_player() != active.seat()
                 {
                     return Err("mandatory natural outcome timing mismatch".into());
                 }

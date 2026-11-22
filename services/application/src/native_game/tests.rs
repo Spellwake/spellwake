@@ -16,7 +16,6 @@ use spellwake_engine::{
     targets::TargetRef,
 };
 use std::collections::{BTreeMap, BTreeSet};
-mod bank_expiry;
 mod concession;
 pub(super) mod fixture;
 mod input_codec;
@@ -202,7 +201,15 @@ fn native_actions_preserve_input_source_ability_payment_and_foreign_scope_bounda
     let target = PlayerTarget::Seat {
         seat_id: viewer_b(),
     };
-    let zero = PlayerPayment { spend: vec![] };
+    let zero = PlayerPayment {
+        from_lots: Default::default(),
+        exile_cast_type: None,
+        alternative_cost_source: None,
+        graveyard_permission: None,
+        use_granted_flashback: false,
+        restricted_mana: Vec::new(),
+        spend: vec![],
+    };
     let actions = vec![
         (
             PlayerAction::CastUntargeted {
@@ -344,6 +351,12 @@ fn native_actions_preserve_input_source_ability_payment_and_foreign_scope_bounda
         Err(NativeBridgeError::StaleBasis)
     ));
     let reordered = PlayerPayment {
+        from_lots: Default::default(),
+        exile_cast_type: None,
+        alternative_cost_source: None,
+        graveyard_permission: None,
+        use_granted_flashback: false,
+        restricted_mana: Vec::new(),
         spend: vec![
             ManaSpend {
                 color: ManaColor::Blue,
@@ -471,6 +484,12 @@ fn native_payment_time_mana_color_restores_parent_and_rejects_old_handles() {
             .unwrap(),
         response: PlayerChoice::Pay {
             payment: PlayerPayment {
+                from_lots: Default::default(),
+                exile_cast_type: None,
+                alternative_cost_source: None,
+                graveyard_permission: None,
+                use_granted_flashback: false,
+                restricted_mana: Vec::new(),
                 spend: vec![ManaSpend {
                     color: ManaColor::Blue,
                     amount: RulesCount::try_from("1".to_owned()).unwrap(),
@@ -484,6 +503,12 @@ fn native_payment_time_mana_color_restores_parent_and_rejects_old_handles() {
     let parent_id = paying.pending_decision().unwrap().id();
     let parent_handle = parent.issue(NativeReference::Decision(parent_id)).unwrap();
     let allocation = PlayerPayment {
+        from_lots: Default::default(),
+        exile_cast_type: None,
+        alternative_cost_source: None,
+        graveyard_permission: None,
+        use_granted_flashback: false,
+        restricted_mana: Vec::new(),
         spend: vec![ManaSpend {
             color: ManaColor::Blue,
             amount: RulesCount::try_from("1".to_owned()).unwrap(),

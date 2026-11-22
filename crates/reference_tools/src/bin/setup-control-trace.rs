@@ -246,6 +246,7 @@ fn main() -> Result<(), String> {
             command: GameCommand::CastUntargeted {
                 spell,
                 payment: Some(ManaPayment {
+                    from_lots: Default::default(),
                     spend: vec![
                         ManaSpend {
                             mana_type: ManaType::Colourless,

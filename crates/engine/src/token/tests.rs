@@ -189,7 +189,7 @@ fn effect_defined_colors_are_distinct_from_cost_indicator_and_explicit_colorless
 
 #[test]
 fn counted_token_and_draw_share_strict_slot_codec_and_group_admission() {
-    use crate::program::{CreatureTypeSlot, InstructionAmount};
+    use crate::program::CreatureTypeSlot;
     let v = selected_vocabulary().unwrap();
     let slot = CreatureTypeSlot::new(0);
     let definition = TokenDefinition::new(
@@ -212,14 +212,22 @@ fn counted_token_and_draw_share_strict_slot_codec_and_group_admission() {
                 Instruction::CreateTokens {
                     creations: vec![TokenCreation {
                         definition,
-                        amount: InstructionAmount::ControlledPermanentsOfChosenType {
-                            chosen: slot,
-                        },
+                        amount: crate::program::ValueExpr::count_battlefield(
+                            crate::program::ObjectFilter::any()
+                                .controlled()
+                                .of_chosen_slot(slot),
+                        ),
+                        base_size: None,
+                        enters_tapped: false,
                         recipients: TokenRecipients::Controller,
                     }],
                 },
                 Instruction::DrawController {
-                    amount: InstructionAmount::ControlledPermanentsOfChosenType { chosen: slot },
+                    amount: crate::program::ValueExpr::count_battlefield(
+                        crate::program::ObjectFilter::any()
+                            .controlled()
+                            .of_chosen_slot(slot),
+                    ),
                 },
             ],
         ),

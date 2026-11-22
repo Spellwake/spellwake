@@ -40,7 +40,7 @@ pub mod matchmaking;
 mod native_build_identity_tests;
 pub mod native_game;
 pub mod notifications;
-pub mod opening_choice;
+mod opening_choice;
 pub mod pack_shop;
 pub mod packs;
 pub mod patreon;

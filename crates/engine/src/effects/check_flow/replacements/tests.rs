@@ -5,8 +5,8 @@ use crate::{
     activated::{ActivatedAbility, ActivatedAbilityId, SourceCost},
     characteristics::{
         AbilityChange, AbilityRemoval, NumericExpression, NumericPair, PermanentSelector,
-        ResolvedPartSpec, ResolvedPartsSpec, StaticAbilityId, StaticContinuousAbility, StaticPart,
-        StaticParts,
+        ResolvedDuration, ResolvedPartSpec, ResolvedPartsSpec, StaticAbilityId,
+        StaticContinuousAbility, StaticPart, StaticParts,
     },
     effects::private_qualification::QualificationFault,
     game::{
@@ -16,11 +16,10 @@ use crate::{
     life::LifeAdjustment,
     object_identity::ObjectIdentityError,
     program::{
-        AffectedPlayers, BodyTarget, ExecutableBody, InstructionAmount, OrdinaryCondition,
-        PermanentTypeFilter, PlayerRelation, PublicZoneDestination as D, ResolvingPlayer,
-        Supertype, TriggerGrouping, TriggeredAbility, TriggeredAbilityId, ZoneObjectKind,
-        ZoneReplacementAbility, ZoneReplacementAbilityId, ZoneReplacementChoice,
-        ZoneReplacementSubject,
+        AffectedPlayers, BodyTarget, ExecutableBody, PermanentTypeFilter, PlayerRelation,
+        PublicZoneDestination as D, ResolvingPlayer, Supertype, TriggerGrouping, TriggeredAbility,
+        TriggeredAbilityId, ZoneObjectKind, ZoneReplacementAbility, ZoneReplacementAbilityId,
+        ZoneReplacementChoice, ZoneReplacementSubject,
     },
     test_support::{
         check_trace, creature_types, current_profile::applicability::NativeCaptureValue,
@@ -162,6 +161,12 @@ fn answer_replacements(run: &mut Run, apply: bool) {
         let reply = match f.request() {
             ZoneReplacementRequest::Select { applications } => {
                 ZoneReplacementReply::Select(applications[0])
+            }
+            ZoneReplacementRequest::Devour { .. }
+            | ZoneReplacementRequest::DevourGraveyardOrder { .. }
+            | ZoneReplacementRequest::EntryCopy { .. }
+            | ZoneReplacementRequest::EntryController { .. } => {
+                panic!("fixture has no controller-changing entrants")
             }
             ZoneReplacementRequest::ConfirmOptional { .. } => {
                 ZoneReplacementReply::Optional(if apply {
@@ -615,7 +620,10 @@ fn copied_cleanup_source_functions_before_expiry_then_waiting_only_triggers_repe
     let mut watcher = Program::artifact(None, vec![]);
     watcher.triggered.push(TriggeredAbility {
         id: TriggeredAbilityId(0),
-        condition: OrdinaryCondition::Discarded(PlayerRelation::Controller),
+        condition: crate::program::TriggerSpec::player_action(
+            PlayerRelation::Controller,
+            crate::program::PlayerTriggerAction::Discarded,
+        ),
         grouping: TriggerGrouping::EachOccurrence,
         body: ExecutableBody::new(BodyTarget::None, vec![gain(1)]),
     });
@@ -747,7 +755,9 @@ fn represented_sba_reasons_union_and_stolen_apnap_use_real_check_identity_and_ow
                 vec![Instruction::CreateTokens {
                     creations: vec![TokenCreation {
                         definition: token,
-                        amount: InstructionAmount::Literal(2.into()),
+                        amount: crate::program::ValueExpr::Literal(2.into()),
+                        base_size: None,
+                        enters_tapped: false,
                         recipients: TokenRecipients::Controller,
                     }],
                 }],
@@ -998,8 +1008,9 @@ fn complete_pass_run() -> Run {
             },
             Instruction::Sacrifice {
                 players: AffectedPlayers::One(ResolvingPlayer::Controller),
-                amount: InstructionAmount::Literal(1.into()),
+                amount: crate::program::ValueExpr::Literal(1.into()),
                 filter: PermanentTypeFilter {
+                    any_types: Default::default(),
                     required_types: BTreeSet::from([crate::program::CardType::Creature]),
                     forbidden_types: BTreeSet::new(),
                 },
@@ -1019,7 +1030,7 @@ fn complete_pass_run() -> Run {
     let copier = |card| {
         instant(
             card,
-            BodyTarget::SingleSpell(SpellTargetFilter::CopyableInstructionSpell),
+            BodyTarget::SingleSpell(crate::program::SpellFilter::copyable_instruction()),
             vec![Instruction::CopySpell],
         )
     };
@@ -1272,7 +1283,7 @@ fn cancellation_cessation_and_loss_only_passes_have_no_zone_intents_or_replaceme
         if mode == 1 {
             cards.push(instant(
                 2,
-                BodyTarget::SingleSpell(SpellTargetFilter::CopyableInstructionSpell),
+                BodyTarget::SingleSpell(crate::program::SpellFilter::copyable_instruction()),
                 vec![Instruction::CopySpell],
             ));
         }
@@ -1601,7 +1612,10 @@ fn real_issued_authority_replay_and_disclosed_late_fault_forks_preserve_whole_so
     let mut watcher = Program::artifact(None, vec![]);
     watcher.triggered.push(TriggeredAbility {
         id: TriggeredAbilityId(0),
-        condition: OrdinaryCondition::Discarded(PlayerRelation::Controller),
+        condition: crate::program::TriggerSpec::player_action(
+            PlayerRelation::Controller,
+            crate::program::PlayerTriggerAction::Discarded,
+        ),
         grouping: TriggerGrouping::EachOccurrence,
         body: ExecutableBody::new(BodyTarget::None, vec![gain(1)]),
     });
@@ -1688,7 +1702,14 @@ fn new_cleanup_journal_and_retained_work_refuse_old_semantics_in_isolation() {
         let mut mixed = p.clone();
         mixed.zone_replacements[0].actions =
             ZoneActionPredicate::OneOf(BTreeSet::from([action, ZoneActionKind::SacrificeCost]));
-        assert!(mixed.validate(&v).is_err());
+        assert_eq!(mixed.validate(&v), Ok(()));
+        assert_eq!(codec::decode(codec::view(&mixed), &v).unwrap(), mixed);
+        mixed.zone_replacements[0].actions =
+            ZoneActionPredicate::OneOf(BTreeSet::from([action, ZoneActionKind::LandPlay]));
+        assert_eq!(
+            mixed.validate(&v),
+            Err(crate::program::DefinitionError::UnsupportedZoneReplacementScope)
+        );
     }
 }
 
@@ -1726,8 +1747,9 @@ fn already_departed_token_cessation_only_pass_does_not_construct_empty_replaceme
                     },
                     Instruction::Sacrifice {
                         players: AffectedPlayers::One(ResolvingPlayer::Controller),
-                        amount: InstructionAmount::Literal(1.into()),
+                        amount: crate::program::ValueExpr::Literal(1.into()),
                         filter: PermanentTypeFilter {
+                            any_types: Default::default(),
                             required_types: BTreeSet::from([crate::program::CardType::Creature]),
                             forbidden_types: BTreeSet::new(),
                         },

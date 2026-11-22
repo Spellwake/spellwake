@@ -1,8 +1,7 @@
 //! Genuine issued root cuts; no fabricated decision is used to concede.
-mod bank_expiry;
 mod check_replacements;
-mod multiplayer_departure;
-mod original_roster;
+mod departure_continuation;
+mod departure_damage;
 use super::*;
 use crate::{
     effects::{
@@ -14,10 +13,10 @@ use crate::{
     object_identity::{CardId, ObjectDestination},
     occurrence::RulesRecord,
     program::{
-        AffectedPlayers, CreatureTypeSlot, Instruction, InstructionAmount, OrdinaryCondition,
-        PlayerRelation, Program, PublicZoneDestination, ResolvingPlayer, Supertype,
-        TriggerGrouping, TriggeredAbility, TriggeredAbilityId, ZoneActionKind, ZoneActionPredicate,
-        ZoneObjectKind, ZoneReplacementAbility, ZoneReplacementAbilityId, ZoneReplacementChoice,
+        AffectedPlayers, CreatureTypeSlot, Instruction, PlayerRelation, Program,
+        PublicZoneDestination, ResolvingPlayer, Supertype, TriggerGrouping, TriggeredAbility,
+        TriggeredAbilityId, ZoneActionKind, ZoneActionPredicate, ZoneObjectKind,
+        ZoneReplacementAbility, ZoneReplacementAbilityId, ZoneReplacementChoice,
         ZoneReplacementSubject,
     },
 };
@@ -117,7 +116,7 @@ fn step(state: &GameState, actor: SeatId, command: GameCommand) -> GameState {
     assert_eq!(actual, state.advance(issued));
     assert_eq!(*state, before);
     let next = actual.unwrap().into_state();
-    if next.outcome().is_none() {
+    if next.outcome().is_none() && next.execution().window().original_participants() == [A, B] {
         both(&next);
     }
     next
@@ -328,14 +327,9 @@ fn concession_basis_actor_terminal_scope_and_capacity_error_order() {
         GameError::RevisionExhausted,
     );
     let mut multi = root(vec![], &[20, 20, 20], None, vec![A, B, C]);
-    let departed = multi
-        .advance(input(&multi, A, GameCommand::Concede))
-        .unwrap();
-    assert_eq!(departed.state().execution().window().active_player(), None);
-    assert_eq!(
-        departed.state().execution().window().participants(),
-        &[B, C]
-    );
+    let conceded = step(&multi, A, GameCommand::Concede);
+    assert_eq!(conceded.execution().window().participants(), &[B, C]);
+    assert_eq!(conceded.outcome(), None);
     multi.basis.revision = u64::MAX;
     reject(
         &multi,
@@ -403,7 +397,7 @@ fn concession_does_not_promote_prospective_losses_in_real_legend_choice() {
 }
 
 #[test]
-fn concession_common_conclusion_preserves_checked_winner_draw_and_multiplayer_continuation() {
+fn checked_losses_conclude_or_continue_with_the_remaining_players() {
     for (lives, expected, losers) in [
         (vec![0, 20], Some(GameOutcome::Winner(B)), vec![A]),
         (vec![0, 0], Some(GameOutcome::Draw), vec![B, A]),
@@ -425,28 +419,25 @@ fn concession_common_conclusion_preserves_checked_winner_draw_and_multiplayer_co
     }
     let state = root(vec![], &[0, 20, 20], None, vec![A, B, C]);
     assert!(state.conclusion().is_none());
-    assert!(state.pending_eliminations().is_empty());
     assert_eq!(state.execution().window().participants(), &[B, C]);
+    assert_eq!(state.execution().window().active_participant(), None);
     assert_eq!(
-        state
-            .advance(input(&state, B, GameCommand::Concede))
-            .unwrap()
-            .state()
-            .outcome(),
-        Some(GameOutcome::Winner(C))
+        state.advance(input(&state, A, GameCommand::Pass)),
+        Err(GameError::UnknownActor)
     );
-    for (lives, outcome) in [
-        ([0, 0, 20], GameOutcome::Winner(C)),
-        ([0, 0, 0], GameOutcome::Draw),
-    ] {
-        assert_eq!(
-            root(vec![], &lives, None, vec![A, B, C]).outcome(),
-            Some(outcome)
-        );
-    }
+    let terminal = step(&state, B, GameCommand::Concede);
+    assert_eq!(terminal.outcome(), Some(GameOutcome::Winner(C)));
+    assert_eq!(
+        terminal
+            .conclusion()
+            .unwrap()
+            .losing_players()
+            .collect::<Vec<_>>(),
+        vec![A, B]
+    );
     for operation in [
         Instruction::DrawController {
-            amount: InstructionAmount::Literal(1.into()),
+            amount: crate::program::ValueExpr::Literal(1.into()),
         },
         Instruction::AdjustControllerLife {
             adjustment: LifeAdjustment::Lose(20.into()),
@@ -467,6 +458,463 @@ fn concession_common_conclusion_preserves_checked_winner_draw_and_multiplayer_co
 }
 
 #[test]
+fn departing_active_player_keeps_the_turn_and_the_surviving_spell() {
+    let mut permanent = Program::artifact(None, vec![]);
+    permanent.triggered.push(TriggeredAbility {
+        id: TriggeredAbilityId(0),
+        condition: crate::program::TriggerSpec::step_began(
+            Step::End,
+            PlayerRelation::AnyParticipant,
+        ),
+        grouping: TriggerGrouping::EachOccurrence,
+        body: ExecutableBody::new(
+            BodyTarget::None,
+            vec![Instruction::AdjustControllerLife {
+                adjustment: LifeAdjustment::Gain(2.into()),
+            }],
+        ),
+    });
+    let spell = Program::instant(
+        ManaCost::free(),
+        ExecutableBody::new(
+            BodyTarget::None,
+            vec![Instruction::AdjustControllerLife {
+                adjustment: LifeAdjustment::Gain(1.into()),
+            }],
+        ),
+    );
+    let state = root(
+        vec![
+            card(1, B, ObjectDestination::Hand, spell),
+            card(2, B, ObjectDestination::LibraryBottom, permanent.clone()),
+            card(
+                3,
+                A,
+                ObjectDestination::Battlefield { controller: B },
+                permanent.clone(),
+            ),
+            card(
+                4,
+                C,
+                ObjectDestination::Battlefield { controller: A },
+                permanent.clone(),
+            ),
+            card(
+                5,
+                B,
+                ObjectDestination::Battlefield { controller: B },
+                permanent,
+            ),
+        ],
+        &[20, 20, 20],
+        Some(Step::PrecombatMain),
+        vec![A, B, C],
+    );
+    let state = step(&state, A, GameCommand::Pass);
+    let state = step(
+        &state,
+        B,
+        GameCommand::CastUntargeted {
+            spell: object(&state, 1),
+            payment: None,
+        },
+    );
+    let position = state.turn().unwrap().position();
+    let departed = step(&state, A, GameCommand::Concede);
+    assert_eq!(departed.turn().unwrap().position(), position);
+    assert_eq!(departed.execution().window().active_participant(), None);
+    assert_eq!(departed.execution().window().entries().len(), 1);
+    assert!(
+        departed
+            .execution()
+            .window()
+            .cards()
+            .current_identity(CardId(3))
+            .is_none()
+    );
+    assert_eq!(
+        departed
+            .execution()
+            .window()
+            .cards()
+            .get(object(&departed, 4))
+            .unwrap()
+            .zone(),
+        ObjectZone::Exile
+    );
+    let state = step(&departed, B, GameCommand::Pass);
+    let mut state = step(&state, C, GameCommand::Pass);
+    assert_eq!(state.execution().life_total(B), Some(&21.into()));
+    assert!(state.execution().window().entries().is_empty());
+    for _ in 0..24 {
+        if state.turn().unwrap().position().number > position.number {
+            break;
+        }
+        let WindowPhase::Priority(PriorityPhase::Ready { holder }) =
+            state.execution().window().phase()
+        else {
+            panic!("the orphaned turn must advance without a decision from its former player");
+        };
+        state = step(&state, holder, GameCommand::Pass);
+    }
+    assert_eq!(state.turn().unwrap().position().number, position.number + 1);
+    assert_eq!(state.execution().window().active_participant(), Some(B));
+    assert_eq!(state.execution().life_total(B), Some(&23.into()));
+}
+
+#[test]
+fn simultaneous_departures_create_independent_surviving_triggers() {
+    let d = SeatId(19);
+    let mut watcher = Program::creature(None, 1.into(), 1.into(), BTreeSet::new());
+    watcher.triggered.push(TriggeredAbility {
+        id: TriggeredAbilityId(0),
+        condition: crate::program::TriggerSpec::new(crate::program::TriggerEvent::PlayerLosesGame(
+            PlayerRelation::AnyParticipant,
+        )),
+        grouping: TriggerGrouping::EachOccurrence,
+        body: ExecutableBody::new(
+            BodyTarget::None,
+            vec![Instruction::PutCountersOnSource { amount: 13.into() }],
+        ),
+    });
+    let state = root(
+        vec![
+            card(
+                1,
+                A,
+                ObjectDestination::Battlefield { controller: A },
+                watcher.clone(),
+            ),
+            card(
+                2,
+                B,
+                ObjectDestination::Battlefield { controller: B },
+                watcher,
+            ),
+        ],
+        &[20, 0, 0, 20],
+        None,
+        vec![A, B, C, d],
+    );
+    assert_eq!(state.execution().window().participants(), &[A, d]);
+    let RuleFrame::Triggers(frame) = state.pending_decision().unwrap().frame() else {
+        panic!("two separate losses must reach the surviving controller's trigger ordering");
+    };
+    assert_eq!(frame.chooser(), A);
+    assert_eq!(frame.instances().len(), 2);
+    let mut state = reply(
+        &state,
+        DecisionReply::OrderTriggers(frame.instances().to_vec()),
+    );
+    for total in [13, 26] {
+        state = step(&step(&state, A, GameCommand::Pass), d, GameCommand::Pass);
+        let counters = state
+            .execution()
+            .power_toughness_counters(object(&state, 1))
+            .unwrap();
+        assert_eq!(counters.plus_one, total.into());
+    }
+}
+
+#[test]
+fn departure_ends_temporary_control_before_exiling_remaining_objects() {
+    use crate::characteristics::{
+        ControlRecipient, ResolvedDuration, ResolvedPartSpec, ResolvedPartsSpec,
+    };
+    let creature = Program::creature(None, 2.into(), 2.into(), BTreeSet::new());
+    let control = Program::instant(
+        ManaCost::free(),
+        ExecutableBody::new(
+            BodyTarget::SingleCreature,
+            vec![Instruction::CreateContinuousEffect {
+                parts: ResolvedPartsSpec(vec![ResolvedPartSpec::Control(
+                    ControlRecipient::ResolvingController,
+                )]),
+                duration: ResolvedDuration::UntilEndOfTurn,
+            }],
+        ),
+    );
+    let state = root(
+        vec![
+            card(1, A, ObjectDestination::Hand, control),
+            card(
+                2,
+                B,
+                ObjectDestination::Battlefield { controller: B },
+                creature,
+            ),
+        ],
+        &[20, 20, 20],
+        None,
+        vec![A, B, C],
+    );
+    let target = object(&state, 2);
+    let state = step(
+        &state,
+        A,
+        GameCommand::Cast {
+            spell: object(&state, 1),
+            target: TargetRef::Object(target),
+        },
+    );
+    let state = [A, B, C]
+        .into_iter()
+        .fold(state, |state, actor| step(&state, actor, GameCommand::Pass));
+    assert_eq!(
+        state
+            .execution()
+            .window()
+            .cards()
+            .get(target)
+            .unwrap()
+            .controller(),
+        Some(A)
+    );
+    let state = step(&state, A, GameCommand::Concede);
+    let restored = state.execution().window().cards().get(target).unwrap();
+    assert_eq!(restored.zone(), ObjectZone::Battlefield);
+    assert_eq!(restored.controller(), Some(B));
+}
+
+#[test]
+fn departed_spell_controller_returns_the_stolen_spell_to_its_living_caster() {
+    let steal = Program::instant(
+        ManaCost::free(),
+        ExecutableBody::new(
+            BodyTarget::SingleSpell(crate::program::SpellFilter::noncreature()),
+            vec![Instruction::GainControlOfSpell],
+        ),
+    );
+    let spell = Program::instant(
+        ManaCost::free(),
+        ExecutableBody::new(
+            BodyTarget::None,
+            vec![Instruction::AdjustControllerLife {
+                adjustment: LifeAdjustment::Gain(1.into()),
+            }],
+        ),
+    );
+    let state = root(
+        vec![
+            card(1, A, ObjectDestination::Hand, steal),
+            card(2, B, ObjectDestination::Hand, spell),
+        ],
+        &[20, 20, 20],
+        None,
+        vec![A, B, C],
+    );
+    let state = step(&state, A, GameCommand::Pass);
+    let state = step(
+        &state,
+        B,
+        GameCommand::CastUntargeted {
+            spell: object(&state, 2),
+            payment: None,
+        },
+    );
+    let state = step(&step(&state, B, GameCommand::Pass), C, GameCommand::Pass);
+    let entry = state.execution().window().entries()[0].id();
+    let state = step(
+        &state,
+        A,
+        GameCommand::Cast {
+            spell: object(&state, 1),
+            target: TargetRef::Stack(entry),
+        },
+    );
+    let state = [A, B, C]
+        .into_iter()
+        .fold(state, |state, actor| step(&state, actor, GameCommand::Pass));
+    assert_eq!(state.execution().window().entries()[0].controller(), A);
+    let state = step(&state, A, GameCommand::Concede);
+    let [restored] = state.execution().window().entries() else {
+        panic!("the stolen spell must remain");
+    };
+    assert_eq!((restored.id(), restored.controller()), (entry, B));
+    let state = step(&step(&state, B, GameCommand::Pass), C, GameCommand::Pass);
+    assert_eq!(state.execution().life_total(B), Some(&21.into()));
+}
+
+#[test]
+fn a_permanent_is_exiled_when_its_default_controller_left_before_the_effect_expired() {
+    use crate::characteristics::{
+        ControlRecipient, ResolvedDuration, ResolvedPartSpec, ResolvedPartsSpec,
+    };
+    let control = Program::instant(
+        ManaCost::free(),
+        ExecutableBody::new(
+            BodyTarget::SingleCreature,
+            vec![Instruction::CreateContinuousEffect {
+                parts: ResolvedPartsSpec(vec![ResolvedPartSpec::Control(
+                    ControlRecipient::ResolvingController,
+                )]),
+                duration: ResolvedDuration::UntilEndOfTurn,
+            }],
+        ),
+    );
+    let creature = Program::creature(None, 2.into(), 2.into(), BTreeSet::new());
+    let state = root(
+        vec![
+            card(1, B, ObjectDestination::Hand, control),
+            card(
+                2,
+                C,
+                ObjectDestination::Battlefield { controller: A },
+                creature,
+            ),
+        ],
+        &[20, 20, 20],
+        Some(Step::End),
+        vec![A, B, C],
+    );
+    let state = step(&state, A, GameCommand::Pass);
+    let state = step(
+        &state,
+        B,
+        GameCommand::Cast {
+            spell: object(&state, 1),
+            target: TargetRef::Object(object(&state, 2)),
+        },
+    );
+    let state = [B, C, A]
+        .into_iter()
+        .fold(state, |state, actor| step(&state, actor, GameCommand::Pass));
+    let state = step(&state, A, GameCommand::Concede);
+    assert_eq!(
+        state
+            .execution()
+            .window()
+            .cards()
+            .get(object(&state, 2))
+            .unwrap()
+            .controller(),
+        Some(B)
+    );
+    let state = step(&step(&state, B, GameCommand::Pass), C, GameCommand::Pass);
+    assert_eq!(
+        state
+            .execution()
+            .window()
+            .cards()
+            .get(object(&state, 2))
+            .unwrap()
+            .zone(),
+        ObjectZone::Exile
+    );
+}
+
+#[test]
+fn skipped_departed_turn_expires_its_effects_and_returns_phased_permanents() {
+    use crate::characteristics::{
+        ControlRecipient, PowerToughness, ResolvedDuration, ResolvedPartSpec, ResolvedPartsSpec,
+    };
+    use crate::program::PhasingSubject;
+
+    let d = SeatId(19);
+    let instant = |instruction| {
+        Program::instant(
+            ManaCost::free(),
+            ExecutableBody::new(BodyTarget::SingleCreature, vec![instruction]),
+        )
+    };
+    let control = instant(Instruction::CreateContinuousEffect {
+        parts: ResolvedPartsSpec(vec![ResolvedPartSpec::Control(
+            ControlRecipient::ResolvingController,
+        )]),
+        duration: ResolvedDuration::UntilEndOfTurn,
+    });
+    let phase = instant(Instruction::PhaseOut(PhasingSubject::Target));
+    let boost = instant(Instruction::CreateContinuousEffect {
+        parts: ResolvedPartsSpec(vec![ResolvedPartSpec::ModifyPT(PowerToughness {
+            power: 3.into(),
+            toughness: 3.into(),
+        })]),
+        duration: ResolvedDuration::ThroughNextTurn {
+            player: B,
+            created_in_turn: 1,
+        },
+    });
+    let creature = Program::creature(None, 2.into(), 2.into(), BTreeSet::new());
+    let mut state = root(
+        vec![
+            card(1, B, ObjectDestination::Hand, control),
+            card(2, B, ObjectDestination::Hand, phase),
+            card(3, A, ObjectDestination::Hand, boost),
+            card(
+                4,
+                d,
+                ObjectDestination::Battlefield { controller: d },
+                creature.clone(),
+            ),
+            card(
+                5,
+                A,
+                ObjectDestination::Battlefield { controller: A },
+                creature,
+            ),
+        ],
+        &[20, 20, 20, 20],
+        Some(Step::End),
+        vec![A, B, C, d],
+    );
+    let phased = object(&state, 4);
+    let boosted = object(&state, 5);
+    for (actor, card, target) in [(B, 1, phased), (B, 2, phased), (A, 3, boosted)] {
+        if actor == B {
+            state = step(&state, A, GameCommand::Pass);
+        }
+        state = step(
+            &state,
+            actor,
+            GameCommand::Cast {
+                spell: object(&state, card),
+                target: TargetRef::Object(target),
+            },
+        );
+        for _ in 0..4 {
+            let WindowPhase::Priority(PriorityPhase::Ready { holder }) =
+                state.execution().window().phase()
+            else {
+                panic!("spell resolution advances through ordinary priority");
+            };
+            state = step(&state, holder, GameCommand::Pass);
+        }
+    }
+    let state = step(&state, B, GameCommand::Concede);
+    assert_eq!(
+        state.execution().window().cards().phased_out_under(phased),
+        Some(B)
+    );
+    assert_eq!(
+        state.execution().creature(boosted).unwrap().unwrap().power,
+        5.into()
+    );
+    let state = step(&step(&state, A, GameCommand::Pass), C, GameCommand::Pass);
+    let candidate = state.advance(input(&state, d, GameCommand::Pass)).unwrap();
+    assert!(candidate.rules_journal().records.iter().any(|record| {
+        matches!(record, RulesRecord::Event(event) if event.occurrences.iter().any(|row|
+            matches!(&row.value, crate::occurrence::RulesOccurrence::TurnsSkipped { players, expired_effects }
+                if players == &[B].into() && expired_effects.len() == 1)))
+    }));
+    let state = candidate.state();
+    assert_eq!(state.execution().window().active_participant(), Some(C));
+    assert_eq!(
+        state
+            .execution()
+            .window()
+            .cards()
+            .get(phased)
+            .unwrap()
+            .controller(),
+        Some(d)
+    );
+    assert_eq!(
+        state.execution().creature(boosted).unwrap().unwrap().power,
+        2.into()
+    );
+}
+
+#[test]
 fn concession_library_partition_replacement_optional_and_final_order_cuts() {
     let library = (10..=13)
         .map(|id| {
@@ -481,7 +929,7 @@ fn concession_library_partition_replacement_optional_and_final_order_cuts() {
     let state = fixture(
         vec![Instruction::Surveil {
             player: ResolvingPlayer::TargetPlayer,
-            amount: InstructionAmount::Literal(3.into()),
+            amount: crate::program::ValueExpr::Literal(3.into()),
         }],
         BodyTarget::SinglePlayer,
         library.clone(),
@@ -522,7 +970,7 @@ fn concession_library_partition_replacement_optional_and_final_order_cuts() {
     let state = fixture(
         vec![Instruction::Mill {
             player: ResolvingPlayer::TargetPlayer,
-            amount: InstructionAmount::Literal(3.into()),
+            amount: crate::program::ValueExpr::Literal(3.into()),
         }],
         BodyTarget::SinglePlayer,
         cards,
@@ -552,6 +1000,12 @@ fn concession_library_partition_replacement_optional_and_final_order_cuts() {
         let choice = match frame.request() {
             ZoneReplacementRequest::Select { applications } => {
                 ZoneReplacementReply::Select(applications[0])
+            }
+            ZoneReplacementRequest::Devour { .. }
+            | ZoneReplacementRequest::DevourGraveyardOrder { .. }
+            | ZoneReplacementRequest::EntryCopy { .. }
+            | ZoneReplacementRequest::EntryController { .. } => {
+                panic!("fixture has no controller-changing entrants")
             }
             ZoneReplacementRequest::ConfirmOptional { .. } => {
                 ZoneReplacementReply::Optional(ZoneOptionalAnswer::Decline)
@@ -583,7 +1037,7 @@ fn concession_other_player_selection_retains_accepted_prefix() {
         fixture(
             vec![Instruction::Discard {
                 players: AffectedPlayers::EachPlayer,
-                amount: InstructionAmount::Literal(1.into()),
+                amount: crate::program::ValueExpr::Literal(1.into()),
             }],
             BodyTarget::None,
             cards,
@@ -714,7 +1168,10 @@ fn concession_creature_type_and_actual_trigger_order_cuts() {
     for id in [0, 1] {
         watcher.triggered.push(TriggeredAbility {
             id: TriggeredAbilityId(id),
-            condition: OrdinaryCondition::Surveilled(PlayerRelation::Controller),
+            condition: crate::program::TriggerSpec::player_action(
+                PlayerRelation::Controller,
+                crate::program::PlayerTriggerAction::Surveilled,
+            ),
             grouping: TriggerGrouping::EachOccurrence,
             body: ExecutableBody::new(
                 BodyTarget::None,
@@ -728,7 +1185,7 @@ fn concession_creature_type_and_actual_trigger_order_cuts() {
         fixture(
             vec![Instruction::Surveil {
                 player: ResolvingPlayer::Controller,
-                amount: InstructionAmount::Literal(1.into()),
+                amount: crate::program::ValueExpr::Literal(1.into()),
             }],
             BodyTarget::None,
             vec![card(
@@ -875,7 +1332,9 @@ fn concession_real_timestamp_copy_target_and_trigger_target_cuts() {
             vec![Instruction::CreateTokens {
                 creations: vec![TokenCreation {
                     definition: token,
-                    amount: InstructionAmount::Literal(2.into()),
+                    amount: crate::program::ValueExpr::Literal(2.into()),
+                    base_size: None,
+                    enters_tapped: false,
                     recipients: TokenRecipients::Controller,
                 }],
             }],
@@ -892,7 +1351,7 @@ fn concession_real_timestamp_copy_target_and_trigger_target_cuts() {
     let copier = Program::instant(
         ManaCost::free(),
         ExecutableBody::new(
-            BodyTarget::SingleSpell(SpellTargetFilter::CopyableInstructionSpell),
+            BodyTarget::SingleSpell(crate::program::SpellFilter::copyable_instruction()),
             vec![Instruction::CopySpell],
         ),
     );
@@ -931,7 +1390,10 @@ fn concession_real_timestamp_copy_target_and_trigger_target_cuts() {
     let mut watcher = Program::artifact(None, vec![]);
     watcher.triggered.push(TriggeredAbility {
         id: TriggeredAbilityId(0),
-        condition: OrdinaryCondition::Surveilled(PlayerRelation::Controller),
+        condition: crate::program::TriggerSpec::player_action(
+            PlayerRelation::Controller,
+            crate::program::PlayerTriggerAction::Surveilled,
+        ),
         grouping: TriggerGrouping::EachOccurrence,
         body: ExecutableBody::new(
             BodyTarget::SinglePlayer,
@@ -944,7 +1406,7 @@ fn concession_real_timestamp_copy_target_and_trigger_target_cuts() {
         fixture(
             vec![Instruction::Surveil {
                 player: ResolvingPlayer::Controller,
-                amount: InstructionAmount::Literal(1.into()),
+                amount: crate::program::ValueExpr::Literal(1.into()),
             }],
             BodyTarget::None,
             vec![card(
@@ -1011,10 +1473,12 @@ fn concession_real_combat_attack_block_and_damage_assignment_cuts() {
             AttackDeclaration {
                 attacker: object(&state, 1),
                 defender: B,
+                defending_planeswalker: None,
             },
             AttackDeclaration {
                 attacker: object(&state, 2),
                 defender: B,
+                defending_planeswalker: None,
             },
         ]),
     );
@@ -1170,6 +1634,7 @@ fn concession_keeps_actual_cast_payment_and_tap_at_a_later_choice() {
         GameCommand::CastUntargeted {
             spell: object(&state, 1),
             payment: Some(ManaPayment {
+                from_lots: Default::default(),
                 spend: vec![crate::mana::ManaSpend {
                     mana_type: ManaType::Red,
                     amount: 1.into(),

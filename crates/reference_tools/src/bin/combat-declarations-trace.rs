@@ -313,7 +313,7 @@ impl Fixture {
         };
         json!({"basis_revision": self.state.basis().revision,
             "executor_revision": execution.revision(),
-            "active": seat(execution.window().turn_owner()), "priority": priority,
+            "active": seat(execution.window().active_player()), "priority": priority,
             "step": phase(self.step()), "stage": format!("{:?}", self.state.turn().unwrap().stage()),
             "combat_context_present": execution.combat().is_some(),
             "had_attackers": execution.combat().map(|c| c.had_attackers()),
@@ -458,6 +458,7 @@ impl Fixture {
             .map(|(label, defender)| AttackDeclaration {
                 attacker: self.object(label),
                 defender: *defender,
+                defending_planeswalker: None,
             })
             .collect();
         self.act(
@@ -568,7 +569,7 @@ impl Fixture {
             WindowPhase::Priority(PriorityPhase::Ready { holder }) => Some(seat(holder)),
             _ => None,
         };
-        json!({"id":id,"comparison_scope":scope,"step":phase(self.step()),"active":seat(self.state.execution().window().turn_owner()),"priority":priority,"stack_size":self.state.execution().window().entries().len(),"cards":cards,"combat":{"attackers":attackers,"blockers":blockers},"native":{"basis_revision":self.state.basis().revision,"executor_revision":self.state.execution().revision(),"combat_context_present":combat.is_some(),"had_attackers":combat.map(|c|c.had_attackers()),"stage":format!("{:?}",self.state.turn().unwrap().stage()),"pending_chooser":self.state.pending_decision().map(|p|seat(p.chooser()))}})
+        json!({"id":id,"comparison_scope":scope,"step":phase(self.step()),"active":seat(self.state.execution().window().active_player()),"priority":priority,"stack_size":self.state.execution().window().entries().len(),"cards":cards,"combat":{"attackers":attackers,"blockers":blockers},"native":{"basis_revision":self.state.basis().revision,"executor_revision":self.state.execution().revision(),"combat_context_present":combat.is_some(),"had_attackers":combat.map(|c|c.had_attackers()),"stage":format!("{:?}",self.state.turn().unwrap().stage()),"pending_chooser":self.state.pending_decision().map(|p|seat(p.chooser()))}})
     }
     fn row(&mut self, id: &str) {
         self.rows.push(
@@ -627,6 +628,7 @@ fn run(case: &str) -> TraceResult<Value> {
             GameCommand::CastUntargeted {
                 spell,
                 payment: Some(ManaPayment {
+                    from_lots: Default::default(),
                     spend: vec![
                         ManaSpend {
                             mana_type: ManaType::Green,

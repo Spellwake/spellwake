@@ -3,7 +3,7 @@
 //! neither full casting/cards nor Forge's asymmetric per-symbol failure states.
 use spellwake_contracts::RulesInteger;
 use spellwake_engine::combat::CombatRules;
-use spellwake_engine::program::{BodyTarget, ExecutableBody, SpellTargetFilter};
+use spellwake_engine::program::{BodyTarget, ExecutableBody};
 use spellwake_engine::setup::GameSeed;
 use spellwake_engine::{
     effects::{CopyTargetChoice, EffectError, EffectWindow, Instruction, Program, SeedCard},
@@ -59,6 +59,7 @@ fn cost(generic: i64, required: &[(ManaType, i64)]) -> ManaCost {
 
 fn payment(spend: &[(ManaType, i64)]) -> ManaPayment {
     ManaPayment {
+        from_lots: Default::default(),
         spend: spend
             .iter()
             .map(|&(mana_type, amount)| ManaSpend {
@@ -675,6 +676,7 @@ fn generic_and_specific_arithmetic_and_receipts_preserve_huge_exact_quantities()
         ],
     );
     let proposed = ManaPayment {
+        from_lots: Default::default(),
         spend: vec![
             ManaSpend {
                 mana_type: ManaType::Colourless,
@@ -692,6 +694,7 @@ fn generic_and_specific_arithmetic_and_receipts_preserve_huge_exact_quantities()
         A,
         &cost,
         ManaPayment {
+            from_lots: Default::default(),
             spend: vec![
                 ManaSpend {
                     mana_type: ManaType::Blue,
@@ -727,6 +730,7 @@ fn generic_and_specific_arithmetic_and_receipts_preserve_huge_exact_quantities()
         A,
         &cost,
         ManaPayment {
+            from_lots: Default::default(),
             spend: vec![ManaSpend {
                 mana_type: ManaType::Black,
                 amount: huge,
@@ -756,6 +760,7 @@ fn a_single_unit_of_huge_underpayment_or_overpayment_is_detected_exactly() {
         rejected_payment(
             &game,
             ManaPayment {
+                from_lots: Default::default(),
                 spend: vec![ManaSpend {
                     mana_type: ManaType::Blue,
                     amount: exact(amount),
@@ -1157,14 +1162,14 @@ fn copy_reply_and_countered_source_neither_repeat_receipts_charge_copies_nor_ref
             B,
             ManaCost::one(ManaType::Blue),
             Instruction::CopySpell,
-            BodyTarget::SingleSpell(SpellTargetFilter::CopyableInstructionSpell),
+            BodyTarget::SingleSpell(spellwake_engine::program::SpellFilter::copyable_instruction()),
         ),
         instant(
             3,
             A,
             ManaCost::one(ManaType::Red),
             Instruction::CounterSpell,
-            BodyTarget::SingleSpell(SpellTargetFilter::AnySpell),
+            BodyTarget::SingleSpell(spellwake_engine::program::SpellFilter::any()),
         ),
         creature(90, B),
     ];

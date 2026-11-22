@@ -84,7 +84,6 @@ impl<'de> Deserialize<'de> for StoredBetweenAck {
         }))
     }
 }
-
 fn advanced(value: &Amount, basis: &Amount) -> bool {
     basis
         .checked_add(&Amount::from(1))

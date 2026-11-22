@@ -565,6 +565,7 @@ fn synthetic_damage_attempt_observation_reuses_complete_structured_source_target
                 spell,
                 target: TargetRef::Object(target),
                 payment: ManaPayment {
+                    from_lots: Default::default(),
                     spend: vec![ManaSpend {
                         mana_type: ManaType::Blue,
                         amount: 1.into(),
@@ -621,8 +622,8 @@ fn token_recipe(mana: bool) -> serde_json::Value {
     use spellwake_engine::{
         mana::{ManaAbility, ManaAbilityId, ManaOutput},
         program::{
-            BodyTarget, ExecutableBody, Instruction, OrdinaryCondition, PlayerRelation, Program,
-            TriggeredAbility, TriggeredAbilityId,
+            BodyTarget, ExecutableBody, Instruction, PlayerRelation, Program, TriggeredAbility,
+            TriggeredAbilityId,
         },
         token::{TokenDefinition, TokenName},
     };
@@ -671,7 +672,10 @@ fn token_recipe(mana: bool) -> serde_json::Value {
         observer.triggered.push(TriggeredAbility {
             grouping: spellwake_engine::program::TriggerGrouping::EachOccurrence,
             id: TriggeredAbilityId(9),
-            condition: OrdinaryCondition::TokenCreated(PlayerRelation::Controller),
+            condition: spellwake_engine::program::TriggerSpec::player_action(
+                PlayerRelation::Controller,
+                spellwake_engine::program::PlayerTriggerAction::TokenCreated,
+            ),
             body: ExecutableBody::new(
                 BodyTarget::None,
                 vec![Instruction::AdjustControllerLife {

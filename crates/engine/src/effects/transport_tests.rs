@@ -34,7 +34,9 @@ fn draw_prefix_survives_pending_and_later_replies_emit_only_the_new_suffix() {
                     program: Program::instant(
                         ManaCost::free(),
                         ExecutableBody::new(
-                            BodyTarget::SingleSpell(SpellTargetFilter::CopyableInstructionSpell),
+                            BodyTarget::SingleSpell(
+                                crate::program::SpellFilter::copyable_instruction(),
+                            ),
                             vec![Instruction::CopySpell, Instruction::CopySpell],
                         ),
                     ),
