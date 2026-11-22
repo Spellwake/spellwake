@@ -147,6 +147,13 @@
     ]
   },
   {
+    "name": "card_art_url",
+    "arguments": "p_definition uuid, p_printing uuid",
+    "roles": [
+      "authenticated"
+    ]
+  },
+  {
     "name": "catalogue_source_visible",
     "arguments": "p_receipt uuid",
     "roles": [
@@ -319,6 +326,13 @@
     "arguments": "p_event jsonb",
     "roles": [
       "supabase_auth_admin"
+    ]
+  },
+  {
+    "name": "deck_face_card_json",
+    "arguments": "p_revision uuid, p_face uuid",
+    "roles": [
+      "authenticated"
     ]
   },
   {
