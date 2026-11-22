@@ -153,25 +153,16 @@ async fn a_deck_keeps_a_face_card_from_its_contents_with_official_art() -> TestR
     client.batch_execute("RESET ROLE").await?;
     assert_eq!(face(&client, deck).await?, Some(second));
 
-    // The owner sees the face card and its official art. Deck reads hold it
-    // back until the deployed API accepts the field (20261122028800).
-    let current = revision(&client, deck).await?;
-    let stored = face(&client, deck).await?;
+    // The owner's reads carry the face card and its official art.
     super::set_auth_claims(&client, subject).await?;
-    let shown: Value = client
-        .query_one(
-            "SELECT app.deck_face_card_json($1,$2)",
-            &[&current, &stored],
-        )
-        .await?
-        .get(0);
-    assert_eq!(shown, json!({"definitionId":second,"artUrl":art}));
     let detail: Value = client
         .query_one("SELECT app.read_my_deck($1)", &[&deck])
         .await?
         .get(0);
-    assert_eq!(detail["status"], "success");
-    assert!(detail["data"]["deck"].get("faceCard").is_none());
+    assert_eq!(
+        detail["data"]["deck"]["faceCard"],
+        json!({"definitionId":second,"artUrl":art})
+    );
     let library: Value = client
         .query_one("SELECT app.read_my_deck_library(NULL,100)", &[])
         .await?
@@ -182,7 +173,10 @@ async fn a_deck_keeps_a_face_card_from_its_contents_with_official_art() -> TestR
         .iter()
         .find(|item| item["id"] == json!(deck))
         .unwrap();
-    assert!(listed.get("faceCard").is_none());
+    assert_eq!(
+        listed["faceCard"],
+        json!({"definitionId":second,"artUrl":art})
+    );
     client.batch_execute("RESET ROLE").await?;
     Ok(())
 }
