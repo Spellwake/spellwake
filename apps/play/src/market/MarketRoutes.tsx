@@ -2,6 +2,9 @@ import type { ReactElement } from "react";
 import { useAccount } from "../auth/AccountProvider";
 import { ListingsPage } from "../routes/market/ListingsPage";
 import { SupplyPage } from "../routes/market/SupplyPage";
+import { PredictionsPage } from "../routes/market/PredictionsPage";
+import { useConnectedPredictions } from "./connected-predictions";
+import { usePreviewPredictions } from "./demo-predictions";
 import { useDemoSupply } from "./demo-supply";
 import { useConnectedListings } from "./connected-listings";
 import { useDemoListings } from "./demo-listings";
@@ -38,5 +41,20 @@ export function SupplyRoute(): ReactElement {
     <PreviewSupply />
   ) : (
     <AccountSupply />
+  );
+}
+
+function PreviewPredictions(): ReactElement {
+  return <PredictionsPage source={usePreviewPredictions()} />;
+}
+function AccountPredictions(): ReactElement {
+  return <PredictionsPage source={useConnectedPredictions()} />;
+}
+/** Market Predictions, from the account where an application API is named, else the local preview. */
+export function PredictionsRoute(): ReactElement {
+  return useAccount().state.status === "unconfigured" ? (
+    <PreviewPredictions />
+  ) : (
+    <AccountPredictions />
   );
 }

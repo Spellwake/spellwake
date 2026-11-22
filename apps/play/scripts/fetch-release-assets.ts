@@ -1,6 +1,7 @@
 import { mkdir, mkdtemp, rename, rm, writeFile } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
-import { tableAssets } from "./table-assets";
+import { appAssets } from "./app-assets";
+import { runtimeAssets } from "./runtime-assets";
 import { releaseAssetPackage } from "./release-asset-source";
 
 const token = process.env.SPELLWAKE_ASSETS_TOKEN;
@@ -14,7 +15,11 @@ if (!token || !revision || !/^[a-f0-9]{40}$/.test(revision)) {
 }
 const root = resolve(import.meta.dir, "../../..");
 const staging = await mkdtemp(join(root, ".release-assets-"));
-const files = ["logo.svg", ...tableAssets.map((path) => `tabletop/${path}`)];
+const files = [
+  "logo.svg",
+  ...runtimeAssets.map((path) => `tabletop/${path}`),
+  ...appAssets.map((path) => `app/${path}`),
+];
 try {
   const results = await Promise.allSettled(
     files.map(async (path) => {

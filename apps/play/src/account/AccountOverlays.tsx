@@ -16,6 +16,7 @@ import {
 import { PublicProfileDialog } from "../routes/profile/PublicProfileDialog";
 import {
   useConnectedAccountSettings,
+  useConnectedPublicProfile,
   type RegisteredSession,
 } from "./connected-account";
 import { useDemoAccountSettings, useDemoPublicProfile } from "./demo-account";
@@ -154,6 +155,54 @@ function PreviewProfile({
   );
 }
 
+function ConnectedProfile({
+  playerId,
+  owner,
+  services,
+  onClose,
+}: {
+  playerId: string;
+  owner: RegisteredSession;
+  services: ApplicationServices;
+  onClose: () => void;
+}): ReactElement {
+  return (
+    <PublicProfileDialog
+      source={useConnectedPublicProfile(playerId, owner, services)}
+      onClose={onClose}
+    />
+  );
+}
+
+function AccountProfile({
+  playerId,
+  onClose,
+}: {
+  playerId: string;
+  onClose: () => void;
+}): ReactElement {
+  const { state, services } = useAccount();
+  if (state.status === "unconfigured")
+    return <PreviewProfile playerId={playerId} onClose={onClose} />;
+  if (state.status === "ready" && state.session.accountId && services)
+    return (
+      <ConnectedProfile
+        playerId={playerId}
+        owner={state.session as RegisteredSession}
+        services={services}
+        onClose={onClose}
+      />
+    );
+  return (
+    <PublicProfileDialog
+      source={{
+        status: state.status === "loading" ? "loading" : "unavailable",
+      }}
+      onClose={onClose}
+    />
+  );
+}
+
 /** Mounted once by the application frame, for every signed-in screen. */
 export function AccountOverlays({
   accountButton,
@@ -216,13 +265,8 @@ export function AccountOverlays({
             onClose={() => void setView(null)}
           />
         ))}
-      {/*
-        The client has no public profile read yet, so only the preview can
-        show a player. A configured build leaves the address alone and shows
-        nothing, never preview people.
-      */}
-      {player && isPreview && (
-        <PreviewProfile
+      {player && (
+        <AccountProfile
           playerId={player}
           onClose={() => void setPlayer(null)}
         />
