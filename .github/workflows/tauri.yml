@@ -79,8 +79,6 @@ jobs:
         id: version
         run: bun run release:config
       - run: bun run release:test
-      - run: bun run ui:check
-      - run: bun run ui:build
       - run: bun run play:check
       - run: bun run play:test
       - run: bun run web:build

@@ -1,0 +1,176 @@
+.sw-book {
+  max-width: 2500px;
+  margin: auto;
+  padding: 16px clamp(12px, 2.5vw, 48px) 28px;
+  font:
+    15px/1.4 "Albert Sans",
+    system-ui,
+    sans-serif;
+  color: #eeeae1;
+}
+.sw-book-head,
+.sw-book-nav,
+.sw-book-toolbar,
+.sw-paging,
+.sw-book-toolbar > [role="group"] {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.sw-book-head {
+  justify-content: space-between;
+}
+.sw-book-head h1 {
+  font:
+    30px/1.1 "Source Serif 4",
+    Georgia,
+    serif;
+  margin: 6px 0 18px;
+}
+.sw-book-head a {
+  color: #bdbbb7;
+}
+.sw-book-nav {
+  flex-wrap: wrap;
+  border-block: 1px solid #363b40;
+  padding: 12px 0 15px;
+}
+.sw-book-nav label {
+  display: grid;
+  gap: 3px;
+  color: #bdbcb8;
+  font-size: 12px;
+}
+.sw-book select,
+.sw-book button {
+  font: inherit;
+  background: #20262b;
+  color: #eee9dd;
+  border: 1px solid #535957;
+  border-radius: 5px;
+  padding: 6px 10px;
+}
+.sw-book select {
+  font-size: 15px;
+  max-width: min(80vw, 480px);
+}
+.sw-paging {
+  margin-left: auto;
+  font-variant-numeric: tabular-nums;
+}
+.sw-book button {
+  cursor: pointer;
+}
+.sw-book button:disabled {
+  opacity: 0.42;
+  cursor: default;
+}
+.sw-paging svg {
+  width: 17px;
+  height: 17px;
+  display: block;
+}
+.sw-book-toolbar {
+  padding: 14px 0;
+  flex-wrap: wrap;
+}
+.sw-book-toolbar h2 {
+  margin: 0 auto 0 0;
+  font:
+    23px "Source Serif 4",
+    Georgia,
+    serif;
+}
+.sw-book-toolbar > [role="group"] {
+  gap: 2px;
+}
+.sw-book-toolbar button[aria-pressed="true"] {
+  background: #e4ddcf;
+  color: #171b20;
+  border-color: #e4ddcf;
+}
+.sw-book-toolbar > a {
+  padding: 5px;
+}
+.sw-canvases {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 14px;
+}
+.sw-canvases[data-mode="Compare"] {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+.sw-canvases figure {
+  margin: 0;
+  min-width: 0;
+}
+.sw-canvases figure > div {
+  position: relative;
+  overflow: hidden;
+  background: #101519;
+}
+.sw-canvases figcaption {
+  font-size: 13px;
+  color: #c4c0b8;
+  margin-bottom: 5px;
+}
+.sw-canvases:not([data-mode="Compare"]) figcaption {
+  display: none;
+}
+.sw-canvases iframe {
+  border: 0;
+  position: absolute;
+  inset: 0;
+  transform-origin: top left;
+}
+.sw-canvases img {
+  display: block;
+  width: 100%;
+  height: auto;
+}
+.sw-native-screen {
+  overflow: hidden;
+  position: relative;
+  isolation: isolate;
+}
+.sw-book :focus-visible {
+  outline: 2px solid #f2d9ac;
+  outline-offset: 2px;
+}
+@media (max-width: 900px) {
+  .sw-canvases[data-mode="Compare"] {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .sw-paging {
+    margin-left: 0;
+  }
+}
+
+.sw-canvases figure > div,
+.sw-canvases figure > a {
+  display: block;
+  width: min(100%, calc(max(340px, 100dvh - 205px) * var(--sw-screen-ratio)));
+  margin-inline: auto;
+}
+.sw-canvases figcaption {
+  text-align: center;
+}
+@media (prefers-reduced-motion: no-preference) {
+  .sw-book-toolbar button {
+    transition:
+      background-color 0.12s,
+      color 0.12s;
+  }
+}
+
+.sw-revision {
+  margin: 16px auto;
+  max-width: 1250px;
+}
+.sw-revision summary {
+  cursor: pointer;
+}
+.sw-revision img {
+  width: 100%;
+  height: auto;
+}

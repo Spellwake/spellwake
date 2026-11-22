@@ -440,12 +440,20 @@ export const deckSettingsSchema = z.strictObject({
   formatId: identifierSchema,
   appearance: appearanceSchema,
 });
+/**
+ * A settings change may also name the deck's face card, a card in its saved
+ * contents. The observed baseline never carries it; omitting it keeps the
+ * current face card.
+ */
+export const deckSettingsChangeSchema = deckSettingsSchema.extend({
+  faceCardId: identifierSchema.optional(),
+});
 export const changeDeckSettingsSchema = z
   .strictObject({
     requestId: identifierSchema,
     deckId: identifierSchema,
     expected: deckSettingsSchema,
-    settings: deckSettingsSchema,
+    settings: deckSettingsChangeSchema,
   })
   .refine(
     (input) => new TextEncoder().encode(JSON.stringify(input)).length <= 4096,
@@ -486,6 +494,7 @@ export const deckCommandErrorsSchema = z.union([
   z.strictObject({
     settings: z.literal("deck settings changed; reload before saving"),
   }),
+  z.strictObject({ faceCard: z.literal("card not in deck") }),
 ]);
 export const deckCommandDispositionSchema = makeCommandDispositionSchema(
   deckCommandErrorsSchema,
@@ -510,6 +519,17 @@ export const deckSummarySchema = z.strictObject({
   currentRevisionId: identifierSchema.nullable(),
   format: deckFormatSchema,
   appearance: appearanceSchema,
+  /**
+   * The card shown on the deck box, with its official art where the catalogue
+   * has it. Null for a deck without cards; absent from servers older than it.
+   */
+  faceCard: z
+    .strictObject({
+      definitionId: identifierSchema,
+      artUrl: z.string().max(2048).startsWith("https://").nullable(),
+    })
+    .nullable()
+    .optional(),
 });
 export type DeckSummary = z.infer<typeof deckSummarySchema>;
 export const deckDetailSchema = z
@@ -706,3 +726,4 @@ export * from "./supply-ballot.ts";
 
 export * from "./player.ts";
 export { parseStrictJson, type RawJsonResult } from "./raw-json.ts";
+export * from "./ui-surface.ts";
