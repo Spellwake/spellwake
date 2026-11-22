@@ -339,8 +339,9 @@ impl Fixture {
         json!({"basis":basis_view(self.state.basis()),"basis_revision": self.state.basis().revision,
             "executor_revision": execution.revision(),
             "window_phase":format!("{:?}",execution.window().phase()),
-            "stack":execution.window().entries().iter().map(|entry|json!({"entry":format!("{:?}",entry.id()),"controller":seat(entry.controller()),"kind":match entry.kind(){StackKind::CardSpell(object)=>json!({"kind":"card_spell","object":format!("{object:?}")}),StackKind::SpellCopy{copied_from,owner}=>json!({"kind":"spell_copy","copied_from":format!("{copied_from:?}"),"owner":seat(*owner)}),StackKind::ActivatedAbility{source}=>json!({"kind":"activated_ability","source_object":format!("{:?}",source.id()),"physical_card":source.card_id().expect("source-authored card-only trace").0}),StackKind::TriggeredAbility{source}=>json!({"kind":"triggered_ability","source_object":format!("{:?}",source.id()),"physical_card":source.card_id().expect("source-authored card-only trace").0})}})).collect::<Vec<_>>(),
-            "active": seat(execution.window().turn_owner()), "priority": priority,
+            "stack":execution.window().entries().iter().map(|entry|json!({"entry":format!("{:?}",entry.id()),"controller":seat(entry.controller()),"kind":match entry.kind(){StackKind::CardSpell(object)=>json!({"kind":"card_spell","object":format!("{object:?}")}),StackKind::Speed=>json!({"kind":"Speed"}),StackKind::Monarch=>json!({"kind":"Monarch"}),StackKind::DelayedCopy{original}=>json!({"kind":"DelayedCopy","original":format!("{original:?}")}),StackKind::Emblem{emblem}=>json!({"kind":"Emblem","id":emblem.sequence()}),
+            StackKind::SpellCopy{copied_from,owner}=>json!({"kind":"spell_copy","copied_from":format!("{copied_from:?}"),"owner":seat(*owner)}),StackKind::ActivatedAbility{source}=>json!({"kind":"activated_ability","source_object":format!("{:?}",source.id()),"physical_card":source.card_id().expect("source-authored card-only trace").0}),StackKind::TriggeredAbility{source}=>json!({"kind":"triggered_ability","source_object":format!("{:?}",source.id()),"physical_card":source.card_id().expect("source-authored card-only trace").0})}})).collect::<Vec<_>>(),
+            "active": seat(execution.window().active_player()), "priority": priority,
             "step": phase(self.step()), "stage": format!("{:?}", self.state.turn().unwrap().stage()),
             "combat_context_present": execution.combat().is_some(),
             "had_attackers": execution.combat().map(|c| c.had_attackers()),
@@ -551,6 +552,7 @@ impl Fixture {
             .map(|(label, defender)| AttackDeclaration {
                 attacker: self.object(label),
                 defender: *defender,
+                defending_planeswalker: None,
             })
             .collect();
         self.act(
@@ -696,7 +698,7 @@ impl Fixture {
             _ => None,
         };
         Ok(
-            json!({"id":id,"comparison_scope":scope,"protocol":"actual-native-root","turn":self.state.turn().unwrap().position().number,"life":self.state.execution().window().participants().iter().map(|&p|(seat(p),self.state.execution().life_total(p).unwrap().clone())).collect::<BTreeMap<_,_>>(),"game_over":self.state.outcome().is_some(),"live_shield_capacity":self.state.execution().prevention_shields().fold(RulesInteger::from(0),|total,s|total.plus(&s.remaining)),"step":phase(self.step()),"active":seat(self.state.execution().window().turn_owner()),"priority":priority,"stack_size":self.state.execution().window().entries().len(),"cards":cards,"graveyards_top_to_bottom":self.graveyards(),"check_journal":self.current_checks,"combat":{"attackers":attackers,"blockers":blockers},"native":{"basis":basis_view(self.state.basis()),"basis_revision":self.state.basis().revision,"executor_revision":self.state.execution().revision(),"combat_context_present":combat.is_some(),"had_attackers":combat.map(|c|c.had_attackers()),"stage":format!("{:?}",self.state.turn().unwrap().stage()),"pending_chooser":self.state.pending_decision().map(|p|seat(p.chooser())),"decision":self.decision_view()}}),
+            json!({"id":id,"comparison_scope":scope,"protocol":"actual-native-root","turn":self.state.turn().unwrap().position().number,"life":self.state.execution().window().participants().iter().map(|&p|(seat(p),self.state.execution().life_total(p).unwrap().clone())).collect::<BTreeMap<_,_>>(),"game_over":self.state.outcome().is_some(),"live_shield_capacity":self.state.execution().prevention_shields().fold(RulesInteger::from(0),|total,s|total.plus(&s.remaining)),"step":phase(self.step()),"active":seat(self.state.execution().window().active_player()),"priority":priority,"stack_size":self.state.execution().window().entries().len(),"cards":cards,"graveyards_top_to_bottom":self.graveyards(),"check_journal":self.current_checks,"combat":{"attackers":attackers,"blockers":blockers},"native":{"basis":basis_view(self.state.basis()),"basis_revision":self.state.basis().revision,"executor_revision":self.state.execution().revision(),"combat_context_present":combat.is_some(),"had_attackers":combat.map(|c|c.had_attackers()),"stage":format!("{:?}",self.state.turn().unwrap().stage()),"pending_chooser":self.state.pending_decision().map(|p|seat(p.chooser())),"decision":self.decision_view()}}),
         )
     }
     fn row(&mut self, id: &str) -> TraceResult<()> {
@@ -727,7 +729,9 @@ impl Fixture {
 
     fn recipient(&self, target: DamageRecipient) -> String {
         match target {
-            DamageRecipient::Creature(id) => self.alias(id),
+            DamageRecipient::Creature(id)
+            | DamageRecipient::Planeswalker(id)
+            | DamageRecipient::Battle(id) => self.alias(id),
             DamageRecipient::Player(p) => seat(p).to_owned(),
         }
     }

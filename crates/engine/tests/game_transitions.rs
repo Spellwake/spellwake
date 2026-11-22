@@ -1,7 +1,7 @@
 //! Independent acceptance scenarios for the restricted, game-scoped transition driver.
 //! These observe native private state and do not qualify transport, persistence or full cards.
 use spellwake_engine::combat::CombatRules;
-use spellwake_engine::program::{BodyTarget, ExecutableBody, SpellTargetFilter};
+use spellwake_engine::program::{BodyTarget, ExecutableBody};
 use spellwake_engine::setup::GameSeed;
 use spellwake_engine::{
     effects::{CopyTargetChoice, EffectError, Instruction, Program, SeedCard},
@@ -77,7 +77,7 @@ fn cards() -> Vec<SeedCard> {
             ManaType::Blue,
             2,
             Instruction::CopySpell,
-            BodyTarget::SingleSpell(SpellTargetFilter::CopyableInstructionSpell),
+            BodyTarget::SingleSpell(spellwake_engine::program::SpellFilter::copyable_instruction()),
         ),
         instant(
             3,
@@ -85,7 +85,7 @@ fn cards() -> Vec<SeedCard> {
             ManaType::Blue,
             2,
             Instruction::CounterSpell,
-            BodyTarget::SingleSpell(SpellTargetFilter::AnySpell),
+            BodyTarget::SingleSpell(spellwake_engine::program::SpellFilter::any()),
         ),
         instant(
             4,
@@ -504,7 +504,7 @@ fn a_later_pending_choice_does_not_accept_the_consumed_decision_identity() {
         ManaType::Blue,
         2,
         Instruction::CopySpell,
-        BodyTarget::SingleSpell(SpellTargetFilter::CopyableInstructionSpell),
+        BodyTarget::SingleSpell(spellwake_engine::program::SpellFilter::copyable_instruction()),
     ));
     let mut pools = mana();
     pools[2].amount = 4.into();

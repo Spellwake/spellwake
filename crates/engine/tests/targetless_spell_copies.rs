@@ -7,6 +7,7 @@ use trajectories::*;
 
 use spellwake_contracts::names::{EnglishCardName, ObjectNames};
 use spellwake_engine::{
+    characteristics::KeywordAbility,
     draw::DrawEvent,
     effects::{CopyTargetChoice, EffectError, EffectWindow, RuleResult, SeedCard},
     game::{
@@ -21,10 +22,7 @@ use spellwake_engine::{
         EntryCompletion, EventCause, RulesJournal, RulesOccurrence, RulesRecord, ZoneReason,
     },
     priority::{PriorityPhase, SeatId},
-    program::{
-        BodyTarget, CardType, ExecutableBody, Instruction, InstructionAmount, Program,
-        SpellTargetFilter, Supertype,
-    },
+    program::{BodyTarget, CardType, ExecutableBody, Instruction, Program, SpellFilter, Supertype},
     stack_window::{StackEntryId, StackKind, WindowPhase},
     targets::TargetRef,
 };
@@ -37,7 +35,7 @@ fn gain() -> Instruction {
 }
 fn draw() -> Instruction {
     Instruction::DrawController {
-        amount: InstructionAmount::Literal(1.into()),
+        amount: spellwake_engine::program::ValueExpr::Literal(1.into()),
     }
 }
 fn hand(id: u64, actor: SeatId, body: ExecutableBody, paid: bool) -> SeedCard {
@@ -55,15 +53,15 @@ fn hand(id: u64, actor: SeatId, body: ExecutableBody, paid: bool) -> SeedCard {
         ),
     }
 }
-fn setup(
-    filter: SpellTargetFilter,
-    source: Vec<Instruction>,
-    copier: Vec<Instruction>,
-) -> GameState {
+fn setup(filter: SpellFilter, source: Vec<Instruction>, copier: Vec<Instruction>) -> GameState {
     let v = vocabulary();
     let mut original = hand(1, P0, ExecutableBody::new(BodyTarget::None, source), true);
     original.program.names =
         ObjectNames::single(EnglishCardName::new("Spellwake Targetless Fixture".into()).unwrap());
+    original
+        .program
+        .printed_keywords
+        .insert(KeywordAbility::Flash);
     original.program.supertypes.insert(Supertype::Snow);
     original.program.card_types.insert(CardType::Kindred);
     original.program.creature_subtypes = subtypes(&v, &["Elf"]);
@@ -88,7 +86,7 @@ fn setup(
             4,
             P0,
             ExecutableBody::new(
-                BodyTarget::SingleSpell(SpellTargetFilter::AnySpell),
+                BodyTarget::SingleSpell(spellwake_engine::program::SpellFilter::any()),
                 vec![Instruction::CounterSpell],
             ),
             false,
@@ -207,6 +205,10 @@ fn assert_no_cast_or_payment(result: &NativeCandidate) {
 fn assert_traits(game: &GameState, id: StackEntryId) {
     let execution = game.execution();
     assert_eq!(
+        execution.stack_copiable_keywords(id),
+        Some(&BTreeSet::from([KeywordAbility::Flash]))
+    );
+    assert_eq!(
         execution.stack_copiable_names(id),
         Some(&ObjectNames::single(
             EnglishCardName::new("Spellwake Targetless Fixture".into()).unwrap()
@@ -263,8 +265,8 @@ fn occurrences(journal: &RulesJournal) -> Vec<&RulesOccurrence> {
 #[test]
 fn both_filters_copy_paid_targetless_spells_without_choices_or_recasting_for_another_controller() {
     for filter in [
-        SpellTargetFilter::AnySpell,
-        SpellTargetFilter::CopyableInstructionSpell,
+        spellwake_engine::program::SpellFilter::any(),
+        spellwake_engine::program::SpellFilter::copyable_instruction(),
     ] {
         let game = setup(filter, vec![draw(), gain()], vec![Instruction::CopySpell]);
         let (game, original, copier) = source_and_copier(&game);
@@ -330,6 +332,10 @@ fn both_filters_copy_paid_targetless_spells_without_choices_or_recasting_for_ano
                     .clone(),
                 copiable_supertypes: BTreeSet::from([Supertype::Snow]),
                 copiable_card_types: BTreeSet::from([CardType::Instant, CardType::Kindred]),
+                copiable_spell_subtypes: BTreeSet::new(),
+                copiable_artifact_subtypes: BTreeSet::new(),
+                copiable_enchantment_subtypes: BTreeSet::new(),
+                copiable_keywords: BTreeSet::from([KeywordAbility::Flash]),
                 copiable_triggered: vec![],
                 copiable_creature_subtypes: subtypes(
                     after.execution().creature_vocabulary(),
@@ -387,7 +393,7 @@ fn both_filters_copy_paid_targetless_spells_without_choices_or_recasting_for_ano
 #[test]
 fn repeated_instructions_create_ordered_copies_and_complete_the_exact_copier() {
     let game = setup(
-        SpellTargetFilter::CopyableInstructionSpell,
+        spellwake_engine::program::SpellFilter::copyable_instruction(),
         vec![gain()],
         vec![Instruction::CopySpell, Instruction::CopySpell],
     );
@@ -473,7 +479,7 @@ fn repeated_instructions_create_ordered_copies_and_complete_the_exact_copier() {
 #[test]
 fn copy_of_copy_owns_body_and_traits_after_the_physical_original_is_countered() {
     let game = setup(
-        SpellTargetFilter::CopyableInstructionSpell,
+        spellwake_engine::program::SpellFilter::copyable_instruction(),
         vec![draw(), gain()],
         vec![Instruction::CopySpell],
     );
@@ -556,7 +562,7 @@ fn each_targetless_copy_and_original_makes_fresh_resolution_choices_and_controll
     let excluded = vocabulary().resolve_label("Dragon").unwrap();
     excluding.insert(excluded);
     let game = setup(
-        SpellTargetFilter::CopyableInstructionSpell,
+        spellwake_engine::program::SpellFilter::copyable_instruction(),
         vec![choose, chosen_draw()],
         vec![Instruction::CopySpell, Instruction::CopySpell],
     );
@@ -669,7 +675,7 @@ fn each_targetless_copy_and_original_makes_fresh_resolution_choices_and_controll
 #[test]
 fn automatic_copy_keeps_its_journal_when_a_later_real_choice_suspends() {
     let game = setup(
-        SpellTargetFilter::CopyableInstructionSpell,
+        spellwake_engine::program::SpellFilter::copyable_instruction(),
         vec![gain()],
         vec![Instruction::CopySpell, type_choice_body(), chosen_draw()],
     );
@@ -716,7 +722,7 @@ fn automatic_copy_keeps_its_journal_when_a_later_real_choice_suspends() {
 #[test]
 fn unused_explicit_copy_choice_on_automatic_completion_is_rejected_atomically() {
     let game = setup(
-        SpellTargetFilter::CopyableInstructionSpell,
+        spellwake_engine::program::SpellFilter::copyable_instruction(),
         vec![gain()],
         vec![Instruction::CopySpell],
     );
@@ -740,7 +746,7 @@ fn unused_explicit_copy_choice_on_automatic_completion_is_rejected_atomically() 
 #[test]
 fn targetless_copy_exit_cessation_and_payload_pruning_are_separate_actual_cuts() {
     let game = setup(
-        SpellTargetFilter::CopyableInstructionSpell,
+        spellwake_engine::program::SpellFilter::copyable_instruction(),
         vec![gain()],
         vec![Instruction::CopySpell],
     );
@@ -778,7 +784,7 @@ fn targetless_copy_exit_cessation_and_payload_pruning_are_separate_actual_cuts()
 #[test]
 fn copy_then_counter_then_copy_skips_the_departed_source_without_a_false_decision() {
     let game = setup(
-        SpellTargetFilter::AnySpell,
+        spellwake_engine::program::SpellFilter::any(),
         vec![gain()],
         vec![
             Instruction::CopySpell,

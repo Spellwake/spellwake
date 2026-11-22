@@ -128,6 +128,15 @@ impl TargetPlan {
         clauses: Vec<TargetClause>,
         choices: Vec<TargetChoice>,
     ) -> Result<Self, TargetError> {
+        Self::capture_in_order(world, source, clauses, choices, true)
+    }
+    fn capture_in_order(
+        world: &impl TargetWorld,
+        source: StackEntryId,
+        clauses: Vec<TargetClause>,
+        choices: Vec<TargetChoice>,
+        announcement: bool,
+    ) -> Result<Self, TargetError> {
         let mut definitions = BTreeMap::new();
         for clause in clauses {
             if clause.minimum > clause.maximum {
@@ -172,7 +181,7 @@ impl TargetPlan {
                     if !world.stack_exists(entry) {
                         return Err(TargetError::MissingTarget);
                     }
-                    if !world.stack_precedes(entry, source) {
+                    if announcement && !world.stack_precedes(entry, source) {
                         return Err(TargetError::TargetNotYetOnStack);
                     }
                     None
@@ -196,6 +205,24 @@ impl TargetPlan {
         source: StackEntryId,
         changes: Vec<TargetChoice>,
     ) -> Result<Self, TargetError> {
+        self.with_changes(world, source, changes, true)
+    }
+    /// An existing spell or ability may gain a target that entered the stack above it.
+    pub(crate) fn retarget(
+        &self,
+        world: &impl TargetWorld,
+        source: StackEntryId,
+        changes: Vec<TargetChoice>,
+    ) -> Result<Self, TargetError> {
+        self.with_changes(world, source, changes, false)
+    }
+    fn with_changes(
+        &self,
+        world: &impl TargetWorld,
+        source: StackEntryId,
+        changes: Vec<TargetChoice>,
+        announcement: bool,
+    ) -> Result<Self, TargetError> {
         let mut next = self.clone();
         let mut keys = BTreeSet::new();
         for choice in changes {
@@ -210,7 +237,7 @@ impl TargetPlan {
             if choice.clause != bound.choice.clause {
                 return Err(TargetError::UnknownClause);
             }
-            let captured = Self::capture(
+            let captured = Self::capture_in_order(
                 world,
                 source,
                 vec![TargetClause {
@@ -219,6 +246,7 @@ impl TargetPlan {
                     maximum: 1,
                 }],
                 vec![choice],
+                announcement,
             )?;
             *bound = captured
                 .targets

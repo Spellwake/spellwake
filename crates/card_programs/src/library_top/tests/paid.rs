@@ -166,6 +166,7 @@ impl Run {
                 command(
                     &self.state,
                     ManaPayment {
+                        from_lots: Default::default(),
                         spend: vec![ManaSpend {
                             mana_type: ManaType::Blue,
                             amount: 1.into(),

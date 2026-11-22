@@ -5,6 +5,7 @@ use crate::token::{TokenBatchMember, TokenRecipients};
 
 fn spend(mana_type: ManaType, amount: i64) -> ManaPayment {
     ManaPayment {
+        from_lots: Default::default(),
         spend: vec![ManaSpend {
             mana_type,
             amount: amount.into(),
@@ -471,7 +472,7 @@ fn token_count_conversion_total_and_layout_overflow_reject_take_atomically_then_
         ),
     ] {
         let mut creation = token_creation();
-        creation.amount = InstructionAmount::Literal(amount);
+        creation.amount = crate::program::ValueExpr::Literal(amount);
         creation.recipients = recipients;
         let state = pending(wrapped(Instruction::CreateTokens {
             creations: vec![creation],
@@ -514,7 +515,7 @@ fn token_count_conversion_total_and_layout_overflow_reject_take_atomically_then_
 fn optional_token_two_apnap_order_children_keep_locals_and_reject_each_bad_reply_before_one_birth_batch()
  {
     let mut creation = token_creation();
-    creation.amount = InstructionAmount::Literal(2.into());
+    creation.amount = crate::program::ValueExpr::Literal(2.into());
     creation.recipients = TokenRecipients::EachPlayer;
     let state = pending(vec![
         Instruction::ChooseCreatureType {

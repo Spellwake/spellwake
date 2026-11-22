@@ -90,7 +90,7 @@ fn cl_fault_query_invariant_propagates_to_target_gate_without_mutation() {
         vec![Instruction::Damage { amount: 1.into() }],
     );
     assert_eq!(
-        state.legal_body_target(&body, TargetRef::Object(target)),
+        state.legal_body_target(&body, TargetRef::Object(target), A),
         Err(expected)
     );
     assert_eq!(state, saved);
@@ -152,4 +152,48 @@ fn cl_fault_cleanup_publication_rolls_back_expiry_and_all_battlefield_marks() {
     assert_eq!(state.battlefield_marked_damage(y), Some(3.into()));
     assert_eq!(state.continuous_effect(boost.id), Some(&boost));
     assert!(state.state_based_losses.is_empty());
+}
+
+#[test]
+fn face_down_layer_one_b_masks_the_latest_copy_and_preview_restores_that_copy() {
+    use crate::face_down::{FaceDownKind, FaceUpAbility};
+    let mut printed = Program::creature(None, 1.into(), 5.into(), BTreeSet::new());
+    printed
+        .face_up_abilities
+        .push(FaceUpAbility::Morph(ManaCost::one(ManaType::Green)));
+    let mut source = seed(vec![printed]);
+    let card = object(&source, 1);
+    let mut borrowed = Program::creature(None, 4.into(), 7.into(), BTreeSet::new());
+    borrowed
+        .face_up_abilities
+        .push(FaceUpAbility::Disguise(ManaCost::one(ManaType::Red)));
+    source
+        .characteristics
+        .add_effect(
+            retired_entry(),
+            card,
+            ResolvedParts(vec![ResolvedPart::Copy(Box::new(borrowed.clone()))]),
+            ResolvedDuration::NoStatedDuration,
+        )
+        .unwrap();
+    source
+        .window
+        .set_orientation(card, Some(FaceDownKind::Morph))
+        .unwrap();
+    assert_eq!(
+        source.copiable_program(card),
+        Some(FaceDownKind::Morph.definition())
+    );
+    let shown = source.face_up_preview(card).unwrap().unwrap();
+    assert_eq!(
+        shown.printed_text.face_up_abilities,
+        borrowed.face_up_abilities
+    );
+    assert_eq!(shown.power_toughness.unwrap().derived.toughness, 7.into());
+    assert_eq!(
+        source.window.cards().get(card).unwrap().face_down(),
+        Some(FaceDownKind::Morph)
+    );
+    source.window.set_orientation(card, None).unwrap();
+    assert_eq!(source.copiable_program(card), Some(&borrowed));
 }

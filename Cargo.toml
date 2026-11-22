@@ -1,6 +1,7 @@
 [workspace]
-members = ["crates/contracts", "crates/engine", "crates/platform", "crates/reference_tools", "crates/content", "crates/card_programs"]
+members = ["crates/contracts", "crates/engine", "crates/platform", "crates/reference_tools", "crates/content", "crates/oracle_compiler", "crates/card_programs"]
 resolver = "3"
+exclude = ["src-tauri"]
 
 [workspace.package]
 version = "0.1.0"
@@ -15,6 +16,7 @@ axum = "0.8"
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "net", "signal"] }
 spellwake-contracts = { path = "crates/contracts" }
 spellwake-engine = { path = "crates/engine" }
+spellwake-oracle-compiler = { path = "crates/oracle_compiler" }
 
 [workspace.lints.rust]
 unsafe_code = "forbid"

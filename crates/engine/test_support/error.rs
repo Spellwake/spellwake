@@ -56,7 +56,7 @@ tree!(
     [Exhausted, InvalidBound, Capacity, EmptySupply],
     []
 );
-tree!(objects,ObjectIdentityError,[InconsistentTokenBatch,TokenCapacity,InvalidLibraryOrder,InconsistentLibrary,InconsistentOrderedZone,InconsistentRemoval,NegativeDrawCount,StaleRevision,RevisionExhausted,IdentityExhausted,CardAlreadyPresent,NotCard,UnknownObject,SameZone,NoController,NotPermanent,StatusUnchanged,NotDepartedToken,UnexpectedUnchangedMove],[Entropy=>entropy,InvalidTokenDefinition=>definition]);
+tree!(objects,ObjectIdentityError,[InconsistentTokenBatch,TokenCapacity,InvalidLibraryOrder,InconsistentLibrary,InconsistentOrderedZone,NegativeDrawCount,StaleRevision,RevisionExhausted,IdentityExhausted,CardAlreadyPresent,NotCard,UnknownObject,SameZone,InvalidCombination,NoController,NotPermanent,StatusUnchanged,NotDepartedToken,UnexpectedUnchangedMove],[Entropy=>entropy,InvalidTokenDefinition=>definition]);
 tree!(
     priority,
     PriorityError,
@@ -118,6 +118,8 @@ tree!(
         WrongFrame,
         InvalidDiscard,
         InvalidGraveyardOrder,
+        InvalidCommanderSelection,
+        InvalidBattleProtector,
         InvalidLegendConflict,
         InvalidLegendKeep,
         ConflictCountExhausted,
@@ -144,7 +146,8 @@ tree!(
         IllegalDamageSource,
         IllegalDamageRecipient,
         InvalidDamageAmount,
-        IncorrectDamageTotal
+        IncorrectDamageTotal,
+        InsufficientTrampleAssignment
     ],
     []
 );
@@ -157,6 +160,7 @@ tree!(
         NotPriorityHolder,
         NotActivePlayer,
         MainPhaseRequired,
+        BeforeAttackersRequired,
         StackNotEmpty
     ],
     []
@@ -186,7 +190,8 @@ tree!(
         ForeignCreatureType,
         UndefinedCreatureTypeSlot,
         ContradictorySelector,
-        EmptyPowerToughnessDefinition
+        EmptyPowerToughnessDefinition,
+        InvalidKeywordGrant
     ],
     []
 );
@@ -280,7 +285,17 @@ tree!(
     ],
     []
 );
-tree!(effect,EffectError,[ReplacementChooserRequired,WrongReplacementChooserFrame,UnsupportedDepartureState,LibraryTopChoiceRequired,WrongLibraryTopFrame,InvalidLibraryPartition,InconsistentLibraryTopWork,SelectionRequired,WrongSelectionFrame,InvalidSelectionCount,DuplicateSelection,SelectionOutsideDomain,InvalidGraveyardPermutation,InconsistentSelectionWork,OptionalEffectChoiceRequired,ResolutionPaymentChoiceRequired,WrongOptionalEffectFrame,WrongResolutionPaymentFrame,IllegalOptionalEffect,InvalidResolvingPlayer,TimestampOrderRequired,WrongTimestampOrderFrame,IllegalTimestampOrder,TokenCapacity,PlayerLossPending,InvalidSetup,UnknownObject,NotCastableSpell,LegendarySpellPrerequisite,TargetRequired,UnexpectedTarget,NotLand,NotAbilitySource,CreatureTapRestricted,UnknownActivatedAbility,NotManaSource,UnknownManaAbility,ManaColorChoiceRequired,WrongManaColorFrame,IllegalManaColor,NotOwnHand,IllegalTarget,InsufficientMana,ManaPaymentRequired,WrongPhase,InconsistentProgram,CopyChoiceRequired,UnexpectedCopyChoice,WrongChooser,WrongResolutionFrame,WrongDamageFrame,WrongDecisionKind,DamageChoiceRequired,TriggerTargetChoiceRequired,CreatureTypeChoiceRequired,WrongCreatureTypeFrame,IllegalCreatureType],[ZoneReplacement=>zone_replacement,Trigger=>trigger,Check=>check,Combat=>combat,Window=>window,Timing=>timing,InvalidManaPayment=>payment,Characteristics=>characteristics,CharacteristicInvariant=>characteristic_invariant,Damage=>damage]);
+fn counter_replacement(value: &spellwake_engine::effects::CounterReplacementChoice) -> Node {
+    Node::leaf(
+        "EffectError",
+        "CounterReplacementRequired",
+        json!({
+            "chooser": value.chooser().0, "doublers": value.doublers(),
+            "plus_one": value.original().plus_one, "minus_one": value.original().minus_one,
+        }),
+    )
+}
+tree!(effect,EffectError,[OpponentActionProhibited,SpellCastLimitReached,ChosenNameProhibitsCasting,CastingFromZoneProhibited,ArtifactActivationProhibited,LoyaltyAlreadyActivated,InsufficientLoyalty,LibraryTopChoiceRequired,WrongLibraryTopFrame,InvalidLibraryPartition,InconsistentLibraryTopWork,SelectionRequired,WrongSelectionFrame,InvalidSelectionCount,DuplicateSelection,SelectionOutsideDomain,InvalidGraveyardPermutation,InconsistentSelectionWork,OptionalEffectChoiceRequired,ResolutionPaymentChoiceRequired,WrongOptionalEffectFrame,WrongResolutionPaymentFrame,IllegalOptionalEffect,InvalidResolvingPlayer,TokenDefenderRequired,TransformTimestampOrderRequired,TimestampOrderRequired,WrongTimestampOrderFrame,IllegalTimestampOrder,TokenCapacity,PlayerLossPending,InvalidSetup,UnknownObject,NotCastableSpell,SplitSecond,LegendarySpellPrerequisite,TargetRequired,UnexpectedTarget,NotLand,NotAbilitySource,CreatureTapRestricted,UnknownActivatedAbility,NotManaSource,UnknownManaAbility,ManaColorChoiceRequired,MissingCommanderColorIdentity,IllegalHybridManaPayment,IllegalManaBundle,ManaActivationConditionNotMet,EntryColorChoiceRequired,IllegalEntryColor,WrongManaColorFrame,IllegalManaColor,NotOwnHand,IllegalTarget,InsufficientMana,ManaPaymentRequired,WrongPhase,AlreadyExhausted,ActivationConditionNotMet,InvalidPowerContributors,InvalidCastResource,InconsistentProgram,CopyChoiceRequired,UnexpectedCopyChoice,WrongChooser,WrongResolutionFrame,WrongDamageFrame,WrongDecisionKind,DamageChoiceRequired,TriggerTargetChoiceRequired,CreatureTypeChoiceRequired,WrongCreatureTypeFrame,IllegalCreatureType],[CounterReplacementRequired=>counter_replacement,ZoneReplacement=>zone_replacement,Trigger=>trigger,Check=>check,Combat=>combat,Window=>window,Timing=>timing,InvalidManaPayment=>payment,Characteristics=>characteristics,CharacteristicInvariant=>characteristic_invariant,Damage=>damage]);
 tree!(
     opening,
     OpeningError,
@@ -336,18 +351,6 @@ fn game(value: &GameError) -> Node {
         GameError::UnsupportedConcessionScope => {
             Node::leaf("GameError", "UnsupportedConcessionScope", Value::Null)
         }
-        GameError::UnsupportedBankExpiryScope => {
-            Node::leaf("GameError", "UnsupportedBankExpiryScope", Value::Null)
-        }
-        GameError::UnsupportedResponseExpiryScope => {
-            Node::leaf("GameError", "UnsupportedResponseExpiryScope", Value::Null)
-        }
-        GameError::ResponsePlayerNotWaiting => {
-            Node::leaf("GameError", "ResponsePlayerNotWaiting", Value::Null)
-        }
-        GameError::BankPlayerNotWaiting => {
-            Node::leaf("GameError", "BankPlayerNotWaiting", Value::Null)
-        }
         GameError::PlayerEliminationRequired => {
             Node::leaf("GameError", "PlayerEliminationRequired", Value::Null)
         }
@@ -386,6 +389,7 @@ tree!(
     definition,
     DefinitionError,
     [
+        UnsupportedPlaneswalker,
         UnsupportedZoneReplacementScope,
         InvalidZoneReplacementDefinition,
         TokenDefinition,

@@ -244,7 +244,7 @@ fn mixed_library_actions_retain_original_selection_actual_receipts_and_final_onl
                 3.into(),
             ),
             Instruction::DrawController {
-                amount: InstructionAmount::Literal(1.into()),
+                amount: crate::program::ValueExpr::Literal(1.into()),
             },
         ],
         BodyTarget::SinglePlayer,
@@ -437,7 +437,10 @@ fn copied_surveil_body_redirects_then_continues_once_and_completes_surveilled() 
         BodyTarget::None,
         A,
         3,
-        Some(OrdinaryCondition::Surveilled(PlayerRelation::Controller)),
+        Some(crate::program::TriggerSpec::player_action(
+            PlayerRelation::Controller,
+            crate::program::PlayerTriggerAction::Surveilled,
+        )),
         true,
         vec![source(vec![rule(
             0,
@@ -683,6 +686,12 @@ fn malformed_frame_domain_amount_and_stage_controls_preserve_whole_owned_work() 
                                 ZoneReplacementReply::Select(applications[0]),
                             ));
                         }
+                        ZoneReplacementRequest::Devour { .. }
+                        | ZoneReplacementRequest::DevourGraveyardOrder { .. }
+                        | ZoneReplacementRequest::EntryCopy { .. }
+                        | ZoneReplacementRequest::EntryController { .. } => {
+                            panic!("fixture has no controller-changing entrants")
+                        }
                         ZoneReplacementRequest::ConfirmOptional { .. } => {
                             confirm(&mut run, ZoneOptionalAnswer::Decline)
                         }
@@ -885,8 +894,16 @@ pub(super) fn assert_publication_receipts(run: &Run) {
                     assert_eq!(
                         actual.after.object.zone(),
                         match movement.destination {
+                            D::Hand => panic!(
+                                "library-top replacement unexpectedly returned a card to hand"
+                            ),
                             D::Graveyard => ObjectZone::Graveyard(action.player),
                             D::Exile => ObjectZone::Exile,
+                            D::Battlefield =>
+                                panic!("library-top replacement unexpectedly entered battlefield"),
+                            D::Command => ObjectZone::Command,
+                            D::Library =>
+                                panic!("library-top replacement unexpectedly returned to library"),
                         }
                     );
                 }
@@ -897,19 +914,18 @@ pub(super) fn assert_publication_receipts(run: &Run) {
 
 #[test]
 fn real_chosen_type_and_captured_trigger_counts_reauthorize_the_owned_library_cursor() {
-    use crate::{
-        program::ObjectRelation,
-        token::{TokenCreation, TokenDefinition, TokenName, TokenRecipients},
-    };
+    use crate::token::{TokenCreation, TokenDefinition, TokenName, TokenRecipients};
     let vocabulary = creature_types::selected_vocabulary().unwrap();
     let elf = vocabulary.resolve_label("Elf").unwrap();
     for captured in [false, true] {
         let amount = if captured {
-            InstructionAmount::MatchedOccurrences
+            crate::program::ValueExpr::event(crate::program::EventValueKind::MatchedOccurrences)
         } else {
-            InstructionAmount::ControlledPermanentsOfChosenType {
-                chosen: CreatureTypeSlot::new(0),
-            }
+            crate::program::ValueExpr::count_battlefield(
+                crate::program::ObjectFilter::any()
+                    .controlled()
+                    .of_chosen_slot(CreatureTypeSlot::new(0)),
+            )
         };
         let body = vec![
             Instruction::Mill {
@@ -936,7 +952,9 @@ fn real_chosen_type_and_captured_trigger_counts_reauthorize_the_owned_library_cu
             let mut watcher = Program::artifact(None, vec![]);
             watcher.triggered.push(TriggeredAbility {
                 id: TriggeredAbilityId(7),
-                condition: OrdinaryCondition::Enters(ObjectRelation::AnyCreature),
+                condition: crate::program::TriggerSpec::enters(
+                    crate::program::ObjectFilter::creature(),
+                ),
                 grouping: TriggerGrouping::OneOrMoreTogether,
                 body: ExecutableBody::new(BodyTarget::None, body),
             });
@@ -952,7 +970,9 @@ fn real_chosen_type_and_captured_trigger_counts_reauthorize_the_owned_library_cu
                 vec![Instruction::CreateTokens {
                     creations: vec![TokenCreation {
                         definition: token,
-                        amount: InstructionAmount::Literal(2.into()),
+                        amount: crate::program::ValueExpr::Literal(2.into()),
+                        base_size: None,
+                        enters_tapped: false,
                         recipients: TokenRecipients::Controller,
                     }],
                 }],

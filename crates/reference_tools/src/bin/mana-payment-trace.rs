@@ -251,6 +251,7 @@ fn run_probe(
     }
     let target = TargetRef::Object(identity(&state, SUBJECT)?);
     let payment = ManaPayment {
+        from_lots: Default::default(),
         spend: probe
             .spend
             .into_iter()

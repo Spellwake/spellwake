@@ -52,37 +52,41 @@ impl NativeActivity {
         {
             return Err(NativeCheckpointError::Invalid);
         }
-        let prior_owner = prior.execution().window().turn_owner();
-        // A departing first player never begins a turn. Only the first live
-        // successor may inherit the opening, with no extra turn credit.
-        let predecessor = if prior.turn().is_none()
-            && !next
-                .execution()
-                .window()
-                .participants()
-                .contains(&prior_owner)
+        let prior_window = prior.execution().window();
+        let next_window = next.execution().window();
+        let prior_position = prior.turn().map(|turn| turn.position());
+        let mut active = prior_window.active_player();
+        let next_active = next_window.active_player();
+        if prior_position.is_none()
+            && prior.opening().is_some_and(|opening| !opening.complete())
+            && prior_window.participants().contains(&active)
+            && !next_window.participants().contains(&active)
         {
-            let order = prior.execution().window().participants();
-            let position = order
+            // A departed opening starter has not started a turn. Rebase onto the
+            // first surviving seat in the original rotation before counting starts.
+            let order = prior_window.original_participants();
+            let index = order
                 .iter()
-                .position(|seat| *seat == prior_owner)
+                .position(|seat| *seat == active)
                 .ok_or(NativeCheckpointError::Invalid)?;
-            *order
+            active = order
                 .iter()
                 .cycle()
-                .skip(position)
+                .skip(index + 1)
                 .take(order.len())
-                .find(|seat| next.execution().window().participants().contains(seat))
-                .ok_or(NativeCheckpointError::Invalid)?
-        } else {
-            prior_owner
-        };
+                .copied()
+                .find(|seat| next_window.participants().contains(seat))
+                .ok_or(NativeCheckpointError::Invalid)?;
+            if active != next_active {
+                return Err(NativeCheckpointError::Invalid);
+            }
+        }
         self.follow_calendar(
-            prior.turn().map(|turn| turn.position()),
-            predecessor,
+            prior_position,
+            active,
             candidate.turn_transitions(),
             next.turn().map(|turn| turn.position()),
-            next.execution().window().turn_owner(),
+            next_active,
         )
     }
     fn follow_calendar(
@@ -193,15 +197,7 @@ impl NativeTerminal {
         let Some(conclusion) = state.conclusion() else {
             return Ok(None);
         };
-        let supported_roster = match conclusion.cause() {
-            GameConclusionCause::CheckedLossesAfterDepartures { .. }
-            | GameConclusionCause::ConcededLastSurvivor { .. }
-            | GameConclusionCause::ResponseExpiredLastSurvivor { .. } => {
-                (3..=6).contains(&binding.seats.len())
-            }
-            _ => binding.seats.len() == 2,
-        };
-        if !supported_roster {
+        if !(2..=6).contains(&binding.seats.len()) {
             return Err(NativeCheckpointError::Invalid);
         }
         let map = |native| {
@@ -220,13 +216,13 @@ impl NativeTerminal {
             .losing_players()
             .map(map)
             .collect::<Result<Vec<_>, _>>()?;
+        if winner_seat_ids.len() + losing_seat_ids.len() != binding.seats.len() {
+            return Err(NativeCheckpointError::Invalid);
+        }
         let reason = match conclusion.cause() {
-            GameConclusionCause::Conceded { .. }
-            | GameConclusionCause::ConcededLastSurvivor { .. } => "native_concession",
-            GameConclusionCause::BankExpired { .. } => "native_bank_expired",
-            GameConclusionCause::ResponseExpiredLastSurvivor { .. } => "native_response_timeout",
-            GameConclusionCause::CheckedLosses { .. }
-            | GameConclusionCause::CheckedLossesAfterDepartures { .. } => "native_checked_losses",
+            GameConclusionCause::Conceded { .. } => "native_concession",
+            GameConclusionCause::CheckedLosses { .. } => "native_checked_losses",
+            GameConclusionCause::WonByEffect { .. } => "native_won_by_effect",
         };
         Ok(Some(Self {
             basis: binding.public_basis.clone(),
@@ -340,8 +336,6 @@ struct ActivityResults<'a> {
     version: &'static str,
     result: &'a serde_json::value::RawValue,
     activity: Vec<super::cast_activity::NativeCastActivity>,
-    #[serde(rename = "landPlayer", skip_serializing_if = "Option::is_none")]
-    land_player: Option<Uuid>,
 }
 impl NativeCheckpoint {
     /// Prepare private all-seat physical-cast delta evidence with unchanged V1
@@ -349,29 +343,11 @@ impl NativeCheckpoint {
     /// # Errors
     /// Rejects invalid native attribution, count overflow, encoding or identity.
     pub fn prepare_activity_results(&self) -> Result<PreparedNativeResults, NativeCheckpointError> {
-        self.prepare_activity_results_schema(self.activity_schema())
-    }
-    fn prepare_activity_results_schema(
-        &self,
-        schema: crate::admission_ports::NativeEventSchema,
-    ) -> Result<PreparedNativeResults, NativeCheckpointError> {
-        let (version, land_player) = match schema {
-            crate::admission_ports::NativeEventSchema::ActivityV1 => {
-                ("native-results-activity-v1", None)
-            }
-            crate::admission_ports::NativeEventSchema::LandPlayV1 => {
-                ("native-results-land-play-v1", Some(self.land_player()?))
-            }
-            crate::admission_ports::NativeEventSchema::TransitionV1 => {
-                return Err(NativeCheckpointError::Invalid);
-            }
-        };
         let original = self.prepare_results()?;
         let result = serde_json::from_slice(original.original_bytes())
             .map_err(NativeCheckpointError::Json)?;
         let payload = ActivityResults {
-            version,
-            land_player,
+            version: "native-results-activity-v1",
             result,
             activity: self.cast_activity()?,
         };
@@ -386,9 +362,8 @@ impl NativeCheckpoint {
     ) -> Result<PreparedNativeResults, NativeCheckpointError> {
         match schema {
             crate::admission_ports::NativeEventSchema::TransitionV1 => self.prepare_results(),
-            crate::admission_ports::NativeEventSchema::ActivityV1
-            | crate::admission_ports::NativeEventSchema::LandPlayV1 => {
-                self.prepare_activity_results_schema(schema)
+            crate::admission_ports::NativeEventSchema::ActivityV1 => {
+                self.prepare_activity_results()
             }
         }
     }

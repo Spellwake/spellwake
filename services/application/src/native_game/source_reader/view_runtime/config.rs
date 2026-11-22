@@ -75,6 +75,7 @@ impl NativeGameRuntime {
         lookup: impl Fn(&str) -> Result<String, ConfigError>,
     ) -> Result<Self, ConfigError> {
         let pool = match pool {
+            spellwake_card_programs::CURRENT_KEYWORD_PROFILE => NativeProgramPool::KeywordGameplay,
             "resolution-selection" => NativeProgramPool::ResolutionSelection,
             "resolution-selection-natural-mana" => {
                 NativeProgramPool::ResolutionSelectionNaturalMana
@@ -185,7 +186,11 @@ mod tests {
                 Err(ConfigError::Invalid | ConfigError::Budget(_))
             ));
         }
-        for pool in ["resolution-selection", "resolution-selection-natural-mana"] {
+        for pool in [
+            "resolution-selection",
+            "resolution-selection-natural-mana",
+            spellwake_card_programs::CURRENT_KEYWORD_PROFILE,
+        ] {
             assert!(matches!(load(pool, &values), Err(ConfigError::Initial(_))));
         }
     }

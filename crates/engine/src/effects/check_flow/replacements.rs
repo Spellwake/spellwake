@@ -5,10 +5,9 @@ use crate::program::{ZoneActionKind, ZoneActionPredicate};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct CheckMoves {
-    retained_orders: BTreeMap<SeatId, Vec<ObjectId>>,
     intents: Vec<ZoneMoveIntent>,
     window_revision: u64,
-    pub(super) stage: CheckMoveStage,
+    stage: CheckMoveStage,
 }
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) enum CheckMoveStage {
@@ -123,7 +122,6 @@ impl EffectWindow {
             }
         };
         Ok(CheckMoves {
-            retained_orders: BTreeMap::new(),
             intents,
             window_revision: self.window.revision(),
             stage,
@@ -178,7 +176,7 @@ impl EffectWindow {
             (ZoneActionKind::CleanupDiscard, CheckPhase::DiscardSelection { domain, required }) => {
                 let objects = intents.iter().map(|i| i.before).collect::<Vec<_>>();
                 if self.cleanup_hand() != *domain
-                    || *required != domain.len().saturating_sub(7)
+                    || *required != self.cleanup_discard_count(domain.len())?
                     || objects.len() != *required
                     || !valid_subset(&objects, domain)
                 {
@@ -187,7 +185,7 @@ impl EffectWindow {
                 if intents.iter().any(|i| {
                     i.reason
                         != ZoneReason::Discard {
-                            player: self.window.turn_owner(),
+                            player: self.window.active_player(),
                         }
                 }) {
                     return Err(CheckError::WrongFrame.into());
@@ -203,7 +201,7 @@ impl EffectWindow {
                 },
             ) => {
                 if self.cleanup_hand() != *domain
-                    || *required != domain.len().saturating_sub(7)
+                    || *required != self.cleanup_discard_count(domain.len())?
                     || selected.len() != *required
                     || !valid_subset(selected, domain)
                 {
@@ -214,7 +212,7 @@ impl EffectWindow {
                     .map(|before| ZoneMoveIntent {
                         before: *before,
                         reason: ZoneReason::Discard {
-                            player: self.window.turn_owner(),
+                            player: self.window.active_player(),
                         },
                     })
                     .collect::<Vec<_>>();
@@ -278,69 +276,6 @@ impl EffectWindow {
             })
             .collect())
     }
-    fn preserve_check_orders(moves: &mut CheckMoves) {
-        if let CheckMoveStage::Ordering { groups, .. } = &mut moves.stage {
-            for group in groups {
-                if let Some(original) = moves.retained_orders.get(&group.owner) {
-                    let order: Vec<_> = original
-                        .iter()
-                        .copied()
-                        .filter(|id| group.entrants.contains(id))
-                        .collect();
-                    if order.len() == group.entrants.len() {
-                        group.order = Some(order);
-                    }
-                }
-            }
-        }
-    }
-    fn check_batch_with_candidates(
-        &self,
-        intents: &[ZoneMoveIntent],
-        cause: EventCause,
-        action: ZoneActionKind,
-    ) -> Result<ZoneReplacementBatch, EffectError> {
-        self.begin_zone_replacements_authorized(
-            AuthorizedZoneBatch {
-                cause,
-                action,
-                intents: intents.to_vec(),
-            },
-            true,
-        )
-    }
-    pub(super) fn rebase_check_moves(
-        &self,
-        before: &Self,
-        old: &CheckMoves,
-        fresh: &mut CheckMoves,
-        action: ZoneActionKind,
-    ) -> Result<(), EffectError> {
-        fresh.retained_orders = old.retained_orders.clone();
-        if let CheckMoveStage::Ordering { groups, .. } = &old.stage {
-            fresh.retained_orders.extend(
-                groups
-                    .iter()
-                    .filter_map(|g| g.order.as_ref().map(|order| (g.owner, order.clone()))),
-            );
-        }
-        if let Some(held) = old.replacements()
-            && !fresh.intents.is_empty()
-        {
-            let cause = held.cause().clone();
-            let original =
-                before.check_batch_with_candidates(&old.intents, cause.clone(), action)?;
-            let current = self.check_batch_with_candidates(&fresh.intents, cause, action)?;
-            let rebased = if action == ZoneActionKind::StateBased {
-                held.rebase_state_actions(original, current)?
-            } else {
-                held.rebase_departure(original, current)?
-            };
-            fresh.stage = CheckMoveStage::Replacing(Box::new(rebased));
-        }
-        Self::preserve_check_orders(fresh);
-        Ok(())
-    }
     pub(super) fn advance_check_moves(&self, moves: &mut CheckMoves) -> Result<bool, EffectError> {
         if let CheckMoveStage::Replacing(batch) = &mut moves.stage {
             if batch.progress(self.revision)?.is_some() {
@@ -361,7 +296,6 @@ impl EffectWindow {
                 groups,
             };
         }
-        Self::preserve_check_orders(moves);
         Ok(moves.order_group().is_some())
     }
     pub(super) fn validate_state_actions(
@@ -370,7 +304,33 @@ impl EffectWindow {
         event: CheckEventId,
     ) -> Result<(), EffectError> {
         let actual = self.collect_state_actions(event)?;
-        if actions.dead != actual.dead
+        if actions.protectors.len() != actual.protectors.len()
+            || actions
+                .protectors
+                .iter()
+                .zip(&actual.protectors)
+                .any(|(staged, actual)| {
+                    staged.battle != actual.battle
+                        || staged.controller != actual.controller
+                        || staged.domain != actual.domain
+                })
+            || actions
+                .protectors
+                .iter()
+                .any(|p| p.selected.is_some_and(|seat| !p.domain.contains(&seat)))
+            || actions.start_speed != actual.start_speed
+            || !actions
+                .commanders
+                .iter()
+                .map(|g| (g.owner, &g.domain))
+                .eq(actual.commanders.iter().map(|g| (g.owner, &g.domain)))
+            || actions.commanders.iter().any(|g| {
+                g.selected
+                    .as_ref()
+                    .is_some_and(|s| !valid_subset(s, &g.domain))
+            })
+            || actions.detach != actual.detach
+            || actions.dead != actual.dead
             || actions.cancellations != actual.cancellations
             || actions.departed_copies != actual.departed_copies
             || actions.departed_tokens != actual.departed_tokens
@@ -384,12 +344,9 @@ impl EffectWindow {
             return Err(CheckError::WrongFrame.into());
         }
         for legend in &actions.legends {
-            if let Some(accepted) = &legend.accepted
-                && (accepted.conflict.id.event != legend.conflict.id.event
-                    || accepted.conflict.id.controller != legend.conflict.id.controller
-                    || accepted.conflict.domain != legend.conflict.domain
-                    || accepted.conflict.comparison_names != legend.conflict.comparison_names
-                    || !legend.conflict.domain.contains(&accepted.keep))
+            if legend
+                .keep
+                .is_some_and(|keep| !legend.conflict.domain.contains(&keep))
             {
                 return Err(CheckError::WrongFrame.into());
             }
@@ -406,14 +363,11 @@ impl EffectWindow {
         if self.window.revision() != moves.window_revision || moves.intents != intents {
             return Err(CheckError::WrongFrame.into());
         }
-        if let Some(held) = moves.replacements() {
-            let fresh = self.check_batch_with_candidates(&intents, cause, action)?;
-            held.verify_cut(&fresh)?;
-        } else if self
-            .begin_check_replacements(&intents, cause, action)?
-            .is_some()
-        {
-            return Err(CheckError::WrongFrame.into());
+        let fresh = self.begin_check_replacements(&intents, cause, action)?;
+        match (moves.replacements(), fresh) {
+            (None, None) => {}
+            (Some(held), Some(initial)) => held.verify_cut(&initial)?,
+            _ => return Err(CheckError::WrongFrame.into()),
         }
         if let CheckMoveStage::Ordering { groups, .. } = &moves.stage {
             let actual = self.check_arrival_groups(&intents, moves.replacements())?;
@@ -472,14 +426,14 @@ impl EffectWindow {
         process: &CheckProcess,
     ) -> Result<(), EffectError> {
         if self.cleanup_hand() != domain
-            || domain.len().saturating_sub(7) != required
+            || self.cleanup_discard_count(domain.len())? != required
             || selected.len() != required
             || !valid_subset(selected, domain)
             || !matches!(process.boundary, CheckBoundary::Cleanup(_))
         {
             return Err(CheckError::WrongFrame.into());
         }
-        let player = self.window.turn_owner();
+        let player = self.window.active_player();
         self.authorize_moves(
             moves,
             selected
@@ -496,37 +450,6 @@ impl EffectWindow {
             ZoneActionKind::CleanupDiscard,
         )
     }
-    /// The accepted discard selection survives a bystander's departure only if
-    /// its hand domain, event, replacement offers and accepted answers still replay.
-    pub(super) fn refresh_cleanup_replacement(&mut self, before: &Self) -> Result<(), EffectError> {
-        let process = before.check_process()?;
-        let CheckPhase::CleanupMoves {
-            domain,
-            required,
-            selected,
-            moves,
-        } = &process.phase
-        else {
-            return Err(EffectError::UnsupportedDepartureState);
-        };
-        if self.check_process()? != process || self.cleanup_hand() != *domain {
-            return Err(EffectError::UnsupportedDepartureState);
-        }
-        before.authorize_cleanup_moves(domain, *required, selected, moves, process)?;
-        let cause = EventCause::CleanupDiscard {
-            event: process.event,
-            boundary: process.boundary,
-        };
-        let mut fresh =
-            self.new_check_moves(moves.intents.clone(), cause, ZoneActionKind::CleanupDiscard)?;
-        self.rebase_check_moves(before, moves, &mut fresh, ZoneActionKind::CleanupDiscard)?;
-        self.authorize_cleanup_moves(domain, *required, selected, &fresh, process)?;
-        let CheckPhase::CleanupMoves { moves, .. } = &mut self.check_process_mut()?.phase else {
-            return Err(EffectError::InconsistentProgram);
-        };
-        *moves = fresh;
-        Ok(())
-    }
     pub(super) fn verify_check_moves(&self, moves: &CheckMoves) -> Result<(), EffectError> {
         if let Some(batch) = moves.replacements() {
             let action = batch
@@ -535,9 +458,10 @@ impl EffectWindow {
                 .next()
                 .ok_or(CheckError::WrongFrame)?
                 .action;
-            let fresh =
-                self.check_batch_with_candidates(&moves.intents, batch.cause().clone(), action)?;
-            batch.verify_initial(fresh)?;
+            let fresh = self
+                .begin_check_replacements(&moves.intents, batch.cause().clone(), action)?
+                .ok_or(CheckError::WrongFrame)?;
+            batch.verify_initial(*fresh)?;
         }
         Ok(())
     }
@@ -633,7 +557,7 @@ impl EffectWindow {
         self.verify_check_moves(moves)?;
         let plan = self.zone_move_plan(&moves.objects(), &moves.orders()?, moves.replacements())?;
         let before = self.rules_snapshot(turn)?;
-        let player = self.window.turn_owner();
+        let player = self.window.active_player();
         let (window, receipts) =
             self.window
                 .record_cleanup_moves(self.window.revision(), player, &plan.application)?;
@@ -672,6 +596,14 @@ impl EffectWindow {
                             ZoneReason::Discard { player },
                             controllers,
                         )
+                        .map(|value| {
+                            occurrence_flow::madness_replaced(
+                                value,
+                                moves
+                                    .replacements()
+                                    .is_some_and(|b| b.used_madness(movement.before.id())),
+                            )
+                        })
                     })
                     .collect()
             },
@@ -685,7 +617,15 @@ impl EffectWindow {
                 before: r.before,
                 after: r.after,
             }));
-        self.finish_cleanup_discard(turn.ok_or(EffectError::WrongPhase)?, append)
+        self.cleanup_characteristics(turn.ok_or(EffectError::WrongPhase)?, append)?;
+        let process = self.check_process_mut()?;
+        process.event.pass = process
+            .event
+            .pass
+            .checked_add(1)
+            .ok_or(CheckError::IterationExhausted)?;
+        process.phase = CheckPhase::Observe;
+        Ok(())
     }
 }
 

@@ -75,9 +75,8 @@ impl HttpProbe {
         configure: impl FnOnce(NativeGameRuntime) -> NativeGameRuntime,
         owner: Option<NativeHostOwner>,
     ) -> Self {
-        Self::serve(configuration(base, key, issuer_base, configure, owner))
-    }
-    pub(super) fn serve(config: crate::api::ApiConfig) -> Self {
+        let config = configuration(base, key, issuer_base, configure, owner);
+
         let runtime = tokio::runtime::Runtime::new().unwrap();
         let listener = runtime
             .block_on(tokio::net::TcpListener::bind("127.0.0.1:0"))
@@ -97,17 +96,6 @@ impl HttpProbe {
                 .build()
                 .unwrap(),
         }
-    }
-    pub(super) fn quests(&self, token: &str) -> Value {
-        let response = self
-            .client
-            .get(format!("{}/v1/quests?limit=100", self.url))
-            .bearer_auth(token)
-            .send()
-            .unwrap();
-        assert_eq!(response.status(), reqwest::StatusCode::OK);
-        assert_eq!(response.headers().get("cache-control").unwrap(), "no-store");
-        response.json().unwrap()
     }
     pub(super) fn command(
         &self,
@@ -222,8 +210,6 @@ impl HttpProbe {
         let mut request = self
             .client
             .post(format!("{}/v1/games/{game}/history", self.url))
-            // Long retained games exercise every single-event archive page in debug builds.
-            .timeout(Duration::from_secs(240))
             .json(body);
         if let Some(token) = token {
             request = request.bearer_auth(token);
@@ -243,24 +229,6 @@ impl HttpProbe {
         value
     }
     /// Raw status of a POST, for routes expected to refuse in varied ways.
-    pub(super) fn admission_receipt(
-        &self,
-        token: &str,
-        path: &str,
-        original: &Value,
-        expected: u16,
-    ) -> Value {
-        let response = self
-            .client
-            .post(format!("{}{path}", self.url))
-            .bearer_auth(token)
-            .json(original)
-            .send()
-            .unwrap();
-        assert_eq!(response.status().as_u16(), expected);
-        assert_eq!(response.headers()["cache-control"], "no-store");
-        response.json().unwrap()
-    }
     pub(super) fn status(&self, token: Option<&str>, path: &str, body: &Value) -> u16 {
         let mut request = self.client.post(format!("{}{path}", self.url)).json(body);
         if let Some(token) = token {

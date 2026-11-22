@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use spellwake_content::{CatalogFace, Inventory, InventoryCard};
 use spellwake_contracts::creature_types::{CreatureTypeVocabulary, CreatureVocabularyId};
-use spellwake_engine::program::{BodyTarget, ExecutableBody, SpellTargetFilter};
+use spellwake_engine::program::{BodyTarget, ExecutableBody};
 use spellwake_engine::{
     effects::{Instruction, Program, SeedCard},
     mana::{ManaCost, ManaType},
@@ -14,6 +14,13 @@ use spellwake_engine::{
 };
 use std::collections::{BTreeMap, BTreeSet};
 
+pub mod commander;
+mod keyword_creatures;
+pub use keyword_creatures::{
+    CURRENT_KEYWORD_PROFILE, KEYWORD_CREATURE_PROFILE, KEYWORD_CREATURE_REGISTRY_VERSION,
+    KEYWORD_GAMEPLAY_PROFILE, KEYWORD_GAMEPLAY_REGISTRY_VERSION, KEYWORD_GAMEPLAY_V3_PROFILE,
+    KEYWORD_GAMEPLAY_V4_PROFILE, KEYWORD_GAMEPLAY_V5_PROFILE, KEYWORD_GAMEPLAY_V6_PROFILE,
+};
 mod library_top;
 pub use library_top::{LIBRARY_TOP_PROFILE, LIBRARY_TOP_REGISTRY_VERSION, LibraryTopRegistryError};
 mod natural_mana;
@@ -89,6 +96,20 @@ impl OracleId {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum ProgramKey {
+    /// Single-face, fixed-cost creature with a complete keyword-only rules box.
+    KeywordCreatureV1,
+    /// Complete card compiled by the second keyword gameplay profile.
+    KeywordGameplayV2,
+    /// Additional source-admitted native mechanics in the third profile.
+    KeywordGameplayV3,
+    /// Source-admitted mechanics in the current gameplay registry.
+    KeywordGameplayCurrent,
+    /// Source-guarded cards compiled by the fifth gameplay profile.
+    KeywordGameplayV5,
+    /// Source-guarded cards compiled by the sixth gameplay profile.
+    KeywordGameplayV6,
+    /// Source-guarded cards compiled by the seventh gameplay profile.
+    KeywordGameplayV7,
     /// Complete source-backed scry followed by controller draw.
     LibraryTopScryDrawSpellV1,
     /// Complete source-backed surveil followed by controller draw.
@@ -170,6 +191,20 @@ pub enum ProgramKey {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum Scope {
+    /// Ordinary single-face creatures in the pinned keyword-only profile.
+    KeywordCreatureOrdinaryCardV1,
+    /// Rules and actions admitted by the second keyword gameplay compiler.
+    KeywordGameplayV2,
+    /// Additional source-admitted native mechanics in the third profile.
+    KeywordGameplayV3,
+    /// Source-admitted mechanics in the current gameplay registry.
+    KeywordGameplayCurrent,
+    /// Source-guarded cards compiled by the fifth gameplay profile.
+    KeywordGameplayV5,
+    /// Source-guarded cards compiled by the sixth gameplay profile.
+    KeywordGameplayV6,
+    /// Source-guarded cards compiled by the seventh gameplay profile.
+    KeywordGameplayV7,
     /// Four dated library-action sources; no complete-card qualification.
     LibraryTopOrdinaryCardV1,
     CreatureTargetOnly,
@@ -234,6 +269,10 @@ pub struct BoundProgram {
     instruction: Program,
 }
 impl BoundProgram {
+    /// Immutable guarded definition materialized by this binding.
+    pub fn program(&self) -> &Program {
+        &self.instruction
+    }
     pub fn key(&self) -> ProgramKey {
         self.key
     }
@@ -247,6 +286,17 @@ pub struct Registry {
 }
 #[derive(Debug)]
 pub enum RegistryError {
+    /// Foreign or altered materialized input for the keyword-only profile.
+    KeywordCreatureSourceMismatch,
+    /// Foreign creature subtype vocabulary for the keyword-only profile.
+    KeywordCreatureVocabularyMismatch,
+    /// An admitted keyword definition failed native validation.
+    InvalidKeywordCreatureDefinition {
+        oracle_id: OracleId,
+        reason: spellwake_engine::program::DefinitionError,
+    },
+    /// Every rejected candidate when several definitions fail the same registry build.
+    InvalidKeywordCreatureDefinitions(Vec<(OracleId, spellwake_engine::program::DefinitionError)>),
     /// The independently closed four-source library-action guard refused intake.
     LibraryTop(LibraryTopRegistryError),
     /// The resolution-selection pool requires its pinned full source/metadata.
@@ -364,6 +414,26 @@ pub enum RegistryError {
 impl std::fmt::Display for RegistryError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            Self::KeywordCreatureSourceMismatch => {
+                f.write_str("keyword creature catalogue source mismatch")
+            }
+            Self::KeywordCreatureVocabularyMismatch => {
+                f.write_str("keyword creature vocabulary mismatch")
+            }
+            Self::InvalidKeywordCreatureDefinition { oracle_id, reason } => {
+                write!(
+                    f,
+                    "invalid compiled definition for {}: {reason:?}",
+                    oracle_id.as_str()
+                )
+            }
+            Self::InvalidKeywordCreatureDefinitions(errors) => {
+                write!(f, "{} invalid compiled definitions", errors.len())?;
+                for (id, error) in errors {
+                    write!(f, "\n{}: {error:?}", id.as_str())?;
+                }
+                Ok(())
+            }
             Self::LibraryTop(error) => error.fmt(f),
             Self::ResolutionSelectionSourceMismatch => {
                 f.write_str("resolution-selection catalogue source mismatch")
@@ -518,7 +588,7 @@ struct Definition {
     name: &'static str,
     mana: &'static str,
     type_line: &'static str,
-    text_sha256: &'static str,
+    text: &'static str,
     power: Option<&'static str>,
     toughness: Option<&'static str>,
     program: Program,
@@ -530,7 +600,7 @@ fn definition(id: &OracleId) -> Option<Definition> {
         name: "Lightning Bolt",
         mana: "{R}",
         type_line: "Instant",
-        text_sha256: "1c8ec5180252d4d2258eec2c0312b6f3c86b101696246288422c2d46aaa5ff8b",
+        text: "Lightning Bolt deals 3 damage to any target.",
         power: None,
         toughness: None,
         program: Program::instant(
@@ -547,7 +617,7 @@ fn definition(id: &OracleId) -> Option<Definition> {
             def.key = ProgramKey::UnsummonCreatureV1;
             def.name = "Unsummon";
             def.mana = "{U}";
-            def.text_sha256 = "949ea0ec2b12afb4e8dd8a5b647f2ae7adfb1af38909f725f589c3cc8814dfa2";
+            def.text = "Return target creature to its owner's hand.";
             def.program = Program::instant(
                 ManaCost::one(ManaType::Blue),
                 ExecutableBody::new(
@@ -561,11 +631,11 @@ fn definition(id: &OracleId) -> Option<Definition> {
             def.scope = Scope::SupportedInstantSpellTargetOnly;
             def.name = "Counterspell";
             def.mana = "{U}{U}";
-            def.text_sha256 = "6e7e3fa9bb231a1c1910cd956dc7e5c91bb22e9705b39ed61a2ebd23201950e4";
+            def.text = "Counter target spell.";
             def.program = Program::instant(
                 ManaCost::specific(ManaType::Blue, 2.into()),
                 ExecutableBody::new(
-                    BodyTarget::SingleSpell(SpellTargetFilter::AnySpell),
+                    BodyTarget::SingleSpell(spellwake_engine::program::SpellFilter::any()),
                     vec![Instruction::CounterSpell],
                 ),
             );
@@ -575,11 +645,14 @@ fn definition(id: &OracleId) -> Option<Definition> {
             def.scope = Scope::SupportedInstantSpellTargetOnly;
             def.name = "Twincast";
             def.mana = "{U}{U}";
-            def.text_sha256 = "ca9a1d032a97c6511cab7dbf3a570b0b50f5035fe29d817d4c871ef7a4d04bf5";
+            def.text =
+                "Copy target instant or sorcery spell. You may choose new targets for the copy.";
             def.program = Program::instant(
                 ManaCost::specific(ManaType::Blue, 2.into()),
                 ExecutableBody::new(
-                    BodyTarget::SingleSpell(SpellTargetFilter::CopyableInstructionSpell),
+                    BodyTarget::SingleSpell(
+                        spellwake_engine::program::SpellFilter::copyable_instruction(),
+                    ),
                     vec![Instruction::CopySpell],
                 ),
             );
@@ -590,7 +663,7 @@ fn definition(id: &OracleId) -> Option<Definition> {
             def.name = "Silvercoat Lion";
             def.mana = "{1}{W}";
             def.type_line = "Creature — Cat";
-            def.text_sha256 = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855";
+            def.text = "";
             def.power = Some("2");
             def.toughness = Some("2");
             def.program = Program::creature(None, 2.into(), 2.into(), BTreeSet::new());
@@ -608,10 +681,7 @@ fn matches(card: &InventoryCard, def: &Definition) -> bool {
         && face.name == def.name
         && face.type_line.as_deref() == Some(def.type_line)
         && face.mana_cost.as_deref() == Some(def.mana)
-        && face
-            .oracle_text
-            .as_deref()
-            .is_some_and(|text| format!("{:x}", Sha256::digest(text.as_bytes())) == def.text_sha256)
+        && face.oracle_text.as_deref() == Some(def.text)
         && face.power.as_deref() == def.power
         && face.toughness.as_deref() == def.toughness
 }

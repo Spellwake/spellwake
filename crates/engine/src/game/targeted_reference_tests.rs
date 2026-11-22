@@ -10,8 +10,8 @@ use crate::{
     mana::{ManaAbilityRef, ManaCost, ManaPayment, ManaSpend, ManaType},
     object_identity::{CardId, ObjectDestination, ObjectId},
     program::{
-        Instruction, OrdinaryCondition, PlayerRelation, Program, SpellCastFilter, TriggerGrouping,
-        TriggeredAbility, TriggeredAbilityId,
+        Instruction, PlayerRelation, Program, TriggerGrouping, TriggerSpec, TriggeredAbility,
+        TriggeredAbilityId,
     },
     stack_window::{StackEntryId, StackKind},
     targets::TargetRef,
@@ -48,7 +48,7 @@ fn original_spell() -> Program {
 }
 fn ability(
     id: u64,
-    condition: OrdinaryCondition,
+    condition: TriggerSpec,
     target: BodyTarget,
     body: Vec<Instruction>,
 ) -> TriggeredAbility {
@@ -59,11 +59,11 @@ fn ability(
         body: ExecutableBody::new(target, body),
     }
 }
-fn watcher_condition() -> OrdinaryCondition {
-    OrdinaryCondition::SpellCast {
-        player: PlayerRelation::AnyParticipant,
-        filter: SpellCastFilter::AnySpell,
-    }
+fn watcher_condition() -> TriggerSpec {
+    crate::program::TriggerSpec::spell_cast(
+        PlayerRelation::AnyParticipant,
+        crate::program::SpellFilter::any(),
+    )
 }
 fn seed(case: &str) -> (NativeCandidate, AliasContext) {
     let vocabulary = creature_types::selected_vocabulary().unwrap();
@@ -82,7 +82,7 @@ fn seed(case: &str) -> (NativeCandidate, AliasContext) {
     if !three {
         let (target, mut body) = if case == "TR4" {
             (
-                BodyTarget::SingleSpell(SpellTargetFilter::AnySpell),
+                BodyTarget::SingleSpell(crate::program::SpellFilter::any()),
                 vec![Instruction::CounterSpell],
             )
         } else {
@@ -94,9 +94,12 @@ fn seed(case: &str) -> (NativeCandidate, AliasContext) {
         if matches!(case, "TR1" | "TR5") {
             body.push(gain(1));
         }
-        source
-            .triggered
-            .push(ability(1, OrdinaryCondition::SelfCast, target, body));
+        source.triggered.push(ability(
+            1,
+            crate::program::TriggerSpec::self_cast(),
+            target,
+            body,
+        ));
     }
     let mut cards = vec![SeedCard {
         card: CardId(1),
@@ -249,6 +252,7 @@ fn paid(
         },
     );
     let payment = ManaPayment {
+        from_lots: Default::default(),
         spend: vec![ManaSpend {
             mana_type: ManaType::Blue,
             amount: 1.into(),

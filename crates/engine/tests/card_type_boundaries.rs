@@ -16,8 +16,8 @@ use spellwake_engine::{
     object_identity::{CardId, ObjectDestination, ObjectZone},
     occurrence::RulesOccurrence,
     program::{
-        BodyTarget, CardType, ExecutableBody, Instruction, ObjectRelation, OrdinaryCondition,
-        Program, SpellTargetFilter, TriggeredAbility, TriggeredAbilityId,
+        BodyTarget, CardType, ExecutableBody, Instruction, Program, TriggeredAbility,
+        TriggeredAbilityId,
     },
     targets::TargetRef,
 };
@@ -199,7 +199,7 @@ fn scheduled_kindred_sorcery_copies_keep_owned_traits_after_original_counter() {
     let copy_card = |id| {
         spell(
             id,
-            BodyTarget::SingleSpell(SpellTargetFilter::CopyableInstructionSpell),
+            BodyTarget::SingleSpell(spellwake_engine::program::SpellFilter::copyable_instruction()),
             vec![Instruction::CopySpell],
         )
     };
@@ -211,7 +211,7 @@ fn scheduled_kindred_sorcery_copies_keep_owned_traits_after_original_counter() {
             copy_card(3),
             spell(
                 4,
-                BodyTarget::SingleSpell(SpellTargetFilter::AnySpell),
+                BodyTarget::SingleSpell(spellwake_engine::program::SpellFilter::any()),
                 vec![Instruction::CounterSpell],
             ),
         ],
@@ -480,7 +480,9 @@ fn kindred_sacrifice_only_matches_dies_while_it_is_a_creature() {
         source.triggered.push(TriggeredAbility {
             grouping: spellwake_engine::program::TriggerGrouping::EachOccurrence,
             id: TriggeredAbilityId(1),
-            condition: OrdinaryCondition::Dies(ObjectRelation::SelfObject),
+            condition: spellwake_engine::program::TriggerSpec::dies(
+                spellwake_engine::program::ObjectFilter::self_object(),
+            ),
             body: ExecutableBody::new(
                 BodyTarget::None,
                 vec![Instruction::AdjustControllerLife {
@@ -613,7 +615,8 @@ fn kindred_combat_eligibility_and_actual_membership_require_creature_type() {
                 decision: decision.id(),
                 choice: DecisionReply::DeclareAttackers(vec![AttackDeclaration {
                     attacker: noncreature,
-                    defender: P1
+                    defender: P1,
+                    defending_planeswalker: None,
                 }])
             }
         }),
@@ -626,6 +629,7 @@ fn kindred_combat_eligibility_and_actual_membership_require_creature_type() {
         DecisionReply::DeclareAttackers(vec![AttackDeclaration {
             attacker: attacking,
             defender: P1,
+            defending_planeswalker: None,
         }]),
     );
     // One branch reaches a real blocker chooser: Kindred does not confer eligibility.

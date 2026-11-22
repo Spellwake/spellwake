@@ -3,7 +3,7 @@
 //! Actual native cleanup/check journeys and one explicitly separate movement
 //! primitive. This executable reads no expected states or reference artifacts.
 use serde_json::{Value, json};
-use spellwake_engine::program::{BodyTarget, ExecutableBody, SpellTargetFilter};
+use spellwake_engine::program::{BodyTarget, ExecutableBody};
 use spellwake_engine::{
     activated::{ActivatedAbility, ActivatedAbilityId, SourceCost},
     checks::{CheckBoundary, CheckDecision},
@@ -295,7 +295,7 @@ impl Fixture {
                     Program::instant(
                         ManaCost::specific(ManaType::Blue, 2.into()),
                         ExecutableBody::new(
-                            BodyTarget::SingleSpell(SpellTargetFilter::AnySpell),
+                            BodyTarget::SingleSpell(spellwake_engine::program::SpellFilter::any()),
                             vec![Instruction::CounterSpell],
                         ),
                     ),
@@ -497,7 +497,9 @@ impl Fixture {
     }
     fn recipient(&self, target: DamageRecipient) -> TraceResult<Value> {
         match target {
-            DamageRecipient::Creature(id) => {
+            DamageRecipient::Creature(id)
+            | DamageRecipient::Planeswalker(id)
+            | DamageRecipient::Battle(id) => {
                 Ok(json!({"kind":"creature","alias":self.alias(id)?,"object":format!("{id:?}")}))
             }
             DamageRecipient::Player(player) => Ok(json!({"kind":"player","player":seat(player)})),
@@ -613,12 +615,16 @@ impl Fixture {
                 StackKind::CardSpell(id)=>json!({"kind":"CardSpell","origin":self.alias(*id)?,"object":format!("{id:?}")}),
                 StackKind::ActivatedAbility{source}=>json!({"kind":"Ability","origin":self.label(source.card_id().expect("source-authored card-only trace")),"source":check_game_object_view(source,|id|self.label(id))}),
                 StackKind::TriggeredAbility{source}=>json!({"kind":"TriggeredAbility","origin":self.label(source.card_id().expect("source-authored card-only trace")),"source":check_game_object_view(source,|id|self.label(id))}),
+                StackKind::Speed=>json!({"kind":"Speed"}),
+                StackKind::Monarch=>json!({"kind":"Monarch"}),
+                StackKind::DelayedCopy{original}=>json!({"kind":"DelayedCopy","original":format!("{original:?}")}),
+                StackKind::Emblem{emblem}=>json!({"kind":"Emblem","id":emblem.sequence()}),
                 StackKind::SpellCopy{copied_from,owner}=>json!({"kind":"SpellCopy","copied_from":format!("{copied_from:?}"),"owner":seat(*owner)}),
             };
             Ok(json!({"entry":format!("{:?}",entry.id()),"controller":seat(entry.controller()),"kind":kind,"targets":format!("{:?}",entry.targets())}))
         }).collect::<TraceResult<Vec<Value>>>()?;
         Ok(
-            json!({"state":{"cards":common,"hands":hands,"graveyards":piles,"life":life,"game_over":self.state.outcome().is_some()},"all_cards":all,"all_hands":all_hands,"libraries_top_to_bottom":libraries,"graveyards_physical_top_to_bottom":physical_piles,"protocol":{"basis":basis(self.state.basis()),"executor_revision":execution.revision(),"registry_revision":registry.revision(),"active":seat(window.turn_owner()),"priority":self.holder().ok().map(seat),"window_phase":format!("{:?}",window.phase()),"position":turn_position_view(self.state.turn().expect("scheduled").position()),"stage":format!("{:?}",self.state.turn().expect("scheduled").stage()),"stack":stack,"stack_size":window.entries().len(),"pending":self.decision()?,"outcome":format!("{:?}",self.state.outcome()),"pending_eliminations":self.state.pending_eliminations().iter().map(|p|seat(*p)).collect::<Vec<_>>(),"mana":window.participants().iter().map(|p|(seat(*p),ManaType::ALL.iter().map(|t|(format!("{t:?}"),execution.mana(*p,*t))).collect::<BTreeMap<_,_>>())).collect::<BTreeMap<_,_>>()},"current_facts":self.current_facts}),
+            json!({"state":{"cards":common,"hands":hands,"graveyards":piles,"life":life,"game_over":self.state.outcome().is_some()},"all_cards":all,"all_hands":all_hands,"libraries_top_to_bottom":libraries,"graveyards_physical_top_to_bottom":physical_piles,"protocol":{"basis":basis(self.state.basis()),"executor_revision":execution.revision(),"registry_revision":registry.revision(),"active":seat(window.active_player()),"priority":self.holder().ok().map(seat),"window_phase":format!("{:?}",window.phase()),"position":turn_position_view(self.state.turn().expect("scheduled").position()),"stage":format!("{:?}",self.state.turn().expect("scheduled").stage()),"stack":stack,"stack_size":window.entries().len(),"pending":self.decision()?,"outcome":format!("{:?}",self.state.outcome()),"pending_eliminations":self.state.pending_eliminations().iter().map(|p|seat(*p)).collect::<Vec<_>>(),"mana":window.participants().iter().map(|p|(seat(*p),ManaType::ALL.iter().map(|t|(format!("{t:?}"),execution.mana(*p,*t))).collect::<BTreeMap<_,_>>())).collect::<BTreeMap<_,_>>()},"current_facts":self.current_facts}),
         )
     }
     fn facts(&self, candidate: &NativeCandidate, source: &GameObjects) -> TraceResult<Value> {
@@ -835,6 +841,7 @@ impl Fixture {
                 Ok(AttackDeclaration {
                     attacker: self.object(alias)?,
                     defender: *defender,
+                    defending_planeswalker: None,
                 })
             })
             .collect::<TraceResult<Vec<_>>>()?;
@@ -1093,6 +1100,7 @@ fn run_root(case: &str) -> TraceResult<Value> {
                     spell: f.object("source")?,
                     target: TargetRef::Object(f.object("giant")?),
                     payment: ManaPayment {
+                        from_lots: Default::default(),
                         spend: vec![ManaSpend {
                             mana_type: ManaType::Red,
                             amount: 3.into(),

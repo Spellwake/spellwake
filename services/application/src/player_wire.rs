@@ -138,6 +138,8 @@ impl RulesCount {
 }
 /// Established public command-envelope byte bound. It is not a rules-integer cap.
 pub const MAX_PLAYER_WIRE_BYTES: usize = 262_144;
+/// Bounded completed replay reveal, which may reveal every player's deck.
+pub(crate) const MAX_COMPLETED_REPLAY_BYTES: usize = 524_288;
 /// Safe original-byte rejection, retaining a private syntax cause where present.
 pub struct PlayerDecodeError {
     cause: Option<serde_json::Error>,

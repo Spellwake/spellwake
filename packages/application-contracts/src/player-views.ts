@@ -5,6 +5,7 @@ import {
   playerBasisSchema,
   playerHandleSchema,
   playerDisplayTextSchema,
+  playerCardTypeSchema,
   playerEnglishLabelSchema,
   rulesCountSchema,
   rulesIntegerSchema,
@@ -14,6 +15,7 @@ import {
   PLAYER_ITEMS,
   playerManaColorSchema,
   playerManaSpendSchema,
+  playerRestrictedManaSpendSchema,
   playerTargetSchema,
   playerObjectTargetSchema,
   playerSeatTargetSchema,
@@ -22,7 +24,6 @@ import {
 } from "./player-actions.ts";
 import {
   playerDecisionSchema,
-  playerDeadlineSchema,
   samePlayerBasis,
   validPlayerDecision,
   playerDecisionReferences,
@@ -44,15 +45,7 @@ export const playerZoneKindSchema = z.enum([
   "exile",
   "command",
 ]);
-export const playerCardTypeSchema = z.enum([
-  "land",
-  "artifact",
-  "creature",
-  "enchantment",
-  "kindred",
-  "instant",
-  "sorcery",
-]);
+export { playerCardTypeSchema } from "./player-primitives.ts";
 export const playerSupertypeSchema = z.enum([
   "basic",
   "legendary",
@@ -82,15 +75,123 @@ export const playerLandTypeSchema = z.enum([
 export const playerAbilityKindSchema = z.enum([
   "mana",
   "activated",
+  "cycling",
+  "ninjutsu",
+  "transmute",
+  "crew",
+  "saddle",
+  "tap-chosen-permanent",
+  "station",
+  "activated-untargeted",
   "triggered",
   "continuous",
 ]);
 export const playerAbilityViewSchema = z.strictObject({
+  powerUpCost: z.strictObject({
+    generic: rulesCountSchema,
+    required: z.array(playerManaSpendSchema).max(6).refine((rows) =>
+      uniquePlayerValues(rows, (row) => row.color) && rows.every((row) => BigInt(row.amount) > 0n)),
+  }).optional(),
+  exhausted: z.boolean().optional(),
   handle: playerHandleSchema,
   kind: playerAbilityKindSchema,
   label: playerDisplayTextSchema(1024).refine((v) => v.length > 0),
 });
-export const playerKeywordSchema = z.enum(["haste", "vigilance"]);
+export const playerKeywordSchema = z.enum([
+  "haste",
+  "partner",
+  "bargain",
+  "banding",
+  "bands-with-other-legendary-creatures",
+  "bands-with-other-creatures-named-wolves-of-the-hunt",
+  "vigilance",
+  "flying",
+  "reach",
+  "daybound",
+  "nightbound",
+  "phasing",
+  "defender",
+  "menace",
+  "shadow",
+  "horsemanship",
+  "fear",
+  "intimidate",
+  "skulk",
+  "plainswalk",
+  "islandwalk",
+  "swampwalk",
+  "mountainwalk",
+  "forestwalk",
+  "desertwalk",
+  "nonbasic-landwalk",
+  "legendary-landwalk",
+  "snow-landwalk",
+  "snow-forestwalk",
+  "snow-swampwalk",
+  "artifact-landwalk",
+  "trample",
+  "deathtouch",
+  "convoke",
+  "improvise",
+  "protection-from-white",
+  "protection-from-blue",
+  "protection-from-black",
+  "protection-from-red",
+  "protection-from-green",
+  "protection-from-multicolored",
+  "retrace",
+  "jump-start",
+  "rebound",
+  "delve",
+  "lifelink",
+  "indestructible",
+  "first-strike",
+  "double-strike",
+  "shroud",
+  "hexproof",
+  "flash",
+  "split-second",
+  "changeling",
+  "devoid",
+  "start-your-engines",
+  "exalted",
+  "wither",
+  "infect",
+  "poisonous",
+  "toxic",
+  "echo",
+  "cumulative-upkeep",
+  "fading",
+  "vanishing",
+  "mentor",
+  "evolve",
+  "backup",
+  "extort",
+  "increment",
+  "decayed",
+  "mobilize",
+  "power-up",
+  "ingest",
+  "annihilator",
+  "modular",
+  "soulshift",
+  "graft",
+  "persist",
+  "undying",
+  "afterlife",
+  "fabricate",
+  "afflict",
+  "dethrone",
+  "melee",
+  "renown",
+  "training",
+  "prowess",
+  "battle-cry",
+  "bushido",
+  "flanking",
+  "frenzy",
+  "rampage",
+]);
 export const playerPhaseSchema = z.enum([
   "beginning",
   "precombat-main",
@@ -132,6 +233,7 @@ export const playerCharacteristicsSchema = z.strictObject({
   printedPower: playerDisplayTextSchema(128).nullable(),
   printedToughness: playerDisplayTextSchema(128).nullable(),
   printedLoyalty: playerDisplayTextSchema(128).nullable(),
+  printedDefense: playerDisplayTextSchema(128).optional(),
 });
 export const playerObjectIdentitySchema = z.discriminatedUnion("kind", [
   z.strictObject({
@@ -162,7 +264,7 @@ export const playerObjectIdentitySchema = z.discriminatedUnion("kind", [
 export const playerPublicPropertiesSchema = z.strictObject({
   cardTypes: z
     .array(playerCardTypeSchema)
-    .max(7)
+    .max(8)
     .refine((xs) => uniquePlayerValues(xs, (x) => x)),
   supertypes: z
     .array(playerSupertypeSchema)
@@ -172,32 +274,44 @@ export const playerPublicPropertiesSchema = z.strictObject({
     .array(playerLandTypeSchema)
     .max(17)
     .refine((xs) => uniquePlayerValues(xs, (x) => x)),
+  spellTypes: z.array(z.enum(["Arcane","Adventure"])).max(2).refine(xs=>new Set(xs).size===xs.length).optional(),
+  enchantmentTypes: z.array(z.literal("Saga")).max(1).optional(),
+  planeswalkerTypes: z.array(z.enum(["Ajani", "Calix", "Chandra", "Daretti", "Elspeth", "Freyalise", "Gideon", "Guff", "Jace", "Nahiri", "Narset", "Nixilis", "Teferi", "Teyo", "Ugin", "Vronos"]))
+    .max(16).refine((xs) => uniquePlayerValues(xs, (x) => x)).optional(),
   creatureTypes: z
     .array(playerEnglishLabelSchema)
     .max(PLAYER_ITEMS)
     .refine((xs) => uniquePlayerValues(xs, (x) => x)),
+  chosenCreatureType: playerEnglishLabelSchema.optional(),
   colors: z
     .array(playerManaColorSchema)
     .max(5)
     .refine(
       (xs) => uniquePlayerValues(xs, (x) => x) && !xs.includes("colourless"),
     ),
+  renowned: z.boolean().optional(),
   keywords: z
     .array(playerKeywordSchema)
-    .max(2)
+    .max(playerKeywordSchema.options.length)
     .refine((xs) => uniquePlayerValues(xs, (x) => x)),
   power: rulesIntegerSchema.nullable(),
   toughness: rulesIntegerSchema.nullable(),
-});
+}).refine((value) => (!value.spellTypes?.length || value.cardTypes.includes("instant") || value.cardTypes.includes("sorcery")) && (!value.planeswalkerTypes?.length || value.cardTypes.includes("planeswalker")) && (!value.enchantmentTypes?.length || value.cardTypes.includes("enchantment")));
 export const playerVisibleSubjectSchema = z.union([
   playerObjectTargetSchema,
   playerSeatTargetSchema,
 ]);
 export const playerObjectSchema = z.strictObject({
+  commander: z.strictObject({
+    commandZoneCasts: rulesCountSchema,
+    combatDamage: z.array(z.strictObject({seatId:identifierSchema, amount:rulesCountSchema.refine((v)=>BigInt(v)>0n)})).max(PLAYER_ITEMS).refine((rows)=>uniquePlayerValues(rows,row=>row.seatId)),
+  }).optional(),
   handle: playerHandleSchema,
   zone: playerHandleSchema,
   ownerSeatId: identifierSchema,
   controllerSeatId: identifierSchema.nullable(),
+  protectorSeatId: identifierSchema.optional(),
+  timesMutated: rulesCountSchema.refine((count) => BigInt(count) > 0n).optional(),
   identity: playerObjectIdentitySchema,
   publicProperties: playerPublicPropertiesSchema.nullable(),
   tapped: z.boolean(),
@@ -208,6 +322,26 @@ export const playerObjectSchema = z.strictObject({
     .refine((xs) => uniquePlayerValues(xs, (x) => x.handle)),
   damageMarked: rulesCountSchema,
   attachedTo: playerVisibleSubjectSchema.nullable(),
+  saddled: z.boolean().optional(),
+  bestowed: z.boolean().optional(),
+  plottedOnTurn: rulesCountSchema.optional(),
+  mayPlayFromExile: z.boolean().optional(),
+  mayCastFreeFromExile:z.boolean().optional(),
+  freeExileTypes:z.array(playerCardTypeSchema.exclude(["land"])).max(8).refine(types=>new Set(types).size===types.length).optional(),
+  mayPlayFromLibrary: z.boolean().optional(),
+  exileMana: z.enum(["any-color","any-type"]).optional(),
+  warpedOnTurn: rulesCountSchema.optional(),
+  adventureFace: playerCharacteristicsSchema.optional(),
+  splitFaces:z.tuple([playerCharacteristicsSchema,playerCharacteristicsSchema]).optional(),
+  transformFace: z.strictObject({backFaceUp:z.boolean(), opposite:playerCharacteristicsSchema}).optional(),
+  faceDown: z.enum(["morph","disguise","manifest","forest"]).optional(),
+  exiledFaceDown: z.boolean().optional(),
+  faceDownOrder: rulesCountSchema.refine((n) => BigInt(n) > 0n).optional(),
+  faceUpOptions: z.array(z.strictObject({
+    ability:z.number().int().min(0).max(65535), generic:rulesCountSchema,
+    required:z.array(playerManaSpendSchema).max(6).refine((cost) => uniquePlayerValues(cost, (item) => item.color) && cost.every((item) => BigInt(item.amount) > 0n)),
+  })).max(PLAYER_ITEMS).refine((offers) => uniquePlayerValues(offers, (item) => String(item.ability))).optional(),
+  foretoldOnTurn: rulesCountSchema.optional(),
 });
 const zoneCommon = {
   handle: playerHandleSchema,
@@ -235,6 +369,28 @@ export const playerZoneSchema = z.discriminatedUnion("visibility", [
   }),
 ]);
 export const playerSeatViewSchema = z.strictObject({
+  phasedOut: z.array(z.strictObject({names:z.array(playerDisplayTextSchema(256).refine(name=>name.length>0)).max(PLAYER_ITEMS),
+    faceDown:z.boolean(),tapped:z.boolean(),phaseInSeatId:identifierSchema,loyalty:rulesCountSchema.nullable()}).refine(p=>!p.faceDown || p.names.length===0)).max(PLAYER_ITEMS).optional(),
+  emblems: z.array(z.discriminatedUnion("kind", [z.strictObject({ kind: z.literal("prevent-all-but-one") }), z.strictObject({ kind: z.literal("loyalty-any-turn") }), z.strictObject({ kind: z.literal("return-fallen-artifacts") }), z.strictObject({ kind: z.literal("sacrifice-creature-gain-life-draw") }), z.strictObject({
+    kind: z.literal("upkeep-damage"),
+    amount: rulesIntegerSchema.refine((value) => BigInt(value) > 0n),
+  }), z.strictObject({
+    kind: z.literal("spellcast-damage"),
+    amount: rulesIntegerSchema.refine((value) => BigInt(value) > 0n),
+    noncreature_only: z.boolean(),
+  }), z.strictObject({
+    kind: z.literal("controlled-creature-bonus"),
+    power: rulesIntegerSchema,
+    toughness: rulesIntegerSchema,
+    keywords: z.array(playerKeywordSchema).max(playerKeywordSchema.options.length).refine((xs) => uniquePlayerValues(xs, (x) => x)),
+  })])).max(PLAYER_ITEMS).optional(),
+  monarch: z.boolean().optional(),
+  cityBlessing: z.boolean().optional(),
+  speed:z.number().int().min(0).max(4).optional(),
+  searchReveal: playerCharacteristicsSchema.optional(),
+  searchReveals: z.array(playerCharacteristicsSchema).max(PLAYER_ITEMS).optional(),
+  cascadeReveals:z.array(playerCharacteristicsSchema).optional(),
+  faceDownReveals: z.array(playerCharacteristicsSchema).max(PLAYER_ITEMS).optional(),
   seatId: identifierSchema,
   life: rulesIntegerSchema,
   poison: rulesCountSchema,
@@ -243,11 +399,15 @@ export const playerSeatViewSchema = z.strictObject({
     .array(playerManaSpendSchema)
     .max(6)
     .refine((xs) => uniquePlayerValues(xs, (x) => x.color)),
+  restrictedMana: z.array(playerRestrictedManaSpendSchema).max(PLAYER_ITEMS).optional(),
   handCount: rulesCountSchema,
   libraryCount: rulesCountSchema,
   eliminated: z.boolean(),
-});
+}).refine((seat) => uniquePlayerValues(seat.restrictedMana ?? [], (item) => `${item.color}:${item.restriction}:${item.creatureType ?? ""}`)
+  && (seat.restrictedMana ?? []).every((item) => BigInt(item.amount) <= BigInt(seat.manaPool.find((pool) => pool.color === item.color)?.amount ?? "0"))
+  && seat.manaPool.every((pool) => (seat.restrictedMana ?? []).filter((item) => item.color === pool.color).reduce((sum, item) => sum + BigInt(item.amount), 0n) <= BigInt(pool.amount)));
 export const playerTurnSchema = z.strictObject({
+  dayNight: z.enum(["day","night"]).optional(),
   number: rulesCountSchema.refine((v) => BigInt(v) > 0n),
   activeSeatIds: z
     .array(identifierSchema)
@@ -257,7 +417,6 @@ export const playerTurnSchema = z.strictObject({
     .array(identifierSchema)
     .max(6)
     .refine((xs) => uniquePlayerValues(xs, (x) => x)),
-  priorityDeadlineAt: playerDeadlineSchema.optional(),
   phase: playerPhaseSchema,
   step: playerStepSchema,
 });
@@ -270,6 +429,9 @@ export const playerStackEntrySchema = z.strictObject({
   // Count bound occurrences without a current permitted reference, not illegal
   // targets. Current visible targets retain their original order and duplicates.
   unavailableTargets: rulesCountSchema,
+  chosenX: rulesCountSchema.optional(),
+  modes: z.array(z.number().int().min(0).max(255)).max(255).optional(),
+  visibleContributors: z.array(playerHandleSchema).max(PLAYER_ITEMS).optional(),
 });
 export const playerSnapshotSchema = z.strictObject({
   basis: playerBasisSchema,
@@ -397,6 +559,7 @@ export function validPlayerSnapshot(
     !uniquePlayerValues(f.roster, (x) => x) ||
     !f.roster.every((x) => identifierSchema.safeParse(x).success) ||
     !f.roster.includes(f.viewer) ||
+    v.players.filter((player) => player.monarch).length > 1 ||
     v.players.length !== f.roster.length ||
     !v.players.every((x, i) => x.seatId === f.roster[i])
   )
@@ -474,8 +637,21 @@ export function validPlayerSnapshot(
       !zoneObjects(zone).includes(object.handle) ||
       (zone.ownerSeatId !== null && zone.ownerSeatId !== object.ownerSeatId) ||
       !f.roster.includes(object.ownerSeatId) ||
+      (object.commander !== undefined && !object.commander.combatDamage.every((hit)=>f.roster.includes(hit.seatId))) ||
+      (object.protectorSeatId !== undefined && (!f.roster.includes(object.protectorSeatId) || zone.zoneType !== "battlefield" || !object.publicProperties?.cardTypes.includes("battle"))) ||
       (object.controllerSeatId !== null &&
         !f.roster.includes(object.controllerSeatId)) ||
+      ((object.freeExileTypes?.length ?? 0) > 0 && object.mayCastFreeFromExile !== true) ||
+      ((object.mayPlayFromExile === true || object.mayCastFreeFromExile === true || object.exileMana !== undefined) && zone.zoneType !== "exile") ||
+      (object.mayPlayFromLibrary === true && (zone.zoneType !== "library" || zone.visibility === "hidden" || zone.objects[0] !== object.handle)) ||
+      (object.warpedOnTurn !== undefined && zone.zoneType !== "exile") ||
+      (object.exiledFaceDown === true && zone.zoneType !== "exile") ||
+      (object.bestowed && zone.zoneType !== "battlefield" && zone.zoneType !== "stack") ||
+      (object.splitFaces !== undefined && !known.has(object.handle)) ||
+      (object.adventureFace !== undefined && !known.has(object.handle)) ||
+      (object.transformFace !== undefined && (!known.has(object.handle) || (object.transformFace.backFaceUp && zone.zoneType !== "battlefield" && zone.zoneType !== "stack"))) ||
+      ((object.faceDownOrder !== undefined) !== (object.faceDown !== undefined || object.foretoldOnTurn !== undefined || object.exiledFaceDown === true)) ||
+      (Boolean(object.faceUpOptions?.length) && (object.faceDown === undefined || object.controllerSeatId !== v.viewerSeatId || !known.has(object.handle) || zone.zoneType !== "battlefield")) ||
       (object.publicProperties !== null &&
         !object.publicProperties.creatureTypes.every((x) =>
           f.creatureTypeMembers.includes(x),
@@ -508,22 +684,11 @@ export function validPlayerSnapshot(
         return false;
   }
   if (v.turn !== null && !validPlayerTurn(v.turn, f.roster)) return false;
-  if (v.turn !== null) {
-    if (
-      v.turn.activeSeatIds.length === 0 &&
-      (f.roster.length < 3 || !v.players.some((player) => player.eliminated))
-    ) return false;
-    if (v.turn.priorityDeadlineAt !== undefined && (
-      f.roster.length < 3 || v.turn.prioritySeatIds.length !== 1 ||
-      v.turn.prioritySeatIds[0] !== v.viewerSeatId || v.decisions.length !== 0
-    )) return false;
-    if (v.turn.prioritySeatIds.some((seat) =>
-      v.players.some((player) => player.seatId === seat && player.eliminated)
-    )) return false;
-  }
   for (const entry of v.stack)
     if (
       !f.roster.includes(entry.controllerSeatId) ||
+      (entry.visibleContributors?.some((v) => !objects.has(v)) ?? false) ||
+      new Set(entry.visibleContributors).size !== (entry.visibleContributors?.length ?? 0) ||
       (entry.sourceObject !== null && !objects.has(entry.sourceObject)) ||
       !entry.targets.every((t) => playerTargetIn(t, objects, stack, f.roster))
     )
@@ -540,38 +705,3 @@ export function validPlayerSnapshot(
       ) && playerDecisionReferences(d, objects, stack, f.roster),
   );
 }
-
-/** Observe or answer the reserved game's starting-player choice. A historical
- * draw can require both participants to confirm its previously unrecorded chooser. */
-export const openingChoiceRequestSchema = z.strictObject({
-  gameId: identifierSchema,
-  playFirst: z.boolean().nullish(),
-  priorChooserSeatId: identifierSchema.nullish(),
-  firstSeatId: identifierSchema.nullish(),
-}).refine((choice) => [choice.playFirst, choice.priorChooserSeatId, choice.firstSeatId]
-  .filter(value => value != null).length <= 1);
-export type OpeningChoiceRequest = z.infer<typeof openingChoiceRequestSchema>;
-
-const openingRollSchema = z.number().int().min(1).max(20);
-export const openingChoiceSchema = z.strictObject({
-  gameId: identifierSchema,
-  chooserSeatId: identifierSchema,
-  firstSeatId: identifierSchema.nullable(),
-  yourChoice: z.boolean(),
-  rolls: z.array(openingRollSchema).min(2).max(6).nullable(),
-  seatIds: z.array(identifierSchema).min(3).max(6).optional(),
-  rollRounds: z.array(z.array(openingRollSchema).min(2).max(6)).optional(),
-}).refine(({ rolls, seatIds, rollRounds, chooserSeatId, firstSeatId }) => {
-  if (!seatIds) return !rollRounds && (rolls === null || (rolls.length === 2 && rolls[0] !== rolls[1]));
-  if (!rolls || !rollRounds?.length || new Set(seatIds).size !== seatIds.length ||
-      !seatIds.includes(chooserSeatId) || (firstSeatId !== null && !seatIds.includes(firstSeatId)) ||
-      rolls.length !== seatIds.length || rolls.some((roll, i) => roll !== rollRounds[0]?.[i])) return false;
-  let contenders = seatIds;
-  for (const round of rollRounds) {
-    if (contenders.length < 2 || round.length !== contenders.length) return false;
-    const highest = Math.max(...round);
-    contenders = contenders.filter((_, i) => round[i] === highest);
-  }
-  return contenders.length === 1 && contenders[0] === chooserSeatId;
-});
-export type OpeningChoice = z.infer<typeof openingChoiceSchema>;

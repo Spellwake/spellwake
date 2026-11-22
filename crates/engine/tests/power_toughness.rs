@@ -1,6 +1,6 @@
 //! Independent closed-subset PT scenarios frozen in pt-layer-scenarios.md.
 //! Native observations do not qualify full layers, cards, durations or reentry.
-use spellwake_engine::program::{BodyTarget, ExecutableBody, SpellTargetFilter};
+use spellwake_engine::program::{BodyTarget, ExecutableBody};
 #[path = "support/damage.rs"]
 pub mod damage_support;
 use spellwake_contracts::RulesInteger;
@@ -1179,7 +1179,9 @@ fn pending_copy(instruction: Instruction) -> (GameState, StackEntryId) {
                 2,
                 B,
                 ExecutableBody::new(
-                    BodyTarget::SingleSpell(SpellTargetFilter::CopyableInstructionSpell),
+                    BodyTarget::SingleSpell(
+                        spellwake_engine::program::SpellFilter::copyable_instruction(),
+                    ),
                     vec![Instruction::CopySpell],
                 ),
             ),
@@ -1187,7 +1189,7 @@ fn pending_copy(instruction: Instruction) -> (GameState, StackEntryId) {
                 3,
                 A,
                 ExecutableBody::new(
-                    BodyTarget::SingleSpell(SpellTargetFilter::AnySpell),
+                    BodyTarget::SingleSpell(spellwake_engine::program::SpellFilter::any()),
                     vec![Instruction::CounterSpell],
                 ),
             ),

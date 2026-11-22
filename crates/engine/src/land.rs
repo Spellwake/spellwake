@@ -1,6 +1,86 @@
 //! The land subtype domain (CR 205.3i) and intrinsic mana mapping (CR 305.6).
 //! Land subtypes and the Basic supertype are independent characteristics.
 use crate::mana::ManaType;
+use crate::object_identity::ObjectId;
+use spellwake_contracts::names::EnglishCardName;
+
+/// One canonical Oracle name in the source-qualified entry choice domain.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CardNameIndex(pub usize);
+
+/// Sorted names of nonland card faces from the same Oracle inventory as the program.
+#[derive(Clone, PartialEq, Eq)]
+pub struct NonlandCardNames(Vec<EnglishCardName>);
+
+impl NonlandCardNames {
+    pub fn new(names: std::collections::BTreeSet<EnglishCardName>) -> Self {
+        Self(names.into_iter().collect())
+    }
+
+    pub fn options(&self) -> &[EnglishCardName] {
+        &self.0
+    }
+
+    pub fn get(&self, index: CardNameIndex) -> Option<&EnglishCardName> {
+        self.0.get(index.0)
+    }
+}
+
+impl std::fmt::Debug for NonlandCardNames {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("NonlandCardNames")
+            .field("count", &self.0.len())
+            .finish()
+    }
+}
+
+/// A decision made by the controller before a permanent enters the battlefield.
+/// `Reveal(None)` is an explicit choice to decline the optional reveal.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EntryChoice {
+    /// Starting chapter chosen for read ahead.
+    Chapter(u8),
+    /// Opponent who will control the permanent as it enters.
+    Opponent(crate::priority::SeatId),
+    /// Two distinct participants linked by the permanent’s ability.
+    Players([crate::priority::SeatId; 2]),
+    Color(ManaType),
+    Reveal(Option<ObjectId>),
+    CreatureType(spellwake_contracts::creature_types::CreatureTypeId),
+    CardName(CardNameIndex),
+}
+
+/// Printed ability replacing the initial untapped status of the entering permanent.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EntryTap {
+    /// Choose how many lore counters this Saga enters with.
+    ReadAhead {
+        final_chapter: u8,
+    },
+    Always,
+    /// Enter tapped after choosing a color other than the excluded color.
+    AlwaysChooseColorExcept(ManaType),
+    /// Choose a creature type as this permanent enters, without changing its tapped status.
+    ChooseCreatureType,
+    /// Choose a name using the source-qualified nonland card catalogue.
+    ChooseNonlandCardName,
+    /// Choose two distinct players before this permanent enters.
+    ChooseTwoPlayers,
+    /// Choose an opponent to protect an entering Siege (CR 310.12a).
+    SiegeProtector,
+    /// This permanent enters under a chosen opponent’s control.
+    ChosenOpponentControls,
+    UnlessTwoOtherLands,
+    UnlessTwoOrFewerOtherLands,
+    UnlessTwoBasicLands,
+    UnlessLandType(BasicLandType, BasicLandType),
+    /// The entering controller may reveal a matching land card from their hand.
+    UnlessRevealHandLandType(BasicLandType, BasicLandType),
+    UnlessTwoOpponents,
+    UnlessOpponentLandsEight,
+    UnlessPlayerLifeThirteenOrLess,
+}
 
 /// All land subtypes in the retained September 25, 2026 Comprehensive Rules.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]

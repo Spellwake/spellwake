@@ -17,8 +17,8 @@ use spellwake_engine::{
     object_identity::{CardId, ObjectZone},
     occurrence::{RulesOccurrence, RulesRecord},
     program::{
-        BodyTarget, CardType, ExecutableBody, Instruction, ObjectRelation, OrdinaryCondition,
-        Program, ProgramKind, TriggeredAbility, TriggeredAbilityId,
+        BodyTarget, CardType, ExecutableBody, Instruction, Program, ProgramKind, TriggeredAbility,
+        TriggeredAbilityId,
     },
     targets::TargetRef,
 };
@@ -509,7 +509,9 @@ fn copied_mana_activation_and_trigger_bodies_use_the_receiver_after_donor_remova
     donor.triggered.push(TriggeredAbility {
         grouping: spellwake_engine::program::TriggerGrouping::EachOccurrence,
         id: TriggeredAbilityId(9),
-        condition: OrdinaryCondition::BecomesTapped(ObjectRelation::SelfObject),
+        condition: spellwake_engine::program::TriggerSpec::becomes_tapped(
+            spellwake_engine::program::ObjectFilter::self_object(),
+        ),
         body: ExecutableBody::new(
             BodyTarget::None,
             vec![Instruction::AdjustControllerLife {
@@ -943,6 +945,7 @@ fn mana_only_source_cost_debits_nonzero_mana_and_rejection_is_atomic() {
         ability: ActivatedAbilityId(1),
         target: TargetRef::Object(object(&game, 2)),
         payment: Some(ManaPayment {
+            from_lots: Default::default(),
             spend: vec![spellwake_engine::mana::ManaSpend {
                 mana_type: ManaType::Green,
                 amount: 1.into(),

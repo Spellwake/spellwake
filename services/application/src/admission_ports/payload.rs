@@ -363,21 +363,8 @@ struct Candidate {
     bank_timeout: Option<BankTimeout>,
     #[serde(default, deserialize_with = "present_objects")]
     native_eliminations: Option<Vec<Elimination>>,
-    #[serde(default, deserialize_with = "present_seat")]
+    #[serde(default, deserialize_with = "crate::identifiers::nullable_uuid")]
     opening_response_seat_id: Option<Uuid>,
-    #[serde(
-        default,
-        deserialize_with = "crate::admission_ports::present_turn_response"
-    )]
-    turn_response: Option<TurnResponse>,
-    #[serde(
-        default,
-        deserialize_with = "crate::admission_ports::present_turn_protocol"
-    )]
-    turn_response_protocol: Option<TurnResponseProtocol>,
-}
-fn present_seat<'de, D: Deserializer<'de>>(input: D) -> Result<Option<Uuid>, D::Error> {
-    crate::identifiers::uuid(input).map(Some)
 }
 /// Original normalized native host output, not a public player command or view.
 pub struct HostCandidate {
@@ -387,12 +374,6 @@ pub struct HostCandidate {
 impl HostCandidate {
     pub(crate) fn opening_response_seat(&self) -> Option<Uuid> {
         self.value.opening_response_seat_id
-    }
-    pub(crate) fn turn_response_protocol(&self) -> Option<TurnResponseProtocol> {
-        self.value.turn_response_protocol
-    }
-    pub(crate) fn turn_response(&self) -> Option<&TurnResponse> {
-        self.value.turn_response.as_ref()
     }
     /// Explicit private codec claim, still requiring actual native comparison.
     pub fn event_schema_revision(&self) -> Option<NativeEventSchema> {
@@ -404,14 +385,7 @@ impl HostCandidate {
     pub fn from_bytes(bytes: &[u8]) -> Result<Self, SourceResponseError> {
         let (crate::provider_json::Object(value), raw) =
             original::<crate::provider_json::Object<Candidate>>(bytes, 1_048_576)?;
-        let valid = value.turn_response.as_ref().is_none_or(|wait| {
-            value.turn_response_protocol.is_some()
-                && value.opening_response_seat_id.is_none()
-                && value.terminal.is_none()
-                && (2..=6).contains(&wait.remaining_seat_ids.len())
-                && unique(wait.remaining_seat_ids.iter().copied())
-                && wait.remaining_seat_ids.contains(&wait.seat_id)
-        }) && (1..=1024).contains(&value.events.len())
+        let valid = (1..=1024).contains(&value.events.len())
             && value.clocks.iter().all(|clock| {
                 clock.eligibility.as_ref().is_none_or(|e| {
                     matches!(
@@ -426,6 +400,9 @@ impl HostCandidate {
             && unique(value.clocks.iter().map(|x| x.seat_id))
             && unique(value.participation.iter().map(|x| x.seat_id))
             && (value.terminal.is_some() || value.participation.is_empty())
+            && value.opening_response_seat_id.is_none_or(|seat| {
+                value.terminal.is_none() && value.clocks.iter().any(|clock| clock.seat_id == seat)
+            })
             && value.facts.iter().all(|x| {
                 index(&x.event_index).is_some_and(|i| i < value.events.len())
                     && proof_bound(&x.kind, 128)
@@ -467,23 +444,7 @@ impl HostCandidate {
     ) -> bool {
         self.value.bank_timeout.is_none()
             && self.value.native_eliminations.is_none()
-            && self.matches_native_clock_rows(intent)
-    }
-    pub(crate) fn matches_native_bank_clocks(
-        &self,
-        intent: &crate::native_game::NativeBankExpiryIntent,
-    ) -> bool {
-        self.value.native_eliminations.is_none()
-            && self.value.bank_timeout.as_ref().is_some_and(|value| {
-                value.kind == intent.timeout.kind
-                    && value._seat_id == intent.timeout.seat_id
-                    && value._clock_revision == intent.timeout.clock_revision
-                    && value._proof_ref.as_str() == intent.timeout.proof_ref.as_str()
-            })
-            && self.matches_native_clock_rows(&intent.clocks)
-    }
-    fn matches_native_clock_rows(&self, intent: &crate::native_game::NativeClockIntent) -> bool {
-        self.value.clocks.len() == intent.rows().len()
+            && self.value.clocks.len() == intent.rows().len()
             && self.value.clocks.iter().all(|supplied| {
                 intent
                     .rows()

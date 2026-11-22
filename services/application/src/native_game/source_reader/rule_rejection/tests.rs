@@ -95,7 +95,15 @@ fn every_explicit_client_category_has_an_exact_safe_pair() {
         "target",
         "invalid",
     );
-    effects([EffectError::InsufficientMana], "payment", "not permitted");
+    effects(
+        [
+            EffectError::InsufficientMana,
+            EffectError::InvalidPowerContributors,
+        ],
+        "payment",
+        "not permitted",
+    );
+    effects([EffectError::AlreadyExhausted], "action", "not permitted");
     for error in [
         ManaPaymentError::NonPositiveSpend,
         ManaPaymentError::DuplicateType,
@@ -112,6 +120,7 @@ fn every_explicit_client_category_has_an_exact_safe_pair() {
     }
     effects(
         [
+            EffectError::SplitSecond,
             EffectError::LegendarySpellPrerequisite,
             EffectError::CreatureTapRestricted,
         ],
@@ -144,7 +153,6 @@ fn every_explicit_client_category_has_an_exact_safe_pair() {
     effects([EffectError::WrongChooser], "actor", "not permitted");
     effects(
         [
-            EffectError::WrongReplacementChooserFrame,
             EffectError::WrongSelectionFrame,
             EffectError::WrongLibraryTopFrame,
             EffectError::WrongOptionalEffectFrame,
@@ -172,6 +180,7 @@ fn every_explicit_client_category_has_an_exact_safe_pair() {
         CombatError::IllegalDamageSource,
         CombatError::IllegalDamageRecipient,
         CombatError::InvalidDamageAmount,
+        CombatError::InsufficientTrampleAssignment,
         CombatError::IncorrectDamageTotal,
     ] {
         effects([EffectError::Combat(error)], "response", "invalid");
@@ -246,7 +255,6 @@ fn source_observer_invariant_capacity_and_pending_work_are_not_player_rejections
         EffectError::InconsistentProgram,
         EffectError::TokenCapacity,
         EffectError::SelectionRequired,
-        EffectError::ReplacementChooserRequired,
         EffectError::InconsistentSelectionWork,
         EffectError::OptionalEffectChoiceRequired,
         EffectError::ResolutionPaymentChoiceRequired,

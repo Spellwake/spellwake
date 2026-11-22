@@ -4,7 +4,7 @@ use super::*;
 use crate::{
     characteristics::{ResolvedPart, ResolvedParts},
     occurrence::{SupportedAppearance, ZoneOccurrence, ZoneReason},
-    program::{OrdinaryCondition, TriggerGrouping, TriggeredAbility, TriggeredAbilityId},
+    program::{TriggerGrouping, TriggeredAbility, TriggeredAbilityId},
     test_support::current_profile::applicability::{
         ApplicabilityError, NativeCaptureValue, tests as fixture,
     },
@@ -14,7 +14,7 @@ fn old_body() -> ExecutableBody {
     ExecutableBody::new(
         BodyTarget::None,
         vec![Instruction::DrawController {
-            amount: InstructionAmount::Literal(0.into()),
+            amount: crate::program::ValueExpr::Literal(0.into()),
         }],
     )
 }
@@ -133,7 +133,7 @@ fn applicability_copy_owned_body_and_trigger_values_survive_donor_lookup_removal
         .triggered
         .push(TriggeredAbility {
             id: TriggeredAbilityId(91),
-            condition: OrdinaryCondition::SelfCast,
+            condition: crate::program::TriggerSpec::self_cast(),
             grouping: TriggerGrouping::EachOccurrence,
             body: ExecutableBody::new(BodyTarget::None, vec![fixture::selection(true)]),
         });
@@ -145,7 +145,7 @@ fn applicability_waiting_capture_and_retained_discovery_do_not_use_later_program
     let mut observer = fixture::creature();
     observer.triggered.push(TriggeredAbility {
         id: TriggeredAbilityId(5),
-        condition: OrdinaryCondition::Enters(crate::program::ObjectRelation::SelfObject),
+        condition: crate::program::TriggerSpec::enters(crate::program::ObjectFilter::self_object()),
         grouping: TriggerGrouping::EachOccurrence,
         body: ExecutableBody::new(BodyTarget::None, vec![fixture::selection(false)]),
     });
@@ -204,7 +204,7 @@ fn applicability_all_captured_copy_definitions_are_checked_including_obscured_ol
     let mut selected = fixture::creature();
     selected.triggered.push(TriggeredAbility {
         id: TriggeredAbilityId(1),
-        condition: OrdinaryCondition::SelfCast,
+        condition: crate::program::TriggerSpec::self_cast(),
         grouping: TriggerGrouping::EachOccurrence,
         body: ExecutableBody::new(BodyTarget::None, vec![fixture::selection(false)]),
     });
@@ -303,6 +303,8 @@ fn applicability_append_reasons_distinguish_resolution_discard_from_mechanism_an
         event.cause = cause;
         event.occurrences.truncate(1);
         event.occurrences[0].value = RulesOccurrence::ZoneChange(Box::new(ZoneOccurrence {
+            additional_arrivals: vec![],
+            madness: false,
             before: appearance.clone(),
             after: appearance.clone(),
             reason,
@@ -323,7 +325,7 @@ fn applicability_retained_removed_printed_body_and_token_origin_are_checked() {
     let (mut event, mut appearance, _) = native_event();
     appearance.printed_text.triggered.push(TriggeredAbility {
         id: TriggeredAbilityId(71),
-        condition: OrdinaryCondition::SelfCast,
+        condition: crate::program::TriggerSpec::self_cast(),
         grouping: TriggerGrouping::EachOccurrence,
         body: ExecutableBody::new(BodyTarget::None, vec![fixture::selection(false)]),
     });
@@ -344,7 +346,7 @@ fn applicability_retained_removed_printed_body_and_token_origin_are_checked() {
     let mut token = fixture::creature();
     token.triggered.push(TriggeredAbility {
         id: TriggeredAbilityId(73),
-        condition: OrdinaryCondition::SelfCast,
+        condition: crate::program::TriggerSpec::self_cast(),
         grouping: TriggerGrouping::EachOccurrence,
         body: ExecutableBody::new(BodyTarget::None, vec![fixture::selection(true)]),
     });
@@ -377,7 +379,7 @@ fn applicability_journal_copy_carriers_and_append_only_calls_cannot_bypass_the_g
     let (mut event, appearance, entry) = native_event();
     let selected = TriggeredAbility {
         id: TriggeredAbilityId(81),
-        condition: OrdinaryCondition::SelfCast,
+        condition: crate::program::TriggerSpec::self_cast(),
         grouping: TriggerGrouping::EachOccurrence,
         body: ExecutableBody::new(BodyTarget::None, vec![fixture::selection(false)]),
     };
@@ -385,8 +387,12 @@ fn applicability_journal_copy_carriers_and_append_only_calls_cannot_bypass_the_g
     event.occurrences[0].value = RulesOccurrence::CopyCreated {
         copiable_card_types: appearance.copiable_card_types.clone(),
         copiable_creature_subtypes: appearance.copiable_creature_subtypes.clone(),
+        copiable_spell_subtypes: appearance.copiable_spell_subtypes.clone(),
+        copiable_artifact_subtypes: appearance.copiable_artifact_subtypes.clone(),
+        copiable_enchantment_subtypes: appearance.copiable_enchantment_subtypes.clone(),
         copiable_names: appearance.copiable_names.clone(),
         copiable_supertypes: appearance.copiable_supertypes.clone(),
+        copiable_keywords: Default::default(),
         copiable_triggered: vec![selected.clone()],
         entry,
         original: entry,

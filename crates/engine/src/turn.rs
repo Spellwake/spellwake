@@ -158,6 +158,25 @@ impl TurnScheduler {
         state.enter(start.step);
         Ok(state)
     }
+    /// CR 724.1d skips all intervening steps and can begin a repeat cleanup.
+    pub(crate) fn jump_to_cleanup(&self) -> Result<Self, TurnError> {
+        let mut next = self.clone();
+        if self.position.step == Step::Cleanup {
+            next.position.cleanup_iteration = self
+                .position
+                .cleanup_iteration
+                .checked_add(1)
+                .ok_or(TurnError::CleanupExhausted)?;
+        }
+        next.additional_damage_required = false;
+        next.position.additional_damage = false;
+        next.enter(Step::Cleanup);
+        Ok(next)
+    }
+    pub(crate) fn begin_additional_combat(mut self) -> Self {
+        self.enter(Step::BeginningCombat);
+        self
+    }
     pub fn position(&self) -> TurnPosition {
         self.position
     }
@@ -169,9 +188,8 @@ impl TurnScheduler {
         &self.lands_played
     }
     /// The root separately establishes ordinary timing and the physical land play.
-    /// Dynamic allowance effects and shared-team turns are not represented yet.
-    pub(crate) fn record_land_play(&self) -> Result<Self, TurnError> {
-        if self.lands_played >= 1.into() {
+    pub(crate) fn record_land_play(&self, allowance: &RulesInteger) -> Result<Self, TurnError> {
+        if &self.lands_played >= allowance {
             return Err(TurnError::LandLimitReached);
         }
         let mut next = self.clone();
@@ -246,6 +264,13 @@ impl TurnScheduler {
     /// Called only after an actual empty-stack consecutive-pass round. Resolving
     /// an entry never calls this method. The enclosing GameState enforces that gate.
     pub fn complete_priority(&self, result: PriorityCompleted) -> Result<Self, TurnError> {
+        self.complete_priority_with_draw_skip(result, false)
+    }
+    pub(crate) fn complete_priority_with_draw_skip(
+        &self,
+        result: PriorityCompleted,
+        skip_draw: bool,
+    ) -> Result<Self, TurnError> {
         if self.stage != TurnStage::Priority {
             return Err(TurnError::WorkRequired);
         }
@@ -256,7 +281,7 @@ impl TurnScheduler {
         }
         let mut next = self.clone();
         match self.position.step {
-            Step::Upkeep if self.position.number == 1 && self.skip_first_draw => {
+            Step::Upkeep if skip_draw || self.position.number == 1 && self.skip_first_draw => {
                 next.enter(Step::PrecombatMain)
             }
             Step::Upkeep => next.enter(Step::Draw),

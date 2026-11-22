@@ -1,18 +1,8 @@
-//! Typed, nonrecursive scalar conditions and admission-only control-flow facts.
-use super::{BodyContext, CreatureTypeSlot, DefinitionError};
+//! Typed scalar conditions and admission-only control-flow facts.
+use super::{BodyContext, CreatureTypeSlot, DefinitionError, ValueExpr};
 use spellwake_contracts::RulesInteger;
 use std::collections::BTreeSet;
 
-/// A signed scalar read at the current resolving instruction, not an effect amount.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum ConditionValue {
-    /// An exact signed integer, with no machine-integer truncation.
-    Literal(RulesInteger),
-    /// Current life of the resolving entry's captured controller.
-    ControllerLife,
-    /// Complete occurrence count captured by the actual triggered stack entry.
-    MatchedOccurrences,
-}
 /// An exact integer comparison. Boolean compositions use forward instructions.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Comparison {
@@ -46,35 +36,42 @@ impl Comparison {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ResolutionCondition {
     /// First signed operand.
-    pub left: ConditionValue,
+    pub left: ValueExpr,
     /// Relation to test.
     pub comparison: Comparison,
     /// Second signed operand.
-    pub right: ConditionValue,
+    pub right: ValueExpr,
 }
 impl ResolutionCondition {
-    pub(super) fn validate(&self, context: BodyContext) -> Result<(), DefinitionError> {
-        for value in [&self.left, &self.right] {
-            match (value, context) {
-                (ConditionValue::MatchedOccurrences, BodyContext::Unbound) => {
-                    return Err(DefinitionError::UnboundTriggerCondition);
-                }
-                (ConditionValue::Literal(_) | ConditionValue::ControllerLife, _)
-                | (ConditionValue::MatchedOccurrences, BodyContext::TriggerBound { .. }) => {}
-            }
-        }
-        Ok(())
+    pub(super) fn validate(
+        &self,
+        context: BodyContext<'_>,
+        vocabulary: &spellwake_contracts::creature_types::CreatureTypeVocabulary,
+    ) -> Result<(), DefinitionError> {
+        self.left.validate_condition(context, vocabulary)?;
+        self.right.validate_condition(context, vocabulary)
     }
 }
 
 /// Static facts only. The live resolution cursor retains the sole local values.
 #[derive(Clone, Default)]
 pub(super) struct FlowFacts {
+    pub(super) exact_creature_target: bool,
     pub definitely: BTreeSet<CreatureTypeSlot>,
     pub possibly: BTreeSet<CreatureTypeSlot>,
     pub donor_moved: bool,
-    /// A reachable predecessor may have removed the bound spell from the stack.
-    pub target_spell_departed: bool,
+    pub definitely_exiled_target: bool,
+    pub remembered_permanent: bool,
+    pub definitely_discarded: bool,
+    pub definitely_destroyed: bool,
+    pub checked_destruction_target: bool,
+    pub moved_library_cards: bool,
+    pub definitely_milled: bool,
+    pub definitely_milled_top: bool,
+    pub definitely_exiled_milled: bool,
+    pub definitely_checked_top: bool,
+    pub definitely_sacrificed: bool,
+    pub definitely_selected_graveyard_exile: bool,
 }
 impl FlowFacts {
     pub fn merge_into(&self, destination: &mut Option<Self>) {
@@ -84,7 +81,19 @@ impl FlowFacts {
                 .retain(|slot| self.definitely.contains(slot));
             previous.possibly.extend(self.possibly.iter().copied());
             previous.donor_moved |= self.donor_moved;
-            previous.target_spell_departed |= self.target_spell_departed;
+            previous.definitely_exiled_target &= self.definitely_exiled_target;
+            previous.remembered_permanent &= self.remembered_permanent;
+            previous.definitely_discarded &= self.definitely_discarded;
+            previous.definitely_destroyed &= self.definitely_destroyed;
+            previous.checked_destruction_target &= self.checked_destruction_target;
+            previous.moved_library_cards &= self.moved_library_cards;
+            previous.definitely_milled &= self.definitely_milled;
+            previous.definitely_milled_top &= self.definitely_milled_top;
+            previous.definitely_checked_top &= self.definitely_checked_top;
+            previous.definitely_sacrificed &= self.definitely_sacrificed;
+            previous.definitely_selected_graveyard_exile &=
+                self.definitely_selected_graveyard_exile;
+            previous.definitely_exiled_milled &= self.definitely_exiled_milled;
         } else {
             *destination = Some(self.clone());
         }

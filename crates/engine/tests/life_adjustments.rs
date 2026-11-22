@@ -15,8 +15,8 @@ use spellwake_engine::{
     object_identity::CardId,
     occurrence::{RulesOccurrence, RulesRecord, TriggerRelated},
     program::{
-        BodyTarget, ExecutableBody, Instruction, InstructionAmount, OrdinaryCondition,
-        PlayerRelation, Program, TriggeredAbility, TriggeredAbilityId,
+        BodyTarget, ExecutableBody, Instruction, PlayerRelation, Program, TriggeredAbility,
+        TriggeredAbilityId,
     },
 };
 
@@ -27,10 +27,10 @@ fn adjust(adjustment: LifeAdjustment) -> Instruction {
 #[test]
 fn simultaneous_unblocked_damage_creates_one_loss_event_per_player() {
     let mut witness = observer(LifeChangeKind::Loss);
-    witness.triggered[0].condition = OrdinaryCondition::LifeChanged {
-        kind: LifeChangeKind::Loss,
-        player: PlayerRelation::Opponent,
-    };
+    witness.triggered[0].condition = spellwake_engine::program::TriggerSpec::life_changed(
+        LifeChangeKind::Loss,
+        PlayerRelation::Opponent,
+    );
     let game = world(
         vocabulary(),
         vec![
@@ -57,10 +57,12 @@ fn simultaneous_unblocked_damage_creates_one_loss_event_per_player() {
             AttackDeclaration {
                 attacker: object(attackers.state(), 1),
                 defender: P1,
+                defending_planeswalker: None,
             },
             AttackDeclaration {
                 attacker: object(attackers.state(), 2),
                 defender: P1,
+                defending_planeswalker: None,
             },
         ]),
     );
@@ -73,6 +75,7 @@ fn simultaneous_unblocked_damage_creates_one_loss_event_per_player() {
     assert_eq!(
         changes(&damage),
         vec![LifeChange {
+            lifelink: None,
             player: P1,
             kind: LifeChangeKind::Loss,
             amount: 5.into(),
@@ -169,14 +172,14 @@ fn observer(kind: LifeChangeKind) -> Program {
     program.triggered.push(TriggeredAbility {
         grouping: spellwake_engine::program::TriggerGrouping::EachOccurrence,
         id: TriggeredAbilityId(1),
-        condition: OrdinaryCondition::LifeChanged {
+        condition: spellwake_engine::program::TriggerSpec::life_changed(
             kind,
-            player: PlayerRelation::Controller,
-        },
+            PlayerRelation::Controller,
+        ),
         body: ExecutableBody::new(
             BodyTarget::None,
             vec![Instruction::DrawController {
-                amount: InstructionAmount::Literal(0.into()),
+                amount: spellwake_engine::program::ValueExpr::Literal(0.into()),
             }],
         ),
     });
@@ -209,6 +212,7 @@ fn life_can_fall_below_zero_and_recover_before_resolution_finishes() {
         changes(&completed),
         vec![
             LifeChange {
+                lifelink: None,
                 player: P0,
                 kind: LifeChangeKind::Loss,
                 amount: 30.into(),
@@ -216,6 +220,7 @@ fn life_can_fall_below_zero_and_recover_before_resolution_finishes() {
                 after: (-10).into()
             },
             LifeChange {
+                lifelink: None,
                 player: P0,
                 kind: LifeChangeKind::Gain,
                 amount: 25.into(),

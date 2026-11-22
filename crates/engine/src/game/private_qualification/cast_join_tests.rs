@@ -5,8 +5,7 @@ use crate::{
     life::LifeAdjustment,
     mana::ManaCost,
     program::{
-        Instruction, OrdinaryCondition, PlayerRelation, Program, SpellCastFilter, TriggerGrouping,
-        TriggeredAbility, TriggeredAbilityId,
+        Instruction, PlayerRelation, Program, TriggerGrouping, TriggeredAbility, TriggeredAbilityId,
     },
     test_support::characteristic_trajectories as tr,
 };
@@ -22,10 +21,10 @@ fn private_discovery_join_selects_the_captured_stack_identity_and_keeps_its_poli
     let mut watcher = Program::artifact(None, vec![]);
     watcher.triggered.push(TriggeredAbility {
         id: TriggeredAbilityId(7),
-        condition: OrdinaryCondition::SpellCast {
-            player: PlayerRelation::Controller,
-            filter: SpellCastFilter::AnySpell,
-        },
+        condition: crate::program::TriggerSpec::spell_cast(
+            PlayerRelation::Controller,
+            crate::program::SpellFilter::any(),
+        ),
         grouping: TriggerGrouping::EachOccurrence,
         body: body.clone(),
     });
@@ -90,7 +89,7 @@ fn private_discovery_join_selects_the_captured_stack_identity_and_keeps_its_poli
 
 #[test]
 fn actual_private_target_replies_reuse_object_and_entry_joins_and_leave_player_legality_native() {
-    use crate::{program::SpellTargetFilter, stack_window::StackKind, targets::TargetRef};
+    use crate::{stack_window::StackKind, targets::TargetRef};
     for stack_target in [false, true] {
         let mut source = Program::instant(
             ManaCost::free(),
@@ -103,11 +102,11 @@ fn actual_private_target_replies_reuse_object_and_entry_joins_and_leave_player_l
         );
         source.triggered.push(TriggeredAbility {
             id: TriggeredAbilityId(1),
-            condition: OrdinaryCondition::SelfCast,
+            condition: crate::program::TriggerSpec::self_cast(),
             grouping: TriggerGrouping::EachOccurrence,
             body: ExecutableBody::new(
                 if stack_target {
-                    BodyTarget::SingleSpell(SpellTargetFilter::AnySpell)
+                    BodyTarget::SingleSpell(crate::program::SpellFilter::any())
                 } else {
                     BodyTarget::SingleCreature
                 },

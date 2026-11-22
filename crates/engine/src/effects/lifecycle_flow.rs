@@ -7,6 +7,81 @@ use crate::{
 };
 
 impl EffectWindow {
+    pub(super) fn retained_mana_types(
+        &self,
+        current: &EvaluatedCharacteristics,
+    ) -> BTreeSet<(SeatId, ManaType)> {
+        let mut retained = BTreeSet::new();
+        for object in current
+            .objects
+            .values()
+            .filter(|p| p.zone == ObjectZone::Battlefield)
+        {
+            let Some(player) = object.controller else {
+                continue;
+            };
+            for ability in object
+                .printed_text
+                .continuous
+                .iter()
+                .chain(&object.printed_text.additional_battlefield_abilities)
+            {
+                if let crate::characteristics::StaticContinuousAbility::Modifier {
+                    id,
+                    rule: crate::characteristics::StaticModifierRule::RetainMana(kind),
+                } = ability
+                    && (object.abilities.continuous == Some(*id)
+                        || object
+                            .abilities
+                            .additional_battlefield_abilities
+                            .contains(id))
+                {
+                    retained.insert((player, *kind));
+                }
+            }
+        }
+        retained
+    }
+
+    pub(crate) fn take_additional_combat(&mut self) -> bool {
+        if self.additional_combats == 0 {
+            return false;
+        }
+        self.additional_combats -= 1;
+        true
+    }
+
+    /// Choose the next actual turn and remember departed seats passed along the way.
+    /// Most recently created extra turns precede ordinary rotation (CR 500.7).
+    pub(crate) fn take_next_active_player(&mut self) -> Result<SeatId, EffectError> {
+        let table = self.window.participants();
+        let current = self.window.active_player();
+        let ordinary = match self.resume_turn_order_at {
+            Some(resume) => resume,
+            None => self
+                .window
+                .original_turn_order_from(current)?
+                .nth(1)
+                .ok_or(EffectError::WrongPhase)?,
+        };
+        self.skipped_turns.clear();
+        while let Some(extra) = self.extra_turns.pop() {
+            if table.contains(&extra) {
+                self.resume_turn_order_at = Some(ordinary);
+                return Ok(extra);
+            }
+            self.skipped_turns.insert(extra);
+        }
+        self.resume_turn_order_at = None;
+        for seat in self.window.original_turn_order_from(ordinary)? {
+            if table.contains(&seat) {
+                return Ok(seat);
+            }
+            self.skipped_turns.insert(seat);
+        }
+        Err(EffectError::WrongPhase)
+    }
+
     /// Adopt one actual scheduler result. Publication does not add owner revisions.
     /// Prepared construction deliberately uses raw enter_turn_step instead.
     pub(crate) fn enter_calendar(
@@ -27,27 +102,41 @@ impl EffectWindow {
         let starts_turn = previous.is_none_or(|turn| turn.position().number != position.number);
         let mut next = self.clone();
         let mut append = RulesJournal::default();
-        if let Some(ended) = previous.filter(|_| entered) {
-            let players = self.window.apnap_players()?.collect::<Vec<_>>();
-            let values = players
-                .into_iter()
-                .filter_map(|player| {
-                    let previous: BTreeMap<_, _> = ManaType::ALL
-                        .into_iter()
-                        .filter_map(|kind| {
-                            let amount = self.mana(player, kind);
-                            amount.is_positive().then_some((kind, amount))
-                        })
-                        .collect();
-                    (!previous.is_empty())
-                        .then_some(RulesOccurrence::ManaPoolEmptied { player, previous })
-                })
-                .collect::<Vec<_>>();
-            if values.is_empty() {
-                next.mana.clear();
-            } else {
-                let before = self.rules_snapshot(Some(ended))?;
-                next.mana.clear();
+        if let Some(ended) = previous.filter(|_| entered && !self.mana.is_empty()) {
+            let before = self.rules_snapshot(Some(ended))?;
+            let retained = self.retained_mana_types(&before.view().evaluated);
+            next.expire_step_mana(&retained);
+            let mut values = Vec::new();
+            for player in self.window.apnap_players()? {
+                let mut expired = BTreeMap::new();
+                let mut remaining = BTreeMap::new();
+                for kind in ManaType::ALL {
+                    let kept = next.mana(player, kind);
+                    let lost = self.mana(player, kind).minus(&kept);
+                    if kept.is_positive() {
+                        remaining.insert(kind, kept);
+                    }
+                    if lost.is_positive() {
+                        expired.insert(kind, lost);
+                    }
+                }
+                if expired.is_empty() {
+                    continue;
+                }
+                values.push(if remaining.is_empty() {
+                    RulesOccurrence::ManaPoolEmptied {
+                        player,
+                        previous: expired,
+                    }
+                } else {
+                    RulesOccurrence::ManaExpired {
+                        player,
+                        expired,
+                        remaining,
+                    }
+                });
+            }
+            if !values.is_empty() {
                 next.emit_from(
                     EventCause::ManaPoolsEmptied {
                         ended: ended.position(),
@@ -68,25 +157,102 @@ impl EffectWindow {
             )?
             .into_parts();
         next = state;
+        next.set_calendar_position(position);
         append.append(records);
         if starts_turn {
+            if !next.skipped_turns.is_empty() {
+                let before = next.rules_snapshot(Some(next_turn))?;
+                let expired_effects = next
+                    .characteristics
+                    .expire_at_skipped_turns(&next.skipped_turns);
+                let players = next.skipped_turns.clone();
+                next.emit_from(
+                    EventCause::TurnOrderAdvanced { position },
+                    &before,
+                    Some(next_turn),
+                    &mut append,
+                    |_, _, _| {
+                        Ok(vec![RulesOccurrence::TurnsSkipped {
+                            players,
+                            expired_effects,
+                        }])
+                    },
+                )?;
+            }
+            next.must_block_this_turn.clear();
+            next.must_be_blocked_this_turn.clear();
+            if let Some(cards) = next.recent_graveyard_cards.as_mut() {
+                cards.clear();
+            }
+            next.combat_damaged_players_by_source.clear();
+            next.activated_this_turn.clear();
+            next.ability_resolutions_this_turn.clear();
+            next.source_cast_uses.clear();
+            next.goaded.retain(|id, players| {
+                players.retain(|player| *player != active && !next.skipped_turns.contains(player));
+                !players.is_empty()
+                    && next.window.cards().get(*id).is_some_and(|c| {
+                        c.zone() == crate::object_identity::ObjectZone::Battlefield
+                    })
+            });
+            let casts = std::mem::take(&mut next.spells_cast_by_player);
+            next.previous_active_spells = previous.map(|_| {
+                casts
+                    .get(&self.window.active_player())
+                    .copied()
+                    .unwrap_or_default()
+            });
+            next.previous_turn_casts = previous.and_then(|_| {
+                use crate::program::PreviousTurnCastCondition::*;
+                if casts.is_empty() {
+                    Some(NoSpells)
+                } else if casts.values().any(|count| *count >= 2) {
+                    Some(OnePlayerCastAtLeastTwo)
+                } else {
+                    None
+                }
+            });
+            next.turn_start_incarnation = next.window.cards().next_incarnation();
+            next.enter_speed_turn(position.number, active);
+            if let Some(damage) = &mut next.damage_to_players_this_turn {
+                damage.clear();
+            }
+            if let Some(history) = &mut next.cast_history {
+                *history = CastTurnHistory::default();
+            }
             next = next.record_turn_start(next.revision())?;
         }
         if entered {
             // The new active/window and actual control-history stamp already exist.
             let before = next.rules_snapshot(Some(next_turn))?;
+            if position.step == Step::PrecombatMain {
+                let current = next.evaluated_characteristics()?;
+                for (&id, permanent) in &current.objects {
+                    if permanent.zone == ObjectZone::Battlefield
+                        && permanent.controller == Some(active)
+                        && permanent.final_saga_chapter().is_some()
+                    {
+                        let count = next
+                            .characteristics
+                            .lore
+                            .entry(id)
+                            .or_insert_with(|| 0.into());
+                        *count = count.plus(&1.into());
+                    }
+                }
+            }
             next.emit_from(
                 EventCause::StepBegan { position },
                 &before,
                 Some(next_turn),
                 &mut append,
-                |_, current, _| {
-                    Ok(vec![RulesOccurrence::StepBegan {
-                        position,
-                        active: current.window.active_player(),
-                    }])
-                },
+                |_, _, _| Ok(vec![RulesOccurrence::StepBegan { position, active }]),
             )?;
+            if position.step == Step::Upkeep
+                && let Some(cuts) = &mut next.characteristics.upkeep_cuts
+            {
+                cuts.insert(active, next.window.cards().control_cut());
+            }
         }
         Ok(RulesTransition::new(next, (), append))
     }
@@ -100,7 +266,7 @@ impl EffectWindow {
         if expected != self.revision {
             return Err(StackWindowError::StaleRevision.into());
         }
-        if turn.position().step != Step::EndCombat
+        if turn.position().step.phase() != crate::turn::Phase::Combat
             || self.window.phase() != WindowPhase::StepEnded
             || self.pending_work.is_some()
         {
@@ -162,20 +328,153 @@ impl EffectWindow {
         if !self.state_based_losses.is_empty() {
             return Err(EffectError::PlayerLossPending);
         }
-        let before = self.rules_snapshot(turn)?;
-        let (window, changes) = self
-            .window
-            .untap_active_with_changes(self.window.revision())?;
-        let mut next = Self {
-            revision,
-            window,
-            ..self.clone()
-        };
+        let mut next = self.clone();
+        next.revision = revision;
         let mut append = RulesJournal::default();
+        let before_phasing = next.rules_snapshot(turn)?;
+        let active = next.window.active_player();
+        let roots = before_phasing
+            .view()
+            .evaluated
+            .objects
+            .values()
+            .filter(|object| {
+                object.zone == ObjectZone::Battlefield
+                    && object.controller == Some(active)
+                    && object.has_keyword(KeywordAbility::Phasing)
+            })
+            .map(|object| object.object)
+            .collect::<Vec<_>>();
+        let (departed, returned) = next.window.phase_at_untap(
+            &roots,
+            &std::mem::take(&mut next.skipped_turns),
+            &next.characteristics.attachments,
+        )?;
+        let changes = [(true, departed), (false, returned)]
+            .into_iter()
+            .filter(|(_, objects)| !objects.is_empty())
+            .map(|(out, objects)| RulesOccurrence::Phased { objects, out })
+            .collect::<Vec<_>>();
+        if !changes.is_empty() {
+            next.emit_from(
+                EventCause::UntapTurn { active },
+                &before_phasing,
+                turn,
+                &mut append,
+                |_, _, _| Ok(changes),
+            )?;
+        }
+
+        let previous = next.day_night();
+        if let Some(count) = next.previous_active_spells.take()
+            && turn.is_some()
+            && let Some(clock) = previous.untap(count)
+        {
+            let before = next.rules_snapshot(turn)?;
+            let (_, faces) =
+                next.reconcile_day_night(Some(clock), &next.evaluated_characteristics()?)?;
+            next.transform_orders.clear();
+            next.emit_from(
+                EventCause::UntapTurn {
+                    active: next.window.active_player(),
+                },
+                &before,
+                turn,
+                &mut append,
+                |old, new, _| Self::day_change_occurrences(previous, clock, &faces, old, new),
+            )?;
+        }
+        let before = next.rules_snapshot(turn)?;
+        let evaluated = next.evaluated_characteristics()?;
+        let mut excluded = BTreeSet::new();
+        for source in evaluated.objects.values() {
+            if source.controller == Some(active)
+                && source.has_battlefield_rule(|rule| {
+                    matches!(
+                        rule,
+                        crate::characteristics::StaticContinuousAbility::UntapRule {
+                            rule: crate::characteristics::StaticUntapRule::SourceSkipsUntap,
+                            ..
+                        }
+                    )
+                })
+            {
+                excluded.insert(source.object);
+            }
+            let always = source.has_battlefield_rule(|rule| {
+                matches!(
+                    rule,
+                    crate::characteristics::StaticContinuousAbility::UntapRule {
+                        rule: crate::characteristics::StaticUntapRule::EnchantedCreatureSkipsUntap,
+                        ..
+                    }
+                )
+            });
+            if !always && !source.has_battlefield_rule(|rule| matches!(
+                rule, crate::characteristics::StaticContinuousAbility::UntapRule { rule: crate::characteristics::StaticUntapRule::EnchantedCreatureUntapsOnlyForMonarch, .. }
+            )) {
+                continue;
+            }
+            let Some(TargetRef::Object(host)) = source.attached_to else {
+                continue;
+            };
+            if evaluated.get(host).is_some_and(|object| {
+                object.zone == ObjectZone::Battlefield
+                    && object.is_creature()
+                    && object.controller == Some(next.window.active_player())
+                    && (always || object.controller != next.characteristics.monarch)
+            }) {
+                excluded.insert(host);
+            }
+        }
+        excluded.extend(
+            next.untap_locks
+                .iter()
+                .filter_map(|&(target, source, epoch)| {
+                    (evaluated
+                        .get(target)
+                        .is_some_and(|card| card.controller == Some(active))
+                        && next
+                            .window
+                            .cards()
+                            .get(source)
+                            .is_some_and(|card| card.control_epoch() == Some(epoch)))
+                    .then_some(target)
+                }),
+        );
+        next.skip_next_controller_untap.retain(|id| {
+            let Some(card) = next
+                .window
+                .cards()
+                .get(*id)
+                .filter(|card| card.zone() == ObjectZone::Battlefield)
+            else {
+                return false;
+            };
+            if card.controller() == Some(active) {
+                excluded.insert(*id);
+                false
+            } else {
+                true
+            }
+        });
+        let additional = evaluated.objects.values()
+            .filter(|source| source.controller.is_some_and(|controller| controller != active)
+                && source.has_battlefield_rule(|ability| {
+                    matches!(ability, crate::characteristics::StaticContinuousAbility::UntapRule { rule: crate::characteristics::StaticUntapRule::UntapDuringOtherPlayersUntap, .. })
+                }))
+            .map(|source| source.object)
+            .collect();
+        let (window, changes) = next.window.untap_active_with_changes(
+            next.window.revision(),
+            &excluded,
+            &additional,
+        )?;
+        next.window = window;
         if !changes.is_empty() {
             next.emit_from(
                 EventCause::UntapTurn {
-                    active: self.window.turn_owner(),
+                    active: self.window.active_player(),
                 },
                 &before,
                 turn,
@@ -299,7 +598,7 @@ mod tests {
             Err(EffectError::Trigger(TriggerError::EventIdentityExhausted))
         );
         assert_eq!(state, saved);
-        assert_eq!(state.window.turn_owner(), SeatId(2));
+        assert_eq!(state.window.active_player(), SeatId(2));
         assert_eq!(state.mana(SeatId(1), ManaType::White), 2.into());
         assert_eq!(state.mana(SeatId(2), ManaType::Green), 2.into());
     }

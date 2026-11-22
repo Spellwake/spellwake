@@ -1,0 +1,887 @@
+//! Ordered library selections and two-pile choices. The objects stay in place while players choose.
+use super::*;
+use crate::occurrence::{EventCause, RulesOccurrence, ZoneReason};
+use crate::program::{PublicZoneDestination as Zone, RevealedHandSelection, ZoneActionKind};
+use crate::stack_window::StackEntry;
+
+/// A choice among identified objects. Dividing a pile can leave either pile empty.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PileChoice {
+    Divide(Vec<ObjectId>),
+    DividePermanents(Vec<ObjectId>),
+    Sacrifice {
+        first: Vec<ObjectId>,
+        second: Vec<ObjectId>,
+    },
+    Creature(Vec<ObjectId>),
+    /// The controller privately chooses one of the looked-at cards to keep.
+    OneToHand(Vec<ObjectId>),
+    OneToHandRestBottom(Vec<ObjectId>),
+    /// Privately select up to one eligible card to enter, then order all other looked-at cards.
+    OptionalCreatureToBattlefield {
+        looked: Vec<ObjectId>,
+        eligible: Vec<ObjectId>,
+    },
+    Take {
+        first: Vec<ObjectId>,
+        second: Vec<ObjectId>,
+    },
+    GraveyardOrder(Vec<ObjectId>),
+    BottomOrder(Vec<ObjectId>),
+}
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PileChoiceFrame {
+    revision: u64,
+    pub(super) chooser: SeatId,
+    choice: PileChoice,
+}
+impl PileChoiceFrame {
+    pub(super) fn graveyard_order(revision: u64, chooser: SeatId, domain: Vec<ObjectId>) -> Self {
+        Self {
+            revision,
+            chooser,
+            choice: PileChoice::GraveyardOrder(domain),
+        }
+    }
+    pub(super) fn validate_graveyard_order(&self, order: &[ObjectId]) -> Result<(), EffectError> {
+        if matches!(&self.choice, PileChoice::GraveyardOrder(domain)
+            if order.len() == domain.len() && order.iter().collect::<BTreeSet<_>>() == domain.iter().collect())
+        {
+            Ok(())
+        } else {
+            Err(EffectError::InvalidLibraryPartition)
+        }
+    }
+
+    pub fn chooser(&self) -> SeatId {
+        self.chooser
+    }
+    pub fn choice(&self) -> &PileChoice {
+        &self.choice
+    }
+}
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct RevealedPiles {
+    pub(super) cards: Vec<ObjectId>,
+    creature: Option<Option<ObjectId>>,
+    entry_offer: Option<EntryChoiceFrame>,
+    pub(super) aura_offer: Option<LinkedAuraChoiceFrame>,
+    entry_choice: Option<crate::land::EntryChoice>,
+    first: Option<Vec<ObjectId>>,
+    pub(super) hand: Option<Vec<ObjectId>>,
+    batches: Vec<(Zone, Vec<ObjectId>, ZoneReplacementBatch)>,
+    graveyard_order: Option<Vec<ObjectId>>,
+    bottom_order: Option<Vec<ObjectId>>,
+    offered: Option<PileChoiceFrame>,
+}
+impl RevealedPiles {
+    fn new(cards: Vec<ObjectId>) -> Self {
+        Self {
+            cards,
+            creature: None,
+            entry_offer: None,
+            aura_offer: None,
+            entry_choice: None,
+            first: None,
+            hand: None,
+            batches: Vec::new(),
+            graveyard_order: None,
+            bottom_order: None,
+            offered: None,
+        }
+    }
+}
+impl EffectWindow {
+    pub(super) fn progress_permanent_piles(
+        &mut self,
+        entry: &StackEntry,
+    ) -> Result<Option<EffectDecision>, EffectError> {
+        let TargetRef::Player(player) = self.instruction_target(entry)?.choice().target else {
+            return Err(EffectError::InconsistentProgram);
+        };
+        let controller = entry.controller();
+        let cursor = self
+            .resolution_cursor_mut()
+            .ok_or(EffectError::WrongResolutionFrame)?;
+        let mut work = if let Some(work) = cursor.revealed_piles.take() {
+            work
+        } else {
+            let cards = self
+                .evaluated_characteristics()?
+                .objects
+                .values()
+                .filter(|object| {
+                    object.zone == ObjectZone::Battlefield
+                        && object.controller == Some(player)
+                        && self
+                            .window
+                            .cards()
+                            .phased_out_under(object.object)
+                            .is_none()
+                })
+                .map(|object| object.object)
+                .collect::<Vec<_>>();
+            if cards.is_empty() {
+                self.advance_instruction()?;
+                return Ok(None);
+            }
+            Box::new(RevealedPiles::new(cards))
+        };
+        if let Some(pile) = work.hand.clone() {
+            self.resolution_cursor_mut()
+                .ok_or(EffectError::WrongResolutionFrame)?
+                .revealed_piles = Some(work);
+            self.begin_fixed_sacrifice(controller, player, &pile)?;
+            return Ok(None);
+        }
+        let (chooser, choice) = match &work.first {
+            Some(first) => (
+                player,
+                PileChoice::Sacrifice {
+                    first: first.clone(),
+                    second: work
+                        .cards
+                        .iter()
+                        .copied()
+                        .filter(|id| !first.contains(id))
+                        .collect(),
+                },
+            ),
+            None => (controller, PileChoice::DividePermanents(work.cards.clone())),
+        };
+        let frame = PileChoiceFrame {
+            revision: self.revision,
+            chooser,
+            choice,
+        };
+        work.offered = Some(frame.clone());
+        self.resolution_cursor_mut()
+            .ok_or(EffectError::WrongResolutionFrame)?
+            .revealed_piles = Some(work);
+        Ok(Some(EffectDecision::RevealedPiles(frame)))
+    }
+
+    fn revealed_batch(
+        &self,
+        entry: StackEntryId,
+        instruction: usize,
+        player: SeatId,
+        zone: Zone,
+        cards: &[ObjectId],
+    ) -> Result<ZoneReplacementBatch, EffectError> {
+        let (action, reason) = match zone {
+            Zone::Battlefield => (
+                ZoneActionKind::EffectEnterBattlefield,
+                ZoneReason::LookTopToBattlefield,
+            ),
+            Zone::Hand => (ZoneActionKind::EffectLookToHand, ZoneReason::LookTopToHand),
+            Zone::Graveyard => (
+                ZoneActionKind::EffectRevealedToGraveyard,
+                ZoneReason::RevealedToGraveyard,
+            ),
+            _ => return Err(EffectError::InconsistentProgram),
+        };
+        let input = zone_replacement::AuthorizedZoneBatch {
+            cause: EventCause::Instruction { entry, instruction },
+            action,
+            intents: cards
+                .iter()
+                .map(|id| zone_replacement::ZoneMoveIntent {
+                    before: *id,
+                    reason,
+                })
+                .collect(),
+        };
+        if zone == Zone::Battlefield {
+            self.begin_zone_replacements_with_entry(
+                input,
+                Some(&cards.iter().map(|&id| (id, player)).collect()),
+            )
+        } else {
+            self.begin_zone_replacements(input)
+        }
+    }
+    pub(super) fn progress_revealed_piles(
+        &mut self,
+        entry: StackEntryId,
+        instruction: usize,
+        player: SeatId,
+        journal: &mut RulesJournal,
+    ) -> Result<Option<EffectDecision>, EffectError> {
+        let revealed_name = match self.current_instruction()? {
+            Instruction::RevealToNameAfterSourceShuffle(name) => Some(name.clone()),
+            _ => None,
+        };
+        let hand_filter = match self.current_instruction()? {
+            Instruction::RevealTopHandRestGraveyard { hand, .. } => Some(*hand),
+            _ => None,
+        };
+        let (count, private, take_all, other_pile_to_bottom) = match self.current_instruction()? {
+            Instruction::LookTopOneRestGraveyard { count } => {
+                (usize::from(*count), true, false, false)
+            }
+            Instruction::LookTopOneRestBottom { count } => (
+                self.resolve_value_expr(player, count)?
+                    .max(0.into())
+                    .min(RulesInteger::from_usize(
+                        self.window.cards().library(player).len(),
+                    ))
+                    .to_usize()
+                    .ok_or(EffectError::InconsistentProgram)?,
+                true,
+                false,
+                true,
+            ),
+            Instruction::LookTopCreatureSharingAttachedSubtype { count } => {
+                (usize::from(*count), true, false, true)
+            }
+            Instruction::RevealTopCreaturesAndLandsRestBottom { count } => {
+                (usize::from(*count), false, true, true)
+            }
+            Instruction::RevealHandAndBottomPiles => (3, false, false, true),
+            Instruction::RevealToNameAfterSourceShuffle(_) => (usize::MAX, false, false, false),
+            Instruction::RevealTopHandRestGraveyard { count, .. } => {
+                (usize::from(*count), false, false, false)
+            }
+            _ => (5, false, false, false),
+        };
+        let creature_choice = revealed_name.is_some()
+            || matches!(
+                self.current_instruction()?,
+                Instruction::RevealOpponentChoosesCreature
+            );
+        let share_attached_type = matches!(
+            self.current_instruction()?,
+            Instruction::LookTopCreatureSharingAttachedSubtype { .. }
+        );
+        let mut work = if let Some(work) = self
+            .resolution_cursor_mut()
+            .ok_or(EffectError::WrongResolutionFrame)?
+            .revealed_piles
+            .take()
+        {
+            work
+        } else {
+            let library = self.window.cards().library(player);
+            let named = if let Some(name) = &revealed_name {
+                let evaluated = self.evaluated_characteristics()?;
+                library.iter().position(|id| {
+                    evaluated
+                        .get(*id)
+                        .is_some_and(|card| self.name_rules().has_name(&card.current_names, name))
+                })
+            } else {
+                None
+            };
+            let cards: Vec<_> = library
+                .iter()
+                .take(named.map_or(count, |index| index + 1))
+                .copied()
+                .collect();
+            let named_card = named.map(|index| library[index]);
+            if cards.is_empty() {
+                return Ok(None);
+            }
+            if !private {
+                let objects = cards
+                    .iter()
+                    .map(|id| {
+                        self.window
+                            .cards()
+                            .get(*id)
+                            .cloned()
+                            .ok_or(EffectError::UnknownObject)
+                    })
+                    .collect::<Result<Vec<_>, _>>()?;
+                let before = self.rules_snapshot(None)?;
+                self.emit_from(
+                    EventCause::Instruction { entry, instruction },
+                    &before,
+                    None,
+                    journal,
+                    |_, _, _| {
+                        Ok(objects
+                            .into_iter()
+                            .map(|object| RulesOccurrence::LibraryCardRevealed { object })
+                            .collect())
+                    },
+                )?;
+            }
+            let mut work = RevealedPiles::new(cards);
+            if revealed_name.is_some() {
+                work.creature = Some(named_card);
+            }
+            Box::new(work)
+        };
+        let opponents = self
+            .combat_rules
+            .opponents(self.window.participants(), player)?;
+        let opponent = if private || take_all || hand_filter.is_some() || revealed_name.is_some() {
+            player
+        } else {
+            match opponents.as_slice() {
+                [] => return Ok(None),
+                [only] => *only,
+                _ => match self
+                    .resolution_cursor()
+                    .and_then(|cursor| cursor.chosen_opponent)
+                {
+                    Some(opponent) => opponent,
+                    None => {
+                        self.resolution_cursor_mut()
+                            .ok_or(EffectError::WrongResolutionFrame)?
+                            .revealed_piles = Some(work);
+                        return Ok(Some(EffectDecision::OpponentChoice(OpponentChoiceFrame {
+                            revision: self.revision,
+                            entry,
+                            instruction,
+                            chooser: player,
+                            opponents,
+                        })));
+                    }
+                },
+            }
+        };
+        let choice = if let Some(hand_filter) = hand_filter {
+            if work.hand.is_some() {
+                None
+            } else {
+                let current = self.evaluated_characteristics()?;
+                let eligible: Vec<_> = work
+                    .cards
+                    .iter()
+                    .copied()
+                    .filter(|id| {
+                        current.get(*id).is_some_and(|card| match hand_filter {
+                            RevealedHandSelection::AllLands => card.has_type(CardType::Land),
+                            RevealedHandSelection::OneCreature => card.is_creature(),
+                        })
+                    })
+                    .collect();
+                if hand_filter == RevealedHandSelection::AllLands || eligible.is_empty() {
+                    work.hand = Some(eligible);
+                    None
+                } else {
+                    Some((player, PileChoice::OneToHand(eligible)))
+                }
+            }
+        } else if take_all {
+            if work.hand.is_none() {
+                let current = self.evaluated_characteristics()?;
+                work.hand = Some(
+                    work.cards
+                        .iter()
+                        .copied()
+                        .filter(|id| {
+                            current.get(*id).is_some_and(|card| {
+                                card.is_creature() || card.has_type(CardType::Land)
+                            })
+                        })
+                        .collect(),
+                );
+            }
+            None
+        } else if share_attached_type {
+            if work.hand.is_some() {
+                None
+            } else {
+                let entry = self
+                    .window
+                    .resolving()
+                    .ok_or(EffectError::WrongResolutionFrame)?;
+                let StackKind::TriggeredAbility { source } = entry.kind() else {
+                    return Err(EffectError::InconsistentProgram);
+                };
+                let current = self.evaluated_characteristics()?;
+                let kinds = match self.attachment_host_for_ability(source.id()) {
+                    Some(TargetRef::Object(host)) => current
+                        .get(host)
+                        .filter(|value| value.zone == ObjectZone::Battlefield)
+                        .map(|value| &value.current_creature_subtypes)
+                        .or_else(|| {
+                            self.growth_last_known
+                                .get(&host)
+                                .map(|value| &value.creature_subtypes)
+                        }),
+                    _ => None,
+                };
+                let eligible = work
+                    .cards
+                    .iter()
+                    .copied()
+                    .filter(|id| {
+                        current.get(*id).is_some_and(|value| {
+                            value.is_creature()
+                                && kinds.is_some_and(|kinds| {
+                                    !kinds.is_disjoint(&value.current_creature_subtypes)
+                                })
+                        })
+                    })
+                    .collect::<Vec<_>>();
+                Some((
+                    player,
+                    PileChoice::OptionalCreatureToBattlefield {
+                        looked: work.cards.clone(),
+                        eligible,
+                    },
+                ))
+            }
+        } else if private {
+            if work.hand.is_some() {
+                None
+            } else if work.cards.len() == 1 {
+                work.hand = Some(work.cards.clone());
+                None
+            } else {
+                let choice = if other_pile_to_bottom {
+                    PileChoice::OneToHandRestBottom(work.cards.clone())
+                } else {
+                    PileChoice::OneToHand(work.cards.clone())
+                };
+                Some((player, choice))
+            }
+        } else if creature_choice {
+            if work.creature.is_some() {
+                None
+            } else {
+                let evaluated = self.evaluated_characteristics()?;
+                let eligible: Vec<_> = work
+                    .cards
+                    .iter()
+                    .copied()
+                    .filter(|id| evaluated.get(*id).is_some_and(|value| value.is_creature()))
+                    .collect();
+                match eligible.as_slice() {
+                    [] => {
+                        work.creature = Some(None);
+                        None
+                    }
+                    [only] => {
+                        work.creature = Some(Some(*only));
+                        None
+                    }
+                    _ => Some((opponent, PileChoice::Creature(eligible))),
+                }
+            }
+        } else if let Some(first) = &work.first {
+            if work.hand.is_none() {
+                let second = work
+                    .cards
+                    .iter()
+                    .copied()
+                    .filter(|id| !first.contains(id))
+                    .collect();
+                Some((
+                    player,
+                    PileChoice::Take {
+                        first: first.clone(),
+                        second,
+                    },
+                ))
+            } else {
+                None
+            }
+        } else {
+            Some((opponent, PileChoice::Divide(work.cards.clone())))
+        };
+        if let Some((chooser, choice)) = choice {
+            let frame = PileChoiceFrame {
+                revision: self.revision,
+                chooser,
+                choice,
+            };
+            work.offered = Some(frame.clone());
+            self.resolution_cursor_mut()
+                .ok_or(EffectError::WrongResolutionFrame)?
+                .revealed_piles = Some(work);
+            return Ok(Some(EffectDecision::RevealedPiles(frame)));
+        }
+        if work.batches.is_empty() {
+            let (chosen_zone, chosen) = if creature_choice {
+                (
+                    Zone::Battlefield,
+                    work.creature
+                        .ok_or(EffectError::WrongResolutionFrame)?
+                        .into_iter()
+                        .collect::<Vec<_>>(),
+                )
+            } else {
+                (
+                    if share_attached_type {
+                        Zone::Battlefield
+                    } else {
+                        Zone::Hand
+                    },
+                    work.hand.clone().ok_or(EffectError::InconsistentProgram)?,
+                )
+            };
+            let remainder: Vec<_> = work
+                .cards
+                .iter()
+                .copied()
+                .filter(|id| !chosen.contains(id))
+                .collect();
+            if other_pile_to_bottom && work.bottom_order.is_none() {
+                if remainder.len() > 1 {
+                    let frame = PileChoiceFrame {
+                        revision: self.revision,
+                        chooser: player,
+                        choice: PileChoice::BottomOrder(remainder),
+                    };
+                    work.offered = Some(frame.clone());
+                    self.resolution_cursor_mut()
+                        .ok_or(EffectError::WrongResolutionFrame)?
+                        .revealed_piles = Some(work);
+                    return Ok(Some(EffectDecision::RevealedPiles(frame)));
+                }
+                work.bottom_order = Some(remainder.clone());
+            }
+            let graveyard = if other_pile_to_bottom {
+                Vec::new()
+            } else {
+                remainder
+            };
+            for (zone, cards) in [(chosen_zone, chosen), (Zone::Graveyard, graveyard)] {
+                if !cards.is_empty() {
+                    let batch = self.revealed_batch(entry, instruction, player, zone, &cards)?;
+                    work.batches.push((zone, cards, batch));
+                }
+            }
+        }
+        let mut moves = Vec::new();
+        let mut graveyard = Vec::new();
+        let mut reasons = BTreeMap::new();
+        for (zone, cards, batch) in &mut work.batches {
+            if let Some(frame) = batch.progress(self.revision)? {
+                self.resolution_cursor_mut()
+                    .ok_or(EffectError::WrongResolutionFrame)?
+                    .revealed_piles = Some(work);
+                return Ok(Some(frame));
+            }
+            batch.verify_initial(self.revealed_batch(
+                entry,
+                instruction,
+                player,
+                *zone,
+                cards,
+            )?)?;
+            self.prospective_entry_copies.extend(batch.entry_copies());
+            self.prospective_entry_controllers
+                .extend(batch.entry_controllers());
+            for &id in cards.iter() {
+                if batch.entry_prohibited(id) {
+                    continue;
+                }
+                let destination = batch.destination(id)?;
+                if destination == Zone::Battlefield {
+                    let controller = batch.entry_controller(id).unwrap_or(player);
+                    if let Some(domain) = self.linked_aura_domain(id, controller, batch.evaluated())
+                    {
+                        if domain.is_empty() {
+                            self.prospective_entry_copies.remove(&id);
+                            self.prospective_entry_controllers.remove(&id);
+                            continue;
+                        }
+                        if let Some(host) = self.resolution_aura_choices.get(&id) {
+                            if !domain.contains(host) {
+                                return Err(EffectError::IllegalTarget);
+                            }
+                        } else {
+                            let frame = LinkedAuraChoiceFrame {
+                                revision: self.revision,
+                                chooser: controller,
+                                object: id,
+                                domain,
+                            };
+                            work.aura_offer = Some(frame.clone());
+                            self.resolution_cursor_mut()
+                                .ok_or(EffectError::WrongResolutionFrame)?
+                                .revealed_piles = Some(work);
+                            return Ok(Some(EffectDecision::LinkedAuraChoice(frame)));
+                        }
+                    }
+                }
+                reasons.insert(
+                    id,
+                    match zone {
+                        Zone::Hand => ZoneReason::LookTopToHand,
+                        Zone::Battlefield => ZoneReason::LookTopToBattlefield,
+                        _ => ZoneReason::RevealedToGraveyard,
+                    },
+                );
+                if destination == Zone::Graveyard {
+                    graveyard.push(id);
+                } else {
+                    moves.push((
+                        id,
+                        destination
+                            .physical(Some(player))
+                            .ok_or(EffectError::InconsistentProgram)?,
+                    ));
+                }
+            }
+        }
+        if graveyard.len() > 1 && work.graveyard_order.is_none() {
+            let frame = PileChoiceFrame::graveyard_order(self.revision, player, graveyard);
+            work.offered = Some(frame.clone());
+            self.resolution_cursor_mut()
+                .ok_or(EffectError::WrongResolutionFrame)?
+                .revealed_piles = Some(work);
+            return Ok(Some(EffectDecision::RevealedPiles(frame)));
+        }
+        if let Some((&(id, _), frame)) = moves
+            .iter()
+            .find(|(_, destination)| matches!(destination, ObjectDestination::Battlefield { .. }))
+            .map(|movement| {
+                Ok::<_, EffectError>((
+                    movement,
+                    self.object_entry_choice_frame(
+                        match movement.1 {
+                            ObjectDestination::Battlefield { controller } => controller,
+                            _ => player,
+                        },
+                        movement.0,
+                    )?,
+                ))
+            })
+            .transpose()?
+            && let Some(frame) = frame
+            && work.entry_choice.is_none()
+        {
+            debug_assert_eq!(frame.object(), id);
+            work.entry_offer = Some(frame.clone());
+            self.resolution_cursor_mut()
+                .ok_or(EffectError::WrongResolutionFrame)?
+                .revealed_piles = Some(work);
+            return Ok(Some(EffectDecision::EntryChoice(frame)));
+        }
+        for (_, _, batch) in &work.batches {
+            batch.commit_devour(self, journal)?;
+        }
+        let order = work.graveyard_order.unwrap_or(graveyard);
+        moves.extend(
+            order
+                .into_iter()
+                .rev()
+                .map(|id| (id, ObjectDestination::Graveyard)),
+        );
+        let before = self.rules_snapshot(None)?;
+        if !self.window.cards().library(player).starts_with(&work.cards) {
+            return Err(EffectError::InvalidLibraryPartition);
+        }
+        let (window, mut movements) = self.window.record_library_search_moves(
+            self.window.revision(),
+            entry,
+            player,
+            player,
+            &moves,
+        )?;
+        self.window = window;
+        if let Some(bottom) = work.bottom_order {
+            self.bottom_remaining_looked_at(player, entry, &bottom)?;
+        }
+        let mut counters = Vec::new();
+        for movement in &mut movements {
+            if movement.after.zone() != ObjectZone::Battlefield {
+                continue;
+            }
+            let id = movement.after.id();
+            if let Some(choice) = work.entry_choice {
+                self.resolution_entry_choices
+                    .insert(movement.before.id(), choice);
+            }
+            self.stage_resolution_entry_choice(movement.before.id(), id)?;
+            self.characteristics.register_battlefield_entry(id)?;
+            if let Some(host) = self.resolution_aura_choices.remove(&movement.before.id()) {
+                self.characteristics.attach(id, host, true)?;
+            }
+            let added =
+                self.apply_entry_counters(&before, id, PowerToughnessCounters::default(), 0)?;
+            movement.after = self
+                .window
+                .cards()
+                .get(id)
+                .cloned()
+                .ok_or(EffectError::InconsistentProgram)?;
+            if added.valid_placement() {
+                counters.push((movement.before.id(), id, added));
+            }
+        }
+        self.resolution_cursor_mut()
+            .ok_or(EffectError::WrongResolutionFrame)?
+            .chosen_opponent = None;
+        self.emit_from(
+            EventCause::Instruction { entry, instruction },
+            &before,
+            None,
+            journal,
+            |previous, current, controllers| {
+                let mut rows = movements
+                    .iter()
+                    .map(|movement| {
+                        zone_occurrence_at(
+                            previous,
+                            current,
+                            movement,
+                            *reasons
+                                .get(&movement.before.id())
+                                .ok_or(EffectError::InconsistentProgram)?,
+                            controllers,
+                        )
+                    })
+                    .collect::<Result<Vec<_>, _>>()?;
+                for (old, id, added) in counters {
+                    rows.push(RulesOccurrence::CountersPlaced {
+                        object: id,
+                        before: previous.characteristics.counters(id),
+                        added,
+                        after: current.characteristics.counters(id),
+                        before_appearance: Box::new(
+                            previous
+                                .appearance(old)
+                                .ok_or(EffectError::InconsistentProgram)?,
+                        ),
+                        after_appearance: Box::new(
+                            current
+                                .appearance(id)
+                                .ok_or(EffectError::InconsistentProgram)?,
+                        ),
+                    });
+                }
+                Ok(rows)
+            },
+        )?;
+        Ok(None)
+    }
+    pub(super) fn resume_pile_choice(
+        &self,
+        expected: u64,
+        frame: &PileChoiceFrame,
+        actor: SeatId,
+        reply: DecisionReply,
+    ) -> Result<RuleProgress, EffectError> {
+        let revision = self.next_revision(expected)?;
+        if actor != frame.chooser {
+            return Err(EffectError::WrongChooser);
+        }
+        let mut next = self.clone();
+        let work = next
+            .resolution_cursor_mut()
+            .and_then(|cursor| cursor.revealed_piles.as_mut())
+            .ok_or(EffectError::WrongResolutionFrame)?;
+        if work.offered.take().as_ref() != Some(frame) || frame.revision != self.revision {
+            return Err(EffectError::WrongResolutionFrame);
+        }
+        match (&frame.choice, reply) {
+            (
+                PileChoice::OneToHand(domain) | PileChoice::OneToHandRestBottom(domain),
+                DecisionReply::SelectResolution(selected),
+            ) if selected.len() == 1 && domain.contains(&selected[0]) => work.hand = Some(selected),
+            (
+                PileChoice::OptionalCreatureToBattlefield { eligible, .. },
+                DecisionReply::SelectResolution(selected),
+            ) if selected.len() <= 1 && selected.iter().all(|id| eligible.contains(id)) => {
+                work.hand = Some(selected);
+            }
+            (PileChoice::Creature(domain), DecisionReply::SelectResolution(selected))
+                if selected.len() == 1 && domain.contains(&selected[0]) =>
+            {
+                work.creature = Some(Some(selected[0]))
+            }
+            (
+                PileChoice::Divide(domain) | PileChoice::DividePermanents(domain),
+                DecisionReply::SelectResolution(selected),
+            ) if selected.iter().all(|id| domain.contains(id))
+                && selected.iter().collect::<BTreeSet<_>>().len() == selected.len() =>
+            {
+                work.first = Some(selected)
+            }
+            (
+                PileChoice::Take { first, second } | PileChoice::Sacrifice { first, second },
+                DecisionReply::ChoosePile(index @ (1 | 2)),
+            ) => work.hand = Some(if index == 1 { first } else { second }.clone()),
+            (PileChoice::BottomOrder(domain), DecisionReply::OrderResolutionGraveyard(order))
+                if order.len() == domain.len()
+                    && order.iter().collect::<BTreeSet<_>>() == domain.iter().collect() =>
+            {
+                work.bottom_order = Some(order);
+            }
+            (PileChoice::GraveyardOrder(_), DecisionReply::OrderResolutionGraveyard(order)) => {
+                frame.validate_graveyard_order(&order)?;
+                work.graveyard_order = Some(order)
+            }
+            _ => return Err(EffectError::InvalidLibraryPartition),
+        }
+        next.revision = revision;
+        next.progress_rules(
+            DamageJournal::default(),
+            vec![],
+            vec![],
+            DrawJournal::default(),
+            RulesJournal::default(),
+        )
+    }
+    pub(super) fn resume_pile_entry(
+        &self,
+        expected: u64,
+        frame: &EntryChoiceFrame,
+        actor: SeatId,
+        reply: DecisionReply,
+    ) -> Result<RuleProgress, EffectError> {
+        let revision = self.next_revision(expected)?;
+        let DecisionReply::EntryChoice(choice) = reply else {
+            return Err(EffectError::WrongDecisionKind);
+        };
+        if frame.chooser() != actor || !self.valid_entry_choice(frame, choice) {
+            return Err(EffectError::IllegalTarget);
+        }
+        let mut next = self.clone();
+        let work = next
+            .resolution_cursor_mut()
+            .and_then(|cursor| cursor.revealed_piles.as_mut())
+            .ok_or(EffectError::WrongResolutionFrame)?;
+        if work.entry_offer.take().as_ref() != Some(frame) || frame.revision() != expected {
+            return Err(EffectError::WrongResolutionFrame);
+        }
+        work.entry_choice = Some(choice);
+        next.revision = revision;
+        next.progress_rules(
+            DamageJournal::default(),
+            vec![],
+            vec![],
+            DrawJournal::default(),
+            RulesJournal::default(),
+        )
+    }
+    pub(super) fn resume_pile_replacement(
+        &self,
+        expected: u64,
+        frame: &ZoneReplacementFrame,
+        actor: SeatId,
+        reply: DecisionReply,
+    ) -> Result<RuleProgress, EffectError> {
+        let revision = self.next_revision(expected)?;
+        let DecisionReply::ZoneReplacement(reply) = reply else {
+            return Err(EffectError::WrongDecisionKind);
+        };
+        let mut next = self.clone();
+        let work = next
+            .resolution_cursor_mut()
+            .and_then(|cursor| cursor.revealed_piles.as_mut())
+            .ok_or(EffectError::WrongResolutionFrame)?;
+        let (_, _, batch) = work
+            .batches
+            .iter_mut()
+            .find(|(_, _, batch)| batch.frame(expected).as_ref() == Some(frame))
+            .ok_or(EffectError::WrongResolutionFrame)?;
+        batch.accept(expected, frame, actor, reply)?;
+        next.revision = revision;
+        next.progress_rules(
+            DamageJournal::default(),
+            vec![],
+            vec![],
+            DrawJournal::default(),
+            RulesJournal::default(),
+        )
+    }
+}

@@ -29,9 +29,8 @@ use spellwake_engine::{
     },
     priority::{PriorityPhase, SeatId},
     program::{
-        BodyTarget, CardType, ExecutableBody, Instruction, ObjectRelation, OrdinaryCondition,
-        PlayerRelation, Program, SpellTargetFilter, Supertype, TriggeredAbility,
-        TriggeredAbilityId,
+        BodyTarget, CardType, ExecutableBody, Instruction, PlayerRelation, Program, Supertype,
+        TriggerSpec, TriggeredAbility, TriggeredAbilityId,
     },
     stack_window::{StackEntryId, WindowPhase},
     targets::TargetRef,
@@ -131,7 +130,8 @@ fn token_tap_mana_and_attacking_use_actual_control_history_and_generic_choice_so
                 decision: pending.id(),
                 choice: DecisionReply::DeclareAttackers(vec![AttackDeclaration {
                     attacker: source,
-                    defender: P1
+                    defender: P1,
+                    defending_planeswalker: None,
                 }])
             },
         }),
@@ -160,6 +160,7 @@ fn token_tap_mana_and_attacking_use_actual_control_history_and_generic_choice_so
         DecisionReply::DeclareAttackers(vec![AttackDeclaration {
             attacker: source,
             defender: P1,
+            defending_planeswalker: None,
         }]),
     );
     assert_eq!(
@@ -287,6 +288,7 @@ fn newly_created_token_blocks_and_deals_combat_damage_without_physical_card_prov
         DecisionReply::DeclareAttackers(vec![AttackDeclaration {
             attacker,
             defender: P1,
+            defending_planeswalker: None,
         }]),
     );
     let blocking = pass_pair(attacking.state());
@@ -368,7 +370,10 @@ fn token_receipt_joins_reject_ambiguous_appends_and_do_not_invent_missing_births
             producer(1, token(1, 1), false),
             card(
                 20,
-                watcher(OrdinaryCondition::TokenCreated(PlayerRelation::Controller)),
+                watcher(spellwake_engine::program::TriggerSpec::player_action(
+                    PlayerRelation::Controller,
+                    spellwake_engine::program::PlayerTriggerAction::TokenCreated,
+                )),
                 true,
             ),
         ],
@@ -497,7 +502,7 @@ fn births(candidate: &NativeCandidate) -> Vec<(StackEntryId, usize, SeatId, Supp
         })
         .collect()
 }
-fn watcher(condition: OrdinaryCondition) -> Program {
+fn watcher(condition: TriggerSpec) -> Program {
     let mut program = Program::artifact(None, vec![]);
     program.triggered.push(TriggeredAbility {
         grouping: spellwake_engine::program::TriggerGrouping::EachOccurrence,
@@ -597,7 +602,7 @@ fn an_owned_spell_copy_creates_a_distinct_token_for_its_own_controller() {
         Program::instant(
             ManaCost::specific(ManaType::Blue, 2.into()),
             ExecutableBody::new(
-                BodyTarget::SingleSpell(SpellTargetFilter::AnySpell),
+                BodyTarget::SingleSpell(spellwake_engine::program::SpellFilter::any()),
                 vec![Instruction::CopySpell],
             ),
         ),
@@ -710,8 +715,13 @@ fn an_owned_spell_copy_creates_a_distinct_token_for_its_own_controller() {
 #[test]
 fn creation_and_enters_conditions_have_distinct_honest_birth_related_captures() {
     for condition in [
-        OrdinaryCondition::Enters(ObjectRelation::AnyCreature),
-        OrdinaryCondition::TokenCreated(PlayerRelation::Controller),
+        spellwake_engine::program::TriggerSpec::enters(
+            spellwake_engine::program::ObjectFilter::creature(),
+        ),
+        spellwake_engine::program::TriggerSpec::player_action(
+            PlayerRelation::Controller,
+            spellwake_engine::program::PlayerTriggerAction::TokenCreated,
+        ),
     ] {
         let game = world(
             vocabulary(),
@@ -759,7 +769,9 @@ fn a_zero_toughness_birth_dies_then_ceases_before_its_owned_trigger_resolves() {
             card(2, shrink_all(), true),
             card(
                 3,
-                watcher(OrdinaryCondition::Dies(ObjectRelation::AnyCreature)),
+                watcher(spellwake_engine::program::TriggerSpec::dies(
+                    spellwake_engine::program::ObjectFilter::creature(),
+                )),
                 true,
             ),
         ],
@@ -1486,7 +1498,9 @@ fn actual_plural_birth_selectors_require_event_uniqueness_and_explicit_ordinal()
                     vec![Instruction::CreateTokens {
                         creations: vec![spellwake_engine::token::TokenCreation {
                             definition: token(1, 1),
-                            amount: spellwake_engine::program::InstructionAmount::Literal(2.into()),
+                            amount: spellwake_engine::program::ValueExpr::Literal(2.into()),
+                            base_size: None,
+                            enters_tapped: false,
                             recipients: spellwake_engine::token::TokenRecipients::Controller,
                         }],
                     }],

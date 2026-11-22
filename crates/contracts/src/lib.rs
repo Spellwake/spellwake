@@ -88,6 +88,24 @@ impl RulesInteger {
         Self(&self.0 * &other.0)
     }
 
+    /// Half a nonnegative quantity rounded down. Negative quantities contribute zero.
+    pub fn nonnegative_half_rounded_down(&self) -> Self {
+        if self.is_positive() {
+            Self(&self.0 / 2)
+        } else {
+            Self::from(0)
+        }
+    }
+
+    /// Half a nonnegative quantity rounded up. Negative quantities contribute zero.
+    pub fn nonnegative_half_rounded_up(&self) -> Self {
+        if self.is_positive() {
+            Self((&self.0 + 1) / 2)
+        } else {
+            Self::from(0)
+        }
+    }
+
     pub fn is_positive(&self) -> bool {
         self.0 > BigInt::from(0)
     }

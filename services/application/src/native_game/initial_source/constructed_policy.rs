@@ -58,7 +58,7 @@ impl Table<'_> {
         if p.planar_pool_ref.is_some()
             || !matches!(
                 key,
-                "standard" | "pioneer" | "modern" | "legacy" | "vintage"
+                "standard" | "pioneer" | "modern" | "legacy" | "vintage" | "draft" | "cube"
             )
         {
             return Err(NativeInitialError::ForeignSource);
@@ -109,7 +109,7 @@ impl NativeProgramSource {
                 .as_deref()
                 .ok_or(NativeInitialError::ForeignSource)?;
             self.verify_constructed_release_content(&t.release, entries)?;
-            self.inspect_selected_constructed_deck(key, entries)?;
+            self.inspect_selected_match_deck(key, entries)?;
             seats.push(Seat {
                 index: &slot.seat_index,
                 controller: slot.controller_kind,

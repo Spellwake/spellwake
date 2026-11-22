@@ -3,8 +3,7 @@
 //! priority check, or that the raw window copy setup executed an authored spell.
 use super::*;
 use crate::program::{
-    BodyTarget, ExecutableBody, ObjectRelation, OrdinaryCondition, PlayerRelation,
-    TriggeredAbility, TriggeredAbilityId,
+    BodyTarget, ExecutableBody, PlayerRelation, TriggerSpec, TriggeredAbility, TriggeredAbilityId,
 };
 use crate::{
     activated::SourceCost,
@@ -771,6 +770,7 @@ fn pending_checks_block_lifecycle_actions_cast_copy_and_mana_bypasses() {
         revision: r,
         entry,
         original: entry,
+        target_ordinal: 0,
         chooser: A,
         instruction: 0,
     };
@@ -1037,7 +1037,7 @@ fn late_finish_checks_window_failure_rolls_back_the_already_moved_local_event() 
         .unwrap();
     // Disclosed prepared fixture: install the newly declared whole action cut
     // after its manual copy teardown before calling the stricter shared authorizer.
-    state.check_process_mut().unwrap().phase = CheckPhase::Actions(actions.clone());
+    state.check_process_mut().unwrap().phase = CheckPhase::Actions(Box::new(actions.clone()));
     let movements = state.determine_state_movements(&actions).unwrap();
     let CheckPhase::Actions(prior) = &mut state.check_process_mut().unwrap().phase else {
         panic!()
@@ -1082,7 +1082,7 @@ fn late_finish_checks_window_failure_rolls_back_the_already_moved_local_event() 
     }
 }
 
-fn add_trigger(seed: &mut SeedCard, condition: OrdinaryCondition) {
+fn add_trigger(seed: &mut SeedCard, condition: TriggerSpec) {
     seed.program.triggered.push(TriggeredAbility {
         grouping: spellwake_engine::program::TriggerGrouping::EachOccurrence,
         id: TriggeredAbilityId(1),
@@ -1090,7 +1090,7 @@ fn add_trigger(seed: &mut SeedCard, condition: OrdinaryCondition) {
         body: ExecutableBody::new(
             BodyTarget::None,
             vec![Instruction::DrawController {
-                amount: crate::program::InstructionAmount::Literal(1.into()),
+                amount: crate::program::ValueExpr::Literal(1.into()),
             }],
         ),
     });
@@ -1103,7 +1103,7 @@ fn prepared_trigger_cohort(singleton_active: bool) -> EffectWindow {
     if singleton_active {
         add_trigger(
             &mut first,
-            OrdinaryCondition::Dies(ObjectRelation::SelfObject),
+            crate::program::TriggerSpec::dies(crate::program::ObjectFilter::self_object()),
         );
     }
     let mut cards = vec![first, creature(20, B, B, 0), creature(30, C, C, 3)];
@@ -1115,7 +1115,7 @@ fn prepared_trigger_cohort(singleton_active: bool) -> EffectWindow {
         let mut observer = artifact(card, B, ObjectDestination::Battlefield { controller });
         add_trigger(
             &mut observer,
-            OrdinaryCondition::Dies(ObjectRelation::AnyCreature),
+            crate::program::TriggerSpec::dies(crate::program::ObjectFilter::creature()),
         );
         cards.push(observer);
     }
@@ -1526,11 +1526,13 @@ fn whole_sba_event_captures_pre_cancellation_dying_sources_and_stops_before_loss
         .push(TriggeredAbility {
             grouping: spellwake_engine::program::TriggerGrouping::EachOccurrence,
             id: TriggeredAbilityId(1),
-            condition: OrdinaryCondition::Dies(ObjectRelation::SelfObject),
+            condition: crate::program::TriggerSpec::dies(
+                crate::program::ObjectFilter::self_object(),
+            ),
             body: ExecutableBody::new(
                 BodyTarget::None,
                 vec![Instruction::DrawController {
-                    amount: crate::program::InstructionAmount::Literal(1.into()),
+                    amount: crate::program::ValueExpr::Literal(1.into()),
                 }],
             ),
         });
@@ -1830,11 +1832,14 @@ fn add_trigger_to_program_for_cleanup(state: &mut EffectWindow, object: ObjectId
         .push(TriggeredAbility {
             grouping: spellwake_engine::program::TriggerGrouping::EachOccurrence,
             id: TriggeredAbilityId(1),
-            condition: OrdinaryCondition::Discarded(PlayerRelation::Controller),
+            condition: crate::program::TriggerSpec::player_action(
+                PlayerRelation::Controller,
+                crate::program::PlayerTriggerAction::Discarded,
+            ),
             body: ExecutableBody::new(
                 BodyTarget::None,
                 vec![Instruction::DrawController {
-                    amount: crate::program::InstructionAmount::Literal(1.into()),
+                    amount: crate::program::ValueExpr::Literal(1.into()),
                 }],
             ),
         });
@@ -1928,11 +1933,13 @@ fn add_trigger_to_existing(state: &mut EffectWindow, n: u64) {
         .push(TriggeredAbility {
             grouping: spellwake_engine::program::TriggerGrouping::EachOccurrence,
             id: TriggeredAbilityId(1),
-            condition: OrdinaryCondition::Dies(ObjectRelation::SelfObject),
+            condition: crate::program::TriggerSpec::dies(
+                crate::program::ObjectFilter::self_object(),
+            ),
             body: ExecutableBody::new(
                 BodyTarget::None,
                 vec![Instruction::DrawController {
-                    amount: crate::program::InstructionAmount::Literal(1.into()),
+                    amount: crate::program::ValueExpr::Literal(1.into()),
                 }],
             ),
         });
@@ -2199,7 +2206,7 @@ fn late_combined_legend_event_faults_preserve_both_controller_keeps_and_the_firs
         let CheckPhase::Actions(actions) = &faulted.check_process().unwrap().phase else {
             panic!()
         };
-        assert!(actions.legends.iter().all(|s| s.accepted.is_some()));
+        assert!(actions.legends.iter().all(|s| s.keep.is_some()));
     }
 }
 
@@ -2299,16 +2306,19 @@ fn factored_legality_preserves_initial_fallible_evaluation_for_every_wrapper_fam
         BodyTarget::SinglePermanent,
         BodyTarget::SinglePlayer,
         BodyTarget::SingleCreatureOrPlayer,
-        BodyTarget::SingleSpell(crate::program::SpellTargetFilter::AnySpell),
-        BodyTarget::SingleSpell(crate::program::SpellTargetFilter::CopyableInstructionSpell),
+        BodyTarget::SingleSpell(crate::program::SpellFilter::any()),
+        BodyTarget::SingleSpell(crate::program::SpellFilter::copyable_instruction()),
     ] {
         // Body instructions are irrelevant to this trusted predicate probe.
         let body = ExecutableBody::new(target, vec![]);
         assert_eq!(
-            state.legal_body_target(&body, TargetRef::Player(B)),
+            state.legal_body_target(&body, TargetRef::Player(B), A),
             Err(expected.clone())
         );
-        assert_eq!(state.trigger_target_domain(&body), Err(expected.clone()));
+        assert_eq!(
+            state.trigger_target_domain(&body, A, None),
+            Err(expected.clone())
+        );
         assert_eq!(state, saved);
     }
 }
@@ -2343,4 +2353,181 @@ fn rebind_prepared_fault_cut(state: &mut EffectWindow) {
         .unwrap()
         .moves
         .qualification_rebind_cut(revision);
+}
+
+#[test]
+fn commander_returns_offer_only_new_incarnations_to_the_owner_and_preserve_declines() {
+    let mut state = EffectWindow::new(GameSeed::with_uniform_life(
+        vec![A, B],
+        A,
+        vec![creature(1, A, B, 0), creature(2, B, A, 0)],
+        vec![CardId(1), CardId(2)],
+        vec![],
+        40.into(),
+        CombatRules::UnrestrictedFreeForAll,
+        crate::test_support::creature_types::synthetic_vocabulary(),
+        std::sync::Arc::new(spellwake_contracts::names::NameRules::literal_names()),
+    ))
+    .unwrap();
+    state.designate_commanders([CardId(1), CardId(2)].into());
+    let first_before = object(&state, 1);
+    let (pending_a, frame, initial) = pending(state.begin_checks(state.revision()).unwrap());
+    assert_eq!(initial.moves.len(), 2);
+    let CheckDecision::ReturnCommanders(f) = &frame else {
+        panic!("expected a return choice")
+    };
+    let first = object(&pending_a, 1);
+    assert_eq!(f.chooser(), A);
+    assert_eq!(f.domain(), &[first]);
+    for bad in [
+        vec![first_before],
+        vec![object(&pending_a, 2)],
+        vec![first, first],
+    ] {
+        assert!(
+            resume(
+                &pending_a,
+                &frame,
+                A,
+                DecisionReply::ReturnCommanders(bad),
+                None
+            )
+            .is_err()
+        );
+    }
+    assert!(
+        resume(
+            &pending_a,
+            &frame,
+            B,
+            DecisionReply::ReturnCommanders(vec![]),
+            None
+        )
+        .is_err()
+    );
+    let (pending_b, frame, journal) = pending(
+        resume(
+            &pending_a,
+            &frame,
+            A,
+            DecisionReply::ReturnCommanders(vec![first]),
+            None,
+        )
+        .unwrap(),
+    );
+    assert!(journal.moves.is_empty());
+    assert_eq!(
+        pending_b.window.cards().get(first).unwrap().zone(),
+        ObjectZone::Graveyard(A)
+    );
+    let CheckDecision::ReturnCommanders(f) = &frame else {
+        panic!("second owner")
+    };
+    assert_eq!(f.chooser(), B);
+    assert_eq!(f.domain(), &[object(&pending_b, 2)]);
+    let (after, _, journal) = complete(
+        resume(
+            &pending_b,
+            &frame,
+            B,
+            DecisionReply::ReturnCommanders(vec![]),
+            None,
+        )
+        .unwrap(),
+    );
+    assert_eq!(journal.moves.len(), 1);
+    assert_eq!(
+        after.window.cards().get(object(&after, 1)).unwrap().zone(),
+        ObjectZone::Command
+    );
+    assert_eq!(
+        after.window.cards().get(object(&after, 2)).unwrap().zone(),
+        ObjectZone::Graveyard(B)
+    );
+    assert!(
+        after
+            .commanders
+            .values()
+            .all(|r| r.return_eligible.is_none())
+    );
+}
+
+#[test]
+fn abandoned_siege_chooses_an_active_opponent_at_checks_without_leaving_the_battlefield() {
+    let mut front = Program::enchantment(None);
+    front.card_types = [CardType::Battle].into();
+    front.printed_defense = Some(4.into());
+    front.siege_back = Some(Box::new(Program::creature(
+        None,
+        3.into(),
+        3.into(),
+        BTreeSet::new(),
+    )));
+    let crate::program::ProgramKind::Permanent(permanent) = &mut front.kind else {
+        unreachable!()
+    };
+    permanent.entry_tap = Some(crate::land::EntryTap::SiegeProtector);
+    front.triggered.push(TriggeredAbility {
+        id: TriggeredAbilityId(1),
+        condition: crate::program::TriggerSpec::counters_changed(
+            crate::program::ObjectFilter::self_object(),
+            crate::program::CounterTriggerKind::LastDefenseRemoved,
+        ),
+        grouping: crate::program::TriggerGrouping::EachOccurrence,
+        body: ExecutableBody::new(
+            BodyTarget::None,
+            vec![
+                Instruction::ExileDefeatedSiege,
+                Instruction::CastDefeatedSiege,
+            ],
+        ),
+    });
+    let mut state = EffectWindow::new(GameSeed::with_uniform_life(
+        vec![A, B, C],
+        A,
+        vec![SeedCard {
+            card: CardId(1),
+            owner: A,
+            destination: ObjectDestination::Battlefield { controller: A },
+            program: front,
+        }],
+        vec![CardId(1)],
+        vec![],
+        20.into(),
+        CombatRules::UnrestrictedFreeForAll,
+        crate::test_support::creature_types::synthetic_vocabulary(),
+        std::sync::Arc::new(spellwake_contracts::names::NameRules::literal_names()),
+    ))
+    .unwrap();
+    let battle = object(&state, 1);
+    state.characteristics.defense.insert(battle, 4.into());
+    // This prepared boundary models a protector who is no longer in the active roster.
+    state
+        .characteristics
+        .battle_protectors
+        .insert(battle, SeatId(99));
+    let (choosing, frame, _) = pending(state.begin_checks(state.revision()).unwrap());
+    let CheckDecision::BattleProtector(choice) = &frame else {
+        panic!("expected the Siege's controller to choose")
+    };
+    assert_eq!(choice.battle(), battle);
+    assert_eq!(choice.domain(), &[B, C]);
+    assert_eq!(
+        resume(
+            &choosing,
+            &frame,
+            A,
+            DecisionReply::OpponentChoice(SeatId(99)),
+            None
+        ),
+        Err(EffectError::Check(CheckError::InvalidBattleProtector))
+    );
+    let (settled, _, journal) =
+        complete(resume(&choosing, &frame, A, DecisionReply::OpponentChoice(C), None).unwrap());
+    assert_eq!(settled.battle_protector(battle), Some(C));
+    assert_eq!(
+        settled.counters_of_kind(battle, CounterKind::Defense),
+        4.into()
+    );
+    assert!(journal.moves.is_empty());
 }

@@ -23,7 +23,7 @@ async fn write(state: ApiState, request: Request, lookup: bool) -> Response {
         Ok(token) => token,
         Err(error) => return actor_error(error),
     };
-    if !single_content_type(request.headers()).is_some_and(|v| v == "application/json") {
+    if !is_json_content_type(request.headers()) {
         return fail(StatusCode::BAD_REQUEST, "body", "json_required");
     }
     let intent: QuestRerollIntent = match to_bytes(request.into_body(), MAX_QUALIFIED_INTENT_BYTES)

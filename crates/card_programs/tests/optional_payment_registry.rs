@@ -18,9 +18,8 @@ use spellwake_engine::{
     object_identity::{CardId, ObjectDestination},
     priority::SeatId,
     program::{
-        BodyTarget, ExecutableBody, Instruction, InstructionAmount, ObjectRelation,
-        OrdinaryCondition, PlayerRelation, Program, ResolvingPlayer, SpellCastFilter,
-        SpellTargetFilter, TriggerGrouping, TriggeredAbility, TriggeredAbilityId,
+        BodyTarget, ExecutableBody, Instruction, PlayerRelation, Program, ResolvingPlayer,
+        TriggerGrouping, TriggeredAbility, TriggeredAbilityId, ValueExpr,
     },
 };
 use std::{
@@ -161,7 +160,7 @@ fn assert_selected(registry: &Registry) {
 }
 fn expected_new_program(name: &str, vocabulary: &CreatureTypeVocabulary) -> Program {
     let draw = Instruction::DrawController {
-        amount: InstructionAmount::Literal(1.into()),
+        amount: ValueExpr::Literal(1.into()),
     };
     let optional = Instruction::OptionalEffect {
         chooser: ResolvingPlayer::Controller,
@@ -192,7 +191,9 @@ fn expected_new_program(name: &str, vocabulary: &CreatureTypeVocabulary) -> Prog
         "Soul's Attendant" => {
             let mut p = creature(&["Human", "Cleric"], ManaCost::one(ManaType::White));
             p.triggered.push(trigger(
-                OrdinaryCondition::Enters(ObjectRelation::AnotherCreature),
+                spellwake_engine::program::TriggerSpec::enters(
+                    spellwake_engine::program::ObjectFilter::creature().other_than_ability_source(),
+                ),
                 vec![
                     optional,
                     Instruction::AdjustControllerLife {
@@ -205,7 +206,9 @@ fn expected_new_program(name: &str, vocabulary: &CreatureTypeVocabulary) -> Prog
         "Oculus" => {
             let mut p = creature(&["Phyrexian", "Homunculus"], blue_cost(1.into()));
             p.triggered.push(trigger(
-                OrdinaryCondition::Dies(ObjectRelation::SelfObject),
+                spellwake_engine::program::TriggerSpec::dies(
+                    spellwake_engine::program::ObjectFilter::self_object(),
+                ),
                 vec![optional, draw],
             ));
             p
@@ -213,7 +216,7 @@ fn expected_new_program(name: &str, vocabulary: &CreatureTypeVocabulary) -> Prog
         "Mana Leak" => Program::instant(
             blue_cost(1.into()),
             ExecutableBody::new(
-                BodyTarget::SingleSpell(SpellTargetFilter::AnySpell),
+                BodyTarget::SingleSpell(spellwake_engine::program::SpellFilter::any()),
                 vec![
                     Instruction::OfferManaPayment {
                         payer: ResolvingPlayer::TargetSpellController,
@@ -228,10 +231,10 @@ fn expected_new_program(name: &str, vocabulary: &CreatureTypeVocabulary) -> Prog
         "Rhystic Study" => {
             let mut p = Program::enchantment(Some(blue_cost(2.into())));
             p.triggered.push(trigger(
-                OrdinaryCondition::SpellCast {
-                    player: PlayerRelation::Opponent,
-                    filter: SpellCastFilter::AnySpell,
-                },
+                spellwake_engine::program::TriggerSpec::spell_cast(
+                    PlayerRelation::Opponent,
+                    spellwake_engine::program::SpellFilter::any(),
+                ),
                 vec![
                     Instruction::OfferManaPayment {
                         payer: ResolvingPlayer::UniqueRelatedPlayer,
@@ -265,7 +268,9 @@ fn expected_new_program(name: &str, vocabulary: &CreatureTypeVocabulary) -> Prog
         "Twincast" => Program::instant(
             ManaCost::specific(ManaType::Blue, 2.into()),
             ExecutableBody::new(
-                BodyTarget::SingleSpell(SpellTargetFilter::CopyableInstructionSpell),
+                BodyTarget::SingleSpell(
+                    spellwake_engine::program::SpellFilter::copyable_instruction(),
+                ),
                 vec![Instruction::CopySpell],
             ),
         ),

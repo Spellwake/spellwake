@@ -158,7 +158,7 @@ fn exact_four_raw_rows_native_source_signatures_and_complete_programs() {
             "Opt",
             Instruction::Scry {
                 player: ResolvingPlayer::Controller,
-                amount: InstructionAmount::Literal(1.into()),
+                amount: spellwake_engine::program::ValueExpr::Literal(1.into()),
             },
             BodyTarget::None,
             ProgramKey::LibraryTopScryDrawSpellV1,
@@ -168,7 +168,7 @@ fn exact_four_raw_rows_native_source_signatures_and_complete_programs() {
             "Consider",
             Instruction::Surveil {
                 player: ResolvingPlayer::Controller,
-                amount: InstructionAmount::Literal(1.into()),
+                amount: spellwake_engine::program::ValueExpr::Literal(1.into()),
             },
             BodyTarget::None,
             ProgramKey::LibraryTopSurveilDrawSpellV1,
@@ -178,7 +178,7 @@ fn exact_four_raw_rows_native_source_signatures_and_complete_programs() {
             "Thought Scour",
             Instruction::Mill {
                 player: ResolvingPlayer::TargetPlayer,
-                amount: InstructionAmount::Literal(2.into()),
+                amount: spellwake_engine::program::ValueExpr::Literal(2.into()),
             },
             BodyTarget::SinglePlayer,
             ProgramKey::LibraryTopMillDrawSpellV1,
@@ -191,7 +191,7 @@ fn exact_four_raw_rows_native_source_signatures_and_complete_programs() {
                 vec![
                     action,
                     Instruction::DrawController {
-                        amount: InstructionAmount::Literal(1.into()),
+                        amount: spellwake_engine::program::ValueExpr::Literal(1.into()),
                     },
                 ],
             ),
@@ -451,7 +451,7 @@ fn native_admission_rejects_invalid_amount_and_player_role_but_source_digest_is_
     };
     spell.body.instructions[0] = Instruction::Scry {
         player: ResolvingPlayer::Controller,
-        amount: InstructionAmount::Literal((-1).into()),
+        amount: spellwake_engine::program::ValueExpr::Literal((-1).into()),
     };
     assert_eq!(
         actual.validate(&g.vocabulary),

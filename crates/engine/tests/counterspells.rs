@@ -1,7 +1,7 @@
 //! Countering in the restricted native world (CR 701.6 and 608.2b).
 use spellwake_contracts::RulesInteger;
 use spellwake_engine::combat::CombatRules;
-use spellwake_engine::program::{BodyTarget, ExecutableBody, SpellTargetFilter};
+use spellwake_engine::program::{BodyTarget, ExecutableBody};
 use spellwake_engine::setup::GameSeed;
 use spellwake_engine::{
     effects::{EffectError, EffectWindow, Instruction, Program, SeedCard},
@@ -37,7 +37,7 @@ fn setup(blue: RulesInteger, cost: RulesInteger) -> EffectWindow {
                 program: Program::instant(
                     ManaCost::specific(ManaType::Blue, cost.clone()),
                     ExecutableBody::new(
-                        BodyTarget::SingleSpell(SpellTargetFilter::AnySpell),
+                        BodyTarget::SingleSpell(spellwake_engine::program::SpellFilter::any()),
                         vec![Instruction::CounterSpell],
                     ),
                 ),
@@ -60,7 +60,7 @@ fn setup(blue: RulesInteger, cost: RulesInteger) -> EffectWindow {
                 program: Program::instant(
                     ManaCost::specific(ManaType::Blue, cost),
                     ExecutableBody::new(
-                        BodyTarget::SingleSpell(SpellTargetFilter::AnySpell),
+                        BodyTarget::SingleSpell(spellwake_engine::program::SpellFilter::any()),
                         vec![Instruction::CounterSpell],
                     ),
                 ),
@@ -285,7 +285,7 @@ fn negative_specific_cost_programs_are_rejected_at_setup() {
                 program: Program::instant(
                     ManaCost::specific(ManaType::Blue, amount),
                     ExecutableBody::new(
-                        BodyTarget::SingleSpell(SpellTargetFilter::AnySpell),
+                        BodyTarget::SingleSpell(spellwake_engine::program::SpellFilter::any()),
                         vec![Instruction::CounterSpell],
                     ),
                 ),

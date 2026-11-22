@@ -159,7 +159,7 @@ async fn command_inner(state: ApiState, input: Request, lookup: bool, kind: Writ
         Ok(token) => token,
         Err(error) => return actor_error(error),
     };
-    if !single_content_type(input.headers()).is_some_and(|value| value == "application/json") {
+    if !is_json_content_type(input.headers()) {
         return fail(StatusCode::BAD_REQUEST, "body", "json_required");
     }
     let bytes = match to_bytes(

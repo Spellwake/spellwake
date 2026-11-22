@@ -17,7 +17,7 @@ use spellwake_engine::{
     mana::{ManaAbility, ManaAbilityId, ManaCost, ManaOutput, ManaPayment, ManaType},
     object_identity::{CardId, ObjectDestination, ObjectId},
     occurrence::RulesOccurrence,
-    program::{BodyTarget, CardType, ExecutableBody, Instruction, InstructionAmount, Program},
+    program::{BodyTarget, CardType, ExecutableBody, Instruction, Program},
 };
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -94,7 +94,7 @@ fn defined_colors_come_from_cost_or_indicator_not_produced_mana() {
             ExecutableBody::new(
                 BodyTarget::None,
                 vec![Instruction::DrawController {
-                    amount: InstructionAmount::Literal(0.into()),
+                    amount: spellwake_engine::program::ValueExpr::Literal(0.into()),
                 }],
             ),
         ),

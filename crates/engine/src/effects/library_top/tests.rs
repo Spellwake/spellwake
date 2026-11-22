@@ -8,8 +8,8 @@ use crate::{
     life::LifeAdjustment,
     occurrence::{RulesOccurrence, RulesRecord},
     program::{
-        BodyTarget, ExecutableBody, OrdinaryCondition, PlayerRelation, ResolvingPlayer,
-        TriggerGrouping, TriggeredAbility, TriggeredAbilityId,
+        BodyTarget, ExecutableBody, PlayerRelation, ResolvingPlayer, TriggerGrouping, TriggerSpec,
+        TriggeredAbility, TriggeredAbilityId,
     },
     test_support::creature_types,
 };
@@ -21,7 +21,7 @@ fn operation(
     player: ResolvingPlayer,
     amount: RulesInteger,
 ) -> Instruction {
-    let amount = InstructionAmount::Literal(amount);
+    let amount = crate::program::ValueExpr::Literal(amount);
     match kind {
         LibraryActionKind::Scry => Instruction::Scry { player, amount },
         LibraryActionKind::Surveil => Instruction::Surveil { player, amount },
@@ -46,7 +46,7 @@ fn fixture(
     target: BodyTarget,
     owner: SeatId,
     count: u64,
-    watcher: Option<OrdinaryCondition>,
+    watcher: Option<TriggerSpec>,
     copy: bool,
 ) -> GameState {
     fixture_with_sources(body, target, owner, count, watcher, copy, vec![])
@@ -56,7 +56,7 @@ fn fixture_with_sources(
     target: BodyTarget,
     owner: SeatId,
     count: u64,
-    watcher: Option<OrdinaryCondition>,
+    watcher: Option<TriggerSpec>,
     copy: bool,
     sources: Vec<Program>,
 ) -> GameState {
@@ -127,7 +127,7 @@ fn fixture_with_sources(
             Program::instant(
                 ManaCost::free(),
                 ExecutableBody::new(
-                    BodyTarget::SingleSpell(SpellTargetFilter::CopyableInstructionSpell),
+                    BodyTarget::SingleSpell(crate::program::SpellFilter::copyable_instruction()),
                     vec![Instruction::CopySpell],
                 ),
             ),
@@ -310,7 +310,7 @@ fn scry_partition_keeps_tail_and_incarnations_then_draws_actual_chosen_top() {
                 3.into(),
             ),
             Instruction::DrawController {
-                amount: InstructionAmount::Literal(1.into()),
+                amount: crate::program::ValueExpr::Literal(1.into()),
             },
         ],
         BodyTarget::None,
@@ -349,13 +349,16 @@ fn surveil_selection_does_not_move_until_actual_owner_order_and_then_draws() {
                 3.into(),
             ),
             Instruction::DrawController {
-                amount: InstructionAmount::Literal(1.into()),
+                amount: crate::program::ValueExpr::Literal(1.into()),
             },
         ],
         BodyTarget::None,
         A,
         5,
-        Some(OrdinaryCondition::Surveilled(PlayerRelation::Controller)),
+        Some(crate::program::TriggerSpec::player_action(
+            PlayerRelation::Controller,
+            crate::program::PlayerTriggerAction::Surveilled,
+        )),
         false,
     ));
     let old: Vec<_> = (10..15).map(|n| object(&run.state, n)).collect();
@@ -458,9 +461,15 @@ fn zero_and_positive_empty_actions_have_distinct_completed_trigger_semantics() {
     for kind in [LibraryActionKind::Scry, LibraryActionKind::Surveil] {
         for amount in [0, 4] {
             let condition = if kind == LibraryActionKind::Scry {
-                OrdinaryCondition::Scried(PlayerRelation::Controller)
+                crate::program::TriggerSpec::player_action(
+                    PlayerRelation::Controller,
+                    crate::program::PlayerTriggerAction::Scried,
+                )
             } else {
-                OrdinaryCondition::Surveilled(PlayerRelation::Controller)
+                crate::program::TriggerSpec::player_action(
+                    PlayerRelation::Controller,
+                    crate::program::PlayerTriggerAction::Surveilled,
+                )
             };
             let mut run = Run::new(fixture(
                 vec![
@@ -667,9 +676,11 @@ fn admission_rejects_negative_undefined_amount_and_unavailable_recipient_capabil
             Instruction::Scry { amount, .. }
             | Instruction::Surveil { amount, .. }
             | Instruction::Mill { amount, .. } => {
-                *amount = InstructionAmount::ControlledPermanentsOfChosenType {
-                    chosen: CreatureTypeSlot::new(9),
-                }
+                *amount = crate::program::ValueExpr::count_battlefield(
+                    crate::program::ObjectFilter::any()
+                        .controlled()
+                        .of_chosen_slot(CreatureTypeSlot::new(9)),
+                )
             }
             _ => unreachable!("test constructs only library instructions"),
         }
@@ -733,5 +744,3 @@ fn zero_actions_with_nonempty_library_preserve_all_cards_and_do_not_emit_actions
 }
 
 mod replacements;
-
-mod departure;

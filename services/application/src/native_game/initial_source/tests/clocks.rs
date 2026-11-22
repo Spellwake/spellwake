@@ -13,7 +13,7 @@ fn initial_clock_observation_requires_no_fake_input_and_preserves_original_recon
     let reference = first.reference().clone();
     let observed = serde_json::to_value(first.opening_clock_observation().unwrap()).unwrap();
     let native = first.state().pending_decision().unwrap().chooser();
-    let active = first.state().execution().window().turn_owner();
+    let active = first.state().execution().window().active_player();
     assert_eq!(
         observed["seatId"],
         json!(seats()[usize::try_from(native.0).unwrap()])
@@ -70,6 +70,6 @@ fn initial_clock_observation_requires_no_fake_input_and_preserves_original_recon
     assert!(
         matches!(waiting(next.state(),&next.binding(viewer).unwrap()).unwrap(),Waiting::Decision(seat) if seat==expected)
     );
-    assert_eq!(next.state().execution().window().turn_owner(), active);
+    assert_eq!(next.state().execution().window().active_player(), active);
     assert!(native != active || chooser != active);
 }

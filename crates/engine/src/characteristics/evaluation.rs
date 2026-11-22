@@ -1,4 +1,6 @@
-use super::{ColorOperation, StaticColorOperand, ordering, types::*};
+use super::{
+    Color, ColorOperation, StaticColorOperand, StaticContinuousAbility, ordering, types::*,
+};
 use crate::{
     object_identity::{GameObjects, ObjectId, ObjectZone},
     priority::SeatId,
@@ -9,6 +11,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 #[derive(Clone, Copy)]
 enum InstanceOrigin<'a> {
+    Emblem(&'a crate::emblem::Emblem),
     Resolved(&'a ResolvedContinuousEffect),
     Static {
         source: ObjectId,
@@ -24,6 +27,15 @@ struct Instance<'a> {
 impl Instance<'_> {
     fn contains_bucket(&self, bucket: CharacteristicBucket) -> bool {
         match self.origin {
+            InstanceOrigin::Emblem(emblem) => {
+                matches!(
+                    emblem.definition,
+                    crate::emblem::EmblemDefinition::ControlledCreatureBonus { .. }
+                ) && matches!(
+                    bucket,
+                    CharacteristicBucket::Abilities | CharacteristicBucket::ModifyPT
+                )
+            }
             InstanceOrigin::Resolved(effect) => {
                 effect.parts.0.iter().any(|part| part.bucket() == bucket)
             }
@@ -31,18 +43,26 @@ impl Instance<'_> {
                 StaticContinuousAbility::Battlefield { parts, .. } => {
                     parts.0.iter().any(|part| part.bucket() == bucket)
                 }
-                StaticContinuousAbility::CharacteristicDefining { .. } => false,
+                _ => false,
             },
         }
     }
 }
 fn defined(program: &Program) -> DefinedCharacteristics {
     DefinedCharacteristics {
+        mana_value: program.mana_value(),
+        colored_mana_symbols: program.colored_mana_symbols(),
+        printed_loyalty: program.printed_loyalty.clone(),
+        printed_defense: program.printed_defense.clone(),
         names: program.names.clone(),
         supertypes: program.supertypes.clone(),
         types: program.card_types.clone(),
         creature_subtypes: program.creature_subtypes.clone(),
         land_subtypes: program.land_subtypes.clone(),
+        spell_subtypes: program.spell_subtypes.clone(),
+        artifact_subtypes: program.artifact_subtypes.clone(),
+        enchantment_subtypes: program.enchantment_subtypes.clone(),
+        planeswalker_subtypes: program.planeswalker_subtypes.clone(),
         colors: program.defined_colors(),
         printed_pt: program
             .permanent()
@@ -80,12 +100,110 @@ pub(crate) fn evaluate(
             .ok_or(CharacteristicInvariantError::MissingDefinition(
             physical.id(),
         ))?;
-        let defined = defined(program);
+        let mut defined = defined(program);
+        if physical.transformed()
+            && physical.face_down().is_none()
+            && copy_timestamp.is_none()
+            && let Some(front) = physical.card_id().and_then(|id| world.programs.get(&id))
+        {
+            defined.mana_value = front.mana_value();
+        }
+        if copy_timestamp.is_none()
+            && physical.face_down().is_none()
+            && let Some(mana_value) = physical.melded_mana_value(world.programs)
+        {
+            defined.mana_value = mana_value;
+        }
         let is_battlefield = physical.zone() == ObjectZone::Battlefield;
         let power_toughness = (defined.types.contains(&CardType::Creature)
             || !is_battlefield && defined.printed_pt.is_some())
         .then(|| initial_pt(physical.id(), &defined));
+        let paid = world.state.end_step_casts.get(&physical.id()).copied().filter(|mode| {
+            copy_timestamp.is_none() && matches!(program.conditional_cost,Some(crate::program::ConditionalCastCost::EndStep{kind,..}) if *mode==kind)
+        });
+        let physical_id = physical.id();
+        let pt_counters = world.state.counters(physical_id);
+        let has_any_counter = pt_counters.plus_one.is_positive()
+            || pt_counters.minus_one.is_positive()
+            || [
+                &world.state.blessing_counters,
+                &world.state.despair_counters,
+                &world.state.hatchling_counters,
+                &world.state.indestructible_counters,
+                &world.state.page_counters,
+                &world.state.quest_counters,
+                &world.state.verse_counters,
+                &world.state.suspect_counters,
+                &world.state.charge,
+                &world.state.storage,
+                &world.state.loyalty,
+                &world.state.lore,
+                &world.state.time_counters,
+                &world.state.fade,
+                &world.state.age,
+            ]
+            .iter()
+            .any(|counts| {
+                counts
+                    .get(&physical_id)
+                    .is_some_and(RulesInteger::is_positive)
+            });
         let mut object = ObjectCharacteristics {
+            paired_with: world.state.paired_creatures.get(&physical_id).copied(),
+            tapped: physical.tapped(),
+            owner: physical.owner(),
+            imprinted_cards: world
+                .state
+                .imprinted_cards
+                .get(&physical_id)
+                .cloned()
+                .unwrap_or_default(),
+            suppressed_keywords: BTreeSet::new(),
+            entry_creature_type: world.entry_creature_types.get(&physical.id()).copied(),
+            commander_owner: physical
+                .card_id()
+                .filter(|id| world.state.commander_cards.contains(id))
+                .map(|_| physical.owner()),
+            attachment_kind: if world.state.bestowed_auras.contains_key(&physical_id)
+                || world.state.bestowed_spells.contains(&physical_id)
+            {
+                Some(crate::attachment::AttachmentKind::Aura(
+                    crate::attachment::EnchantRestriction::Creature,
+                ))
+            } else {
+                program
+                    .permanent()
+                    .and_then(|permanent| permanent.attachment)
+            },
+            is_token: physical.is_token(),
+            attacking: world
+                .combat
+                .is_some_and(|c| c.attacker(physical.id()).is_some()),
+            blocking: world
+                .combat
+                .is_some_and(|c| c.blocker(physical.id()).is_some()),
+            has_plus_one_counter: pt_counters.plus_one.is_positive(),
+            plus_one_counters: pt_counters.plus_one.clone(),
+            has_any_counter,
+            blessing_counters: world
+                .state
+                .blessing_counters
+                .get(&physical_id)
+                .cloned()
+                .unwrap_or_else(|| 0.into()),
+            charge_counters: world
+                .state
+                .charge
+                .get(&physical.id())
+                .cloned()
+                .unwrap_or_else(|| 0.into()),
+            controller_speed: physical
+                .default_controller()
+                .or(physical.controller())
+                .and_then(|seat| world.state.speed.get(&seat).copied())
+                .unwrap_or(0),
+            saddled: world.state.saddled.contains(&physical.id()),
+            attached_to: world.state.attachments.get(&physical.id()).copied(),
             object: physical.id(),
             zone: physical.zone(),
             current_types: defined.types.clone(),
@@ -93,6 +211,10 @@ pub(crate) fn evaluate(
             current_supertypes: defined.supertypes.clone(),
             current_creature_subtypes: defined.creature_subtypes.clone(),
             current_land_subtypes: defined.land_subtypes.clone(),
+            current_planeswalker_subtypes: defined.planeswalker_subtypes.clone(),
+            current_spell_subtypes: defined.spell_subtypes.clone(),
+            current_artifact_subtypes: defined.artifact_subtypes.clone(),
+            current_enchantment_subtypes: defined.enchantment_subtypes.clone(),
             intrinsic_mana: BTreeSet::new(),
             current_colors: defined.colors.clone(),
             defined,
@@ -104,6 +226,13 @@ pub(crate) fn evaluate(
                 physical.controller()
             },
             abilities: PrintedAbilityRoster {
+                entry_tap: program
+                    .permanent()
+                    .and_then(|permanent| permanent.entry_tap),
+                attack_requirement: program.attack_requirement,
+                combat_limits: program.combat_limits,
+                entry_counter_abilities: !program.entry_counter_abilities.is_empty(),
+                face_up: (0..program.face_up_abilities.len()).collect(),
                 zone_replacements: program
                     .zone_replacements
                     .iter()
@@ -113,13 +242,63 @@ pub(crate) fn evaluate(
                 card: physical.card_id(),
                 mana: program.mana.iter().map(|ability| ability.id).collect(),
                 activated: program.activated.iter().map(|ability| ability.id).collect(),
-                triggered: program.triggered.iter().map(|ability| ability.id).collect(),
+                triggered: program
+                    .triggered
+                    .iter()
+                    .filter(|a| {
+                        !matches!(
+                            a.condition.event,
+                            crate::program::TriggerEvent::Dies {
+                                mode: crate::program::DiesTriggerMode::Blitz,
+                                ..
+                            }
+                        ) || paid == Some(crate::program::EndStepCast::Blitz)
+                    })
+                    .map(|ability| ability.id)
+                    .collect(),
                 continuous: program.continuous.as_ref().map(StaticContinuousAbility::id),
+                additional_battlefield_abilities: program
+                    .additional_battlefield_abilities
+                    .iter()
+                    .map(StaticContinuousAbility::id)
+                    .collect(),
             },
             printed_text: PrintedText::from_program(program),
-            keywords: BTreeSet::new(),
+            keywords: program.printed_keywords.clone(),
+            toxic_value: program.printed_toxic.clone(),
+            granted_exalted: BTreeMap::new(),
+            granted_any_color_mana: BTreeSet::new(),
+            granted_fixed_mana: BTreeMap::new(),
+            granted_triggers: BTreeMap::new(),
+            granted_activated: BTreeMap::new(),
+            inherited_activation_terms: BTreeMap::new(),
+            inherited_mana: BTreeMap::new(),
+            granted_combat_keywords: BTreeMap::new(),
+            blocking_restrictions: Vec::new(),
+            granted_unblockable: false,
             power_toughness,
         };
+        if matches!(
+            paid,
+            Some(crate::program::EndStepCast::Dash | crate::program::EndStepCast::Blitz)
+        ) {
+            object.keywords.insert(KeywordAbility::Haste);
+        }
+        if physical.zone() == ObjectZone::Stack
+            && world
+                .state
+                .suspend_haste
+                .get(&physical.id())
+                .is_some_and(|(seat, _)| Some(*seat) == physical.controller())
+        {
+            object.keywords.insert(KeywordAbility::Haste);
+        }
+        if world.state.bestowed_spells.contains(&physical.id()) {
+            object.current_types = BTreeSet::from([CardType::Enchantment]);
+            object.current_creature_subtypes.clear();
+            object.current_land_subtypes.clear();
+            object.current_spell_subtypes.clear();
+        }
         object.derive_intrinsic_mana();
         objects.insert(physical.id(), object);
         if is_battlefield {
@@ -135,9 +314,14 @@ pub(crate) fn evaluate(
                     physical.id(),
                 ));
             }
-            if let Some(ability @ StaticContinuousAbility::Battlefield { parts, .. }) =
-                &program.continuous
+            for ability in program
+                .continuous
+                .iter()
+                .chain(&program.additional_battlefield_abilities)
             {
+                let StaticContinuousAbility::Battlefield { parts, .. } = ability else {
+                    continue;
+                };
                 if validate_buckets(parts.0.iter().map(StaticPart::bucket)).is_err() {
                     return Err(CharacteristicInvariantError::InvalidStaticParts(
                         physical.id(),
@@ -187,6 +371,22 @@ pub(crate) fn evaluate(
             },
         );
     }
+    for emblem in world.state.emblems.values() {
+        if !used_timestamps.insert(emblem.timestamp) {
+            return Err(CharacteristicInvariantError::DuplicateTimestamp(
+                emblem.timestamp,
+            ));
+        }
+        let key = EffectInstanceKey::Emblem(emblem.id);
+        instances.insert(
+            key,
+            Instance {
+                key,
+                timestamp: emblem.timestamp,
+                origin: InstanceOrigin::Emblem(emblem),
+            },
+        );
+    }
     let mut trace = EvaluationTrace::default();
     let mut copies: Vec<_> = world
         .state
@@ -213,7 +413,10 @@ pub(crate) fn evaluate(
         }
     }
     for instance in instances.values() {
-        if matches!(instance.origin, InstanceOrigin::Static { .. }) {
+        if matches!(
+            instance.origin,
+            InstanceOrigin::Static { .. } | InstanceOrigin::Emblem(_)
+        ) {
             trace
                 .bindings
                 .insert(instance.key, PassBinding::NotProcessed);
@@ -251,12 +454,13 @@ pub(crate) fn evaluate(
                 .iter()
                 .map(|(key, instance)| {
                     generate(
+                        world,
                         *instance,
                         bucket,
                         &objects,
                         &battlefield,
                         &trace.bindings,
-                        world,
+                        world.name_rules,
                     )
                     .map(|component| (*key, component))
                 })
@@ -265,8 +469,16 @@ pub(crate) fn evaluate(
             for (a_key, a) in &remaining {
                 for b_key in remaining.keys().filter(|key| *key != a_key) {
                     let mut probe = objects.clone();
-                    apply(&generated[b_key], &mut probe);
-                    let after = generate(*a, bucket, &probe, &battlefield, &trace.bindings, world)?;
+                    apply(&generated[b_key], &mut probe, &world.state.speed);
+                    let after = generate(
+                        world,
+                        *a,
+                        bucket,
+                        &probe,
+                        &battlefield,
+                        &trace.bindings,
+                        world.name_rules,
+                    )?;
                     if !generated[a_key].same_semantics(&after) {
                         original_waits.insert(ComponentWait {
                             waiting: *a_key,
@@ -299,7 +511,7 @@ pub(crate) fn evaluate(
                 {
                     *binding = PassBinding::Processed(component.affected.clone());
                 }
-                apply(component, &mut objects);
+                apply(component, &mut objects, &world.state.speed);
                 trace.applied.push(AppliedComponent {
                     key: component.key,
                     bucket,
@@ -333,7 +545,103 @@ pub(crate) fn evaluate(
             }
         }
     }
-    Ok(EvaluatedCharacteristics { objects, trace })
+    // Graveyard grants use each source's final controller and active ability roster.
+    let encore_grants = objects
+        .values()
+        .filter(|o| o.zone == ObjectZone::Battlefield)
+        .flat_map(|source| {
+            source
+                    .printed_text
+                    .continuous
+                    .iter()
+                    .chain(&source.printed_text.additional_battlefield_abilities)
+                    .filter_map(move |rule| {
+                        let crate::characteristics::StaticContinuousAbility::CastPermission {
+                            id,
+                            permission:
+                                crate::characteristics::CastPermissionRule::GraveyardSubtypeEncore(
+                                    subtype,
+                                ),
+                        } = rule
+                        else {
+                            return None;
+                        };
+                        (source.abilities.continuous == Some(*id)
+                            || source
+                                .abilities
+                                .additional_battlefield_abilities
+                                .contains(id))
+                        .then(|| {
+                            Some((
+                                source.controller?,
+                                *subtype,
+                                EffectInstanceKey::Static {
+                                    source: source.object,
+                                    ability: *id,
+                                },
+                            ))
+                        })
+                        .flatten()
+                    })
+        })
+        .collect::<Vec<_>>();
+    for (controller, subtype, grant) in encore_grants {
+        for recipient in objects.values_mut().filter(|o| {
+            o.zone == ObjectZone::Graveyard(controller)
+                && o.is_creature()
+                && o.current_creature_subtypes.contains(&subtype)
+        }) {
+            let physical = world.cards.get(recipient.object).ok_or(
+                CharacteristicInvariantError::MissingDefinition(recipient.object),
+            )?;
+            let mana_value = physical
+                .base_program(world.programs)
+                .ok_or(CharacteristicInvariantError::MissingDefinition(
+                    recipient.object,
+                ))?
+                .mana_value();
+            let mut price = crate::mana::ManaCost::free();
+            price.generic = mana_value;
+            recipient.granted_activated.insert(
+                grant,
+                crate::activated::ActivatedAbility {
+                    id: crate::activated::ActivatedAbilityId(0),
+                    mana_cost: price,
+                    source_cost: crate::activated::SourceCost::Exile {
+                        tap_source: false,
+                        from_graveyard: true,
+                    },
+                    body: crate::program::ExecutableBody::new(
+                        crate::program::BodyTarget::None,
+                        vec![crate::program::Instruction::Encore],
+                    ),
+                },
+            );
+        }
+    }
+    let mut evaluated = EvaluatedCharacteristics {
+        objects,
+        trace,
+        player_color_protection: world.state.player_color_protection.clone(),
+    };
+    let improvised: Vec<_> = evaluated
+        .objects
+        .values()
+        .filter(|spell| {
+            spell.zone == ObjectZone::Stack
+                && !spell.has_type(CardType::Artifact)
+                && spell
+                    .controller
+                    .is_some_and(|player| evaluated.grants_improvise(player))
+        })
+        .map(|spell| spell.object)
+        .collect();
+    for spell in improvised {
+        if let Some(spell) = evaluated.objects.get_mut(&spell) {
+            spell.keywords.insert(KeywordAbility::Improvise);
+        }
+    }
+    Ok(evaluated)
 }
 
 /// CR 613.3/613.4a/613.8a: the admitted self-only definitions precede
@@ -348,103 +656,145 @@ fn apply_definitions(
 ) -> Result<(), CharacteristicInvariantError> {
     let mut components = Vec::new();
     for (source, current) in objects.iter() {
-        let Some(StaticContinuousAbility::CharacteristicDefining { id, parts }) =
-            &current.printed_text.continuous
-        else {
-            continue;
+        let keyword = match bucket {
+            CharacteristicBucket::Type => Some((
+                KeywordAbility::Changeling,
+                DefiningPart::CreatureTypes(DefiningCreatureTypes::All),
+            )),
+            CharacteristicBucket::Color => Some((
+                KeywordAbility::Devoid,
+                DefiningPart::Colors(BTreeSet::new()),
+            )),
+            _ => None,
         };
-        let Some(part) = parts.0.iter().find(|part| part.bucket() == bucket) else {
-            continue;
-        };
-        let key = EffectInstanceKey::Static {
-            source: *source,
-            ability: *id,
-        };
-        let started = matches!(trace.bindings.get(&key), Some(PassBinding::Processed(_)));
-        if !started && current.abilities.continuous != Some(*id) {
-            continue;
-        }
-        let operation = match part {
-            DefiningPart::Colors(colors) => {
-                ResolvedPart::Color(ColorOperation::Set(colors.clone()))
-            }
-            DefiningPart::CreatureTypes(types) => {
-                let values = match types {
-                    DefiningCreatureTypes::Literal(values) => values.clone(),
-                    DefiningCreatureTypes::All => world
-                        .vocabulary
-                        .members()
-                        .iter()
-                        .map(|name| {
-                            world
-                                .vocabulary
-                                .resolve_label(name)
-                                .ok_or(CharacteristicInvariantError::InvalidStaticParts(*source))
-                        })
-                        .collect::<Result<BTreeSet<_>, _>>()?,
-                };
-                ResolvedPart::Type(TypeChange {
-                    land_subtypes: SubtypeOperation::Keep,
-                    supertypes: TypeOperation::Keep,
-                    types: TypeOperation::Keep,
-                    subtypes: SubtypeOperation::Set(values),
-                })
-            }
-            DefiningPart::PowerToughness { power, toughness } => {
-                let physical = world
-                    .cards
-                    .get(*source)
-                    .ok_or(CharacteristicInvariantError::InvalidStaticParts(*source))?;
-                let controller = current.controller.unwrap_or(physical.owner());
-                let baseline = current
-                    .power_toughness
-                    .as_ref()
-                    .map(|pt| pt.derived.clone())
-                    .unwrap_or_else(|| initial_pt(*source, &current.defined).derived);
-                ResolvedPart::SetPT(PowerToughness {
-                    power: power
-                        .as_ref()
-                        .map(|expression| {
-                            numeric(
-                                expression,
-                                *source,
-                                controller,
-                                objects,
-                                battlefield,
-                                world.name_rules,
-                            )
-                        })
-                        .unwrap_or(baseline.power),
-                    toughness: toughness
-                        .as_ref()
-                        .map(|expression| {
-                            numeric(
-                                expression,
-                                *source,
-                                controller,
-                                objects,
-                                battlefield,
-                                world.name_rules,
-                            )
-                        })
-                        .unwrap_or(baseline.toughness),
-                })
-            }
-        };
-        components.push(GeneratedComponent {
-            key,
-            bucket,
-            present: true,
-            affected: BTreeSet::from([*source]),
-            generated: BTreeMap::from([(*source, operation)]),
+        let keyword_part = keyword.as_ref().and_then(|(keyword, part)| {
+            current.has_keyword(*keyword).then_some((
+                EffectInstanceKey::PrintedKeyword {
+                    source: *source,
+                    keyword: *keyword,
+                },
+                part,
+            ))
         });
+        let authored_part = current
+            .printed_text
+            .continuous
+            .as_ref()
+            .and_then(|ability| {
+                let StaticContinuousAbility::CharacteristicDefining { id, parts } = ability else {
+                    return None;
+                };
+                let key = EffectInstanceKey::Static {
+                    source: *source,
+                    ability: *id,
+                };
+                let started = matches!(trace.bindings.get(&key), Some(PassBinding::Processed(_)));
+                if !started && current.abilities.continuous != Some(*id) {
+                    return None;
+                }
+                parts
+                    .0
+                    .iter()
+                    .find(|part| part.bucket() == bucket)
+                    .map(|part| (key, part))
+            });
+        for (key, part) in keyword_part.into_iter().chain(authored_part) {
+            let operation = match part {
+                DefiningPart::CommanderChosenColor(_) => {
+                    let Some(card) = world.cards.get(*source).and_then(|object| object.card_id())
+                    else {
+                        continue;
+                    };
+                    let Some(&chosen) = world.state.commander_chosen_colors.get(&card) else {
+                        continue;
+                    };
+                    if !world.state.commander_cards.contains(&card) {
+                        continue;
+                    }
+                    ResolvedPart::Color(ColorOperation::Set([chosen].into()))
+                }
+                DefiningPart::Colors(colors) => {
+                    ResolvedPart::Color(ColorOperation::Set(colors.clone()))
+                }
+                DefiningPart::CreatureTypes(types) => {
+                    let values = match types {
+                        DefiningCreatureTypes::Literal(values) => values.clone(),
+                        DefiningCreatureTypes::All => world
+                            .vocabulary
+                            .members()
+                            .iter()
+                            .map(|name| {
+                                world.vocabulary.resolve_label(name).ok_or(
+                                    CharacteristicInvariantError::InvalidStaticParts(*source),
+                                )
+                            })
+                            .collect::<Result<BTreeSet<_>, _>>()?,
+                    };
+                    ResolvedPart::Type(TypeChange {
+                        land_subtypes: SubtypeOperation::Keep,
+                        supertypes: TypeOperation::Keep,
+                        types: TypeOperation::Keep,
+                        subtypes: SubtypeOperation::Set(values),
+                    })
+                }
+                DefiningPart::PowerToughness { power, toughness } => {
+                    let physical = world
+                        .cards
+                        .get(*source)
+                        .ok_or(CharacteristicInvariantError::InvalidStaticParts(*source))?;
+                    let controller = current.controller.unwrap_or(physical.owner());
+                    let baseline = current
+                        .power_toughness
+                        .as_ref()
+                        .map(|pt| pt.derived.clone())
+                        .unwrap_or_else(|| initial_pt(*source, &current.defined).derived);
+                    ResolvedPart::SetPT(PowerToughness {
+                        power: power
+                            .as_ref()
+                            .map(|expression| {
+                                numeric(
+                                    world,
+                                    expression,
+                                    *source,
+                                    controller,
+                                    objects,
+                                    battlefield,
+                                    world.name_rules,
+                                )
+                            })
+                            .unwrap_or(baseline.power),
+                        toughness: toughness
+                            .as_ref()
+                            .map(|expression| {
+                                numeric(
+                                    world,
+                                    expression,
+                                    *source,
+                                    controller,
+                                    objects,
+                                    battlefield,
+                                    world.name_rules,
+                                )
+                            })
+                            .unwrap_or(baseline.toughness),
+                    })
+                }
+            };
+            components.push(GeneratedComponent {
+                key,
+                bucket,
+                present: true,
+                affected: BTreeSet::from([*source]),
+                generated: BTreeMap::from([(*source, operation)]),
+            });
+        }
     }
     for component in components {
         trace.bindings.insert(
             component.key,
             PassBinding::Processed(component.affected.clone()),
         );
-        apply(&component, objects);
+        apply(&component, objects, &world.state.speed);
         trace.applied.push(AppliedComponent {
             key: component.key,
             bucket,
@@ -462,12 +812,123 @@ fn select_affected(
     battlefield: &BTreeSet<ObjectId>,
     name_rules: &NameRules,
 ) -> BTreeSet<ObjectId> {
+    if let Some(subtype) = selector.controlled_creatures_and_typed_tokens {
+        return objects
+            .values()
+            .filter(|object| match object.zone {
+                ObjectZone::Battlefield => {
+                    object.controller == Some(controller)
+                        && ((!object.is_token && object.is_creature())
+                            || object.current_creature_subtypes.contains(&subtype))
+                }
+                ObjectZone::Stack => {
+                    object.is_creature()
+                        && (object.controller == Some(controller)
+                            || !object.is_token && object.owner == controller)
+                }
+                _ => object.is_creature() && !object.is_token && object.owner == controller,
+            })
+            .map(|object| object.object)
+            .collect();
+    }
+    if selector.source_has_imprinted_creature && last_imprinted_creature(source, objects).is_none()
+    {
+        return BTreeSet::new();
+    }
+    if selector.devotion_below.is_some_and(|(color, minimum)| {
+        devotion(color, controller, objects, battlefield) >= i64::from(minimum).into()
+    }) {
+        return BTreeSet::new();
+    }
+    if selector.while_controlling_own_commander
+        && !battlefield.iter().any(|id| {
+            objects.get(id).is_some_and(|view| {
+                view.commander_owner == Some(controller) && view.controller == Some(controller)
+            })
+        })
+    {
+        return BTreeSet::new();
+    }
+    if let Some((kind, minimum)) = selector.controller_type_threshold
+        && battlefield
+            .iter()
+            .filter_map(|id| objects.get(id))
+            .filter(|p| p.controller == Some(controller) && p.has_type(kind))
+            .count()
+            < usize::from(minimum.get())
+    {
+        return BTreeSet::new();
+    }
+    let creature_counts = selector.sole_controlled_creature.then(|| {
+        let mut counts = BTreeMap::new();
+        for id in battlefield {
+            let creature = &objects[id];
+            if creature.is_creature()
+                && let Some(controller) = creature.controller
+            {
+                *counts.entry(controller).or_insert(0usize) += 1;
+            }
+        }
+        counts
+    });
     battlefield
         .iter()
         .copied()
         .filter(|id| {
             let object = &objects[id];
-            (!selector.exclude_source || *id != source)
+            (!selector.matches_source_entry_type
+                || objects
+                    .get(&source)
+                    .and_then(|object| object.entry_creature_type)
+                    .is_some_and(|kind| object.current_creature_subtypes.contains(&kind)))
+                && (!selector.exclude_auras
+                    || !matches!(
+                        object.attachment_kind,
+                        Some(crate::attachment::AttachmentKind::Aura(_))
+                    ))
+                && selector
+                    .artifact_subtype
+                    .is_none_or(|kind| object.current_artifact_subtypes.contains(&kind))
+                && selector.combat_role.is_none_or(|role| match role {
+                    CombatSelector::Attacking => object.attacking,
+                    CombatSelector::OutsideCombat => !object.attacking && !object.blocking,
+                })
+                && (!selector.requires_untapped || object.tapped == Some(false))
+                && creature_counts.as_ref().is_none_or(|counts| {
+                    object.is_creature()
+                        && object
+                            .controller
+                            .and_then(|controller| counts.get(&controller))
+                            == Some(&1)
+                })
+                && (!selector.plus_one_counter || object.has_plus_one_counter)
+                && (selector.minimum_plus_one_counters == 0
+                    || object.plus_one_counters
+                        >= i64::from(selector.minimum_plus_one_counters).into())
+                && (!selector.requires_flying || object.has_keyword(KeywordAbility::Flying))
+                && (!selector.any_counter || object.has_any_counter)
+                && (selector.equipped_by_at_least == 0
+                    || battlefield
+                        .iter()
+                        .filter_map(|id| objects.get(id))
+                        .filter(|equipment| {
+                            equipment.attached_to == Some(crate::targets::TargetRef::Object(*id))
+                                && equipment.has_type(CardType::Artifact)
+                                && equipment
+                                    .current_artifact_subtypes
+                                    .contains(&crate::program::ArtifactSubtype::Equipment)
+                        })
+                        .count()
+                        >= usize::from(selector.equipped_by_at_least))
+                && selector.station_at.is_none_or(|minimum| {
+                    *id == source && object.charge_counters >= i64::from(minimum.get()).into()
+                })
+                && (!selector.attached_to_source
+                    || objects.get(&source).is_some_and(|source| {
+                        source.attached_to == Some(crate::targets::TargetRef::Object(*id))
+                    }))
+                && selector.token.is_none_or(|token| token == object.is_token)
+                && (!selector.exclude_source || *id != source)
                 && selector
                     .required_supertypes
                     .is_subset(&object.current_supertypes)
@@ -486,6 +947,9 @@ fn select_affected(
                     .creature_subtype
                     .is_none_or(|kind| object.current_creature_subtypes.contains(&kind))
                 && selector
+                    .forbidden_creature_subtype
+                    .is_none_or(|kind| !object.current_creature_subtypes.contains(&kind))
+                && selector
                     .land_subtype
                     .is_none_or(|kind| object.current_land_subtypes.contains(&kind))
                 && selector.color.matches(&object.current_colors)
@@ -499,12 +963,51 @@ fn select_affected(
                         name_rules.different_from(&object.current_names, &[&source.current_names])
                     }),
                 }
-                && (selector.controller == ControllerSelector::Any
-                    || object.controller == Some(controller))
+                && match selector.controller {
+                    ControllerSelector::Any => true,
+                    ControllerSelector::SourceController => object.controller == Some(controller),
+                    ControllerSelector::Opponents => {
+                        object.controller.is_some_and(|owner| owner != controller)
+                    }
+                    ControllerSelector::EnchantedPlayer => object.controller.is_some_and(|owner| {
+                        objects.get(&source).is_some_and(|aura| {
+                            aura.attached_to == Some(crate::targets::TargetRef::Player(owner))
+                        })
+                    }),
+
+                    ControllerSelector::SourceItself => *id == source,
+                    ControllerSelector::SourcePair => {
+                        objects[&source].paired_with.is_some_and(|partner| {
+                            (*id == source || *id == partner)
+                                && objects[&source].is_creature()
+                                && battlefield.contains(&partner)
+                                && objects.get(&partner).is_some_and(|other| {
+                                    other.is_creature() && other.controller == Some(controller)
+                                })
+                        })
+                    }
+                    ControllerSelector::SelfAtMaxSpeed => {
+                        *id == source && object.controller_speed == 4
+                    }
+                }
         })
         .collect()
 }
+fn devotion(
+    color: Color,
+    controller: SeatId,
+    objects: &BTreeMap<ObjectId, ObjectCharacteristics>,
+    battlefield: &BTreeSet<ObjectId>,
+) -> RulesInteger {
+    battlefield
+        .iter()
+        .filter_map(|id| objects.get(id))
+        .filter(|view| view.controller == Some(controller))
+        .filter_map(|view| view.defined.colored_mana_symbols.get(&color))
+        .fold(RulesInteger::from(0), |total, n| total.plus(n))
+}
 fn numeric(
+    world: CharacteristicWorld<'_>,
     expression: &NumericExpression,
     source: ObjectId,
     controller: SeatId,
@@ -528,6 +1031,144 @@ fn numeric(
         )
         .times(multiplier)
         .plus(offset),
+        NumericExpression::ZoneCount { zone, types } => match zone {
+            StaticZone::ControlledBattlefield => RulesInteger::from_usize(
+                battlefield
+                    .iter()
+                    .filter(|id| {
+                        let object = &objects[id];
+                        object.controller == Some(controller)
+                            && types.matches_any(&object.current_types)
+                    })
+                    .count(),
+            ),
+            StaticZone::OwnGraveyard => RulesInteger::from_usize(
+                objects
+                    .values()
+                    .filter(|card| {
+                        card.zone == ObjectZone::Graveyard(controller)
+                            && types.matches_any(&card.current_types)
+                    })
+                    .count(),
+            ),
+            StaticZone::OwnHand => RulesInteger::from_usize(
+                objects
+                    .values()
+                    .filter(|card| {
+                        card.zone == ObjectZone::Hand(controller)
+                            && types.matches_any(&card.current_types)
+                    })
+                    .count(),
+            ),
+        },
+        NumericExpression::Counters {
+            source: linked,
+            kind,
+        } => match linked {
+            Some(target) => world.state.permanent_counter_count(*target, *kind),
+            None => match kind {
+                crate::effects::CounterKind::Blessing => objects
+                    .get(&source)
+                    .map_or_else(|| 0.into(), |object| object.blessing_counters.clone()),
+                crate::effects::CounterKind::Charge => objects
+                    .get(&source)
+                    .map_or_else(|| 0.into(), |object| object.charge_counters.clone()),
+                other => world.state.permanent_counter_count(source, *other),
+            },
+        },
+        NumericExpression::ImprintedStat { stat, total } => {
+            if *total {
+                imprinted_creatures(source, objects)
+                    .filter_map(|card| card.power_toughness.as_ref())
+                    .fold(0.into(), |acc, pt| {
+                        let val = match stat {
+                            crate::program::ObjectStatKind::Power => &pt.derived.power,
+                            crate::program::ObjectStatKind::Toughness => &pt.derived.toughness,
+                            crate::program::ObjectStatKind::ManaValue => return acc,
+                        };
+                        acc.plus(val)
+                    })
+            } else {
+                last_imprinted_creature(source, objects)
+                    .and_then(|donor| donor.power_toughness.as_ref())
+                    .map_or_else(
+                        || 0.into(),
+                        |pt| match stat {
+                            crate::program::ObjectStatKind::Power => pt.derived.power.clone(),
+                            crate::program::ObjectStatKind::Toughness => {
+                                pt.derived.toughness.clone()
+                            }
+                            crate::program::ObjectStatKind::ManaValue => 0.into(),
+                        },
+                    )
+            }
+        }
+        NumericExpression::PlayerStat(stat) => match stat {
+            StaticPlayerStat::Devotion(color) => devotion(*color, controller, objects, battlefield),
+            StaticPlayerStat::ManaInPool(kind) => world
+                .mana
+                .get(&(controller, *kind))
+                .cloned()
+                .unwrap_or_else(|| 0.into()),
+            StaticPlayerStat::HalfHighestOpponentLife => world
+                .life
+                .and_then(|life| {
+                    world
+                        .participants
+                        .iter()
+                        .copied()
+                        .filter(|player| *player != controller)
+                        .filter_map(|player| life.get(player))
+                        .max()
+                })
+                .map(RulesInteger::nonnegative_half_rounded_up)
+                .unwrap_or_else(|| 0.into()),
+            StaticPlayerStat::OwnGraveyardGreatestCreaturePower => objects
+                .values()
+                .filter(|card| card.zone == ObjectZone::Graveyard(controller) && card.is_creature())
+                .filter_map(|card| {
+                    card.power_toughness
+                        .as_ref()
+                        .map(|pt| pt.derived.power.clone())
+                })
+                .max()
+                .unwrap_or_else(|| 0.into()),
+        },
+        NumericExpression::AttachedAurasAndEquipment { multiplier } => RulesInteger::from_usize(
+            battlefield
+                .iter()
+                .filter(|id| {
+                    let object = &objects[id];
+                    object.attached_to == Some(crate::targets::TargetRef::Object(source))
+                        && match object.attachment_kind {
+                            Some(crate::attachment::AttachmentKind::Equipment) => {
+                                object.has_type(CardType::Artifact)
+                            }
+                            Some(crate::attachment::AttachmentKind::Aura(_)) => {
+                                object.has_type(CardType::Enchantment)
+                            }
+                            _ => false,
+                        }
+                })
+                .count(),
+        )
+        .times(multiplier),
+        NumericExpression::ConditionalBonus { condition, bonus } => {
+            let active = match condition {
+                StaticBonusCondition::DuringControllersTurn => controller == world.active_player,
+                StaticBonusCondition::ControlledLandsAtLeast(minimum) => {
+                    let lands = battlefield
+                        .iter()
+                        .filter(|id| {
+                            objects[id].controller == Some(controller)
+                                && objects[id].has_type(CardType::Land)
+                        })
+                        .count();
+                    lands >= usize::from(*minimum)
+                }
+            };
+            if active { bonus.clone() } else { 0.into() }
+        }
     }
 }
 fn count_matching(
@@ -573,13 +1214,44 @@ pub(crate) fn count_permanents(
         name_rules,
     )
 }
+fn last_imprinted_creature(
+    source: ObjectId,
+    objects: &BTreeMap<ObjectId, ObjectCharacteristics>,
+) -> Option<&ObjectCharacteristics> {
+    imprinted_creatures(source, objects).next_back()
+}
+
+fn imprinted_creatures(
+    source: ObjectId,
+    objects: &BTreeMap<ObjectId, ObjectCharacteristics>,
+) -> impl DoubleEndedIterator<Item = &ObjectCharacteristics> {
+    objects
+        .get(&source)
+        .into_iter()
+        .flat_map(|source| &source.imprinted_cards)
+        .filter_map(|id| objects.get(id))
+        .filter(|card| card.zone == ObjectZone::Exile && card.is_creature())
+}
+
 fn static_subtype(
     operand: &StaticSubtypeOperand,
     source: ObjectId,
     objects: &BTreeMap<ObjectId, ObjectCharacteristics>,
 ) -> BTreeSet<spellwake_contracts::creature_types::CreatureTypeId> {
     match operand {
+        StaticSubtypeOperand::ImprintedCreatureTypes { keep } => {
+            let mut subtypes = keep.clone();
+            if let Some(donor) = last_imprinted_creature(source, objects) {
+                subtypes.extend(&donor.current_creature_subtypes);
+            }
+            subtypes
+        }
         StaticSubtypeOperand::Literal(value) => value.clone(),
+        StaticSubtypeOperand::SourceEntryCreatureType => objects
+            .get(&source)
+            .and_then(|object| object.entry_creature_type)
+            .into_iter()
+            .collect(),
         StaticSubtypeOperand::SourceCurrentSubtypes => {
             objects[&source].current_creature_subtypes.clone()
         }
@@ -598,15 +1270,46 @@ fn static_land_subtype(
     }
 }
 fn generate(
+    world: CharacteristicWorld<'_>,
     instance: Instance<'_>,
     bucket: CharacteristicBucket,
     objects: &BTreeMap<ObjectId, ObjectCharacteristics>,
     battlefield: &BTreeSet<ObjectId>,
     bindings: &BTreeMap<EffectInstanceKey, PassBinding>,
-    world: CharacteristicWorld<'_>,
+    name_rules: &NameRules,
 ) -> Result<GeneratedComponent, CharacteristicInvariantError> {
-    let name_rules = world.name_rules;
     let (affected, operation) = match instance.origin {
+        InstanceOrigin::Emblem(emblem) => {
+            let affected = match bindings.get(&instance.key) {
+                Some(PassBinding::Processed(affected)) => affected.clone(),
+                _ => battlefield
+                    .iter()
+                    .copied()
+                    .filter(|id| {
+                        objects.get(id).is_some_and(|object| {
+                            object.is_creature() && object.controller == Some(emblem.controller)
+                        })
+                    })
+                    .collect(),
+            };
+            let crate::emblem::EmblemDefinition::ControlledCreatureBonus {
+                power_toughness,
+                keywords,
+            } = &emblem.definition
+            else {
+                return Err(CharacteristicInvariantError::NoEligibleComponent);
+            };
+            let operation = match bucket {
+                CharacteristicBucket::Abilities => Some(ResolvedPart::Abilities(
+                    AbilityChange::grant_keywords(keywords.iter().copied()),
+                )),
+                CharacteristicBucket::ModifyPT => {
+                    Some(ResolvedPart::ModifyPT(power_toughness.clone()))
+                }
+                _ => None,
+            };
+            (affected, operation)
+        }
         InstanceOrigin::Resolved(effect) => {
             let affected: BTreeSet<_> =
                 effect.affected.intersection(battlefield).copied().collect();
@@ -623,16 +1326,12 @@ fn generate(
             // applying to that set even if its generating ability is removed.
             // Otherwise a removed ability cannot generate a later-layer effect.
             let started = matches!(bindings.get(&instance.key), Some(PassBinding::Processed(_)));
-            // Layer dependency probes must see the same control prohibition as
-            // the final application. A change in the source's own controller
-            // can make its static effect applicable again during this evaluation.
-            let grants_departed_control = matches!(ability, StaticContinuousAbility::Battlefield { parts, .. }
-                if parts.0.contains(&StaticPart::ControlSourceController))
-                && objects[&source]
-                    .controller
-                    .is_some_and(|seat| world.state.departed_controllers.contains(&seat));
-            if grants_departed_control
-                || (!started && objects[&source].abilities.continuous != Some(ability.id()))
+            let roster = &objects[&source].abilities;
+            if !started
+                && roster.continuous != Some(ability.id())
+                && !roster
+                    .additional_battlefield_abilities
+                    .contains(&ability.id())
             {
                 return Ok(GeneratedComponent {
                     key: instance.key,
@@ -645,11 +1344,12 @@ fn generate(
             // Text substitution changes operands, never the identity or bucket
             // structure of this printed ability. Re-read its actual layer-3 text
             // in dependency probes and later layers, not the frozen definition.
-            let ability = objects[&source]
-                .printed_text
+            let text = &objects[&source].printed_text;
+            let ability = text
                 .continuous
-                .as_ref()
-                .filter(|current| current.id() == ability.id())
+                .iter()
+                .chain(&text.additional_battlefield_abilities)
+                .find(|current| current.id() == ability.id())
                 .ok_or(CharacteristicInvariantError::InvalidStaticParts(source))?;
             let StaticContinuousAbility::Battlefield {
                 selector, parts, ..
@@ -662,6 +1362,31 @@ fn generate(
             )?;
             let affected = match bindings.get(&instance.key) {
                 Some(PassBinding::Processed(affected)) => affected.clone(),
+                _ if selector.source_condition.as_ref().is_some_and(|condition| {
+                    use StaticSourceCondition::*;
+                    match condition {
+                        ControllerLifeAtMost(limit) => world
+                            .life
+                            .and_then(|life| life.get(controller))
+                            .is_none_or(|life| *life > i64::from(*limit).into()),
+                        ControllerControlsSubtype(kind) | OpponentControlsSubtype(kind) => {
+                            let opponents = matches!(condition, OpponentControlsSubtype(_));
+                            !battlefield
+                                .iter()
+                                .filter_map(|id| objects.get(id))
+                                .any(|card| {
+                                    card.controller
+                                        .is_some_and(|owner| (owner != controller) == opponents)
+                                        && card.current_creature_subtypes.contains(kind)
+                                })
+                        }
+                        OpponentsTurn => world.active_player == controller,
+                        HasKeyword(keyword) => !objects[&source].has_keyword(*keyword),
+                    }
+                }) =>
+                {
+                    BTreeSet::new()
+                }
                 _ => select_affected(
                     selector,
                     source,
@@ -674,106 +1399,197 @@ fn generate(
             // Empty generated data is independent of unused numeric/source values.
             let operation = if affected.is_empty() {
                 None
-            } else {
-                parts
-                    .0
-                    .iter()
-                    .find(|part| part.bucket() == bucket)
-                    .map(|part| match part {
-                        StaticPart::ControlSourceController => ResolvedPart::Control(controller),
-                        StaticPart::Color(change) => {
-                            ResolvedPart::Color(change.map(|operand| match operand {
-                                StaticColorOperand::Literal(colors) => colors.clone(),
-                                StaticColorOperand::SourceCurrentColors => {
-                                    objects[&source].current_colors.clone()
-                                }
-                            }))
-                        }
-                        StaticPart::Text(change) => ResolvedPart::Text(*change),
-                        StaticPart::Names(change) => {
-                            let resolve = |operand: &StaticNameOperand| match operand {
-                                StaticNameOperand::Literal(names) => names.clone(),
-                                StaticNameOperand::SourceCurrentNames => {
-                                    objects[&source].current_names.clone()
-                                }
-                            };
-                            ResolvedPart::Names(match change {
-                                NameOperation::Set(names) => NameOperation::Set(resolve(names)),
-                                NameOperation::Add(names) => NameOperation::Add(resolve(names)),
+            } else if let Some(part) = parts.0.iter().find(|part| part.bucket() == bucket) {
+                Some(match part {
+                    StaticPart::SetPTToOwnManaValue => {
+                        let generated = affected
+                            .iter()
+                            .map(|id| {
+                                let value = &objects[id].defined.mana_value;
+                                (
+                                    *id,
+                                    ResolvedPart::SetPT(PowerToughness {
+                                        power: value.clone(),
+                                        toughness: value.clone(),
+                                    }),
+                                )
                             })
-                        }
-                        StaticPart::Type(change) => ResolvedPart::Type(TypeChange {
-                            land_subtypes: match &change.land_subtypes {
-                                SubtypeOperation::Keep => SubtypeOperation::Keep,
-                                SubtypeOperation::Remove(values) => {
-                                    SubtypeOperation::Remove(values.clone())
-                                }
-                                SubtypeOperation::Add(operand) => SubtypeOperation::Add(
-                                    static_land_subtype(operand, source, objects),
-                                ),
-                                SubtypeOperation::Set(operand) => SubtypeOperation::Set(
-                                    static_land_subtype(operand, source, objects),
-                                ),
-                            },
-                            supertypes: change.supertypes.clone(),
-                            types: change.types.clone(),
-                            subtypes: match &change.subtypes {
-                                SubtypeOperation::Keep => SubtypeOperation::Keep,
-                                SubtypeOperation::Remove(values) => {
-                                    SubtypeOperation::Remove(values.clone())
-                                }
-                                SubtypeOperation::Add(operand) => {
-                                    SubtypeOperation::Add(static_subtype(operand, source, objects))
-                                }
-                                SubtypeOperation::Set(operand) => {
-                                    SubtypeOperation::Set(static_subtype(operand, source, objects))
-                                }
-                            },
-                        }),
-                        StaticPart::SetPT(pair) => ResolvedPart::SetPT(PowerToughness {
-                            power: numeric(
-                                &pair.power,
+                            .collect();
+                        return Ok(GeneratedComponent {
+                            key: instance.key,
+                            bucket,
+                            present: true,
+                            affected,
+                            generated,
+                        });
+                    }
+                    StaticPart::ControlSourceController => ResolvedPart::Control(controller),
+                    StaticPart::Color(change) => {
+                        ResolvedPart::Color(change.map(|operand| match operand {
+                            StaticColorOperand::Literal(colors) => colors.clone(),
+                            StaticColorOperand::SourceCurrentColors => {
+                                objects[&source].current_colors.clone()
+                            }
+                        }))
+                    }
+                    StaticPart::Text(change) => ResolvedPart::Text(*change),
+                    StaticPart::Names(change) => {
+                        let resolve = |operand: &StaticNameOperand| match operand {
+                            StaticNameOperand::Literal(names) => names.clone(),
+                            StaticNameOperand::SourceCurrentNames => {
+                                objects[&source].current_names.clone()
+                            }
+                        };
+                        ResolvedPart::Names(match change {
+                            NameOperation::Set(names) => NameOperation::Set(resolve(names)),
+                            NameOperation::Add(names) => NameOperation::Add(resolve(names)),
+                        })
+                    }
+                    StaticPart::Type(change) => ResolvedPart::Type(TypeChange {
+                        land_subtypes: match &change.land_subtypes {
+                            SubtypeOperation::Keep => SubtypeOperation::Keep,
+                            SubtypeOperation::Remove(values) => {
+                                SubtypeOperation::Remove(values.clone())
+                            }
+                            SubtypeOperation::Add(operand) => {
+                                SubtypeOperation::Add(static_land_subtype(operand, source, objects))
+                            }
+                            SubtypeOperation::Set(operand) => {
+                                SubtypeOperation::Set(static_land_subtype(operand, source, objects))
+                            }
+                        },
+                        supertypes: change.supertypes.clone(),
+                        types: change.types.clone(),
+                        subtypes: match &change.subtypes {
+                            SubtypeOperation::Keep => SubtypeOperation::Keep,
+                            SubtypeOperation::Remove(values) => {
+                                SubtypeOperation::Remove(values.clone())
+                            }
+                            SubtypeOperation::Add(operand) => {
+                                SubtypeOperation::Add(static_subtype(operand, source, objects))
+                            }
+                            SubtypeOperation::Set(operand) => {
+                                SubtypeOperation::Set(static_subtype(operand, source, objects))
+                            }
+                        },
+                    }),
+                    StaticPart::SetPT(pair) => ResolvedPart::SetPT(PowerToughness {
+                        power: numeric(
+                            world,
+                            &pair.power,
+                            source,
+                            controller,
+                            objects,
+                            battlefield,
+                            name_rules,
+                        ),
+                        toughness: numeric(
+                            world,
+                            &pair.toughness,
+                            source,
+                            controller,
+                            objects,
+                            battlefield,
+                            name_rules,
+                        ),
+                    }),
+                    StaticPart::ModifyPT(pair) => ResolvedPart::ModifyPT(PowerToughness {
+                        power: numeric(
+                            world,
+                            &pair.power,
+                            source,
+                            controller,
+                            objects,
+                            battlefield,
+                            name_rules,
+                        ),
+                        toughness: numeric(
+                            world,
+                            &pair.toughness,
+                            source,
+                            controller,
+                            objects,
+                            battlefield,
+                            name_rules,
+                        ),
+                    }),
+                    StaticPart::SwitchPT => ResolvedPart::SwitchPT,
+                    StaticPart::Abilities(change) => ResolvedPart::Abilities(change.clone()),
+                    StaticPart::InheritExiledCreatureAbilities => {
+                        let donors = world
+                            .state
+                            .ability_donors_in_exile
+                            .get(&source)
+                            .into_iter()
+                            .flatten()
+                            .filter_map(|id| objects.get(id))
+                            .filter(|card| card.zone == ObjectZone::Exile && card.is_creature());
+                        ResolvedPart::InheritedAbilities(Box::new(
+                            super::inheritance::inherit_activated_abilities(
                                 source,
-                                controller,
+                                ability.id(),
+                                donors,
+                            ),
+                        ))
+                    }
+                    StaticPart::InheritCounteredCreatureAbilities => {
+                        ResolvedPart::InheritedAbilities(Box::new(
+                            super::inheritance::countered_creature_abilities(
+                                source,
+                                ability.id(),
                                 objects,
                                 battlefield,
-                                name_rules,
                             ),
-                            toughness: numeric(
-                                &pair.toughness,
-                                source,
-                                controller,
-                                objects,
-                                battlefield,
-                                name_rules,
-                            ),
-                        }),
-                        StaticPart::ModifyPT(pair) => ResolvedPart::ModifyPT(PowerToughness {
-                            power: numeric(
-                                &pair.power,
-                                source,
-                                controller,
-                                objects,
-                                battlefield,
-                                name_rules,
-                            ),
-                            toughness: numeric(
-                                &pair.toughness,
-                                source,
-                                controller,
-                                objects,
-                                battlefield,
-                                name_rules,
-                            ),
-                        }),
-                        StaticPart::SwitchPT => ResolvedPart::SwitchPT,
-                        StaticPart::Abilities(change) => ResolvedPart::Abilities(change.clone()),
-                    })
+                        ))
+                    }
+                    StaticPart::GrantActivated(ability) => {
+                        ResolvedPart::GrantActivated(ability.clone())
+                    }
+                    StaticPart::GrantTrigger(ability) => {
+                        ResolvedPart::GrantTrigger(ability.clone())
+                    }
+                    StaticPart::GrantAnyColorMana => ResolvedPart::GrantAnyColorMana,
+                    StaticPart::GrantSubtypeProtection {
+                        types,
+                        creatures_only,
+                    } => {
+                        let qualities =
+                            static_subtype(types, source, objects)
+                                .into_iter()
+                                .map(|subtype| {
+                                    KeywordAbility::ProtectionFromSubtype(SubtypeProtection {
+                                        subtype,
+                                        exclude_subtype: false,
+                                        creatures_only: *creatures_only,
+                                    })
+                                });
+                        ResolvedPart::Abilities(AbilityChange::grant_keywords(qualities))
+                    }
+                    StaticPart::GrantFixedColorMana(color) => {
+                        ResolvedPart::GrantFixedColorMana(*color)
+                    }
+                    StaticPart::BlockingRestriction(
+                        BlockingRestriction::BlockerPowerAtLeastSource,
+                    ) => ResolvedPart::BlockingRestriction(
+                        BlockingRestriction::BlockerPowerAtLeastPowerOf(source),
+                    ),
+                    StaticPart::BlockingRestriction(value) => {
+                        ResolvedPart::BlockingRestriction(value.clone())
+                    }
+                })
+            } else {
+                None
             };
             (affected, operation)
         }
     };
     let generated = match operation {
+        // CR 800.4b: the control layer cannot grant control to a departed seat.
+        Some(ResolvedPart::Control(controller))
+            if !world.participants.is_empty() && !world.participants.contains(&controller) =>
+        {
+            BTreeMap::new()
+        }
         Some(operation) => affected
             .iter()
             .map(|object| (*object, operation.clone()))
@@ -812,7 +1628,11 @@ fn apply_type_operation<T: Copy + Ord>(operation: &TypeOperation<T>, values: &mu
     }
 }
 
-fn apply(component: &GeneratedComponent, objects: &mut BTreeMap<ObjectId, ObjectCharacteristics>) {
+fn apply(
+    component: &GeneratedComponent,
+    objects: &mut BTreeMap<ObjectId, ObjectCharacteristics>,
+    speeds: &BTreeMap<SeatId, u8>,
+) {
     for (object, operation) in &component.generated {
         let Some(object) = objects.get_mut(object) else {
             continue;
@@ -821,7 +1641,10 @@ fn apply(component: &GeneratedComponent, objects: &mut BTreeMap<ObjectId, Object
             // Fixed copy snapshots initialize the entire definition before
             // static instances are collected. No later-layer generator emits one.
             ResolvedPart::Copy(_) => unreachable!("copy part reached a later characteristic layer"),
-            ResolvedPart::Control(controller) => object.controller = Some(*controller),
+            ResolvedPart::Control(controller) => {
+                object.controller = Some(*controller);
+                object.controller_speed = speeds.get(controller).copied().unwrap_or(0);
+            }
             ResolvedPart::Color(change) => match change {
                 ColorOperation::Set(colors) => object.current_colors = colors.clone(),
                 ColorOperation::Add(colors) => object.current_colors.extend(colors),
@@ -834,24 +1657,115 @@ fn apply(component: &GeneratedComponent, objects: &mut BTreeMap<ObjectId, Object
                 NameOperation::Set(names) => object.current_names = names.clone(),
                 NameOperation::Add(names) => object.current_names.add(names),
             },
+            ResolvedPart::InheritedAbilities(abilities) => {
+                for (key, (definition, terms)) in &abilities.activated {
+                    object.granted_activated.insert(*key, definition.clone());
+                    object
+                        .inherited_activation_terms
+                        .insert(*key, terms.clone());
+                }
+                object.inherited_mana.extend(abilities.mana.clone());
+            }
+            ResolvedPart::GrantActivated(ability) => {
+                object
+                    .granted_activated
+                    .insert(component.key, (**ability).clone());
+            }
+            ResolvedPart::GrantTrigger(ability) => {
+                object
+                    .granted_triggers
+                    .insert(component.key, (**ability).clone());
+            }
+            ResolvedPart::GrantAnyColorMana => {
+                object.granted_any_color_mana.insert(component.key);
+            }
+            ResolvedPart::GrantFixedColorMana(color) => {
+                object.granted_fixed_mana.insert(component.key, *color);
+            }
+            ResolvedPart::BlockingRestriction(value) => {
+                object.blocking_restrictions.push(value.clone())
+            }
             ResolvedPart::Abilities(change) => {
-                if let Some(removal) = change.removal {
+                if change.removal == Some(AbilityRemoval::Flying) {
+                    object.keywords.remove(&KeywordAbility::Flying);
+                } else if let Some(
+                    removal @ (AbilityRemoval::Banding | AbilityRemoval::BandsWithOther),
+                ) = change.removal
+                {
+                    object.keywords.retain(|keyword| {
+                        !matches!(keyword, KeywordAbility::BandsWithOther(_))
+                            && !(removal == AbilityRemoval::Banding
+                                && *keyword == KeywordAbility::Banding)
+                    });
+                } else if let Some(removal) = change.removal {
                     object.abilities.remove(removal);
                     if removal == AbilityRemoval::All {
                         object.intrinsic_mana.clear();
+                        object.granted_any_color_mana.clear();
+                        object.granted_fixed_mana.clear();
+                        object.inherited_mana.clear();
                     }
                     object.keywords.clear();
+                    object.toxic_value = None;
+                    object.granted_exalted.clear();
+                    object.granted_unblockable = false;
+                    object.granted_combat_keywords.clear();
+                    object.granted_triggers.clear();
+                    object.granted_activated.clear();
+                    object.inherited_activation_terms.clear();
                 }
+                object.granted_unblockable |= change.grants_unblockable;
+                if let Some(trigger) = &change.granted_trigger {
+                    object
+                        .granted_triggers
+                        .insert(component.key, (**trigger).clone());
+                }
+                object
+                    .suppressed_keywords
+                    .extend(&change.suppressed_keywords);
                 object.keywords.extend(&change.granted_keywords);
+                object
+                    .keywords
+                    .retain(|keyword| !object.suppressed_keywords.contains(keyword));
+                if let Some(amount) = &change.granted_toxic {
+                    object.toxic_value = Some(
+                        object
+                            .toxic_value
+                            .as_ref()
+                            .map_or_else(|| amount.clone(), |total| total.plus(amount)),
+                    );
+                }
+                if !change.granted_combat_keywords.is_empty() {
+                    object
+                        .granted_combat_keywords
+                        .insert(component.key, change.granted_combat_keywords.clone());
+                }
+                if change.granted_exalted != 0 {
+                    object
+                        .granted_exalted
+                        .insert(component.key, change.granted_exalted);
+                }
             }
             ResolvedPart::Type(change) => {
                 apply_type_operation(&change.supertypes, &mut object.current_supertypes);
                 apply_type_operation(&change.types, &mut object.current_types);
+                if !object.has_type(CardType::Instant) && !object.has_type(CardType::Sorcery) {
+                    object.current_spell_subtypes.clear();
+                }
+                if !object.has_type(CardType::Artifact) {
+                    object.current_artifact_subtypes.clear();
+                }
+                if !object.has_type(CardType::Enchantment) {
+                    object.current_enchantment_subtypes.clear();
+                }
                 if !object.carries_creature_subtypes() {
                     object.current_creature_subtypes.clear();
                 }
                 if !object.has_type(CardType::Land) {
                     object.current_land_subtypes.clear();
+                }
+                if !object.has_type(CardType::Planeswalker) {
+                    object.current_planeswalker_subtypes.clear();
                 }
                 apply_subtype_operation(&change.subtypes, &mut object.current_creature_subtypes);
                 // CR 305.7 removes availability, not the retained semantic text
@@ -860,6 +1774,17 @@ fn apply(component: &GeneratedComponent, objects: &mut BTreeMap<ObjectId, Object
                     && matches!(&change.land_subtypes, SubtypeOperation::Set(kinds) if kinds.iter().any(|kind|kind.basic().is_some()))
                 {
                     object.abilities.remove(AbilityRemoval::All);
+                    object.granted_any_color_mana.clear();
+                    object.granted_fixed_mana.clear();
+                    object.inherited_mana.clear();
+                    object.keywords.clear();
+                    object.toxic_value = None;
+                    object.granted_exalted.clear();
+                    object.granted_unblockable = false;
+                    object.granted_combat_keywords.clear();
+                    object.granted_triggers.clear();
+                    object.granted_activated.clear();
+                    object.inherited_activation_terms.clear();
                 }
                 apply_subtype_operation(&change.land_subtypes, &mut object.current_land_subtypes);
                 if !object.has_type(CardType::Land) {
@@ -885,6 +1810,13 @@ fn apply(component: &GeneratedComponent, objects: &mut BTreeMap<ObjectId, Object
                 if let Some(pt) = object.power_toughness.as_mut() {
                     pt.base = pair.clone();
                     pt.derived = pair.clone();
+                    pt.applied_effects.push(component.key);
+                }
+            }
+            ResolvedPart::SetToughness(toughness) => {
+                if let Some(pt) = object.power_toughness.as_mut() {
+                    pt.base.toughness = toughness.clone();
+                    pt.derived.toughness = toughness.clone();
                     pt.applied_effects.push(component.key);
                 }
             }
@@ -949,11 +1881,12 @@ pub(crate) fn qualification_static_probe(
         .map(|object| object.id())
         .collect();
     generate(
+        world,
         instance,
         bucket,
         objects,
         &battlefield,
         &BTreeMap::from([(key, binding)]),
-        world,
+        world.name_rules,
     )
 }

@@ -5,10 +5,7 @@ use crate::{
     game::private_qualification::input::{command, reply},
     life::LifeAdjustment,
     mana::ManaCost,
-    program::{
-        Instruction, OrdinaryCondition, Program, SpellTargetFilter, TriggerGrouping,
-        TriggeredAbility, TriggeredAbilityId,
-    },
+    program::{Instruction, Program, TriggerGrouping, TriggeredAbility, TriggeredAbilityId},
     test_support::characteristic_trajectories as tr,
 };
 
@@ -27,7 +24,7 @@ fn copier() -> Program {
     Program::instant(
         ManaCost::free(),
         ExecutableBody::new(
-            BodyTarget::SingleSpell(SpellTargetFilter::AnySpell),
+            BodyTarget::SingleSpell(crate::program::SpellFilter::any()),
             vec![Instruction::CopySpell],
         ),
     )
@@ -161,7 +158,7 @@ fn private_trigger_player_target_reply_binds_then_uses_native_target_domain() {
     );
     source.triggered.push(TriggeredAbility {
         id: TriggeredAbilityId(1),
-        condition: OrdinaryCondition::SelfCast,
+        condition: crate::program::TriggerSpec::self_cast(),
         grouping: TriggerGrouping::EachOccurrence,
         body: ExecutableBody::new(
             BodyTarget::SinglePlayer,

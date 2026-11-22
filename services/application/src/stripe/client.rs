@@ -269,6 +269,8 @@ pub(super) struct Checkout {
     livemode: bool,
     #[serde(deserialize_with = "field::optional_string")]
     pub payment_intent: Option<String>,
+    #[serde(default, deserialize_with = "field::optional_string")]
+    pub customer: Option<String>,
     #[serde(deserialize_with = "field::optional_string")]
     pub client_reference_id: Option<String>,
     #[serde(deserialize_with = "field::optional_string")]
@@ -803,4 +805,59 @@ impl StripeClient {
         }
         Ok(c)
     }
+    pub fn create_billing_portal_session(
+        &self,
+        customer_id: &str,
+        return_url: &str,
+    ) -> Result<String, ClientError> {
+        #[derive(Deserialize)]
+        struct PortalSession {
+            #[serde(deserialize_with = "field::string")]
+            id: String,
+            #[serde(deserialize_with = "field::string")]
+            object: String,
+            #[serde(deserialize_with = "field::string")]
+            url: String,
+        }
+        if !provider_id(customer_id, "cus_") {
+            return Err(ClientError::Contract);
+        }
+        let form = vec![
+            ("customer", customer_id.to_owned()),
+            ("return_url", return_url.to_owned()),
+        ];
+        let response = self
+            .http
+            .request(
+                Method::POST,
+                self.http
+                    .url("v1/billing_portal/sessions")
+                    .map_err(|_| ClientError::Configuration)?,
+            )
+            .map_err(|_| ClientError::Configuration)?
+            .form(&form)
+            .timeout(self.remaining()?)
+            .send()?;
+        let portal: PortalSession = self.decode(response)?;
+        if portal.object != "billing_portal.session" || !provider_id(&portal.id, "bps_") {
+            return Err(ClientError::Contract);
+        }
+        let parsed = reqwest::Url::parse(&portal.url).map_err(|_| ClientError::Contract)?;
+        if parsed.scheme() != "https"
+            || parsed.origin().ascii_serialization() != "https://billing.stripe.com"
+            || !parsed.username().is_empty()
+            || parsed.password().is_some()
+        {
+            return Err(ClientError::Contract);
+        }
+        Ok(portal.url)
+    }
+}
+
+pub(crate) fn create_billing_portal_session(
+    config: StripeConfig,
+    customer_id: &str,
+    return_url: &str,
+) -> Result<String, ClientError> {
+    StripeClient::new(config)?.create_billing_portal_session(customer_id, return_url)
 }

@@ -639,7 +639,7 @@ impl TeachingPolicy {
     }
     fn combat(&self, state: &GameState) -> Option<(usize, &Combat)> {
         let turn = state.turn()?.position();
-        let active = role(state.execution().window().turn_owner()).ok()?;
+        let active = role(state.execution().window().active_player()).ok()?;
         self.recipe
             .combat
             .iter()
@@ -738,6 +738,7 @@ impl TeachingPolicy {
                         .map(|attacker| AttackDeclaration {
                             attacker,
                             defender: other(actor).expect("known teaching seat"),
+                            defending_planeswalker: None,
                         })
                         .collect();
                     (
@@ -873,7 +874,7 @@ impl TeachingPolicy {
                 .turn()
                 .ok_or("teaching priority without turn")?
                 .position();
-            let active = state.execution().window().turn_owner();
+            let active = state.execution().window().active_player();
             let next = self.recipe.actions.iter().enumerate().find(|(i, a)| {
                 !self.consumed.contains(&format!("action.{i}"))
                     && seat(&a.role).ok() == Some(active)
@@ -911,6 +912,7 @@ impl TeachingPolicy {
                             GameCommand::CastUntargeted {
                                 spell: object,
                                 payment: Some(ManaPayment {
+                                    from_lots: Default::default(),
                                     spend: vec![ManaSpend {
                                         mana_type: if active == A {
                                             ManaType::White
@@ -1014,6 +1016,7 @@ pub(super) fn reached_probes(
                     input.command = GameCommand::CastUntargeted {
                         spell: fixture.current_object(state, &cast.card)?,
                         payment: Some(ManaPayment {
+                            from_lots: Default::default(),
                             spend: vec![ManaSpend {
                                 mana_type: if own == "W" {
                                     ManaType::White
@@ -1039,7 +1042,7 @@ pub(super) fn reached_probes(
         && state.pending_decision().is_none()
         && state.execution().window().entries().is_empty()
     {
-        let active = state.execution().window().turn_owner();
+        let active = state.execution().window().active_player();
         if valid.actor == active {
             let base = if active == A { "W.plains" } else { "G.forest" };
             let first = fixture.current_object(state, &format!("{base}.1"))?;
@@ -1076,6 +1079,7 @@ pub(super) fn reached_probes(
             choice: DecisionReply::DeclareAttackers(vec![AttackDeclaration {
                 attacker: fixture.current_object(state, "W.elite-vanguard.1")?,
                 defender: B,
+                defending_planeswalker: None,
             }]),
         };
         add(

@@ -15,9 +15,8 @@ use spellwake_engine::{
     object_identity::{CardId, ObjectDestination},
     priority::SeatId,
     program::{
-        BodyTarget, CardType, CreatureTypeSlot, ExecutableBody, Instruction, InstructionAmount,
-        ObjectRelation, OrdinaryCondition, Program, ProgramKind, SpellTargetFilter,
-        TriggeredAbility, TriggeredAbilityId,
+        BodyTarget, CardType, CreatureTypeSlot, ExecutableBody, Instruction, Program, ProgramKind,
+        TriggeredAbility, TriggeredAbilityId, ValueExpr,
     },
     setup::GameSeed,
 };
@@ -124,9 +123,11 @@ pub fn body(
         "None" => BodyTarget::None,
         "SingleCreature" => BodyTarget::SingleCreature,
         "SingleSpell(CopyableInstructionSpell)" => {
-            BodyTarget::SingleSpell(SpellTargetFilter::CopyableInstructionSpell)
+            BodyTarget::SingleSpell(spellwake_engine::program::SpellFilter::copyable_instruction())
         }
-        "SingleSpell(AnySpell)" => BodyTarget::SingleSpell(SpellTargetFilter::AnySpell),
+        "SingleSpell(AnySpell)" => {
+            BodyTarget::SingleSpell(spellwake_engine::program::SpellFilter::any())
+        }
         _ => return Err("unlisted finite body target".into()),
     };
     let instructions = rows(&value["instructions"])?
@@ -139,11 +140,15 @@ pub fn body(
                 },
                 "DrawController" => Instruction::DrawController {
                     amount: match text(&row["amount"], "tag")? {
-                        "Literal" => InstructionAmount::Literal(quantity(&row["amount"]["value"])?),
+                        "Literal" => ValueExpr::Literal(quantity(&row["amount"]["value"])?),
                         "ControlledPermanentsOfChosenType" => {
-                            InstructionAmount::ControlledPermanentsOfChosenType {
-                                chosen: creature_types::slot(row["amount"]["chosen"].clone())?,
-                            }
+                            spellwake_engine::program::ValueExpr::count_battlefield(
+                                spellwake_engine::program::ObjectFilter::any()
+                                    .controlled()
+                                    .of_chosen_slot(creature_types::slot(
+                                        row["amount"]["chosen"].clone(),
+                                    )?),
+                            )
                         }
                         _ => return Err("unlisted finite draw amount".into()),
                     },
@@ -253,7 +258,9 @@ pub fn definition(
         result.triggered.push(TriggeredAbility {
             grouping: spellwake_engine::program::TriggerGrouping::EachOccurrence,
             id: TriggeredAbilityId(number(&row["id"])?),
-            condition: OrdinaryCondition::Enters(ObjectRelation::SelfObject),
+            condition: spellwake_engine::program::TriggerSpec::enters(
+                spellwake_engine::program::ObjectFilter::self_object(),
+            ),
             body: body(&row["body"], full, other)?,
         });
     }
@@ -343,7 +350,7 @@ pub fn public_input(
                 ExecutableBody::new(
                     BodyTarget::None,
                     vec![Instruction::DrawController {
-                        amount: InstructionAmount::Literal(0.into()),
+                        amount: ValueExpr::Literal(0.into()),
                     }],
                 ),
             ),

@@ -6,7 +6,7 @@ description: >
   error handling, async patterns, concurrency, unsafe code, API design, memory
   optimization, performance, numeric safety, conversions, serde, pattern
   matching, macros, closures, observability, testing, and common anti-patterns.
-  Invoke with /rust-skills.
+  Read the task-relevant rule files before applying their recommendations.
 license: MIT
 metadata:
   author: leonardomso
@@ -21,7 +21,34 @@ metadata:
 
 # Rust Best Practices
 
-Comprehensive guide for writing high-quality, idiomatic, and highly optimized Rust code. Contains 265 rules across 26 categories, prioritized by impact to guide LLMs in code generation and refactoring. Current for Rust 1.96 (2024 edition).
+Comprehensive guide for writing high-quality, idiomatic, and highly optimized Rust code. Contains 265 rules across 26 categories, prioritized by impact to guide LLMs in code generation and refactoring. Use the edition, toolchain, and supported targets declared by the project.
+
+## Project policy and compiler workflow
+
+Read `quzzar-workplace` and the repository instructions first. Apply relevant rules from this
+index without loading the entire collection. Project invariants, existing typed domain errors,
+and the project's unsafe-code policy take precedence over generic recommendations. Do not add
+optimization crates or change ownership merely because a rule lists them; profile the workload.
+
+Use each manifest's edition and the pinned toolchain. A pinned compiler does not imply an MSRV.
+Return recoverable failures through `Result`; use production `expect` only for documented
+internal invariants. Test assertions may use `unwrap` or `expect`. Preserve underlying errors
+through `Error::source()` and expose safe messages at public boundaries. Document public APIs
+and their error conditions with rustdoc. Explain scoped lint allowances where they occur.
+
+After a coherent batch, run `cargo check --locked` for affected packages/workspaces. Before
+handoff, run formatting, all-target Clippy with warnings denied, and relevant behavioral tests:
+
+```sh
+cargo fmt --all --check
+cargo clippy --locked --workspace --all-targets -- -D warnings
+cargo test --locked --workspace
+```
+
+Adapt scope and feature/target flags to the repo. Root commands do not cover independent
+workspaces: use their manifest paths and lockfiles, including the native shell when separate.
+Report blocked checks explicitly. Compiler and lint success do not prove behavior or platform
+support. This workflow works across agents and requires no editor-specific hook.
 
 ## When to Apply
 

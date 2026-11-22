@@ -138,25 +138,75 @@ fn current_root_projection_retains_all_locals_and_chosen_occurrences_after_compl
         game::{GameContext, GameId},
         mana::ManaCost,
         program::{
-            BodyTarget, CreatureTypeSlot, ExecutableBody, Instruction, InstructionAmount,
-            ProgramKind, SpellDefinition,
+            BodyTarget, CreatureTypeSlot, ExecutableBody, Instruction, ObjectFilter, ProgramKind,
+            SpellDefinition, ValueExpr,
         },
     };
     let vocabulary = super::super::creature_types::synthetic_vocabulary();
     let first = vocabulary.resolve_label("Elf").unwrap();
     let second = vocabulary.resolve_label("Cat").unwrap();
     let program = Program {
+        cast_reductions: vec![],
+        entry_counter_abilities: vec![],
+        conditional_cost: None,
+        plot: None,
+        adventure: None,
+        splice: None,
+        entry_copy: None,
+        nightbound_back: None,
+        transform_back: None,
+        split: None,
+        madness: None,
+        miracle: None,
+        cast_from_own_exile: false,
+        exile_action: None,
+        flashback: None,
+        flashback_x_mana_symbols: 0,
+        sacrifice_creature_cast_cost: false,
+        tap_creatures_cast_cost: false,
+        reveal_colorless_creature_cast_cost: false,
+        discard_cast_cost: false,
+        graveyard_creature_exile_cost: 0,
+        graveyard_exile_x_cost: false,
+        graveyard_self_cast: None,
+        flashback_sacrifice_creatures: 0,
+        flashback_tap_white_creatures: 0,
+        flashback_life: 0,
+        additional_cast_costs: vec![],
+        activation_restrictions: Default::default(),
+        loyalty_costs: Default::default(),
+        variable_loyalty_costs: Default::default(),
+        face_up_abilities: Vec::new(),
+        printed_keywords: Default::default(),
+        printed_toxic: None,
+        x_mana_symbols: 0,
+        hybrid_symbols: Vec::new(),
+        cannot_be_countered: false,
+        attack_requirement: None,
+        combat_limits: Default::default(),
+        cast_during_own_combat: false,
+        additional_life_cost: None,
+        siege_back: None,
+        disturb: None,
+        meld_partner: None,
+        printed_defense: None,
+        printed_loyalty: None,
         zone_replacements: vec![],
         card_types: std::collections::BTreeSet::from([
             spellwake_engine::program::CardType::Instant,
         ]),
         creature_subtypes: std::collections::BTreeSet::new(),
         land_subtypes: std::collections::BTreeSet::new(),
+        spell_subtypes: std::collections::BTreeSet::new(),
+        artifact_subtypes: std::collections::BTreeSet::new(),
+        enchantment_subtypes: std::collections::BTreeSet::new(),
+        planeswalker_subtypes: Default::default(),
         names: spellwake_contracts::names::ObjectNames::nameless(),
         supertypes: std::collections::BTreeSet::new(),
         color_indicator: None,
         effect_defined_colors: None,
         kind: ProgramKind::Spell(SpellDefinition {
+            modes: None,
             cost: ManaCost {
                 generic: 0.into(),
                 required: Default::default(),
@@ -169,16 +219,18 @@ fn current_root_projection_retains_all_locals_and_chosen_occurrences_after_compl
                         excluding: Default::default(),
                     },
                     Instruction::DrawController {
-                        amount: InstructionAmount::Literal(0.into()),
+                        amount: ValueExpr::Literal(0.into()),
                     },
                     Instruction::ChooseCreatureType {
                         into: CreatureTypeSlot::new(1),
                         excluding: Default::default(),
                     },
                     Instruction::DrawController {
-                        amount: InstructionAmount::ControlledPermanentsOfChosenType {
-                            chosen: CreatureTypeSlot::new(0),
-                        },
+                        amount: ValueExpr::count_battlefield(
+                            ObjectFilter::any()
+                                .controlled()
+                                .of_chosen_slot(CreatureTypeSlot::new(0)),
+                        ),
                     },
                 ],
             ),
@@ -187,6 +239,7 @@ fn current_root_projection_retains_all_locals_and_chosen_occurrences_after_compl
         activated: vec![],
         triggered: vec![],
         continuous: None,
+        additional_battlefield_abilities: Vec::new(),
     };
     let context = GameContext::new(
         "synthetic".into(),

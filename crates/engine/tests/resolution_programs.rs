@@ -1,6 +1,6 @@
 //! Independently derived ordered-program cases frozen in resolution-program-scenarios.md.
 //! These test native mechanisms, not complete cards or a production game protocol.
-use spellwake_engine::program::{BodyTarget, ExecutableBody, SpellTargetFilter};
+use spellwake_engine::program::{BodyTarget, ExecutableBody};
 #[path = "support/damage.rs"]
 pub mod damage_support;
 use spellwake_contracts::RulesInteger;
@@ -334,7 +334,7 @@ fn setup_validates_every_instruction_and_homogeneous_nonempty_programs() {
     for (target, instructions) in [
         (BodyTarget::SingleCreature, vec![damage(1), shield(1)]),
         (
-            BodyTarget::SingleSpell(SpellTargetFilter::CopyableInstructionSpell),
+            BodyTarget::SingleSpell(spellwake_engine::program::SpellFilter::copyable_instruction()),
             vec![Instruction::CopySpell, Instruction::CounterSpell],
         ),
     ] {
@@ -881,7 +881,9 @@ fn two_copy_choices_keep_source_cursor_and_independent_full_programs_above_it() 
                 2,
                 B,
                 ExecutableBody::new(
-                    BodyTarget::SingleSpell(SpellTargetFilter::CopyableInstructionSpell),
+                    BodyTarget::SingleSpell(
+                        spellwake_engine::program::SpellFilter::copyable_instruction(),
+                    ),
                     vec![Instruction::CopySpell, Instruction::CopySpell],
                 ),
             ),
@@ -995,7 +997,9 @@ fn copy_then_counter_preserves_the_independent_copied_sequence() {
                 2,
                 B,
                 ExecutableBody::new(
-                    BodyTarget::SingleSpell(SpellTargetFilter::CopyableInstructionSpell),
+                    BodyTarget::SingleSpell(
+                        spellwake_engine::program::SpellFilter::copyable_instruction(),
+                    ),
                     vec![Instruction::CopySpell, Instruction::CounterSpell],
                 ),
             ),
@@ -1041,7 +1045,7 @@ fn counter_then_copy_and_repeated_counter_skip_departed_stack_operands() {
                     2,
                     B,
                     ExecutableBody::new(
-                        BodyTarget::SingleSpell(SpellTargetFilter::AnySpell),
+                        BodyTarget::SingleSpell(spellwake_engine::program::SpellFilter::any()),
                         vec![Instruction::CounterSpell, later],
                     ),
                 ),
@@ -1106,7 +1110,9 @@ fn one_choice_convenience_wrappers_reject_a_second_prompt_atomically() {
                 2,
                 B,
                 ExecutableBody::new(
-                    BodyTarget::SingleSpell(SpellTargetFilter::CopyableInstructionSpell),
+                    BodyTarget::SingleSpell(
+                        spellwake_engine::program::SpellFilter::copyable_instruction(),
+                    ),
                     vec![
                         Instruction::CopySpell,
                         Instruction::CopySpell,

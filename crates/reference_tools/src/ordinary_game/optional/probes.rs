@@ -112,6 +112,7 @@ pub(in crate::ordinary_game) fn reached_probes(
         let mut input = valid_reply;
         if let GameCommand::Reply { choice, .. } = &mut input.command {
             *choice = DecisionReply::ResolutionPayment(ResolutionPaymentReply::Pay(ManaPayment {
+                from_lots: Default::default(),
                 spend: vec![ManaSpend {
                     mana_type: ManaType::Blue,
                     amount: 3.into(),

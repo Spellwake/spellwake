@@ -29,41 +29,6 @@ pub struct RecoveredNativeGame {
     history_evidence: NativeHistoryEvidence,
 }
 impl RecoveredNativeGame {
-    // A qualification driver can follow its own acknowledged setup commands. The final
-    // independent cold recovery still checks every cut. Never promote this view to history.
-    #[cfg(test)]
-    pub(super) fn advance_observed_for_fixture(
-        self,
-        repository: &NativeSourceRepository,
-        next: NativeCheckpoint,
-    ) -> Result<Self, NativeSourceError> {
-        let next_basis = next.basis();
-        let prior = self.checkpoint();
-        let (kind, parent, _) = next.retained_input().ok_or_else(invalid)?;
-        if !matches!(kind, NativeCheckpointInput::Player)
-            || parent != prior.reference()
-            || prior.basis().revision.get().checked_add(1) != Some(next_basis.revision.get())
-            || prior.basis().epoch != next_basis.epoch
-            || next.initial_reference() != prior.initial_reference()
-        {
-            return Err(invalid());
-        }
-        let observed = repository.read(next_basis.game_id)?.ok_or_else(invalid)?;
-        if observed.context_ids() != self.source.context_ids()
-            || observed.operational_basis() != self.source.operational_basis()
-            || observed.checkpoint_reference() != next.reference()
-            || observed.accepted_revision() != &Amount::from(next_basis.revision.get())
-            || observed.game_id() != self.source.game_id()
-        {
-            return Err(invalid());
-        }
-        Ok(Self {
-            source: observed,
-            opening: self.opening,
-            checkpoint: next,
-            history_evidence: NativeHistoryEvidence::StateOnly,
-        })
-    }
     /// Exact evidence scope established by this recovery, not feature/replay qualification.
     pub fn history_evidence(&self) -> NativeHistoryEvidence {
         self.history_evidence
@@ -120,17 +85,14 @@ pub(super) fn proposal_input<'a>(
     };
     if !matches!(
         (kind, expected),
-        (
-            NativeCheckpointInput::ResponseTimeout,
-            NativeCheckpointInput::ResponseTimeout
-        ) | (NativeCheckpointInput::Player, NativeCheckpointInput::Player)
+        (NativeCheckpointInput::Player, NativeCheckpointInput::Player)
             | (
                 NativeCheckpointInput::Entropy,
                 NativeCheckpointInput::Entropy
             )
             | (
-                NativeCheckpointInput::BankExpiry,
-                NativeCheckpointInput::BankExpiry
+                NativeCheckpointInput::ResponseTimeout,
+                NativeCheckpointInput::ResponseTimeout
             )
     ) || parent != prior.reference()
         || next.initial_reference() != prior.initial_reference()
@@ -138,33 +100,20 @@ pub(super) fn proposal_input<'a>(
         || next.basis().context_id != basis.context_id
         || next.basis().epoch != basis.epoch
         || next.basis().revision.get() != next_revision
-        || candidate.turn_response_protocol() != next.turn_response_protocol()
-        || candidate.opening_response_seat() != next.opening_response_seat()?
-        || candidate.turn_response()
-            != next
-                .turn_response_after(prior.logical_wait().as_ref())?
-                .as_ref()
         || context != basis.context_id
         || state != next.reference().as_str()
         || !scoped(facts, NativeArtifactRole::Facts)
         || events.len() != 1
         || events.next() != Some(event.reference().as_str())
+        || candidate.opening_response_seat() != next.opening_response_seat()?
         || !candidate.valid_for(&Amount::from(basis.revision.get()))
     {
         return Err(invalid());
     }
-    let clocks_match = if matches!(expected, NativeCheckpointInput::BankExpiry) {
-        let intent = recovered
-            .bank_expiry_intent(next)
-            .map_err(|e| NativeSourceError(Failure::Checkpoint(e)))?;
-        candidate.matches_native_bank_clocks(&intent)
-    } else {
-        let intent = recovered
-            .clock_intent(next)
-            .map_err(|e| NativeSourceError(Failure::Checkpoint(e)))?;
-        candidate.matches_native_clocks(&intent)
-    };
-    if !clocks_match {
+    let clocks = recovered
+        .clock_intent(next)
+        .map_err(|error| NativeSourceError(Failure::Checkpoint(error)))?;
+    if !candidate.matches_native_clocks(&clocks) {
         return Err(invalid());
     }
     let terminal = next
@@ -186,11 +135,10 @@ pub(super) fn proposal_input<'a>(
         crate::admission_ports::NativeEventSchema::TransitionV1 => {
             candidate.matches_native_results(terminal.as_ref(), &participation)
         }
-        crate::admission_ports::NativeEventSchema::ActivityV1
-        | crate::admission_ports::NativeEventSchema::LandPlayV1 => {
+        crate::admission_ports::NativeEventSchema::ActivityV1 => {
             let facts = source
                 .cast_accounts()
-                .and_then(|accounts| accounts.facts_for_schema(next, schema))
+                .and_then(|accounts| accounts.facts(next))
                 .map_err(|error| NativeSourceError(Failure::Checkpoint(error)))?;
             candidate.matches_native_activity_results(terminal.as_ref(), &participation, &facts)
         }
@@ -224,57 +172,6 @@ impl NativeSourceRepository {
         candidate: &crate::admission_ports::HostCandidate,
         original: &NativeSystemOriginal,
     ) -> Result<crate::admission_ports::CandidateAck, NativeSourceError> {
-        self.commit_host_input(
-            store,
-            source,
-            request_id,
-            next,
-            candidate,
-            original,
-            NativeHostInputKind::Entropy,
-        )
-    }
-    /// Commit a retained tentative bank expiry through the existing clock owner.
-    /// SQL must authorize current due time, clock source and canonical BO3 result.
-    /// # Errors
-    /// Rejects unrelated originals/candidates, stale source, artifacts, policy or
-    /// SQL acceptance. Exact accepted originals reconcile before fresh operands.
-    pub fn commit_bank_expiry(
-        &self,
-        store: &NativeArtifactStore,
-        source: &RecoveredNativeGame,
-        request_id: Uuid,
-        next: &NativeCheckpoint,
-        candidate: &crate::admission_ports::HostCandidate,
-        original: &NativeSystemOriginal,
-    ) -> Result<crate::admission_ports::CandidateAck, NativeSourceError> {
-        // Static original-to-native input correlation prevents an unrelated old
-        // clock acknowledgment from being labeled a native bank expiry. This
-        // needs no fresh clock state, retained-byte IO or current source basis.
-        if !original.matches_bank_checkpoint(next) {
-            return Err(invalid());
-        }
-        self.commit_host_input(
-            store,
-            source,
-            request_id,
-            next,
-            candidate,
-            original,
-            NativeHostInputKind::Clock,
-        )
-    }
-    #[allow(clippy::too_many_arguments)] // One shared private owner preserves both existing public entry-point shapes.
-    fn commit_host_input(
-        &self,
-        store: &NativeArtifactStore,
-        source: &RecoveredNativeGame,
-        request_id: Uuid,
-        next: &NativeCheckpoint,
-        candidate: &crate::admission_ports::HostCandidate,
-        original: &NativeSystemOriginal,
-        host_kind: NativeHostInputKind,
-    ) -> Result<crate::admission_ports::CandidateAck, NativeSourceError> {
         let prior = source.checkpoint();
         let basis = prior.basis();
         if request_id.is_nil()
@@ -282,7 +179,7 @@ impl NativeSourceRepository {
             || original.game_id() != basis.game_id
             || !original
                 .host_fields()
-                .is_some_and(|fields| fields.kind == host_kind)
+                .is_some_and(|fields| fields.kind == NativeHostInputKind::Entropy)
         {
             return Err(invalid());
         }
@@ -291,28 +188,25 @@ impl NativeSourceRepository {
             NativeSystemDisposition::Unknown => {}
             _ => return Err(invalid()),
         }
-        let (prepared_original, input_kind) = match host_kind {
-            NativeHostInputKind::Entropy => (
-                NativeSystemOriginal::prepare_entropy(request_id, source, next)?,
-                NativeCheckpointInput::Entropy,
-            ),
-            NativeHostInputKind::Clock => (
-                NativeSystemOriginal::prepare_bank_expiry(request_id, source, next)?,
-                NativeCheckpointInput::BankExpiry,
-            ),
-            NativeHostInputKind::NativeWork => return Err(invalid()),
-        };
-        if !original.matches_original(&prepared_original)? {
+        if !original.matches_original(&NativeSystemOriginal::prepare_entropy(
+            request_id, source, next,
+        )?)? {
             return Err(invalid());
         }
-        let (_, next_revision) = proposal_input(store, source, next, candidate, input_kind)?;
+        let (_, next_revision) = proposal_input(
+            store,
+            source,
+            next,
+            candidate,
+            NativeCheckpointInput::Entropy,
+        )?;
         self.send_host_candidate(source, request_id, original, candidate, next_revision)
     }
     /// Commit a retained response timeout at the original multiplayer opening.
     /// Reads an exact original disposition before checking a new due interval.
     /// # Errors
     /// Rejects different originals, unretained artifacts, stale/early intervals or failed SQL acceptance.
-    pub fn commit_opening_response_timeout(
+    pub(super) fn commit_opening_response_timeout(
         &self,
         store: &NativeArtifactStore,
         source: &RecoveredNativeGame,
@@ -497,16 +391,130 @@ impl NativeSourceRepository {
             _ => Err(invalid()),
         }
     }
+}
 
-    /// Reconstruct a SQL-selected accepted tip using its retained original opening.
-    /// Current compiled runtime and program package must exactly match the original;
-    /// no compatible historical runner or fencing-to-native-epoch inference is made.
-    /// # Errors
-    /// Rejects missing/foreign original coordinates, runtime/source mismatch,
-    /// malformed artifacts, original epoch disagreement or recovery budget failure.
-    /// Bank-expiry cuts require verified history and are refused by this method.
-    /// Multiplayer successors also verify transition history because an elapsed
-    /// response can precede later turns. None means the game source is unavailable.
+/// Thread-safe bounded LRU cache of cryptographically verified native checkpoints.
+/// Every lookup still verifies live SQL `NativeGameSource` authority and matches the exact
+/// content-addressed `state_ref`, `initial_ref`, and `program_source_id`.
+#[derive(Clone)]
+pub(super) struct CheckpointCache {
+    entries:
+        std::sync::Arc<std::sync::Mutex<lru::LruCache<CheckpointCacheKey, CachedCheckpointEntry>>>,
+}
+
+#[derive(Clone, PartialEq, Eq, Hash)]
+struct CheckpointCacheKey {
+    game_id: Uuid,
+    state_ref: String,
+    initial_ref: String,
+    program_source_id: String,
+}
+
+#[derive(Clone)]
+struct CachedCheckpointEntry {
+    checkpoint: NativeCheckpoint,
+    history_verified: Option<(NativeHistoryEvidence, crate::amount::Amount)>,
+}
+
+impl CheckpointCache {
+    pub(super) fn new() -> Self {
+        Self {
+            entries: std::sync::Arc::new(std::sync::Mutex::new(lru::LruCache::new(
+                std::num::NonZeroUsize::new(256).expect("non-zero checkpoint cache capacity"),
+            ))),
+        }
+    }
+
+    pub(super) fn record(
+        &self,
+        game_id: Uuid,
+        initial_ref: &str,
+        program_source_id: &str,
+        checkpoint: NativeCheckpoint,
+        history_verified: Option<(NativeHistoryEvidence, crate::amount::Amount)>,
+    ) {
+        let key = CheckpointCacheKey {
+            game_id,
+            state_ref: checkpoint.reference().as_str().to_owned(),
+            initial_ref: initial_ref.to_owned(),
+            program_source_id: program_source_id.to_owned(),
+        };
+        if let Ok(mut guard) = self.entries.lock() {
+            guard.put(
+                key,
+                CachedCheckpointEntry {
+                    checkpoint,
+                    history_verified,
+                },
+            );
+        }
+    }
+
+    fn get(
+        &self,
+        game_id: Uuid,
+        state_ref: &str,
+        initial_ref: &str,
+        program_source_id: &str,
+    ) -> Option<CachedCheckpointEntry> {
+        let key = CheckpointCacheKey {
+            game_id,
+            state_ref: state_ref.to_owned(),
+            initial_ref: initial_ref.to_owned(),
+            program_source_id: program_source_id.to_owned(),
+        };
+        self.entries
+            .lock()
+            .ok()
+            .and_then(|mut guard| guard.get(&key).cloned())
+    }
+}
+
+impl NativeSourceRepository {
+    /// Read one anchored accepted game and reuse a verified cached checkpoint when
+    /// live SQL authority matches the exact content-addressed `state_ref`.
+    pub(super) fn recover_cached(
+        &self,
+        game: Uuid,
+        store: &NativeArtifactStore,
+        programs: &NativeProgramSource,
+        mut budget: NativeRecoveryBudget,
+        cache: &CheckpointCache,
+    ) -> Result<Option<RecoveredNativeGame>, NativeSourceError> {
+        self.recover_selected_cached(
+            game,
+            store,
+            programs,
+            &mut budget,
+            Recovery::StateOnly,
+            None,
+            Some(cache),
+        )
+    }
+
+    /// Recover accepted history under an explicit server owner, reusing a verified
+    /// cached checkpoint and history proof when live SQL authority matches.
+    pub(super) fn recover_owned_history_cached(
+        &self,
+        game: Uuid,
+        store: &NativeArtifactStore,
+        programs: &NativeProgramSource,
+        mut budget: NativeRecoveryBudget,
+        owner: &NativeHostOwner,
+        cache: &CheckpointCache,
+    ) -> Result<Option<RecoveredNativeGame>, NativeSourceError> {
+        self.recover_selected_cached(
+            game,
+            store,
+            programs,
+            &mut budget,
+            Recovery::OwnedHistory(owner),
+            None,
+            Some(cache),
+        )
+    }
+
+    /// Reconstruct one anchored accepted game from its SQL source and private Storage.
     pub fn recover(
         &self,
         game: Uuid,
@@ -514,12 +522,13 @@ impl NativeSourceRepository {
         programs: &NativeProgramSource,
         mut budget: NativeRecoveryBudget,
     ) -> Result<Option<RecoveredNativeGame>, NativeSourceError> {
-        self.recover_selected(
+        self.recover_selected_cached(
             game,
             store,
             programs,
             &mut budget,
             Recovery::StateOnly,
+            None,
             None,
         )
     }
@@ -590,13 +599,27 @@ impl NativeSourceRepository {
         programs: &NativeProgramSource,
         budget: &mut NativeRecoveryBudget,
         mode: Recovery<'_>,
+        observer: Option<&mut CheckpointObserver<'_>>,
+    ) -> Result<Option<RecoveredNativeGame>, NativeSourceError> {
+        self.recover_selected_cached(game, store, programs, budget, mode, observer, None)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn recover_selected_cached(
+        &self,
+        game: Uuid,
+        store: &NativeArtifactStore,
+        programs: &NativeProgramSource,
+        budget: &mut NativeRecoveryBudget,
+        mode: Recovery<'_>,
         mut observer: Option<&mut CheckpointObserver<'_>>,
+        cache: Option<&CheckpointCache>,
     ) -> Result<Option<RecoveredNativeGame>, NativeSourceError> {
         let Some(source) = self.read(game)? else {
             return Ok(None);
         };
-        // A multiplayer expiry can be an ancestor of a live turn. Authenticate
-        // its elapsed interval even for an ordinary participant view.
+        // A privately reconstructed timeout needs its accepted deadline evidence
+        // before it can influence reads, even when the requested cut is nonterminal.
         let check_history = !matches!(mode, Recovery::StateOnly)
             || (source.record.seats.len() >= 3 && !source.accepted_revision().is_zero());
         if let Recovery::OwnedHistory(owner) = mode {
@@ -616,6 +639,41 @@ impl NativeSourceRepository {
             || opening.artifacts().context_revision() != source.context_revision()
         {
             return Err(invalid());
+        }
+        // Fast path: when SQL's authoritative content-addressed `state_ref` is already
+        // verified in memory (and no per-step observer is attached), skip O(N) Storage replay.
+        if observer.is_none()
+            && let Some(cache) = cache
+            && let Some(entry) = cache.get(
+                game,
+                source.record.checkpoint.state_ref.as_str(),
+                source.record.initial_ref.as_str(),
+                programs.identity().hex(),
+            )
+            && crate::amount::Amount::from(entry.checkpoint.basis().revision.get())
+                == *source.accepted_revision()
+        {
+            if !check_history {
+                return Ok(Some(RecoveredNativeGame {
+                    source,
+                    opening,
+                    checkpoint: entry.checkpoint,
+                    history_evidence: entry
+                        .history_verified
+                        .map(|(ev, _)| ev)
+                        .unwrap_or(NativeHistoryEvidence::StateOnly),
+                }));
+            }
+            if let Some((evidence, seq)) = entry.history_verified
+                && seq == *source.last_event_sequence()
+            {
+                return Ok(Some(RecoveredNativeGame {
+                    source,
+                    opening,
+                    checkpoint: entry.checkpoint,
+                    history_evidence: evidence,
+                }));
+            }
         }
         let history = if check_history {
             let Some(history) = self.read_transition_sources(&source, budget)? else {
@@ -708,16 +766,16 @@ impl NativeSourceRepository {
                 NativeHistoryEvidence::StateOnly,
             )
         };
-        // A bank conclusion also needs the authenticated clock original and due
-        // source. Basic live-view recovery intentionally does not read that evidence.
-        // Native terminal input cannot be followed by another accepted native input,
-        // so any successfully reconstructed bank input is necessarily the tip.
-        if !check_history
-            && checkpoint
-                .retained_input()
-                .is_some_and(|(kind, _, _)| matches!(kind, NativeCheckpointInput::BankExpiry))
-        {
-            return Err(invalid());
+        if let Some(cache) = cache {
+            let history_verified =
+                check_history.then(|| (history_evidence, source.last_event_sequence().clone()));
+            cache.record(
+                game,
+                source.record.initial_ref.as_str(),
+                programs.identity().hex(),
+                checkpoint.clone(),
+                history_verified,
+            );
         }
         Ok(Some(RecoveredNativeGame {
             source,

@@ -6,12 +6,16 @@
 //! values borrowed from the caller's actual physical/definition/state cut.
 mod colors;
 mod evaluation;
+mod inheritance;
+pub(crate) use inheritance::inherit_activated_abilities;
+pub use inheritance::{ActivationOriginPath, ActivationTerms, InheritedAbilities};
 #[cfg(test)]
 #[path = "characteristics/tests.rs"]
 pub(crate) mod frozen_tests;
 mod ordering;
 #[cfg(test)]
 pub(crate) mod private_qualification;
+mod static_rules;
 mod text;
 pub(crate) use text::rewrite_program as rewrite_program_creature_types;
 mod types;
@@ -19,19 +23,93 @@ mod world;
 
 pub use colors::{Color, ColorFilter, ColorOperation, StaticColorOperand};
 pub(crate) use evaluation::{count_permanents, evaluate};
+pub use static_rules::*;
 pub use types::*;
 
+use crate::priority::SeatId;
 pub use crate::program::CardType;
 use crate::{
     object_identity::{CardId, GameObjects, ObjectId, ObjectZone},
     stack_window::StackEntryId,
 };
+use spellwake_contracts::RulesInteger;
 use std::collections::{BTreeMap, BTreeSet};
 
 /// Nested canonical state under EffectWindow, never a final-stat cache.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct CharacteristicState {
-    departed_controllers: BTreeSet<crate::priority::SeatId>,
+    /// Physical commander designations used by rules that inspect the evaluated battlefield.
+    pub(crate) commander_cards: BTreeSet<CardId>,
+    pub(crate) entry_copies: BTreeMap<ObjectId, std::sync::Arc<crate::program::Program>>,
+    /// Component additions that postdate an individual copy effect, for this permanent only.
+    mutated_copies: BTreeMap<
+        (ObjectId, ContinuousEffectId),
+        (crate::program::Program, crate::program::Program),
+    >,
+    mutated_entry_faces: BTreeMap<ObjectId, crate::program::Program>,
+    pub(crate) commander_chosen_colors: BTreeMap<CardId, Color>,
+    pub(crate) exhausted: BTreeSet<(
+        ObjectId,
+        Option<CharacteristicTimestamp>,
+        crate::activated::ActivatedAbilityId,
+        ActivationOriginPath,
+    )>,
+    pub(crate) attachments: BTreeMap<ObjectId, crate::targets::TargetRef>,
+    pub(crate) paired_creatures: BTreeMap<ObjectId, ObjectId>,
+    pub(crate) suspend_haste:
+        BTreeMap<ObjectId, (crate::priority::SeatId, Option<ContinuousEffectId>)>,
+    pub(crate) foretold: BTreeMap<ObjectId, u64>,
+    pub(crate) saddled: BTreeSet<ObjectId>,
+    pub(crate) upkeep_cuts:
+        Option<BTreeMap<crate::priority::SeatId, crate::object_identity::ControlEpoch>>,
+    pub(crate) speed: BTreeMap<crate::priority::SeatId, u8>,
+    pub(crate) city_blessing: BTreeSet<crate::priority::SeatId>,
+    pub(crate) player_color_protection: BTreeMap<crate::priority::SeatId, BTreeSet<Color>>,
+    pub(crate) experience: BTreeMap<crate::priority::SeatId, RulesInteger>,
+    /// Game-wide monarch designation, independent of the permanent that created it.
+    pub(crate) monarch: Option<crate::priority::SeatId>,
+    pub(crate) lore: BTreeMap<ObjectId, spellwake_contracts::RulesInteger>,
+    pub(crate) life_lost_this_turn: BTreeMap<SeatId, RulesInteger>,
+    /// Actual damage pairs retained until cleanup when a definition uses that history.
+    pub(crate) creature_damage_pairs: Option<BTreeSet<(ObjectId, ObjectId)>>,
+    pub(crate) vow_counters: BTreeMap<ObjectId, RulesInteger>,
+    pub(crate) vow_protected_players: BTreeMap<ObjectId, BTreeSet<SeatId>>,
+    pub(crate) corpse_counters: BTreeMap<ObjectId, RulesInteger>,
+    pub(crate) blessing_counters: BTreeMap<ObjectId, RulesInteger>,
+    pub(crate) despair_counters: BTreeMap<ObjectId, RulesInteger>,
+    pub(crate) hatchling_counters: BTreeMap<ObjectId, RulesInteger>,
+    pub(crate) named_counters:
+        BTreeMap<crate::effects::CounterKind, BTreeMap<ObjectId, RulesInteger>>,
+    pub(crate) imprinted_cards: BTreeMap<ObjectId, Vec<ObjectId>>,
+    pub(crate) ability_donors_in_exile: BTreeMap<ObjectId, Vec<ObjectId>>,
+    pub(crate) chosen_entry_players: BTreeMap<ObjectId, [crate::priority::SeatId; 2]>,
+    pub(crate) indestructible_counters: BTreeMap<ObjectId, RulesInteger>,
+    indestructible_grants: BTreeMap<ObjectId, ContinuousEffectId>,
+    pub(crate) page_counters: BTreeMap<ObjectId, RulesInteger>,
+    pub(crate) quest_counters: BTreeMap<ObjectId, RulesInteger>,
+    pub(crate) verse_counters: BTreeMap<ObjectId, RulesInteger>,
+    pub(crate) suspect_counters: BTreeMap<ObjectId, spellwake_contracts::RulesInteger>,
+    pub(crate) charge: BTreeMap<ObjectId, spellwake_contracts::RulesInteger>,
+    pub(crate) storage: BTreeMap<ObjectId, spellwake_contracts::RulesInteger>,
+    pub(crate) defense: BTreeMap<ObjectId, spellwake_contracts::RulesInteger>,
+    pub(crate) battle_protectors: BTreeMap<ObjectId, SeatId>,
+    pub(crate) loyalty: BTreeMap<ObjectId, spellwake_contracts::RulesInteger>,
+    pub(crate) loyalty_used: BTreeMap<ObjectId, RulesInteger>,
+    pub(crate) loyalty_activators: BTreeSet<SeatId>,
+    pub(crate) extra_loyalty_activations: BTreeMap<SeatId, RulesInteger>,
+    pub(crate) extra_loyalty_used: BTreeMap<(ObjectId, SeatId), RulesInteger>,
+    pub(crate) emblems: BTreeMap<crate::emblem::EmblemId, crate::emblem::Emblem>,
+    next_emblem: u64,
+    pub(crate) time_counters: BTreeMap<ObjectId, spellwake_contracts::RulesInteger>,
+    pub(crate) fade: BTreeMap<ObjectId, spellwake_contracts::RulesInteger>,
+    pub(crate) age: BTreeMap<ObjectId, spellwake_contracts::RulesInteger>,
+    pub(crate) renowned: BTreeSet<ObjectId>,
+    pub(crate) end_step_casts: BTreeMap<ObjectId, crate::program::EndStepCast>,
+    pub(crate) evoked: BTreeSet<ObjectId>,
+    pub(crate) kicked: BTreeSet<ObjectId>,
+    pub(crate) bestowed_spells: BTreeSet<ObjectId>,
+    pub(crate) bestowed_auras: BTreeMap<ObjectId, ContinuousEffectId>,
+    reconfigure_effects: BTreeMap<ObjectId, ContinuousEffectId>,
     next_effect: u64,
     next_timestamp: u64,
     object_timestamps: BTreeMap<ObjectId, CharacteristicTimestamp>,
@@ -43,7 +121,63 @@ pub(crate) struct CharacteristicState {
 impl Default for CharacteristicState {
     fn default() -> Self {
         Self {
-            departed_controllers: BTreeSet::new(),
+            commander_cards: BTreeSet::new(),
+            entry_copies: BTreeMap::new(),
+            mutated_copies: BTreeMap::new(),
+            mutated_entry_faces: BTreeMap::new(),
+            commander_chosen_colors: BTreeMap::new(),
+            exhausted: BTreeSet::new(),
+            attachments: BTreeMap::new(),
+            paired_creatures: BTreeMap::new(),
+            saddled: BTreeSet::new(),
+            foretold: BTreeMap::new(),
+            suspend_haste: BTreeMap::new(),
+            upkeep_cuts: None,
+            speed: BTreeMap::new(),
+            city_blessing: BTreeSet::new(),
+            player_color_protection: BTreeMap::new(),
+            experience: BTreeMap::new(),
+            monarch: None,
+            lore: BTreeMap::new(),
+            life_lost_this_turn: BTreeMap::new(),
+            creature_damage_pairs: None,
+            vow_counters: BTreeMap::new(),
+            vow_protected_players: BTreeMap::new(),
+            corpse_counters: BTreeMap::new(),
+            blessing_counters: BTreeMap::new(),
+            despair_counters: BTreeMap::new(),
+            hatchling_counters: BTreeMap::new(),
+            named_counters: BTreeMap::new(),
+            imprinted_cards: BTreeMap::new(),
+            ability_donors_in_exile: BTreeMap::new(),
+            chosen_entry_players: BTreeMap::new(),
+            indestructible_counters: BTreeMap::new(),
+            indestructible_grants: BTreeMap::new(),
+            page_counters: BTreeMap::new(),
+            quest_counters: BTreeMap::new(),
+            verse_counters: BTreeMap::new(),
+            suspect_counters: BTreeMap::new(),
+            charge: BTreeMap::new(),
+            storage: BTreeMap::new(),
+            defense: BTreeMap::new(),
+            battle_protectors: BTreeMap::new(),
+            loyalty: BTreeMap::new(),
+            loyalty_used: BTreeMap::new(),
+            loyalty_activators: BTreeSet::new(),
+            extra_loyalty_activations: BTreeMap::new(),
+            extra_loyalty_used: BTreeMap::new(),
+            emblems: BTreeMap::new(),
+            next_emblem: 1,
+            age: BTreeMap::new(),
+            time_counters: BTreeMap::new(),
+            fade: BTreeMap::new(),
+            renowned: BTreeSet::new(),
+            end_step_casts: BTreeMap::new(),
+            evoked: BTreeSet::new(),
+            kicked: BTreeSet::new(),
+            bestowed_spells: BTreeSet::new(),
+            bestowed_auras: BTreeMap::new(),
+            reconfigure_effects: BTreeMap::new(),
             next_effect: 1,
             next_timestamp: 1,
             object_timestamps: BTreeMap::new(),
@@ -55,16 +189,53 @@ impl Default for CharacteristicState {
     }
 }
 impl CharacteristicState {
+    pub(crate) fn attack_allocation_mark(&self) -> [u64; 4] {
+        [
+            self.next_effect,
+            self.next_timestamp,
+            self.next_world_tenure,
+            self.next_emblem,
+        ]
+    }
+    pub(crate) fn retain_attack_mark(&mut self, mark: [u64; 4]) {
+        self.next_effect = self.next_effect.max(mark[0]);
+        self.next_timestamp = self.next_timestamp.max(mark[1]);
+        self.next_world_tenure = self.next_world_tenure.max(mark[2]);
+        self.next_emblem = self.next_emblem.max(mark[3]);
+    }
+
     pub(crate) fn copiable_definition<'a>(
         &'a self,
         physical: &'a crate::object_identity::GameObject,
         programs: &'a BTreeMap<CardId, crate::program::Program>,
     ) -> Option<(&'a crate::program::Program, Option<CharacteristicTimestamp>)> {
         let original = physical.base_program(programs)?;
+        if physical.zone() == ObjectZone::Exile && self.foretold.contains_key(&physical.id()) {
+            static CONCEALED: std::sync::LazyLock<crate::program::Program> =
+                std::sync::LazyLock::new(|| {
+                    let mut hidden = crate::program::Program::artifact(None, vec![]);
+                    hidden.card_types.clear();
+                    hidden
+                });
+            return Some((&CONCEALED, None));
+        }
+
+        if let Some(kind) = physical.face_down() {
+            return Some((kind.definition(), None));
+        }
+
         if physical.zone() == ObjectZone::Battlefield
             && let Some((program, timestamp)) = self.copied_definition(physical.id())
         {
             return Some((program, Some(timestamp)));
+        }
+        if physical.zone() == ObjectZone::Battlefield
+            && let Some(program) = self.entry_copies.get(&physical.id())
+        {
+            return Some((
+                program.as_ref(),
+                self.object_timestamps.get(&physical.id()).copied(),
+            ));
         }
         Some((original, None))
     }
@@ -78,10 +249,63 @@ impl CharacteristicState {
             .values()
             .filter(|effect| effect.affected.contains(&object))
             .filter_map(|effect| match effect.parts.0.as_slice() {
-                [ResolvedPart::Copy(program)] => Some((program.as_ref(), effect.timestamp)),
+                [ResolvedPart::Copy(program)] => Some((
+                    self.mutated_copies
+                        .get(&(object, effect.id))
+                        .map_or(program.as_ref(), |(merged, _)| merged),
+                    effect.timestamp,
+                )),
                 _ => None,
             })
             .max_by_key(|(_, timestamp)| *timestamp)
+    }
+    /// A newly merged component applies after all active copy effects in layer 1a.
+    /// Preserve each underlying copy so expiry can reveal its own merged result.
+    pub(crate) fn update_copy_components<E>(
+        &mut self,
+        object: ObjectId,
+        new_top: Option<&crate::program::Program>,
+        merge: impl Fn(&crate::program::Program) -> Result<crate::program::Program, E>,
+    ) -> Result<(), E> {
+        if let Some(program) = self.entry_copies.get_mut(&object) {
+            let face = new_top
+                .or_else(|| self.mutated_entry_faces.get(&object))
+                .unwrap_or(program)
+                .clone();
+            *program = std::sync::Arc::new(merge(program)?);
+            self.mutated_entry_faces.insert(object, face);
+        }
+        for effect in self
+            .resolved
+            .values()
+            .filter(|effect| effect.affected.contains(&object))
+        {
+            if let [ResolvedPart::Copy(program)] = effect.parts.0.as_slice() {
+                let key = (object, effect.id);
+                let previous = self.mutated_copies.get(&key);
+                let merged = merge(previous.map_or(program.as_ref(), |(merged, _)| merged))?;
+                let face = new_top
+                    .or_else(|| previous.map(|(_, face)| face))
+                    .unwrap_or(program)
+                    .clone();
+                self.mutated_copies.insert(key, (merged, face));
+            }
+        }
+        Ok(())
+    }
+    pub(crate) fn displayed_copy_face(&self, object: ObjectId) -> Option<&crate::program::Program> {
+        if let Some((effective, time)) = self.copied_definition(object) {
+            let effect = self
+                .resolved
+                .values()
+                .find(|effect| effect.timestamp == time)?;
+            return Some(
+                self.mutated_copies
+                    .get(&(object, effect.id))
+                    .map_or(effective, |(_, face)| face),
+            );
+        }
+        self.mutated_entry_faces.get(&object)
     }
     /// Admit exactly the trusted initial BF order without deriving history from
     /// registry or definition IDs. Validate the complete batch before allocation.
@@ -109,7 +333,88 @@ impl CharacteristicState {
         self.register_battlefield_entries(&order)
     }
 
+    /// CR 613.7e gives an attachment a fresh timestamp when it attaches to a
+    /// different object. Reattaching to its current host has no effect.
+    pub(crate) fn attach(
+        &mut self,
+        source: ObjectId,
+        host: crate::targets::TargetRef,
+        entering: bool,
+    ) -> Result<(), CharacteristicsError> {
+        if self.attachments.get(&source) != Some(&host) {
+            if !entering {
+                let next = self
+                    .next_timestamp
+                    .checked_add(1)
+                    .ok_or(CharacteristicsError::TimestampExhausted)?;
+                self.object_timestamps
+                    .insert(source, CharacteristicTimestamp(self.next_timestamp));
+                self.next_timestamp = next;
+            }
+            self.attachments.insert(source, host);
+        }
+        Ok(())
+    }
+    /// End the continuous type change created when this exact Equipment attached.
+    pub(crate) fn detach(&mut self, source: ObjectId) -> Option<crate::targets::TargetRef> {
+        if let Some(effect) = self.bestowed_auras.remove(&source) {
+            self.resolved.remove(&effect);
+        }
+        if let Some(effect) = self.reconfigure_effects.remove(&source) {
+            self.resolved.remove(&effect);
+        }
+        self.attachments.remove(&source)
+    }
+    /// Start the bestowed permanent’s layer-4 type change as it enters (CR 702.103b).
+    pub(crate) fn enter_bestowed(
+        &mut self,
+        entry: StackEntryId,
+        source: ObjectId,
+    ) -> Result<(), CharacteristicsError> {
+        let effect = self.add_effect(
+            entry,
+            source,
+            ResolvedParts(vec![ResolvedPart::Type(TypeChange {
+                supertypes: TypeOperation::Keep,
+                types: TypeOperation::Set([CardType::Enchantment].into()),
+                subtypes: SubtypeOperation::Keep,
+                land_subtypes: SubtypeOperation::Keep,
+            })]),
+            ResolvedDuration::NoStatedDuration,
+        )?;
+        self.bestowed_auras.insert(source, effect.id);
+        Ok(())
+    }
+    /// CR 702.151b creates a timestamped effect that lasts for this attachment.
+    pub(crate) fn stop_being_creature_while_attached(
+        &mut self,
+        entry: StackEntryId,
+        source: ObjectId,
+    ) -> Result<(), CharacteristicsError> {
+        let effect = self.add_effect(
+            entry,
+            source,
+            ResolvedParts(vec![ResolvedPart::Type(TypeChange {
+                supertypes: TypeOperation::Keep,
+                types: TypeOperation::Remove(BTreeSet::from([CardType::Creature])),
+                subtypes: SubtypeOperation::Keep,
+                land_subtypes: SubtypeOperation::Keep,
+            })]),
+            ResolvedDuration::NoStatedDuration,
+        )?;
+        self.reconfigure_effects.insert(source, effect.id);
+        Ok(())
+    }
     /// Trusted single entry through the same complete-order allocator.
+    pub(crate) fn restamp_transformations(
+        &mut self,
+        order: &[ObjectId],
+    ) -> Result<(), CharacteristicsError> {
+        for id in order {
+            self.object_timestamps.remove(id);
+        }
+        self.register_battlefield_entries(order)
+    }
     pub(crate) fn register_battlefield_entry(
         &mut self,
         object: ObjectId,
@@ -147,10 +452,70 @@ impl CharacteristicState {
         Ok(())
     }
 
+    pub(crate) fn create_emblem(
+        &mut self,
+        controller: crate::priority::SeatId,
+        definition: crate::emblem::EmblemDefinition,
+    ) -> Result<crate::emblem::Emblem, CharacteristicsError> {
+        let next_id = self
+            .next_emblem
+            .checked_add(1)
+            .ok_or(CharacteristicsError::EffectIdentityExhausted)?;
+        let next_timestamp = self
+            .next_timestamp
+            .checked_add(1)
+            .ok_or(CharacteristicsError::TimestampExhausted)?;
+        let emblem = crate::emblem::Emblem {
+            id: crate::emblem::EmblemId(self.next_emblem),
+            controller,
+            definition,
+            timestamp: CharacteristicTimestamp(self.next_timestamp),
+        };
+        self.next_emblem = next_id;
+        self.next_timestamp = next_timestamp;
+        self.emblems.insert(emblem.id, emblem.clone());
+        Ok(emblem)
+    }
+
+    pub(crate) fn clear_indestructible_counter_grant(&mut self, object: ObjectId) {
+        if let Some(id) = self.indestructible_grants.remove(&object) {
+            self.resolved.remove(&id);
+        }
+    }
+
+    /// A fresh counter of the same kind gives the whole group a new timestamp (CR 613.7d).
+    pub(crate) fn refresh_indestructible_counter_grant(
+        &mut self,
+        entry: StackEntryId,
+        object: ObjectId,
+    ) -> Result<(), CharacteristicsError> {
+        let effect = self.add_effect(
+            entry,
+            object,
+            ResolvedParts(vec![ResolvedPart::Abilities(
+                AbilityChange::grant_keywords([KeywordAbility::Indestructible]),
+            )]),
+            ResolvedDuration::NoStatedDuration,
+        )?;
+        self.clear_indestructible_counter_grant(object);
+        self.indestructible_grants.insert(object, effect.id);
+        Ok(())
+    }
+
     pub(crate) fn add_effect(
         &mut self,
         creator: StackEntryId,
         target: ObjectId,
+        parts: ResolvedParts,
+        duration: ResolvedDuration,
+    ) -> Result<ResolvedContinuousEffect, CharacteristicsError> {
+        self.add_effect_for_objects(creator, BTreeSet::from([target]), parts, duration)
+    }
+
+    pub(crate) fn add_effect_for_objects(
+        &mut self,
+        creator: StackEntryId,
+        affected: BTreeSet<ObjectId>,
         mut parts: ResolvedParts,
         duration: ResolvedDuration,
     ) -> Result<ResolvedContinuousEffect, CharacteristicsError> {
@@ -171,7 +536,7 @@ impl CharacteristicState {
             id,
             timestamp: CharacteristicTimestamp(self.next_timestamp),
             creator,
-            affected: BTreeSet::from([target]),
+            affected,
             parts,
             duration,
         };
@@ -179,6 +544,51 @@ impl CharacteristicState {
         self.next_effect = next_effect;
         self.next_timestamp = next_timestamp;
         Ok(effect)
+    }
+    pub(crate) fn take_all_plus_one_counters(
+        &mut self,
+        target: ObjectId,
+    ) -> spellwake_contracts::RulesInteger {
+        self.counters.get_mut(&target).map_or_else(
+            || 0.into(),
+            |c| std::mem::replace(&mut c.plus_one, 0.into()),
+        )
+    }
+    pub(crate) fn take_plus_one_counter(
+        &mut self,
+        target: ObjectId,
+    ) -> Result<(), CharacteristicsError> {
+        self.take_power_toughness_counters(
+            target,
+            &PowerToughnessCounters {
+                plus_one: 1.into(),
+                minus_one: 0.into(),
+            },
+        )?;
+        Ok(())
+    }
+    pub(crate) fn take_power_toughness_counters(
+        &mut self,
+        target: ObjectId,
+        removed: &PowerToughnessCounters,
+    ) -> Result<PowerToughnessCounters, CharacteristicsError> {
+        let current = self
+            .counters
+            .get_mut(&target)
+            .ok_or(CharacteristicsError::InvalidCounterPlacement)?;
+        if !removed.valid_placement()
+            || removed.plus_one > current.plus_one
+            || removed.minus_one > current.minus_one
+        {
+            return Err(CharacteristicsError::InvalidCounterPlacement);
+        }
+        current.plus_one = current.plus_one.minus(&removed.plus_one);
+        current.minus_one = current.minus_one.minus(&removed.minus_one);
+        let after = current.clone();
+        if after == PowerToughnessCounters::default() {
+            self.counters.remove(&target);
+        }
+        Ok(after)
     }
     pub(crate) fn place_counters(
         &mut self,
@@ -218,38 +628,77 @@ impl CharacteristicState {
     pub(crate) fn effect(&self, id: ContinuousEffectId) -> Option<&ResolvedContinuousEffect> {
         self.resolved.get(&id)
     }
-    pub(crate) fn expire_until_end_of_turn(&mut self) -> Vec<ContinuousEffectId> {
-        let expired = self
-            .resolved
-            .values()
-            .filter(|effect| effect.duration == ResolvedDuration::UntilEndOfTurn)
-            .map(|effect| effect.id)
-            .collect();
-        self.resolved
-            .retain(|_, effect| effect.duration != ResolvedDuration::UntilEndOfTurn);
+    pub(crate) fn expire_departed_player_control(&mut self, players: &BTreeSet<SeatId>) {
+        self.resolved.retain(|_, effect| {
+            effect.parts.0.retain(|part| {
+                !matches!(part, ResolvedPart::Control(controller) if players.contains(controller))
+            });
+            !effect.parts.0.is_empty()
+        });
+    }
+    pub(crate) fn expire_at_cleanup(
+        &mut self,
+        active: crate::priority::SeatId,
+        turn: u64,
+    ) -> Vec<ContinuousEffectId> {
+        self.player_color_protection.clear();
+        self.expire_effects_matching(|duration| duration.expires_at_cleanup(active, turn))
+    }
+
+    pub(crate) fn expire_at_skipped_turns(
+        &mut self,
+        skipped: &BTreeSet<SeatId>,
+    ) -> Vec<ContinuousEffectId> {
+        self.expire_effects_matching(|duration| {
+            matches!(duration, ResolvedDuration::ThroughNextTurn { player, .. }
+            if skipped.contains(&player))
+        })
+    }
+
+    fn expire_effects_matching(
+        &mut self,
+        mut ends: impl FnMut(ResolvedDuration) -> bool,
+    ) -> Vec<ContinuousEffectId> {
+        let mut expired = Vec::new();
+        self.resolved.retain(|&id, effect| {
+            let ended = ends(effect.duration);
+            if ended {
+                expired.push(id);
+            }
+            !ended
+        });
         expired
     }
 
-    /// CR 800.4a ends the entire continuous effect granting a departing player
-    /// control, including masked effects and other buckets in that same record.
-    /// Independent effects survive regardless of the creating entry's controller.
-    pub(crate) fn end_departed_control(
+    /// Remove effects whose exact source left, phased out, or changed controller.
+    pub(crate) fn expire_source_control(
         &mut self,
-        players: &BTreeSet<crate::priority::SeatId>,
-    ) -> Vec<ResolvedContinuousEffect> {
-        self.departed_controllers.extend(players);
-        let mut ended = Vec::new();
-        self.resolved.retain(|_, effect| {
-            if effect.parts.0.iter().any(
-                |part| matches!(part, ResolvedPart::Control(player) if players.contains(player)),
-            ) {
-                ended.push(effect.clone());
-                false
-            } else {
-                true
+        cards: &GameObjects,
+        evaluated: &EvaluatedCharacteristics,
+    ) -> Vec<ContinuousEffectId> {
+        let mut expired = Vec::new();
+        self.resolved.retain(|id, effect| {
+            let ResolvedDuration::WhileSourceControlled {
+                source,
+                controller,
+                epoch,
+            } = effect.duration
+            else {
+                return true;
+            };
+            let still_controlled = cards.get(source).is_some_and(|card| {
+                card.zone() == crate::object_identity::ObjectZone::Battlefield
+                    && card.control_epoch() == Some(epoch)
+            }) && evaluated.get(source).is_some_and(|object| {
+                object.controller == Some(controller)
+                    && object.zone == crate::object_identity::ObjectZone::Battlefield
+            });
+            if !still_controlled {
+                expired.push(*id);
             }
+            still_controlled
         });
-        ended
+        expired
     }
 
     /// Compute from pre-check state and apply in the same SBA batch as death.
@@ -281,11 +730,106 @@ impl CharacteristicState {
             }
         }
     }
-    pub(crate) fn retain_battlefield(&mut self, live: &BTreeSet<ObjectId>) {
+    pub(crate) fn expire_suspend_haste(&mut self, cards: &GameObjects) -> bool {
+        let mut removed = false;
+        self.suspend_haste.retain(|object, (controller, effect)| {
+            let keep = cards
+                .get(*object)
+                .is_some_and(|c| c.controller() == Some(*controller));
+            if !keep && let Some(id) = effect {
+                removed |= self.resolved.remove(id).is_some();
+            }
+            keep
+        });
+        removed
+    }
+    pub(crate) fn retain_battlefield(
+        &mut self,
+        live: &BTreeSet<ObjectId>,
+        linked_counter_sources: &BTreeSet<ObjectId>,
+    ) {
+        self.entry_copies.retain(|id, _| live.contains(id));
+        self.mutated_entry_faces
+            .retain(|object, _| live.contains(object));
+        self.mutated_copies
+            .retain(|(object, id), _| live.contains(object) && self.resolved.contains_key(id));
+        self.lore.retain(|id, _| live.contains(id));
+        self.vow_counters.retain(|id, _| live.contains(id));
+        self.vow_protected_players.retain(|id, _| live.contains(id));
+        self.corpse_counters
+            .retain(|object, _| live.contains(object));
+        self.blessing_counters
+            .retain(|object, _| live.contains(object));
+        self.hatchling_counters
+            .retain(|object, _| live.contains(object));
+        self.despair_counters
+            .retain(|object, _| live.contains(object));
+        self.named_counters.retain(|_, counters| {
+            counters.retain(|object, _| {
+                live.contains(object) || linked_counter_sources.contains(object)
+            });
+            !counters.is_empty()
+        });
+        self.imprinted_cards
+            .retain(|source, _| live.contains(source));
+        self.ability_donors_in_exile
+            .retain(|source, _| live.contains(source));
+        self.chosen_entry_players
+            .retain(|source, _| live.contains(source));
+        self.indestructible_counters
+            .retain(|object, _| live.contains(object));
+        self.indestructible_grants
+            .retain(|object, _| live.contains(object));
+        self.page_counters.retain(|id, _| live.contains(id));
+        self.quest_counters.retain(|id, _| live.contains(id));
+        self.verse_counters.retain(|id, _| live.contains(id));
+        self.suspect_counters.retain(|id, _| live.contains(id));
+        self.charge.retain(|id, _| live.contains(id));
+        self.storage.retain(|id, _| live.contains(id));
+        self.defense.retain(|id, _| live.contains(id));
+        self.battle_protectors.retain(|id, _| live.contains(id));
+        self.loyalty.retain(|id, _| live.contains(id));
+        self.loyalty_used.retain(|id, _| live.contains(id));
+        self.extra_loyalty_used
+            .retain(|(id, _), _| live.contains(id));
+        self.fade.retain(|id, _| live.contains(id));
+        self.age.retain(|id, _| live.contains(id));
+        self.renowned.retain(|id| live.contains(id));
         self.resolved.retain(|_, effect| {
             effect.affected.retain(|object| live.contains(object));
             !effect.affected.is_empty()
         });
+        self.attachments.retain(|source, host| {
+            live.contains(source)
+                && match host {
+                    crate::targets::TargetRef::Object(object) => live.contains(object),
+                    crate::targets::TargetRef::Player(_) => true,
+                    crate::targets::TargetRef::Stack(_) => false,
+                }
+        });
+        self.bestowed_auras.retain(|source, id| {
+            if self.attachments.contains_key(source) {
+                true
+            } else {
+                self.resolved.remove(id);
+                false
+            }
+        });
+        self.reconfigure_effects.retain(|source, id| {
+            if self.attachments.contains_key(source) {
+                true
+            } else {
+                self.resolved.remove(id);
+                false
+            }
+        });
+        self.end_step_casts
+            .retain(|object, _| live.contains(object));
+        self.kicked.retain(|object| live.contains(object));
+        self.evoked.retain(|object| live.contains(object));
+        self.saddled.retain(|object| live.contains(object));
+        self.exhausted
+            .retain(|(object, _, _, _)| live.contains(object));
         self.counters.retain(|object, _| live.contains(object));
         self.object_timestamps
             .retain(|object, _| live.contains(object));
