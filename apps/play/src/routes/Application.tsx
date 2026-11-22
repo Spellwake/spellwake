@@ -11,9 +11,15 @@ import { DeletionRecovery } from "../account/DeletionRecovery";
 import { AccountProvider } from "../auth/AccountProvider";
 import { CardsRoute, PacksRoute } from "../collection/CollectionRoutes";
 import { DeckBuilderRoute, DeckShelfRoute } from "../decks/DeckRoutes";
+import { SeasonRoute, StandingsRoute } from "../league/LeagueRoutes";
 import { LobbyRoute } from "../lobby/LobbyRoutes";
+import {
+  ListingsRoute,
+  PredictionsRoute,
+  SupplyRoute,
+} from "../market/MarketRoutes";
+import { MatchRoute } from "../match/MatchRoutes";
 import { TradeRoute } from "../trade/TradeRoutes";
-import { ListingsRoute, SupplyRoute } from "../market/MarketRoutes";
 import {
   AccountGate,
   AuthCallbackRoute,
@@ -22,34 +28,29 @@ import {
 } from "./entry/EntryRoutes";
 import type { FrameHandle } from "./frame-mode";
 import { PatreonReturnRoute } from "./patreon/PatreonReturnRoute";
-import { PendingPage } from "./PendingPage";
 
 /** A screen of the signed-in app. In a configured build it waits behind account entry. */
 const gated = (element: ReactElement): ReactElement => (
   <AccountGate>{element}</AccountGate>
 );
-const pending = (path: string, title: string) => ({
-  path,
-  element: gated(<PendingPage title={title} />),
-});
 const entry = { frame: "focus" } satisfies FrameHandle;
+const immersive = { frame: "immersive" } satisfies FrameHandle;
 
 /**
- * Frame probe: a stand-in screen that exercises the immersive frame until the
- * live match is connected. Development only. A production build drops it.
+ * Development-only probes for stressing individual layouts. A production build drops them.
  */
 const probes: RouteObject[] = import.meta.env.DEV
   ? [
       {
         path: "probe/match",
-        handle: { frame: "immersive" } satisfies FrameHandle,
+        handle: immersive,
         lazy: async () => ({
           Component: (await import("./probes/MatchProbe")).MatchProbe,
         }),
       },
       {
         path: "probe/entry",
-        handle: { frame: "focus" } satisfies FrameHandle,
+        handle: entry,
         lazy: async () => ({
           Component: (await import("./probes/EntryProbe")).EntryProbe,
         }),
@@ -70,6 +71,19 @@ const probes: RouteObject[] = import.meta.env.DEV
         path: "probe/market",
         lazy: async () => ({
           Component: (await import("./probes/MarketProbe")).MarketProbe,
+        }),
+      },
+      {
+        path: "probe/league",
+        lazy: async () => ({
+          Component: (await import("./probes/LeagueProbe")).LeagueProbe,
+        }),
+      },
+      {
+        path: "probe/predictions",
+        lazy: async () => ({
+          Component: (await import("./probes/PredictionsProbe"))
+            .PredictionsProbe,
         }),
       },
       {
@@ -123,17 +137,17 @@ const router = createBrowserRouter(
         { path: "collection/packs", element: gated(<PacksRoute />) },
         { path: "collection/trade/:personId", element: gated(<TradeRoute />) },
         { path: "market/listings", element: gated(<ListingsRoute />) },
-        pending("market/predictions", "Predictions"),
+        { path: "market/predictions", element: gated(<PredictionsRoute />) },
         { path: "market/supply", element: gated(<SupplyRoute />) },
-        pending("league/season", "This season"),
-        pending("league/standings", "Standings"),
+        { path: "league/season", element: gated(<SeasonRoute />) },
+        { path: "league/standings", element: gated(<StandingsRoute />) },
         {
           path: "decks/import",
           element: <Navigate to="/collection/decks?import=true" replace />,
         },
         {
           path: "decks/:deckId",
-          handle: { frame: "focus" } satisfies FrameHandle,
+          handle: entry,
           element: gated(<DeckBuilderRoute />),
         },
         {
@@ -159,7 +173,12 @@ const router = createBrowserRouter(
           element: <PatreonReturnRoute />,
         },
         { path: "lobby", element: <Navigate to="/open-play/lobby" replace /> },
-        pending("match", "Match"),
+        { path: "match", handle: immersive, element: gated(<MatchRoute />) },
+        {
+          path: "match/:gameId",
+          handle: immersive,
+          element: gated(<MatchRoute />),
+        },
         // View profile and Account settings are one dialog, opened over a screen.
         {
           path: "profile",

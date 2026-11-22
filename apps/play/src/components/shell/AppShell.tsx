@@ -19,8 +19,8 @@ import { destinationFor, travelDirection } from "../../routes/navigation";
 import {
   AccountOverlays,
   useOpenAccountSettings,
-  useOpenAgreement,
   useOpenCosmetics,
+  useOpenPolicy,
 } from "../../account/AccountOverlays";
 import { AppHeader } from "./AppHeader";
 import {
@@ -53,7 +53,7 @@ export function AppShell(): ReactElement {
   const frame = isEntering || isRestricted ? "focus" : routeFrame;
   const openAccountSettings = useOpenAccountSettings();
   const { openCosmetics, openDefaults } = useOpenCosmetics();
-  const openAgreement = useOpenAgreement();
+  const openPolicy = useOpenPolicy();
   const accountButton = useRef<HTMLButtonElement>(null);
   const messagesButton = useRef<HTMLButtonElement>(null);
   const [messages, setMessages] = useMessagesParam();
@@ -113,7 +113,7 @@ export function AppShell(): ReactElement {
                 onViewProfile={openAccountSettings}
                 onOpenCosmetics={openCosmetics}
                 onOpenDefaults={openDefaults}
-                onOpenAgreement={openAgreement}
+                onOpenPolicy={openPolicy}
                 onToggleMessages={() =>
                   void setMessages(messages ? null : "open")
                 }

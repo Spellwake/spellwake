@@ -1,7 +1,7 @@
 import { useAccount } from "../../auth/AccountProvider";
 import { endCurrentSession } from "../../auth/services";
 import type { OwnIdentity } from "../../account/account-sources";
-import { CONNECTED_IDENTITY } from "../../account/connected-account";
+import { useConnectedIdentity } from "../../account/connected-account";
 import { DEMO_USERNAME, useDemoIdentity } from "../../account/demo-account";
 import { useAccountSummary } from "../../data/account";
 import { coinsOf, useDemoCollection } from "../../collection/demo-collection";
@@ -25,6 +25,7 @@ export function useHeaderAccount(): HeaderAccount {
   const { state, services } = useAccount();
   const summary = useAccountSummary();
   const preview = useDemoIdentity();
+  const connectedIdentity = useConnectedIdentity();
   const [collection] = useDemoCollection();
   if (state.status === "unconfigured")
     return {
@@ -38,7 +39,7 @@ export function useHeaderAccount(): HeaderAccount {
     // A balance too large to show exactly is shown as unknown, never rounded.
     coins: Number.isSafeInteger(available) ? available : null,
     username: summary.data?.username ?? null,
-    identity: CONNECTED_IDENTITY,
+    identity: connectedIdentity,
     signOut:
       services && state.status === "ready"
         ? () => endCurrentSession(services)

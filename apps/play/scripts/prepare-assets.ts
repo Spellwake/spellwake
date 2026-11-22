@@ -1,29 +1,43 @@
 import { copyFile, cp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { basename, dirname, resolve } from "node:path";
+import { appAssets } from "./app-assets";
 import { runtimeAssets } from "./runtime-assets";
-import { tableAssets } from "./table-assets";
-import { logoAssetSource, tableAssetSource } from "./release-asset-source";
+import {
+  appAssetSource,
+  logoAssetSource,
+  tableAssetSource,
+} from "./release-asset-source";
 
-// Release builds take only the pinned runtime package and publish the sample
-// tabletop: the application UI's artwork is accepted in the asset repository
-// but not yet packaged. Local preview builds serve the application UI.
+// Release builds take only the pinned runtime asset package (logo, card back,
+// and accepted application UI artwork) and omit local deck-builder fixtures.
 const release = process.env.SPELLWAKE_RELEASE_ASSETS === "true";
 const source = tableAssetSource();
 const output = resolve(import.meta.dir, "../public");
-const packaged: readonly string[] = release ? tableAssets : runtimeAssets;
 
 await rm(output, { recursive: true, force: true });
 await Promise.all(
-  packaged.map(async (asset) => {
+  runtimeAssets.map(async (asset) => {
     const destination = resolve(output, asset);
     await mkdir(dirname(destination), { recursive: true });
     await copyFile(resolve(source, asset), destination);
   }),
 );
-console.info(
-  `Prepared ${packaged.length} ${release ? "sample tabletop" : "runtime"} assets.`,
-);
-if (release) process.exit(0);
+if (release) {
+  const packagedApp = appAssetSource();
+  await Promise.all([
+    copyFile(logoAssetSource(), resolve(output, "logo.svg")),
+    ...appAssets.map(async (asset) => {
+      const destination = resolve(output, asset);
+      await mkdir(dirname(destination), { recursive: true });
+      await copyFile(resolve(packagedApp, asset), destination);
+    }),
+  ]);
+  console.info(
+    `Prepared ${runtimeAssets.length + appAssets.length + 1} release application assets.`,
+  );
+  process.exit(0);
+}
+console.info(`Prepared ${runtimeAssets.length} runtime assets.`);
 
 // Shell artwork is copied from the private asset working paths for local preview only.
 // The backdrop is absent on purpose: its artwork is supplied separately.

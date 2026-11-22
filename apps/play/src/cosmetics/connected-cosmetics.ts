@@ -1,11 +1,12 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { useQuery } from "@tanstack/react-query";
 import { isTauri } from "@tauri-apps/api/core";
 import type {
   AppearanceSelection,
   CosmeticSummary,
 } from "@spellwake/application-contracts";
 import { useAccount } from "../auth/AccountProvider";
-import { useAccountSummary } from "../data/account";
+import { ownerBearer, useAccountSummary } from "../data/account";
 import { useCheckout } from "../data/checkout";
 import { useCosmeticCatalogue } from "../data/cosmetics";
 import { useProfileDefaultsCommand } from "../data/profile-defaults";
@@ -373,29 +374,81 @@ function useHostedCheckout(
   };
 }
 
+function formatUsdCents(cents: number | null): string | null {
+  if (cents === null || !Number.isFinite(cents)) return null;
+  const dollars = cents / 100;
+  return dollars % 1 === 0
+    ? `$${dollars.toFixed(0)}`
+    : `$${dollars.toFixed(2)}`;
+}
+
 export function useConnectedCosmetics(): CosmeticsSource {
   const gap = useAccountGap();
+  const { state, services } = useAccount();
+  const owner =
+    state.status === "ready" && state.session.accountId
+      ? { ...state.session, accountId: state.session.accountId }
+      : null;
   const catalogue = useCatalogue();
+  const richQuery = useQuery({
+    queryKey: ["cosmetics-rich", owner?.accountId, owner?.sessionId],
+    enabled: !!owner && !!services,
+    queryFn: async ({ signal }) => {
+      if (!owner || !services) return null;
+      const res = await services.api.cosmeticsRich(
+        await ownerBearer(services, owner),
+        { limit: 100 },
+        signal,
+      );
+      return res.status === "success" ? res.data.items : null;
+    },
+  });
   const [chosenId, setChosenId] = useState<string | null>(null);
-  const items = useMemo(
+  const richById = useMemo(
     () =>
-      catalogue.items.map(({ id, name, kind, isOwned, isFree }): ShopItem => ({
-        id,
-        name,
-        kind,
-        look: null,
-        isOwned,
-        isSold: !isFree,
-        price: null,
-      })),
-    [catalogue.items],
+      new Map((richQuery.data ?? []).map((item) => [item.id, item] as const)),
+    [richQuery.data],
   );
+  const items = useMemo((): ShopItem[] => {
+    const base: ShopItem[] = catalogue.items.map(
+      ({ id, name, kind, isOwned, isFree }): ShopItem => {
+        const rich = richById.get(id);
+        return {
+          id,
+          name: rich?.name || name,
+          kind,
+          look: rich?.previewUrl ? { imageUrl: rich.previewUrl } : null,
+          isOwned: rich ? rich.owned : isOwned,
+          isSold: rich
+            ? rich.priceCents !== null && rich.priceCents > 0
+            : !isFree,
+          price: rich ? formatUsdCents(rich.priceCents) : null,
+        };
+      },
+    );
+    const seen = new Set(base.map((i) => i.id));
+    for (const rich of richQuery.data ?? []) {
+      if (seen.has(rich.id)) continue;
+      base.push({
+        id: rich.id,
+        name: rich.name,
+        kind: rich.kind,
+        look: rich.previewUrl ? { imageUrl: rich.previewUrl } : null,
+        isOwned: rich.owned,
+        isSold: rich.priceCents !== null && rich.priceCents > 0,
+        price: formatUsdCents(rich.priceCents),
+      });
+    }
+    return base;
+  }, [catalogue.items, richById, richQuery.data]);
+  const hasPets = items.some((item) => item.kind === "pet");
+  const categories = hasPets ? ([...CATEGORIES, "pet"] as const) : CATEGORIES;
   const chosen = items.find((item) => item.id === chosenId) ?? null;
   const { checkout, isPaid } = useHostedCheckout(chosen, setChosenId);
   if (gap) return { status: gap };
   return {
     status: "ready",
-    categories: CATEGORIES,
+    categories,
     state: catalogue.state,
     // A paid purchase counts at once, before the catalogue is read again.
     items: isPaid
