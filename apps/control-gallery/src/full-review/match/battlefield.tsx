@@ -1,7 +1,7 @@
 import type { CSSProperties } from "react";
 import { TargetOption } from "@spellwake/ui";
 import { cardImage, cardName, type Card, sourceFor } from "./assets";
-import sleeve from "../../../../../output/card-study-matte-approved-2026-10-31/preview/app/cards/spellwake-sleeve-midnight.svg?inline";
+import sleeve from "../../../../../benchmarks/browser-rendering/public/cards/spellwake-sleeve-midnight.svg?inline";
 
 export type Piece = {
   id: string;

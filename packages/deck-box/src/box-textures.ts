@@ -254,7 +254,7 @@ function sharedInputs(): Promise<SharedInputs> {
         ),
         image(
           new URL(
-            "../../../assets/logo/spellwake-gold-two-dots.svg",
+            "../../../assets/logo/spellwake-gold.svg",
             import.meta.url,
           ).href,
         ),
