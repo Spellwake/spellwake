@@ -339,7 +339,7 @@ async fn fixture(client: &Client) -> Result<(Uuid, Uuid, Uuid), Box<dyn Error + 
 async fn schema_permissions_and_exact_owned_quantities() -> TestResult {
     let client = connection().await?;
     let counts = client.query_one("SELECT (SELECT count(*) FROM pg_tables WHERE schemaname='app')::bigint,(SELECT count(*) FROM pg_views WHERE schemaname='app')::bigint", &[]).await?;
-    assert_eq!(counts.get::<_, i64>(0), 90);
+    assert_eq!(counts.get::<_, i64>(0), 109);
     assert_eq!(counts.get::<_, i64>(1), 10);
     let (owner, subject, asset) = fixture(&client).await?;
     let (_, other_subject) = account(&client).await?;

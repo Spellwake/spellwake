@@ -120,7 +120,25 @@ async fn catalogue_batches_remain_hidden_until_atomic_release_and_exact_receipts
     assert_eq!(rejected["status"], "fail");
     assert_eq!(rejected["data"]["entries"], "invalid deck entries");
     client.batch_execute("RESET ROLE").await?;
+    let pending_printing: Uuid = client
+        .query_one(
+            "SELECT id FROM app.printing WHERE definition_id=$1 ORDER BY id LIMIT 1",
+            &[&definition],
+        )
+        .await?
+        .get(0);
     set_auth_claims(&client, subject).await?;
+    let metadata_query = "SELECT app.read_card_metadata($1,$2)";
+    let metadata_args: &[&(dyn tokio_postgres::types::ToSql + Sync)] =
+        &[&vec![pending_printing], &vec![definition]];
+    let metadata: Value = client
+        .query_one(metadata_query, metadata_args)
+        .await?
+        .get(0);
+    assert_eq!(metadata["data"], json!({"printings":[],"definitions":[]}));
+    let search_query = "SELECT app.search_cards_rich($1,NULL,NULL,NULL,NULL,100)";
+    let search: Value = client.query_one(search_query, &[&name]).await?.get(0);
+    assert_eq!(search["data"]["items"], json!([]));
     let set_code = format!("q{}", &set.simple().to_string()[..10]);
     let hidden_sets: Value = client
         .query_one("SELECT app.read_my_sets($1,NULL,100)", &[&set_code])
@@ -165,6 +183,20 @@ async fn catalogue_batches_remain_hidden_until_atomic_release_and_exact_receipts
         .await?
         .get(0);
     assert_eq!(committed["data"]["items"].as_array().unwrap().len(), 4);
+    let metadata: Value = observer
+        .query_one(metadata_query, metadata_args)
+        .await?
+        .get(0);
+    assert_eq!(
+        metadata["data"]["printings"][0]["printingId"],
+        json!(pending_printing)
+    );
+    assert_eq!(
+        metadata["data"]["definitions"][0]["definitionId"],
+        json!(definition)
+    );
+    let search: Value = observer.query_one(search_query, &[&name]).await?.get(0);
+    assert_eq!(search["data"]["items"].as_array().unwrap().len(), 4);
     assert_eq!(finish(&client, publication).await?, publication);
     assert_eq!(begin(&client, &source).await?, publication);
     assert_eq!(append(&client, publication, 1, &first).await?, batch);
@@ -213,10 +245,10 @@ async fn catalogue_batches_remain_hidden_until_atomic_release_and_exact_receipts
     assert_eq!(visible_sets["data"]["items"].as_array().unwrap().len(), 1);
     client.batch_execute("RESET ROLE").await?;
     let (faces, images, programs): (i64, i64, i64) = {
-        let row=client.query_one("SELECT (SELECT count(*) FROM app.card_face f JOIN app.card_definition_revision r ON r.id=f.definition_revision_id WHERE r.catalogue_receipt_id=$1), (SELECT count(*) FROM app.printing WHERE catalogue_receipt_id=$1 AND image_ref IS NOT NULL), (SELECT count(*) FROM app.release_card_program p JOIN app.card_definition_revision r ON r.id=p.definition_revision_id WHERE r.catalogue_receipt_id=$1)",&[&publication]).await?;
+        let row=client.query_one("SELECT (SELECT count(*) FROM app.card_face f JOIN app.card_definition_revision r ON r.id=f.definition_revision_id WHERE r.catalogue_receipt_id=$1), (SELECT count(*) FROM app.printing WHERE catalogue_receipt_id=$1 AND image_ref LIKE 'https://cards.scryfall.io/art_crop/front/%'), (SELECT count(*) FROM app.release_card_program p JOIN app.card_definition_revision r ON r.id=p.definition_revision_id WHERE r.catalogue_receipt_id=$1)",&[&publication]).await?;
         (row.get(0), row.get(1), row.get(2))
     };
-    assert_eq!((faces, images, programs), (1, 0, 0));
+    assert_eq!((faces, images, programs), (1, 4, 0));
     assert!(client.execute("UPDATE app.card_definition_revision SET source_metadata='{}' WHERE catalogue_receipt_id=$1",&[&publication]).await.is_err());
     assert!(client.execute("UPDATE app.card_face SET name='Changed' WHERE definition_revision_id IN (SELECT id FROM app.card_definition_revision WHERE catalogue_receipt_id=$1)",&[&publication]).await.is_err());
     Ok(())

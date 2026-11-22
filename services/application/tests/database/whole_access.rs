@@ -17,8 +17,8 @@ async fn subject(c: &Client, actor: Uuid) -> Result<Uuid, tokio_postgres::Error>
 #[ignore = "requires isolated migrated Postgres"]
 async fn every_relation_preserves_rls_invoker_views_and_closed_runtime_mutations() -> TestResult {
     let c = connection().await?;
-    let relations=c.query("SELECT oid,relname,relkind::text,relrowsecurity,relforcerowsecurity,coalesce(reloptions,'{}') FROM pg_class WHERE relnamespace='app'::regnamespace AND relkind IN('r','v') ORDER BY relname",&[]).await?;
-    assert_eq!(relations.len(), 100);
+    let relations=c.query("SELECT c.oid,c.relname,c.relkind::text,c.relrowsecurity,c.relforcerowsecurity,coalesce(c.reloptions,'{}'), (SELECT quote_ident(a.attname) FROM pg_attribute a WHERE a.attrelid=c.oid AND a.attnum>0 AND NOT a.attisdropped AND a.attgenerated='' ORDER BY a.attnum LIMIT 1) FROM pg_class c WHERE c.relnamespace='app'::regnamespace AND c.relkind IN('r','v') ORDER BY c.relname",&[]).await?;
+    assert_eq!(relations.len(), 119);
     for row in &relations {
         let name: String = row.get(1);
         let kind: String = row.get(2);
@@ -45,12 +45,13 @@ async fn every_relation_preserves_rls_invoker_views_and_closed_runtime_mutations
         c.batch_execute(&format!("SET ROLE {role}")).await?;
         for row in &relations {
             let name: String = row.get(1);
-            // Identifiers come exclusively from this owned schema catalogue.
+            // Pick an actual column, including on join tables with no id column.
+            let column: String = row.get(6);
             for statement in [
-                format!("UPDATE app.\"{name}\" SET id=id WHERE false"),
+                format!("UPDATE app.\"{name}\" SET {column}={column} WHERE false"),
                 format!("DELETE FROM app.\"{name}\" WHERE false"),
                 format!(
-                    "INSERT INTO app.\"{name}\" (id) SELECT id FROM app.\"{name}\" WHERE false"
+                    "INSERT INTO app.\"{name}\" ({column}) SELECT {column} FROM app.\"{name}\" WHERE false"
                 ),
             ] {
                 let error = c.execute(&statement, &[]).await.unwrap_err();
@@ -637,7 +638,7 @@ async fn every_selectable_column_matches_the_reviewed_whole_relation_capability_
     let c = connection().await?;
     let approved: Value =
         serde_json::from_str(include_str!("../fixtures/rls-relation-capabilities.json"))?;
-    assert_eq!(approved.as_array().unwrap().len(), 100);
+    assert_eq!(approved.as_array().unwrap().len(), 119);
     for relation in approved.as_array().unwrap() {
         let name = relation["relation"].as_str().unwrap();
         for role in [

@@ -42,7 +42,9 @@
         "default_back_id",
         "default_sleeve_id",
         "default_dice_id",
-        "default_playmat_id"
+        "default_playmat_id",
+        "default_pet_id",
+        "selected_badge"
       ],
       "service_role": [
         "id",
@@ -54,7 +56,9 @@
         "default_back_id",
         "default_sleeve_id",
         "default_dice_id",
-        "default_playmat_id"
+        "default_playmat_id",
+        "default_pet_id",
+        "selected_badge"
       ],
       "supabase_auth_admin": []
     }
@@ -88,7 +92,13 @@
         "asset_ref",
         "state",
         "is_free",
-        "display_name"
+        "display_name",
+        "name",
+        "description",
+        "price_cents",
+        "price_coins",
+        "preview_url",
+        "rarity"
       ],
       "service_role": [
         "id",
@@ -96,7 +106,13 @@
         "asset_ref",
         "state",
         "is_free",
-        "display_name"
+        "display_name",
+        "name",
+        "description",
+        "price_cents",
+        "price_coins",
+        "preview_url",
+        "rarity"
       ],
       "supabase_auth_admin": []
     }
@@ -578,7 +594,9 @@
         "back_id",
         "sleeve_id",
         "dice_id",
-        "playmat_id"
+        "playmat_id",
+        "pet_id",
+        "face_definition_id"
       ],
       "service_role": [
         "id",
@@ -593,7 +611,9 @@
         "back_id",
         "sleeve_id",
         "dice_id",
-        "playmat_id"
+        "playmat_id",
+        "pet_id",
+        "face_definition_id"
       ],
       "supabase_auth_admin": []
     }
@@ -924,7 +944,8 @@
         "sender_id",
         "send_request_ref",
         "body",
-        "sent_at"
+        "sent_at",
+        "attachment"
       ],
       "service_role": [
         "id",
@@ -932,7 +953,8 @@
         "sender_id",
         "send_request_ref",
         "body",
-        "sent_at"
+        "sent_at",
+        "attachment"
       ],
       "supabase_auth_admin": []
     }
@@ -1162,7 +1184,10 @@
         "structure",
         "configuration_id",
         "target_seat_count",
-        "queue_claim_receipt_id"
+        "queue_claim_receipt_id",
+        "ai_difficulty",
+        "planechase_enabled",
+        "range_of_influence"
       ],
       "service_role": [
         "id",
@@ -1178,7 +1203,10 @@
         "structure",
         "configuration_id",
         "target_seat_count",
-        "queue_claim_receipt_id"
+        "queue_claim_receipt_id",
+        "ai_difficulty",
+        "planechase_enabled",
+        "range_of_influence"
       ],
       "supabase_auth_admin": []
     }
@@ -2291,6 +2319,196 @@
         "context_id",
         "release_id"
       ],
+      "supabase_auth_admin": []
+    }
+  },
+  {
+    "relation": "commander_pilot_member",
+    "kind": "table",
+    "reads": {
+      "anon": [],
+      "authenticated": [],
+      "service_role": [],
+      "supabase_auth_admin": []
+    }
+  },
+  {
+    "relation": "countdown_dispatch_cursor",
+    "kind": "table",
+    "reads": {
+      "anon": [],
+      "authenticated": [],
+      "service_role": [],
+      "supabase_auth_admin": []
+    }
+  },
+  {
+    "relation": "limited_draft",
+    "kind": "table",
+    "reads": {
+      "anon": [],
+      "authenticated": [],
+      "service_role": [],
+      "supabase_auth_admin": []
+    }
+  },
+  {
+    "relation": "limited_draft_item",
+    "kind": "table",
+    "reads": {
+      "anon": [],
+      "authenticated": [],
+      "service_role": [],
+      "supabase_auth_admin": []
+    }
+  },
+  {
+    "relation": "limited_draft_pack",
+    "kind": "table",
+    "reads": {
+      "anon": [],
+      "authenticated": [],
+      "service_role": [],
+      "supabase_auth_admin": []
+    }
+  },
+  {
+    "relation": "limited_draft_pick",
+    "kind": "table",
+    "reads": {
+      "anon": [],
+      "authenticated": [],
+      "service_role": [],
+      "supabase_auth_admin": []
+    }
+  },
+  {
+    "relation": "limited_draft_seat",
+    "kind": "table",
+    "reads": {
+      "anon": [],
+      "authenticated": [],
+      "service_role": [],
+      "supabase_auth_admin": []
+    }
+  },
+  {
+    "relation": "limited_draft_source",
+    "kind": "table",
+    "reads": {
+      "anon": [],
+      "authenticated": [],
+      "service_role": [],
+      "supabase_auth_admin": []
+    }
+  },
+  {
+    "relation": "limited_match_seat_pool",
+    "kind": "table",
+    "reads": {
+      "anon": [],
+      "authenticated": [],
+      "service_role": [],
+      "supabase_auth_admin": []
+    }
+  },
+  {
+    "relation": "limited_pilot_member",
+    "kind": "table",
+    "reads": {
+      "anon": [],
+      "authenticated": [],
+      "service_role": [],
+      "supabase_auth_admin": []
+    }
+  },
+  {
+    "relation": "limited_private_profile",
+    "kind": "table",
+    "reads": {
+      "anon": [],
+      "authenticated": [],
+      "service_role": [],
+      "supabase_auth_admin": []
+    }
+  },
+  {
+    "relation": "native_entropy_seed",
+    "kind": "table",
+    "reads": {
+      "anon": [],
+      "authenticated": [],
+      "service_role": [],
+      "supabase_auth_admin": []
+    }
+  },
+  {
+    "relation": "native_host_watch",
+    "kind": "table",
+    "reads": {
+      "anon": [],
+      "authenticated": [],
+      "service_role": [],
+      "supabase_auth_admin": []
+    }
+  },
+  {
+    "relation": "native_legacy_chooser_report",
+    "kind": "table",
+    "reads": {
+      "anon": [],
+      "authenticated": [],
+      "service_role": [],
+      "supabase_auth_admin": []
+    }
+  },
+  {
+    "relation": "native_opening_selection",
+    "kind": "table",
+    "reads": {
+      "anon": [],
+      "authenticated": [],
+      "service_role": [],
+      "supabase_auth_admin": []
+    }
+  },
+  {
+    "relation": "native_response_adoption",
+    "kind": "table",
+    "reads": {
+      "anon": [],
+      "authenticated": [],
+      "service_role": [],
+      "supabase_auth_admin": []
+    }
+  },
+  {
+    "relation": "private_pilot_profile",
+    "kind": "table",
+    "reads": {
+      "anon": [],
+      "authenticated": [],
+      "service_role": [],
+      "supabase_auth_admin": []
+    }
+  },
+  {
+    "relation": "trade_session",
+    "kind": "table",
+    "reads": {
+      "anon": [],
+      "authenticated": [],
+      "service_role": [],
+      "supabase_auth_admin": []
+    }
+  },
+  {
+    "relation": "trade_session_item",
+    "kind": "table",
+    "reads": {
+      "anon": [],
+      "authenticated": [],
+      "service_role": [],
       "supabase_auth_admin": []
     }
   }

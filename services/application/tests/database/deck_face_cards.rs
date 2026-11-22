@@ -210,13 +210,13 @@ async fn face_card_art_never_reveals_private_references_or_other_decks() -> Test
         .get(0);
     assert_eq!(private, None);
     // The owner sees the card without art; another account sees nothing.
+    let (_, stranger) = super::account(&client).await?;
     super::set_auth_claims(&client, subject).await?;
     let own: Value = client
         .query_one("SELECT app.deck_face_card_json($1,NULL)", &[&current])
         .await?
         .get(0);
     assert_eq!(own, json!({"definitionId":definition,"artUrl":null}));
-    let (_, stranger) = super::account(&client).await?;
     super::set_auth_claims(&client, stranger).await?;
     let other: Option<Value> = client
         .query_one("SELECT app.deck_face_card_json($1,NULL)", &[&current])
