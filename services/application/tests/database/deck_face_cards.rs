@@ -61,22 +61,21 @@ async fn a_deck_keeps_a_face_card_from_its_contents_with_official_art() -> TestR
     let scryfall = Uuid::new_v4();
     client.execute("INSERT INTO app.printing(definition_id,set_id,external_printing_ref,rarity,finish,image_ref,language) VALUES($1,$2,$3,'rare','nonfoil',NULL,'en')", &[&second,&set,&scryfall.to_string()]).await?;
     client.execute("INSERT INTO app.printing(definition_id,set_id,external_printing_ref,rarity,finish,image_ref) VALUES($1,$2,$3,'common','nonfoil','private:catalogue-art')", &[&first,&set,&Uuid::new_v4().to_string()]).await?;
-    let art: String = client
+    let id = scryfall.to_string();
+    let art = format!(
+        "https://cards.scryfall.io/art_crop/front/{}/{}/{id}.jpg",
+        &id[..1],
+        &id[1..2]
+    );
+    // The art is built when read: the published printing itself is unchanged.
+    let stored: Option<String> = client
         .query_one(
             "SELECT image_ref FROM app.printing WHERE external_printing_ref=$1",
-            &[&scryfall.to_string()],
+            &[&id],
         )
         .await?
         .get(0);
-    let id = scryfall.to_string();
-    assert_eq!(
-        art,
-        format!(
-            "https://cards.scryfall.io/art_crop/front/{}/{}/{id}.jpg",
-            &id[..1],
-            &id[1..2]
-        )
-    );
+    assert_eq!(stored, None);
 
     client.batch_execute("SET ROLE service_role").await?;
     // The first card of the first save becomes the face card.
