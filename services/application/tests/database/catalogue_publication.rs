@@ -120,7 +120,25 @@ async fn catalogue_batches_remain_hidden_until_atomic_release_and_exact_receipts
     assert_eq!(rejected["status"], "fail");
     assert_eq!(rejected["data"]["entries"], "invalid deck entries");
     client.batch_execute("RESET ROLE").await?;
+    let pending_printing: Uuid = client
+        .query_one(
+            "SELECT id FROM app.printing WHERE definition_id=$1 ORDER BY id LIMIT 1",
+            &[&definition],
+        )
+        .await?
+        .get(0);
     set_auth_claims(&client, subject).await?;
+    let metadata_query = "SELECT app.read_card_metadata($1,$2)";
+    let metadata_args: &[&(dyn tokio_postgres::types::ToSql + Sync)] =
+        &[&vec![pending_printing], &vec![definition]];
+    let metadata: Value = client
+        .query_one(metadata_query, metadata_args)
+        .await?
+        .get(0);
+    assert_eq!(metadata["data"], json!({"printings":[],"definitions":[]}));
+    let search_query = "SELECT app.search_cards_rich($1,NULL,NULL,NULL,NULL,100)";
+    let search: Value = client.query_one(search_query, &[&name]).await?.get(0);
+    assert_eq!(search["data"]["items"], json!([]));
     let set_code = format!("q{}", &set.simple().to_string()[..10]);
     let hidden_sets: Value = client
         .query_one("SELECT app.read_my_sets($1,NULL,100)", &[&set_code])
@@ -165,6 +183,26 @@ async fn catalogue_batches_remain_hidden_until_atomic_release_and_exact_receipts
         .await?
         .get(0);
     assert_eq!(committed["data"]["items"].as_array().unwrap().len(), 4);
+    let metadata: Value = observer
+        .query_one(metadata_query, metadata_args)
+        .await?
+        .get(0);
+    assert_eq!(
+        metadata["data"]["printings"][0]["printingId"],
+        json!(pending_printing)
+    );
+    assert_eq!(
+        metadata["data"]["definitions"][0]["definitionId"],
+        json!(definition)
+    );
+    assert!(
+        metadata["data"]["printings"][0]["imageUrl"]
+            .as_str()
+            .unwrap()
+            .starts_with("https://cards.scryfall.io/art_crop/front/")
+    );
+    let search: Value = observer.query_one(search_query, &[&name]).await?.get(0);
+    assert_eq!(search["data"]["items"].as_array().unwrap().len(), 4);
     assert_eq!(finish(&client, publication).await?, publication);
     assert_eq!(begin(&client, &source).await?, publication);
     assert_eq!(append(&client, publication, 1, &first).await?, batch);
@@ -451,75 +489,5 @@ async fn pending_catalogue_cannot_feed_assets_avatars_programs_or_qualified_pack
             &[&product.recipe, &evidence],
         )
         .await?;
-    Ok(())
-}
-
-#[tokio::test]
-#[ignore = "requires isolated migrated Postgres"]
-async fn native_deck_publication_rejects_an_unlinked_sideboard_in_either_selection() -> TestResult {
-    let c = connection().await?;
-    let (actor, _, deck, main, _) = super::decks::library(&c).await?;
-    let side = Uuid::new_v4();
-    c.execute(
-        "INSERT INTO app.card_definition(id,oracle_ref,name) VALUES($1,$1::uuid::text,'Sideboard')",
-        &[&side],
-    )
-    .await?;
-    let release = Uuid::new_v4();
-    c.execute("INSERT INTO app.qualified_release(id,release_ref,kernel_ref,rules_ref,program_manifest_ref,evidence_ref) VALUES($1,$1::uuid::text,'fixture','fixture','fixture','fixture')",&[&release]).await?;
-    for (definition, reference) in [
-        (main, "fixture:main".to_owned()),
-        (side, format!("catalogue:{}", Uuid::new_v4())),
-    ] {
-        let revision:Uuid=c.query_one("INSERT INTO app.card_definition_revision(definition_id,revision_ref,rules_text_ref) VALUES($1,$2,'fixture:rules') RETURNING id",&[&definition,&reference]).await?.get(0);
-        c.execute("INSERT INTO app.release_card_program(release_id,definition_revision_id,program_ref,unlimited_basic_land) VALUES($1,$2,'fixture:program',true)",&[&release,&revision]).await?;
-    }
-    let mut prior: Option<Uuid> = None;
-    for (section, valid) in [("main", true), ("sideboard", false), ("main", false)] {
-        let mut entries =
-            vec![json!({"definitionId":main,"printingId":null,"section":"main","quantity":"60"})];
-        if !valid {
-            entries.push(
-                json!({"definitionId":side,"printingId":null,"section":section,"quantity":"1"}),
-            );
-        }
-        let saved: Value = c
-            .query_one(
-                "SELECT app.save_deck_contents($1,$2,$3,$4,$5)",
-                &[&actor, &deck, &prior, &json!(entries), &Uuid::new_v4()],
-            )
-            .await?
-            .get(0);
-        assert_eq!(saved["status"], "success");
-        let selected: Uuid = c
-            .query_one(
-                "SELECT current_revision_id FROM app.deck WHERE id=$1",
-                &[&deck],
-            )
-            .await?
-            .get(0);
-        let projected = c
-            .query_one(
-                "SELECT app.native_deck_source($1,$2)",
-                &[&release, &selected],
-            )
-            .await;
-        if valid {
-            let rows: Value = projected?.get(0);
-            assert_eq!(rows.as_array().unwrap().len(), 1);
-            assert_eq!(rows[0]["quantity"], "60");
-        } else {
-            let err = projected.unwrap_err();
-            assert_eq!(
-                err.code(),
-                Some(&tokio_postgres::error::SqlState::CHECK_VIOLATION)
-            );
-            assert_eq!(
-                err.as_db_error().unwrap().message(),
-                "native deck publication source is incomplete"
-            );
-        }
-        prior = Some(selected);
-    }
     Ok(())
 }

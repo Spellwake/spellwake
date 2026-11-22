@@ -89,7 +89,7 @@ fn grouped_gate(lane: Lane, controller: SeatId) -> GameState {
     )
     .unwrap();
     let mut creation = TokenCreation::one(definition);
-    creation.amount = InstructionAmount::Literal(2.into());
+    creation.amount = crate::program::ValueExpr::Literal(2.into());
     let creator = hand(
         1,
         A,
@@ -101,7 +101,7 @@ fn grouped_gate(lane: Lane, controller: SeatId) -> GameState {
     let mut watcher = Program::artifact(None, vec![]);
     watcher.triggered.push(TriggeredAbility {
         id: TriggeredAbilityId(1),
-        condition: OrdinaryCondition::Enters(ObjectRelation::AnyCreature),
+        condition: crate::program::TriggerSpec::enters(crate::program::ObjectFilter::creature()),
         grouping: TriggerGrouping::OneOrMoreByPlayer,
         body: ExecutableBody::new(BodyTarget::None, lane.body()),
     });

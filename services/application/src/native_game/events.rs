@@ -66,7 +66,7 @@ impl NativeCheckpoint {
     /// # Errors
     /// Rejects encoding or invalid/over-budget artifact identity.
     pub fn prepare_activity_event(&self) -> Result<PreparedNativeEvent, NativeCheckpointError> {
-        self.prepare_event_schema(self.activity_schema())
+        self.prepare_event_schema(NativeEventSchema::ActivityV1)
     }
     pub(super) fn prepare_event_schema(
         &self,

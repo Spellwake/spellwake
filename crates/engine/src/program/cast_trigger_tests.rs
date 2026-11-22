@@ -11,7 +11,7 @@ fn body() -> ExecutableBody {
         }],
     )
 }
-fn ability(condition: OrdinaryCondition) -> TriggeredAbility {
+fn ability(condition: TriggerSpec) -> TriggeredAbility {
     TriggeredAbility {
         id: TriggeredAbilityId(1),
         condition,
@@ -19,7 +19,7 @@ fn ability(condition: OrdinaryCondition) -> TriggeredAbility {
         body: body(),
     }
 }
-fn watched(mut program: Program, condition: OrdinaryCondition) -> Program {
+fn watched(mut program: Program, condition: TriggerSpec) -> Program {
     program.triggered.push(ability(condition));
     program
 }
@@ -33,7 +33,7 @@ fn self_cast_is_admitted_on_physical_permanent_and_instruction_definitions() {
         Program::artifact(Some(ManaCost::free()), vec![]),
         Program::creature(Some(ManaCost::free()), 1.into(), 1.into(), BTreeSet::new()),
     ] {
-        let program = watched(program, OrdinaryCondition::SelfCast);
+        let program = watched(program, crate::program::TriggerSpec::self_cast());
         assert_eq!(program.validate(&vocabulary), Ok(()));
         assert_eq!(
             codec::decode(codec::view(&program), &vocabulary).unwrap(),
@@ -51,13 +51,13 @@ fn battlefield_cast_watchers_do_not_bypass_instruction_source_admission() {
         PlayerRelation::AnyParticipant,
     ] {
         for filter in [
-            SpellCastFilter::AnySpell,
-            SpellCastFilter::Noncreature,
-            SpellCastFilter::InstantOrSorcery,
-            SpellCastFilter::HasType(CardType::Kindred),
+            crate::program::SpellFilter::any(),
+            crate::program::SpellFilter::noncreature(),
+            crate::program::SpellFilter::instant_or_sorcery(),
+            crate::program::SpellFilter::of_type(CardType::Kindred),
         ] {
-            let condition = OrdinaryCondition::SpellCast { player, filter };
-            let permanent = watched(Program::artifact(None, vec![]), condition);
+            let condition = crate::program::TriggerSpec::spell_cast(player, filter);
+            let permanent = watched(Program::artifact(None, vec![]), condition.clone());
             assert_eq!(permanent.validate(&vocabulary), Ok(()));
             assert_eq!(
                 codec::decode(codec::view(&permanent), &vocabulary).unwrap(),
@@ -83,7 +83,7 @@ fn self_cast_still_uses_shared_unique_id_target_and_amount_admission() {
     let vocabulary = creature_types::selected_vocabulary().unwrap();
     let mut spell = watched(
         Program::instant(ManaCost::free(), body()),
-        OrdinaryCondition::SelfCast,
+        crate::program::TriggerSpec::self_cast(),
     );
     spell.triggered.push(spell.triggered[0].clone());
     assert_eq!(
@@ -101,7 +101,9 @@ fn self_cast_still_uses_shared_unique_id_target_and_amount_admission() {
     let counted = ExecutableBody::new(
         BodyTarget::None,
         vec![Instruction::DrawController {
-            amount: InstructionAmount::MatchedOccurrences,
+            amount: crate::program::ValueExpr::event(
+                crate::program::EventValueKind::MatchedOccurrences,
+            ),
         }],
     );
     spell.triggered[0].body = counted.clone();
@@ -119,7 +121,10 @@ fn self_cast_still_uses_shared_unique_id_target_and_amount_admission() {
 #[test]
 fn cast_condition_and_filter_fields_are_required_tagged_and_strict() {
     let vocabulary = creature_types::selected_vocabulary().unwrap();
-    let program = watched(Program::artifact(None, vec![]), OrdinaryCondition::SelfCast);
+    let program = watched(
+        Program::artifact(None, vec![]),
+        crate::program::TriggerSpec::self_cast(),
+    );
     let original = codec::view(&program);
     for condition in [
         json!({"tag":"SelfCast","zone":"Hand"}),
@@ -141,14 +146,14 @@ fn cast_condition_and_filter_fields_are_required_tagged_and_strict() {
 fn cast_type_filters_use_membership_and_instant_or_sorcery_is_disjunctive() {
     for kind in [CardType::Instant, CardType::Sorcery] {
         let types = BTreeSet::from([kind, CardType::Kindred]);
-        assert!(SpellCastFilter::InstantOrSorcery.matches(&types));
-        assert!(SpellCastFilter::HasType(CardType::Kindred).matches(&types));
-        assert!(SpellCastFilter::Noncreature.matches(&types));
-        assert!(SpellCastFilter::AnySpell.matches(&types));
+        assert!(crate::program::SpellFilter::instant_or_sorcery().matches_card_types(&types));
+        assert!(crate::program::SpellFilter::of_type(CardType::Kindred).matches_card_types(&types));
+        assert!(crate::program::SpellFilter::noncreature().matches_card_types(&types));
+        assert!(crate::program::SpellFilter::any().matches_card_types(&types));
     }
     let creature = BTreeSet::from([CardType::Artifact, CardType::Creature]);
-    assert!(!SpellCastFilter::InstantOrSorcery.matches(&creature));
-    assert!(!SpellCastFilter::Noncreature.matches(&creature));
-    assert!(!SpellCastFilter::HasType(CardType::Kindred).matches(&creature));
-    assert!(SpellCastFilter::HasType(CardType::Artifact).matches(&creature));
+    assert!(!crate::program::SpellFilter::instant_or_sorcery().matches_card_types(&creature));
+    assert!(!crate::program::SpellFilter::noncreature().matches_card_types(&creature));
+    assert!(!crate::program::SpellFilter::of_type(CardType::Kindred).matches_card_types(&creature));
+    assert!(crate::program::SpellFilter::of_type(CardType::Artifact).matches_card_types(&creature));
 }

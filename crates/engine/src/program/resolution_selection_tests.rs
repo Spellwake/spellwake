@@ -4,12 +4,13 @@ use crate::test_support::creature_types;
 
 fn creature_filter() -> PermanentTypeFilter {
     PermanentTypeFilter {
+        any_types: Default::default(),
         required_types: BTreeSet::from([CardType::Creature]),
         forbidden_types: BTreeSet::new(),
     }
 }
 
-fn sacrifice(players: AffectedPlayers, amount: InstructionAmount) -> Instruction {
+fn sacrifice(players: AffectedPlayers, amount: ValueExpr) -> Instruction {
     Instruction::Sacrifice {
         players,
         amount,
@@ -17,7 +18,7 @@ fn sacrifice(players: AffectedPlayers, amount: InstructionAmount) -> Instruction
     }
 }
 
-fn selected_effects(players: AffectedPlayers, amount: InstructionAmount) -> [Instruction; 2] {
+fn selected_effects(players: AffectedPlayers, amount: ValueExpr) -> [Instruction; 2] {
     [
         sacrifice(players, amount.clone()),
         Instruction::Discard { players, amount },
@@ -47,9 +48,11 @@ fn choose() -> Instruction {
 fn branch(destination: usize) -> Instruction {
     Instruction::BranchIfFalse {
         condition: ResolutionCondition {
-            left: ConditionValue::ControllerLife,
+            left: crate::program::ValueExpr::PlayerStat(
+                crate::program::PlayerStatExpr::ControllerLife,
+            ),
             comparison: Comparison::Greater,
-            right: ConditionValue::Literal(0.into()),
+            right: crate::program::ValueExpr::Literal(0.into()),
         },
         destination,
     }
@@ -68,7 +71,7 @@ fn check_triggered(
     ExecutableBody::new(target, instructions).validate_in(
         &creature_types::selected_vocabulary().unwrap(),
         BodyContext::TriggerBound {
-            condition: OrdinaryCondition::SelfCast,
+            condition: &crate::program::TriggerSpec::self_cast(),
             grouping,
         },
     )
@@ -77,7 +80,7 @@ fn check_triggered(
 #[test]
 fn targeted_selection_consumes_only_the_exact_player_capability() {
     let target_player = AffectedPlayers::One(ResolvingPlayer::TargetPlayer);
-    for effect in selected_effects(target_player, InstructionAmount::Literal(1.into())) {
+    for effect in selected_effects(target_player, crate::program::ValueExpr::Literal(1.into())) {
         assert_eq!(
             check(BodyTarget::SinglePlayer, vec![effect.clone()]),
             Ok(())
@@ -87,7 +90,7 @@ fn targeted_selection_consumes_only_the_exact_player_capability() {
             BodyTarget::SinglePermanent,
             BodyTarget::SingleCreature,
             BodyTarget::SingleCreatureOrPlayer,
-            BodyTarget::SingleSpell(SpellTargetFilter::AnySpell),
+            BodyTarget::SingleSpell(crate::program::SpellFilter::any()),
         ] {
             assert_eq!(
                 check(wrong, vec![effect.clone()]),
@@ -103,7 +106,7 @@ fn nontargeted_scopes_cannot_hide_a_phantom_player_target() {
         AffectedPlayers::One(ResolvingPlayer::Controller),
         AffectedPlayers::EachPlayer,
     ] {
-        for effect in selected_effects(scope, InstructionAmount::Literal(1.into())) {
+        for effect in selected_effects(scope, crate::program::ValueExpr::Literal(1.into())) {
             assert_eq!(check(BodyTarget::None, vec![effect.clone()]), Ok(()));
             assert_eq!(
                 check(BodyTarget::SinglePlayer, vec![effect]),
@@ -116,10 +119,13 @@ fn nontargeted_scopes_cannot_hide_a_phantom_player_target() {
 #[test]
 fn spell_controller_and_player_roles_remain_distinct_capabilities() {
     let spell_controller = AffectedPlayers::One(ResolvingPlayer::TargetSpellController);
-    for effect in selected_effects(spell_controller, InstructionAmount::Literal(1.into())) {
+    for effect in selected_effects(
+        spell_controller,
+        crate::program::ValueExpr::Literal(1.into()),
+    ) {
         assert_eq!(
             check(
-                BodyTarget::SingleSpell(SpellTargetFilter::AnySpell),
+                BodyTarget::SingleSpell(crate::program::SpellFilter::any()),
                 vec![effect.clone()]
             ),
             Ok(())
@@ -158,7 +164,7 @@ fn target_player_uses_the_shared_optional_and_payment_role_owner() {
 #[test]
 fn related_player_selection_requires_a_singular_captured_participant() {
     let related = AffectedPlayers::One(ResolvingPlayer::UniqueRelatedPlayer);
-    for effect in selected_effects(related, InstructionAmount::Literal(1.into())) {
+    for effect in selected_effects(related, crate::program::ValueExpr::Literal(1.into())) {
         assert_eq!(
             check(BodyTarget::None, vec![effect.clone()]),
             Err(DefinitionError::UnboundResolvingPlayer)
@@ -187,14 +193,17 @@ fn related_player_selection_requires_a_singular_captured_participant() {
 fn selection_type_filters_admit_empty_and_disjoint_sets_but_reject_overlap() {
     for filter in [
         PermanentTypeFilter {
+            any_types: Default::default(),
             required_types: BTreeSet::new(),
             forbidden_types: BTreeSet::new(),
         },
         PermanentTypeFilter {
+            any_types: Default::default(),
             required_types: BTreeSet::from([CardType::Artifact, CardType::Creature]),
             forbidden_types: BTreeSet::from([CardType::Land]),
         },
         PermanentTypeFilter {
+            any_types: Default::default(),
             required_types: BTreeSet::new(),
             forbidden_types: BTreeSet::from([CardType::Creature]),
         },
@@ -204,7 +213,7 @@ fn selection_type_filters_admit_empty_and_disjoint_sets_but_reject_overlap() {
                 BodyTarget::None,
                 vec![Instruction::Sacrifice {
                     players: AffectedPlayers::EachPlayer,
-                    amount: InstructionAmount::Literal(1.into()),
+                    amount: crate::program::ValueExpr::Literal(1.into()),
                     filter
                 }]
             ),
@@ -216,8 +225,9 @@ fn selection_type_filters_admit_empty_and_disjoint_sets_but_reject_overlap() {
             BodyTarget::None,
             vec![Instruction::Sacrifice {
                 players: AffectedPlayers::EachPlayer,
-                amount: InstructionAmount::Literal(0.into()),
+                amount: crate::program::ValueExpr::Literal(0.into()),
                 filter: PermanentTypeFilter {
+                    any_types: Default::default(),
                     required_types: BTreeSet::from([CardType::Artifact, CardType::Creature]),
                     forbidden_types: BTreeSet::from([CardType::Creature]),
                 }
@@ -241,14 +251,14 @@ fn literal_counts_admit_zero_and_huge_values_without_narrowing_but_reject_negati
     ] {
         for effect in selected_effects(
             AffectedPlayers::EachPlayer,
-            InstructionAmount::Literal(amount.clone()),
+            crate::program::ValueExpr::Literal(amount.clone()),
         ) {
             assert_eq!(check(BodyTarget::None, vec![effect]), Ok(()));
         }
     }
     for effect in selected_effects(
         AffectedPlayers::EachPlayer,
-        InstructionAmount::Literal((-1).into()),
+        crate::program::ValueExpr::Literal((-1).into()),
     ) {
         assert_eq!(
             check(BodyTarget::None, vec![effect]),
@@ -259,9 +269,11 @@ fn literal_counts_admit_zero_and_huge_values_without_narrowing_but_reject_negati
 
 #[test]
 fn selection_amounts_keep_slot_and_captured_trigger_context_requirements() {
-    let chosen = InstructionAmount::ControlledPermanentsOfChosenType {
-        chosen: CreatureTypeSlot::new(0),
-    };
+    let chosen = crate::program::ValueExpr::count_battlefield(
+        crate::program::ObjectFilter::any()
+            .controlled()
+            .of_chosen_slot(CreatureTypeSlot::new(0)),
+    );
     for effect in selected_effects(AffectedPlayers::EachPlayer, chosen) {
         assert_eq!(
             check(BodyTarget::None, vec![effect.clone()]),
@@ -278,7 +290,7 @@ fn selection_amounts_keep_slot_and_captured_trigger_context_requirements() {
     }
     for effect in selected_effects(
         AffectedPlayers::EachPlayer,
-        InstructionAmount::MatchedOccurrences,
+        crate::program::ValueExpr::event(crate::program::EventValueKind::MatchedOccurrences),
     ) {
         assert_eq!(
             check(BodyTarget::None, vec![effect.clone()]),
@@ -299,7 +311,7 @@ fn selection_amounts_keep_slot_and_captured_trigger_context_requirements() {
 fn selected_effects_are_not_admitted_as_optional_single_primitives() {
     for effect in selected_effects(
         AffectedPlayers::EachPlayer,
-        InstructionAmount::Literal(1.into()),
+        crate::program::ValueExpr::Literal(1.into()),
     ) {
         assert_eq!(
             check(
@@ -321,20 +333,21 @@ fn unreachable_selection_still_validates_roles_amounts_and_filter() {
     let invalid_effects = [
         Instruction::Discard {
             players: AffectedPlayers::One(ResolvingPlayer::TargetPlayer),
-            amount: InstructionAmount::Literal(1.into()),
+            amount: crate::program::ValueExpr::Literal(1.into()),
         },
         sacrifice(
             AffectedPlayers::EachPlayer,
-            InstructionAmount::Literal((-1).into()),
+            crate::program::ValueExpr::Literal((-1).into()),
         ),
         sacrifice(
             AffectedPlayers::EachPlayer,
-            InstructionAmount::MatchedOccurrences,
+            crate::program::ValueExpr::event(crate::program::EventValueKind::MatchedOccurrences),
         ),
         Instruction::Sacrifice {
             players: AffectedPlayers::EachPlayer,
-            amount: InstructionAmount::Literal(1.into()),
+            amount: crate::program::ValueExpr::Literal(1.into()),
             filter: PermanentTypeFilter {
+                any_types: Default::default(),
                 required_types: BTreeSet::from([CardType::Creature]),
                 forbidden_types: BTreeSet::from([CardType::Creature]),
             },
@@ -361,7 +374,7 @@ fn unreachable_selection_still_validates_roles_amounts_and_filter() {
                 Instruction::Jump { destination: 2 },
                 Instruction::Discard {
                     players: AffectedPlayers::One(ResolvingPlayer::TargetPlayer),
-                    amount: InstructionAmount::Literal(1.into()),
+                    amount: crate::program::ValueExpr::Literal(1.into()),
                 }
             ]
         ),
@@ -373,7 +386,7 @@ fn unreachable_selection_still_validates_roles_amounts_and_filter() {
 fn possible_sacrifice_departure_rejects_straight_line_and_joined_copy_donors() {
     let positive = sacrifice(
         AffectedPlayers::One(ResolvingPlayer::Controller),
-        InstructionAmount::Literal(1.into()),
+        crate::program::ValueExpr::Literal(1.into()),
     );
     assert_eq!(
         check(BodyTarget::SinglePermanent, vec![positive.clone(), copy()]),
@@ -388,9 +401,11 @@ fn possible_sacrifice_departure_rejects_straight_line_and_joined_copy_donors() {
     );
     let nonliteral = sacrifice(
         AffectedPlayers::EachPlayer,
-        InstructionAmount::ControlledPermanentsOfChosenType {
-            chosen: CreatureTypeSlot::new(0),
-        },
+        crate::program::ValueExpr::count_battlefield(
+            crate::program::ObjectFilter::any()
+                .controlled()
+                .of_chosen_slot(CreatureTypeSlot::new(0)),
+        ),
     );
     assert_eq!(
         check(
@@ -406,7 +421,9 @@ fn possible_sacrifice_departure_rejects_straight_line_and_joined_copy_donors() {
             vec![
                 sacrifice(
                     AffectedPlayers::EachPlayer,
-                    InstructionAmount::MatchedOccurrences
+                    crate::program::ValueExpr::event(
+                        crate::program::EventValueKind::MatchedOccurrences
+                    )
                 ),
                 copy()
             ]
@@ -419,7 +436,7 @@ fn possible_sacrifice_departure_rejects_straight_line_and_joined_copy_donors() {
 fn sacrifice_transfer_does_not_leak_to_disjoint_or_unreachable_copy_paths() {
     let positive = sacrifice(
         AffectedPlayers::EachPlayer,
-        InstructionAmount::Literal(1.into()),
+        crate::program::ValueExpr::Literal(1.into()),
     );
     assert_eq!(
         check(
@@ -455,7 +472,7 @@ fn sacrifice_transfer_does_not_leak_to_disjoint_or_unreachable_copy_paths() {
 fn exact_zero_sacrifice_preserves_both_false_and_true_incoming_movement_facts() {
     let zero = sacrifice(
         AffectedPlayers::EachPlayer,
-        InstructionAmount::Literal(0.into()),
+        crate::program::ValueExpr::Literal(0.into()),
     );
     assert_eq!(
         check(BodyTarget::SinglePermanent, vec![zero.clone(), copy()]),
@@ -475,7 +492,7 @@ fn exact_zero_sacrifice_preserves_both_false_and_true_incoming_movement_facts() 
                 branch(2),
                 sacrifice(
                     AffectedPlayers::EachPlayer,
-                    InstructionAmount::Literal(1.into())
+                    crate::program::ValueExpr::Literal(1.into())
                 ),
                 zero,
                 copy()
@@ -493,7 +510,7 @@ fn discard_does_not_invalidate_a_battlefield_copy_donor() {
             vec![
                 Instruction::Discard {
                     players: AffectedPlayers::EachPlayer,
-                    amount: InstructionAmount::Literal(3.into()),
+                    amount: crate::program::ValueExpr::Literal(3.into()),
                 },
                 copy()
             ]
@@ -509,7 +526,7 @@ fn selected_body_shapes_keep_targeted_life_loss_and_each_player_trigger_continua
         check(
             BodyTarget::SinglePlayer,
             vec![
-                sacrifice(targeted, InstructionAmount::Literal(1.into())),
+                sacrifice(targeted, crate::program::ValueExpr::Literal(1.into())),
                 Instruction::AdjustTargetLife {
                     adjustment: LifeAdjustment::Lose(1.into()),
                 }
@@ -523,7 +540,7 @@ fn selected_body_shapes_keep_targeted_life_loss_and_each_player_trigger_continua
             TriggerGrouping::EachOccurrence,
             vec![sacrifice(
                 AffectedPlayers::EachPlayer,
-                InstructionAmount::Literal(1.into())
+                crate::program::ValueExpr::Literal(1.into())
             )]
         ),
         Ok(())

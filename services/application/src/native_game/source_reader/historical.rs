@@ -1,6 +1,15 @@
 //! Accepted historical cut projections, separate from current command authority.
+use super::rpc::RecordBudget;
 use super::*;
 use crate::player_wire::PlayerTerminal;
+use std::{
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicBool, Ordering},
+        mpsc::{channel, sync_channel},
+    },
+    thread,
+};
 
 /// One verified SQL-winning historical observation. No mutable projection or
 /// private command registry escapes the walk. This is not HTTP delivery authority.
@@ -84,12 +93,79 @@ pub(in crate::native_game) struct HistoricalCut<'a> {
     source_anchor: NativeArtifactRef,
     full: bool,
 }
+/// Verified cut metadata and an owned reference to its immutable native state.
+struct ArchiveViewJob {
+    perspective: usize,
+    cut_index: usize,
+    checkpoint: Arc<NativeCheckpoint>,
+    binding: NativeBinding,
+    opening_receipt_id: Uuid,
+    checkpoint_id: Uuid,
+    creator_receipt_id: Uuid,
+    through: Amount,
+    event_id: Uuid,
+    event_ref: NativeArtifactRef,
+    source_anchor: NativeArtifactRef,
+    full: bool,
+}
+
+impl ArchiveViewJob {
+    fn new(
+        perspective: usize,
+        cut_index: usize,
+        checkpoint: Arc<NativeCheckpoint>,
+        cut: HistoricalCut<'_>,
+    ) -> Self {
+        Self {
+            perspective,
+            cut_index,
+            checkpoint,
+            binding: cut.binding,
+            opening_receipt_id: cut.opening_receipt_id,
+            checkpoint_id: cut.checkpoint_id,
+            creator_receipt_id: cut.creator_receipt_id,
+            through: cut.through,
+            event_id: cut.event_id,
+            event_ref: cut.event_ref,
+            source_anchor: cut.source_anchor,
+            full: cut.full,
+        }
+    }
+
+    fn render(
+        self,
+        repository: &NativeSourceRepository,
+        store: &NativeArtifactStore,
+        programs: &NativeProgramSource,
+        proof: &HistoricalCompletionAuthority,
+        budget: RecordBudget<'_>,
+    ) -> Result<NativeHistoricalObservation, NativeSourceError> {
+        let provenance = self.checkpoint.provenance().ok_or_else(invalid)?;
+        let display = NativeImmutableDisplay::new(programs, provenance)
+            .map_err(|error| NativeSourceError(Failure::Initial(error)))?;
+        let cut = HistoricalCut {
+            checkpoint: &self.checkpoint,
+            binding: self.binding,
+            opening_receipt_id: self.opening_receipt_id,
+            checkpoint_id: self.checkpoint_id,
+            creator_receipt_id: self.creator_receipt_id,
+            through: self.through,
+            event_id: self.event_id,
+            event_ref: self.event_ref,
+            source_anchor: self.source_anchor,
+            full: self.full,
+        };
+        repository.project_verified_cut(store, cut, &display, Some(proof), budget, true)
+    }
+}
+
 /// Which historical authority a walk runs under.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum HistoricalKind {
     /// Native conclusion + SQL completion, full reveal.
     CompletedFull,
     /// Native conclusion + SQL completion, any retained seat filtered.
+    #[cfg(test)]
     CompletedSeat,
     /// Accepted operational no-contest before any native conclusion, any
     /// retained seat filtered. Never full reveal.
@@ -104,6 +180,46 @@ pub(in crate::native_game) struct HistoricalCompletionAuthority {
     terminal_ref: NativeArtifactRef,
     full_allowed: bool,
 }
+
+/// The verified terminal observation shared by one portable archive build.
+pub(super) struct ArchiveCompletionAuthority {
+    proof: HistoricalCompletionAuthority,
+    pub(super) proof_records: usize,
+    pub(super) proof_bytes: u64,
+    pub(super) humans: Vec<Uuid>,
+    pub(super) roster: Vec<Uuid>,
+}
+
+pub(super) struct ArchivePerspective {
+    pub(super) seat: Uuid,
+    pub(super) disclosure: NativeDisclosure,
+    pub(super) observations: Vec<NativeHistoricalObservation>,
+}
+
+pub(super) struct ArchiveHistory {
+    pub(super) recovered: RecoveredNativeGame,
+    pub(super) perspectives: Vec<ArchivePerspective>,
+}
+
+impl ArchiveCompletionAuthority {
+    pub(super) fn charge_recovery(
+        &self,
+        budget: &mut NativeRecoveryBudget,
+        perspectives: usize,
+    ) -> Result<(), NativeSourceError> {
+        // Preserve the existing logical proof + recall charge per view, although
+        // the native walks now serve the whole archive.
+        let walks = perspectives.checked_mul(2).ok_or_else(invalid)?;
+        let records = self.proof_records.checked_mul(walks).ok_or_else(invalid)?;
+        let bytes = self
+            .proof_bytes
+            .checked_mul(u64::try_from(walks).map_err(|_| invalid())?)
+            .ok_or_else(invalid)?;
+        budget
+            .charge_work(records, bytes)
+            .map_err(|error| NativeSourceError(Failure::Checkpoint(error)))
+    }
+}
 impl HistoricalCompletionAuthority {
     fn from_recovered(
         access: &NativeHumanAccess,
@@ -112,7 +228,11 @@ impl HistoricalCompletionAuthority {
     ) -> Result<Self, NativeSourceError> {
         let native_conclusion = recovered.checkpoint().state().outcome().is_some();
         let allowed = match kind {
-            HistoricalKind::CompletedFull | HistoricalKind::CompletedSeat => {
+            HistoricalKind::CompletedFull => {
+                access.completed_disclosure().is_some() && native_conclusion
+            }
+            #[cfg(test)]
+            HistoricalKind::CompletedSeat => {
                 access.completed_disclosure().is_some() && native_conclusion
             }
             HistoricalKind::IncidentSeat => access.operational_no_contest() && !native_conclusion,
@@ -209,6 +329,215 @@ impl<'a> HistoricalCut<'a> {
     }
 }
 impl NativeSourceRepository {
+    /// Verify the accepted terminal history once for the archive's perspectives.
+    pub(super) fn archive_completion_authority(
+        &self,
+        store: &NativeArtifactStore,
+        programs: &NativeProgramSource,
+        access: &NativeHumanAccess,
+        mut budget: NativeRecoveryBudget,
+    ) -> Result<Option<ArchiveCompletionAuthority>, NativeSourceError> {
+        let kind = if access.completed_disclosure().is_some() {
+            HistoricalKind::CompletedFull
+        } else if access.operational_no_contest() {
+            HistoricalKind::IncidentSeat
+        } else {
+            return Err(invalid());
+        };
+        let (initial_records, initial_bytes) = budget.remaining();
+        let Some(recovered) = self.recover_observed(
+            access.basis().game_id,
+            store,
+            programs,
+            &mut budget,
+            &mut |_, _, _, _, _| Ok(()),
+        )?
+        else {
+            return Ok(None);
+        };
+        let proof = HistoricalCompletionAuthority::from_recovered(access, &recovered, kind)?;
+        let binding = recovered
+            .checkpoint()
+            .binding(access.viewer_seat_id())
+            .map_err(|error| NativeSourceError(Failure::Checkpoint(error)))?;
+        let (remaining_records, remaining_bytes) = budget.remaining();
+        Ok(Some(ArchiveCompletionAuthority {
+            humans: recovered.source().human_seats().collect(),
+            roster: binding.seats.iter().map(|seat| seat.seat_id).collect(),
+            proof,
+            proof_records: initial_records
+                .checked_sub(remaining_records)
+                .ok_or_else(invalid)?,
+            proof_bytes: initial_bytes
+                .checked_sub(remaining_bytes)
+                .ok_or_else(invalid)?,
+        }))
+    }
+
+    /// Project all archive perspectives from one observed, verified native walk.
+    pub(super) fn collect_archive_history(
+        &self,
+        store: &NativeArtifactStore,
+        programs: &NativeProgramSource,
+        authority: &ArchiveCompletionAuthority,
+        mut native_budget: NativeRecoveryBudget,
+        first_budget: &Mutex<NativeRecoveryBudget>,
+        shared_budget: &Mutex<NativeRecoveryBudget>,
+    ) -> Result<Option<ArchiveHistory>, NativeSourceError> {
+        let proof = &authority.proof;
+        let viewer = proof.access.viewer_seat_id();
+        let mut perspectives: Vec<_> = authority
+            .humans
+            .iter()
+            .map(|&seat| ArchivePerspective {
+                seat,
+                disclosure: NativeDisclosure::LiveParticipant,
+                observations: Vec::new(),
+            })
+            .collect();
+        if proof.full_allowed {
+            perspectives.extend(authority.roster.iter().map(|&seat| ArchivePerspective {
+                seat,
+                disclosure: NativeDisclosure::CompletedParticipant,
+                observations: Vec::new(),
+            }));
+        }
+        let physical_start = native_budget.remaining();
+        let failed = AtomicBool::new(false);
+        let mut cut_count = 0;
+        let (recovered, rendered) = thread::scope(|scope| {
+            // One cut can wait in the queue. At most six extra jobs are active,
+            // and each job shares the verified native State for its cut.
+            let (send, receive) = sync_channel::<ArchiveViewJob>(perspectives.len());
+            let queue = Arc::new(Mutex::new(receive));
+            let (output, results) = channel();
+            let mut workers = Vec::new();
+            for _ in 0..perspectives.len().min(6) {
+                let queue = Arc::clone(&queue);
+                let output = output.clone();
+                let failed = &failed;
+                let worker = thread::Builder::new()
+                    .stack_size(16 * 1024 * 1024)
+                    .spawn_scoped(scope, move || {
+                        loop {
+                            let task = queue.lock().map_err(|_| invalid())?.recv();
+                            let Ok(job) = task else { break };
+                            if failed.load(Ordering::Relaxed) {
+                                continue;
+                            }
+                            let first =
+                                job.binding.viewer == viewer && job.full == proof.full_allowed;
+                            let budget = if first { first_budget } else { shared_budget };
+                            let index = (job.perspective, job.cut_index);
+                            let result = job.render(
+                                self,
+                                store,
+                                programs,
+                                proof,
+                                RecordBudget::Shared(budget),
+                            );
+                            if result.is_err() {
+                                failed.store(true, Ordering::Relaxed);
+                            }
+                            output.send((index, result)).map_err(|_| invalid())?;
+                        }
+                        Ok::<(), NativeSourceError>(())
+                    })
+                    .map_err(|error| {
+                        NativeSourceError(Failure::Backend(BackendError::caused(
+                            "replay view worker",
+                            error,
+                        )))
+                    })?;
+                workers.push(worker);
+            }
+            drop(queue);
+            drop(output);
+            let recovered = self.recover_observed(
+                proof.access.basis().game_id,
+                store,
+                programs,
+                &mut native_budget,
+                &mut |source, opening, group, checkpoint, _| {
+                    if failed.load(Ordering::Relaxed) {
+                        return Err(invalid());
+                    }
+                    let shared = Arc::new(checkpoint.clone());
+                    for (index, perspective) in perspectives.iter().enumerate() {
+                        let full = perspective.disclosure == NativeDisclosure::CompletedParticipant;
+                        let cut = HistoricalCut::from_verified_observation(
+                            &proof.access,
+                            source,
+                            opening,
+                            group,
+                            checkpoint,
+                            perspective.seat,
+                            Some((proof, full)),
+                        )?;
+                        send.send(ArchiveViewJob::new(
+                            index,
+                            cut_count,
+                            Arc::clone(&shared),
+                            cut,
+                        ))
+                        .map_err(|_| invalid())?;
+                    }
+                    cut_count += 1;
+                    Ok(())
+                },
+            );
+            drop(send);
+            let mut worker_failure = None;
+            for worker in workers {
+                if let Err(error) = worker
+                    .join()
+                    .map_err(|_| invalid())
+                    .and_then(|result| result)
+                {
+                    worker_failure.get_or_insert(error);
+                }
+            }
+            let mut rendered = Vec::new();
+            for (index, result) in results {
+                rendered.push((index, result?));
+            }
+            if let Some(error) = worker_failure {
+                return Err(error);
+            }
+            Ok::<_, NativeSourceError>((recovered?, rendered))
+        })?;
+        let mut rendered = rendered;
+        rendered.sort_unstable_by_key(|entry| entry.0);
+        for ((perspective, cut_index), observation) in rendered {
+            let part = perspectives.get_mut(perspective).ok_or_else(invalid)?;
+            if cut_index != part.observations.len() {
+                return Err(invalid());
+            }
+            part.observations.push(observation);
+        }
+        if perspectives
+            .iter()
+            .any(|part| part.observations.len() != cut_count)
+        {
+            return Err(invalid());
+        }
+        let Some(recovered) = recovered else {
+            return Ok(None);
+        };
+        let physical_end = native_budget.remaining();
+        if !proof.access.matches_source(&recovered)
+            || !recovered.history_evidence().transitions_verified()
+            || physical_start.0.checked_sub(physical_end.0) != Some(authority.proof_records)
+            || physical_start.1.checked_sub(physical_end.1) != Some(authority.proof_bytes)
+        {
+            return Err(invalid());
+        }
+        Ok(Some(ArchiveHistory {
+            recovered,
+            perspectives,
+        }))
+    }
+
     /// Project the actual admitted human's historical seat over one native walk.
     /// SQL first-winner View issuance determines all public handles. No historical
     /// projection becomes an IssuedNativeHumanView/current command operand.
@@ -268,6 +597,7 @@ impl NativeSourceRepository {
     /// historical replay. Live games never reach this path.
     /// # Errors
     /// As project_completed_history.
+    #[cfg(test)]
     pub(in crate::native_game) fn project_retained_seat_history(
         &self,
         store: &NativeArtifactStore,
@@ -283,30 +613,6 @@ impl NativeSourceRepository {
             perspective,
             budget,
             HistoricalKind::CompletedSeat,
-        )
-    }
-    /// Seat-filtered history of any retained seat of an accepted operational
-    /// no-contest game, which has no native conclusion. Never full reveal.
-    /// The caller's later SQL publication is the incident proof; delivery stays
-    /// own-seat only.
-    /// # Errors
-    /// Rejects games that are not no-contest, that reached a native conclusion,
-    /// or that have completed disclosure; otherwise as project_completed_history.
-    pub(in crate::native_game) fn project_incident_seat_history(
-        &self,
-        store: &NativeArtifactStore,
-        programs: &NativeProgramSource,
-        access: &NativeHumanAccess,
-        perspective: Uuid,
-        budget: NativeRecoveryBudget,
-    ) -> Result<Option<NativeHumanHistory>, NativeSourceError> {
-        self.project_authorized_history(
-            store,
-            programs,
-            access,
-            perspective,
-            budget,
-            HistoricalKind::IncidentSeat,
         )
     }
     fn project_authorized_history(
@@ -386,57 +692,14 @@ impl NativeSourceRepository {
                 let provenance = checkpoint.provenance().ok_or_else(invalid)?;
                 let display = NativeImmutableDisplay::new(programs, provenance)
                     .map_err(|error| NativeSourceError(Failure::Initial(error)))?;
-                let permit = completion
-                    .filter(|(_, full)| *full)
-                    .map(|(authority, _)| {
-                        crate::native_game::projection::HistoricalProjectionPermit::from_cut(
-                            authority, &cut,
-                        )
-                        .map_err(|error| {
-                            NativeSourceError(Failure::View(NativeViewError::Projection(error)))
-                        })
-                    })
-                    .transpose()?;
-                let terminal = crate::native_game::NativeTerminal::derive(
-                    cut.checkpoint.state(),
-                    &cut.binding,
-                )
-                .map_err(|error| NativeSourceError(Failure::Checkpoint(error)))?
-                .map(|terminal| PlayerTerminal {
-                    outcome: terminal.outcome(),
-                    winner_seat_ids: terminal.winner_seat_ids().to_vec(),
-                });
-                let metadata = NativeProjectionMetadata {
-                    through_event_sequence: cut.through,
-                    // No independently qualified per-decision clock exists at
-                    // this historical cut. Keep the ordinary producer's null.
-                    deadline_at: None,
-                    disclosure,
-                };
-                let (receipt_id, view) = self.issue_verified_view(
+                observations.push(self.project_verified_cut(
                     store,
-                    super::view::ViewFrame {
-                        checkpoint: cut.checkpoint,
-                        binding: cut.binding,
-                        opening_receipt_id: cut.opening_receipt_id,
-                        checkpoint_id: cut.checkpoint_id,
-                        permit,
-                    },
-                    &metadata,
+                    cut,
                     &display,
-                    Some(budget),
-                )?;
-                observations.push(NativeHistoricalObservation {
-                    receipt_id,
-                    checkpoint_id: cut.checkpoint_id,
-                    creator_receipt_id: cut.creator_receipt_id,
-                    view_ref: view.reference().clone(),
-                    event_id: cut.event_id,
-                    event_ref: cut.event_ref,
-                    state_ref: cut.checkpoint.reference().clone(),
-                    projection: view.into_projection(),
-                    terminal,
-                });
+                    completion.map(|(authority, _)| authority),
+                    RecordBudget::Exclusive(budget),
+                    false,
+                )?);
                 Ok(())
             },
         )?;
@@ -454,5 +717,68 @@ impl NativeSourceRepository {
             remaining_budget: budget,
             disclosure,
         }))
+    }
+    fn project_verified_cut(
+        &self,
+        store: &NativeArtifactStore,
+        cut: HistoricalCut<'_>,
+        display: &dyn NativeDisplaySource,
+        completion: Option<&HistoricalCompletionAuthority>,
+        budget: RecordBudget<'_>,
+        archive: bool,
+    ) -> Result<NativeHistoricalObservation, NativeSourceError> {
+        let permit = completion
+            .filter(|_| cut.full)
+            .map(|authority| {
+                crate::native_game::projection::HistoricalProjectionPermit::from_cut(
+                    authority, &cut,
+                )
+                .map_err(|error| {
+                    NativeSourceError(Failure::View(NativeViewError::Projection(error)))
+                })
+            })
+            .transpose()?;
+        let terminal =
+            crate::native_game::NativeTerminal::derive(cut.checkpoint.state(), &cut.binding)
+                .map_err(|error| NativeSourceError(Failure::Checkpoint(error)))?
+                .map(|terminal| PlayerTerminal {
+                    outcome: terminal.outcome(),
+                    winner_seat_ids: terminal.winner_seat_ids().to_vec(),
+                });
+        let metadata = NativeProjectionMetadata {
+            through_event_sequence: cut.through,
+            // Historical cuts have no independently qualified per-decision clock.
+            deadline_at: None,
+            disclosure: if cut.full {
+                NativeDisclosure::CompletedParticipant
+            } else {
+                NativeDisclosure::LiveParticipant
+            },
+        };
+        let (receipt_id, view) = self.issue_verified_view(
+            store,
+            super::view::ViewFrame {
+                checkpoint: cut.checkpoint,
+                binding: cut.binding,
+                opening_receipt_id: cut.opening_receipt_id,
+                checkpoint_id: cut.checkpoint_id,
+                permit,
+                archive,
+            },
+            &metadata,
+            display,
+            budget,
+        )?;
+        Ok(NativeHistoricalObservation {
+            receipt_id,
+            checkpoint_id: cut.checkpoint_id,
+            creator_receipt_id: cut.creator_receipt_id,
+            view_ref: view.reference().clone(),
+            event_id: cut.event_id,
+            event_ref: cut.event_ref,
+            state_ref: cut.checkpoint.reference().clone(),
+            projection: view.into_projection(),
+            terminal,
+        })
     }
 }

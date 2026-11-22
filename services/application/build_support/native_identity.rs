@@ -14,6 +14,7 @@ const TREES: &[&str] = &[
     "crates/contracts/src",
     "crates/card_programs/src",
     "crates/content/src",
+    "crates/oracle_compiler/src",
 ];
 const FILES: &[&str] = &[
     "Cargo.toml",
@@ -25,6 +26,7 @@ const FILES: &[&str] = &[
     "crates/contracts/Cargo.toml",
     "crates/card_programs/Cargo.toml",
     "crates/content/Cargo.toml",
+    "crates/oracle_compiler/Cargo.toml",
 ];
 /// One exact source or build-metadata digest; metadata values are not disclosed.
 #[derive(Serialize)]

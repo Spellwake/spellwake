@@ -423,6 +423,7 @@ fn advance(
 }
 fn payment(amount: i64) -> spellwake_engine::mana::ManaPayment {
     spellwake_engine::mana::ManaPayment {
+        from_lots: Default::default(),
         spend: vec![spellwake_engine::mana::ManaSpend {
             mana_type: spellwake_engine::mana::ManaType::Blue,
             amount: amount.into(),
@@ -649,6 +650,7 @@ fn prepared_negative_timing_completed_target_and_creature_spell_probes_are_atomi
                 .current_object(&state, "G.grizzly-bears.1")
                 .unwrap(),
             payment: Some(ManaPayment {
+                from_lots: Default::default(),
                 spend: vec![ManaSpend {
                     mana_type: ManaType::Green,
                     amount: 2.into(),

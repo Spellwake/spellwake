@@ -37,6 +37,7 @@ struct Fixture {
     programs: BTreeMap<CardId, Program>,
     state: CharacteristicState,
     vocabulary: Arc<CreatureTypeVocabulary>,
+    mana: BTreeMap<(SeatId, crate::mana::ManaType), RulesInteger>,
     name_rules: spellwake_contracts::names::NameRules,
     objects: BTreeMap<&'static str, ObjectId>,
 }
@@ -76,12 +77,20 @@ impl Fixture {
             programs,
             state,
             vocabulary,
+            mana: BTreeMap::new(),
             name_rules: spellwake_contracts::names::NameRules::literal_names(),
             objects,
         }
     }
     fn world(&self) -> CharacteristicWorld<'_> {
+        static NO_ENTRY_CHOICES: BTreeMap<ObjectId, CreatureTypeId> = BTreeMap::new();
         CharacteristicWorld {
+            active_player: SeatId(0),
+            participants: &[],
+            life: None,
+            entry_creature_types: &NO_ENTRY_CHOICES,
+            mana: &self.mana,
+            combat: None,
             cards: &self.cards,
             programs: &self.programs,
             state: &self.state,
@@ -156,15 +165,66 @@ fn permanent(
     continuous: Option<StaticContinuousAbility>,
 ) -> Program {
     Program {
+        cast_reductions: vec![],
+        entry_counter_abilities: vec![],
+        conditional_cost: None,
+        plot: None,
+        adventure: None,
+        splice: None,
+        entry_copy: None,
+        nightbound_back: None,
+        transform_back: None,
+        split: None,
+        madness: None,
+        miracle: None,
+        cast_from_own_exile: false,
+        exile_action: None,
+        flashback: None,
+        flashback_x_mana_symbols: 0,
+        sacrifice_creature_cast_cost: false,
+        tap_creatures_cast_cost: false,
+        reveal_colorless_creature_cast_cost: false,
+        discard_cast_cost: false,
+        graveyard_creature_exile_cost: 0,
+        graveyard_exile_x_cost: false,
+        graveyard_self_cast: None,
+        flashback_sacrifice_creatures: 0,
+        flashback_tap_white_creatures: 0,
+        flashback_life: 0,
+        additional_cast_costs: vec![],
+        activation_restrictions: Default::default(),
+        loyalty_costs: Default::default(),
+        variable_loyalty_costs: Default::default(),
+        face_up_abilities: Vec::new(),
+        printed_keywords: Default::default(),
+        printed_toxic: None,
+        x_mana_symbols: 0,
+        hybrid_symbols: Vec::new(),
+        cannot_be_countered: false,
+        attack_requirement: None,
+        combat_limits: Default::default(),
+        cast_during_own_combat: false,
+        additional_life_cost: None,
+        siege_back: None,
+        disturb: None,
+        meld_partner: None,
+        printed_defense: None,
+        printed_loyalty: None,
         zone_replacements: vec![],
         card_types: types.iter().copied().collect(),
         creature_subtypes: subtypes.iter().copied().collect(),
         land_subtypes: std::collections::BTreeSet::new(),
+        spell_subtypes: std::collections::BTreeSet::new(),
+        artifact_subtypes: std::collections::BTreeSet::new(),
+        enchantment_subtypes: std::collections::BTreeSet::new(),
+        planeswalker_subtypes: Default::default(),
         names: spellwake_contracts::names::ObjectNames::nameless(),
         supertypes: BTreeSet::new(),
         color_indicator: None,
         effect_defined_colors: None,
         kind: ProgramKind::Permanent(PermanentDefinition {
+            entry_tap: None,
+            attachment: None,
             printed_pt: Some(pair(pt.0, pt.1).into()),
             casting_cost,
         }),
@@ -172,6 +232,7 @@ fn permanent(
         activated: vec![],
         triggered: vec![],
         continuous,
+        additional_battlefield_abilities: vec![],
     }
 }
 fn ability(
@@ -183,16 +244,37 @@ fn ability(
     Some(StaticContinuousAbility::Battlefield {
         id: StaticAbilityId(1),
         selector: PermanentSelector {
+            token: None,
+            combat_role: None,
+            requires_flying: false,
+            plus_one_counter: false,
+            minimum_plus_one_counters: 0,
+            any_counter: false,
+            source_has_imprinted_creature: false,
+            controlled_creatures_and_typed_tokens: None,
+            exclude_auras: false,
+            artifact_subtype: None,
+            matches_source_entry_type: false,
+            controller_type_threshold: None,
+            source_condition: None,
+            equipped_by_at_least: 0,
+            devotion_below: None,
+            while_controlling_own_commander: false,
+            station_at: None,
+            attached_to_source: false,
             land_subtype: None,
             required_supertypes: BTreeSet::new(),
             forbidden_supertypes: BTreeSet::new(),
             name: crate::characteristics::NameFilter::Any,
             required_types: required.iter().copied().collect(),
             forbidden_types: forbidden.iter().copied().collect(),
+            forbidden_creature_subtype: None,
             creature_subtype: None,
             color: Default::default(),
             controller: ControllerSelector::Any,
             exclude_source,
+            requires_untapped: false,
+            sole_controlled_creature: false,
         },
         parts: StaticParts(parts),
     })
@@ -1416,5 +1498,36 @@ pub(crate) fn capture_static_case(case: &str) {
         "CL-LOOP-LATE-OUTSIDE-AB" => cl_loop_late_outside_ab(),
         "CL-LOOP-LATE-OUTSIDE-BA" => cl_loop_late_outside_ba(),
         _ => panic!("outside the ten selected pure static fixtures"),
+    }
+}
+
+#[test]
+fn station_striation_turns_on_and_off_at_its_current_charge_total() {
+    let mut fixture = Fixture::new(
+        vocabulary(),
+        vec![(
+            "ship",
+            ObjectDestination::Battlefield { controller: P0 },
+            Program::station_spacecraft(
+                ManaCost::free(),
+                std::num::NonZeroU16::new(3).unwrap(),
+                pair(6, 5),
+                [KeywordAbility::Flying, KeywordAbility::Haste].into(),
+            ),
+        )],
+        &["ship"],
+    );
+    let id = fixture.object("ship");
+    for count in [0_i64, 2, 3, 4, 2, 0] {
+        fixture.state.charge.insert(id, count.into());
+        let evaluated = evaluate(fixture.world()).unwrap();
+        let ship = evaluated.get(id).unwrap();
+        assert_eq!(ship.is_creature(), count >= 3);
+        assert_eq!(ship.has_keyword(KeywordAbility::Flying), count >= 3);
+        assert_eq!(ship.has_keyword(KeywordAbility::Haste), count >= 3);
+        assert_eq!(
+            ship.power_toughness.as_ref().map(|p| p.derived.clone()),
+            (count >= 3).then(|| pair(6, 5))
+        );
     }
 }

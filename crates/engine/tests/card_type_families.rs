@@ -12,7 +12,7 @@ use spellwake_engine::{
     },
     mana::ManaCost,
     object_identity::CardId,
-    program::{BodyTarget, CardType, ExecutableBody, Instruction, InstructionAmount, Program},
+    program::{BodyTarget, CardType, ExecutableBody, Instruction, Program},
 };
 use std::collections::BTreeSet;
 use trajectories::*;
@@ -39,7 +39,7 @@ fn every_authored_type_subset_is_checked_against_body_and_shared_family() {
                         ExecutableBody::new(
                             BodyTarget::None,
                             vec![Instruction::DrawController {
-                                amount: InstructionAmount::Literal(0.into()),
+                                amount: spellwake_engine::program::ValueExpr::Literal(0.into()),
                             }],
                         ),
                     )
@@ -273,7 +273,7 @@ fn kindred_all_type_definition_runs_in_every_physical_zone_without_becoming_crea
         ExecutableBody::new(
             BodyTarget::None,
             vec![Instruction::DrawController {
-                amount: InstructionAmount::Literal(0.into()),
+                amount: spellwake_engine::program::ValueExpr::Literal(0.into()),
             }],
         ),
     );
@@ -366,7 +366,7 @@ fn kindred_instruction_timing_and_paid_enchantment_entry_use_ordinary_root_trans
         ExecutableBody::new(
             BodyTarget::None,
             vec![Instruction::DrawController {
-                amount: InstructionAmount::Literal(0.into()),
+                amount: spellwake_engine::program::ValueExpr::Literal(0.into()),
             }],
         )
     };
@@ -410,6 +410,7 @@ fn kindred_instruction_timing_and_paid_enchantment_entry_use_ordinary_root_trans
         1.into()
     );
     let green = ManaPayment {
+        from_lots: Default::default(),
         spend: vec![ManaSpend {
             mana_type: ManaType::Green,
             amount: 1.into(),
@@ -518,7 +519,7 @@ fn generic_mana_counts_kindred_members_but_creature_targets_reject_them() {
     let counted = ManaAbility {
         id: ManaAbilityId(1),
         output: ManaOutput::Counted {
-            mana_type: ManaType::Green,
+            mana_type: Some(ManaType::Green),
             permanents: PermanentSelector {
                 creature_subtype: Some(elf),
                 controller: spellwake_engine::characteristics::ControllerSelector::SourceController,
@@ -634,9 +635,11 @@ fn chosen_type_draw_counts_noncreature_kindred_with_the_existing_value_and_draw_
                     excluding: BTreeSet::new(),
                 },
                 Instruction::DrawController {
-                    amount: InstructionAmount::ControlledPermanentsOfChosenType {
-                        chosen: CreatureTypeSlot::new(0),
-                    },
+                    amount: spellwake_engine::program::ValueExpr::count_battlefield(
+                        spellwake_engine::program::ObjectFilter::any()
+                            .controlled()
+                            .of_chosen_slot(CreatureTypeSlot::new(0)),
+                    ),
                 },
             ],
         ),
@@ -1033,7 +1036,7 @@ fn kindred_text_changes_rewrite_current_family_and_printed_mana_selector_togethe
     source.mana.push(ManaAbility {
         id: ManaAbilityId(1),
         output: ManaOutput::Counted {
-            mana_type: ManaType::Green,
+            mana_type: Some(ManaType::Green),
             permanents: PermanentSelector {
                 creature_subtype: Some(elf),
                 controller: ControllerSelector::SourceController,
@@ -1109,7 +1112,7 @@ fn legendary_noncreature_enchantments_and_kindred_permanents_do_not_qualify_spel
             ExecutableBody::new(
                 BodyTarget::None,
                 vec![Instruction::DrawController {
-                    amount: InstructionAmount::Literal(0.into()),
+                    amount: spellwake_engine::program::ValueExpr::Literal(0.into()),
                 }],
             ),
         );
@@ -1192,6 +1195,7 @@ fn paid_kindred_instruction_spells_use_actual_mana_and_life_transition_paths() {
             },
         );
         let payment = ManaPayment {
+            from_lots: Default::default(),
             spend: vec![ManaSpend {
                 mana_type: ManaType::Green,
                 amount: 1.into(),

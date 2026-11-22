@@ -531,3 +531,38 @@ fn a_type_definition_cannot_give_a_noncreature_invalid_subtypes_or_erase_its_off
             .is_none()
     );
 }
+
+#[test]
+fn printed_changeling_and_devoid_define_every_physical_zone_before_ability_removal() {
+    let v = vocabulary();
+    let all: BTreeSet<_> = v
+        .members()
+        .iter()
+        .map(|name| v.resolve_label(name).unwrap())
+        .collect();
+    let mut card = Program::creature(None, 2.into(), 3.into(), BTreeSet::new())
+        .with_printed_keywords([KeywordAbility::Changeling, KeywordAbility::Devoid]);
+    card.color_indicator = Some(BTreeSet::from([Color::Red]));
+    let mut rows: Vec<_> = zones()
+        .into_iter()
+        .map(|(alias, zone)| (alias, zone, card.clone()))
+        .collect();
+    rows.push(("remover", battlefield(), remover()));
+    let fixture = Fixture::new(v, rows, &["battlefield", "remover"]);
+    let result = evaluate(fixture.world()).unwrap();
+    for (alias, _) in zones() {
+        let current = result.get(fixture.object(alias)).unwrap();
+        assert_eq!(current.current_creature_subtypes, all);
+        assert!(current.current_colors.is_empty());
+        assert_eq!(current.defined.colors, BTreeSet::from([Color::Red]));
+        assert!(current.defined.creature_subtypes.is_empty());
+        assert_eq!(
+            current.has_keyword(KeywordAbility::Changeling),
+            alias != "battlefield"
+        );
+        assert_eq!(
+            current.has_keyword(KeywordAbility::Devoid),
+            alias != "battlefield"
+        );
+    }
+}

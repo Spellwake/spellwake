@@ -90,7 +90,7 @@ fn actual_discard_preserves_nonactive_player_and_uses_rule_reason() {
     let MatcherWitness::Moves { source, result } = *witness else {
         panic!()
     };
-    assert_eq!(source.window().turn_owner(), SeatId(0));
+    assert_eq!(source.window().active_player(), SeatId(0));
     let transition = result.unwrap();
     let event = transition
         .append()
@@ -134,7 +134,7 @@ fn step_preparation_has_no_retroactive_entry_and_genuine_upkeep_uses_active_b() 
     else {
         panic!()
     };
-    assert_eq!(source.window().turn_owner(), SeatId(1));
+    assert_eq!(source.window().active_player(), SeatId(1));
     let transitions = stages
         .iter()
         .filter_map(|stage| {
@@ -164,7 +164,7 @@ fn step_preparation_has_no_retroactive_entry_and_genuine_upkeep_uses_active_b() 
     assert!(matches!(
         events[0].occurrences[0].value,
         RulesOccurrence::StepBegan {
-            active: Some(SeatId(1)),
+            active: SeatId(1),
             position: crate::turn::TurnPosition {
                 step: crate::turn::Step::Upkeep,
                 ..

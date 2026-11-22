@@ -88,25 +88,22 @@ pub(super) fn run(
     let mut active_replay_frames = 0;
     let mut publication_budget = serde_json::Value::Null;
     let mut prior_banks: Option<Vec<Bank>> = None;
-    let supply = std::env::var("SPELLWAKE_SUPPLY_PARTICIPATION").as_deref() == Ok("1");
-    let mut last_committed: Option<RecoveredNativeGame> = None;
     for _ in 0..400 {
         // Each step really cold-recovers the accepted canonical chain. This is
         // intentionally a recovery test, not a performance claim or cache design.
-        let recovered = if let Some(accepted) = last_committed.take() {
-            accepted
-        } else {
-            repository
-                .recover_with_history(
-                    reservation.game_id,
-                    store,
-                    programs,
-                    NativeRecoveryBudget::new(10_000, 100_000_000).unwrap(),
-                )
-                .unwrap()
-                .unwrap()
-        };
-        assert!(supply || recovered.history_evidence().transitions_verified());
+        let recovered = repository
+            .recover_with_history(
+                reservation.game_id,
+                store,
+                programs,
+                NativeRecoveryBudget::new(10_000, 100_000_000).unwrap(),
+            )
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            recovered.history_evidence(),
+            NativeHistoryEvidence::TransitionV1
+        );
         let checkpoint = recovered.checkpoint();
         for (seat, _, _, _, _) in recovered.source().clocks() {
             assert_eq!(
@@ -146,7 +143,7 @@ pub(super) fn run(
         let concede = !rule_errors
             && !unsupported
             && checkpoint.own_turns(reservation.seat_ids[0]).unwrap() >= target;
-        if concede && !supply && active_replay_frames == 0 {
+        if concede && active_replay_frames == 0 {
             // The game is still in progress here: own-seat live replay only.
             active_replay_frames = super::active_replay::run(
                 &read_only_http,
@@ -242,7 +239,9 @@ pub(super) fn run(
                         .handle
                         .clone(),
                 },
-                PlayerDomain::Attackers { choices, required } => {
+                PlayerDomain::Attackers {
+                    choices, required, ..
+                } => {
                     assert!(
                         choices.is_empty() && required.is_empty(),
                         "land-only fixture has no attackers"
@@ -251,9 +250,14 @@ pub(super) fn run(
                         assignments: vec![],
                     }
                 }
-                PlayerDomain::Blockers { choices, required } => {
+                PlayerDomain::Blockers {
+                    choices,
+                    required,
+                    minimum_if_blocked,
+                    ..
+                } => {
                     assert!(
-                        choices.is_empty() && required.is_empty(),
+                        choices.is_empty() && required.is_empty() && minimum_if_blocked.is_empty(),
                         "land-only fixture has no blockers"
                     );
                     PlayerChoice::Blockers {
@@ -276,7 +280,7 @@ pub(super) fn run(
                 response,
             }
         } else if !unsupported
-            && checkpoint.state().execution().window().turn_owner() == native_actor
+            && checkpoint.state().execution().window().active_player() == native_actor
             && checkpoint.state().turn().unwrap().position().step == TurnStep::PrecombatMain
             && checkpoint.state().turn().unwrap().lands_played() == &0.into()
         {
@@ -428,10 +432,6 @@ pub(super) fn run(
                 )
                 .unwrap()
         };
-        if supply {
-            let accepted = commit();
-            assert!(matches!(accepted, ApiResponse::Success { .. }));
-        }
         let response = command_http.command(Some(&tokens[index]), &original, 202);
         let ack: crate::player_wire::PlayerCommandAck =
             serde_json::from_value(response["data"].clone()).unwrap();
@@ -471,7 +471,7 @@ pub(super) fn run(
                 )
                 .unwrap()
                 .unwrap();
-            assert!(cold.history_evidence().transitions_verified());
+            assert_eq!(cold.history_evidence(), NativeHistoryEvidence::TransitionV1);
             assert_accounted(prior_banks.as_ref().unwrap(), cold.source());
             assert!(cold.source().clocks().all(|(_, _, _, paused, _)| paused));
             assert_eq!(
@@ -490,15 +490,6 @@ pub(super) fn run(
                 &[reservation.seat_ids[1]]
             );
             fs::write(std::env::var_os("SPELLWAKE_NATIVE_SOURCE_OUTPUT").unwrap(), serde_json::to_vec(&json!({"contextId":reservation.context_id,"ownTurns":reservation.seat_ids.iter().map(|seat|next.own_turns(*seat).unwrap().to_string()).collect::<Vec<_>>(),"basis":next.basis(),"factsRef":facts,"requestId":original.request_id})).unwrap()).unwrap();
-            if supply {
-                assert_eq!(target, 3);
-                assert_eq!(next.own_turns(reservation.seat_ids[1]), Some(2));
-                println!(
-                    "OWNED_NATIVE_SOURCE_READER_OK {}",
-                    json!({"phase":"supply-participation","turns":["3","2"],"originalHttpRetries":true,"coldTerminalVerified":true,"acceptedRevision":next.basis().revision})
-                );
-                return;
-            }
             completed_history_cuts = super::completed_history::run(
                 &repository,
                 store,
@@ -526,13 +517,6 @@ pub(super) fn run(
             );
             terminal_accepted = true;
             break;
-        }
-        if supply {
-            last_committed = Some(
-                recovered
-                    .advance_observed_for_fixture(&repository, next)
-                    .unwrap(),
-            );
         }
     }
     assert!(terminal_accepted);

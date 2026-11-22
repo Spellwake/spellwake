@@ -1,6 +1,6 @@
 //! Independent scenarios frozen in damage-prevention-scenarios.md.
 //! These native observations do not qualify full replacements, replay or cards.
-use spellwake_engine::program::{BodyTarget, ExecutableBody, SpellTargetFilter};
+use spellwake_engine::program::{BodyTarget, ExecutableBody};
 #[path = "support/damage.rs"]
 pub mod damage_support;
 use spellwake_contracts::RulesInteger;
@@ -1086,7 +1086,9 @@ fn copied_damage_retains_its_exact_payload_and_own_cause_after_original_exit() {
                 2,
                 B,
                 ExecutableBody::new(
-                    BodyTarget::SingleSpell(SpellTargetFilter::CopyableInstructionSpell),
+                    BodyTarget::SingleSpell(
+                        spellwake_engine::program::SpellFilter::copyable_instruction(),
+                    ),
                     vec![Instruction::CopySpell],
                 ),
             ),
@@ -1094,7 +1096,7 @@ fn copied_damage_retains_its_exact_payload_and_own_cause_after_original_exit() {
                 3,
                 A,
                 ExecutableBody::new(
-                    BodyTarget::SingleSpell(SpellTargetFilter::AnySpell),
+                    BodyTarget::SingleSpell(spellwake_engine::program::SpellFilter::any()),
                     vec![Instruction::CounterSpell],
                 ),
             ),
@@ -1188,7 +1190,9 @@ fn copied_shields_are_independent_effects_and_survive_copy_cessation() {
                     2,
                     B,
                     ExecutableBody::new(
-                        BodyTarget::SingleSpell(SpellTargetFilter::CopyableInstructionSpell),
+                        BodyTarget::SingleSpell(
+                            spellwake_engine::program::SpellFilter::copyable_instruction(),
+                        ),
                         vec![Instruction::CopySpell],
                     ),
                 ),
@@ -1196,7 +1200,7 @@ fn copied_shields_are_independent_effects_and_survive_copy_cessation() {
                     3,
                     A,
                     ExecutableBody::new(
-                        BodyTarget::SingleSpell(SpellTargetFilter::AnySpell),
+                        BodyTarget::SingleSpell(spellwake_engine::program::SpellFilter::any()),
                         vec![Instruction::CounterSpell],
                     ),
                 ),
@@ -1442,7 +1446,7 @@ fn illegal_targets_and_countered_creation_produce_no_damage_or_new_shield() {
                 2,
                 A,
                 ExecutableBody::new(
-                    BodyTarget::SingleSpell(SpellTargetFilter::AnySpell),
+                    BodyTarget::SingleSpell(spellwake_engine::program::SpellFilter::any()),
                     vec![Instruction::CounterSpell],
                 ),
             ),

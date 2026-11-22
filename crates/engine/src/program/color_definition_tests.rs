@@ -30,11 +30,38 @@ fn color_definition_roundtrips_program_and_printed_text_including_colorless() {
         assert_eq!(encoded["continuous"]["tag"], "CharacteristicDefining");
         assert_eq!(codec::decode(encoded.clone(), &v).unwrap(), p);
         let text = PrintedText {
+            cast_reductions: vec![],
+            entry_counter_abilities: vec![],
+            conditional_cost: None,
+            plot: None,
+            madness: None,
+            miracle: None,
+            exile_action: None,
+            flashback: None,
+            flashback_x_mana_symbols: 0,
+            sacrifice_creature_cast_cost: false,
+            tap_creatures_cast_cost: false,
+            reveal_colorless_creature_cast_cost: false,
+            discard_cast_cost: false,
+            graveyard_creature_exile_cost: 0,
+            graveyard_exile_x_cost: false,
+            graveyard_self_cast: None,
+            flashback_sacrifice_creatures: 0,
+            flashback_tap_white_creatures: 0,
+            flashback_life: 0,
+            additional_cast_costs: vec![],
+            activation_restrictions: Default::default(),
+            loyalty_costs: Default::default(),
+            variable_loyalty_costs: Default::default(),
+            face_up_abilities: Vec::new(),
+            printed_keywords: Default::default(),
+            printed_toxic: None,
             zone_replacements: vec![],
             mana: vec![],
             activated: vec![],
             triggered: vec![],
             continuous: p.continuous.clone(),
+            additional_battlefield_abilities: p.additional_battlefield_abilities.clone(),
         };
         assert_eq!(
             codec::printed_text(&text)["continuous"],
@@ -50,7 +77,7 @@ fn color_definitions_admit_on_spells_but_ordinary_battlefield_statics_do_not() {
     let body = ExecutableBody::new(
         BodyTarget::None,
         vec![Instruction::DrawController {
-            amount: InstructionAmount::Literal(1.into()),
+            amount: crate::program::ValueExpr::Literal(1.into()),
         }],
     );
     for mut p in [

@@ -45,9 +45,6 @@ mod ai_ready_integrity;
 #[path = "database/room_start_integrity.rs"]
 mod room_start_integrity;
 
-#[path = "database/countdown_dispatch.rs"]
-mod countdown_dispatch;
-
 #[path = "database/queue_intent_integrity.rs"]
 mod queue_intent_integrity;
 
@@ -197,20 +194,12 @@ async fn connection() -> Result<Client, Box<dyn Error + Send + Sync>> {
     let address = std::env::var("SPELLWAKE_TEST_DATABASE_URL")?;
     // This harness intentionally refuses remote or credential-bearing connections.
     let base = "host=127.0.0.1 port=55439 user=postgres dbname=spellwake_application";
-    let isolated_name =
-        |suffix: &str| suffix.len() == 32 && suffix.bytes().all(|byte| byte.is_ascii_hexdigit());
     let fresh_test_target = address
         .strip_prefix(&(base.to_owned() + "_test_"))
-        .is_some_and(isolated_name);
-    // An owned stand-alone cluster listens only on its private Unix socket. Both
-    // the socket directory and the disposable database carry generated identities.
-    let private_socket = address
-        .strip_prefix("host=/tmp/spellwake-pg-")
-        .and_then(|rest| {
-            rest.split_once(" port=55440 user=postgres dbname=spellwake_application_test_")
-        })
-        .is_some_and(|(directory, name)| isolated_name(directory) && isolated_name(name));
-    if address != base && !fresh_test_target && !private_socket {
+        .is_some_and(|suffix| {
+            suffix.len() == 32 && suffix.bytes().all(|byte| byte.is_ascii_hexdigit())
+        });
+    if address != base && !fresh_test_target {
         return Err("database test target must be the isolated local Postgres instance".into());
     }
     let (client, connection) = tokio_postgres::connect(&address, NoTls).await?;
@@ -219,14 +208,6 @@ async fn connection() -> Result<Client, Box<dyn Error + Send + Sync>> {
             eprintln!("application test database connection failed: {error}");
         }
     });
-    if private_socket {
-        let owned: bool = client.query_one(
-            "SELECT current_setting('cluster_name') = 'spellwake-api-qualification' AND inet_server_addr() IS NULL", &[]
-        ).await?.get(0);
-        if !owned {
-            return Err("private test socket does not identify the qualification cluster".into());
-        }
-    }
     client.batch_execute("SET statement_timeout='10s'").await?;
     Ok(client)
 }
@@ -358,7 +339,7 @@ async fn fixture(client: &Client) -> Result<(Uuid, Uuid, Uuid), Box<dyn Error + 
 async fn schema_permissions_and_exact_owned_quantities() -> TestResult {
     let client = connection().await?;
     let counts = client.query_one("SELECT (SELECT count(*) FROM pg_tables WHERE schemaname='app')::bigint,(SELECT count(*) FROM pg_views WHERE schemaname='app')::bigint", &[]).await?;
-    assert_eq!(counts.get::<_, i64>(0), 96);
+    assert_eq!(counts.get::<_, i64>(0), 109);
     assert_eq!(counts.get::<_, i64>(1), 10);
     let (owner, subject, asset) = fixture(&client).await?;
     let (_, other_subject) = account(&client).await?;

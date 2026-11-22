@@ -166,11 +166,7 @@ impl From<&AbilityActivationRecord> for ActivationView {
             ability: value.ability.0,
             controller: seat(value.controller),
             source: object_view(&value.source),
-            source_cost: match value.source_cost {
-                SourceCost::None => "none",
-                SourceCost::Tap => "tap",
-                SourceCost::Sacrifice => "sacrifice",
-            },
+            source_cost: value.source_cost.trace_label(),
             resulting_source: format!("{:?}", value.resulting_source),
         }
     }
@@ -316,6 +312,10 @@ fn kind(value: &StackKind) -> &'static str {
         StackKind::CardSpell(_) => "card-spell",
         StackKind::ActivatedAbility { .. } => "activated-ability",
         StackKind::SpellCopy { .. } => "spell-copy",
+        StackKind::Speed => "speed",
+        StackKind::Monarch => "monarch",
+        StackKind::DelayedCopy { .. } => "delayed-copy",
+        StackKind::Emblem { .. } => "emblem",
         StackKind::TriggeredAbility { .. } => "triggered-ability",
     }
 }
@@ -625,6 +625,7 @@ fn run_probe(
             probe.ability,
             TARGET,
             Some(ManaPayment {
+                from_lots: Default::default(),
                 spend: requested_spend,
             }),
         )?,

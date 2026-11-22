@@ -124,52 +124,7 @@ impl NativeCastAccounts {
         Ok(facts)
     }
 }
-impl NativeCastAccounts {
-    pub(super) fn facts_for_schema(
-        &self,
-        checkpoint: &NativeCheckpoint,
-        schema: crate::admission_ports::NativeEventSchema,
-    ) -> Result<Vec<NativeCastFact>, NativeCheckpointError> {
-        let mut facts = self.facts(checkpoint)?;
-        if schema == crate::admission_ports::NativeEventSchema::LandPlayV1 {
-            let seat = checkpoint.land_player()?;
-            if let Some(account) = self
-                .seats
-                .get(&seat)
-                .ok_or(NativeCheckpointError::Invalid)?
-            {
-                facts.push(NativeCastFact {
-                    event_index: 0.into(),
-                    account_id: *account,
-                    kind: "native:land-play",
-                    revision: "native-land-play-v1",
-                    value: 1.into(),
-                });
-                facts.sort_by_key(|fact| (fact.account_id, fact.kind));
-            }
-        }
-        Ok(facts)
-    }
-}
 impl NativeCheckpoint {
-    pub(super) fn activity_schema(&self) -> crate::admission_ports::NativeEventSchema {
-        if self.candidate().land_play().is_some() {
-            crate::admission_ports::NativeEventSchema::LandPlayV1
-        } else {
-            crate::admission_ports::NativeEventSchema::ActivityV1
-        }
-    }
-    pub(super) fn land_player(&self) -> Result<Uuid, NativeCheckpointError> {
-        let play = self
-            .candidate()
-            .land_play()
-            .ok_or(NativeCheckpointError::Invalid)?;
-        self.roster
-            .iter()
-            .find(|seat| seat.native_seat == play.player)
-            .map(|seat| seat.seat_id)
-            .ok_or(NativeCheckpointError::Invalid)
-    }
     pub(super) fn cast_activity(&self) -> Result<Vec<NativeCastActivity>, NativeCheckpointError> {
         let mut counts = vec![(0u64, 0u64); self.roster.len()];
         // Project precisely Event occurrences; unrelated rule records/occurrences

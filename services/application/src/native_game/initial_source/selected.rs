@@ -250,6 +250,37 @@ impl SelectedRoot {
             })
             .collect()
     }
+    pub(super) fn validate_commander(
+        &self,
+        ids: NativeInitialIds,
+        participants: &[NativeInitialParticipant],
+    ) -> Result<Vec<Vec<usize>>, NativeInitialError> {
+        if !self.game_index.is_zero() {
+            return Err(NativeInitialError::ForeignSource);
+        }
+        let indices = self.validate(ids, participants)?;
+        for ((seat, participant), selected) in self.seats.iter().zip(participants).zip(&indices) {
+            let mut consumed = BTreeMap::<Uuid, u64>::new();
+            for (card, index) in participant.cards.iter().zip(selected) {
+                let entry = &seat.entries[*index];
+                let expected = match card.zone {
+                    super::NativeInitialZone::Library => "main",
+                    super::NativeInitialZone::Command => "commander",
+                };
+                if entry.section.as_str() != expected {
+                    return Err(NativeInitialError::ForeignSource);
+                }
+                *consumed.entry(entry.entry_id).or_default() += 1;
+            }
+            if seat.entries.iter().any(|entry| {
+                Amount::from(consumed.get(&entry.entry_id).copied().unwrap_or(0)) != entry.quantity
+            }) {
+                return Err(NativeInitialError::ForeignSource);
+            }
+        }
+        Ok(indices)
+    }
+
     fn matches(&self, source: &NativeReservedGameSource) -> bool {
         let r = source.metadata();
         self.game_id == r.game_id

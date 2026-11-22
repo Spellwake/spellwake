@@ -1,26 +1,21 @@
 //! Conditional effects use real paid casts, root decisions and one live cursor.
 use super::*;
-use spellwake_engine::program::{
-    Comparison, ConditionValue, CreatureTypeSlot, InstructionAmount, ResolutionCondition,
-};
-fn branch(
-    left: ConditionValue,
-    comparison: Comparison,
-    right: i64,
-    destination: usize,
-) -> Instruction {
+use spellwake_engine::program::{Comparison, CreatureTypeSlot, ResolutionCondition, ValueExpr};
+fn branch(left: ValueExpr, comparison: Comparison, right: i64, destination: usize) -> Instruction {
     Instruction::BranchIfFalse {
         condition: ResolutionCondition {
             left,
             comparison,
-            right: ConditionValue::Literal(right.into()),
+            right: spellwake_engine::program::ValueExpr::Literal(right.into()),
         },
         destination,
     }
 }
 fn life(threshold: i64, destination: usize) -> Instruction {
     branch(
-        ConditionValue::ControllerLife,
+        spellwake_engine::program::ValueExpr::PlayerStat(
+            spellwake_engine::program::PlayerStatExpr::ControllerLife,
+        ),
         Comparison::GreaterOrEqual,
         threshold,
         destination,
@@ -87,7 +82,14 @@ fn conditional_true_false_and_changed_current_life_execute_only_selected_paths()
                 Instruction::AdjustControllerLife {
                     adjustment: LifeAdjustment::Set((-5).into()),
                 },
-                branch(ConditionValue::ControllerLife, Comparison::Equal, -5, 3),
+                branch(
+                    spellwake_engine::program::ValueExpr::PlayerStat(
+                        spellwake_engine::program::PlayerStatExpr::ControllerLife,
+                    ),
+                    Comparison::Equal,
+                    -5,
+                    3,
+                ),
                 gain(30),
             ],
             25,
@@ -194,7 +196,11 @@ fn mutually_exclusive_type_producers_keep_one_cursor_and_join_the_actual_local()
                 Instruction::Jump { destination: 4 },
                 choice(),
                 Instruction::DrawController {
-                    amount: InstructionAmount::ControlledPermanentsOfChosenType { chosen: slot },
+                    amount: spellwake_engine::program::ValueExpr::count_battlefield(
+                        spellwake_engine::program::ObjectFilter::any()
+                            .controlled()
+                            .of_chosen_slot(slot),
+                    ),
                 },
                 gain(1),
             ],
@@ -316,12 +322,21 @@ fn matched_count_condition_uses_captured_causes_after_source_departure() {
     let mut watcher = Program::creature(None, 1.into(), 0.into(), BTreeSet::new());
     watcher.triggered.push(TriggeredAbility {
         id: TriggeredAbilityId(1),
-        condition: OrdinaryCondition::Dies(spellwake_engine::program::ObjectRelation::AnyCreature),
+        condition: spellwake_engine::program::TriggerSpec::dies(
+            spellwake_engine::program::ObjectFilter::creature(),
+        ),
         grouping: TriggerGrouping::OneOrMoreTogether,
         body: ExecutableBody::new(
             BodyTarget::None,
             vec![
-                branch(ConditionValue::MatchedOccurrences, Comparison::Equal, 2, 2),
+                branch(
+                    spellwake_engine::program::ValueExpr::event(
+                        spellwake_engine::program::EventValueKind::MatchedOccurrences,
+                    ),
+                    Comparison::Equal,
+                    2,
+                    2,
+                ),
                 gain(4),
             ],
         ),
@@ -408,7 +423,9 @@ fn token_timestamp_pause_restores_control_cursor_then_jumps_over_else() {
         Instruction::CreateTokens {
             creations: vec![TokenCreation {
                 definition,
-                amount: InstructionAmount::Literal(2.into()),
+                amount: spellwake_engine::program::ValueExpr::Literal(2.into()),
+                base_size: None,
+                enters_tapped: false,
                 recipients: TokenRecipients::Controller,
             }],
         },
@@ -518,7 +535,7 @@ fn damage_pause_restores_control_cursor_then_jumps_over_else() {
 }
 #[test]
 fn copy_target_pause_restores_control_cursor_then_jumps_over_else() {
-    use spellwake_engine::{effects::CopyTargetChoice, program::SpellTargetFilter};
+    use spellwake_engine::effects::CopyTargetChoice;
     let original = spell(
         BodyTarget::SinglePlayer,
         vec![Instruction::AdjustTargetLife {
@@ -526,7 +543,7 @@ fn copy_target_pause_restores_control_cursor_then_jumps_over_else() {
         }],
     );
     let copy = spell(
-        BodyTarget::SingleSpell(SpellTargetFilter::CopyableInstructionSpell),
+        BodyTarget::SingleSpell(spellwake_engine::program::SpellFilter::copyable_instruction()),
         vec![
             life(20, 3),
             Instruction::CopySpell,
@@ -583,7 +600,7 @@ fn an_executed_draw_from_an_empty_library_is_attempted_and_a_skipped_draw_is_abs
     use spellwake_engine::draw::{DrawEvent, GameOutcome};
     for threshold in [20, 21] {
         let draw = |n: i64| Instruction::DrawController {
-            amount: InstructionAmount::Literal(n.into()),
+            amount: spellwake_engine::program::ValueExpr::Literal(n.into()),
         };
         let game = two(vec![hand(
             1,
@@ -632,10 +649,10 @@ fn controller_life_uses_captured_trigger_controller_after_source_control_changes
     let mut watcher = Program::artifact(None, vec![]);
     watcher.triggered.push(TriggeredAbility {
         id: TriggeredAbilityId(1),
-        condition: OrdinaryCondition::SpellCast {
-            player: PlayerRelation::Controller,
-            filter: SpellCastFilter::AnySpell,
-        },
+        condition: spellwake_engine::program::TriggerSpec::spell_cast(
+            PlayerRelation::Controller,
+            spellwake_engine::program::SpellFilter::any(),
+        ),
         grouping: TriggerGrouping::EachOccurrence,
         body: ExecutableBody::new(BodyTarget::None, vec![life(20, 2), gain(4)]),
     });

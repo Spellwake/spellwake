@@ -8,7 +8,6 @@
 //! them to a game and serializes accepted successors.
 #[cfg(test)]
 mod control_tests;
-mod departure;
 #[cfg(test)]
 pub(crate) mod private_qualification;
 use crate::activated::SourceCost;
@@ -37,6 +36,18 @@ pub struct StackEntryId(u64);
 /// Minimal source evidence only, not a complete ability program or last-known state.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum StackKind {
+    /// The source-free triggered ability a player has from the speed rules.
+    Speed,
+    /// One of the source-free inherent monarch triggers.
+    Monarch,
+    /// Source-independent delayed trigger created by a resolving spell copy.
+    DelayedCopy {
+        original: StackEntryId,
+    },
+    /// Triggered ability whose actual source is a command-zone emblem.
+    Emblem {
+        emblem: crate::emblem::EmblemId,
+    },
     CardSpell(ObjectId),
     /// A nonpermanent spell copy has no physical CardId. Payload is owned by the executor.
     SpellCopy {
@@ -53,12 +64,121 @@ pub enum StackKind {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StackEntry {
+    /// Earlier controllers, from admission through subsequent control effects.
+    previous_controllers: Vec<SeatId>,
+    ability_copy_of: Option<StackEntryId>,
+    chosen_x: Option<RulesInteger>,
+    caster: Option<SeatId>,
+    cast_from_hand: Option<SeatId>,
+    pub(crate) cast_from_graveyard: bool,
+    pub(crate) cast_original_object: Option<ObjectId>,
+    pub(crate) cast_from_command: bool,
+    pub(crate) cast_from_library: Option<SeatId>,
+    cast_during_own_main: bool,
+    protected_by_spent_mana: bool,
+    power_contributors: Vec<ObjectId>,
+    attacking_defender: Option<SeatId>,
+    exile_cast: Option<ExileCast>,
+    conditional_cost: bool,
+    bargained: bool,
+    buyback: bool,
+    kicked: BTreeMap<usize, RulesInteger>,
+    replicated: BTreeMap<usize, RulesInteger>,
+    pub(crate) granted_replicate: BTreeMap<crate::characteristics::EffectInstanceKey, usize>,
+    sunburst_colors: u8,
     id: StackEntryId,
     controller: SeatId,
     kind: StackKind,
     targets: TargetPlan,
 }
+/// A casting permission which exiles the physical spell whenever it leaves the stack.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ExileCast {
+    Flashback,
+    JumpStart,
+    Aftermath,
+    IfGraveyard,
+}
+impl ExileCast {
+    fn destination(self, proposed: ObjectDestination) -> ObjectDestination {
+        if self != Self::IfGraveyard || proposed == ObjectDestination::Graveyard {
+            ObjectDestination::Exile
+        } else {
+            proposed
+        }
+    }
+}
 impl StackEntry {
+    /// Original stack entry for an ability copy. The copy retains the ability’s source.
+    pub fn ability_copy_of(&self) -> Option<StackEntryId> {
+        self.ability_copy_of
+    }
+    /// Chosen X is shared by every X symbol on this spell and its copies.
+    pub fn chosen_x(&self) -> Option<&RulesInteger> {
+        self.chosen_x.as_ref()
+    }
+    pub(crate) fn cast_origin(&self) -> Option<(SeatId, bool)> {
+        self.caster
+            .map(|caster| (caster, self.cast_from_hand == Some(caster)))
+    }
+    pub(crate) fn controller_cast_during_own_main(&self) -> bool {
+        self.cast_during_own_main
+            && self.caster == Some(self.controller)
+            && matches!(self.kind, StackKind::CardSpell(_))
+    }
+    /// Whether this specific physical spell paid with mana that prevents countering it.
+    pub fn protected_by_spent_mana(&self) -> bool {
+        self.protected_by_spent_mana
+    }
+    pub(crate) fn cast_from_hand_of(&self, player: SeatId) -> bool {
+        self.cast_from_hand == Some(player)
+    }
+    pub(crate) fn cast_from_controllers_hand(&self) -> bool {
+        self.cast_from_hand == Some(self.controller)
+    }
+    /// The defender of the unblocked attacker returned to pay sneak or ninjutsu.
+    pub fn attacking_defender(&self) -> Option<SeatId> {
+        self.attacking_defender
+    }
+    /// Exact creatures tapped to pay for this crew or saddle activation.
+    pub fn power_contributors(&self) -> &[ObjectId] {
+        &self.power_contributors
+    }
+
+    /// Number of distinct colors actually spent on a spell with sunburst.
+    pub fn sunburst_colors(&self) -> u8 {
+        self.sunburst_colors
+    }
+    /// Whether the spell used its printed conditional price, including copied choices.
+    pub fn paid_conditional_cost(&self) -> bool {
+        self.conditional_cost
+    }
+    /// Whether buyback was paid, including copied casting decisions (CR 707.10).
+    pub fn bought_back(&self) -> bool {
+        self.buyback
+    }
+    /// Whether an eligible permanent was sacrificed to bargain, including on a copied spell.
+    pub fn bargained(&self) -> bool {
+        self.bargained
+    }
+    /// The kicker costs paid while announcing this spell.
+    pub fn replicate_choices(&self) -> &BTreeMap<usize, RulesInteger> {
+        &self.replicated
+    }
+    pub fn kicker_choices(&self) -> &BTreeMap<usize, RulesInteger> {
+        &self.kicked
+    }
+    /// True only on the physical spell cast by paying its flashback cost.
+    pub fn cast_with_flashback(&self) -> bool {
+        self.exile_cast == Some(ExileCast::Flashback)
+    }
+    /// True only on the physical spell cast using jump-start.
+    pub fn exiles_if_put_into_graveyard(&self) -> bool {
+        self.exile_cast == Some(ExileCast::IfGraveyard)
+    }
+    pub fn cast_with_jump_start(&self) -> bool {
+        self.exile_cast == Some(ExileCast::JumpStart)
+    }
     pub fn id(&self) -> StackEntryId {
         self.id
     }
@@ -92,6 +212,8 @@ pub(crate) struct LibraryTopCommit<'a> {
 /// replacement-adjusted destinations are unsupported in this narrow slice.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SpellCopyObject {
+    /// Stack or departed incarnation of a noncard permanent spell.
+    pub permanent_object: Option<ObjectId>,
     pub id: StackEntryId,
     pub owner: SeatId,
     pub controller: Option<SeatId>,
@@ -153,9 +275,8 @@ pub struct StackWindow {
     revision: u64,
     next_entry: u64,
     order: Vec<SeatId>,
-    departed: BTreeSet<SeatId>,
+    original_order: Vec<SeatId>,
     active: SeatId,
-    priority_start: SeatId,
     cards: GameObjects,
     stack: Vec<StackEntry>,
     copies: BTreeMap<StackEntryId, SpellCopyObject>,
@@ -296,12 +417,43 @@ pub enum StackWindowError {
 /// Type predicates stay in the characteristic executor, not this registry owner.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ResolutionSelectionMove {
+    PutInLibrary {
+        player: SeatId,
+        object: ObjectId,
+        destination: crate::program::PublicZoneDestination,
+        placement: crate::program::LibraryPlacement,
+    },
+    LibraryEffect {
+        player: SeatId,
+        object: ObjectId,
+        destination: crate::program::PublicZoneDestination,
+    },
+    CommanderReturn {
+        player: SeatId,
+        object: ObjectId,
+        destination: crate::program::PublicZoneDestination,
+    },
+    GraveyardReturn {
+        player: SeatId,
+        object: ObjectId,
+        destination: crate::program::PublicZoneDestination,
+    },
+    BattlefieldEffect {
+        player: SeatId,
+        object: ObjectId,
+        destination: crate::program::PublicZoneDestination,
+    },
+    ReturnToHand {
+        player: SeatId,
+        object: ObjectId,
+        destination: crate::program::PublicZoneDestination,
+    },
     Sacrifice {
         player: SeatId,
         object: ObjectId,
         destination: crate::program::PublicZoneDestination,
     },
-    Discard {
+    FromHand {
         player: SeatId,
         object: ObjectId,
         destination: crate::program::PublicZoneDestination,
@@ -332,7 +484,10 @@ impl TargetWorld for StackWindow {
         self.order.contains(&player)
     }
     fn stack_exists(&self, entry: StackEntryId) -> bool {
-        self.stack.iter().any(|item| item.id == entry)
+        self.stack
+            .iter()
+            .chain(self.resolving())
+            .any(|item| item.id == entry)
     }
     fn stack_precedes(&self, target: StackEntryId, source: StackEntryId) -> bool {
         match (
@@ -346,6 +501,17 @@ impl TargetWorld for StackWindow {
 }
 
 impl StackWindow {
+    pub(crate) fn retain_attack_object_mark(&mut self, mark: [u64; 2]) {
+        self.cards.retain_attack_mark(mark);
+    }
+    pub(crate) fn attack_allocation_mark(&self) -> [u64; 2] {
+        [self.revision, self.next_entry]
+    }
+    pub(crate) fn retain_attack_mark(&mut self, mark: [u64; 2]) {
+        self.revision = self.revision.max(mark[0]);
+        self.next_entry = self.next_entry.max(mark[1]);
+    }
+
     /// Begin at a caller-selected step boundary after turn-based work. No player
     /// gets priority until the enclosing kernel settles CR 117.5 and finishes checks.
     /// Existing stack objects need a future explicit restoration contract, not inference.
@@ -368,10 +534,9 @@ impl StackWindow {
         Ok(Self {
             revision: 0,
             next_entry: 1,
-            departed: BTreeSet::new(),
+            original_order: order.clone(),
             order,
             active,
-            priority_start: active,
             cards,
             stack: Vec::new(),
             copies: BTreeMap::new(),
@@ -384,14 +549,6 @@ impl StackWindow {
     /// Privileged operational counter; allocation receipts identify actual entries.
     pub fn next_entry_sequence(&self) -> u64 {
         self.next_entry
-    }
-    /// Inspect the real retained pass prefix in reached qualification fixtures.
-    #[cfg(test)]
-    pub(crate) fn qualification_priority_pass_count(&self) -> Option<usize> {
-        match &self.status {
-            Status::Priority(round) => Some(round.consecutive_passes()),
-            _ => None,
-        }
     }
     /// Actual live priority owner's revision, when a priority round exists.
     pub fn priority_revision(&self) -> Option<u64> {
@@ -413,27 +570,125 @@ impl StackWindow {
     pub fn participants(&self) -> &[SeatId] {
         &self.order
     }
-    /// Historical identity is not current participation or action authority.
-    pub(crate) fn known_player(&self, player: SeatId) -> bool {
-        self.order.contains(&player) || self.departed.contains(&player)
-    }
-    /// Historical owner of this turn, retained until its completion (CR 800.4j).
-    pub fn turn_owner(&self) -> SeatId {
+    /// The seat whose turn began, even if it has since left the game.
+    pub fn active_player(&self) -> SeatId {
         self.active
     }
-    /// Current active participant. A departed owner's turn continues with none.
-    pub fn active_player(&self) -> Option<SeatId> {
+    /// The rules-active participant, absent for the rest of a departed player's turn.
+    pub fn active_participant(&self) -> Option<SeatId> {
         self.order.contains(&self.active).then_some(self.active)
+    }
+    /// Fixed turn order, including departed seats, for rotation and result provenance.
+    pub fn original_participants(&self) -> &[SeatId] {
+        &self.original_order
+    }
+    pub(crate) fn original_turn_order_from(
+        &self,
+        seat: SeatId,
+    ) -> Result<impl Iterator<Item = SeatId> + '_, StackWindowError> {
+        let index = self
+            .original_order
+            .iter()
+            .position(|player| *player == seat)
+            .ok_or(StackWindowError::UnknownPlayer)?;
+        Ok(self
+            .original_order
+            .iter()
+            .cycle()
+            .skip(index)
+            .take(self.original_order.len())
+            .copied())
+    }
+    pub(crate) fn next_participant_after(&self, seat: SeatId) -> Result<SeatId, StackWindowError> {
+        let index = self
+            .original_order
+            .iter()
+            .position(|player| *player == seat)
+            .ok_or(StackWindowError::UnknownPlayer)?;
+        self.original_order
+            .iter()
+            .cycle()
+            .skip(index + 1)
+            .take(self.original_order.len())
+            .find(|player| self.order.contains(player))
+            .copied()
+            .ok_or(StackWindowError::UnknownPlayer)
+    }
+    fn step_priority_candidate(&self) -> Result<SeatId, StackWindowError> {
+        match self.active_participant() {
+            Some(active) => Ok(active),
+            None => self.next_participant_after(self.active),
+        }
+    }
+    pub(crate) fn remove_departed_owners(
+        &mut self,
+        players: &BTreeSet<SeatId>,
+    ) -> Result<(), StackWindowError> {
+        self.cards.remove_departed_owners(players)?;
+        Ok(())
+    }
+
+    /// Remove departed players and their stack objects while keeping the turn's original seat.
+    pub(crate) fn remove_departed_players(
+        &mut self,
+        players: &BTreeSet<SeatId>,
+        exile: &[(ObjectId, ObjectDestination)],
+    ) -> Result<Vec<ObjectMovement>, StackWindowError> {
+        let revision = self.next_revision(self.revision)?;
+        self.order.retain(|seat| !players.contains(seat));
+        self.cards.remove_departed_stack_copies(players);
+        self.stack.retain(|entry| match entry.kind() {
+            StackKind::CardSpell(id) => {
+                self.cards.get(*id).is_some() && !players.contains(&entry.controller())
+            }
+            StackKind::SpellCopy { owner, .. } => {
+                !players.contains(owner) && !players.contains(&entry.controller())
+            }
+            _ => !players.contains(&entry.controller()),
+        });
+        self.copies.retain(|_, copy| {
+            !players.contains(&copy.owner)
+                && copy.controller.is_none_or(|seat| !players.contains(&seat))
+        });
+        self.status = match &self.status {
+            Status::Opening => {
+                // No turn has started yet. Keep the first live seat as the starter.
+                self.active = self.step_priority_candidate()?;
+                Status::Opening
+            }
+            Status::Priority(round) => {
+                Status::Priority(round.after_departures(self.order.clone())?)
+            }
+            Status::Resolving { entry, targets } => Status::Resolving {
+                // CR 608.2m retains an already resolving instruction spell/ability even
+                // when CR 800.4a removed its actual object from the stack.
+                entry: self
+                    .stack
+                    .iter()
+                    .find(|current| current.id() == entry.id())
+                    .unwrap_or(entry)
+                    .clone(),
+                targets: targets.clone(),
+            },
+            Status::TurnWork | Status::StepEnded => self.status.clone(),
+            Status::CheckingTargets(_) | Status::AllTargetsIllegal { .. } => {
+                return Err(StackWindowError::ChecksNotPending);
+            }
+        };
+        let (next, changes) = self.apply_recorded_zone_moves(revision, exile)?;
+        *self = next;
+        Ok(changes)
     }
     /// Actual stable individual-turn participant order, starting at the active
     /// player. Placement and simultaneous graveyard grouping share this traversal.
     pub(crate) fn apnap_players(
         &self,
     ) -> Result<impl Iterator<Item = SeatId> + '_, StackWindowError> {
+        let first = self.step_priority_candidate()?;
         let start = self
             .order
             .iter()
-            .position(|player| *player == self.priority_start)
+            .position(|player| *player == first)
             .ok_or(StackWindowError::UnknownPlayer)?;
         Ok(self
             .order
@@ -443,6 +698,25 @@ impl StackWindow {
             .take(self.order.len())
             .copied())
     }
+    pub(crate) fn phase_out(
+        &mut self,
+        objects: &[ObjectId],
+        attachments: &BTreeMap<ObjectId, TargetRef>,
+    ) -> Result<Vec<ObjectId>, StackWindowError> {
+        Ok(self.cards.phase_out(objects, attachments)?)
+    }
+
+    pub(crate) fn phase_at_untap(
+        &mut self,
+        roots: &[ObjectId],
+        skipped_turns: &BTreeSet<SeatId>,
+        attachments: &BTreeMap<ObjectId, TargetRef>,
+    ) -> Result<(Vec<ObjectId>, Vec<ObjectId>), StackWindowError> {
+        Ok(self
+            .cards
+            .phase_at_untap(self.active, roots, skipped_turns, attachments)?)
+    }
+
     pub fn cards(&self) -> &GameObjects {
         &self.cards
     }
@@ -492,9 +766,8 @@ impl StackWindow {
             revision,
             next_entry: self.next_entry,
             order: self.order.clone(),
-            departed: self.departed.clone(),
+            original_order: self.original_order.clone(),
             active: self.active,
-            priority_start: self.priority_start,
             cards,
             stack: self.stack.clone(),
             copies: self.copies.clone(),
@@ -549,23 +822,22 @@ impl StackWindow {
         {
             return Err(StackWindowError::NotInTurnWork);
         }
-        if !self.order.contains(&active) && active != self.active {
+        if active != self.active && !self.order.contains(&active) {
             return Err(StackWindowError::UnknownPlayer);
         }
-        let priority_start = if self.order.contains(&active) {
-            active
-        } else {
-            self.priority_start
-        };
         let status = if priority {
-            Status::Priority(PriorityRound::new(self.order.clone(), priority_start, 0)?)
+            let first = if self.order.contains(&active) {
+                active
+            } else {
+                self.next_participant_after(active)?
+            };
+            Status::Priority(PriorityRound::new(self.order.clone(), first, 0)?)
         } else {
             Status::TurnWork
         };
         Ok(Self {
             revision,
             active,
-            priority_start,
             status,
             ..self.clone()
         })
@@ -624,6 +896,54 @@ impl StackWindow {
             shuffled.record,
         ))
     }
+    pub(crate) fn search_shuffle(
+        &self,
+        player: SeatId,
+        entropy: &EntropyTape,
+    ) -> Result<(Self, EntropyTape, ShuffleRecord), StackWindowError> {
+        if !matches!(self.status, Status::Resolving { .. }) {
+            return Err(StackWindowError::NotResolving);
+        }
+        let revision = self.next_revision(self.revision)?;
+        let shuffled = self
+            .cards
+            .shuffle_library(self.cards.revision(), player, entropy)?;
+        Ok((
+            Self {
+                revision,
+                cards: shuffled.next,
+                ..self.clone()
+            },
+            shuffled.entropy,
+            shuffled.record,
+        ))
+    }
+    pub(crate) fn search_shuffle_to_top(
+        &self,
+        player: SeatId,
+        selected: Option<ObjectId>,
+        entropy: &EntropyTape,
+    ) -> Result<(Self, EntropyTape, ShuffleRecord), StackWindowError> {
+        if !matches!(self.status, Status::Resolving { .. }) {
+            return Err(StackWindowError::NotResolving);
+        }
+        let revision = self.next_revision(self.revision)?;
+        let shuffled = self.cards.shuffle_library_with_top(
+            self.cards.revision(),
+            player,
+            selected,
+            entropy,
+        )?;
+        Ok((
+            Self {
+                revision,
+                cards: shuffled.next,
+                ..self.clone()
+            },
+            shuffled.entropy,
+            shuffled.record,
+        ))
+    }
     pub(crate) fn opening_bottom_with_movements(
         &self,
         expected: u64,
@@ -664,12 +984,14 @@ impl StackWindow {
     /// Receipt-dropping primitive adapter; executor publication retains status pairs.
     #[cfg(test)]
     pub(crate) fn untap_active(&self, expected: u64) -> Result<Self, StackWindowError> {
-        self.untap_active_with_changes(expected)
+        self.untap_active_with_changes(expected, &BTreeSet::new(), &BTreeSet::new())
             .map(|(state, _)| state)
     }
     pub(crate) fn untap_active_with_changes(
         &self,
         expected: u64,
+        excluded: &BTreeSet<ObjectId>,
+        additional: &BTreeSet<ObjectId>,
     ) -> Result<(Self, Vec<ObjectStatusChange>), StackWindowError> {
         let revision = self.next_revision(expected)?;
         if !matches!(self.status, Status::TurnWork) {
@@ -679,7 +1001,9 @@ impl StackWindow {
             .cards
             .iter()
             .filter(|object| {
-                object.controller() == Some(self.active) && object.tapped() == Some(true)
+                (object.controller() == Some(self.active) || additional.contains(&object.id()))
+                    && object.tapped() == Some(true)
+                    && !excluded.contains(&object.id())
             })
             .map(GameObject::id)
             .collect();
@@ -724,6 +1048,28 @@ impl StackWindow {
             .set_tapped_batch(self.cards.revision(), objects, true)?;
         Ok((self.with_cards(revision, cards), changes))
     }
+    pub(crate) fn reverse_declaration_taps(
+        &self,
+        actor: SeatId,
+        taps: &[crate::combat::AttackTap],
+    ) -> Result<Self, StackWindowError> {
+        if self.active != actor || self.phase() != WindowPhase::TurnWork {
+            return Err(StackWindowError::NotInTurnWork);
+        }
+        let objects = taps
+            .iter()
+            .filter_map(|tap| {
+                self.cards
+                    .get(tap.after.id())
+                    .filter(|card| card.tapped() == Some(true))
+                    .map(GameObject::id)
+            })
+            .collect::<Vec<_>>();
+        let (cards, _) = self
+            .cards
+            .set_tapped_batch(self.cards.revision(), &objects, false)?;
+        Ok(self.with_cards(self.next_revision(self.revision)?, cards))
+    }
     /// Trusted ordinary draw work. A player command cannot select a library or
     /// count; the enclosing scheduler/evaluator establishes the instruction.
     /// Test-only direct mechanism fixture; production uses the shared driver.
@@ -751,19 +1097,7 @@ impl StackWindow {
         player: SeatId,
         amount: RulesInteger,
     ) -> Result<DrawBatch<'_>, StackWindowError> {
-        let revision = self.next_revision(expected)?;
-        if !matches!(
-            self.phase(),
-            WindowPhase::Opening | WindowPhase::TurnWork | WindowPhase::Resolving(_)
-        ) {
-            return Err(StackWindowError::NotInTurnWork);
-        }
-        if !self.order.contains(&player) {
-            return Err(StackWindowError::UnknownPlayer);
-        }
-        if amount < 0.into() {
-            return Err(ObjectIdentityError::NegativeDrawCount.into());
-        }
+        let revision = self.validate_draw(expected, player, &amount)?;
         Ok(DrawBatch {
             basis: self,
             revision,
@@ -789,6 +1123,28 @@ impl StackWindow {
             _ => Err(StackWindowError::NotInPriority),
         }
     }
+    /// Validate an original draw event before any replacement can suppress the draw.
+    pub(crate) fn validate_draw(
+        &self,
+        expected: u64,
+        player: SeatId,
+        amount: &RulesInteger,
+    ) -> Result<u64, StackWindowError> {
+        let revision = self.next_revision(expected)?;
+        if !matches!(
+            self.phase(),
+            WindowPhase::Opening | WindowPhase::TurnWork | WindowPhase::Resolving(_)
+        ) {
+            return Err(StackWindowError::NotInTurnWork);
+        }
+        if !self.order.contains(&player) {
+            return Err(StackWindowError::UnknownPlayer);
+        }
+        if amount < &0.into() {
+            return Err(ObjectIdentityError::NegativeDrawCount.into());
+        }
+        Ok(revision)
+    }
     /// Check action timing without recording an action or paying a source cost.
     pub(crate) fn validate_action_actor(&self, actor: SeatId) -> Result<(), StackWindowError> {
         self.priority()?.validate_holder(actor)?;
@@ -802,13 +1158,13 @@ impl StackWindow {
         }
     }
     fn validate_source(&self, source: &GameObject) -> Result<(), StackWindowError> {
-        // A surviving controller's triggered ability can retain a source owned
-        // by a departed player as exact LKI (CR 603.6c, 800.4d).
-        if !self.known_player(source.owner()) {
+        // A captured source can belong to someone who has already left (CR 603.10f).
+        if !self.original_order.contains(&source.owner())
+            || source
+                .controller()
+                .is_some_and(|controller| !self.original_order.contains(&controller))
+        {
             return Err(StackWindowError::UnknownPlayer);
-        }
-        if let Some(controller) = source.controller() {
-            self.validate_player(controller)?;
         }
         Ok(())
     }
@@ -822,6 +1178,27 @@ impl StackWindow {
             .checked_add(1)
             .ok_or(StackWindowError::EntryIdentityExhausted)?;
         let entry = StackEntry {
+            previous_controllers: Vec::new(),
+            ability_copy_of: None,
+            chosen_x: None,
+            caster: None,
+            cast_from_hand: None,
+            cast_original_object: None,
+            cast_from_graveyard: false,
+            cast_from_command: false,
+            cast_from_library: None,
+            cast_during_own_main: false,
+            protected_by_spent_mana: false,
+            power_contributors: Vec::new(),
+            attacking_defender: None,
+            exile_cast: None,
+            conditional_cost: false,
+            bargained: false,
+            buyback: false,
+            kicked: BTreeMap::new(),
+            replicated: BTreeMap::new(),
+            granted_replicate: BTreeMap::new(),
+            sunburst_colors: 0,
             id: StackEntryId(self.next_entry),
             controller,
             kind,
@@ -844,7 +1221,7 @@ impl StackWindow {
         let round = round.finish_checks(round.revision())?;
         Ok(Self {
             revision,
-            status: Status::Priority(round),
+            status: self.status_after_passes(round),
             ..self.clone()
         })
     }
@@ -852,7 +1229,15 @@ impl StackWindow {
         let revision = self.next_revision(expected)?;
         let round = self.priority()?;
         let round = round.pass(round.revision(), player)?;
-        let status = if round.phase() == PriorityPhase::AllPassed {
+        Ok(Self {
+            revision,
+            status: self.status_after_passes(round),
+            ..self.clone()
+        })
+    }
+
+    fn status_after_passes(&self, round: PriorityRound) -> Status {
+        if round.phase() == PriorityPhase::AllPassed {
             match self.stack.last() {
                 Some(entry) if !entry.targets.targets().is_empty() => {
                     Status::CheckingTargets(entry.clone())
@@ -865,12 +1250,7 @@ impl StackWindow {
             }
         } else {
             Status::Priority(round)
-        };
-        Ok(Self {
-            revision,
-            status,
-            ..self.clone()
-        })
+        }
     }
     /// Trusted completed tap activation. Reuse priority action/check bookkeeping,
     /// but do not allocate or insert a stack entry for a mana ability (CR 605.3b).
@@ -883,13 +1263,104 @@ impl StackWindow {
         let revision = self.next_revision(expected)?;
         let round = self.priority()?;
         let round = round.record_action(round.revision(), actor)?;
-        let changed = self.source_cost_change(actor, source, SourceCost::Tap)?;
+        let changed = self.source_cost_change(actor, source, SourceCost::Tap, false)?;
         Ok(Self {
             revision,
             cards: changed.next,
             status: Status::Priority(round),
             ..self.clone()
         })
+    }
+    /// Reserve a priority mana action whose source will be sacrificed without tapping.
+    pub(crate) fn record_mana_action(
+        &self,
+        expected: u64,
+        actor: SeatId,
+    ) -> Result<Self, StackWindowError> {
+        let revision = self.next_revision(expected)?;
+        let round = self.priority()?;
+        let round = round.record_action(round.revision(), actor)?;
+        Ok(Self {
+            revision,
+            status: Status::Priority(round),
+            ..self.clone()
+        })
+    }
+    /// Reserve a non-tap mana action during an already resolving payment.
+    pub(crate) fn record_resolution_mana_action(
+        &self,
+        expected: u64,
+        resolving: StackEntryId,
+    ) -> Result<Self, StackWindowError> {
+        let revision = self.next_revision(expected)?;
+        if self.resolving().map(StackEntry::id) != Some(resolving) {
+            return Err(StackWindowError::WrongResolution);
+        }
+        Ok(Self {
+            revision,
+            ..self.clone()
+        })
+    }
+    /// Commit a proven source sacrifice without manufacturing a stack entry.
+    pub(crate) fn sacrifice_mana_source(
+        &self,
+        actor: SeatId,
+        source: ObjectId,
+        destination: ObjectDestination,
+    ) -> Result<(Self, GameObject), StackWindowError> {
+        let card = self
+            .cards
+            .get(source)
+            .ok_or(ObjectIdentityError::UnknownObject)?;
+        if card.zone() != ObjectZone::Battlefield {
+            return Err(ObjectIdentityError::NotPermanent.into());
+        }
+        if card.controller() != Some(actor) {
+            return Err(StackWindowError::WrongController);
+        }
+        if matches!(destination, ObjectDestination::Battlefield { .. }) {
+            return Err(StackWindowError::InconsistentStack);
+        }
+        let change = self
+            .cards
+            .apply_zone_move(self.cards.revision(), source, destination)?
+            .require_moved()?;
+        Ok((
+            Self {
+                cards: change.next,
+                ..self.clone()
+            },
+            change.after,
+        ))
+    }
+    /// Untap the selected battlefield objects at the current resolution cut.
+    pub(crate) fn untap_for_effect(
+        &self,
+        entry: StackEntryId,
+        objects: &[ObjectId],
+    ) -> Result<(Self, Vec<ObjectStatusChange>), StackWindowError> {
+        if self.resolving().map(StackEntry::id) != Some(entry) {
+            return Err(StackWindowError::WrongResolution);
+        }
+        let revision = self.next_revision(self.revision)?;
+        let (cards, changes) =
+            self.cards
+                .set_tapped_batch(self.cards.revision(), objects, false)?;
+        Ok((self.with_cards(revision, cards), changes))
+    }
+    pub(crate) fn tap_for_effect(
+        &self,
+        entry: StackEntryId,
+        objects: &[ObjectId],
+    ) -> Result<(Self, Vec<ObjectStatusChange>), StackWindowError> {
+        if self.resolving().map(StackEntry::id) != Some(entry) {
+            return Err(StackWindowError::WrongResolution);
+        }
+        let revision = self.next_revision(self.revision)?;
+        let (cards, changes) = self
+            .cards
+            .set_tapped_batch(self.cards.revision(), objects, true)?;
+        Ok((self.with_cards(revision, cards), changes))
     }
     /// Trusted resolution-time mana tap after the executor proves payment authority.
     /// This preserves the resolving entry and does not create priority/check work.
@@ -908,20 +1379,70 @@ impl StackWindow {
         if self.resolving().map(StackEntry::id) != Some(resolving) {
             return Err(StackWindowError::WrongResolution);
         }
-        let changed = self.source_cost_change(actor, source, SourceCost::Tap)?;
+        let changed = self.source_cost_change(actor, source, SourceCost::Tap, false)?;
         Ok(Self {
             revision,
             cards: changed.next,
             ..self.clone()
         })
     }
+    /// Move the special action’s physical card to exile while retaining priority.
+    pub(crate) fn exile_hand_special_action(
+        &self,
+        actor: SeatId,
+        source: ObjectId,
+    ) -> Result<(Self, ObjectMovement), StackWindowError> {
+        let current = self.priority()?;
+        let round = current.record_action(current.revision(), actor)?;
+        let revision = self.next_revision(self.revision)?;
+        let before = self
+            .cards
+            .get(source)
+            .filter(|c| c.zone() == ObjectZone::Hand(actor) && c.card_id().is_some())
+            .ok_or(StackWindowError::NotOwnHand)?
+            .clone();
+        let moved = self
+            .cards
+            .apply_zone_move(self.cards.revision(), source, ObjectDestination::Exile)?
+            .require_moved()?;
+        let next = Self {
+            cards: moved.next,
+            revision,
+            status: Status::Priority(round),
+            ..self.clone()
+        };
+        Ok((
+            next,
+            ObjectMovement {
+                before,
+                after: moved.after,
+            },
+        ))
+    }
     /// Trusted ordinary land special action after program, timing and allowance
     /// validation by the enclosing owners. No stack identity is allocated.
+    #[cfg(test)]
     pub(crate) fn record_land_play(
         &self,
         expected: u64,
         actor: SeatId,
         land: ObjectId,
+    ) -> Result<(Self, crate::actions::LandPlayRecord), StackWindowError> {
+        self.record_land_play_replaced(
+            expected,
+            actor,
+            land,
+            ObjectDestination::Battlefield { controller: actor },
+            false,
+        )
+    }
+    pub(crate) fn record_land_play_replaced(
+        &self,
+        expected: u64,
+        actor: SeatId,
+        land: ObjectId,
+        destination: ObjectDestination,
+        permitted_outside_hand: bool,
     ) -> Result<(Self, crate::actions::LandPlayRecord), StackWindowError> {
         let revision = self.next_revision(expected)?;
         let round = self.priority()?;
@@ -930,29 +1451,40 @@ impl StackWindow {
             .cards
             .get(land)
             .ok_or(ObjectIdentityError::UnknownObject)?;
-        if before.zone() != ObjectZone::Hand(actor) {
+        if before.zone() != ObjectZone::Hand(actor)
+            && !(permitted_outside_hand
+                && (before.zone() == ObjectZone::Exile
+                    || before.zone() == ObjectZone::Library(actor)
+                        && self.cards.library(actor).first() == Some(&land)))
+        {
             return Err(StackWindowError::NotOwnHand);
         }
         if before.card_id().is_none() {
             return Err(ObjectIdentityError::NotCard.into());
         }
-        let changed = self
-            .cards
-            .apply_zone_move(
-                self.cards.revision(),
-                land,
-                ObjectDestination::Battlefield { controller: actor },
-            )?
-            .require_moved()?;
+        let remains = matches!((before.zone(), destination), (ObjectZone::Hand(owner), ObjectDestination::Hand) if owner == before.owner())
+            || matches!(
+                (before.zone(), destination),
+                (ObjectZone::Exile, ObjectDestination::Exile)
+            );
+        let (cards, after) = if remains {
+            (self.cards.clone(), before.clone())
+        } else {
+            let changed = self
+                .cards
+                .apply_zone_move(self.cards.revision(), land, destination)?
+                .require_moved()?;
+            (changed.next, changed.after)
+        };
         let record = crate::actions::LandPlayRecord {
             player: actor,
             before: before.clone(),
-            after: changed.after,
+            after,
         };
         Ok((
             Self {
                 revision,
-                cards: changed.next,
+                cards,
                 status: Status::Priority(round),
                 ..self.clone()
             },
@@ -981,34 +1513,78 @@ impl StackWindow {
         actor: SeatId,
         source: ObjectId,
         cost: SourceCost,
+        madness: bool,
     ) -> Result<crate::object_identity::ObjectChange, StackWindowError> {
         let card = self
             .cards
             .get(source)
             .ok_or(ObjectIdentityError::UnknownObject)?;
-        if card.zone() != ObjectZone::Battlefield {
-            return Err(ObjectIdentityError::NotPermanent.into());
+        if cost.is_from_graveyard() {
+            if card.zone() != ObjectZone::Graveyard(actor) {
+                return Err(StackWindowError::WrongController);
+            }
+        } else if cost.is_ninjutsu() {
+            if !cost.can_activate_ninjutsu(card, actor) {
+                return Err(StackWindowError::NotOwnHand);
+            }
+        } else if cost.discards_source() {
+            if card.zone() != ObjectZone::Hand(actor) {
+                return Err(StackWindowError::NotOwnHand);
+            }
+        } else {
+            if card.zone() != ObjectZone::Battlefield {
+                return Err(ObjectIdentityError::NotPermanent.into());
+            }
+            if card.controller() != Some(actor) {
+                return Err(StackWindowError::WrongController);
+            }
         }
-        if card.controller() != Some(actor) {
-            return Err(StackWindowError::WrongController);
+        if matches!(
+            cost,
+            SourceCost::Power { .. }
+                | SourceCost::SacrificeSelected { .. }
+                | SourceCost::Discard { .. }
+                | SourceCost::ExileGraveyard { .. }
+                | SourceCost::Mill { .. }
+                | SourceCost::PayLife {
+                    sacrifice: Some(_),
+                    ..
+                }
+        ) {
+            return Err(StackWindowError::InconsistentStack);
         }
-        match cost {
-            SourceCost::None => Ok(crate::object_identity::ObjectChange {
-                next: self.cards.clone(),
-                before: Some(card.clone()),
-                after: card.clone(),
-            }),
-            SourceCost::Tap => {
+        if cost.sacrifices_source() || cost.exiles_source() || cost.discards_source() {
+            let destination = if cost.exiles_source() || (madness && cost.discards_source()) {
+                ObjectDestination::Exile
+            } else {
+                card.unearth_destination(ObjectDestination::Graveyard)
+            };
+            if cost.taps_source() {
                 if card.tapped() != Some(false) {
                     return Err(StackWindowError::SourceTapped);
                 }
-                Ok(self.cards.set_tapped(self.cards.revision(), source, true)?)
+                let tapped = self.cards.set_tapped(self.cards.revision(), source, true)?;
+                return Ok(tapped
+                    .next
+                    .apply_zone_move(tapped.next.revision(), source, destination)?
+                    .require_moved()?);
             }
-            SourceCost::Sacrifice => Ok(self
+            return Ok(self
                 .cards
-                .apply_zone_move(self.cards.revision(), source, ObjectDestination::Graveyard)?
-                .require_moved()?),
+                .apply_zone_move(self.cards.revision(), source, destination)?
+                .require_moved()?);
         }
+        if cost.taps_source() && !matches!(cost, SourceCost::TapPermanents { .. }) {
+            if card.tapped() != Some(false) {
+                return Err(StackWindowError::SourceTapped);
+            }
+            return Ok(self.cards.set_tapped(self.cards.revision(), source, true)?);
+        }
+        Ok(crate::object_identity::ObjectChange {
+            next: self.cards.clone(),
+            before: Some(card.clone()),
+            after: card.clone(),
+        })
     }
     /// Trusted native targeted activation with a source cost. No mana payment or
     /// general ability legality is inferred here. The source snapshot precedes cost.
@@ -1033,7 +1609,7 @@ impl StackWindow {
             .last()
             .ok_or(StackWindowError::InconsistentStack)?
             .id();
-        let (paid, after) = next.pay_announced_source_cost(entry, actor, source, cost)?;
+        let (paid, after) = next.pay_announced_source_cost(entry, actor, source, cost, false)?;
         next = paid;
         Ok(PaidActivation {
             state: next,
@@ -1050,6 +1626,7 @@ impl StackWindow {
         actor: SeatId,
         source: ObjectId,
         cost: SourceCost,
+        madness: bool,
     ) -> Result<(Self, GameObject), StackWindowError> {
         let admitted = self
             .stack
@@ -1061,10 +1638,240 @@ impl StackWindow {
         {
             return Err(StackWindowError::InconsistentStack);
         }
-        let changed = self.source_cost_change(actor, source, cost)?;
+        let changed = self.source_cost_change(actor, source, cost, madness)?;
         let mut next = self.clone();
         next.cards = changed.next;
         Ok((next, changed.after))
+    }
+    pub(crate) fn pay_announced_source_to(
+        &self,
+        entry: StackEntryId,
+        actor: SeatId,
+        source: ObjectId,
+        destination: ObjectDestination,
+    ) -> Result<(Self, GameObject), StackWindowError> {
+        let admitted = self
+            .stack
+            .last()
+            .ok_or(StackWindowError::InconsistentStack)?;
+        if admitted.id() != entry
+            || admitted.controller() != actor
+            || !matches!(admitted.kind(), StackKind::ActivatedAbility { source: origin } if origin.id() == source)
+            || !matches!(
+                destination,
+                ObjectDestination::Graveyard | ObjectDestination::Exile | ObjectDestination::Hand
+            )
+        {
+            return Err(StackWindowError::InconsistentStack);
+        }
+        let card = self
+            .cards
+            .get(source)
+            .ok_or(ObjectIdentityError::UnknownObject)?;
+        if !(card.zone() == ObjectZone::Battlefield && card.controller() == Some(actor)
+            || card.zone() == ObjectZone::Graveyard(actor))
+        {
+            return Err(StackWindowError::WrongController);
+        }
+        let changed = self
+            .cards
+            .apply_zone_move(self.cards.revision(), source, destination)?
+            .require_moved()?;
+        let mut next = self.clone();
+        next.cards = changed.next;
+        Ok((next, changed.after))
+    }
+    pub(crate) fn record_library_shuffle_moves(
+        &self,
+        entry: StackEntryId,
+        player: SeatId,
+        collective: bool,
+        ability_source: Option<ObjectId>,
+        moves: &[(ObjectId, ObjectDestination)],
+    ) -> Result<(Self, Vec<ObjectMovement>), StackWindowError> {
+        let targets_player = self
+            .target_assessment()
+            .and_then(|assessment| assessment.get(crate::TargetId(0)))
+            .filter(|target| target.legality == crate::targets::TargetLegality::Legal)
+            .is_some_and(|target| {
+                target.choice.target == crate::targets::TargetRef::Player(player)
+            });
+        let current = self
+            .resolving()
+            .filter(|current| current.id() == entry)
+            .ok_or(StackWindowError::WrongResolution)?;
+        if let Some(source) = ability_source {
+            let exact_source = match current.kind() {
+                StackKind::ActivatedAbility { source } => Some(source.id()),
+                StackKind::TriggeredAbility { source } => Some(source.id()),
+                _ => None,
+            };
+            if exact_source != Some(source) || !matches!(moves, [(id, _)] if *id == source) {
+                return Err(StackWindowError::InvalidResolutionMove);
+            }
+        } else if !collective && current.controller() != player && !targets_player {
+            return Err(StackWindowError::WrongResolution);
+        }
+        let mut unique = BTreeSet::new();
+        for (id, destination) in moves {
+            let object = self
+                .cards
+                .get(*id)
+                .ok_or(ObjectIdentityError::UnknownObject)?;
+            let eligible = if ability_source.is_some() {
+                object.zone() == ObjectZone::Battlefield
+                    && object.owner() == player
+                    && self.cards.phased_out_under(*id).is_none()
+            } else {
+                object.card_id().is_some()
+                    && if collective {
+                        matches!(
+                            object.zone(),
+                            ObjectZone::Hand(_) | ObjectZone::Graveyard(_)
+                        )
+                    } else {
+                        object.zone() == ObjectZone::Graveyard(player)
+                    }
+            };
+            if !unique.insert(*id)
+                || !eligible
+                || !matches!(
+                    destination,
+                    ObjectDestination::Command
+                        | ObjectDestination::LibraryTop
+                        | ObjectDestination::Hand
+                        | ObjectDestination::Exile
+                        | ObjectDestination::Graveyard
+                )
+            {
+                return Err(StackWindowError::InvalidResolutionMove);
+            }
+        }
+        let actual = moves
+            .iter()
+            .copied()
+            .filter(|(id, destination)| {
+                self.cards.get(*id).is_some_and(|object| {
+                    !matches!(
+                        (object.zone(), destination),
+                        (ObjectZone::Graveyard(_), ObjectDestination::Graveyard)
+                            | (ObjectZone::Hand(_), ObjectDestination::Hand)
+                    )
+                })
+            })
+            .collect::<Vec<_>>();
+        if actual.is_empty() {
+            return Ok((self.clone(), Vec::new()));
+        }
+        self.apply_recorded_zone_moves(self.next_revision(self.revision)?, &actual)
+    }
+    pub(crate) fn record_graveyard_exile_moves(
+        &self,
+        entry: StackEntryId,
+        moves: &[(ObjectId, ObjectDestination)],
+    ) -> Result<(Self, Vec<ObjectMovement>), StackWindowError> {
+        if self.resolving().is_none_or(|current| current.id() != entry) {
+            return Err(StackWindowError::WrongResolution);
+        }
+        let mut unique = BTreeSet::new();
+        for (id, destination) in moves {
+            let card = self
+                .cards
+                .get(*id)
+                .ok_or(ObjectIdentityError::UnknownObject)?;
+            if !unique.insert(*id)
+                || card.card_id().is_none()
+                || !matches!(card.zone(), ObjectZone::Graveyard(_))
+                || !matches!(
+                    destination,
+                    ObjectDestination::Hand
+                        | ObjectDestination::Exile
+                        | ObjectDestination::Graveyard
+                )
+            {
+                return Err(StackWindowError::InvalidResolutionMove);
+            }
+        }
+        let actual = moves
+            .iter()
+            .copied()
+            .filter(|(_, destination)| *destination != ObjectDestination::Graveyard)
+            .collect::<Vec<_>>();
+        if actual.is_empty() {
+            return Ok((self.clone(), Vec::new()));
+        }
+        self.apply_recorded_zone_moves(self.next_revision(self.revision)?, &actual)
+    }
+    /// Commit validated selected activation-cost departures as one movement cut.
+    pub(crate) fn pay_selected_activation_costs(
+        &self,
+        entry: StackEntryId,
+        actor: SeatId,
+        action: crate::program::ZoneActionKind,
+        moves: &[(ObjectId, ObjectDestination)],
+    ) -> Result<(Self, Vec<ObjectMovement>), StackWindowError> {
+        let admitted = self
+            .stack
+            .last()
+            .ok_or(StackWindowError::InconsistentStack)?;
+        if admitted.id() != entry
+            || admitted.controller() != actor
+            || !matches!(
+                admitted.kind(),
+                StackKind::ActivatedAbility { .. } | StackKind::Emblem { .. }
+            )
+            || moves.is_empty()
+        {
+            return Err(StackWindowError::InconsistentStack);
+        }
+        let mut unique = BTreeSet::new();
+        for (id, destination) in moves {
+            let object = self
+                .cards
+                .get(*id)
+                .ok_or(ObjectIdentityError::UnknownObject)?;
+            if !unique.insert(*id)
+                || !matches!(
+                    destination,
+                    ObjectDestination::Hand
+                        | ObjectDestination::Graveyard
+                        | ObjectDestination::Exile
+                )
+                || !match action {
+                    crate::program::ZoneActionKind::MillCost => {
+                        moves.len() == 1 && self.cards.library(actor).first() == Some(id)
+                    }
+                    crate::program::ZoneActionKind::DiscardCost => {
+                        object.zone() == ObjectZone::Hand(actor) && object.card_id().is_some()
+                    }
+                    crate::program::ZoneActionKind::ExileCost => {
+                        object.zone() == ObjectZone::Graveyard(actor) && object.card_id().is_some()
+                    }
+                    crate::program::ZoneActionKind::SacrificeCost => {
+                        object.zone() == ObjectZone::Battlefield
+                            && object.controller() == Some(actor)
+                    }
+                    _ => false,
+                }
+            {
+                return Err(StackWindowError::InvalidResolutionMove);
+            }
+        }
+        let actual = moves
+            .iter()
+            .copied()
+            .filter(|(id, destination)| {
+                !matches!(
+                    (self.cards.get(*id).map(GameObject::zone), destination),
+                    (Some(ObjectZone::Hand(_)), ObjectDestination::Hand)
+                        | (Some(ObjectZone::Graveyard(_)), ObjectDestination::Graveyard)
+                )
+            })
+            .collect::<Vec<_>>();
+        if actual.is_empty() {
+            return Ok((self.clone(), Vec::new()));
+        }
+        self.apply_recorded_zone_moves(self.next_revision(self.revision)?, &actual)
     }
     /// Record an otherwise legal card cast with a new stack incarnation. This narrow
     /// move/push/reset is atomic in the returned native successor; it does not pay
@@ -1075,9 +1882,25 @@ impl StackWindow {
         actor: SeatId,
         card: ObjectId,
     ) -> Result<Self, StackWindowError> {
+        self.admit_card_spell(expected, actor, card, None)
+    }
+    pub(crate) fn admit_card_spell(
+        &self,
+        expected: u64,
+        actor: SeatId,
+        card: ObjectId,
+        resolving: Option<StackEntryId>,
+    ) -> Result<Self, StackWindowError> {
         let revision = self.next_revision(expected)?;
-        let round = self.priority()?;
-        let round = round.record_action(round.revision(), actor)?;
+        let round = if let Some(entry) = resolving {
+            if self.resolving().map(StackEntry::id) != Some(entry) {
+                return Err(StackWindowError::WrongResolution);
+            }
+            None
+        } else {
+            let round = self.priority()?;
+            Some(round.record_action(round.revision(), actor)?)
+        };
         if self.cards.get(card).is_some_and(GameObject::is_token) {
             return Err(ObjectIdentityError::NotCard.into());
         }
@@ -1090,13 +1913,369 @@ impl StackWindow {
             )?
             .require_moved()?;
         let mut next = self.clone();
-        let entry = next.allocate(actor, StackKind::CardSpell(moved.after.id()))?;
+        let mut entry = next.allocate(actor, StackKind::CardSpell(moved.after.id()))?;
+        entry.caster = Some(actor);
+        entry.cast_original_object = Some(card);
+        entry.cast_from_command = moved
+            .before
+            .as_ref()
+            .is_some_and(|c| c.zone() == ObjectZone::Command);
+        entry.cast_from_graveyard = matches!(
+            moved.before.as_ref().map(GameObject::zone),
+            Some(ObjectZone::Graveyard(_))
+        );
+        if let Some(ObjectZone::Library(owner)) = moved.before.as_ref().map(GameObject::zone) {
+            entry.cast_from_library = Some(owner);
+        }
+        if let Some(ObjectZone::Hand(player)) = moved.before.as_ref().map(GameObject::zone) {
+            entry.cast_from_hand = Some(player);
+        }
+
         next.stack.push(entry);
         next.cards = moved.next;
-        next.status = Status::Priority(round);
+        if let Some(round) = round {
+            next.status = Status::Priority(round);
+        }
         next.revision = revision;
         Ok(next)
     }
+    /// Reverse an unfinished child spell announcement without undoing later
+    /// mana-ability taps or damage. Only the original exile incarnation may return.
+    pub(crate) fn reverse_child_cast(
+        &self,
+        parent: StackEntryId,
+        child: StackEntryId,
+        before: &GameObject,
+        graveyard_below: &[ObjectId],
+    ) -> Result<Self, StackWindowError> {
+        if self.resolving().map(StackEntry::id) != Some(parent) {
+            return Err(StackWindowError::WrongResolution);
+        }
+        let Some(entry) = self.stack.last().filter(|entry| entry.id() == child) else {
+            return Err(StackWindowError::InconsistentStack);
+        };
+        let StackKind::CardSpell(stack_object) = entry.kind() else {
+            return Err(StackWindowError::InconsistentStack);
+        };
+        let cards = self
+            .cards
+            .reverse_cast_announcement(before, *stack_object, graveyard_below)?;
+        let mut next = self.clone();
+        next.revision = self.next_revision(self.revision)?;
+        next.stack.pop();
+        next.cards = cards;
+        Ok(next)
+    }
+    pub(crate) fn tap_for_cast_cost(
+        &self,
+        entry: StackEntryId,
+        objects: &[ObjectId],
+    ) -> Result<(Self, Vec<ObjectStatusChange>), StackWindowError> {
+        let actor = self
+            .stack
+            .last()
+            .filter(|value| value.id() == entry && matches!(value.kind(), StackKind::CardSpell(_)))
+            .ok_or(StackWindowError::InconsistentStack)?
+            .controller();
+        if objects.iter().any(|id| {
+            self.cards.get(*id).is_none_or(|object| {
+                object.zone() != ObjectZone::Battlefield
+                    || object.controller() != Some(actor)
+                    || object.tapped() != Some(false)
+            })
+        }) {
+            return Err(StackWindowError::InvalidResolutionMove);
+        }
+        let revision = self.next_revision(self.revision)?;
+        let (cards, changes) = self
+            .cards
+            .set_tapped_batch(self.cards.revision(), objects, true)?;
+        Ok((self.with_cards(revision, cards), changes))
+    }
+    /// Pay the prevalidated simultaneous creature taps of an announced crew/saddle activation.
+    pub(crate) fn pay_power_contributors(
+        &self,
+        entry: StackEntryId,
+        objects: &[ObjectId],
+    ) -> Result<(Self, Vec<crate::object_identity::ObjectStatusChange>), StackWindowError> {
+        let mut next = self.clone();
+        let ability = next
+            .stack
+            .last_mut()
+            .filter(|ability| {
+                ability.id() == entry
+                    && matches!(ability.kind(), StackKind::ActivatedAbility { .. })
+            })
+            .ok_or(StackWindowError::InconsistentStack)?;
+        let (cards, changes) = self
+            .cards
+            .set_tapped_batch(self.cards.revision(), objects, true)?;
+        ability.power_contributors = objects.to_vec();
+        next.cards = cards;
+        Ok((next, changes))
+    }
+
+    pub(crate) fn set_orientation(
+        &mut self,
+        object: ObjectId,
+        kind: Option<crate::face_down::FaceDownKind>,
+    ) -> Result<(), StackWindowError> {
+        self.cards.set_orientation(object, kind)?;
+        Ok(())
+    }
+    pub(crate) fn record_turn_face_up(
+        &self,
+        actor: SeatId,
+        object: ObjectId,
+    ) -> Result<Self, StackWindowError> {
+        let current = self.priority()?;
+        let round = current.record_action(current.revision(), actor)?;
+        let mut next = self.clone();
+        next.revision = self.next_revision(self.revision)?;
+        next.set_orientation(object, None)?;
+        next.status = Status::Priority(round);
+        Ok(next)
+    }
+
+    /// Apply one already validated object payment to the announced spell.
+    pub(crate) fn pay_cast_resource(
+        &self,
+        entry: StackEntryId,
+        resource: crate::mana::CastResource,
+        madness: bool,
+    ) -> Result<(Self, GameObject, GameObject), StackWindowError> {
+        self.pay_cast_resource_replaced(entry, resource, madness, None)
+    }
+    pub(crate) fn pay_cast_resource_replaced(
+        &self,
+        entry: StackEntryId,
+        resource: crate::mana::CastResource,
+        madness: bool,
+        replacement: Option<ObjectDestination>,
+    ) -> Result<(Self, GameObject, GameObject), StackWindowError> {
+        if self.stack.last().is_none_or(|top| top.id != entry) {
+            return Err(StackWindowError::InconsistentStack);
+        }
+        let revision = self.next_revision(self.revision)?;
+        let id = resource.object();
+        let before = self
+            .cards
+            .get(id)
+            .ok_or(ObjectIdentityError::UnknownObject)?
+            .clone();
+        let replaced = replacement.is_some();
+        let destination = replacement.or(match resource {
+            crate::mana::CastResource::WebSlinging(_) | crate::mana::CastResource::Sneak(_) => {
+                Some(ObjectDestination::Hand)
+            }
+            crate::mana::CastResource::ExileHandForAlternative(_)
+            | crate::mana::CastResource::ExileCreatureForReduction(_)
+            | crate::mana::CastResource::ExileGraveyardCreatureForSpell(_)
+            | crate::mana::CastResource::ExileGraveyardCardForSpell(_)
+            | crate::mana::CastResource::Escape(_)
+            | crate::mana::CastResource::Delve(_) => Some(ObjectDestination::Exile),
+            crate::mana::CastResource::Emerge(_)
+            | crate::mana::CastResource::Bargain(_)
+            | crate::mana::CastResource::SacrificeForSpell(_)
+            | crate::mana::CastResource::FlashbackSacrifice(_)
+            | crate::mana::CastResource::Retrace(_)
+            | crate::mana::CastResource::DiscardForSpell(_)
+            | crate::mana::CastResource::JumpStart(_) => Some(if madness {
+                ObjectDestination::Exile
+            } else {
+                ObjectDestination::Graveyard
+            }),
+            _ => None,
+        });
+        let (cards, after) = if let Some(destination) = destination {
+            let moved = self
+                .cards
+                .apply_zone_move(
+                    self.cards.revision(),
+                    id,
+                    if replaced {
+                        destination
+                    } else {
+                        before.unearth_destination(destination)
+                    },
+                )?
+                .require_moved()?;
+            (moved.next, moved.after)
+        } else {
+            let changed = self.cards.set_tapped(self.cards.revision(), id, true)?;
+            (changed.next, changed.after)
+        };
+        Ok((self.with_cards(revision, cards), before, after))
+    }
+
+    pub(crate) fn note_attacking_defender(
+        &mut self,
+        id: StackEntryId,
+        defender: SeatId,
+    ) -> Result<(), StackWindowError> {
+        let entry = self
+            .stack
+            .last_mut()
+            .filter(|s| s.id == id)
+            .ok_or(StackWindowError::InconsistentStack)?;
+        entry.attacking_defender = Some(defender);
+        Ok(())
+    }
+    pub(crate) fn set_day_faces(
+        &mut self,
+        clock: crate::day_night::DayNight,
+        changed: &[ObjectId],
+    ) -> Result<(), StackWindowError> {
+        self.cards.set_day_faces(clock, changed)?;
+        Ok(())
+    }
+    pub(crate) fn transform(&mut self, source: ObjectId) -> Result<(), StackWindowError> {
+        self.cards.transform(source)?;
+        Ok(())
+    }
+    /// Install an entry replacement's controller inside the unobserved zone-change cut.
+    pub(crate) fn set_entering_controller(
+        &mut self,
+        object: ObjectId,
+        player: SeatId,
+    ) -> Result<(), StackWindowError> {
+        self.validate_player(player)?;
+        if self
+            .cards
+            .get(object)
+            .is_none_or(|card| card.zone() != ObjectZone::Battlefield)
+        {
+            return Err(StackWindowError::InvalidResolutionMove);
+        }
+        self.cards = self
+            .cards
+            .apply_controller(self.cards.revision(), object, player)?
+            .next;
+        Ok(())
+    }
+    pub(crate) fn enter_tapped(&mut self, id: ObjectId) -> Result<GameObject, StackWindowError> {
+        if let Some(object) = self
+            .cards
+            .get(id)
+            .filter(|object| object.tapped() == Some(true))
+        {
+            return Ok(object.clone());
+        }
+        let change = self.cards.set_tapped(self.cards.revision(), id, true)?;
+        self.cards = change.next;
+        Ok(change.after)
+    }
+    pub(crate) fn mark_protected_by_spent_mana(
+        &mut self,
+        id: StackEntryId,
+    ) -> Result<(), StackWindowError> {
+        let entry = self
+            .stack
+            .last_mut()
+            .filter(|entry| entry.id == id && matches!(entry.kind, StackKind::CardSpell(_)))
+            .ok_or(StackWindowError::InconsistentStack)?;
+        entry.protected_by_spent_mana = true;
+        Ok(())
+    }
+    pub(crate) fn mark_main_phase_cast(
+        &mut self,
+        id: StackEntryId,
+    ) -> Result<(), StackWindowError> {
+        self.stack
+            .last_mut()
+            .filter(|entry| entry.id == id)
+            .ok_or(StackWindowError::InconsistentStack)?
+            .cast_during_own_main = true;
+        Ok(())
+    }
+    pub(crate) fn mark_conditional_cost(
+        &mut self,
+        id: StackEntryId,
+    ) -> Result<(), StackWindowError> {
+        self.stack
+            .last_mut()
+            .filter(|s| s.id == id)
+            .ok_or(StackWindowError::InconsistentStack)?
+            .conditional_cost = true;
+        Ok(())
+    }
+    pub(crate) fn set_chosen_x(
+        &mut self,
+        id: StackEntryId,
+        x: RulesInteger,
+    ) -> Result<(), StackWindowError> {
+        self.stack
+            .last_mut()
+            .filter(|entry| entry.id == id)
+            .ok_or(StackWindowError::InconsistentStack)?
+            .chosen_x = Some(x);
+        Ok(())
+    }
+    pub(crate) fn mark_sunburst_colors(
+        &mut self,
+        entry: StackEntryId,
+        spend: &[crate::mana::ManaSpend],
+    ) -> Result<(), StackWindowError> {
+        let colors = spend
+            .iter()
+            .filter(|s| s.mana_type != crate::mana::ManaType::Colourless && s.amount.is_positive())
+            .map(|s| s.mana_type)
+            .collect::<BTreeSet<_>>();
+        self.stack
+            .last_mut()
+            .filter(|s| s.id == entry)
+            .ok_or(StackWindowError::InconsistentStack)?
+            .sunburst_colors =
+            u8::try_from(colors.len()).map_err(|_| StackWindowError::InconsistentStack)?;
+        Ok(())
+    }
+    pub(crate) fn set_replicate(
+        &mut self,
+        id: StackEntryId,
+        paid: BTreeMap<usize, RulesInteger>,
+        grants: BTreeMap<crate::characteristics::EffectInstanceKey, usize>,
+    ) -> Result<(), StackWindowError> {
+        let entry = self
+            .stack
+            .last_mut()
+            .filter(|s| s.id == id)
+            .ok_or(StackWindowError::InconsistentStack)?;
+        entry.replicated = paid;
+        entry.granted_replicate = grants;
+        Ok(())
+    }
+    pub(crate) fn set_additional_costs(
+        &mut self,
+        id: StackEntryId,
+        buyback: bool,
+        bargained: bool,
+        kicked: BTreeMap<usize, RulesInteger>,
+    ) -> Result<(), StackWindowError> {
+        let entry = self
+            .stack
+            .last_mut()
+            .filter(|s| s.id == id)
+            .ok_or(StackWindowError::InconsistentStack)?;
+        entry.bargained = bargained;
+        entry.buyback = buyback;
+        entry.kicked = kicked;
+        Ok(())
+    }
+    /// Mark the freshly announced physical spell. Copies allocate their own entry.
+    pub(crate) fn mark_exile_cast(
+        &mut self,
+        id: StackEntryId,
+        method: ExileCast,
+    ) -> Result<(), StackWindowError> {
+        let entry = self
+            .stack
+            .last_mut()
+            .filter(|entry| entry.id == id && matches!(entry.kind, StackKind::CardSpell(_)))
+            .ok_or(StackWindowError::InconsistentStack)?;
+        entry.exile_cast = Some(method);
+        Ok(())
+    }
+
     /// Trusted batch from the actual resolving instruction, with participant creators.
     /// This creates no stack entries, casting actions, checks or priority.
     /// The executor adopts timestamps and one publication atomically.
@@ -1117,9 +2296,9 @@ impl StackWindow {
             return Ok((self.clone(), vec![]));
         }
         let revision = self.next_revision(expected)?;
-        let created = self
-            .cards
-            .insert_tokens(self.cards.revision(), tokens, vocabulary)?;
+        let created =
+            self.cards
+                .insert_materialized_tokens(self.cards.revision(), tokens, vocabulary)?;
         Ok((self.with_cards(revision, created.next), created.objects))
     }
     /// Trusted resolution-only creation of a nonpermanent spell copy. This is not
@@ -1132,7 +2311,7 @@ impl StackWindow {
         controller: SeatId,
         changes: Vec<TargetChoice>,
     ) -> Result<Self, StackWindowError> {
-        let revision = self.next_revision(expected)?;
+        self.next_revision(expected)?;
         if !matches!(self.status, Status::Resolving { .. }) {
             return Err(StackWindowError::NotResolving);
         }
@@ -1142,6 +2321,53 @@ impl StackWindow {
             .iter()
             .find(|entry| entry.id == original)
             .ok_or(StackWindowError::NotSpell)?;
+        self.copy_known_spell(expected, source, controller, changes)
+    }
+    pub(crate) fn copy_known_ability(
+        &self,
+        source: &StackEntry,
+        controller: SeatId,
+        changes: Vec<TargetChoice>,
+    ) -> Result<Self, StackWindowError> {
+        let revision = self.next_revision(self.revision)?;
+        if !matches!(self.status, Status::Resolving { .. }) {
+            return Err(StackWindowError::NotResolving);
+        }
+        if matches!(
+            source.kind,
+            StackKind::CardSpell(_) | StackKind::SpellCopy { .. }
+        ) {
+            return Err(StackWindowError::InconsistentStack);
+        }
+        self.validate_player(controller)?;
+        let mut next = self.clone();
+        next.revision = revision;
+        let id = next.allocate(controller, source.kind.clone())?.id;
+        let mut copy = source.clone();
+        copy.controller = controller;
+        copy.id = id;
+        copy.ability_copy_of = Some(source.id);
+        next.stack.push(copy.clone());
+        copy.targets = source.targets.copy_with_changes(&next, id, changes)?;
+        *next
+            .stack
+            .last_mut()
+            .ok_or(StackWindowError::InconsistentStack)? = copy;
+        Ok(next)
+    }
+    pub(crate) fn copy_known_spell(
+        &self,
+        expected: u64,
+        source: &StackEntry,
+        controller: SeatId,
+        changes: Vec<TargetChoice>,
+    ) -> Result<Self, StackWindowError> {
+        let revision = self.next_revision(expected)?;
+        if !matches!(self.status, Status::Resolving { .. }) {
+            return Err(StackWindowError::NotResolving);
+        }
+        self.validate_player(controller)?;
+        let original = source.id();
         if !matches!(
             source.kind,
             StackKind::CardSpell(_) | StackKind::SpellCopy { .. }
@@ -1149,6 +2375,8 @@ impl StackWindow {
             return Err(StackWindowError::NotSpell);
         }
         let targets = source.targets.clone();
+        let buyback = source.buyback;
+        let kicked = source.kicked.clone();
         let mut next = self.clone();
         let mut entry = next.allocate(
             controller,
@@ -1158,6 +2386,13 @@ impl StackWindow {
             },
         )?;
         next.stack.push(entry.clone());
+        entry.chosen_x.clone_from(&source.chosen_x);
+        entry.attacking_defender = source.attacking_defender;
+        entry.conditional_cost = source.conditional_cost;
+        entry.bargained = source.bargained;
+        entry.buyback = buyback;
+        entry.kicked = kicked;
+        entry.replicated = source.replicated.clone();
         entry.targets = targets.copy_with_changes(&next, entry.id, changes)?;
         *next
             .stack
@@ -1166,6 +2401,7 @@ impl StackWindow {
         next.copies.insert(
             entry.id,
             SpellCopyObject {
+                permanent_object: None,
                 id: entry.id,
                 owner: controller,
                 controller: Some(controller),
@@ -1175,12 +2411,145 @@ impl StackWindow {
         next.revision = revision;
         Ok(next)
     }
+    pub(crate) fn give_copy_permanent_definition(
+        &mut self,
+        entry: StackEntryId,
+        definition: crate::program::Program,
+    ) -> Result<(), StackWindowError> {
+        let copy = self
+            .copies
+            .get_mut(&entry)
+            .ok_or(StackWindowError::InconsistentStack)?;
+        if copy.permanent_object.is_some() || copy.zone != ObjectZone::Stack {
+            return Err(StackWindowError::InconsistentStack);
+        }
+        copy.permanent_object = Some(
+            self.cards
+                .insert_permanent_spell_copy(copy.owner, definition)?,
+        );
+        Ok(())
+    }
+    pub(crate) fn spell_object(&self, entry: &StackEntry) -> Option<ObjectId> {
+        match entry.kind() {
+            StackKind::CardSpell(object) => Some(*object),
+            StackKind::SpellCopy { .. } => self.copies.get(&entry.id())?.permanent_object,
+            _ => None,
+        }
+    }
+    /// CR 112.2. A change on the stack leaves the caster, owner and target choices intact.
+    pub(crate) fn gain_spell_control(
+        &mut self,
+        id: StackEntryId,
+        controller: SeatId,
+    ) -> Result<SeatId, StackWindowError> {
+        self.validate_player(controller)?;
+        let index = self
+            .stack
+            .iter()
+            .position(|entry| entry.id == id)
+            .ok_or(StackWindowError::InconsistentStack)?;
+        let previous = self.stack[index].controller;
+        if previous == controller {
+            return Ok(previous);
+        }
+        self.set_spell_controller(index, controller)?;
+        self.stack[index].previous_controllers.push(previous);
+        Ok(previous)
+    }
+
+    pub(crate) fn end_departed_spell_control(
+        &mut self,
+        players: &BTreeSet<SeatId>,
+    ) -> Result<Vec<(StackEntryId, SeatId, SeatId)>, StackWindowError> {
+        let mut changes = Vec::new();
+        for index in 0..self.stack.len() {
+            let entry = &mut self.stack[index];
+            entry
+                .previous_controllers
+                .retain(|seat| !players.contains(seat));
+            if !players.contains(&entry.controller())
+                || matches!(entry.kind(), StackKind::CardSpell(id) if self.cards.get(*id).is_none())
+                || matches!(entry.kind(), StackKind::SpellCopy { owner, .. } if players.contains(owner))
+            {
+                continue;
+            }
+            if let Some(restored) = entry.previous_controllers.pop() {
+                let (id, departed) = (entry.id(), entry.controller());
+                self.set_spell_controller(index, restored)?;
+                changes.push((id, departed, restored));
+            }
+        }
+        Ok(changes)
+    }
+
+    fn set_spell_controller(
+        &mut self,
+        index: usize,
+        controller: SeatId,
+    ) -> Result<(), StackWindowError> {
+        let revision = self.next_revision(self.revision)?;
+        match self.stack[index].kind {
+            StackKind::CardSpell(object) => {
+                self.cards = self
+                    .cards
+                    .apply_controller(self.cards.revision(), object, controller)?
+                    .next;
+            }
+            StackKind::SpellCopy { .. } => {
+                let copy = self
+                    .copies
+                    .get_mut(&self.stack[index].id)
+                    .ok_or(StackWindowError::InconsistentStack)?;
+                if let Some(object) = copy.permanent_object {
+                    self.cards = self
+                        .cards
+                        .apply_controller(self.cards.revision(), object, controller)?
+                        .next;
+                }
+                copy.controller = Some(controller);
+            }
+            _ => return Err(StackWindowError::InvalidResolutionMove),
+        }
+        self.stack[index].controller = controller;
+        self.revision = revision;
+        Ok(())
+    }
+    /// Replace only the selected occurrences, leaving untouched targets and stack order intact.
+    pub(crate) fn change_targets(
+        &mut self,
+        id: StackEntryId,
+        changes: Vec<TargetChoice>,
+    ) -> Result<(), StackWindowError> {
+        let resolving = self.resolving().ok_or(StackWindowError::NotResolving)?;
+        if resolving.id() == id {
+            return Err(StackWindowError::InvalidResolutionMove);
+        }
+        let index = self
+            .stack
+            .iter()
+            .position(|entry| entry.id == id)
+            .ok_or(StackWindowError::InconsistentStack)?;
+        let targets = self.stack[index].targets.retarget(self, id, changes)?;
+        let revision = self.next_revision(self.revision)?;
+        self.stack[index].targets = targets;
+        self.revision = revision;
+        Ok(())
+    }
     /// CR 704.5e: exited spell copies cease to exist during pending state checks,
     /// not as an instruction in the middle of resolution.
     pub fn cease_departed_copies(&self, expected: u64) -> Result<Self, StackWindowError> {
         let revision = self.next_revision(expected)?;
         self.require_checks()?;
         let mut next = self.clone();
+        for copy in self
+            .copies
+            .values()
+            .filter(|copy| copy.zone != ObjectZone::Stack)
+        {
+            if let Some(object) = copy.permanent_object {
+                next.cards.cease_departed_permanent_copy(object)?;
+            }
+        }
         next.copies.retain(|_, copy| copy.zone == ObjectZone::Stack);
         next.revision = revision;
         Ok(next)
@@ -1220,13 +2589,49 @@ impl StackWindow {
         }
         Ok((self.with_cards(revision, cards), ceased))
     }
+    fn copy_exit(
+        &self,
+        next: &Self,
+        before: &SpellCopyObject,
+        after: &SpellCopyObject,
+    ) -> Result<StackExit, StackWindowError> {
+        if let (Some(old), Some(new)) = (before.permanent_object, after.permanent_object) {
+            return Ok(StackExit::Object(ObjectMovement {
+                before: self
+                    .cards
+                    .get(old)
+                    .cloned()
+                    .ok_or(StackWindowError::InconsistentStack)?,
+                after: next
+                    .cards
+                    .get(new)
+                    .cloned()
+                    .ok_or(StackWindowError::InconsistentStack)?,
+            }));
+        }
+        Ok(StackExit::Copy {
+            before: before.clone(),
+            after: after.clone(),
+        })
+    }
     fn move_copy(
         &self,
         revision: u64,
         id: StackEntryId,
         destination: ObjectDestination,
     ) -> Result<Self, StackWindowError> {
-        if destination != ObjectDestination::Graveyard {
+        let returning = destination == ObjectDestination::Hand
+            && self.resolving().is_some_and(|s| s.id == id && s.buyback);
+        if self
+            .copies
+            .get(&id)
+            .is_none_or(|copy| copy.permanent_object.is_none())
+            && !matches!(
+                destination,
+                ObjectDestination::Graveyard | ObjectDestination::Exile
+            )
+            && !returning
+        {
             return Err(StackWindowError::UnsupportedTargetOperation);
         }
         let mut next = self.clone();
@@ -1237,8 +2642,25 @@ impl StackWindow {
         if copy.zone != ObjectZone::Stack {
             return Err(StackWindowError::InconsistentStack);
         }
-        copy.zone = ObjectZone::Graveyard(copy.owner);
-        copy.controller = None;
+        if let Some(object) = copy.permanent_object {
+            let moved = next
+                .cards
+                .apply_zone_move(next.cards.revision(), object, destination)?
+                .require_moved()?;
+            copy.zone = moved.after.zone();
+            copy.controller = moved.after.controller();
+            copy.permanent_object = Some(moved.after.id());
+            next.cards = moved.next;
+        } else {
+            copy.zone = if destination == ObjectDestination::Exile {
+                ObjectZone::Exile
+            } else if returning {
+                ObjectZone::Hand(copy.owner)
+            } else {
+                ObjectZone::Graveyard(copy.owner)
+            };
+            copy.controller = None;
+        }
         next.stack.retain(|entry| entry.id != id);
         next.revision = revision;
         Ok(next)
@@ -1264,6 +2686,24 @@ impl StackWindow {
         next.revision = revision;
         Ok(next)
     }
+    pub(crate) fn record_emblem_activation(
+        &self,
+        expected: u64,
+        actor: SeatId,
+        emblem: crate::emblem::EmblemId,
+    ) -> Result<(Self, StackEntryId), StackWindowError> {
+        let revision = self.next_revision(expected)?;
+        let round = self.priority()?;
+        let round = round.record_action(round.revision(), actor)?;
+        self.validate_player(actor)?;
+        let mut next = self.clone();
+        let entry = next.allocate(actor, StackKind::Emblem { emblem })?;
+        let id = entry.id();
+        next.stack.push(entry);
+        next.status = Status::Priority(round);
+        next.revision = revision;
+        Ok((next, id))
+    }
     /// Apply a preordered nonmana trigger batch during checks. The same candidate remains
     /// pending; the changed stack requires a fresh pass round. No discovery or player
     /// ordering decision is synthesized, and no controller silently gains priority.
@@ -1276,6 +2716,76 @@ impl StackWindow {
         // consumes the allocation receipt instead of guessing the new entries.
         self.record_ordered_triggers_with_receipt(expected, triggers)
             .map(|receipt| receipt.into_parts().0)
+    }
+    pub(crate) fn record_speed_trigger(
+        &self,
+        actor: SeatId,
+    ) -> Result<(Self, StackEntryId), StackWindowError> {
+        let round = self.priority()?;
+        let PriorityPhase::RequiresChecks { candidate } = round.phase() else {
+            return Err(StackWindowError::ChecksNotPending);
+        };
+        self.validate_player(actor)?;
+        let mut next = self.clone();
+        let entry = next.allocate(actor, StackKind::Speed)?;
+        let id = entry.id();
+        next.stack.push(entry);
+        next.status = Status::Priority(PriorityRound::new(self.order.clone(), candidate, 0)?);
+        next.revision = self.next_revision(self.revision)?;
+        Ok((next, id))
+    }
+    pub(crate) fn record_delayed_copy_trigger(
+        &self,
+        actor: SeatId,
+        original: StackEntryId,
+    ) -> Result<(Self, StackEntryId), StackWindowError> {
+        let round = self.priority()?;
+        let PriorityPhase::RequiresChecks { candidate } = round.phase() else {
+            return Err(StackWindowError::ChecksNotPending);
+        };
+        self.validate_player(actor)?;
+        let mut next = self.clone();
+        let entry = next.allocate(actor, StackKind::DelayedCopy { original })?;
+        let id = entry.id();
+        next.stack.push(entry);
+        next.status = Status::Priority(PriorityRound::new(self.order.clone(), candidate, 0)?);
+        next.revision = self.next_revision(self.revision)?;
+        Ok((next, id))
+    }
+    pub(crate) fn record_monarch_trigger(
+        &self,
+        actor: SeatId,
+    ) -> Result<(Self, StackEntryId), StackWindowError> {
+        let round = self.priority()?;
+        let PriorityPhase::RequiresChecks { candidate } = round.phase() else {
+            return Err(StackWindowError::ChecksNotPending);
+        };
+        self.validate_player(actor)?;
+        let mut next = self.clone();
+        let entry = next.allocate(actor, StackKind::Monarch)?;
+        let id = entry.id();
+        next.stack.push(entry);
+        next.status = Status::Priority(PriorityRound::new(self.order.clone(), candidate, 0)?);
+        next.revision = self.next_revision(self.revision)?;
+        Ok((next, id))
+    }
+    pub(crate) fn record_emblem_trigger(
+        &self,
+        actor: SeatId,
+        emblem: crate::emblem::EmblemId,
+    ) -> Result<(Self, StackEntryId), StackWindowError> {
+        let round = self.priority()?;
+        let PriorityPhase::RequiresChecks { candidate } = round.phase() else {
+            return Err(StackWindowError::ChecksNotPending);
+        };
+        self.validate_player(actor)?;
+        let mut next = self.clone();
+        let entry = next.allocate(actor, StackKind::Emblem { emblem })?;
+        let id = entry.id();
+        next.stack.push(entry);
+        next.status = Status::Priority(PriorityRound::new(self.order.clone(), candidate, 0)?);
+        next.revision = self.next_revision(self.revision)?;
+        Ok((next, id))
     }
     pub(crate) fn record_ordered_triggers_with_receipt(
         &self,
@@ -1313,10 +2823,61 @@ impl StackWindow {
             entries,
         })
     }
+    /// Select the alternate characteristics in an isolated prospective cast window.
+    pub(crate) fn select_siege_back(&mut self, spell: ObjectId) -> Result<(), StackWindowError> {
+        Ok(self.cards.select_reverse_spell(spell)?)
+    }
+    pub(crate) fn preview_adventure(&mut self, spell: ObjectId) -> Result<(), StackWindowError> {
+        Ok(self.cards.select_adventure(spell)?)
+    }
+    /// Install the selected spell characteristics on the admitted stack object.
+    pub(crate) fn meld_during_resolution(
+        &mut self,
+        entry: StackEntryId,
+        halves: [ObjectId; 2],
+        controller: SeatId,
+        back: crate::program::Program,
+    ) -> Result<GameObject, StackWindowError> {
+        if self.resolving().is_none_or(|current| current.id() != entry) {
+            return Err(StackWindowError::InvalidResolutionMove);
+        }
+        let revision = self.next_revision(self.revision)?;
+        let joined = self.cards.meld_from_exile(halves, controller, back)?;
+        self.revision = revision;
+        Ok(joined)
+    }
+    pub(crate) fn select_split_half(
+        &mut self,
+        object: ObjectId,
+        half: crate::program::SplitHalf,
+    ) -> Result<(), StackWindowError> {
+        Ok(self.cards.select_split_half(object, half)?)
+    }
+    pub(crate) fn select_adventure_spell(
+        &mut self,
+        entry: StackEntryId,
+    ) -> Result<(), StackWindowError> {
+        let Some(StackKind::CardSpell(spell)) = self
+            .stack
+            .last()
+            .filter(|top| top.id() == entry)
+            .map(StackEntry::kind)
+        else {
+            return Err(StackWindowError::InconsistentStack);
+        };
+        Ok(self.cards.select_adventure(*spell)?)
+    }
+    /// Install the departure replacement on the returned battlefield incarnation.
+    pub(crate) fn mark_corpse_return(&mut self, id: ObjectId) -> Result<(), StackWindowError> {
+        Ok(self.cards.mark_corpse_return(id)?)
+    }
+    pub(crate) fn mark_unearthed(&mut self, id: ObjectId) -> Result<(), StackWindowError> {
+        Ok(self.cards.mark_unearthed(id)?)
+    }
     /// One already-adjudicated resolution instruction, not an effect interpreter.
     /// Moving a card spell removes its stack entry, but a resolving continuation
     /// survives its own card's exit (CR 608.2m). Casting another physical card during
-    /// resolution remains unsupported; spell-copy creation uses its explicit method.
+    /// resolution uses a trigger-granted cast permission; spell copies use their explicit method.
     pub fn record_resolution_move(
         &self,
         expected: u64,
@@ -1327,7 +2888,7 @@ impl StackWindow {
             .resolution_move_with_exit(expected, card, destination)?
             .0)
     }
-    fn resolution_move_with_exit(
+    pub(crate) fn resolution_move_with_exit(
         &self,
         expected: u64,
         card: ObjectId,
@@ -1345,6 +2906,37 @@ impl StackWindow {
             _ => {}
         }
         self.move_card(revision, card, destination)
+    }
+    /// Move distinct selected cards from the searched library in one batch. The entry controller may differ from its owner.
+    pub(crate) fn record_library_search_moves(
+        &self,
+        expected: u64,
+        entry: StackEntryId,
+        player: SeatId,
+        entry_controller: SeatId,
+        moves: &[(ObjectId, ObjectDestination)],
+    ) -> Result<(Self, Vec<ObjectMovement>), StackWindowError> {
+        let revision = self.next_revision(expected)?;
+        if self.resolving().is_none_or(|value| value.id() != entry) {
+            return Err(StackWindowError::WrongResolution);
+        }
+        let mut unique = BTreeSet::new();
+        for &(id, destination) in moves {
+            if !unique.insert(id)
+                || self.cards.get(id).is_none_or(|object| {
+                    object.zone() != ObjectZone::Library(player) || object.card_id().is_none()
+                })
+                || !(matches!(
+                    destination,
+                    ObjectDestination::Hand
+                        | ObjectDestination::Graveyard
+                        | ObjectDestination::Exile
+                ) || matches!(destination, ObjectDestination::Battlefield { controller } if controller == entry_controller && self.validate_player(controller).is_ok()))
+            {
+                return Err(StackWindowError::InvalidResolutionMove);
+            }
+        }
+        self.apply_recorded_zone_moves(revision, moves)
     }
     /// Trusted replacement-adjusted state-based zone moves, only while CR 117.5
     /// checks are pending. No priority is granted and no triggers are discovered.
@@ -1375,6 +2967,28 @@ impl StackWindow {
             }
         }
         self.apply_recorded_zone_moves(revision, &moves)
+    }
+    /// Apply the eligible commanders selected by their owners during CR 903.9a checks.
+    pub(crate) fn return_commanders(
+        &self,
+        selected: &[ObjectId],
+    ) -> Result<(Self, Vec<ObjectMovement>), StackWindowError> {
+        self.require_checks()?;
+        let mut seen = BTreeSet::new();
+        for id in selected {
+            if !seen.insert(*id)
+                || !self.cards.get(*id).is_some_and(|card| {
+                    matches!(card.zone(), ObjectZone::Graveyard(_) | ObjectZone::Exile)
+                })
+            {
+                return Err(StackWindowError::InvalidCheckMove);
+            }
+        }
+        let application = selected
+            .iter()
+            .map(|id| (*id, ObjectDestination::Command))
+            .collect::<Vec<_>>();
+        self.apply_recorded_zone_moves(self.next_revision(self.revision())?, &application)
     }
     /// Actual cleanup work after the rules layer validates the required subset.
     /// Selection and evidence are final top-to-bottom entrant order above the old
@@ -1419,8 +3033,15 @@ impl StackWindow {
         }
         let moves = application
             .iter()
-            .map(|(id, destination)| (*id, destination.physical()))
-            .collect::<Vec<_>>();
+            .map(|(id, destination)| {
+                Ok((
+                    *id,
+                    destination
+                        .physical(None)
+                        .ok_or(StackWindowError::InvalidCheckMove)?,
+                ))
+            })
+            .collect::<Result<Vec<_>, StackWindowError>>()?;
         self.apply_recorded_zone_moves(revision, &moves)
     }
     /// Apply one complete resolving instruction's selected batch. This never
@@ -1454,7 +3075,38 @@ impl StackWindow {
                     object,
                     destination,
                 }
-                | ResolutionSelectionMove::Discard {
+                | ResolutionSelectionMove::CommanderReturn {
+                    player,
+                    object,
+                    destination,
+                }
+                | ResolutionSelectionMove::GraveyardReturn {
+                    player,
+                    object,
+                    destination,
+                }
+                | ResolutionSelectionMove::PutInLibrary {
+                    player,
+                    object,
+                    destination,
+                    ..
+                }
+                | ResolutionSelectionMove::LibraryEffect {
+                    player,
+                    object,
+                    destination,
+                }
+                | ResolutionSelectionMove::BattlefieldEffect {
+                    player,
+                    object,
+                    destination,
+                }
+                | ResolutionSelectionMove::ReturnToHand {
+                    player,
+                    object,
+                    destination,
+                }
+                | ResolutionSelectionMove::FromHand {
                     player,
                     object,
                     destination,
@@ -1466,17 +3118,51 @@ impl StackWindow {
                 .get(id)
                 .ok_or(StackWindowError::InvalidResolutionMove)?;
             let eligible = match selection {
-                ResolutionSelectionMove::Sacrifice { .. } => {
+                ResolutionSelectionMove::PutInLibrary { .. } => {
+                    (object.zone() == ObjectZone::Battlefield
+                        && object.controller() == Some(player))
+                        || (object.card_id().is_some()
+                            && matches!(object.zone(), ObjectZone::Graveyard(seat) | ObjectZone::Hand(seat) if seat == player))
+                }
+                ResolutionSelectionMove::BattlefieldEffect { .. }
+                | ResolutionSelectionMove::ReturnToHand { .. }
+                | ResolutionSelectionMove::Sacrifice { .. } => {
                     object.zone() == ObjectZone::Battlefield && object.controller() == Some(player)
                 }
-                ResolutionSelectionMove::Discard { .. } => {
+                ResolutionSelectionMove::CommanderReturn { .. } => {
+                    object.card_id().is_some()
+                        && object.owner() == player
+                        && (object.zone() == ObjectZone::Command
+                            || object.zone() == ObjectZone::Graveyard(player))
+                }
+                ResolutionSelectionMove::GraveyardReturn { .. } => {
+                    object.card_id().is_some() && object.zone() == ObjectZone::Graveyard(player)
+                }
+                ResolutionSelectionMove::LibraryEffect { .. } => {
+                    object.card_id().is_some() && object.zone() == ObjectZone::Library(player)
+                }
+                ResolutionSelectionMove::FromHand { .. } => {
                     object.card_id().is_some() && object.zone() == ObjectZone::Hand(player)
                 }
             };
             if !eligible || !unique.insert(id) {
                 return Err(StackWindowError::InvalidResolutionMove);
             }
-            moves.push((id, destination.physical()));
+            let physical = if matches!(
+                selection,
+                ResolutionSelectionMove::PutInLibrary {
+                    placement: crate::program::LibraryPlacement::Bottom,
+                    ..
+                }
+            ) && destination == crate::program::PublicZoneDestination::Library
+            {
+                ObjectDestination::LibraryBottom
+            } else {
+                destination
+                    .physical(None)
+                    .ok_or(StackWindowError::InvalidResolutionMove)?
+            };
+            moves.push((id, physical));
         }
         self.apply_recorded_zone_moves(revision, &moves)
     }
@@ -1488,6 +3174,17 @@ impl StackWindow {
         entry: StackEntryId,
         commit: LibraryTopCommit<'_>,
     ) -> Result<(Self, Vec<ObjectMovement>), StackWindowError> {
+        if self.resolving().map(|e| e.id()) != Some(entry) {
+            return Err(StackWindowError::WrongResolution);
+        }
+        self.record_revealed_top(expected, commit)
+    }
+    /// Commit an exact revealed partition at a draw cut or a resolving instruction.
+    pub(crate) fn record_revealed_top(
+        &self,
+        expected: u64,
+        commit: LibraryTopCommit<'_>,
+    ) -> Result<(Self, Vec<ObjectMovement>), StackWindowError> {
         let LibraryTopCommit {
             player,
             frozen,
@@ -1497,9 +3194,6 @@ impl StackWindow {
         } = commit;
         let revision = self.next_revision(expected)?;
         self.validate_player(player)?;
-        if self.resolving().map(|e| e.id()) != Some(entry) {
-            return Err(StackWindowError::WrongResolution);
-        }
         let library = self.cards.library(player);
         let partition: Vec<_> = top
             .iter()
@@ -1530,8 +3224,16 @@ impl StackWindow {
             .collect();
         let moves: Vec<_> = moves_application
             .iter()
-            .map(|movement| (movement.before, movement.destination.physical()))
-            .collect();
+            .map(|movement| {
+                Ok((
+                    movement.before,
+                    movement
+                        .destination
+                        .physical(None)
+                        .ok_or(StackWindowError::InvalidLibraryTop)?,
+                ))
+            })
+            .collect::<Result<_, StackWindowError>>()?;
         let (next, movements) = self.apply_recorded_zone_moves(revision, &moves)?;
         let cards = next
             .cards
@@ -1540,6 +3242,12 @@ impl StackWindow {
     }
     /// Shared physical application only. Each caller retains its own legal
     /// phase, source, controller and empty-batch policy above this helper.
+    pub(crate) fn record_linked_return_moves(
+        &self,
+        moves: &[(ObjectId, ObjectDestination)],
+    ) -> Result<(Self, Vec<ObjectMovement>), StackWindowError> {
+        self.apply_recorded_zone_moves(self.next_revision(self.revision())?, moves)
+    }
     fn apply_recorded_zone_moves(
         &self,
         revision: u64,
@@ -1563,9 +3271,24 @@ impl StackWindow {
             .get(card)
             .ok_or(ObjectIdentityError::UnknownObject)?
             .clone();
+        let replacement = self
+            .entries()
+            .iter()
+            .chain(self.resolving())
+            .find_map(|entry| {
+                (before.zone() == ObjectZone::Stack
+                    && matches!(entry.kind,StackKind::CardSpell(id) if id==card))
+                .then_some(entry.exile_cast)
+                .flatten()
+            });
+        let destination = replacement.map_or(destination, |kind| kind.destination(destination));
         let moved = self
             .cards
-            .apply_zone_move(self.cards.revision(), card, destination)?
+            .apply_zone_move(
+                self.cards.revision(),
+                card,
+                before.unearth_destination(destination),
+            )?
             .require_moved()?;
         let mut next = self.with_cards(revision, moved.next);
         next.stack
@@ -1577,6 +3300,69 @@ impl StackWindow {
                 after: moved.after,
             }),
         ))
+    }
+    /// CR 724.1b removes every entry together, retaining card and copy incarnations in exile.
+    pub(crate) fn exile_stack_to_end_turn(
+        &self,
+        entry: StackEntryId,
+    ) -> Result<(Self, Vec<StackExit>), StackWindowError> {
+        if self.resolving().is_none_or(|actual| actual.id() != entry) {
+            return Err(StackWindowError::WrongResolution);
+        }
+        let revision = self.next_revision(self.revision)?;
+        let mut next = self.clone();
+        let mut exits = Vec::new();
+        for item in &self.stack {
+            match item.kind() {
+                StackKind::CardSpell(id) => {
+                    let (state, exit) = next.move_card(revision, *id, ObjectDestination::Exile)?;
+                    next = state;
+                    exits.push(exit);
+                }
+                StackKind::SpellCopy { .. } => {
+                    let old = self
+                        .copies
+                        .get(&item.id())
+                        .ok_or(StackWindowError::InconsistentStack)?;
+                    if old.permanent_object.is_some() {
+                        next = next.move_copy(revision, item.id(), ObjectDestination::Exile)?;
+                    } else {
+                        let copy = next
+                            .copies
+                            .get_mut(&item.id())
+                            .ok_or(StackWindowError::InconsistentStack)?;
+                        copy.zone = ObjectZone::Exile;
+                        copy.controller = None;
+                    }
+                    let after = next
+                        .copies
+                        .get(&item.id())
+                        .ok_or(StackWindowError::InconsistentStack)?;
+                    exits.push(self.copy_exit(&next, old, after)?);
+                }
+                _ => {}
+            }
+        }
+        next.stack.clear();
+        next.status = Status::Priority(PriorityRound::new(
+            self.order.clone(),
+            self.step_priority_candidate()?,
+            0,
+        )?);
+        next.revision = revision;
+        Ok((next, exits))
+    }
+    /// End the current step once the mandatory CR 724.1c checks finish.
+    pub(crate) fn finish_end_turn_checks(&self) -> Result<Self, StackWindowError> {
+        self.require_checks()?;
+        if !self.stack.is_empty() {
+            return Err(StackWindowError::InconsistentStack);
+        }
+        Ok(Self {
+            status: Status::StepEnded,
+            revision: self.next_revision(self.revision)?,
+            ..self.clone()
+        })
     }
     /// Trusted completion after all resolution work/choices have finished. A card
     /// still on the stack requires its computed exit; an already departed card or
@@ -1631,6 +3417,9 @@ impl StackWindow {
                         }
                         _ => {}
                     }
+                    let destination = pending
+                        .exile_cast
+                        .map_or(destination, |kind| kind.destination(destination));
                     let moved = self
                         .cards
                         .apply_zone_move(self.cards.revision(), object, destination)?
@@ -1643,6 +3432,22 @@ impl StackWindow {
                 } else if exit.is_some() {
                     return Err(StackWindowError::UnexpectedSpellExit);
                 }
+            }
+            StackKind::SpellCopy { .. }
+                if exit.is_none()
+                    && !self.copies.contains_key(&entry)
+                    && !self.stack.iter().any(|item| item.id == entry) => {}
+            StackKind::SpellCopy { .. }
+                if exit.is_none()
+                    && self.copies.get(&entry).is_some_and(|copy| {
+                        copy.zone == ObjectZone::Battlefield
+                            && copy
+                                .permanent_object
+                                .and_then(|id| self.cards.get(id))
+                                .is_some_and(|host| host.times_mutated() > 0)
+                    }) =>
+            {
+                next.copies.remove(&entry);
             }
             StackKind::SpellCopy { .. } => {
                 let before = self
@@ -1660,7 +3465,10 @@ impl StackWindow {
                     .get(&entry)
                     .ok_or(StackWindowError::InconsistentStack)?
                     .clone();
-                receipt = Some(StackExit::Copy { before, after });
+                receipt = Some(self.copy_exit(&next, &before, &after)?);
+                if after.zone == ObjectZone::Battlefield {
+                    next.copies.remove(&entry);
+                }
             }
             _ => {
                 if exit.is_some() {
@@ -1671,7 +3479,7 @@ impl StackWindow {
         next.stack.retain(|item| item.id != entry);
         next.status = Status::Priority(PriorityRound::new(
             self.order.clone(),
-            self.priority_start,
+            self.step_priority_candidate()?,
             0,
         )?);
         next.revision = revision;
@@ -1691,7 +3499,7 @@ impl StackWindow {
             _ => None,
         }
     }
-    fn bind_targets(
+    pub(crate) fn bind_targets(
         &mut self,
         entry: StackEntryId,
         clauses: Vec<TargetClause>,
@@ -1718,7 +3526,10 @@ impl StackWindow {
             .last()
             .ok_or(StackWindowError::InconsistentStack)?;
         if actual.id() != entry
-            || !matches!(actual.kind(), StackKind::TriggeredAbility { .. })
+            || !matches!(
+                actual.kind(),
+                StackKind::TriggeredAbility { .. } | StackKind::Emblem { .. }
+            )
             || !actual.targets().targets().is_empty()
         {
             return Err(StackWindowError::InconsistentStack);
@@ -1741,6 +3552,35 @@ impl StackWindow {
         if choices.len() != 1 {
             return Err(TargetError::TargetCount.into());
         }
+        let mut next = self.clone();
+        next.bind_targets(entry, clauses, choices)?;
+        next.revision = revision;
+        Ok(next)
+    }
+    /// Bind the distinct choices to one printed multiple-target clause at trigger placement.
+    pub(crate) fn bind_trigger_target_set(
+        &self,
+        expected: u64,
+        entry: StackEntryId,
+        clause: TargetClause,
+        choices: Vec<TargetChoice>,
+    ) -> Result<Self, StackWindowError> {
+        let revision = self.next_revision(expected)?;
+        self.validate_unbound_trigger(entry)?;
+        let mut next = self.clone();
+        next.bind_targets(entry, vec![clause], choices)?;
+        next.revision = revision;
+        Ok(next)
+    }
+    pub(crate) fn bind_trigger_mode_targets(
+        &self,
+        expected: u64,
+        entry: StackEntryId,
+        clauses: Vec<TargetClause>,
+        choices: Vec<TargetChoice>,
+    ) -> Result<Self, StackWindowError> {
+        let revision = self.next_revision(expected)?;
+        self.validate_unbound_trigger(entry)?;
         let mut next = self.clone();
         next.bind_targets(entry, clauses, choices)?;
         next.revision = revision;
@@ -1829,6 +3669,51 @@ impl StackWindow {
             ..self.clone()
         })
     }
+    pub(crate) fn merge_resolving_spell(
+        &mut self,
+        entry: StackEntryId,
+        spell: ObjectId,
+        host: ObjectId,
+        on_top: bool,
+        definition: crate::program::Program,
+        top_face: crate::program::Program,
+    ) -> Result<(), StackWindowError> {
+        if self
+            .resolving()
+            .filter(|e| e.id() == entry)
+            .and_then(|e| self.spell_object(e))
+            != Some(spell)
+        {
+            return Err(StackWindowError::WrongResolution);
+        }
+        let revision = self.next_revision(self.revision)?;
+        self.cards
+            .merge_mutating_spell(spell, host, on_top, definition, top_face)?;
+        if let Some(copy) = self.copies.get_mut(&entry) {
+            copy.zone = ObjectZone::Battlefield;
+            copy.permanent_object = Some(host);
+        }
+        self.revision = revision;
+        Ok(())
+    }
+    /// Bestow and mutate explicitly continue resolving as an untargeted permanent
+    /// spell when the only announced target is illegal (CR 702.103e and 702.140b).
+    pub(crate) fn resolve_as_untargeted_permanent(
+        &mut self,
+        id: StackEntryId,
+    ) -> Result<(), StackWindowError> {
+        let Status::AllTargetsIllegal { entry, targets } = &self.status else {
+            return Err(StackWindowError::NotResolving);
+        };
+        if entry.id != id || self.spell_object(entry).is_none() {
+            return Err(StackWindowError::WrongResolution);
+        }
+        self.status = Status::Resolving {
+            entry: entry.clone(),
+            targets: targets.clone(),
+        };
+        Ok(())
+    }
     /// All-illegal entries do not resolve. The enclosing kernel supplies the
     /// replacement-adjusted spell exit (normally owner's graveyard), or None for an
     /// ability. This gate cannot be used to run effects or silently skip checks.
@@ -1867,6 +3752,54 @@ impl StackWindow {
             .record_targeted_resolution_move_with_exit(expected, target, destination)?
             .0)
     }
+    /// Counter exactly the spell or ability captured by the resolving ward instance.
+    pub(crate) fn counter_captured_entry(
+        &self,
+        id: StackEntryId,
+    ) -> Result<(Self, Option<StackExit>), StackWindowError> {
+        let resolving = self.resolving().ok_or(StackWindowError::NotResolving)?;
+        if id == resolving.id || !self.stack_precedes(id, resolving.id) {
+            return Err(StackWindowError::IllegalTarget);
+        }
+        let entry = self
+            .stack
+            .iter()
+            .find(|s| s.id == id)
+            .ok_or(StackWindowError::NotSpell)?;
+        let revision = self.next_revision(self.revision)?;
+        match entry.kind() {
+            StackKind::CardSpell(card) => {
+                let (next, exit) = self.move_card(revision, *card, ObjectDestination::Graveyard)?;
+                Ok((next, Some(exit)))
+            }
+            StackKind::SpellCopy { .. } => {
+                let before = self
+                    .copies
+                    .get(&id)
+                    .ok_or(StackWindowError::InconsistentStack)?
+                    .clone();
+                let next = self.move_copy(revision, id, ObjectDestination::Graveyard)?;
+                let after = next
+                    .copies
+                    .get(&id)
+                    .ok_or(StackWindowError::InconsistentStack)?
+                    .clone();
+                let exit = self.copy_exit(&next, &before, &after)?;
+                Ok((next, Some(exit)))
+            }
+            StackKind::Speed
+            | StackKind::Monarch
+            | StackKind::DelayedCopy { .. }
+            | StackKind::Emblem { .. }
+            | StackKind::ActivatedAbility { .. }
+            | StackKind::TriggeredAbility { .. } => {
+                let mut next = self.clone();
+                next.revision = revision;
+                next.stack.retain(|s| s.id != id);
+                Ok((next, None))
+            }
+        }
+    }
     pub(crate) fn record_targeted_resolution_move_with_exit(
         &self,
         expected: u64,
@@ -1903,7 +3836,8 @@ impl StackWindow {
                         .get(&id)
                         .ok_or(StackWindowError::InconsistentStack)?
                         .clone();
-                    return Ok((next, StackExit::Copy { before, after }));
+                    let exit = self.copy_exit(&next, &before, &after)?;
+                    return Ok((next, exit));
                 }
                 _ => return Err(StackWindowError::UnsupportedTargetOperation),
             },
@@ -2526,7 +4460,7 @@ mod tests {
         assert_eq!(next.revision(), before.revision() + 1);
         assert_eq!(next.cards.revision(), before.cards.revision() + 2);
         assert_eq!(next.phase(), WindowPhase::TurnWork);
-        assert_eq!(next.turn_owner(), A);
+        assert_eq!(next.active_player(), A);
         assert_eq!(next.participants(), before.participants());
         assert_eq!(next.next_entry, u64::MAX);
         assert!(next.entries().is_empty());

@@ -115,7 +115,7 @@ pub(super) fn group_matches(
                 )?);
             }
         }
-        TriggerGrouping::OneOrMoreTogether => {
+        TriggerGrouping::OneOrMoreTogether | TriggerGrouping::OneOrMoreOnceEachTurn => {
             groups.push(TriggerCauseSet::new(
                 event,
                 TriggerCauseKey::Together,

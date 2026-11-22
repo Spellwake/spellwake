@@ -19,7 +19,6 @@ const C: SeatId = SeatId(41);
 
 mod applicability;
 mod copied_body_mechanisms;
-mod departure;
 mod zone_replacement_mechanisms;
 
 fn creature() -> Program {
@@ -41,8 +40,9 @@ fn gain(amount: i64) -> Instruction {
 fn sacrifice(players: AffectedPlayers, amount: RulesInteger) -> Instruction {
     Instruction::Sacrifice {
         players,
-        amount: InstructionAmount::Literal(amount),
+        amount: crate::program::ValueExpr::Literal(amount),
         filter: PermanentTypeFilter {
+            any_types: Default::default(),
             required_types: BTreeSet::from([CardType::Creature]),
             forbidden_types: BTreeSet::new(),
         },
@@ -457,7 +457,7 @@ fn huge_discard_clamps_to_real_hand_and_orders_without_creating_a_failed_draw() 
         BodyTarget::SinglePlayer,
         vec![Instruction::Discard {
             players: AffectedPlayers::One(ResolvingPlayer::TargetPlayer),
-            amount: InstructionAmount::Literal(huge),
+            amount: crate::program::ValueExpr::Literal(huge),
         }],
         vec![A, B],
         A,
@@ -673,7 +673,7 @@ fn same_body_bounce_excludes_hand_tokens_at_domain_and_commit_then_later_checks_
                 Instruction::ReturnToOwnersHand,
                 Instruction::Discard {
                     players: AffectedPlayers::One(ResolvingPlayer::Controller),
-                    amount: InstructionAmount::Literal(1.into()),
+                    amount: crate::program::ValueExpr::Literal(1.into()),
                 },
                 Instruction::OptionalEffect {
                     chooser: ResolvingPlayer::Controller,
@@ -756,7 +756,7 @@ fn same_body_bounce_excludes_hand_tokens_at_domain_and_commit_then_later_checks_
             window.record_resolution_selection_moves(
                 window.revision(),
                 state.execution().resolution_state().unwrap().entry(),
-                vec![ResolutionSelectionMove::Discard {
+                vec![ResolutionSelectionMove::FromHand {
                     destination: crate::program::PublicZoneDestination::Graveyard,
                     player: A,
                     object: hand_token
@@ -825,10 +825,13 @@ fn counted_amount_is_frozen_once_under_resolving_controller_for_every_affected_p
             },
             Instruction::Sacrifice {
                 players: AffectedPlayers::EachPlayer,
-                amount: InstructionAmount::ControlledPermanentsOfChosenType {
-                    chosen: CreatureTypeSlot::new(0),
-                },
+                amount: crate::program::ValueExpr::count_battlefield(
+                    crate::program::ObjectFilter::any()
+                        .controlled()
+                        .of_chosen_slot(CreatureTypeSlot::new(0)),
+                ),
                 filter: PermanentTypeFilter {
+                    any_types: Default::default(),
                     required_types: BTreeSet::from([CardType::Creature]),
                     forbidden_types: BTreeSet::new(),
                 },
@@ -902,7 +905,7 @@ fn zero_amount_leaves_real_hand_cards_and_emits_no_discard() {
         vec![
             Instruction::Discard {
                 players: AffectedPlayers::EachPlayer,
-                amount: InstructionAmount::Literal(0.into()),
+                amount: crate::program::ValueExpr::Literal(0.into()),
             },
             gain(1),
         ],
@@ -1060,8 +1063,9 @@ fn current_evaluated_type_filter_is_independent_of_printed_types_and_zone_contro
         BodyTarget::None,
         vec![Instruction::Sacrifice {
             players: AffectedPlayers::EachPlayer,
-            amount: InstructionAmount::Literal(1.into()),
+            amount: crate::program::ValueExpr::Literal(1.into()),
             filter: PermanentTypeFilter {
+                any_types: Default::default(),
                 required_types: BTreeSet::from([CardType::Creature]),
                 forbidden_types: BTreeSet::from([CardType::Artifact]),
             },
@@ -1147,7 +1151,7 @@ fn resolving_wrapper_and_final_commit_reject_a_complete_invalid_batch_atomically
                     player: A,
                     object: selected
                 },
-                ResolutionSelectionMove::Discard {
+                ResolutionSelectionMove::FromHand {
                     destination: crate::program::PublicZoneDestination::Graveyard,
                     player: A,
                     object: id(&state, 11)

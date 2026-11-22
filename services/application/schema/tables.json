@@ -1,0 +1,4561 @@
+{
+  "version": 1,
+  "tables": [
+    {
+      "name": "auth.users",
+      "kind": "managed",
+      "columns": [
+        {
+          "name": "id",
+          "type": "id",
+          "nullable": false
+        },
+        {
+          "name": "email",
+          "type": "text",
+          "nullable": true
+        },
+        {
+          "name": "provider",
+          "type": "text",
+          "nullable": false
+        }
+      ],
+      "unique": []
+    },
+    {
+      "name": "account",
+      "kind": "table",
+      "columns": [
+        {
+          "name": "id",
+          "type": "id",
+          "nullable": false
+        },
+        {
+          "name": "auth_subject",
+          "type": "id",
+          "nullable": true,
+          "reference": "auth.users"
+        },
+        {
+          "name": "username",
+          "type": "text",
+          "nullable": false
+        },
+        {
+          "name": "sign_in_method",
+          "type": "text",
+          "nullable": false
+        },
+        {
+          "name": "created_at",
+          "type": "time",
+          "nullable": false
+        },
+        {
+          "name": "state",
+          "type": "text",
+          "nullable": false
+        },
+        {
+          "name": "deletion_requested_at",
+          "type": "time",
+          "nullable": true
+        },
+        {
+          "name": "retirement_operation_id",
+          "type": "id",
+          "nullable": true,
+          "reference": "ledger_operation"
+        },
+        {
+          "name": "deletion_finalized_at",
+          "type": "time",
+          "nullable": true
+        }
+      ],
+      "unique": [
+        [
+          "auth_subject"
+        ],
+        [
+          "username"
+        ],
+        [
+          "retirement_operation_id"
+        ]
+      ]
+    },
+    {
+      "name": "profile",
+      "kind": "table",
+      "columns": [
+        {
+          "name": "id",
+          "type": "id",
+          "nullable": false
+        },
+        {
+          "name": "account_id",
+          "type": "id",
+          "nullable": false,
+          "reference": "account"
+        },
+        {
+          "name": "printing_id",
+          "type": "id",
+          "nullable": true,
+          "reference": "printing"
+        },
+        {
+          "name": "crop_x",
+          "type": "number",
+          "nullable": true
+        },
+        {
+          "name": "crop_y",
+          "type": "number",
+          "nullable": true
+        },
+        {
+          "name": "crop_scale",
+          "type": "number",
+          "nullable": true
+        },
+        {
+          "name": "default_back_id",
+          "type": "id",
+          "nullable": false,
+          "reference": "cosmetic"
+        },
+        {
+          "name": "default_sleeve_id",
+          "type": "id",
+          "nullable": false,
+          "reference": "cosmetic"
+        },
+        {
+          "name": "default_dice_id",
+          "type": "id",
+          "nullable": false,
+          "reference": "cosmetic"
+        },
+        {
+          "name": "default_playmat_id",
+          "type": "id",
+          "nullable": true,
+          "reference": "cosmetic"
+        }
+      ],
+      "unique": [
+        [
+          "account_id"
+        ]
+      ]
+    },
+    {
+      "name": "asset_owner",
+      "kind": "table",
+      "columns": [
+        {
+          "name": "id",
+          "type": "id",
+          "nullable": false
+        },
+        {
+          "name": "account_id",
+          "type": "id",
+          "nullable": false,
+          "reference": "account"
+        },
+        {
+          "name": "state",
+          "type": "text",
+          "nullable": false
+        }
+      ],
+      "unique": [
+        [
+          "account_id"
+        ]
+      ]
+    },
+    {
+      "name": "cosmetic",
+      "kind": "table",
+      "columns": [
+        {
+          "name": "id",
+          "type": "id",
+          "nullable": false
+        },
+        {
+          "name": "kind",
+          "type": "text",
+          "nullable": false
+        },
+        {
+          "name": "asset_ref",
+          "type": "text",
+          "nullable": false
+        },
+        {
+          "name": "state",
+          "type": "text",
+          "nullable": false
+        }
+      ],
+      "unique": []
+    },
+    {
+      "name": "supporter_tier",
+      "kind": "table",
+      "columns": [
+        {
+          "name": "id",
+          "type": "id",
+          "nullable": false
+        },
+        {
+          "name": "patreon_tier_ref",
+          "type": "text",
+          "nullable": false
+        },
+        {
+          "name": "name",
+          "type": "text",
+          "nullable": false
+        },
+        {
+          "name": "rank",
+          "type": "integer",
+          "nullable": false
+        }
+      ],
+      "unique": [
+        [
+          "patreon_tier_ref"
+        ]
+      ]
+    },
+    {
+      "name": "tier_cosmetic",
+      "kind": "table",
+      "columns": [
+        {
+          "name": "id",
+          "type": "id",
+          "nullable": false
+        },
+        {
+          "name": "tier_id",
+          "type": "id",
+          "nullable": false,
+          "reference": "supporter_tier"
+        },
+        {
+          "name": "cosmetic_id",
+          "type": "id",
+          "nullable": false,
+          "reference": "cosmetic"
+        }
+      ],
+      "unique": [
+        [
+          "tier_id",
+          "cosmetic_id"
+        ]
+      ]
+    },
+    {
+      "name": "provider_event",
+      "kind": "table",
+      "columns": [
+        {
+          "name": "id",
+          "type": "id",
+          "nullable": false
+        },
+        {
+          "name": "provider",
+          "type": "text",
+          "nullable": false
+        },
+        {
+          "name": "external_event_ref",
+          "type": "text",
+          "nullable": false
+        },
+        {
+          "name": "account_id",
+          "type": "id",
+          "nullable": true,
+          "reference": "account"
+        },
+        {
+          "name": "received_at",
+          "type": "time",
+          "nullable": false
+        },
+        {
+          "name": "event_type",
+          "type": "text",
+          "nullable": false
+        },
+        {
+          "name": "payload_ref",
+          "type": "text",
+          "nullable": false
+        },
+        {
+          "name": "processing_state",
+          "type": "text",
+          "nullable": false
+        }
+      ],
+      "unique": [
+        [
+          "provider",
+          "external_event_ref"
+        ]
+      ]
+    },
+    {
+      "name": "purchase",
+      "kind": "table",
+      "columns": [
+        {
+          "name": "id",
+          "type": "id",
+          "nullable": false
+        },
+        {
+          "name": "account_id",
+          "type": "id",
+          "nullable": false,
+          "reference": "account"
+        },
+        {
+          "name": "cosmetic_id",
+          "type": "id",
+          "nullable": false,
+          "reference": "cosmetic"
+        },
+        {
+          "name": "provider_request_ref",
+          "type": "text",
+          "nullable": false
+        },
+        {
+          "name": "provider_event_id",
+          "type": "id",
+          "nullable": true,
+          "reference": "provider_event"
+        },
+        {
+          "name": "stripe_payment_ref",
+          "type": "text",
+          "nullable": true
+        },
+        {
+          "name": "stripe_checkout_ref",
+          "type": "text",
+          "nullable": true
+        },
+        {
+          "name": "requested_at",
+          "type": "time",
+          "nullable": false
+        },
+        {
+          "name": "state",
+          "type": "text",
+          "nullable": false
+        }
+      ],
+      "unique": [
+        [
+          "provider_request_ref"
+        ],
+        [
+          "stripe_payment_ref"
+        ],
+        [
+          "stripe_checkout_ref"
+        ]
+      ]
+    },
+    {
+      "name": "patreon_membership",
+      "kind": "table",
+      "columns": [
+        {
+          "name": "id",
+          "type": "id",
+          "nullable": false
+        },
+        {
+          "name": "account_id",
+          "type": "id",
+          "nullable": false,
+          "reference": "account"
+        },
+        {
+          "name": "patreon_member_ref",
+          "type": "text",
+          "nullable": false
+        },
+        {
+          "name": "active_tier_id",
+          "type": "id",
+          "nullable": true,
+          "reference": "supporter_tier"
+        },
+        {
+          "name": "active",
+          "type": "bool",
+          "nullable": false
+        },
+        {
+          "name": "source_event_id",
+          "type": "id",
+          "nullable": false,
+          "reference": "provider_event"
+        }
+      ],
+      "unique": [
+        [
+          "account_id"
+        ]
+      ]
+    },
+    {
+      "name": "patreon_payment",
+      "kind": "table",
+      "columns": [
+        {
+          "name": "id",
+          "type": "id",
+          "nullable": false
+        },
+        {
+          "name": "membership_id",
+          "type": "id",
+          "nullable": false,
+          "reference": "patreon_membership"
+        },
+        {
+          "name": "tier_id",
+          "type": "id",
+          "nullable": false,
+          "reference": "supporter_tier"
+        },
+        {
+          "name": "provider_event_id",
+          "type": "id",
+          "nullable": false,
+          "reference": "provider_event"
+        },
+        {
+          "name": "payment_ref",
+          "type": "text",
+          "nullable": false
+        },
+        {
+          "name": "paid_at",
+          "type": "time",
+          "nullable": false
+        },
+        {
+          "name": "state",
+          "type": "text",
+          "nullable": false
+        }
+      ],
+      "unique": [
+        [
+          "payment_ref"
+        ]
+      ]
+    },
+    {
+      "name": "cosmetic_grant",
+      "kind": "table",
+      "columns": [
+        {
+          "name": "id",
+          "type": "id",
+          "nullable": false
+        },
+        {
+          "name": "account_id",
+          "type": "id",
+          "nullable": false,
+          "reference": "account"
+        },
+        {
+          "name": "cosmetic_id",
+          "type": "id",
+          "nullable": false,
+          "reference": "cosmetic"
+        },
+        {
+          "name": "source_kind",
+          "type": "text",
+          "nullable": false
+        },
+        {
+          "name": "purchase_id",
+          "type": "id",
+          "nullable": true,
+          "reference": "purchase"
+        },
+        {
+          "name": "patreon_payment_id",
+          "type": "id",
+          "nullable": true,
+          "reference": "patreon_payment"
+        },
+        {
+          "name": "state",
+          "type": "text",
+          "nullable": false
+        }
+      ],
+      "unique": [
+        [
+          "account_id",
+          "cosmetic_id",
+          "purchase_id"
+        ],
+        [
+          "account_id",
+          "cosmetic_id",
+          "patreon_payment_id"
+        ]
+      ]
+    },
+    {
+      "name": "card_set",
+      "kind": "table",
+      "columns": [
+        {
+          "name": "id",
+          "type": "id",
+          "nullable": false
+        },
+        {
+          "name": "external_set_ref",
+          "type": "text",
+          "nullable": false
+        },
+        {
+          "name": "name",
+          "type": "text",
+          "nullable": false
+        }
+      ],
+      "unique": [
+        [
+          "external_set_ref"
+        ]
+      ]
+    },
+    {
+      "name": "card_definition",
+      "kind": "table",
+      "columns": [
+        {
+          "name": "id",
+          "type": "id",
+          "nullable": false
+        },
+        {
+          "name": "oracle_ref",
+          "type": "text",
+          "nullable": false
+        },
+        {
+          "name": "name",
+          "type": "text",
+          "nullable": false
+        }
+      ],
+      "unique": [
+        [
+          "oracle_ref"
+        ]
+      ]
+    },
+    {
+      "name": "card_definition_revision",
+      "kind": "table",
+      "columns": [
+        {
+          "name": "id",
+          "type": "id",
+          "nullable": false
+        },
+        {
+          "name": "definition_id",
+          "type": "id",
+          "nullable": false,
+          "reference": "card_definition"
+        },
+        {
+          "name": "revision_ref",
+          "type": "text",
+          "nullable": false
+        },
+        {
+          "name": "rules_text_ref",
+          "type": "text",
+          "nullable": false
+        }
+      ],
+      "unique": [
+        [
+          "definition_id",
+          "revision_ref"
+        ]
+      ]
+    },
+    {
+      "name": "card_face",
+      "kind": "table",
+      "columns": [
+        {
+          "name": "id",
+          "type": "id",
+          "nullable": false
+        },
+        {
+          "name": "definition_revision_id",
+          "type": "id",
+          "nullable": false,
+          "reference": "card_definition_revision"
+        },
+        {
+          "name": "face_index",
+          "type": "integer",
+          "nullable": false
+        },
+        {
+          "name": "name",
+          "type": "text",
+          "nullable": false
+        },
+        {
+          "name": "characteristics_ref",
+          "type": "text",
+          "nullable": false
+        }
+      ],
+      "unique": [
+        [
+          "definition_revision_id",
+          "face_index"
+        ]
+      ]
+    },
+    {
+      "name": "printing",
+      "kind": "table",
+      "columns": [
+        {
+          "name": "id",
+          "type": "id",
+          "nullable": false
+        },
+        {
+          "name": "definition_id",
+          "type": "id",
+          "nullable": false,
+          "reference": "card_definition"
+        },
+        {
+          "name": "set_id",
+          "type": "id",
+          "nullable": false,
+          "reference": "card_set"
+        },
+        {
+          "name": "external_printing_ref",
+          "type": "text",
+          "nullable": false
+        },
+        {
+          "name": "rarity",
+          "type": "text",
+          "nullable": false
+        },
+        {
+          "name": "finish",
+          "type": "text",
+          "nullable": false
+        },
+        {
+          "name": "image_ref",
+          "type": "text",
+          "nullable": false
+        }
+      ],
+      "unique": [
+        [
+          "external_printing_ref",
+          "finish"
+        ]
+      ]
+    },
+    {
+      "name": "format",
+      "kind": "table",
+      "columns": [
+        {
+          "name": "id",
+          "type": "id",
+          "nullable": false
+        },
+        {
+          "name": "key",
+          "type": "text",
+          "nullable": false
+        },
+        {
+          "name": "name",
+          "type": "text",
+          "nullable": false
+        },
+        {
+          "name": "next_competitive_sequence",
+          "type": "quantity",
+          "nullable": false
+        },
+        {
+          "name": "last_ranked_sequence",
+          "type": "quantity",
+          "nullable": false
+        }
+      ],
+      "unique": [
+        [
+          "key"
+        ]
+      ]
+    },
+    {
+      "name": "legality_revision",
+      "kind": "table",
+      "columns": [
+        {
+          "name": "id",
+          "type": "id",
+          "nullable": false
+        },
+        {
+          "name": "source_ref",
+          "type": "text",
+          "nullable": false
+        },
+        {
+          "name": "effective_at",
+          "type": "time",
+          "nullable": false
+        },
+        {
+          "name": "imported_at",
+          "type": "time",
+          "nullable": false
+        }
+      ],
+      "unique": []
+    },
+    {
+      "name": "card_legality",
+      "kind": "table",
+      "columns": [
+        {
+          "name": "id",
+          "type": "id",
+          "nullable": false
+        },
+        {
+          "name": "definition_id",
+          "type": "id",
+          "nullable": false,
+          "reference": "card_definition"
+        },
+        {
+          "name": "format_id",
+          "type": "id",
+          "nullable": false,
+          "reference": "format"
+        },
+        {
+          "name": "legality_revision_id",
+          "type": "id",
+          "nullable": false,
+          "reference": "legality_revision"
+        },
+        {
+          "name": "status",
+          "type": "text",
+          "nullable": false
+        }
+      ],
+      "unique": [
+        [
+          "definition_id",
+          "format_id",
+          "legality_revision_id"
+        ]
+      ]
+    },
+    {
+      "name": "booster_product",
+      "kind": "table",
+      "columns": [
+        {
+          "name": "id",
+          "type": "id",
+          "nullable": false
+        },
+        {
+          "name": "set_id",
+          "type": "id",
+          "nullable": false,
+          "reference": "card_set"
+        },
+        {
+          "name": "name",
+          "type": "text",
+          "nullable": false
+        },
+        {
+          "name": "external_product_ref",
+          "type": "text",
+          "nullable": false
+        }
+      ],
+      "unique": []
+    },
+    {
+      "name": "booster_recipe",
+      "kind": "table",
+      "columns": [
+        {
+          "name": "id",
+          "type": "id",
+          "nullable": false
+        },
+        {
+          "name": "product_id",
+          "type": "id",
+          "nullable": false,
+          "reference": "booster_product"
+        },
+        {
+          "name": "revision_ref",
+          "type": "text",
+          "nullable": false
+        },
+        {
+          "name": "evidence_ref",
+          "type": "text",
+          "nullable": false
+        }
+      ],
+      "unique": [
+        [
+          "product_id",
+          "revision_ref"
+        ]
+      ]
+    },
+    {
+      "name": "booster_slot",
+      "kind": "table",
+      "columns": [
+        {
+          "name": "id",
+          "type": "id",
+          "nullable": false
+        },
+        {
+          "name": "recipe_id",
+          "type": "id",
+          "nullable": false,
+          "reference": "booster_recipe"
+        },
+        {
+          "name": "slot_key",
+          "type": "text",
+          "nullable": false
+        },
+        {
+          "name": "draws",
+          "type": "quantity",
+          "nullable": false
+        },
+        {
+          "name": "collation_ref",
+          "type": "text",
+          "nullable": true
+        }
+      ],
+      "unique": [
+        [
+          "recipe_id",
+          "slot_key"
+        ]
+      ]
+    },
+    {
+      "name": "booster_slot_card",
+      "kind": "table",
+      "columns": [
+        {
+          "name": "id",
+          "type": "id",
+          "nullable": false
+        },
+        {
+          "name": "slot_id",
+          "type": "id",
+          "nullable": false,
+          "reference": "booster_slot"
+        },
+        {
+          "name": "printing_id",
+          "type": "id",
+          "nullable": false,
+          "reference": "printing"
+        },
+        {
+          "name": "weight",
+          "type": "quantity",
+          "nullable": false
+        }
+      ],
+      "unique": [
+        [
+          "slot_id",
+          "printing_id"
+        ]
+      ]
+    },
+    {
+      "name": "table_profile_revision",
+      "kind": "table",
+      "columns": [
+        {
+          "name": "id",
+          "type": "id",
+          "nullable": false
+        },
+        {
+          "name": "key",
+          "type": "text",
+          "nullable": false
+        },
+        {
+          "name": "revision_ref",
+          "type": "text",
+          "nullable": false
+        },
+        {
+          "name": "rules_ref",
+          "type": "text",
+          "nullable": false
+        },
+        {
+          "name": "planar_pool_ref",
+          "type": "text",
+          "nullable": true
+        }
+      ],
+      "unique": [
+        [
+          "key",
+          "revision_ref"
+        ]
+      ]
+    },
+    {
+      "name": "qualified_release",
+      "kind": "table",
+      "columns": [
+        {
+          "name": "id",
+          "type": "id",
+          "nullable": false
+        },
+        {
+          "name": "release_ref",
+          "type": "text",
+          "nullable": false
+        },
+        {
+          "name": "kernel_ref",
+          "type": "text",
+          "nullable": false
+        },
+        {
+          "name": "rules_ref",
+          "type": "text",
+          "nullable": false
+        },
+        {
+          "name": "program_manifest_ref",
+          "type": "text",
+          "nullable": false
+        },
+        {
+          "name": "evidence_ref",
+          "type": "text",
+          "nullable": false
+        }
+      ],
+      "unique": [
+        [
+          "release_ref"
+        ]
+      ]
+    },
+    {
+      "name": "release_card_program",
+      "kind": "table",
+      "columns": [
+        {
+          "name": "id",
+          "type": "id",
+          "nullable": false
+        },
+        {
+          "name": "release_id",
+          "type": "id",
+          "nullable": false,
+          "reference": "qualified_release"
+        },
+        {
+          "name": "definition_revision_id",
+          "type": "id",
+          "nullable": false,
+          "reference": "card_definition_revision"
+        },
+        {
+          "name": "program_ref",
+          "type": "text",
+          "nullable": false
+        }
+      ],
+      "unique": [
+        [
+          "release_id",
+          "definition_revision_id"
+        ]
+      ]
+    },
+    {
+      "name": "deck",
+      "kind": "table",
+      "columns": [
+        {
+          "name": "id",
+          "type": "id",
+          "nullable": false
+        },
+        {
+          "name": "account_id",
+          "type": "id",
+          "nullable": true,
+          "reference": "account"
+        },
+        {
+          "name": "source_kind",
+          "type": "text",
+          "nullable": false
+        },
+        {
+          "name": "system_pool_ref",
+          "type": "text",
+          "nullable": true
+        },
+        {
+          "name": "source_manifest_ref",
+          "type": "text",
+          "nullable": true
+        },
+        {
+          "name": "mode",
+          "type": "text",
+          "nullable": false
+        },
+        {
+          "name": "format_id",
+          "type": "id",
+          "nullable": false,
+          "reference": "format"
+        },
+        {
+          "name": "name",
+          "type": "text",
+          "nullable": false
+        },
+        {
+          "name": "current_revision_id",
+          "type": "id",
+          "nullable": true,
+          "reference": "deck_revision"
+        },
+        {
+          "name": "back_id",
+          "type": "id",
+          "nullable": false,
+          "reference": "cosmetic"
+        },
+        {
+          "name": "sleeve_id",
+          "type": "id",
+          "nullable": false,
+          "reference": "cosmetic"
+        },
+        {
+          "name": "dice_id",
+          "type": "id",
+          "nullable": false,
+          "reference": "cosmetic"
+        },
+        {
+          "name": "playmat_id",
+          "type": "id",
+          "nullable": true,
+          "reference": "cosmetic"
+        }
+      ],
+      "unique": []
+    },
+    {
+      "name": "deck_revision",
+      "kind": "table",
+      "columns": [
+        {
+          "name": "id",
+          "type": "id",
+          "nullable": false
+        },
+        {
+          "name": "deck_id",
+          "type": "id",
+          "nullable": false,
+          "reference": "deck"
+        },
+        {
+          "name": "revision_number",
+          "type": "quantity",
+          "nullable": false
+        },
+        {
+          "name": "created_at",
+          "type": "time",
+          "nullable": false
+        }
+      ],
+      "unique": [
+        [
+          "deck_id",
+          "revision_number"
+        ]
+      ]
+    },
+    {
+      "name": "deck_entry",
+      "kind": "table",
+      "columns": [
+        {
+          "name": "id",
+          "type": "id",
+          "nullable": false
+        },
+        {
+          "name": "revision_id",
+          "type": "id",
+          "nullable": false,
+          "reference": "deck_revision"
+        },
+        {
+          "name": "definition_id",
+          "type": "id",
+          "nullable": false,
+          "reference": "card_definition"
+        },
+        {
+          "name": "printing_id",
+          "type": "id",
+          "nullable": true,
+          "reference": "printing"
+        },
+        {
+          "name": "section",
+          "type": "text",
+          "nullable": false
+        },
+        {
+          "name": "quantity",
+          "type": "quantity",
+          "nullable": false
+        }
+      ],
+      "unique": []
+    },
+    {
+      "name": "asset_definition",
+      "kind": "table",
+      "columns": [
+        {
+          "name": "id",
+          "type": "id",
+          "nullable": false
+        },
+        {
+          "name": "kind",
+          "type": "text",
+          "nullable": false
+        },
+        {
+          "name": "currency_key",
+          "type": "text",
+          "nullable": true
+        },
+        {
+          "name": "printing_id",
+          "type": "id",
+          "nullable": true,
+          "reference": "printing"
+        },
+        {
+          "name": "recipe_id",
+          "type": "id",
+          "nullable": true,
+          "reference": "booster_recipe"
+        }
+      ],
+      "unique": [
+        [
+          "currency_key"
+        ],
+        [
+          "printing_id"
+        ],
+        [
+          "recipe_id"
+        ]
+      ]
+    },
+    {
+      "name": "inventory_asset",
+      "kind": "table",
+      "columns": [
+        {
+          "name": "id",
+          "type": "id",
+          "nullable": false
+        },
+        {
+          "name": "owner_id",
+          "type": "id",
+          "nullable": false,
+          "reference": "asset_owner"
+        },
+        {
+          "name": "asset_definition_id",
+          "type": "id",
+          "nullable": false,
+          "reference": "asset_definition"
+        },
+        {
+          "name": "owned_quantity",
+          "type": "quantity",
+          "nullable": false
+        },
+        {
+          "name": "revision",
+          "type": "quantity",
+          "nullable": false
+        }
+      ],
+      "unique": [
+        [
+          "owner_id",
+          "asset_definition_id"
+        ]
+      ]
+    },
+    {
+      "name": "ledger_operation",
+      "kind": "table",
+      "columns": [
+        {
+          "name": "id",
+          "type": "id",
+          "nullable": false
+        },
+        {
+          "name": "kind",
+          "type": "text",
+          "nullable": false
+        },
+        {
+          "name": "source_ref",
+          "type": "text",
+          "nullable": false
+        },
+        {
+          "name": "source_scope",
+          "type": "text",
+          "nullable": false
+        },
+        {
+          "name": "actor_account_id",
+          "type": "id",
+          "nullable": true,
+          "reference": "account"
+        },
+        {
+          "name": "created_at",
+          "type": "time",
+          "nullable": false
+        },
+        {
+          "name": "state",
+          "type": "text",
+          "nullable": false
+        }
+      ],
+      "unique": [
+        [
+          "source_scope",
+          "source_ref"
+        ]
+      ]
+    },
+    {
+      "name": "ledger_posting",
+      "kind": "table",
+      "columns": [
+        {
+          "name": "id",
+          "type": "id",
+          "nullable": false
+        },
+        {
+          "name": "operation_id",
+          "type": "id",
+          "nullable": false,
+          "reference": "ledger_operation"
+        },
+        {
+          "name": "inventory_asset_id",
+          "type": "id",
+          "nullable": false,
+          "reference": "inventory_asset"
+        },
+        {
+          "name": "direction",
+          "type": "text",
+          "nullable": false
+        },
+        {
+          "name": "quantity",
+          "type": "quantity",
+          "nullable": false
+        },
+        {
+          "name": "source_kind",
+          "type": "text",
+          "nullable": false
+        },
+        {
+          "name": "source_ref",
+          "type": "text",
+          "nullable": false
+        }
+      ],
+      "unique": []
+    },
+    {
+      "name": "asset_hold",
+      "kind": "table",
+      "columns": [
+        {
+          "name": "id",
+          "type": "id",
+          "nullable": false
+        },
+        {
+          "name": "owner_id",
+          "type": "id",
+          "nullable": false,
+          "reference": "asset_owner"
+        },
+        {
+          "name": "purpose",
+          "type": "text",
+          "nullable": false
+        },
+        {
+          "name": "commitment_ref",
+          "type": "text",
+          "nullable": false
+        },
+        {
+          "name": "state",
+          "type": "text",
+          "nullable": false
+        },
+        {
+          "name": "operation_id",
+          "type": "id",
+          "nullable": false,
+          "reference": "ledger_operation"
+        }
+      ],
+      "unique": [
+        [
+          "purpose",
+          "commitment_ref",
+          "owner_id"
+        ]
+      ]
+    },
+    {
+      "name": "hold_line",
+      "kind": "table",
+      "columns": [
+        {
+          "name": "id",
+          "type": "id",
+          "nullable": false
+        },
+        {
+          "name": "hold_id",
+          "type": "id",
+          "nullable": false,
+          "reference": "asset_hold"
+        },
+        {
+          "name": "inventory_asset_id",
+          "type": "id",
+          "nullable": false,
+          "reference": "inventory_asset"
+        },
+        {
+          "name": "quantity",
+          "type": "quantity",
+          "nullable": false
+        }
+      ],
+      "unique": [
+        [
+          "hold_id",
+          "inventory_asset_id"
+        ]
+      ]
+    },
+    {
+      "name": "command_receipt",
+      "kind": "table",
+      "columns": [
+        {
+          "name": "id",
+          "type": "id",
+          "nullable": false
+        },
+        {
+          "name": "account_id",
+          "type": "id",
+          "nullable": true,
+          "reference": "account"
+        },
+        {
+          "name": "controller_grant_id",
+          "type": "id",
+          "nullable": true,
+          "reference": "controller_grant"
+        },
+        {
+          "name": "principal_key",
+          "type": "text",
+          "nullable": false
+        },
+        {
+          "name": "request_ref",
+          "type": "text",
+          "nullable": false
+        },
+        {
+          "name": "scope",
+          "type": "text",
+          "nullable": false
+        },
+        {
+          "name": "target_ref",
+          "type": "text",
+          "nullable": false
+        },
+        {
+          "name": "payload_hash",
+          "type": "text",
+          "nullable": false
+        },
+        {
+          "name": "operation_id",
+          "type": "id",
+          "nullable": true,
+          "reference": "ledger_operation"
+        },
+        {
+          "name": "state",
+          "type": "text",
+          "nullable": false
+        },
+        {
+          "name": "result_ref",
+          "type": "text",
+          "nullable": false
+        }
+      ],
+      "unique": [
+        [
+          "principal_key",
+          "scope",
+          "target_ref",
+          "request_ref"
+        ]
+      ]
+    },
+    {
+      "name": "valuation_policy_revision",
+      "kind": "table",
+      "columns": [
+        {
+          "name": "id",
+          "type": "id",
+          "nullable": false
+        },
+        {
+          "name": "revision_ref",
+          "type": "text",
+          "nullable": false
+        },
+        {
+          "name": "formula_ref",
+          "type": "text",
+          "nullable": false
+        },
+        {
+          "name": "price_anchor_ref",
+          "type": "text",
+          "nullable": false
+        },
+        {
+          "name": "state",
+          "type": "text",
+          "nullable": false
+        }
+      ],
+      "unique": [
+        [
+          "revision_ref"
+        ]
+      ]
+    },
+    {
+      "name": "pack_open_receipt",
+      "kind": "table",
+      "columns": [
+        {
+          "name": "id",
+          "type": "id",
+          "nullable": false
+        },
+        {
+          "name": "inventory_asset_id",
+          "type": "id",
+          "nullable": false,
+          "reference": "inventory_asset"
+        },
+        {
+          "name": "recipe_id",
+          "type": "id",
+          "nullable": false,
+          "reference": "booster_recipe"
+        },
+        {
+          "name": "operation_id",
+          "type": "id",
+          "nullable": false,
+          "reference": "ledger_operation"
+        },
+        {
+          "name": "result_ref",
+          "type": "text",
+          "nullable": false
+        }
+      ],
+      "unique": [
+        [
+          "operation_id"
+        ]
+      ]
+    },
+    {
+      "name": "friendship",
+      "kind": "table",
+      "columns": [
+        {
+          "name": "id",
+          "type": "id",
+          "nullable": false
+        },
+        {
+          "name": "account_low_id",
+          "type": "id",
+          "nullable": false,
+          "reference": "account"
+        },
+        {
+          "name": "account_high_id",
+          "type": "id",
+          "nullable": false,
+          "reference": "account"
+        },
+        {
+          "name": "requested_by_id",
+          "type": "id",
+          "nullable": false,
+          "reference": "account"
+        },
+        {
+          "name": "state",
+          "type": "text",
+          "nullable": false
+        },
+        {
+          "name": "accepted_at",
+          "type": "time",
+          "nullable": true
+        }
+      ],
+      "unique": [
+        [
+          "account_low_id",
+          "account_high_id"
+        ]
+      ]
+    },
+    {
+      "name": "block",
+      "kind": "table",
+      "columns": [
+        {
+          "name": "id",
+          "type": "id",
+          "nullable": false
+        },
+        {
+          "name": "blocker_id",
+          "type": "id",
+          "nullable": false,
+          "reference": "account"
+        },
+        {
+          "name": "blocked_id",
+          "type": "id",
+          "nullable": false,
+          "reference": "account"
+        },
+        {
+          "name": "created_at",
+          "type": "time",
+          "nullable": false
+        }
+      ],
+      "unique": [
+        [
+          "blocker_id",
+          "blocked_id"
+        ]
+      ]
+    },
+    {
+      "name": "conversation",
+      "kind": "table",
+      "columns": [
+        {
+          "name": "id",
+          "type": "id",
+          "nullable": false
+        },
+        {
+          "name": "kind",
+          "type": "text",
+          "nullable": false
+        },
+        {
+          "name": "match_id",
+          "type": "id",
+          "nullable": true,
+          "reference": "match"
+        },
+        {
+          "name": "created_at",
+          "type": "time",
+          "nullable": false
+        }
+      ],
+      "unique": []
+    },
+    {
+      "name": "conversation_member",
+      "kind": "table",
+      "columns": [
+        {
+          "name": "id",
+          "type": "id",
+          "nullable": false
+        },
+        {
+          "name": "conversation_id",
+          "type": "id",
+          "nullable": false,
+          "reference": "conversation"
+        },
+        {
+          "name": "account_id",
+          "type": "id",
+          "nullable": false,
+          "reference": "account"
+        }
+      ],
+      "unique": [
+        [
+          "conversation_id",
+          "account_id"
+        ]
+      ]
+    },
+    {
+      "name": "message",
+      "kind": "table",
+      "columns": [
+        {
+          "name": "id",
+          "type": "id",
+          "nullable": false
+        },
+        {
+          "name": "conversation_id",
+          "type": "id",
+          "nullable": false,
+          "reference": "conversation"
+        },
+        {
+          "name": "sender_id",
+          "type": "id",
+          "nullable": false,
+          "reference": "account"
+        },
+        {
+          "name": "send_request_ref",
+          "type": "text",
+          "nullable": false
+        },
+        {
+          "name": "body",
+          "type": "text",
+          "nullable": false
+        },
+        {
+          "name": "sent_at",
+          "type": "time",
+          "nullable": false
+        }
+      ],
+      "unique": [
+        [
+          "sender_id",
+          "send_request_ref"
+        ]
+      ]
+    },
+    {
+      "name": "notification",
+      "kind": "table",
+      "columns": [
+        {
+          "name": "id",
+          "type": "id",
+          "nullable": false
+        },
+        {
+          "name": "recipient_id",
+          "type": "id",
+          "nullable": false,
+          "reference": "account"
+        },
+        {
+          "name": "source_kind",
+          "type": "text",
+          "nullable": false
+        },
+        {
+          "name": "source_ref",
+          "type": "text",
+          "nullable": false
+        },
+        {
+          "name": "body",
+          "type": "text",
+          "nullable": false
+        },
+        {
+          "name": "read_at",
+          "type": "time",
+          "nullable": true
+        }
+      ],
+      "unique": [
+        [
+          "recipient_id",
+          "source_kind",
+          "source_ref"
+        ]
+      ]
+    },
+    {
+      "name": "trade_offer",
+      "kind": "table",
+      "columns": [
+        {
+          "name": "id",
+          "type": "id",
+          "nullable": false
+        },
+        {
+          "name": "sender_id",
+          "type": "id",
+          "nullable": false,
+          "reference": "account"
+        },
+        {
+          "name": "recipient_id",
+          "type": "id",
+          "nullable": false,
+          "reference": "account"
+        },
+        {
+          "name": "sender_hold_id",
+          "type": "id",
+          "nullable": false,
+          "reference": "asset_hold"
+        },
+        {
+          "name": "terms_revision",
+          "type": "quantity",
+          "nullable": false
+        },
+        {
+          "name": "state",
+          "type": "text",
+          "nullable": false
+        },
+        {
+          "name": "settlement_operation_id",
+          "type": "id",
+          "nullable": true,
+          "reference": "ledger_operation"
+        },
+        {
+          "name": "created_at",
+          "type": "time",
+          "nullable": false
+        }
+      ],
+      "unique": [
+        [
+          "sender_hold_id"
+        ]
+      ]
+    },
+    {
+      "name": "trade_line",
+      "kind": "table",
+      "columns": [
+        {
+          "name": "id",
+          "type": "id",
+          "nullable": false
+        },
+        {
+          "name": "trade_id",
+          "type": "id",
+          "nullable": false,
+          "reference": "trade_offer"
+        },
+        {
+          "name": "asset_definition_id",
+          "type": "id",
+          "nullable": false,
+          "reference": "asset_definition"
+        },
+        {
+          "name": "side",
+          "type": "text",
+          "nullable": false
+        },
+        {
+          "name": "quantity",
+          "type": "quantity",
+          "nullable": false
+        }
+      ],
+      "unique": [
+        [
+          "trade_id",
+          "side",
+          "asset_definition_id"
+        ]
+      ]
+    },
+    {
+      "name": "market_listing",
+      "kind": "table",
+      "columns": [
+        {
+          "name": "id",
+          "type": "id",
+          "nullable": false
+        },
+        {
+          "name": "seller_id",
+          "type": "id",
+          "nullable": false,
+          "reference": "account"
+        },
+        {
+          "name": "asset_definition_id",
+          "type": "id",
+          "nullable": false,
+          "reference": "asset_definition"
+        },
+        {
+          "name": "hold_id",
+          "type": "id",
+          "nullable": false,
+          "reference": "asset_hold"
+        },
+        {
+          "name": "quantity",
+          "type": "quantity",
+          "nullable": false
+        },
+        {
+          "name": "total_price_coins",
+          "type": "quantity",
+          "nullable": false
+        },
+        {
+          "name": "state",
+          "type": "text",
+          "nullable": false
+        },
+        {
+          "name": "revision",
+          "type": "quantity",
+          "nullable": false
+        },
+        {
+          "name": "buyer_id",
+          "type": "id",
+          "nullable": true,
+          "reference": "account"
+        },
+        {
+          "name": "settlement_operation_id",
+          "type": "id",
+          "nullable": true,
+          "reference": "ledger_operation"
+        },
+        {
+          "name": "paid_coins",
+          "type": "quantity",
+          "nullable": true
+        },
+        {
+          "name": "completed_at",
+          "type": "time",
+          "nullable": true
+        }
+      ],
+      "unique": [
+        [
+          "hold_id"
+        ],
+        [
+          "settlement_operation_id"
+        ]
+      ]
+    },
+    {
+      "name": "prediction_market",
+      "kind": "table",
+      "columns": [
+        {
+          "name": "id",
+          "type": "id",
+          "nullable": false
+        },
+        {
+          "name": "creator_id",
+          "type": "id",
+          "nullable": false,
+          "reference": "account"
+        },
+        {
+          "name": "printing_id",
+          "type": "id",
+          "nullable": false,
+          "reference": "printing"
+        },
+        {
+          "name": "price_metric_ref",
+          "type": "text",
+          "nullable": false
+        },
+        {
+          "name": "target_usd_decimal",
+          "type": "text",
+          "nullable": false
+        },
+        {
+          "name": "condition",
+          "type": "text",
+          "nullable": false
+        },
+        {
+          "name": "deadline",
+          "type": "time",
+          "nullable": false
+        },
+        {
+          "name": "trading_closes_at",
+          "type": "time",
+          "nullable": false
+        },
+        {
+          "name": "observation_starts_at",
+          "type": "time",
+          "nullable": false
+        },
+        {
+          "name": "sampling_policy_ref",
+          "type": "text",
+          "nullable": false
+        },
+        {
+          "name": "terminal_slot_ref",
+          "type": "text",
+          "nullable": false
+        },
+        {
+          "name": "rules_revision",
+          "type": "text",
+          "nullable": false
+        },
+        {
+          "name": "payout_coins",
+          "type": "quantity",
+          "nullable": false
+        },
+        {
+          "name": "next_order_sequence",
+          "type": "quantity",
+          "nullable": false
+        },
+        {
+          "name": "state",
+          "type": "text",
+          "nullable": false
+        },
+        {
+          "name": "resolution_evidence_ref",
+          "type": "text",
+          "nullable": true
+        },
+        {
+          "name": "resolution_rules_revision",
+          "type": "text",
+          "nullable": true
+        },
+        {
+          "name": "outcome",
+          "type": "text",
+          "nullable": true
+        },
+        {
+          "name": "settlement_operation_id",
+          "type": "id",
+          "nullable": true,
+          "reference": "ledger_operation"
+        },
+        {
+          "name": "resolved_at",
+          "type": "time",
+          "nullable": true
+        }
+      ],
+      "unique": [
+        [
+          "settlement_operation_id"
+        ]
+      ]
+    },
+    {
+      "name": "prediction_order",
+      "kind": "table",
+      "columns": [
+        {
+          "name": "id",
+          "type": "id",
+          "nullable": false
+        },
+        {
+          "name": "market_id",
+          "type": "id",
+          "nullable": false,
+          "reference": "prediction_market"
+        },
+        {
+          "name": "account_id",
+          "type": "id",
+          "nullable": false,
+          "reference": "account"
+        },
+        {
+          "name": "hold_id",
+          "type": "id",
+          "nullable": false,
+          "reference": "asset_hold"
+        },
+        {
+          "name": "side",
+          "type": "text",
+          "nullable": false
+        },
+        {
+          "name": "limit_cost_coins",
+          "type": "quantity",
+          "nullable": false
+        },
+        {
+          "name": "quantity",
+          "type": "quantity",
+          "nullable": false
+        },
+        {
+          "name": "filled_quantity",
+          "type": "quantity",
+          "nullable": false
+        },
+        {
+          "name": "accepted_sequence",
+          "type": "quantity",
+          "nullable": false
+        },
+        {
+          "name": "state",
+          "type": "text",
+          "nullable": false
+        }
+      ],
+      "unique": [
+        [
+          "hold_id"
+        ],
+        [
+          "market_id",
+          "accepted_sequence"
+        ]
+      ]
+    },
+    {
+      "name": "prediction_pair",
+      "kind": "table",
+      "columns": [
+        {
+          "name": "id",
+          "type": "id",
+          "nullable": false
+        },
+        {
+          "name": "market_id",
+          "type": "id",
+          "nullable": false,
+          "reference": "prediction_market"
+        },
+        {
+          "name": "yes_order_id",
+          "type": "id",
+          "nullable": false,
+          "reference": "prediction_order"
+        },
+        {
+          "name": "no_order_id",
+          "type": "id",
+          "nullable": false,
+          "reference": "prediction_order"
+        },
+        {
+          "name": "quantity",
+          "type": "quantity",
+          "nullable": false
+        },
+        {
+          "name": "fixed_payout_coins",
+          "type": "quantity",
+          "nullable": false
+        },
+        {
+          "name": "yes_actual_cost_coins",
+          "type": "quantity",
+          "nullable": false
+        },
+        {
+          "name": "no_actual_cost_coins",
+          "type": "quantity",
+          "nullable": false
+        },
+        {
+          "name": "match_operation_id",
+          "type": "id",
+          "nullable": false,
+          "reference": "ledger_operation"
+        }
+      ],
+      "unique": [
+        [
+          "match_operation_id"
+        ]
+      ]
+    },
+    {
+      "name": "price_observation",
+      "kind": "table",
+      "columns": [
+        {
+          "name": "id",
+          "type": "id",
+          "nullable": false
+        },
+        {
+          "name": "market_id",
+          "type": "id",
+          "nullable": false,
+          "reference": "prediction_market"
+        },
+        {
+          "name": "printing_id",
+          "type": "id",
+          "nullable": false,
+          "reference": "printing"
+        },
+        {
+          "name": "source_ref",
+          "type": "text",
+          "nullable": false
+        },
+        {
+          "name": "observed_at",
+          "type": "time",
+          "nullable": false
+        },
+        {
+          "name": "scheduled_slot_ref",
+          "type": "text",
+          "nullable": false
+        },
+        {
+          "name": "source_artifact_updated_at",
+          "type": "time",
+          "nullable": true
+        },
+        {
+          "name": "price_field",
+          "type": "text",
+          "nullable": false
+        },
+        {
+          "name": "price_usd_decimal",
+          "type": "text",
+          "nullable": true
+        },
+        {
+          "name": "evidence_ref",
+          "type": "text",
+          "nullable": false
+        },
+        {
+          "name": "state",
+          "type": "text",
+          "nullable": false
+        }
+      ],
+      "unique": [
+        [
+          "market_id",
+          "scheduled_slot_ref"
+        ]
+      ]
+    },
+    {
+      "name": "room",
+      "kind": "table",
+      "columns": [
+        {
+          "name": "id",
+          "type": "id",
+          "nullable": false
+        },
+        {
+          "name": "host_id",
+          "type": "id",
+          "nullable": false,
+          "reference": "account"
+        },
+        {
+          "name": "format_id",
+          "type": "id",
+          "nullable": false,
+          "reference": "format"
+        },
+        {
+          "name": "profile_id",
+          "type": "id",
+          "nullable": false,
+          "reference": "table_profile_revision"
+        },
+        {
+          "name": "mode",
+          "type": "text",
+          "nullable": false
+        },
+        {
+          "name": "competitive",
+          "type": "bool",
+          "nullable": false
+        },
+        {
+          "name": "visibility",
+          "type": "text",
+          "nullable": false
+        },
+        {
+          "name": "state",
+          "type": "text",
+          "nullable": false
+        },
+        {
+          "name": "revision",
+          "type": "quantity",
+          "nullable": false
+        },
+        {
+          "name": "countdown_at",
+          "type": "time",
+          "nullable": true
+        }
+      ],
+      "unique": []
+    },
+    {
+      "name": "room_slot",
+      "kind": "table",
+      "columns": [
+        {
+          "name": "id",
+          "type": "id",
+          "nullable": false
+        },
+        {
+          "name": "room_id",
+          "type": "id",
+          "nullable": false,
+          "reference": "room"
+        },
+        {
+          "name": "account_id",
+          "type": "id",
+          "nullable": true,
+          "reference": "account"
+        },
+        {
+          "name": "sponsor_id",
+          "type": "id",
+          "nullable": true,
+          "reference": "account"
+        },
+        {
+          "name": "deck_revision_id",
+          "type": "id",
+          "nullable": true,
+          "reference": "deck_revision"
+        },
+        {
+          "name": "seat_index",
+          "type": "integer",
+          "nullable": false
+        },
+        {
+          "name": "team_ref",
+          "type": "text",
+          "nullable": true
+        },
+        {
+          "name": "controller_kind",
+          "type": "text",
+          "nullable": false
+        },
+        {
+          "name": "ready",
+          "type": "bool",
+          "nullable": false
+        }
+      ],
+      "unique": [
+        [
+          "room_id",
+          "seat_index"
+        ]
+      ]
+    },
+    {
+      "name": "invitation",
+      "kind": "table",
+      "columns": [
+        {
+          "name": "id",
+          "type": "id",
+          "nullable": false
+        },
+        {
+          "name": "room_id",
+          "type": "id",
+          "nullable": false,
+          "reference": "room"
+        },
+        {
+          "name": "issuer_id",
+          "type": "id",
+          "nullable": false,
+          "reference": "account"
+        },
+        {
+          "name": "token_hash",
+          "type": "text",
+          "nullable": false
+        },
+        {
+          "name": "state",
+          "type": "text",
+          "nullable": false
+        }
+      ],
+      "unique": [
+        [
+          "token_hash"
+        ]
+      ]
+    },
+    {
+      "name": "queue_entry",
+      "kind": "table",
+      "columns": [
+        {
+          "name": "id",
+          "type": "id",
+          "nullable": false
+        },
+        {
+          "name": "account_id",
+          "type": "id",
+          "nullable": false,
+          "reference": "account"
+        },
+        {
+          "name": "deck_revision_id",
+          "type": "id",
+          "nullable": false,
+          "reference": "deck_revision"
+        },
+        {
+          "name": "mode",
+          "type": "text",
+          "nullable": false
+        },
+        {
+          "name": "competitive",
+          "type": "bool",
+          "nullable": false
+        },
+        {
+          "name": "preferences_ref",
+          "type": "text",
+          "nullable": false
+        },
+        {
+          "name": "reserved_match_id",
+          "type": "id",
+          "nullable": true,
+          "reference": "match"
+        },
+        {
+          "name": "state",
+          "type": "text",
+          "nullable": false
+        }
+      ],
+      "unique": []
+    },
+    {
+      "name": "match",
+      "kind": "table",
+      "columns": [
+        {
+          "name": "id",
+          "type": "id",
+          "nullable": false
+        },
+        {
+          "name": "room_id",
+          "type": "id",
+          "nullable": true,
+          "reference": "room"
+        },
+        {
+          "name": "format_id",
+          "type": "id",
+          "nullable": false,
+          "reference": "format"
+        },
+        {
+          "name": "profile_id",
+          "type": "id",
+          "nullable": false,
+          "reference": "table_profile_revision"
+        },
+        {
+          "name": "legality_revision_id",
+          "type": "id",
+          "nullable": false,
+          "reference": "legality_revision"
+        },
+        {
+          "name": "mode",
+          "type": "text",
+          "nullable": false
+        },
+        {
+          "name": "competitive",
+          "type": "bool",
+          "nullable": false
+        },
+        {
+          "name": "structure",
+          "type": "text",
+          "nullable": false
+        },
+        {
+          "name": "state",
+          "type": "text",
+          "nullable": false
+        },
+        {
+          "name": "revision",
+          "type": "quantity",
+          "nullable": false
+        }
+      ],
+      "unique": []
+    },
+    {
+      "name": "match_seat",
+      "kind": "table",
+      "columns": [
+        {
+          "name": "id",
+          "type": "id",
+          "nullable": false
+        },
+        {
+          "name": "match_id",
+          "type": "id",
+          "nullable": false,
+          "reference": "match"
+        },
+        {
+          "name": "account_id",
+          "type": "id",
+          "nullable": true,
+          "reference": "account"
+        },
+        {
+          "name": "sponsor_id",
+          "type": "id",
+          "nullable": true,
+          "reference": "account"
+        },
+        {
+          "name": "seat_index",
+          "type": "integer",
+          "nullable": false
+        },
+        {
+          "name": "team_ref",
+          "type": "text",
+          "nullable": true
+        },
+        {
+          "name": "controller_kind",
+          "type": "text",
+          "nullable": false
+        },
+        {
+          "name": "source_revision_id",
+          "type": "id",
+          "nullable": true,
+          "reference": "deck_revision"
+        },
+        {
+          "name": "deck_snapshot_ref",
+          "type": "text",
+          "nullable": true
+        },
+        {
+          "name": "deck_accepted_at",
+          "type": "time",
+          "nullable": true
+        }
+      ],
+      "unique": [
+        [
+          "match_id",
+          "seat_index"
+        ]
+      ]
+    },
+    {
+      "name": "match_clock",
+      "kind": "table",
+      "columns": [
+        {
+          "name": "id",
+          "type": "id",
+          "nullable": false
+        },
+        {
+          "name": "match_seat_id",
+          "type": "id",
+          "nullable": false,
+          "reference": "match_seat"
+        },
+        {
+          "name": "remaining_ms",
+          "type": "quantity",
+          "nullable": false
+        },
+        {
+          "name": "clock_revision",
+          "type": "quantity",
+          "nullable": false
+        },
+        {
+          "name": "policy_ref",
+          "type": "text",
+          "nullable": false
+        },
+        {
+          "name": "paused",
+          "type": "bool",
+          "nullable": false
+        },
+        {
+          "name": "last_accounted_at",
+          "type": "time",
+          "nullable": false
+        }
+      ],
+      "unique": [
+        [
+          "match_seat_id"
+        ]
+      ]
+    },
+    {
+      "name": "between_game_decision",
+      "kind": "table",
+      "columns": [
+        {
+          "name": "id",
+          "type": "id",
+          "nullable": false
+        },
+        {
+          "name": "match_id",
+          "type": "id",
+          "nullable": false,
+          "reference": "match"
+        },
+        {
+          "name": "seat_id",
+          "type": "id",
+          "nullable": false,
+          "reference": "match_seat"
+        },
+        {
+          "name": "decision_kind",
+          "type": "text",
+          "nullable": false
+        },
+        {
+          "name": "basis_revision",
+          "type": "quantity",
+          "nullable": false
+        },
+        {
+          "name": "reply_ref",
+          "type": "text",
+          "nullable": true
+        },
+        {
+          "name": "deadline_at",
+          "type": "time",
+          "nullable": true
+        },
+        {
+          "name": "clock_revision",
+          "type": "quantity",
+          "nullable": false
+        },
+        {
+          "name": "state",
+          "type": "text",
+          "nullable": false
+        }
+      ],
+      "unique": []
+    },
+    {
+      "name": "match_result",
+      "kind": "table",
+      "columns": [
+        {
+          "name": "id",
+          "type": "id",
+          "nullable": false
+        },
+        {
+          "name": "match_id",
+          "type": "id",
+          "nullable": false,
+          "reference": "match"
+        },
+        {
+          "name": "source_ref",
+          "type": "text",
+          "nullable": false
+        },
+        {
+          "name": "outcome",
+          "type": "text",
+          "nullable": false
+        },
+        {
+          "name": "winners_ref",
+          "type": "text",
+          "nullable": false
+        },
+        {
+          "name": "committed_at",
+          "type": "time",
+          "nullable": false
+        },
+        {
+          "name": "ranking_format_id",
+          "type": "id",
+          "nullable": true,
+          "reference": "format"
+        },
+        {
+          "name": "rank_sequence",
+          "type": "quantity",
+          "nullable": true
+        }
+      ],
+      "unique": [
+        [
+          "match_id"
+        ],
+        [
+          "source_ref"
+        ],
+        [
+          "ranking_format_id",
+          "rank_sequence"
+        ]
+      ]
+    },
+    {
+      "name": "game",
+      "kind": "table",
+      "columns": [
+        {
+          "name": "id",
+          "type": "id",
+          "nullable": false
+        },
+        {
+          "name": "match_id",
+          "type": "id",
+          "nullable": false,
+          "reference": "match"
+        },
+        {
+          "name": "game_index",
+          "type": "quantity",
+          "nullable": false
+        },
+        {
+          "name": "state",
+          "type": "text",
+          "nullable": false
+        },
+        {
+          "name": "accepted_revision",
+          "type": "quantity",
+          "nullable": false
+        }
+      ],
+      "unique": [
+        [
+          "match_id",
+          "game_index"
+        ]
+      ]
+    },
+    {
+      "name": "game_context",
+      "kind": "table",
+      "columns": [
+        {
+          "name": "id",
+          "type": "id",
+          "nullable": false
+        },
+        {
+          "name": "game_id",
+          "type": "id",
+          "nullable": false,
+          "reference": "game"
+        },
+        {
+          "name": "release_id",
+          "type": "id",
+          "nullable": false,
+          "reference": "qualified_release"
+        },
+        {
+          "name": "profile_id",
+          "type": "id",
+          "nullable": false,
+          "reference": "table_profile_revision"
+        },
+        {
+          "name": "snapshot_ref",
+          "type": "text",
+          "nullable": false
+        },
+        {
+          "name": "context_revision",
+          "type": "text",
+          "nullable": false
+        }
+      ],
+      "unique": [
+        [
+          "game_id"
+        ]
+      ]
+    },
+    {
+      "name": "game_checkpoint",
+      "kind": "table",
+      "columns": [
+        {
+          "name": "id",
+          "type": "id",
+          "nullable": false
+        },
+        {
+          "name": "game_id",
+          "type": "id",
+          "nullable": false,
+          "reference": "game"
+        },
+        {
+          "name": "context_id",
+          "type": "id",
+          "nullable": false,
+          "reference": "game_context"
+        },
+        {
+          "name": "accepted_revision",
+          "type": "quantity",
+          "nullable": false
+        },
+        {
+          "name": "private_state_ref",
+          "type": "text",
+          "nullable": false
+        },
+        {
+          "name": "facts_ref",
+          "type": "text",
+          "nullable": false
+        },
+        {
+          "name": "clock_revision",
+          "type": "quantity",
+          "nullable": false
+        }
+      ],
+      "unique": [
+        [
+          "game_id",
+          "accepted_revision"
+        ]
+      ]
+    },
+    {
+      "name": "game_event",
+      "kind": "table",
+      "columns": [
+        {
+          "name": "id",
+          "type": "id",
+          "nullable": false
+        },
+        {
+          "name": "game_id",
+          "type": "id",
+          "nullable": false,
+          "reference": "game"
+        },
+        {
+          "name": "context_id",
+          "type": "id",
+          "nullable": false,
+          "reference": "game_context"
+        },
+        {
+          "name": "sequence",
+          "type": "quantity",
+          "nullable": false
+        },
+        {
+          "name": "accepted_revision",
+          "type": "quantity",
+          "nullable": false
+        },
+        {
+          "name": "private_payload_ref",
+          "type": "text",
+          "nullable": false
+        }
+      ],
+      "unique": [
+        [
+          "game_id",
+          "sequence"
+        ]
+      ]
+    },
+    {
+      "name": "game_result",
+      "kind": "table",
+      "columns": [
+        {
+          "name": "id",
+          "type": "id",
+          "nullable": false
+        },
+        {
+          "name": "game_id",
+          "type": "id",
+          "nullable": false,
+          "reference": "game"
+        },
+        {
+          "name": "source_event_id",
+          "type": "id",
+          "nullable": false,
+          "reference": "game_event"
+        },
+        {
+          "name": "outcome",
+          "type": "text",
+          "nullable": false
+        },
+        {
+          "name": "winners_ref",
+          "type": "text",
+          "nullable": false
+        },
+        {
+          "name": "end_reason",
+          "type": "text",
+          "nullable": false
+        }
+      ],
+      "unique": [
+        [
+          "game_id"
+        ]
+      ]
+    },
+    {
+      "name": "operational_state",
+      "kind": "table",
+      "columns": [
+        {
+          "name": "id",
+          "type": "id",
+          "nullable": false
+        },
+        {
+          "name": "game_id",
+          "type": "id",
+          "nullable": false,
+          "reference": "game"
+        },
+        {
+          "name": "owner_instance_ref",
+          "type": "text",
+          "nullable": false
+        },
+        {
+          "name": "fence_epoch",
+          "type": "quantity",
+          "nullable": false
+        },
+        {
+          "name": "availability",
+          "type": "text",
+          "nullable": false
+        },
+        {
+          "name": "incident_ref",
+          "type": "text",
+          "nullable": true
+        },
+        {
+          "name": "revision",
+          "type": "quantity",
+          "nullable": false
+        }
+      ],
+      "unique": [
+        [
+          "game_id"
+        ]
+      ]
+    },
+    {
+      "name": "durable_handoff",
+      "kind": "table",
+      "columns": [
+        {
+          "name": "id",
+          "type": "id",
+          "nullable": false
+        },
+        {
+          "name": "match_id",
+          "type": "id",
+          "nullable": false,
+          "reference": "match"
+        },
+        {
+          "name": "game_id",
+          "type": "id",
+          "nullable": true,
+          "reference": "game"
+        },
+        {
+          "name": "source_ref",
+          "type": "text",
+          "nullable": false
+        },
+        {
+          "name": "destination",
+          "type": "text",
+          "nullable": false
+        },
+        {
+          "name": "kind",
+          "type": "text",
+          "nullable": false
+        },
+        {
+          "name": "state",
+          "type": "text",
+          "nullable": false
+        }
+      ],
+      "unique": [
+        [
+          "kind",
+          "source_ref"
+        ]
+      ]
+    },
+    {
+      "name": "replay_manifest",
+      "kind": "table",
+      "columns": [
+        {
+          "name": "id",
+          "type": "id",
+          "nullable": false
+        },
+        {
+          "name": "game_id",
+          "type": "id",
+          "nullable": false,
+          "reference": "game"
+        },
+        {
+          "name": "context_id",
+          "type": "id",
+          "nullable": false,
+          "reference": "game_context"
+        },
+        {
+          "name": "artifact_ref",
+          "type": "text",
+          "nullable": false
+        },
+        {
+          "name": "visibility_index_ref",
+          "type": "text",
+          "nullable": false
+        },
+        {
+          "name": "schema_revision",
+          "type": "text",
+          "nullable": false
+        }
+      ],
+      "unique": [
+        [
+          "game_id"
+        ]
+      ]
+    },
+    {
+      "name": "ai_runner_binding",
+      "kind": "table",
+      "columns": [
+        {
+          "name": "id",
+          "type": "id",
+          "nullable": false
+        },
+        {
+          "name": "room_slot_id",
+          "type": "id",
+          "nullable": false,
+          "reference": "room_slot"
+        },
+        {
+          "name": "match_seat_id",
+          "type": "id",
+          "nullable": true,
+          "reference": "match_seat"
+        },
+        {
+          "name": "provider_runner_ref",
+          "type": "text",
+          "nullable": true
+        },
+        {
+          "name": "binding_epoch",
+          "type": "quantity",
+          "nullable": false
+        },
+        {
+          "name": "desired_state",
+          "type": "text",
+          "nullable": false
+        },
+        {
+          "name": "observed_state",
+          "type": "text",
+          "nullable": false
+        }
+      ],
+      "unique": []
+    },
+    {
+      "name": "controller_grant",
+      "kind": "table",
+      "columns": [
+        {
+          "name": "id",
+          "type": "id",
+          "nullable": false
+        },
+        {
+          "name": "binding_id",
+          "type": "id",
+          "nullable": false,
+          "reference": "ai_runner_binding"
+        },
+        {
+          "name": "binding_epoch",
+          "type": "quantity",
+          "nullable": false
+        },
+        {
+          "name": "match_seat_id",
+          "type": "id",
+          "nullable": true,
+          "reference": "match_seat"
+        },
+        {
+          "name": "grant_secret_ref",
+          "type": "text",
+          "nullable": false
+        },
+        {
+          "name": "state",
+          "type": "text",
+          "nullable": false
+        }
+      ],
+      "unique": []
+    },
+    {
+      "name": "ai_loss_bucket",
+      "kind": "table",
+      "columns": [
+        {
+          "name": "id",
+          "type": "id",
+          "nullable": false
+        },
+        {
+          "name": "sponsor_id",
+          "type": "id",
+          "nullable": false,
+          "reference": "account"
+        },
+        {
+          "name": "utc_day",
+          "type": "text",
+          "nullable": false
+        },
+        {
+          "name": "limit_coins",
+          "type": "quantity",
+          "nullable": false
+        },
+        {
+          "name": "lost_coins",
+          "type": "quantity",
+          "nullable": false
+        },
+        {
+          "name": "revision",
+          "type": "quantity",
+          "nullable": false
+        }
+      ],
+      "unique": [
+        [
+          "sponsor_id",
+          "utc_day"
+        ]
+      ]
+    },
+    {
+      "name": "ai_loss_exposure",
+      "kind": "table",
+      "columns": [
+        {
+          "name": "id",
+          "type": "id",
+          "nullable": false
+        },
+        {
+          "name": "bucket_id",
+          "type": "id",
+          "nullable": false,
+          "reference": "ai_loss_bucket"
+        },
+        {
+          "name": "match_id",
+          "type": "id",
+          "nullable": false,
+          "reference": "match"
+        },
+        {
+          "name": "commitment_id",
+          "type": "id",
+          "nullable": false,
+          "reference": "ante_commitment"
+        },
+        {
+          "name": "reserved_coins",
+          "type": "quantity",
+          "nullable": false
+        },
+        {
+          "name": "state",
+          "type": "text",
+          "nullable": false
+        }
+      ],
+      "unique": [
+        [
+          "bucket_id",
+          "match_id"
+        ]
+      ]
+    },
+    {
+      "name": "ante_commitment",
+      "kind": "table",
+      "columns": [
+        {
+          "name": "id",
+          "type": "id",
+          "nullable": false
+        },
+        {
+          "name": "match_id",
+          "type": "id",
+          "nullable": false,
+          "reference": "match"
+        },
+        {
+          "name": "terms_revision",
+          "type": "quantity",
+          "nullable": false
+        },
+        {
+          "name": "state",
+          "type": "text",
+          "nullable": false
+        },
+        {
+          "name": "reservation_operation_id",
+          "type": "id",
+          "nullable": true,
+          "reference": "ledger_operation"
+        },
+        {
+          "name": "settlement_operation_id",
+          "type": "id",
+          "nullable": true,
+          "reference": "ledger_operation"
+        },
+        {
+          "name": "allocation_evidence_ref",
+          "type": "text",
+          "nullable": true
+        },
+        {
+          "name": "valuation_evidence_ref",
+          "type": "text",
+          "nullable": true
+        }
+      ],
+      "unique": [
+        [
+          "match_id"
+        ]
+      ]
+    },
+    {
+      "name": "ante_stake",
+      "kind": "table",
+      "columns": [
+        {
+          "name": "id",
+          "type": "id",
+          "nullable": false
+        },
+        {
+          "name": "commitment_id",
+          "type": "id",
+          "nullable": false,
+          "reference": "ante_commitment"
+        },
+        {
+          "name": "match_seat_id",
+          "type": "id",
+          "nullable": false,
+          "reference": "match_seat"
+        },
+        {
+          "name": "funding_kind",
+          "type": "text",
+          "nullable": false
+        },
+        {
+          "name": "hold_id",
+          "type": "id",
+          "nullable": true,
+          "reference": "asset_hold"
+        },
+        {
+          "name": "estimated_value_coins",
+          "type": "quantity",
+          "nullable": false
+        },
+        {
+          "name": "valuation_policy_id",
+          "type": "id",
+          "nullable": false,
+          "reference": "valuation_policy_revision"
+        },
+        {
+          "name": "ai_exposure_id",
+          "type": "id",
+          "nullable": true,
+          "reference": "ai_loss_exposure"
+        }
+      ],
+      "unique": [
+        [
+          "commitment_id",
+          "match_seat_id"
+        ],
+        [
+          "hold_id"
+        ]
+      ]
+    },
+    {
+      "name": "game_participation",
+      "kind": "table",
+      "columns": [
+        {
+          "name": "id",
+          "type": "id",
+          "nullable": false
+        },
+        {
+          "name": "game_id",
+          "type": "id",
+          "nullable": false,
+          "reference": "game"
+        },
+        {
+          "name": "match_seat_id",
+          "type": "id",
+          "nullable": false,
+          "reference": "match_seat"
+        },
+        {
+          "name": "account_id",
+          "type": "id",
+          "nullable": false,
+          "reference": "account"
+        },
+        {
+          "name": "own_turns",
+          "type": "quantity",
+          "nullable": false
+        },
+        {
+          "name": "real_game",
+          "type": "bool",
+          "nullable": false
+        },
+        {
+          "name": "reason",
+          "type": "text",
+          "nullable": false
+        },
+        {
+          "name": "completed_at",
+          "type": "time",
+          "nullable": false
+        }
+      ],
+      "unique": [
+        [
+          "game_id",
+          "account_id"
+        ]
+      ]
+    },
+    {
+      "name": "game_activity_fact",
+      "kind": "table",
+      "columns": [
+        {
+          "name": "id",
+          "type": "id",
+          "nullable": false
+        },
+        {
+          "name": "game_id",
+          "type": "id",
+          "nullable": false,
+          "reference": "game"
+        },
+        {
+          "name": "source_event_id",
+          "type": "id",
+          "nullable": false,
+          "reference": "game_event"
+        },
+        {
+          "name": "account_id",
+          "type": "id",
+          "nullable": false,
+          "reference": "account"
+        },
+        {
+          "name": "kind",
+          "type": "text",
+          "nullable": false
+        },
+        {
+          "name": "value",
+          "type": "quantity",
+          "nullable": false
+        },
+        {
+          "name": "fact_revision",
+          "type": "text",
+          "nullable": false
+        }
+      ],
+      "unique": [
+        [
+          "source_event_id",
+          "account_id",
+          "kind",
+          "fact_revision"
+        ]
+      ]
+    },
+    {
+      "name": "activity_consumer_cursor",
+      "kind": "table",
+      "columns": [
+        {
+          "name": "id",
+          "type": "id",
+          "nullable": false
+        },
+        {
+          "name": "consumer_key",
+          "type": "text",
+          "nullable": false
+        },
+        {
+          "name": "game_id",
+          "type": "id",
+          "nullable": false,
+          "reference": "game"
+        },
+        {
+          "name": "last_sequence",
+          "type": "quantity",
+          "nullable": false
+        },
+        {
+          "name": "revision",
+          "type": "quantity",
+          "nullable": false
+        }
+      ],
+      "unique": [
+        [
+          "consumer_key",
+          "game_id"
+        ]
+      ]
+    },
+    {
+      "name": "season",
+      "kind": "table",
+      "columns": [
+        {
+          "name": "id",
+          "type": "id",
+          "nullable": false
+        },
+        {
+          "name": "year",
+          "type": "integer",
+          "nullable": false
+        },
+        {
+          "name": "quarter",
+          "type": "integer",
+          "nullable": false
+        },
+        {
+          "name": "start_at",
+          "type": "time",
+          "nullable": false
+        },
+        {
+          "name": "end_at",
+          "type": "time",
+          "nullable": false
+        },
+        {
+          "name": "result_cutoff_ref",
+          "type": "text",
+          "nullable": true
+        },
+        {
+          "name": "policy_ref",
+          "type": "text",
+          "nullable": false
+        },
+        {
+          "name": "state",
+          "type": "text",
+          "nullable": false
+        }
+      ],
+      "unique": [
+        [
+          "year",
+          "quarter"
+        ]
+      ]
+    },
+    {
+      "name": "set_ballot",
+      "kind": "table",
+      "columns": [
+        {
+          "name": "id",
+          "type": "id",
+          "nullable": false
+        },
+        {
+          "name": "season_id",
+          "type": "id",
+          "nullable": false,
+          "reference": "season"
+        },
+        {
+          "name": "account_id",
+          "type": "id",
+          "nullable": false,
+          "reference": "account"
+        },
+        {
+          "name": "set_id",
+          "type": "id",
+          "nullable": false,
+          "reference": "card_set"
+        },
+        {
+          "name": "revision",
+          "type": "quantity",
+          "nullable": false
+        }
+      ],
+      "unique": [
+        [
+          "season_id",
+          "account_id",
+          "set_id"
+        ]
+      ]
+    },
+    {
+      "name": "monthly_account_activity",
+      "kind": "table",
+      "columns": [
+        {
+          "name": "id",
+          "type": "id",
+          "nullable": false
+        },
+        {
+          "name": "account_id",
+          "type": "id",
+          "nullable": false,
+          "reference": "account"
+        },
+        {
+          "name": "utc_month",
+          "type": "text",
+          "nullable": false
+        },
+        {
+          "name": "activity_policy_ref",
+          "type": "text",
+          "nullable": false
+        },
+        {
+          "name": "source_ref",
+          "type": "text",
+          "nullable": false
+        }
+      ],
+      "unique": [
+        [
+          "account_id",
+          "utc_month",
+          "activity_policy_ref"
+        ]
+      ]
+    },
+    {
+      "name": "supply_drop",
+      "kind": "table",
+      "columns": [
+        {
+          "name": "id",
+          "type": "id",
+          "nullable": false
+        },
+        {
+          "name": "season_id",
+          "type": "id",
+          "nullable": false,
+          "reference": "season"
+        },
+        {
+          "name": "set_id",
+          "type": "id",
+          "nullable": false,
+          "reference": "card_set"
+        },
+        {
+          "name": "population_snapshot_ref",
+          "type": "text",
+          "nullable": false
+        },
+        {
+          "name": "quantity",
+          "type": "quantity",
+          "nullable": false
+        },
+        {
+          "name": "policy_ref",
+          "type": "text",
+          "nullable": false
+        }
+      ],
+      "unique": [
+        [
+          "season_id",
+          "set_id"
+        ]
+      ]
+    },
+    {
+      "name": "supply_pricing_policy",
+      "kind": "table",
+      "columns": [
+        {
+          "name": "id",
+          "type": "id",
+          "nullable": false
+        },
+        {
+          "name": "product_id",
+          "type": "id",
+          "nullable": false,
+          "reference": "booster_product"
+        },
+        {
+          "name": "revision_ref",
+          "type": "text",
+          "nullable": false
+        },
+        {
+          "name": "base_price_coins",
+          "type": "quantity",
+          "nullable": false
+        },
+        {
+          "name": "product_modifier_ref",
+          "type": "text",
+          "nullable": false
+        },
+        {
+          "name": "window_starting_quantity",
+          "type": "quantity",
+          "nullable": false
+        },
+        {
+          "name": "normal_quantity",
+          "type": "quantity",
+          "nullable": false
+        },
+        {
+          "name": "published_at",
+          "type": "time",
+          "nullable": false
+        },
+        {
+          "name": "formula_ref",
+          "type": "text",
+          "nullable": false
+        }
+      ],
+      "unique": [
+        [
+          "revision_ref"
+        ]
+      ]
+    },
+    {
+      "name": "supply_stock",
+      "kind": "table",
+      "columns": [
+        {
+          "name": "id",
+          "type": "id",
+          "nullable": false
+        },
+        {
+          "name": "recipe_id",
+          "type": "id",
+          "nullable": false,
+          "reference": "booster_recipe"
+        },
+        {
+          "name": "drop_id",
+          "type": "id",
+          "nullable": true,
+          "reference": "supply_drop"
+        },
+        {
+          "name": "origin",
+          "type": "text",
+          "nullable": false
+        },
+        {
+          "name": "pricing_policy_id",
+          "type": "id",
+          "nullable": false,
+          "reference": "supply_pricing_policy"
+        },
+        {
+          "name": "starting_quantity",
+          "type": "quantity",
+          "nullable": false
+        },
+        {
+          "name": "remaining_quantity",
+          "type": "quantity",
+          "nullable": false
+        },
+        {
+          "name": "revision",
+          "type": "quantity",
+          "nullable": false
+        }
+      ],
+      "unique": []
+    },
+    {
+      "name": "supply_purchase",
+      "kind": "table",
+      "columns": [
+        {
+          "name": "id",
+          "type": "id",
+          "nullable": false
+        },
+        {
+          "name": "stock_id",
+          "type": "id",
+          "nullable": false,
+          "reference": "supply_stock"
+        },
+        {
+          "name": "pricing_policy_id",
+          "type": "id",
+          "nullable": false,
+          "reference": "supply_pricing_policy"
+        },
+        {
+          "name": "buyer_id",
+          "type": "id",
+          "nullable": false,
+          "reference": "account"
+        },
+        {
+          "name": "operation_id",
+          "type": "id",
+          "nullable": false,
+          "reference": "ledger_operation"
+        },
+        {
+          "name": "quantity",
+          "type": "quantity",
+          "nullable": false
+        },
+        {
+          "name": "paid_coins",
+          "type": "quantity",
+          "nullable": false
+        }
+      ],
+      "unique": [
+        [
+          "operation_id",
+          "stock_id"
+        ]
+      ]
+    },
+    {
+      "name": "quest_definition_revision",
+      "kind": "table",
+      "columns": [
+        {
+          "name": "id",
+          "type": "id",
+          "nullable": false
+        },
+        {
+          "name": "definition_key",
+          "type": "text",
+          "nullable": false
+        },
+        {
+          "name": "revision",
+          "type": "text",
+          "nullable": false
+        },
+        {
+          "name": "objective_ref",
+          "type": "text",
+          "nullable": false
+        },
+        {
+          "name": "target",
+          "type": "quantity",
+          "nullable": false
+        },
+        {
+          "name": "reward_coins",
+          "type": "quantity",
+          "nullable": false
+        }
+      ],
+      "unique": [
+        [
+          "definition_key",
+          "revision"
+        ]
+      ]
+    },
+    {
+      "name": "quest_assignment",
+      "kind": "table",
+      "columns": [
+        {
+          "name": "id",
+          "type": "id",
+          "nullable": false
+        },
+        {
+          "name": "account_id",
+          "type": "id",
+          "nullable": false,
+          "reference": "account"
+        },
+        {
+          "name": "definition_id",
+          "type": "id",
+          "nullable": false,
+          "reference": "quest_definition_revision"
+        },
+        {
+          "name": "source_day",
+          "type": "text",
+          "nullable": false
+        },
+        {
+          "name": "assignment_ref",
+          "type": "text",
+          "nullable": false
+        },
+        {
+          "name": "progress",
+          "type": "quantity",
+          "nullable": false
+        },
+        {
+          "name": "completed_at",
+          "type": "time",
+          "nullable": true
+        },
+        {
+          "name": "replaced_by_id",
+          "type": "id",
+          "nullable": true,
+          "reference": "quest_assignment"
+        },
+        {
+          "name": "reward_operation_id",
+          "type": "id",
+          "nullable": true,
+          "reference": "ledger_operation"
+        },
+        {
+          "name": "reward_source_fact_id",
+          "type": "id",
+          "nullable": true,
+          "reference": "game_activity_fact"
+        }
+      ],
+      "unique": [
+        [
+          "account_id",
+          "assignment_ref"
+        ],
+        [
+          "reward_operation_id"
+        ]
+      ]
+    },
+    {
+      "name": "daily_quest_state",
+      "kind": "table",
+      "columns": [
+        {
+          "name": "id",
+          "type": "id",
+          "nullable": false
+        },
+        {
+          "name": "account_id",
+          "type": "id",
+          "nullable": false,
+          "reference": "account"
+        },
+        {
+          "name": "utc_day",
+          "type": "text",
+          "nullable": false
+        },
+        {
+          "name": "generated_assignment_id",
+          "type": "id",
+          "nullable": true,
+          "reference": "quest_assignment"
+        },
+        {
+          "name": "rerolls_used",
+          "type": "quantity",
+          "nullable": false
+        },
+        {
+          "name": "revision",
+          "type": "quantity",
+          "nullable": false
+        }
+      ],
+      "unique": [
+        [
+          "account_id",
+          "utc_day"
+        ]
+      ]
+    },
+    {
+      "name": "competitive_result",
+      "kind": "table",
+      "columns": [
+        {
+          "name": "id",
+          "type": "id",
+          "nullable": false
+        },
+        {
+          "name": "account_id",
+          "type": "id",
+          "nullable": false,
+          "reference": "account"
+        },
+        {
+          "name": "match_result_id",
+          "type": "id",
+          "nullable": false,
+          "reference": "match_result"
+        },
+        {
+          "name": "source_ref",
+          "type": "text",
+          "nullable": false
+        },
+        {
+          "name": "format_id",
+          "type": "id",
+          "nullable": false,
+          "reference": "format"
+        },
+        {
+          "name": "win",
+          "type": "bool",
+          "nullable": false
+        },
+        {
+          "name": "completed_at",
+          "type": "time",
+          "nullable": false
+        },
+        {
+          "name": "policy_ref",
+          "type": "text",
+          "nullable": false
+        }
+      ],
+      "unique": [
+        [
+          "account_id",
+          "source_ref"
+        ]
+      ]
+    },
+    {
+      "name": "rank",
+      "kind": "table",
+      "columns": [
+        {
+          "name": "id",
+          "type": "id",
+          "nullable": false
+        },
+        {
+          "name": "account_id",
+          "type": "id",
+          "nullable": false,
+          "reference": "account"
+        },
+        {
+          "name": "format_id",
+          "type": "id",
+          "nullable": false,
+          "reference": "format"
+        },
+        {
+          "name": "season_id",
+          "type": "id",
+          "nullable": false,
+          "reference": "season"
+        },
+        {
+          "name": "tier",
+          "type": "text",
+          "nullable": false
+        },
+        {
+          "name": "rating_ref",
+          "type": "text",
+          "nullable": false
+        },
+        {
+          "name": "revision",
+          "type": "quantity",
+          "nullable": false
+        },
+        {
+          "name": "finalized",
+          "type": "bool",
+          "nullable": false
+        }
+      ],
+      "unique": [
+        [
+          "account_id",
+          "format_id",
+          "season_id"
+        ]
+      ]
+    },
+    {
+      "name": "daily_win_bucket",
+      "kind": "table",
+      "columns": [
+        {
+          "name": "id",
+          "type": "id",
+          "nullable": false
+        },
+        {
+          "name": "account_id",
+          "type": "id",
+          "nullable": false,
+          "reference": "account"
+        },
+        {
+          "name": "utc_day",
+          "type": "text",
+          "nullable": false
+        },
+        {
+          "name": "wins",
+          "type": "quantity",
+          "nullable": false
+        },
+        {
+          "name": "issued_coins",
+          "type": "quantity",
+          "nullable": false
+        },
+        {
+          "name": "revision",
+          "type": "quantity",
+          "nullable": false
+        }
+      ],
+      "unique": [
+        [
+          "account_id",
+          "utc_day"
+        ]
+      ]
+    },
+    {
+      "name": "prediction_position",
+      "kind": "view",
+      "columns": [
+        {
+          "name": "id",
+          "type": "id",
+          "nullable": false
+        },
+        {
+          "name": "pair_id",
+          "type": "id",
+          "nullable": false,
+          "reference": "prediction_pair"
+        },
+        {
+          "name": "order_id",
+          "type": "id",
+          "nullable": false,
+          "reference": "prediction_order"
+        },
+        {
+          "name": "account_id",
+          "type": "id",
+          "nullable": false,
+          "reference": "account"
+        },
+        {
+          "name": "side",
+          "type": "text",
+          "nullable": false
+        },
+        {
+          "name": "quantity",
+          "type": "quantity",
+          "nullable": false
+        },
+        {
+          "name": "actual_cost_coins",
+          "type": "quantity",
+          "nullable": false
+        }
+      ],
+      "unique": [
+        [
+          "pair_id",
+          "side"
+        ]
+      ]
+    },
+    {
+      "name": "coin_balance",
+      "kind": "view",
+      "columns": [
+        {
+          "name": "id",
+          "type": "id",
+          "nullable": false
+        },
+        {
+          "name": "owner_id",
+          "type": "id",
+          "nullable": false,
+          "reference": "asset_owner"
+        },
+        {
+          "name": "inventory_asset_id",
+          "type": "id",
+          "nullable": false,
+          "reference": "inventory_asset"
+        },
+        {
+          "name": "quantity",
+          "type": "quantity",
+          "nullable": false
+        }
+      ],
+      "unique": []
+    },
+    {
+      "name": "asset_availability",
+      "kind": "view",
+      "columns": [
+        {
+          "name": "id",
+          "type": "id",
+          "nullable": false
+        },
+        {
+          "name": "inventory_asset_id",
+          "type": "id",
+          "nullable": false,
+          "reference": "inventory_asset"
+        },
+        {
+          "name": "owned",
+          "type": "quantity",
+          "nullable": false
+        },
+        {
+          "name": "held",
+          "type": "quantity",
+          "nullable": false
+        },
+        {
+          "name": "available",
+          "type": "quantity",
+          "nullable": false
+        }
+      ],
+      "unique": []
+    },
+    {
+      "name": "friend_request",
+      "kind": "view",
+      "columns": [
+        {
+          "name": "id",
+          "type": "id",
+          "nullable": false
+        },
+        {
+          "name": "friendship_id",
+          "type": "id",
+          "nullable": false,
+          "reference": "friendship"
+        },
+        {
+          "name": "requested_by_id",
+          "type": "id",
+          "nullable": false,
+          "reference": "account"
+        }
+      ],
+      "unique": []
+    },
+    {
+      "name": "shared_real_game",
+      "kind": "view",
+      "columns": [
+        {
+          "name": "id",
+          "type": "id",
+          "nullable": false
+        },
+        {
+          "name": "left_participation_id",
+          "type": "id",
+          "nullable": false,
+          "reference": "game_participation"
+        },
+        {
+          "name": "right_participation_id",
+          "type": "id",
+          "nullable": false,
+          "reference": "game_participation"
+        },
+        {
+          "name": "game_id",
+          "type": "id",
+          "nullable": false,
+          "reference": "game"
+        },
+        {
+          "name": "shared_at",
+          "type": "time",
+          "nullable": false
+        }
+      ],
+      "unique": []
+    },
+    {
+      "name": "account_qualifying_count",
+      "kind": "view",
+      "columns": [
+        {
+          "name": "id",
+          "type": "id",
+          "nullable": false
+        },
+        {
+          "name": "account_id",
+          "type": "id",
+          "nullable": false,
+          "reference": "account"
+        },
+        {
+          "name": "qualifying_games",
+          "type": "quantity",
+          "nullable": false
+        },
+        {
+          "name": "age_days",
+          "type": "quantity",
+          "nullable": false
+        },
+        {
+          "name": "restricted",
+          "type": "bool",
+          "nullable": false
+        }
+      ],
+      "unique": []
+    },
+    {
+      "name": "quest_progress",
+      "kind": "view",
+      "columns": [
+        {
+          "name": "id",
+          "type": "id",
+          "nullable": false
+        },
+        {
+          "name": "assignment_id",
+          "type": "id",
+          "nullable": false,
+          "reference": "quest_assignment"
+        },
+        {
+          "name": "progress",
+          "type": "quantity",
+          "nullable": false
+        },
+        {
+          "name": "complete",
+          "type": "bool",
+          "nullable": false
+        }
+      ],
+      "unique": []
+    },
+    {
+      "name": "season_rank_snapshot",
+      "kind": "view",
+      "columns": [
+        {
+          "name": "id",
+          "type": "id",
+          "nullable": false
+        },
+        {
+          "name": "rank_id",
+          "type": "id",
+          "nullable": false,
+          "reference": "rank"
+        },
+        {
+          "name": "season_id",
+          "type": "id",
+          "nullable": false,
+          "reference": "season"
+        }
+      ],
+      "unique": []
+    },
+    {
+      "name": "match_decision_deadline",
+      "kind": "view",
+      "columns": [
+        {
+          "name": "id",
+          "type": "id",
+          "nullable": false
+        },
+        {
+          "name": "decision_id",
+          "type": "id",
+          "nullable": false,
+          "reference": "between_game_decision"
+        },
+        {
+          "name": "deadline_at",
+          "type": "time",
+          "nullable": false
+        },
+        {
+          "name": "clock_revision",
+          "type": "quantity",
+          "nullable": false
+        }
+      ],
+      "unique": []
+    },
+    {
+      "name": "historical_context",
+      "kind": "view",
+      "columns": [
+        {
+          "name": "id",
+          "type": "id",
+          "nullable": false
+        },
+        {
+          "name": "context_id",
+          "type": "id",
+          "nullable": false,
+          "reference": "game_context"
+        },
+        {
+          "name": "release_id",
+          "type": "id",
+          "nullable": false,
+          "reference": "qualified_release"
+        }
+      ],
+      "unique": []
+    }
+  ],
+  "scope": "Initial migration baseline only; forward migrations define current deployed columns and constraints.",
+  "initial_migration": "20261101000100_application_tables.sql"
+}

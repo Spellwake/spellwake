@@ -17,14 +17,14 @@ pub use stored_view::{
     prepare_view, restore_view,
 };
 pub(super) use stored_view::{
-    RetainedViewSource, load_historical_view, prepare_historical_view, verify_retained_view,
+    RetainedViewSource, load_historical_view, prepare_historical_view, restore_historical_view,
+    verify_retained_view,
 };
 
 /// Private reconstruction record bound, independent of the public command bound.
 pub(super) const MAX_RECORD_BYTES: usize = 1_048_576;
 const VERSION: &str = "native-input-v1";
 const RESPONSE_VERSION: &str = "native-response-timeout-input-v1";
-const BANK_VERSION: &str = "native-bank-input-v1";
 
 /// Safe reconstruction failure. Underlying details remain private typed causes.
 pub enum NativeCodecError {
@@ -157,9 +157,6 @@ enum Transition {
     Entropy {
         words: Vec<NativeRevision>,
     },
-    BankExpiry {
-        seat_id: Uuid,
-    },
     ResponseTimeout {
         seat_id: Uuid,
     },
@@ -191,7 +188,7 @@ impl<'de> Deserialize<'de> for Transition {
         }
         #[derive(Deserialize)]
         #[serde(rename_all = "camelCase", deny_unknown_fields)]
-        struct ClockExpiry {
+        struct ResponseTimeout {
             kind: String,
             #[serde(deserialize_with = "crate::identifiers::uuid")]
             seat_id: Uuid,
@@ -220,20 +217,14 @@ impl<'de> Deserialize<'de> for Transition {
                 }
                 Ok(Self::Entropy { words: value.words })
             }
-            "bank-expiry" | "response-timeout" => {
-                let value: ClockExpiry = crate::decode_wire_object(raw.get().as_bytes())
+            "response-timeout" => {
+                let value: ResponseTimeout = crate::decode_wire_object(raw.get().as_bytes())
                     .map_err(serde::de::Error::custom)?;
-                if value.kind != kind.kind {
+                if value.kind != "response-timeout" {
                     return Err(serde::de::Error::custom("invalid native transition kind"));
                 }
-                Ok(if value.kind == "bank-expiry" {
-                    Self::BankExpiry {
-                        seat_id: value.seat_id,
-                    }
-                } else {
-                    Self::ResponseTimeout {
-                        seat_id: value.seat_id,
-                    }
+                Ok(Self::ResponseTimeout {
+                    seat_id: value.seat_id,
                 })
             }
             _ => Err(serde::de::Error::custom("invalid native transition kind")),
@@ -260,12 +251,11 @@ fn decode(bytes: &[u8], scope: &NativeScope<'_>) -> Result<Record, NativeCodecEr
         return Err(NativeCodecError::Size);
     }
     let record: Record = crate::decode_wire_object(bytes).map_err(NativeCodecError::Json)?;
-    let expected_version = match record.transition {
-        Transition::BankExpiry { .. } => BANK_VERSION,
+    let version = match &record.transition {
+        Transition::Player { .. } | Transition::Entropy { .. } => VERSION,
         Transition::ResponseTimeout { .. } => RESPONSE_VERSION,
-        _ => VERSION,
     };
-    if record.version != expected_version {
+    if record.version != version {
         return Err(NativeCodecError::InvalidRecord);
     }
     if record.source != Source::from_scope(scope) {
@@ -442,56 +432,25 @@ pub fn restore_entropy(
         .map_err(|cause| NativeCodecError::Bridge(NativeBridgeError::Native(Box::new(cause))))
 }
 
-/// A deterministic clock-expiry candidate with its private reconstruction bytes.
-/// This record carries no elapsed-time, clock-source or durable acceptance proof.
-/// The trusted acceptance owner must independently authenticate SQL expiry.
-pub struct PreparedNativeClockExpiry {
+/// Exact private reconstruction bytes and the tentative opening-timeout successor.
+pub(super) struct PreparedNativeResponseTimeout {
     record: Vec<u8>,
     candidate: NativeCandidate,
 }
-/// Provisional two-seat bank expiry, retained for existing callers.
-pub type PreparedNativeBankExpiry = PreparedNativeClockExpiry;
-impl PreparedNativeClockExpiry {
-    /// Private original input bytes, never a public player command.
-    pub fn record(&self) -> &[u8] {
+impl PreparedNativeResponseTimeout {
+    pub(super) fn record(&self) -> &[u8] {
         &self.record
     }
-    /// Actual uninstalled native successor.
-    pub fn candidate(&self) -> &NativeCandidate {
+    pub(super) fn candidate(&self) -> &NativeCandidate {
         &self.candidate
-    }
-    /// Transfer to the trusted acceptance owner without implying authorization.
-    pub fn into_parts(self) -> (Vec<u8>, NativeCandidate) {
-        (self.record, self.candidate)
     }
 }
 impl NativeScope<'_> {
-    /// Reconstructable mechanics for a caller-authenticated bank expiry.
-    /// This grants no clock authority and cannot be submitted as a player action.
-    /// # Errors
-    /// Rejects foreign seats, oversized records and actual native ineligibility.
-    pub fn prepare_bank_expiry(
+    /// Prepare a deterministic host proposal. The database still owns expiry authority.
+    pub(super) fn prepare_response_timeout(
         &self,
         seat_id: Uuid,
-    ) -> Result<PreparedNativeBankExpiry, NativeCodecError> {
-        self.prepare_clock_expiry(seat_id, false)
-    }
-    /// Encode a tentative multiplayer response timeout at this exact source.
-    /// The accepting database must independently establish deadline and authority.
-    /// # Errors
-    /// Rejects an unsupported game frame, foreign seat or non-waiting participant.
-    pub fn prepare_response_timeout(
-        &self,
-        seat_id: Uuid,
-    ) -> Result<PreparedNativeClockExpiry, NativeCodecError> {
-        self.prepare_clock_expiry(seat_id, true)
-    }
-
-    fn prepare_clock_expiry(
-        &self,
-        seat_id: Uuid,
-        response: bool,
-    ) -> Result<PreparedNativeClockExpiry, NativeCodecError> {
+    ) -> Result<PreparedNativeResponseTimeout, NativeCodecError> {
         let player = self
             .binding
             .seats
@@ -499,62 +458,30 @@ impl NativeScope<'_> {
             .find(|seat| seat.seat_id == seat_id)
             .ok_or(NativeCodecError::WrongSource)?
             .native_seat;
-        let (version, transition, candidate) = if response {
-            match clocks::waiting(self.source, &self.binding)? {
-                clocks::Waiting::Decision(owner) | clocks::Waiting::Priority(owner)
-                    if owner == seat_id => {}
-                _ => return Err(NativeCodecError::WrongSource),
-            }
-            (
-                RESPONSE_VERSION,
-                Transition::ResponseTimeout { seat_id },
-                self.source.expire_response(self.source.basis(), player),
-            )
-        } else {
-            (
-                BANK_VERSION,
-                Transition::BankExpiry { seat_id },
-                self.source
-                    .expire_bank(spellwake_engine::game::BankExpiryInput {
-                        basis: self.source.basis().clone(),
-                        player,
-                    }),
-            )
-        };
-        let candidate = candidate.map_err(|cause| {
-            NativeCodecError::Bridge(NativeBridgeError::Native(Box::new(cause)))
-        })?;
+        if self.binding.viewer != seat_id || self.binding.actor != player {
+            return Err(NativeCodecError::WrongSource);
+        }
+        let candidate = self
+            .source
+            .advance(spellwake_engine::game::GameInput {
+                basis: self.source.basis().clone(),
+                actor: player,
+                command: spellwake_engine::game::GameCommand::Concede,
+            })
+            .map_err(|cause| {
+                NativeCodecError::Bridge(NativeBridgeError::Native(Box::new(cause)))
+            })?;
         let record = encode(&Record {
-            version: version.into(),
+            version: RESPONSE_VERSION.into(),
             source: Source::from_scope(self),
-            transition,
+            transition: Transition::ResponseTimeout { seat_id },
         })?;
-        Ok(PreparedNativeClockExpiry { record, candidate })
+        Ok(PreparedNativeResponseTimeout { record, candidate })
     }
 }
-/// Replay private bank-expiry mechanics against a caller-established exact source.
-/// Neither record metadata nor replay success authenticates the original expiry.
-/// # Errors
-/// Rejects wrong version, kind, source, roster, seat and actual native ineligibility.
-pub fn restore_bank_expiry(
-    source: &GameState,
-    binding: NativeBinding,
-    bytes: &[u8],
-) -> Result<NativeCandidate, NativeCodecError> {
-    let scope = NativeScope::new(source, binding)?;
-    let record = decode(bytes, &scope)?;
-    let Transition::BankExpiry { seat_id } = record.transition else {
-        return Err(NativeCodecError::InvalidRecord);
-    };
-    scope
-        .prepare_bank_expiry(seat_id)
-        .map(|prepared| prepared.candidate)
-}
 
-/// Reconstruct the same tentative multiplayer transition from its original input.
-/// # Errors
-/// Rejects foreign source, roster, kind, seat and ineligible or terminal waits.
-pub fn restore_response_timeout(
+/// Replay the exact host proposal without granting authority to accept it.
+pub(super) fn restore_response_timeout(
     source: &GameState,
     binding: NativeBinding,
     bytes: &[u8],

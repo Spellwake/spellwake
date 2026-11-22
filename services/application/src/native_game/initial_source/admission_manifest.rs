@@ -3,8 +3,13 @@ use super::*;
 use crate::actor::ActorError;
 use crate::native_game::preparation_source::NativePreparationRepository;
 use crate::price_source::EvidenceHash;
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeSet;
 use std::path::Path;
+
+// The pinned catalogue contains over 32,000 eligible Oracle identities. Bound
+// both the encoded input and index size so startup can budget for either limit.
+const MAX_MANIFEST_BYTES: usize = 16 * 1024 * 1024;
+const MAX_APPROVED_CARDS: usize = 50_000;
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -54,14 +59,21 @@ struct ApprovedCard {
 }
 
 impl AdmissionManifest {
+    pub(crate) fn release_id(&self) -> Uuid {
+        self.release_id
+    }
+
     pub(crate) fn from_env() -> Result<Option<Self>, ActorError> {
         let file = std::env::var_os("SPELLWAKE_NATIVE_ADMISSION_MANIFEST");
         let pin = std::env::var_os("SPELLWAKE_NATIVE_ADMISSION_MANIFEST_SHA256");
         match (file, pin) {
             (None, None) => Ok(None),
             (Some(file), Some(pin)) => {
-                let bytes = crate::catalogue_source::read_bounded(Path::new(&file), 2_097_152)
-                    .map_err(|_| ActorError::Configuration)?;
+                let bytes = crate::catalogue_source::read_bounded(
+                    Path::new(&file),
+                    MAX_MANIFEST_BYTES as u64,
+                )
+                .map_err(|_| ActorError::Configuration)?;
                 Self::verified(&bytes, pin.to_str().ok_or(ActorError::Configuration)?).map(Some)
             }
             _ => Err(ActorError::Configuration),
@@ -69,29 +81,42 @@ impl AdmissionManifest {
     }
 
     fn verified(bytes: &[u8], expected: &str) -> Result<Self, ActorError> {
-        if digest(bytes).as_str() != expected {
+        if bytes.len() > MAX_MANIFEST_BYTES {
+            return Err(ActorError::Configuration);
+        }
+        let pin = digest(bytes);
+        if pin.as_str() != expected {
             return Err(ActorError::Configuration);
         }
         let mut manifest: Self =
             crate::decode_wire_object(bytes).map_err(|_| ActorError::Configuration)?;
         let mut profiles = BTreeSet::new();
-        let mut cards = BTreeSet::new();
         let scoped = manifest.schema == "spellwake-accepted-constructed-v2";
         if (!scoped && manifest.schema != "spellwake-accepted-constructed-v1")
             || manifest.release_id.is_nil()
             || manifest.legality_revision_id.is_nil()
             || manifest.profiles.is_empty()
             || manifest.cards.is_empty()
+            || manifest.cards.len() > MAX_APPROVED_CARDS
             || !manifest.profiles.iter().all(|p| {
                 !p.format_id.is_nil()
                     && !p.profile_id.is_nil()
                     && matches!(
                         p.format_key.as_str(),
-                        "standard" | "pioneer" | "modern" | "legacy" | "vintage"
+                        "standard" | "pioneer" | "modern" | "legacy" | "vintage" | "draft" | "cube"
                     )
                     && !p.profile_rules.is_empty()
                     && !p.profile_revision.is_empty()
                     && p.table_policy.is_some() == scoped
+                    && (!matches!(p.format_key.as_str(), "draft" | "cube")
+                        || p.table_policy.as_ref().is_some_and(|policy| {
+                            policy.mode == crate::decks::PlayMode::Open
+                                && policy.structure
+                                    == crate::rooms::configuration::MatchStructure::Bo1
+                                && !policy.competitive
+                                && policy.controllers
+                                    == [crate::match_history::ControllerKind::Human]
+                        }))
                     && p.minimum_seats >= crate::amount::Amount::from(2)
                     && p.minimum_seats <= p.seat_capacity
                     && p.seat_capacity <= crate::amount::Amount::from(6)
@@ -117,32 +142,48 @@ impl AdmissionManifest {
                     })
                     && profiles.insert((p.format_id, p.profile_id))
             })
-            || !manifest.cards.iter().all(|c| {
-                !c.oracle_id.is_nil()
-                    && !c.definition_revision_id.is_nil()
-                    && cards.insert(c.oracle_id)
-            })
+            || manifest
+                .cards
+                .iter()
+                .any(|card| card.oracle_id.is_nil() || card.definition_revision_id.is_nil())
         {
             return Err(ActorError::Configuration);
         }
-        manifest.pin = Some(digest(bytes));
+        // The byte digest authenticates the original order. The sorted entries
+        // give every admission the same immutable lookup without rebuilding it.
+        manifest.cards.sort_unstable_by_key(|card| card.oracle_id);
+        if manifest
+            .cards
+            .windows(2)
+            .any(|pair| pair[0].oracle_id == pair[1].oracle_id)
+        {
+            return Err(ActorError::Configuration);
+        }
+        manifest.pin = Some(pin);
         Ok(manifest)
     }
 
     // Every approval is in the pinned manifest. Caller-supplied bytes never select
     // a release, a format, a card program, or the evidence behind that program.
     fn check_entries(&self, entries: &[preparation_source::PreparationEntry]) -> bool {
-        let approved: BTreeMap<_, _> = self.cards.iter().map(|c| (c.oracle_id, c)).collect();
         entries.iter().all(|e| {
             Uuid::parse_str(e.oracle_ref.as_str())
                 .ok()
-                .and_then(|id| approved.get(&id))
+                .and_then(|id| self.approved_card(id))
                 .is_some_and(|card| {
                     card.definition_revision_id == e.definition_revision_id
                         && card.program.as_str() == e.program_ref.as_str()
                         && e.definition_revision_ref.as_str().starts_with("catalogue:")
                 })
         })
+    }
+
+    fn approved_card(&self, oracle: Uuid) -> Option<&ApprovedCard> {
+        let index = self
+            .cards
+            .binary_search_by_key(&oracle, |card| card.oracle_id)
+            .ok()?;
+        self.cards.get(index)
     }
 
     fn bound_profile(
@@ -172,18 +213,6 @@ impl AdmissionManifest {
             return Ok(None);
         }
         Ok(Some(bound))
-    }
-
-    pub(crate) fn between_seconds(&self, release: Uuid, proof: &str, profile: Uuid) -> Option<u32> {
-        if release != self.release_id || self.pin.as_ref()?.as_str() != proof {
-            return None;
-        }
-        self.profiles
-            .iter()
-            .find(|p| p.profile_id == profile)?
-            .table_policy
-            .as_ref()?
-            .between_game_seconds
     }
 
     pub(crate) fn reserved_format(
@@ -247,8 +276,12 @@ impl AdmissionManifest {
         reply: &crate::deadline_ports::BetweenGameReply,
         hash: &str,
     ) -> serde_json::Value {
-        serde_json::json!({"version":"native-between-prepared-v1","sourceHash":hash,
-            "replyRef":reply.reply_ref.as_str(),"qualificationRef":reply.qualification_ref.as_str()})
+        serde_json::json!({
+            "version": "native-between-prepared-v1",
+            "sourceHash": hash,
+            "replyRef": reply.reply_ref.as_str(),
+            "qualificationRef": reply.qualification_ref.as_str()
+        })
     }
 
     pub(crate) fn between_selection(
@@ -282,8 +315,6 @@ impl AdmissionManifest {
         else {
             return Ok(None);
         };
-        // The source reader verifies the selected deck has the exact original pool,
-        // including quantities and printings. The writer fences the same source hash.
         if profile.table_policy.as_ref().is_some_and(|table| {
             table.mode != terms.r#match.mode || table.structure != terms.r#match.structure
         }) || !self.check_entries(&terms.entries)
@@ -384,33 +415,47 @@ impl AdmissionManifest {
                 .constructed_room_reference(&observation, &p.format_key)
                 .ok()
         } else {
-            slot.entries.as_deref().and_then(|entries| {
-                if !self.check_entries(entries) {
-                    return None;
-                }
-                programs
+            let Some(entries) = slot.entries.as_deref() else {
+                return Ok(None);
+            };
+            if !self.check_entries(entries)
+                || programs
                     .verify_constructed_release_content(&t.release, entries)
-                    .ok()?;
-                programs
-                    .inspect_selected_constructed_deck(&p.format_key, entries)
-                    .ok()?;
-                let material = serde_json::to_vec(&(
-                    "native-constructed-ready-v1",
-                    self.release_id,
-                    self.legality_revision_id,
-                    p.profile_id,
-                    p.format_id,
-                    &p.format_key,
-                    actor,
-                    selected,
-                    observation.source_hash(),
-                ))
-                .ok()?;
-                Some(format!(
+                    .is_err()
+            {
+                return Ok(None);
+            }
+            let Ok(counts) = programs.selected_match_deck_counts(&p.format_key, entries) else {
+                return Ok(None);
+            };
+            if counts.is_err() {
+                return Ok(Some(serde_json::json!({
+                    "version": "native-ready-rejected-v1",
+                    "sourceHash": observation.source_hash(),
+                    "releaseId": self.release_id,
+                    "legalityRevisionId": self.legality_revision_id,
+                    "qualificationRef": "native-ready-deck-rejected-v1",
+                    "selectedRevisionId": selected,
+                })));
+            }
+            serde_json::to_vec(&(
+                "native-constructed-ready-v1",
+                self.release_id,
+                self.legality_revision_id,
+                p.profile_id,
+                p.format_id,
+                &p.format_key,
+                actor,
+                selected,
+                observation.source_hash(),
+            ))
+            .ok()
+            .map(|material| {
+                format!(
                     "native-constructed-ready-v1/{}/{}",
                     p.format_key,
                     digest(&material).as_str()
-                ))
+                )
             })
         };
         // A Ready that can complete or revise a countdown has two distinct
@@ -443,6 +488,41 @@ impl AdmissionManifest {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn seven_format_manifest_accepts_private_bo1_profiles_and_excludes_commander() {
+        let evidence = digest(b"fixture evidence");
+        let profiles: Vec<_> = [
+            "standard", "pioneer", "modern", "legacy", "vintage", "draft", "cube",
+        ]
+        .into_iter()
+        .map(|format| {
+            json!({
+                "formatId": Uuid::new_v4(), "formatKey": format, "profileId": Uuid::new_v4(),
+                "profileRevision": "fixture-v1", "profileRules": "human-open-bo1",
+                "profileEvidence": evidence, "minimumSeats": "2", "seatCapacity": "2",
+                "tablePolicy": {"mode": "open", "structure": "bo1", "competitive": false,
+                                "controllers": ["human"]},
+            })
+        })
+        .collect();
+        let mut document = json!({
+            "schema":"spellwake-accepted-constructed-v2", "releaseId":Uuid::new_v4(),
+            "legalityRevisionId":Uuid::new_v4(), "profiles": profiles,
+            "cards":[{"oracleId":Uuid::new_v4(), "definitionRevisionId":Uuid::new_v4(),
+                      "program":evidence, "behaviorEvidence":evidence}],
+        });
+        let verify = |document: &serde_json::Value| {
+            let bytes = serde_json::to_vec(document).unwrap();
+            AdmissionManifest::verified(&bytes, digest(&bytes).as_str())
+        };
+        assert_eq!(verify(&document).unwrap().profiles.len(), 7);
+        document["profiles"][5]["tablePolicy"]["competitive"] = json!(true);
+        assert!(verify(&document).is_err());
+        document["profiles"][5]["tablePolicy"]["competitive"] = json!(false);
+        document["profiles"][0]["formatKey"] = json!("commander");
+        assert!(verify(&document).is_err());
+    }
 
     #[test]
     fn manifest_binds_approved_bytes_and_unique_published_card_identity() {
@@ -483,5 +563,50 @@ mod tests {
         let mut altered = original.clone();
         altered["cards"][0]["program"] = json!("fixture");
         assert!(read(&altered).is_err());
+    }
+    #[test]
+    fn accepts_and_indexes_catalogue_sized_manifests_with_their_original_pin() {
+        let hash = digest(b"qualification fixture");
+        let cards: Vec<_> = (1..=32_155)
+            .rev()
+            .map(|index| {
+                json!({
+                    "oracleId": Uuid::from_u128(index),
+                    "definitionRevisionId": Uuid::from_u128(100_000 + index),
+                    "program": hash,
+                    "behaviorEvidence": hash,
+                })
+            })
+            .collect();
+        let profiles: Vec<_> = ["standard", "pioneer", "modern", "legacy", "vintage"]
+            .into_iter()
+            .map(|key| json!({
+                "formatId": Uuid::new_v4(), "formatKey": key,
+                "profileId": Uuid::new_v4(), "profileRevision": "v1", "profileRules": "ordinary-v1",
+                "profileEvidence": hash, "minimumSeats": "2", "seatCapacity": "2",
+            }))
+            .collect();
+        let document = json!({
+            "schema": "spellwake-accepted-constructed-v1",
+            "releaseId": Uuid::new_v4(), "legalityRevisionId": Uuid::new_v4(),
+            "profiles": profiles, "cards": cards,
+        });
+        let bytes = serde_json::to_vec(&document).unwrap();
+        assert!(bytes.len() > 2 * 1024 * 1024);
+        let pin = digest(&bytes);
+        let manifest = AdmissionManifest::verified(&bytes, pin.as_str()).unwrap();
+        assert_eq!(manifest.pin.as_ref(), Some(&pin));
+        assert_eq!(manifest.cards.len(), 32_155);
+        for index in [1, 16_000, 32_155] {
+            let found = manifest.approved_card(Uuid::from_u128(index)).unwrap();
+            assert_eq!(
+                found.definition_revision_id,
+                Uuid::from_u128(100_000 + index)
+            );
+        }
+        assert!(manifest.approved_card(Uuid::from_u128(32_156)).is_none());
+        assert!(
+            AdmissionManifest::verified(&vec![b' '; MAX_MANIFEST_BYTES + 1], pin.as_str()).is_err()
+        );
     }
 }

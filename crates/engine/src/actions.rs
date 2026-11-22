@@ -1,5 +1,5 @@
 //! Default individual-turn action timing (CR 116.2a, 117.1a, 305.1–4, 307.1).
-//! No flash, timing permissions/prohibitions or dynamic land allowances are inferred.
+//! Includes explicit flash permission for playing a land on the active player’s turn.
 use crate::{
     object_identity::GameObject,
     priority::{PriorityPhase, SeatId},
@@ -14,6 +14,7 @@ pub enum TimingError {
     NotPriorityHolder,
     NotActivePlayer,
     MainPhaseRequired,
+    BeforeAttackersRequired,
     StackNotEmpty,
 }
 
@@ -23,6 +24,17 @@ pub(crate) fn validate_main_phase(
     turn: Option<&TurnScheduler>,
     actor: SeatId,
 ) -> Result<(), TimingError> {
+    validate_land_timing(window, turn, actor, false)
+}
+
+/// Flash changes the priority window for playing a land, while CR 305.3
+/// still requires the active player. The scheduler enforces the play allowance.
+pub(crate) fn validate_land_timing(
+    window: &StackWindow,
+    turn: Option<&TurnScheduler>,
+    actor: SeatId,
+    flash: bool,
+) -> Result<(), TimingError> {
     match window.phase() {
         WindowPhase::Priority(PriorityPhase::Ready { holder }) if holder == actor => {}
         WindowPhase::Priority(PriorityPhase::Ready { .. }) => {
@@ -31,8 +43,11 @@ pub(crate) fn validate_main_phase(
         _ => return Err(TimingError::PriorityRequired),
     }
     let turn = turn.ok_or(TimingError::TurnRequired)?;
-    if window.turn_owner() != actor {
+    if window.active_player() != actor {
         return Err(TimingError::NotActivePlayer);
+    }
+    if flash && turn.stage() == TurnStage::Priority {
+        return Ok(());
     }
     if turn.stage() != TurnStage::Priority
         || !matches!(

@@ -7,42 +7,6 @@ use crate::{
 mod resolution_values;
 pub(crate) use resolution_values::QualificationResolutionParentFault;
 
-/// Single-field controls on a genuinely reached Checks placement owner.
-#[cfg(test)]
-#[derive(Debug, Clone, Copy)]
-pub(crate) enum QualificationCheckOrderFault {
-    DuplicateFutureMember,
-    ForeignFutureMember,
-    DuplicateFutureController,
-    MissingFutureCapture,
-    UnallocatedWave,
-    UnsupportedStage,
-}
-
-/// Single-field structural controls on a genuinely accepted Legend certificate.
-#[cfg(test)]
-#[derive(Debug, Clone, Copy)]
-pub(crate) enum QualificationLegendFault {
-    Event,
-    Controller,
-    Domain,
-    Names,
-    Keep,
-}
-
-/// Structural controls on an actual provisional target placement.
-#[cfg(test)]
-#[derive(Debug, Clone, Copy)]
-pub(crate) enum QualificationCheckTargetFault {
-    DuplicateOrder,
-    ExtendedOrder,
-    PositionPastEnd,
-    WrongEntry,
-    MissingCapture,
-    TargetlessCapture,
-    DifferentSource(ObjectId),
-}
-
 /// Closed operational fields selected by the input-only private recipes.
 #[derive(Debug, Clone, Copy)]
 pub(crate) enum QualificationFault {
@@ -126,7 +90,7 @@ impl EffectWindow {
             return Err(CharacteristicsError::UnsupportedTimestampProducer.into());
         }
         let before = self.rules_snapshot(None)?;
-        let (window, movements) = self
+        let (window, mut movements) = self
             .window
             .qualification_zone_moves(self.window.revision(), moves)?;
         let mut next = Self {
@@ -134,7 +98,7 @@ impl EffectWindow {
             window,
             ..self.clone()
         };
-        for movement in &movements {
+        for movement in &mut movements {
             if movement.after.zone() == ObjectZone::Battlefield {
                 if !matches!(
                     next.base_program(movement.after.id())
@@ -145,6 +109,18 @@ impl EffectWindow {
                 }
                 next.characteristics
                     .register_battlefield_entry(movement.after.id())?;
+                next.apply_entry_counters(
+                    &before,
+                    movement.after.id(),
+                    PowerToughnessCounters::default(),
+                    0,
+                )?;
+                movement.after = next
+                    .window
+                    .cards()
+                    .get(movement.after.id())
+                    .ok_or(EffectError::InconsistentProgram)?
+                    .clone();
             }
         }
         let mut append = RulesJournal::default();

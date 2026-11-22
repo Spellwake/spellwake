@@ -45,6 +45,7 @@ struct StreamState {
     scope: PlayerViewRequest,
     first: Option<Prepared>,
     previous: Option<IssuedNativeCursor>,
+    updates: Option<tokio::sync::broadcast::Receiver<u64>>,
     // This belongs to the body state, never to an uncancellable blocking closure.
     _lifetime: OwnedSemaphorePermit,
 }
@@ -88,12 +89,18 @@ pub(super) async fn read(
     if let Err(error) = first.actor.ensure_unexpired() {
         return actor_error(error);
     }
+    let updates = state
+        .config
+        .native_views
+        .as_ref()
+        .map(|runtime| runtime.subscribe_game(selected.game_id));
     let body = StreamState {
         api: state,
         token,
         scope: selected,
         first: Some(first),
         previous: None,
+        updates,
         _lifetime: lifetime,
     };
     (
@@ -308,31 +315,126 @@ fn finish(
         actor,
     })
 }
+/// Lightweight check whether the game's accepted cut has moved since `prior`.
+/// Avoids running full projection and emitting duplicate 256 KiB frames when idle.
+enum RevisionCheck {
+    Unchanged(RequestActor),
+    Changed,
+}
+
+fn check_revision_changed(
+    config: &ApiConfig,
+    token: &str,
+    scope: &PlayerViewRequest,
+    prior: &IssuedNativeCursor,
+) -> Outcome<RevisionCheck> {
+    let auth = config.actor().map_err(|e| Box::new(actor_error(e)))?;
+    let actor = auth.resolve(token).map_err(|e| Box::new(actor_error(e)))?;
+    if actor.account().is_none() {
+        return Err(Box::new(fail(
+            StatusCode::CONFLICT,
+            "account",
+            "unavailable",
+        )));
+    }
+    let repository = delivery::repository(config, "spellwake-native-stream-check")?;
+    match repository
+        .human_access(&actor, scope.game_id, scope.context_id)
+        .map_err(|_| unavailable_failure())?
+    {
+        NativeHumanAccessOutcome::Granted(current) => {
+            if current.basis() == prior.cursor().basis {
+                Ok(RevisionCheck::Unchanged(actor))
+            } else {
+                Ok(RevisionCheck::Changed)
+            }
+        }
+        NativeHumanAccessOutcome::Unauthorized => {
+            Err(Box::new(actor_error(ActorError::Unauthorized)))
+        }
+        NativeHumanAccessOutcome::Unavailable => {
+            Err(Box::new(fail(StatusCode::NOT_FOUND, "game", "unavailable")))
+        }
+    }
+}
+
 async fn next(
     state: Option<StreamState>,
 ) -> Option<(Result<Bytes, Infallible>, Option<StreamState>)> {
     let mut state = state?;
     let token = state.token.clone();
-    let delivery = if let Some(first) = state.first.take() {
+    if let Some(first) = state.first.take() {
         // Deferred until the FIRST body poll, even after a successful preflight.
-        state
+        let delivery = state
             .api
             .blocking_value(move |config| renew(config, &token, first))
-            .await
-    } else {
-        // A demand-driven wait starts after the preceding yield; no work permit or
-        // running producer is retained, and dropping this future schedules no work.
-        tokio::time::sleep(Duration::from_secs(1)).await;
-        let prior = state.previous.take()?;
-        let scope = state.scope.clone();
-        state
+            .await;
+        let delivered = match delivery {
+            Ok(Ok(delivered)) => delivered,
+            Ok(Err(failure)) => return Some((Ok(terminal(*failure).await), None)),
+            Err(()) => return Some((Ok(terminal(unavailable()).await), None)),
+        };
+        if let Err(error) = delivered.actor.ensure_unexpired() {
+            return Some((Ok(terminal(actor_error(error)).await), None));
+        }
+        state.previous = Some(delivered.cursor);
+        return Some((Ok(delivered.bytes), Some(state)));
+    }
+
+    // Event-driven wait: wake immediately when a local command advances this game,
+    // or perform a lightweight 5-second reconciliation check for external worker updates.
+    let pushed = match state.updates.as_mut() {
+        Some(rx) => tokio::select! {
+            res = rx.recv() => {
+                match res {
+                    Ok(_) | Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => true,
+                    Err(tokio::sync::broadcast::error::RecvError::Closed) => {
+                        state.updates = None;
+                        false
+                    }
+                }
+            }
+            _ = tokio::time::sleep(Duration::from_secs(5)) => false,
+        },
+        None => {
+            tokio::time::sleep(Duration::from_secs(5)).await;
+            false
+        }
+    };
+
+    let prior = state.previous.take()?;
+    if !pushed {
+        let check_token = token.clone();
+        let check_scope = state.scope.clone();
+        let check_prior = prior.clone();
+        match state
             .api
             .blocking_value(move |config| {
-                let prepared = prepare(config, &token, &scope, Previous::Yielded(prior))?;
-                finish(prepared.frame, prepared.cursor, prepared.actor)
+                check_revision_changed(config, &check_token, &check_scope, &check_prior)
             })
             .await
-    };
+        {
+            Ok(Ok(RevisionCheck::Unchanged(actor))) => {
+                if let Err(error) = actor.ensure_unexpired() {
+                    return Some((Ok(terminal(actor_error(error)).await), None));
+                }
+                state.previous = Some(prior);
+                return Some((Ok(Bytes::from_static(b": keepalive\n\n")), Some(state)));
+            }
+            Ok(Ok(RevisionCheck::Changed)) => {}
+            Ok(Err(failure)) => return Some((Ok(terminal(*failure).await), None)),
+            Err(()) => return Some((Ok(terminal(unavailable()).await), None)),
+        }
+    }
+
+    let scope = state.scope.clone();
+    let delivery = state
+        .api
+        .blocking_value(move |config| {
+            let prepared = prepare(config, &token, &scope, Previous::Yielded(prior))?;
+            finish(prepared.frame, prepared.cursor, prepared.actor)
+        })
+        .await;
     let delivered = match delivery {
         Ok(Ok(delivered)) => delivered,
         Ok(Err(failure)) => return Some((Ok(terminal(*failure).await), None)),

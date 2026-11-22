@@ -13,7 +13,8 @@ fn validate(metrics: &Value, inventory: &Value) {
     assert_eq!(metrics["completed"], true);
     assert_eq!(count(metrics, "humanSeats"), 2);
     assert_eq!(count(metrics, "rosterSeats"), 2);
-    assert_eq!(count(metrics, "plannedWalks"), 4);
+    assert_eq!(count(metrics, "plannedPerspectives"), 4);
+    assert_eq!(count(metrics, "nativeWalks"), 2);
     assert_eq!(
         metrics["firstTemplate"],
         json!({"records":10000,"bytes":10000000})
@@ -35,34 +36,13 @@ fn validate(metrics: &Value, inventory: &Value) {
         metrics["cutsPerPerspective"],
         inventory["cutsPerPerspective"]
     );
-    let walks = metrics["walks"].as_array().unwrap();
-    assert_eq!(walks.len(), 4);
-    let mut combinations = BTreeSet::new();
-    let mut shared_records = count(metrics, "retainedPayloadOperations");
-    let mut shared_bytes = count(metrics, "retainedPayloadBytes");
-    let mut first = 0;
-    for walk in walks {
-        let seat = count(walk, "seatIndex");
-        assert!(seat < 2);
-        let full = walk["fullInformation"].as_bool().unwrap();
-        assert!(combinations.insert((seat, full)));
-        if walk["first"] == true {
-            first += 1;
-            assert!(full);
-            assert_eq!(walk["spend"], metrics["firstSpend"]);
-        } else {
-            shared_records = shared_records
-                .checked_add(count(&walk["spend"], "records"))
-                .unwrap();
-            shared_bytes = shared_bytes
-                .checked_add(count(&walk["spend"], "bytes"))
-                .unwrap();
-        }
-    }
-    assert_eq!(first, 1);
+    let projection = &metrics["sharedProjectionSpend"];
     assert_eq!(
         metrics["sharedSpend"],
-        json!({"records":shared_records,"bytes":shared_bytes})
+        json!({
+            "records":count(projection, "records") + count(metrics, "retainedPayloadOperations"),
+            "bytes":count(projection, "bytes") + count(metrics, "retainedPayloadBytes"),
+        }),
     );
     for axis in ["records", "bytes"] {
         assert!(count(&metrics["firstSpend"], axis) <= count(&metrics["firstTemplate"], axis));
@@ -193,7 +173,6 @@ pub(super) fn run(r: &Reservation, store: &NativeArtifactStore, programs: &Nativ
         .unwrap()
         .unwrap();
     let inventory = inventory(&repository, store, r, manifest);
-    take_test_publication_observation(false);
     take_test_publication_observation(true);
     assert_eq!(
         repository
@@ -203,7 +182,6 @@ pub(super) fn run(r: &Reservation, store: &NativeArtifactStore, programs: &Nativ
     );
     let measured = take_test_publication_observation(true).unwrap();
     validate(&measured, &inventory);
-    take_test_publication_observation(false);
     let first_records = count(&measured["firstSpend"], "records");
     assert!(first_records > 0);
     assert!(
@@ -219,14 +197,6 @@ pub(super) fn run(r: &Reservation, store: &NativeArtifactStore, programs: &Nativ
         error.0,
         Failure::Checkpoint(NativeCheckpointError::Budget)
     ));
-    let entered = take_test_publication_observation(false)
-        .expect("actual first walk must have completed before shared refusal");
-    assert_eq!(entered["firstSpend"]["records"], json!(first_records));
-    assert_eq!(entered["firstTemplate"]["records"], json!(first_records));
-    assert_eq!(
-        entered["sharedCapacity"]["records"],
-        json!(first_records * 3)
-    );
     assert!(take_test_publication_observation(true).is_none());
     assert_eq!(source_fingerprint(&repository, r.game_id), before);
     assert_eq!(

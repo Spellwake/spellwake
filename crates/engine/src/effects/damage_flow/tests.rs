@@ -511,8 +511,30 @@ pub(crate) fn n04_player_batch_fixture() -> (EffectWindow, RuleProgress) {
         )
         .unwrap();
     state.pending_work = Some(PendingWork::Resolution(ResolutionCursor {
+        revealed_piles: None,
+        chosen_opponent: None,
+        chosen_damage_recipient: None,
+        damage_offer_opponents: None,
+        vowed_creatures: Default::default(),
+        meld_pair: None,
+        manifest_remaining: None,
+        random_selection: None,
+        results: ResolutionResults::default(),
+        chosen_effect_color: None,
+        chosen_mana_split: None,
+        tempting_token_offer: None,
+        destroyed_permanents: None,
+        chosen_loyalty_removals: None,
+        discarded_nonland_mana_value: None,
+        last_created_tokens: Vec::new(),
+        chosen_token_equipment: None,
+        found_spells: Vec::new(),
+        largest_discard: None,
+        impulse: ImpulseState::default(),
         entry: entry.id(),
         instruction: 0,
+        exiled_target: None,
+        remembered_permanent: None,
         values: BTreeMap::new(),
     }));
     let inputs = vec![

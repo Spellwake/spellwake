@@ -103,6 +103,7 @@ fn vanilla_description(
         printed_power: Some(String::from(power.clone())),
         printed_toughness: Some(String::from(toughness.clone())),
         printed_loyalty: None,
+        printed_defense: None,
     };
     if !result.valid() {
         return Err(NativeInitialError::Invalid);

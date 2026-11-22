@@ -570,6 +570,10 @@ fn resolve_choices(
                         ResolutionSelectionKind::Sacrifice,
                         ZoneReason::Sacrifice { .. }
                     ) | (ResolutionSelectionKind::Discard, ZoneReason::Discard { .. })
+                        | (
+                            ResolutionSelectionKind::ReturnToHand,
+                            ZoneReason::ReturnToOwnersHand
+                        )
                 ),
                 _ => false,
             })
@@ -639,20 +643,94 @@ fn resolve_choices(
             assert_eq!(
                 movement.reason,
                 match kind {
-                    ResolutionSelectionKind::Sacrifice => ZoneReason::Sacrifice { player: *player },
+                    ResolutionSelectionKind::Destroy => ZoneReason::Destroyed,
+                    ResolutionSelectionKind::Exile => ZoneReason::ExiledByEffect,
+                    ResolutionSelectionKind::ReturnToHand => ZoneReason::ReturnToOwnersHand,
+                    ResolutionSelectionKind::Sacrifice
+                    | ResolutionSelectionKind::OptionalSacrifice =>
+                        ZoneReason::Sacrifice { player: *player },
                     ResolutionSelectionKind::Discard => ZoneReason::Discard { player: *player },
+                    ResolutionSelectionKind::VowCreature
+                    | ResolutionSelectionKind::ChooseCreatureToKeep
+                    | ResolutionSelectionKind::LibraryToGraveyard
+                    | ResolutionSelectionKind::PayLifeToSaveCreatures
+                    | ResolutionSelectionKind::AttachAurasFromHandOrGraveyard
+                    | ResolutionSelectionKind::DiscardUpTo
+                    | ResolutionSelectionKind::EquipmentToToken
+                    | ResolutionSelectionKind::TokenReceivingEquipment
+                    | ResolutionSelectionKind::UnattachControlledEquipment
+                    | ResolutionSelectionKind::FoundSpellToCast
+                    | ResolutionSelectionKind::TurnCreatureFaceUp
+                    | ResolutionSelectionKind::MeldPartner
+                    | ResolutionSelectionKind::Soulbond
+                    | ResolutionSelectionKind::ExileToBattlefield
+                    | ResolutionSelectionKind::ExileMilledCreatures
+                    | ResolutionSelectionKind::VoteForCard
+                    | ResolutionSelectionKind::GraveyardToBattlefield
+                    | ResolutionSelectionKind::HandToBattlefield
+                    | ResolutionSelectionKind::GraveyardCreatureToHand
+                    | ResolutionSelectionKind::ReturnToCommandZone
+                    | ResolutionSelectionKind::ReturnToLibrary
+                    | ResolutionSelectionKind::Mill
+                    | ResolutionSelectionKind::AttachChosenAurasAndEquipment
+                    | ResolutionSelectionKind::AttachAllEquipment
+                    | ResolutionSelectionKind::CopyDifferentlyNamedTokens
+                    | ResolutionSelectionKind::Bolster
+                    | ResolutionSelectionKind::Amass
+                    | ResolutionSelectionKind::Untap
+                    | ResolutionSelectionKind::EnterBattlefield =>
+                        panic!("unexpected selection cohort"),
                 }
             );
             assert_eq!(
                 movement.before.object.zone(),
                 match kind {
-                    ResolutionSelectionKind::Sacrifice => ObjectZone::Battlefield,
+                    ResolutionSelectionKind::ReturnToHand
+                    | ResolutionSelectionKind::Sacrifice
+                    | ResolutionSelectionKind::OptionalSacrifice
+                    | ResolutionSelectionKind::Destroy
+                    | ResolutionSelectionKind::Exile => ObjectZone::Battlefield,
                     ResolutionSelectionKind::Discard => ObjectZone::Hand(*player),
+                    ResolutionSelectionKind::VowCreature
+                    | ResolutionSelectionKind::ChooseCreatureToKeep
+                    | ResolutionSelectionKind::LibraryToGraveyard
+                    | ResolutionSelectionKind::PayLifeToSaveCreatures
+                    | ResolutionSelectionKind::AttachAurasFromHandOrGraveyard
+                    | ResolutionSelectionKind::DiscardUpTo
+                    | ResolutionSelectionKind::EquipmentToToken
+                    | ResolutionSelectionKind::TokenReceivingEquipment
+                    | ResolutionSelectionKind::UnattachControlledEquipment
+                    | ResolutionSelectionKind::FoundSpellToCast
+                    | ResolutionSelectionKind::TurnCreatureFaceUp
+                    | ResolutionSelectionKind::MeldPartner
+                    | ResolutionSelectionKind::Soulbond
+                    | ResolutionSelectionKind::ExileToBattlefield
+                    | ResolutionSelectionKind::ExileMilledCreatures
+                    | ResolutionSelectionKind::VoteForCard
+                    | ResolutionSelectionKind::GraveyardToBattlefield
+                    | ResolutionSelectionKind::HandToBattlefield
+                    | ResolutionSelectionKind::GraveyardCreatureToHand
+                    | ResolutionSelectionKind::ReturnToCommandZone
+                    | ResolutionSelectionKind::ReturnToLibrary
+                    | ResolutionSelectionKind::Mill
+                    | ResolutionSelectionKind::AttachChosenAurasAndEquipment
+                    | ResolutionSelectionKind::AttachAllEquipment
+                    | ResolutionSelectionKind::CopyDifferentlyNamedTokens
+                    | ResolutionSelectionKind::Bolster
+                    | ResolutionSelectionKind::Amass
+                    | ResolutionSelectionKind::Untap
+                    | ResolutionSelectionKind::EnterBattlefield =>
+                        panic!("unexpected selection cohort"),
                 }
             );
             assert_eq!(
                 movement.after.object.zone(),
-                ObjectZone::Graveyard(movement.before.object.owner())
+                match kind {
+                    ResolutionSelectionKind::ReturnToHand =>
+                        ObjectZone::Hand(movement.before.object.owner()),
+                    ResolutionSelectionKind::Exile => ObjectZone::Exile,
+                    _ => ObjectZone::Graveyard(movement.before.object.owner()),
+                }
             );
             assert_ne!(movement.before.object.id(), movement.after.object.id());
             if kind == ResolutionSelectionKind::Discard {

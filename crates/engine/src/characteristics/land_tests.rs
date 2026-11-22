@@ -62,7 +62,8 @@ fn evaluated(fixture: &Fixture) -> ObjectCharacteristics {
     result
 }
 fn printed_land() -> Program {
-    let mut program = land([LandType::Forest, LandType::Gate]);
+    let mut program =
+        land([LandType::Forest, LandType::Gate]).with_printed_keywords([KeywordAbility::Shroud]);
     program.mana = [0, u64::MAX]
         .map(|id| ManaAbility {
             id: ManaAbilityId(id),
@@ -81,13 +82,13 @@ fn printed_land() -> Program {
     program.triggered = vec![crate::program::TriggeredAbility {
         grouping: spellwake_engine::program::TriggerGrouping::EachOccurrence,
         id: crate::program::TriggeredAbilityId(3),
-        condition: crate::program::OrdinaryCondition::BecomesTapped(
-            crate::program::ObjectRelation::SelfObject,
+        condition: crate::program::TriggerSpec::becomes_tapped(
+            crate::program::ObjectFilter::self_object(),
         ),
         body: crate::program::ExecutableBody::new(
             crate::program::BodyTarget::None,
             vec![crate::program::Instruction::DrawController {
-                amount: crate::program::InstructionAmount::Literal(0.into()),
+                amount: crate::program::ValueExpr::Literal(0.into()),
             }],
         ),
     }];
@@ -176,6 +177,7 @@ fn setting_basic_types_removes_printed_availability_but_add_remove_and_nonbasic_
         apply(&mut fixture, vec![change(operation.clone())]);
         let current = evaluated(&fixture);
         assert_eq!(current.abilities, original.abilities, "{operation:?}");
+        assert!(current.has_keyword(KeywordAbility::Shroud));
         assert_eq!(current.printed_text, original.printed_text);
         assert_eq!(
             current.intrinsic_mana,
@@ -208,7 +210,11 @@ fn setting_basic_types_removes_printed_availability_but_add_remove_and_nonbasic_
     assert_eq!(current.defined, original.defined);
     assert_eq!(current.current_supertypes, original.current_supertypes);
     assert_eq!(current.current_types, original.current_types);
-    assert!(current.has_keyword(KeywordAbility::Haste));
+    assert_eq!(current.keywords, BTreeSet::from([KeywordAbility::Haste]));
+    assert_eq!(
+        current.printed_text.printed_keywords,
+        BTreeSet::from([KeywordAbility::Shroud])
+    );
     assert!(
         current.current_colors.is_empty(),
         "unstarted later color ability was removed in layer 4"
@@ -559,4 +565,33 @@ fn creature_text_substitution_rewrites_creature_words_and_preserves_land_operand
         current.current_land_subtypes,
         BTreeSet::from([LandType::Forest, LandType::Island])
     );
+}
+
+#[test]
+fn copied_printed_keywords_survive_in_text_after_removal_and_later_grants() {
+    use KeywordAbility::{Flying, Reach, Shroud};
+    for removal in [AbilityRemoval::All, AbilityRemoval::NonMana] {
+        let mut fixture = fixture(land([]).with_printed_keywords([Shroud]));
+        let donor = land([]).with_printed_keywords([Flying]);
+        assert_eq!(evaluated(&fixture).keywords, BTreeSet::from([Shroud]));
+        apply(&mut fixture, vec![ResolvedPart::Copy(Box::new(donor))]);
+        assert_eq!(evaluated(&fixture).keywords, BTreeSet::from([Flying]));
+        apply(
+            &mut fixture,
+            vec![ResolvedPart::Abilities(AbilityChange::remove(removal))],
+        );
+        assert!(evaluated(&fixture).keywords.is_empty());
+        apply(
+            &mut fixture,
+            vec![ResolvedPart::Abilities(AbilityChange::grant_keywords([
+                Reach,
+            ]))],
+        );
+        let current = evaluated(&fixture);
+        assert_eq!(current.keywords, BTreeSet::from([Reach]));
+        assert_eq!(
+            current.printed_text.printed_keywords,
+            BTreeSet::from([Flying])
+        );
+    }
 }

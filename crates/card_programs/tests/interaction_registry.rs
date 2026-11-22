@@ -20,8 +20,7 @@ use spellwake_engine::{
     object_identity::{CardId, ObjectDestination},
     priority::SeatId,
     program::{
-        BodyTarget, CardType, ExecutableBody, Instruction, InstructionAmount, ProgramKind,
-        SpellTargetFilter, Supertype,
+        BodyTarget, CardType, ExecutableBody, Instruction, ProgramKind, Supertype, ValueExpr,
     },
 };
 use std::{collections::BTreeSet, path::Path};
@@ -275,13 +274,13 @@ fn assert_complete_programs(registry: &Registry, vocabulary: &CreatureTypeVocabu
                             vec![Instruction::ReturnToOwnersHand],
                         ),
                         "Cancel" | "Counterspell" => ExecutableBody::new(
-                            BodyTarget::SingleSpell(SpellTargetFilter::AnySpell),
+                            BodyTarget::SingleSpell(spellwake_engine::program::SpellFilter::any()),
                             vec![Instruction::CounterSpell],
                         ),
                         "Divination" => ExecutableBody::new(
                             BodyTarget::None,
                             vec![Instruction::DrawController {
-                                amount: InstructionAmount::Literal(2.into()),
+                                amount: ValueExpr::Literal(2.into()),
                             }],
                         ),
                         _ => panic!("unlisted selected spell"),

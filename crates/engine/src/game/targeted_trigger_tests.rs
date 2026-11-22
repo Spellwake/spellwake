@@ -7,10 +7,7 @@ use crate::{
     life::LifeAdjustment,
     object_identity::{CardId, ObjectDestination},
     occurrence::RulesRecord,
-    program::{
-        Instruction, ObjectRelation, OrdinaryCondition, Program, TriggerGrouping, TriggeredAbility,
-        TriggeredAbilityId,
-    },
+    program::{Instruction, Program, TriggerGrouping, TriggeredAbility, TriggeredAbilityId},
     test_support::{
         creature_types,
         current_profile::{
@@ -29,7 +26,7 @@ fn same_source_pending() -> GameState {
     let mut watcher = Program::artifact(None, vec![]);
     watcher.triggered.push(TriggeredAbility {
         id: TriggeredAbilityId(1),
-        condition: OrdinaryCondition::Dies(ObjectRelation::AnyCreature),
+        condition: crate::program::TriggerSpec::dies(crate::program::ObjectFilter::creature()),
         grouping: TriggerGrouping::EachOccurrence,
         body: ExecutableBody::new(
             BodyTarget::SinglePlayer,
@@ -275,7 +272,10 @@ fn cleanup_pending(no_targets: bool) -> GameState {
     };
     watcher.triggered.push(TriggeredAbility {
         id: TriggeredAbilityId(1),
-        condition: OrdinaryCondition::Discarded(crate::program::PlayerRelation::Controller),
+        condition: crate::program::TriggerSpec::player_action(
+            crate::program::PlayerRelation::Controller,
+            crate::program::PlayerTriggerAction::Discarded,
+        ),
         grouping: TriggerGrouping::EachOccurrence,
         body: ExecutableBody::new(target, body),
     });

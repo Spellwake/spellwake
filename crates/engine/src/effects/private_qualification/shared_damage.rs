@@ -36,7 +36,7 @@ impl EffectWindow {
             entry,
             vec![TargetCheck {
                 target: bound.choice().id,
-                legal: self.legal_body_target(body, bound.choice().target)?,
+                legal: self.legal_body_target(body, bound.choice().target, current.controller())?,
             }],
         )?;
         if gate
@@ -52,8 +52,30 @@ impl EffectWindow {
         let mut next = self.clone();
         next.window = gate.clone();
         next.pending_work = Some(PendingWork::Resolution(ResolutionCursor {
+            revealed_piles: None,
+            chosen_opponent: None,
+            chosen_damage_recipient: None,
+            damage_offer_opponents: None,
+            vowed_creatures: Default::default(),
+            meld_pair: None,
+            manifest_remaining: None,
+            random_selection: None,
+            results: ResolutionResults::default(),
+            chosen_effect_color: None,
+            chosen_mana_split: None,
+            tempting_token_offer: None,
+            destroyed_permanents: None,
+            chosen_loyalty_removals: None,
+            discarded_nonland_mana_value: None,
+            last_created_tokens: Vec::new(),
+            chosen_token_equipment: None,
+            found_spells: Vec::new(),
+            largest_discard: None,
+            impulse: ImpulseState::default(),
             entry,
             instruction,
+            exiled_target: None,
+            remembered_permanent: None,
             values: BTreeMap::new(),
         }));
         Ok((next, gate))

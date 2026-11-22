@@ -581,7 +581,7 @@ impl Policy {
         {
             return Err("unexpected fixture game/context/epoch".into());
         }
-        if window.participants() != [A, B] || window.turn_owner() != entry.active {
+        if window.participants() != [A, B] || window.active_player() != entry.active {
             return Err("unexpected ordered participants or active player".into());
         }
         match (entry.turn, state.turn()) {
@@ -650,7 +650,7 @@ impl Policy {
         match (stack_spell, window.entries()) {
             (None, []) => Ok(()),
             (Some(alias), [entry])
-                if entry.controller() == window.turn_owner()
+                if entry.controller() == window.active_player()
                     && entry.kind() == &StackKind::CardSpell(self.object(state, alias)?) =>
             {
                 Ok(())
@@ -739,6 +739,7 @@ impl Policy {
                         .map(|attacker| AttackDeclaration {
                             attacker,
                             defender: other(entry.actor).expect("actor checked"),
+                            defending_planeswalker: None,
                         })
                         .collect(),
                 )
@@ -813,6 +814,7 @@ impl Policy {
 }
 pub(crate) fn lion_payment() -> ManaPayment {
     ManaPayment {
+        from_lots: Default::default(),
         spend: vec![ManaSpend {
             mana_type: ManaType::White,
             amount: 2.into(),

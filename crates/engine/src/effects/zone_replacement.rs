@@ -1,4 +1,5 @@
 //! One bounded precommit reducer under the existing selected-effect cursor.
+pub(super) mod devour;
 use super::*;
 use crate::program::{
     PublicZoneDestination, ZoneActionKind, ZoneActionPredicate, ZoneObjectKind,
@@ -10,28 +11,72 @@ use crate::{
     occurrence::{EventCause, ZoneReason},
 };
 
+/// A resolving instruction created a temporary replacement for this exact object.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum CreatedZoneEffect {
+    CorpseReturn,
+    /// The owner’s optional Commander rule for a hand or library destination.
+    Commander,
+    Regenerate {
+        entry: StackEntryId,
+        instruction: usize,
+    },
+    ExileIfDies {
+        entry: StackEntryId,
+        instruction: usize,
+    },
+}
 /// Actual source incarnation plus its copiable definition-local identity.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub struct ZoneEffectInstance {
     pub source: ObjectId,
     pub ability: ZoneReplacementAbilityId,
+    /// Distinguishes an unearth-created effect from every printed ability ID.
+    pub unearth: bool,
+    /// Replacement supplied by the card itself while in hand.
+    pub madness: bool,
+    /// Stack origin distinguishes repeated and copied temporary shields.
+    pub created: Option<CreatedZoneEffect>,
 }
 /// Original selected event lineage, unchanged by destination transformations.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum ZoneEventKey {
+    /// An already resolving permanent spell's battlefield entry.
+    PermanentEntry {
+        entry: StackEntryId,
+        before: ObjectId,
+    },
+    /// A land special action, before its physical entry.
+    LandPlay {
+        before: ObjectId,
+    },
+    DamageFollowup {
+        batch: crate::damage::DamageBatchId,
+        before: ObjectId,
+    },
+    DrawReveal {
+        before: ObjectId,
+    },
+    /// A cost paid for an already announced spell or activated ability.
+    Cost {
+        entry: StackEntryId,
+        before: ObjectId,
+    },
+    /// A physical mana-ability source sacrificed without a stack entry.
+    ManaCost {
+        source: ObjectId,
+        ability: crate::mana::ManaAbilityRef,
+        before: ObjectId,
+    },
+    /// Exact object in an owned linked-return batch.
+    LinkedReturn {
+        before: ObjectId,
+    },
     /// A real resolving body instruction.
     Instruction {
         entry: StackEntryId,
         instruction: usize,
         before: ObjectId,
-    },
-    /// A held selected action after departure, distinct for each original actor.
-    /// The same incarnation may have been chosen by different actors at different cuts.
-    Selection {
-        entry: StackEntryId,
-        instruction: usize,
-        before: ObjectId,
-        player: SeatId,
     },
     /// A real reserved event/pass within the Checks owner.
     Check {
@@ -44,8 +89,14 @@ impl ZoneEventKey {
     pub fn before(self) -> ObjectId {
         match self {
             Self::Instruction { before, .. }
-            | Self::Selection { before, .. }
-            | Self::Check { before, .. } => before,
+            | Self::Check { before, .. }
+            | Self::LinkedReturn { before }
+            | Self::Cost { before, .. }
+            | Self::ManaCost { before, .. }
+            | Self::PermanentEntry { before, .. }
+            | Self::DrawReveal { before }
+            | Self::LandPlay { before }
+            | Self::DamageFollowup { before, .. } => before,
         }
     }
     #[cfg(test)]
@@ -58,18 +109,20 @@ impl ZoneEventKey {
                 instruction,
                 before,
             },
-            Self::Selection {
-                entry,
-                instruction,
-                player,
-                ..
-            } => Self::Selection {
-                entry,
-                instruction,
-                before,
-                player,
-            },
             Self::Check { event, .. } => Self::Check { event, before },
+            Self::LinkedReturn { .. } => Self::LinkedReturn { before },
+            Self::Cost { entry, .. } => Self::Cost { entry, before },
+            Self::ManaCost {
+                source, ability, ..
+            } => Self::ManaCost {
+                source,
+                ability,
+                before,
+            },
+            Self::PermanentEntry { entry, .. } => Self::PermanentEntry { entry, before },
+            Self::DrawReveal { .. } => Self::DrawReveal { before },
+            Self::LandPlay { .. } => Self::LandPlay { before },
+            Self::DamageFollowup { batch, .. } => Self::DamageFollowup { batch, before },
         }
     }
 }
@@ -90,23 +143,59 @@ pub enum ZoneOptionalAnswer {
 /// A response to an exact executor-issued replacement request.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ZoneReplacementReply {
+    Devour(Option<ObjectId>),
+    DevourGraveyardOrder(ObjectId),
+    /// Controller selected for a permanent whose own entry effect precedes other replacements.
+    EntryController(SeatId),
+    /// Choose a donor without targeting it, or decline this copy replacement.
+    EntryCopy(Option<ObjectId>),
+    /// Use the mandatory copy replacement supplied by this exact Aura.
+    EntryCopyFromPermanent(ObjectId),
     /// Select one event/effect pair.
     Select(ZoneApplication),
     /// Answer the specific optional confirmation.
     Optional(ZoneOptionalAnswer),
 }
+/// A live card or a not-yet-created token that can enter as a copy.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum EntryCopySubject {
+    Card(ObjectId),
+    Token(crate::token::TokenBatchMember),
+}
 /// Immutable request payload; a singleton optional effect still needs confirmation.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ZoneReplacementRequest {
+    Devour {
+        entrant: EntryCopySubject,
+        choices: Vec<ObjectId>,
+    },
+    DevourGraveyardOrder {
+        choices: Vec<ObjectId>,
+    },
+    /// Choose the opponent who will control an entering permanent (CR 616.1b).
+    EntryController {
+        object: ObjectId,
+        opponents: Vec<SeatId>,
+    },
+    /// Choose whether and what this object copies as it enters (CR 616.1c).
+    EntryCopy {
+        object: EntryCopySubject,
+        donors: Vec<ObjectId>,
+        battlefield_donors: Vec<(ObjectId, ObjectId)>,
+    },
     /// Earliest affected player's applicable pairs.
-    Select { applications: Vec<ZoneApplication> },
+    Select {
+        applications: Vec<ZoneApplication>,
+    },
     /// One already selected optional effect.
-    ConfirmOptional { application: ZoneApplication },
+    ConfirmOptional {
+        application: ZoneApplication,
+    },
 }
 /// Exact private native request. Hidden source domains remain privileged.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ZoneReplacementFrame {
-    pub(crate) revision: u64,
+    revision: u64,
     cause: EventCause,
     stage: u64,
     chooser: SeatId,
@@ -125,6 +214,80 @@ impl ZoneReplacementFrame {
         Self {
             cause,
             ..self.clone()
+        }
+    }
+    pub(super) fn token_copy(
+        revision: u64,
+        entry: StackEntryId,
+        instruction: usize,
+        chooser: SeatId,
+        member: crate::token::TokenBatchMember,
+        donors: Vec<ObjectId>,
+        battlefield_donors: Vec<(ObjectId, ObjectId)>,
+    ) -> Self {
+        Self {
+            revision,
+            chooser,
+            cause: EventCause::Instruction { entry, instruction },
+            stage: revision,
+            request: ZoneReplacementRequest::EntryCopy {
+                object: EntryCopySubject::Token(member),
+                donors,
+                battlefield_donors,
+            },
+        }
+    }
+    /// Resolve a public option ordinal only in this exact native choice frame.
+    pub fn reply_at(&self, index: usize) -> Option<ZoneReplacementReply> {
+        match self.request() {
+            ZoneReplacementRequest::Devour { choices, .. } => {
+                if index == 0 {
+                    Some(ZoneReplacementReply::Devour(None))
+                } else {
+                    choices
+                        .get(index - 1)
+                        .copied()
+                        .map(|id| ZoneReplacementReply::Devour(Some(id)))
+                }
+            }
+            ZoneReplacementRequest::DevourGraveyardOrder { choices } => choices
+                .get(index)
+                .copied()
+                .map(ZoneReplacementReply::DevourGraveyardOrder),
+            ZoneReplacementRequest::EntryCopy {
+                donors,
+                battlefield_donors,
+                ..
+            } => {
+                let intrinsic_options = if donors.is_empty() {
+                    0
+                } else {
+                    donors.len() + 1
+                };
+                if index < intrinsic_options {
+                    Some(ZoneReplacementReply::EntryCopy(
+                        index.checked_sub(1).map(|offset| donors[offset]),
+                    ))
+                } else {
+                    battlefield_donors
+                        .get(index - intrinsic_options)
+                        .map(|&(aura, _)| ZoneReplacementReply::EntryCopyFromPermanent(aura))
+                }
+            }
+            ZoneReplacementRequest::EntryController { opponents, .. } => opponents
+                .get(index)
+                .copied()
+                .map(ZoneReplacementReply::EntryController),
+            ZoneReplacementRequest::Select { applications } => applications
+                .get(index)
+                .copied()
+                .map(ZoneReplacementReply::Select),
+            ZoneReplacementRequest::ConfirmOptional { .. } => {
+                [ZoneOptionalAnswer::Apply, ZoneOptionalAnswer::Decline]
+                    .get(index)
+                    .copied()
+                    .map(ZoneReplacementReply::Optional)
+            }
         }
     }
     /// Accepted executor revision.
@@ -180,6 +343,10 @@ pub struct ZoneCandidate {
     pub reason: crate::occurrence::ZoneReason,
     pub original: PublicZoneDestination,
     pub current: PublicZoneDestination,
+    /// This entrant stays in its starting zone because a rule prohibits entry.
+    pub entry_prohibited: bool,
+    /// Controller of a pending battlefield entrant, absent for other destinations.
+    pub entering_controller: Option<SeatId>,
 }
 /// Source evidence from the complete unchanged before-world.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -204,145 +371,43 @@ pub enum ZoneReplacementPhase {
     /// No applications remain.
     Settled,
 }
-/// Trusted consumed prefix established only after validating the previous physical cut.
-/// It stores reducer facts and consumed source evidence, never a former world snapshot.
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct ZoneReplacementPrefix {
-    destinations: BTreeMap<ZoneEventKey, PublicZoneDestination>,
-    applied: BTreeMap<ZoneEventKey, BTreeSet<ZoneEffectInstance>>,
-    optional: BTreeMap<ZoneApplication, ZoneOptionalAnswer>,
-    history: Vec<ZoneReplacementStep>,
-    application_sources: BTreeMap<ZoneApplication, ZoneReplacementSource>,
-    sources: BTreeMap<ZoneEffectInstance, ZoneReplacementSource>,
-    stage: u64,
-    phase: ZoneReplacementPhase,
-}
 /// Sole precommit value. The parent cursor remains in ResolutionSelectionWork.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ZoneReplacementBatch {
+    devour: devour::Devour,
+    controller_domains: BTreeMap<ObjectId, (SeatId, Vec<SeatId>)>,
+    selected_controllers: Vec<(ObjectId, SeatId)>,
+    copy_rules: BTreeMap<ObjectId, crate::program::EntryCopyRule>,
+    copy_pool: entry_copy::EntryCopyPool,
+    eligible_nontoken_creatures: BTreeSet<ObjectId>,
+    used_battlefield_copies: BTreeMap<ObjectId, BTreeSet<ObjectId>>,
+    used_intrinsic_copies: BTreeMap<ObjectId, Vec<crate::program::EntryCopyRule>>,
+    copies: BTreeMap<ObjectId, entry_copy::EntryCopyResult>,
+    entry_opponents: BTreeMap<SeatId, Vec<SeatId>>,
+    entry_history: Vec<(ObjectId, ZoneReplacementReply)>,
+    regeneration_prohibited: bool,
+    ordered_library_placement: Option<crate::program::LibraryPlacement>,
     cause: EventCause,
     intents: Vec<ZoneMoveIntent>,
     window_revision: u64,
     evaluated: Arc<EvaluatedCharacteristics>,
     apnap: Vec<SeatId>,
     candidates: BTreeMap<ZoneEventKey, ZoneCandidate>,
-    selection_origins: Option<BTreeMap<ZoneEventKey, ZoneCandidate>>,
-    application_sources: BTreeMap<ZoneApplication, ZoneReplacementSource>,
     sources: BTreeMap<ZoneEffectInstance, ZoneReplacementSource>,
     applied: BTreeMap<ZoneEventKey, BTreeSet<ZoneEffectInstance>>,
     optional: BTreeMap<ZoneApplication, ZoneOptionalAnswer>,
     history: Vec<ZoneReplacementStep>,
     stage: u64,
     phase: ZoneReplacementPhase,
-    retained_prefix: Option<Box<ZoneReplacementPrefix>>,
 }
-/// Single-field controls applied only to genuinely reached retained work.
-#[cfg(test)]
-#[derive(Debug, Clone, Copy)]
-pub(crate) enum SelectionReplacementFault {
-    CandidateDestination,
-    CurrentSourceDefinition,
-    OriginalUniverse,
-    EventNamespace,
-    ApplicationSourceWitness,
-    RetainedDestination,
-    RetainedApplicationWitness,
-    RetainedFirstSource,
+struct PendingEntryCopy {
+    object: ObjectId,
+    chooser: SeatId,
+    donors: Vec<ObjectId>,
+    battlefield_donors: Vec<(ObjectId, ObjectId)>,
 }
+
 impl ZoneReplacementBatch {
-    #[cfg(test)]
-    pub(crate) fn qualification_corrupt_selection(&mut self, fault: SelectionReplacementFault) {
-        match fault {
-            SelectionReplacementFault::CandidateDestination => {
-                self.candidates
-                    .first_entry()
-                    .expect("actual candidates")
-                    .get_mut()
-                    .current = PublicZoneDestination::Exile
-            }
-            SelectionReplacementFault::CurrentSourceDefinition => {
-                self.sources
-                    .first_entry()
-                    .expect("actual current source")
-                    .get_mut()
-                    .definition
-                    .replace_with = PublicZoneDestination::Graveyard
-            }
-            SelectionReplacementFault::OriginalUniverse => {
-                let key = self
-                    .selection_origins
-                    .as_ref()
-                    .expect("trusted selection universe")
-                    .keys()
-                    .find(|key| !self.candidates.contains_key(key))
-                    .copied()
-                    .expect("actual retired original action");
-                self.selection_origins
-                    .as_mut()
-                    .expect("trusted selection universe")
-                    .remove(&key)
-                    .expect("actual retired original action");
-            }
-            SelectionReplacementFault::EventNamespace => {
-                let (key, mut candidate) = self.candidates.pop_first().expect("actual candidate");
-                let ZoneEventKey::Selection {
-                    entry,
-                    instruction,
-                    before,
-                    ..
-                } = key
-                else {
-                    panic!("selection namespace")
-                };
-                candidate.key = ZoneEventKey::Instruction {
-                    entry,
-                    instruction,
-                    before,
-                };
-                self.candidates.insert(candidate.key, candidate);
-            }
-            SelectionReplacementFault::ApplicationSourceWitness => {
-                self.application_sources
-                    .first_entry()
-                    .expect("actual consumed witness")
-                    .get_mut()
-                    .definition
-                    .replace_with = PublicZoneDestination::Graveyard
-            }
-            SelectionReplacementFault::RetainedDestination => {
-                *self
-                    .retained_prefix
-                    .as_mut()
-                    .expect("trusted cut")
-                    .destinations
-                    .first_entry()
-                    .expect("actual retained destination")
-                    .get_mut() = PublicZoneDestination::Exile
-            }
-            SelectionReplacementFault::RetainedApplicationWitness => {
-                self.retained_prefix
-                    .as_mut()
-                    .expect("trusted cut")
-                    .application_sources
-                    .first_entry()
-                    .expect("actual retained witness")
-                    .get_mut()
-                    .definition
-                    .replace_with = PublicZoneDestination::Graveyard
-            }
-            SelectionReplacementFault::RetainedFirstSource => {
-                self.retained_prefix
-                    .as_mut()
-                    .expect("trusted cut")
-                    .sources
-                    .first_entry()
-                    .expect("actual first witness")
-                    .get_mut()
-                    .definition
-                    .replace_with = PublicZoneDestination::Graveyard
-            }
-        }
-    }
     #[cfg(test)]
     pub(crate) fn qualification_exhaust_stage(&mut self) {
         self.stage = u64::MAX;
@@ -400,320 +465,10 @@ impl ZoneReplacementBatch {
     pub fn phase(&self) -> &ZoneReplacementPhase {
         &self.phase
     }
-    /// Actual immutable source snapshot at each consumed event/effect opportunity.
-    /// Unlike an aggregate source-instance lookup, this preserves earlier cuts.
-    pub fn consumed_sources(&self) -> &BTreeMap<ZoneApplication, ZoneReplacementSource> {
-        &self.application_sources
-    }
-    /// Original certified selected actions, including currently infeasible ones.
-    /// These privileged choice snapshots are not proposed movements or client authority.
-    pub fn selection_origins(&self) -> Option<&BTreeMap<ZoneEventKey, ZoneCandidate>> {
-        self.selection_origins.as_ref()
-    }
-    /// Source evidence for consumed opportunities accepted before a trusted departure.
-    /// Current eligibility uses `sources()` instead.
-    pub fn departed_prefix_sources(
-        &self,
-    ) -> Option<&BTreeMap<ZoneEffectInstance, ZoneReplacementSource>> {
-        self.retained_prefix.as_ref().map(|prefix| &prefix.sources)
-    }
-    fn restore_prefix(&mut self) -> Result<(), EffectError> {
-        let Some(prefix) = &self.retained_prefix else {
-            return Ok(());
-        };
-        if Self::first_consumed_sources(&prefix.history, &prefix.application_sources)?
-            != prefix.sources
-        {
-            return Err(ZoneReplacementError::InconsistentBatch.into());
-        }
-        let expected: BTreeSet<_> = self
-            .selection_origins
-            .as_ref()
-            .unwrap_or(&self.candidates)
-            .keys()
-            .copied()
-            .collect();
-        let keys = prefix.destinations.keys().copied().collect::<BTreeSet<_>>();
-        if !expected.is_subset(&keys)
-            || (keys != expected && !matches!(self.cause, EventCause::StateBasedActions { .. }))
-        {
-            return Err(ZoneReplacementError::InconsistentBatch.into());
-        }
-        for (key, candidate) in &mut self.candidates {
-            candidate.current = *prefix
-                .destinations
-                .get(key)
-                .ok_or(ZoneReplacementError::InconsistentBatch)?;
-        }
-        self.applied = prefix.applied.clone();
-        self.optional = prefix.optional.clone();
-        self.history = prefix.history.clone();
-        self.application_sources = prefix.application_sources.clone();
-        self.stage = prefix.stage;
-        self.phase = prefix.phase.clone();
-        Ok(())
-    }
-    /// Reauthorize unchanged original movement lineages across a trusted departure.
-    pub(super) fn rebase_departure(&self, before: Self, after: Self) -> Result<Self, EffectError> {
-        self.verify_state(before, false)?;
-        if self.cause != after.cause
-            || self.intents != after.intents
-            || self.candidates.len() != after.candidates.len()
-        {
-            return Err(ZoneReplacementError::InconsistentBatch.into());
-        }
-        for (key, held) in &self.candidates {
-            let mut original = held.clone();
-            original.current = original.original;
-            if after.candidates.get(key) != Some(&original) {
-                return Err(ZoneReplacementError::InconsistentBatch.into());
-            }
-        }
-        let destinations = self
-            .candidates
-            .iter()
-            .map(|(key, candidate)| (*key, candidate.current))
-            .collect();
-        self.install_departure_prefix(after, destinations)
-    }
-    /// Re-evaluate one state-action event after a departure. Removed candidates
-    /// have no physical destination, but their consumed opportunities stay in history.
-    pub(super) fn rebase_state_actions(
-        &self,
-        before: Self,
-        after: Self,
-    ) -> Result<Self, EffectError> {
-        self.verify_state(before, false)?;
-        if self.cause != after.cause || !matches!(self.cause, EventCause::StateBasedActions { .. })
-        {
-            return Err(ZoneReplacementError::InconsistentBatch.into());
-        }
-        let mut destinations = self
-            .retained_prefix
-            .as_ref()
-            .map(|prefix| prefix.destinations.clone())
-            .unwrap_or_default();
-        destinations.extend(
-            self.candidates
-                .iter()
-                .map(|(key, item)| (*key, item.current)),
-        );
-        for (key, item) in &after.candidates {
-            destinations.entry(*key).or_insert(item.original);
-        }
-        self.install_departure_prefix(after, destinations)
-    }
-    fn first_consumed_sources(
-        history: &[ZoneReplacementStep],
-        application_sources: &BTreeMap<ZoneApplication, ZoneReplacementSource>,
-    ) -> Result<BTreeMap<ZoneEffectInstance, ZoneReplacementSource>, EffectError> {
-        let mut sources = BTreeMap::new();
-        if application_sources.len() != history.len() {
-            return Err(ZoneReplacementError::InconsistentBatch.into());
-        }
-        for step in history {
-            let source = application_sources
-                .get(&step.application)
-                .ok_or(ZoneReplacementError::InconsistentBatch)?;
-            if source.instance != step.application.effect {
-                return Err(ZoneReplacementError::InconsistentBatch.into());
-            }
-            sources
-                .entry(source.instance)
-                .or_insert_with(|| source.clone());
-        }
-        Ok(sources)
-    }
-    fn install_departure_prefix(
-        &self,
-        mut after: Self,
-        destinations: BTreeMap<ZoneEventKey, PublicZoneDestination>,
-    ) -> Result<Self, EffectError> {
-        let sources = Self::first_consumed_sources(&self.history, &self.application_sources)?;
-        after.retained_prefix = Some(Box::new(ZoneReplacementPrefix {
-            destinations,
-            applied: self.applied.clone(),
-            optional: self.optional.clone(),
-            history: self.history.clone(),
-            application_sources: self.application_sources.clone(),
-            sources,
-            stage: self.stage,
-            phase: ZoneReplacementPhase::Selecting,
-        }));
-        after.restore_prefix()?;
-        if let ZoneReplacementPhase::Confirming { application } = self.phase
-            && after.applicable(application)
-            && after
-                .sources
-                .get(&application.effect)
-                .is_some_and(|source| {
-                    source.definition.choice == ZoneReplacementChoice::OptionalAffectedPlayer
-                })
-        {
-            after.phase = ZoneReplacementPhase::Confirming { application };
-            after
-                .retained_prefix
-                .as_mut()
-                .ok_or(ZoneReplacementError::InconsistentBatch)?
-                .phase = after.phase.clone();
-        }
-        Ok(after)
-    }
-    fn selection_key(key: ZoneEventKey, reason: ZoneReason) -> Result<ZoneEventKey, EffectError> {
-        let player = match reason {
-            ZoneReason::Sacrifice { player } | ZoneReason::Discard { player } => player,
-            _ => return Err(ZoneReplacementError::InconsistentBatch.into()),
-        };
-        match key {
-            ZoneEventKey::Instruction {
-                entry,
-                instruction,
-                before,
-            } => Ok(ZoneEventKey::Selection {
-                entry,
-                instruction,
-                before,
-                player,
-            }),
-            ZoneEventKey::Selection { player: actual, .. } if actual == player => Ok(key),
-            _ => Err(ZoneReplacementError::InconsistentBatch.into()),
-        }
-    }
-    fn same_selection_lineage(origin: &ZoneCandidate, current: &ZoneCandidate) -> bool {
-        origin.key == current.key
-            && origin.action == current.action
-            && origin.reason == current.reason
-            && origin.original == current.original
-            && origin.before.id() == current.before.id()
-            && origin.before.origin() == current.before.origin()
-            && origin.before.owner() == current.before.owner()
-            && origin.before.zone() == current.before.zone()
-            && origin.before.controller() == current.before.controller()
-    }
-    /// Authorize the complete original choice universe and normalize trusted legacy keys.
-    /// The caller supplies actual held choice snapshots, not a player payload.
-    pub(super) fn with_selection_origins(
-        mut self,
-        values: Vec<ZoneCandidate>,
-    ) -> Result<Self, EffectError> {
-        let mut origins = BTreeMap::new();
-        for value in values {
-            if Self::selection_key(value.key, value.reason)? != value.key
-                || value.before.id() != value.key.before()
-                || value.original != PublicZoneDestination::Graveyard
-                || value.current != value.original
-                || origins.insert(value.key, value).is_some()
-            {
-                return Err(ZoneReplacementError::InconsistentBatch.into());
-            }
-        }
-        if let Some(held) = &self.selection_origins {
-            if held != &origins {
-                return Err(ZoneReplacementError::InconsistentBatch.into());
-            }
-            return Ok(self);
-        }
-        if self.retained_prefix.is_some() {
-            return Err(ZoneReplacementError::InconsistentBatch.into());
-        }
-        let keys = self
-            .candidates
-            .iter()
-            .map(|(key, value)| Ok((*key, Self::selection_key(*key, value.reason)?)))
-            .collect::<Result<BTreeMap<_, _>, EffectError>>()?;
-        let event = |key: ZoneEventKey| {
-            keys.get(&key).copied().ok_or(EffectError::ZoneReplacement(
-                ZoneReplacementError::InconsistentBatch,
-            ))
-        };
-        let application = |value: ZoneApplication| {
-            Ok::<_, EffectError>(ZoneApplication {
-                event: event(value.event)?,
-                effect: value.effect,
-            })
-        };
-        self.candidates = self
-            .candidates
-            .into_values()
-            .map(|mut value| {
-                value.key = event(value.key)?;
-                Ok((value.key, value))
-            })
-            .collect::<Result<_, EffectError>>()?;
-        self.applied = self
-            .applied
-            .into_iter()
-            .map(|(key, value)| Ok((event(key)?, value)))
-            .collect::<Result<_, EffectError>>()?;
-        self.optional = self
-            .optional
-            .into_iter()
-            .map(|(key, value)| Ok((application(key)?, value)))
-            .collect::<Result<_, EffectError>>()?;
-        self.application_sources = self
-            .application_sources
-            .into_iter()
-            .map(|(key, value)| Ok((application(key)?, value)))
-            .collect::<Result<_, EffectError>>()?;
-        for step in &mut self.history {
-            step.application = application(step.application)?;
-        }
-        if let ZoneReplacementPhase::Confirming { application: value } = &mut self.phase {
-            *value = application(*value)?;
-        }
-        for (key, current) in &self.candidates {
-            if origins
-                .get(key)
-                .is_none_or(|origin| !Self::same_selection_lineage(origin, current))
-            {
-                return Err(ZoneReplacementError::InconsistentBatch.into());
-            }
-        }
-        self.selection_origins = Some(origins);
-        Ok(self)
-    }
-    /// Reconcile feasibility only within the exact certified original actor/action universe.
-    pub(super) fn rebase_selection_departure(
-        &self,
-        before: Self,
-        after: Self,
-    ) -> Result<Self, EffectError> {
-        self.verify_state(before, false)?;
-        let origins = after
-            .selection_origins
-            .as_ref()
-            .ok_or(ZoneReplacementError::InconsistentBatch)?;
-        let held = self
-            .clone()
-            .with_selection_origins(origins.values().cloned().collect())?;
-        if held.cause != after.cause || held.selection_origins != after.selection_origins {
-            return Err(ZoneReplacementError::InconsistentBatch.into());
-        }
-        for (key, current) in &after.candidates {
-            if origins
-                .get(key)
-                .is_none_or(|origin| !Self::same_selection_lineage(origin, current))
-            {
-                return Err(ZoneReplacementError::InconsistentBatch.into());
-            }
-        }
-        let destinations = origins
-            .iter()
-            .map(|(key, origin)| {
-                let destination = held
-                    .candidates
-                    .get(key)
-                    .map(|candidate| candidate.current)
-                    .or_else(|| {
-                        held.retained_prefix
-                            .as_ref()
-                            .and_then(|prefix| prefix.destinations.get(key).copied())
-                    })
-                    .unwrap_or(origin.original);
-                (*key, destination)
-            })
-            .collect();
-        held.install_departure_prefix(after, destinations)
+    pub(super) fn used_madness(&self, id: ObjectId) -> bool {
+        self.applied.iter().any(|(event, effects)| {
+            event.before() == id && effects.iter().any(|effect| effect.madness)
+        })
     }
     pub(super) fn destination(&self, id: ObjectId) -> Result<PublicZoneDestination, EffectError> {
         self.candidates
@@ -722,11 +477,249 @@ impl ZoneReplacementBatch {
             .map(|c| c.current)
             .ok_or(ZoneReplacementError::InconsistentBatch.into())
     }
-    fn chooser(candidate: &ZoneCandidate) -> SeatId {
-        candidate
-            .before
-            .controller()
-            .unwrap_or(candidate.before.owner())
+    pub(super) fn entry_prohibited(&self, id: ObjectId) -> bool {
+        self.candidates
+            .values()
+            .any(|candidate| candidate.before.id() == id && candidate.entry_prohibited)
+    }
+    pub(super) fn regenerations(
+        &self,
+    ) -> impl Iterator<Item = (ObjectId, StackEntryId, usize)> + '_ {
+        self.applied.iter().flat_map(|(event, effects)| {
+            effects
+                .iter()
+                .filter_map(move |effect| match effect.created {
+                    Some(CreatedZoneEffect::Regenerate { entry, instruction }) => {
+                        Some((event.before(), entry, instruction))
+                    }
+                    _ => None,
+                })
+        })
+    }
+    pub(super) fn regenerated(&self, object: ObjectId) -> bool {
+        self.regenerations().any(|(id, _, _)| id == object)
+    }
+    pub(super) fn entry_controller(&self, object: ObjectId) -> Option<SeatId> {
+        self.selected_controllers
+            .iter()
+            .find(|(id, _)| *id == object)
+            .map(|(_, seat)| *seat)
+    }
+    pub(super) fn entry_controllers(&self) -> impl Iterator<Item = (ObjectId, SeatId)> + '_ {
+        self.selected_controllers
+            .iter()
+            .filter(|(id, _)| self.destination(*id) == Ok(PublicZoneDestination::Battlefield))
+            .copied()
+    }
+    pub(super) fn entry_copies(
+        &self,
+    ) -> impl Iterator<Item = (ObjectId, entry_copy::EntryCopyResult)> + '_ {
+        self.copies
+            .iter()
+            .filter(|(id, _)| self.destination(**id) == Ok(PublicZoneDestination::Battlefield))
+            .map(|(id, copy)| (*id, copy.clone()))
+    }
+    pub(super) fn copied_definition(&self, id: ObjectId) -> Option<&Program> {
+        self.copies.get(&id).map(|copy| copy.definition.as_ref())
+    }
+    fn pending_copy(&self) -> Option<PendingEntryCopy> {
+        if self.copy_rules.is_empty() && self.eligible_nontoken_creatures.is_empty() {
+            return None;
+        }
+        for &player in &self.apnap {
+            for candidate in self.candidates.values().filter(|candidate| {
+                self.chooser(candidate) == player
+                    && candidate.current == PublicZoneDestination::Battlefield
+            }) {
+                let object = candidate.before.id();
+                let donors = self
+                    .copy_rules
+                    .get(&object)
+                    .map_or(&[][..], |rule| self.copy_pool.domain(rule, player));
+                let creature = self.copies.get(&object).map_or_else(
+                    || self.eligible_nontoken_creatures.contains(&object),
+                    |copy| {
+                        copy.definition
+                            .card_types
+                            .contains(&crate::program::CardType::Creature)
+                    },
+                );
+                let auras = if creature {
+                    self.copy_pool
+                        .battlefield_donors(player)
+                        .iter()
+                        .copied()
+                        .filter(|(aura, _)| {
+                            self.used_battlefield_copies
+                                .get(&object)
+                                .is_none_or(|used| !used.contains(aura))
+                        })
+                        .collect::<Vec<_>>()
+                } else {
+                    Vec::new()
+                };
+                if !donors.is_empty() || !auras.is_empty() {
+                    return Some(PendingEntryCopy {
+                        object,
+                        chooser: player,
+                        donors: donors.to_vec(),
+                        battlefield_donors: auras,
+                    });
+                }
+            }
+        }
+        None
+    }
+    /// Replace only the entrant's own printed "as this enters" effects. The
+    /// existing battlefield sources and created replacements still apply.
+    fn set_entrant_replacements(
+        sources: &mut BTreeMap<ZoneEffectInstance, ZoneReplacementSource>,
+        before: &GameObject,
+        rules: &[ZoneReplacementAbility],
+    ) {
+        let is_entry = |rule: &ZoneReplacementAbility| {
+            rule.subject == ZoneReplacementSubject::SourceSelf
+                && matches!(&rule.actions, ZoneActionPredicate::OneOf(actions) if actions.contains(&ZoneActionKind::EffectEnterBattlefield))
+        };
+        sources.retain(|instance, source| {
+            instance.source != before.id()
+                || instance.unearth
+                || instance.madness
+                || instance.created.is_some()
+                || !is_entry(&source.definition)
+        });
+        for rule in rules.iter().filter(|rule| is_entry(rule)) {
+            let instance = ZoneEffectInstance {
+                source: before.id(),
+                ability: rule.id,
+                unearth: false,
+                madness: false,
+                created: None,
+            };
+            sources.insert(
+                instance,
+                ZoneReplacementSource {
+                    instance,
+                    before: before.clone(),
+                    definition: rule.clone(),
+                },
+            );
+        }
+    }
+
+    fn select_copy(&mut self, reply: ZoneReplacementReply) -> Result<(), EffectError> {
+        let PendingEntryCopy {
+            object,
+            chooser: controller,
+            donors,
+            battlefield_donors,
+        } = self
+            .pending_copy()
+            .ok_or(ZoneReplacementError::WrongFrame)?;
+        let previous = self.copies.get(&object);
+        let copy = match reply {
+            ZoneReplacementReply::EntryCopy(donor) if !donors.is_empty() => {
+                let rule = self
+                    .copy_rules
+                    .remove(&object)
+                    .ok_or(ZoneReplacementError::InconsistentBatch)?;
+                self.used_intrinsic_copies
+                    .entry(object)
+                    .or_default()
+                    .push(rule.clone());
+                donor
+                    .map(|id| self.copy_pool.select(&rule, controller, id, previous))
+                    .transpose()?
+            }
+            ZoneReplacementReply::EntryCopyFromPermanent(aura) => {
+                let donor = battlefield_donors
+                    .iter()
+                    .find_map(|(source, donor)| (*source == aura).then_some(*donor))
+                    .ok_or(ZoneReplacementError::InapplicableApplication)?;
+                self.used_battlefield_copies
+                    .entry(object)
+                    .or_default()
+                    .insert(aura);
+                Some(self.copy_pool.battlefield_copy(donor, previous)?)
+            }
+            _ => return Err(ZoneReplacementError::InapplicableApplication.into()),
+        };
+        if let Some(copy) = copy {
+            self.copy_rules.remove(&object);
+            if let Some(rule) = &copy.definition.entry_copy
+                && self
+                    .used_intrinsic_copies
+                    .get(&object)
+                    .is_none_or(|used| !used.contains(rule))
+            {
+                self.copy_rules.insert(object, rule.clone());
+            }
+            if copy.definition.permanent().is_some_and(|card| {
+                card.entry_tap == Some(crate::land::EntryTap::ChosenOpponentControls)
+            }) && self.entry_controller(object).is_none()
+                && let Some(opponents) = self.entry_opponents.get(&controller)
+                && !opponents.is_empty()
+            {
+                self.controller_domains
+                    .insert(object, (controller, opponents.clone()));
+            }
+            let candidate = self
+                .candidates
+                .values()
+                .find(|candidate| candidate.before.id() == object)
+                .ok_or(ZoneReplacementError::InconsistentBatch)?;
+            Self::set_entrant_replacements(
+                &mut self.sources,
+                &candidate.before,
+                &copy.definition.zone_replacements,
+            );
+            let subject = EntryCopySubject::Card(object);
+            if let Some(n) = devour::multiplier(&copy.definition) {
+                self.devour.rules.insert(subject, (controller, n));
+            } else {
+                self.devour.rules.remove(&subject);
+            }
+            self.copies.insert(object, copy);
+        }
+
+        self.bump()?;
+        self.entry_history.push((object, reply));
+        Ok(())
+    }
+    fn pending_controller(&self) -> Option<(ObjectId, SeatId, &[SeatId])> {
+        for &player in &self.apnap {
+            if let Some((&id, (_, opponents))) =
+                self.controller_domains.iter().find(|(id, (chooser, _))| {
+                    *chooser == player && self.entry_controller(**id).is_none()
+                })
+            {
+                return Some((id, player, opponents));
+            }
+        }
+        None
+    }
+    fn select_controller(&mut self, seat: SeatId) -> Result<(), ZoneReplacementError> {
+        let (object, _, opponents) = self
+            .pending_controller()
+            .ok_or(ZoneReplacementError::WrongFrame)?;
+        if !opponents.contains(&seat) {
+            return Err(ZoneReplacementError::InapplicableApplication);
+        }
+        self.bump()?;
+        self.selected_controllers.push((object, seat));
+        self.entry_history
+            .push((object, ZoneReplacementReply::EntryController(seat)));
+        Ok(())
+    }
+    fn chooser(&self, candidate: &ZoneCandidate) -> SeatId {
+        self.entry_controller(candidate.before.id())
+            .or(candidate.entering_controller)
+            .unwrap_or_else(|| {
+                candidate
+                    .before
+                    .controller()
+                    .unwrap_or(candidate.before.owner())
+            })
     }
     fn applicable(&self, application: ZoneApplication) -> bool {
         let Some(candidate) = self.candidates.get(&application.event) else {
@@ -735,14 +728,49 @@ impl ZoneReplacementBatch {
         let Some(source) = self.sources.get(&application.effect) else {
             return false;
         };
+        if candidate.entry_prohibited || self.regenerated(candidate.before.id()) {
+            return false;
+        }
+        if matches!(
+            source.instance.created,
+            Some(CreatedZoneEffect::Regenerate { .. })
+        ) {
+            let destroyed = match candidate.reason {
+                ZoneReason::Destroyed => true,
+                ZoneReason::StateBased(reasons) => reasons.iter().all(|reason| {
+                    matches!(
+                        reason,
+                        crate::occurrence::StateBasedMoveReason::LethalDestruction
+                            | crate::occurrence::StateBasedMoveReason::DeathtouchDestruction
+                    )
+                }),
+                _ => false,
+            };
+            if self.regeneration_prohibited || !destroyed {
+                return false;
+            }
+        }
         let definition = &source.definition;
         !self
             .applied
             .get(&application.event)
             .is_some_and(|used| used.contains(&application.effect))
             && !self.optional.contains_key(&application)
-            && definition.destination == candidate.current
-            && matches!(&definition.actions,ZoneActionPredicate::OneOf(actions) if actions.contains(&candidate.action))
+            && (definition.destination == candidate.current
+                || (source.instance.created == Some(CreatedZoneEffect::Commander)
+                    && candidate.current == PublicZoneDestination::Library)
+                || ((source.instance.unearth
+                    || source.instance.created == Some(CreatedZoneEffect::CorpseReturn))
+                    && matches!(
+                        candidate.current,
+                        PublicZoneDestination::Hand
+                            | PublicZoneDestination::Library
+                            | PublicZoneDestination::Command
+                    )))
+            && match &definition.actions {
+                ZoneActionPredicate::Any => true,
+                ZoneActionPredicate::OneOf(actions) => actions.contains(&candidate.action),
+            }
             && match definition.objects {
                 ZoneObjectKind::Either => true,
                 ZoneObjectKind::Card => candidate.before.card_id().is_some(),
@@ -760,7 +788,7 @@ impl ZoneReplacementBatch {
             let applications = self
                 .candidates
                 .iter()
-                .filter(|(_, candidate)| Self::chooser(candidate) == actor)
+                .filter(|(_, candidate)| self.chooser(candidate) == actor)
                 .flat_map(|(&event, _)| {
                     self.sources
                         .keys()
@@ -807,7 +835,6 @@ impl ZoneReplacementBatch {
             return Err(ZoneReplacementError::InconsistentBatch);
         }
         let destination = source.definition.replace_with;
-        let witness = source.clone();
         self.bump()?;
         if let Some(answer) = answer {
             self.optional.insert(application, answer);
@@ -826,13 +853,6 @@ impl ZoneReplacementBatch {
             application,
             optional: answer,
         });
-        if self
-            .application_sources
-            .insert(application, witness)
-            .is_some()
-        {
-            return Err(ZoneReplacementError::InconsistentBatch);
-        }
         self.phase = ZoneReplacementPhase::Selecting;
         Ok(())
     }
@@ -840,12 +860,44 @@ impl ZoneReplacementBatch {
         let (chooser, request) = match self.phase {
             ZoneReplacementPhase::Settled => return None,
             ZoneReplacementPhase::Confirming { application } => (
-                Self::chooser(self.candidates.get(&application.event)?),
+                if application.effect.created == Some(CreatedZoneEffect::Commander) {
+                    self.candidates.get(&application.event)?.before.owner()
+                } else {
+                    self.chooser(self.candidates.get(&application.event)?)
+                },
                 ZoneReplacementRequest::ConfirmOptional { application },
             ),
             ZoneReplacementPhase::Selecting => {
-                let (chooser, applications) = self.applications()?;
-                (chooser, ZoneReplacementRequest::Select { applications })
+                if let Some((object, chooser, opponents)) = self.pending_controller() {
+                    (
+                        chooser,
+                        ZoneReplacementRequest::EntryController {
+                            object,
+                            opponents: opponents.to_vec(),
+                        },
+                    )
+                } else if let Some(PendingEntryCopy {
+                    object,
+                    chooser,
+                    donors,
+                    battlefield_donors,
+                }) = self.pending_copy()
+                {
+                    (
+                        chooser,
+                        ZoneReplacementRequest::EntryCopy {
+                            object: EntryCopySubject::Card(object),
+                            donors,
+                            battlefield_donors,
+                        },
+                    )
+                } else {
+                    if let Some((chooser, applications)) = self.applications() {
+                        (chooser, ZoneReplacementRequest::Select { applications })
+                    } else {
+                        self.devour_choice()?
+                    }
+                }
             }
         };
         Some(ZoneReplacementFrame {
@@ -861,13 +913,31 @@ impl ZoneReplacementBatch {
         revision: u64,
     ) -> Result<Option<EffectDecision>, EffectError> {
         loop {
-            if matches!(self.phase, ZoneReplacementPhase::Confirming { .. }) {
+            if self.pending_controller().is_none()
+                && let Some(PendingEntryCopy {
+                    donors,
+                    battlefield_donors,
+                    ..
+                }) = self.pending_copy()
+                && donors.is_empty()
+                && let [(aura, _)] = battlefield_donors.as_slice()
+            {
+                self.select_copy(ZoneReplacementReply::EntryCopyFromPermanent(*aura))?;
+                continue;
+            }
+            if self.pending_controller().is_some()
+                || self.pending_copy().is_some()
+                || matches!(self.phase, ZoneReplacementPhase::Confirming { .. })
+            {
                 return Ok(Some(EffectDecision::ZoneReplacement(
                     self.frame(revision)
                         .ok_or(ZoneReplacementError::InconsistentBatch)?,
                 )));
             }
             let Some((_, applications)) = self.applications() else {
+                if let Some(frame) = self.frame(revision) {
+                    return Ok(Some(EffectDecision::ZoneReplacement(frame)));
+                }
                 self.phase = ZoneReplacementPhase::Settled;
                 return Ok(None);
             };
@@ -899,6 +969,21 @@ impl ZoneReplacementBatch {
         }
         match (&frame.request, reply) {
             (
+                ZoneReplacementRequest::Devour { .. }
+                | ZoneReplacementRequest::DevourGraveyardOrder { .. },
+                reply,
+            ) => self.select_devour(reply)?,
+
+            (
+                ZoneReplacementRequest::EntryCopy { .. },
+                reply @ (ZoneReplacementReply::EntryCopy(_)
+                | ZoneReplacementReply::EntryCopyFromPermanent(_)),
+            ) => self.select_copy(reply)?,
+            (
+                ZoneReplacementRequest::EntryController { .. },
+                ZoneReplacementReply::EntryController(seat),
+            ) => self.select_controller(seat)?,
+            (
                 ZoneReplacementRequest::Select { applications },
                 ZoneReplacementReply::Select(application),
             ) if applications.contains(&application) => {
@@ -918,76 +1003,113 @@ impl ZoneReplacementBatch {
         }
         Ok(())
     }
+    pub(super) fn verify(
+        &self,
+        window: &EffectWindow,
+        cursor: &ResolutionCursor,
+        operation: &ResolutionSelectionOperation,
+        selections: Vec<ResolutionAcceptedSelection>,
+    ) -> Result<(), EffectError> {
+        self.verify_initial(window.begin_selection_replacements(cursor, operation, selections)?)
+    }
     pub(super) fn verify_cut(&self, fresh: &Self) -> Result<(), EffectError> {
-        if self.cause != fresh.cause
+        let replay;
+        let sources = if self.entry_history.is_empty() {
+            &fresh.sources
+        } else {
+            let mut initial = fresh.clone();
+            self.replay_entry_choices(&mut initial)?;
+            replay = initial;
+            &replay.sources
+        };
+        if self.regeneration_prohibited != fresh.regeneration_prohibited
+            || self.ordered_library_placement != fresh.ordered_library_placement
+            || self.cause != fresh.cause
             || self.intents != fresh.intents
             || self.window_revision != fresh.window_revision
             || self.evaluated != fresh.evaluated
-            || self.sources != fresh.sources
+            || &self.sources != sources
             || self.apnap != fresh.apnap
             || self.candidates.len() != fresh.candidates.len()
-            || self.selection_origins != fresh.selection_origins
         {
             return Err(ZoneReplacementError::InconsistentBatch.into());
         }
         for (key, held) in &self.candidates {
             let mut original = held.clone();
-            original.current = original.original;
+            if !original.entry_prohibited {
+                original.current = original.original;
+            }
             if fresh.candidates.get(key) != Some(&original) {
                 return Err(ZoneReplacementError::InconsistentBatch.into());
             }
         }
         Ok(())
     }
-    fn verify_state(&self, mut replay: Self, settled: bool) -> Result<(), EffectError> {
-        self.verify_cut(&replay)?;
-        if settled && self.phase != ZoneReplacementPhase::Settled {
+    fn replay_entry_choices(&self, replay: &mut Self) -> Result<(), EffectError> {
+        for (object, choice) in &self.entry_history {
+            match choice {
+                ZoneReplacementReply::EntryController(seat)
+                    if replay
+                        .pending_controller()
+                        .is_some_and(|(next, _, _)| next == *object) =>
+                {
+                    replay.select_controller(*seat)?
+                }
+                ZoneReplacementReply::EntryCopy(_)
+                | ZoneReplacementReply::EntryCopyFromPermanent(_)
+                    if replay.pending_controller().is_none()
+                        && replay
+                            .pending_copy()
+                            .is_some_and(|pending| pending.object == *object) =>
+                {
+                    replay.select_copy(choice.clone())?
+                }
+                _ => return Err(ZoneReplacementError::InconsistentBatch.into()),
+            }
+        }
+        Ok(())
+    }
+    pub(super) fn verify_initial(&self, mut replay: Self) -> Result<(), EffectError> {
+        if self.window_revision != replay.window_revision
+            || self.phase != ZoneReplacementPhase::Settled
+            || self.evaluated != replay.evaluated
+        {
             return Err(ZoneReplacementError::InconsistentBatch.into());
         }
-        replay.retained_prefix = self.retained_prefix.clone();
-        replay.restore_prefix()?;
-        if !self.history.starts_with(&replay.history) {
+        self.replay_entry_choices(&mut replay)?;
+        if replay.pending_copy().is_some() || replay.pending_controller().is_some() {
             return Err(ZoneReplacementError::InconsistentBatch.into());
         }
-        for step in &self.history[replay.history.len()..] {
-            if step.optional.is_some()
-                && !matches!(replay.phase, ZoneReplacementPhase::Confirming { application } if application == step.application)
-            {
+        let mut replies = self.devour.replies.iter().peekable();
+        for (index, step) in self
+            .history
+            .iter()
+            .map(Some)
+            .chain(std::iter::once(None))
+            .enumerate()
+        {
+            while let Some((_, reply)) = replies.next_if(|(position, _)| *position == index) {
+                if replay.applications().is_some() {
+                    return Err(ZoneReplacementError::InconsistentBatch.into());
+                }
+                replay.select_devour(reply.clone())?;
+            }
+            let Some(step) = step else {
+                break;
+            };
+            if step.optional.is_some() {
                 replay.confirm(step.application)?;
             }
             replay.apply(step.application, step.optional)?;
         }
-        match self.phase {
-            ZoneReplacementPhase::Settled => {
-                if replay.applications().is_some() {
-                    return Err(ZoneReplacementError::InconsistentBatch.into());
-                }
-                replay.phase = ZoneReplacementPhase::Settled;
-            }
-            ZoneReplacementPhase::Confirming { application } if replay.phase != self.phase => {
-                if !replay
-                    .applications()
-                    .is_some_and(|(_, domain)| domain.contains(&application))
-                    || replay.sources.get(&application.effect).is_none_or(|s| {
-                        s.definition.choice != ZoneReplacementChoice::OptionalAffectedPlayer
-                    })
-                {
-                    return Err(ZoneReplacementError::InconsistentBatch.into());
-                }
-                replay.confirm(application)?;
-            }
-            _ => {}
+        if replay.applications().is_some() || replay.devour_choice().is_some() {
+            return Err(ZoneReplacementError::InconsistentBatch.into());
         }
+        replay.phase = ZoneReplacementPhase::Settled;
         if replay != *self {
             return Err(ZoneReplacementError::InconsistentBatch.into());
         }
         Ok(())
-    }
-    pub(super) fn verify_pending(&self, replay: Self) -> Result<(), EffectError> {
-        self.verify_state(replay, false)
-    }
-    pub(super) fn verify_initial(&self, replay: Self) -> Result<(), EffectError> {
-        self.verify_state(replay, true)
     }
 }
 /// One neutral original attempted movement. The owning adapter authenticates it.
@@ -1009,9 +1131,66 @@ pub(super) struct AuthorizedZoneBatch {
     pub(super) intents: Vec<ZoneMoveIntent>,
 }
 impl EffectWindow {
+    pub(super) fn graveyard_and_library_restricted(evaluated: &EvaluatedCharacteristics) -> bool {
+        evaluated.objects.values().any(|object| {
+            object.has_battlefield_rule(|rule| {
+                matches!(
+                    rule,
+                    crate::characteristics::StaticContinuousAbility::Restriction {
+                        rule:
+                            crate::characteristics::StaticRestriction::RestrictGraveyardAndLibrary,
+                        ..
+                    }
+                )
+            })
+        })
+    }
     pub(super) fn zone_replacement_sources(&self) -> Result<ZoneReplacementSources, EffectError> {
         let evaluated = Arc::new(self.evaluated_characteristics()?);
         let mut sources = BTreeMap::new();
+        for before in self
+            .window
+            .cards()
+            .iter()
+            .filter(|object| matches!(object.zone(), ObjectZone::Hand(_)))
+        {
+            let current = evaluated
+                .get(before.id())
+                .ok_or(ZoneReplacementError::InconsistentBatch)?;
+            if current.printed_text.madness.is_some() {
+                let instance = ZoneEffectInstance {
+                    source: before.id(),
+                    ability: ZoneReplacementAbilityId(0),
+                    unearth: false,
+                    madness: true,
+                    created: None,
+                };
+                let definition = ZoneReplacementAbility {
+                    id: instance.ability,
+                    actions: ZoneActionPredicate::OneOf(
+                        [
+                            ZoneActionKind::EffectDiscard,
+                            ZoneActionKind::DiscardCost,
+                            ZoneActionKind::CleanupDiscard,
+                        ]
+                        .into(),
+                    ),
+                    objects: ZoneObjectKind::Card,
+                    subject: ZoneReplacementSubject::SourceSelf,
+                    destination: PublicZoneDestination::Graveyard,
+                    replace_with: PublicZoneDestination::Exile,
+                    choice: ZoneReplacementChoice::Mandatory,
+                };
+                sources.insert(
+                    instance,
+                    ZoneReplacementSource {
+                        instance,
+                        before: before.clone(),
+                        definition,
+                    },
+                );
+            }
+        }
         for before in self
             .window
             .cards()
@@ -1021,6 +1200,110 @@ impl EffectWindow {
             let current = evaluated
                 .get(before.id())
                 .ok_or(ZoneReplacementError::InconsistentBatch)?;
+            if let Some(origins) = self.damage_exile_until_cleanup.get(&before.id()) {
+                for &(entry, instruction) in origins {
+                    let instance = ZoneEffectInstance {
+                        source: before.id(),
+                        ability: ZoneReplacementAbilityId(0),
+                        unearth: false,
+                        madness: false,
+                        created: Some(CreatedZoneEffect::ExileIfDies { entry, instruction }),
+                    };
+                    let definition = ZoneReplacementAbility {
+                        id: instance.ability,
+                        actions: ZoneActionPredicate::OneOf(BTreeSet::from([
+                            ZoneActionKind::StateBased,
+                            ZoneActionKind::EffectDestroy,
+                            ZoneActionKind::EffectSacrifice,
+                            ZoneActionKind::SacrificeCost,
+                        ])),
+                        objects: ZoneObjectKind::Either,
+                        subject: ZoneReplacementSubject::SourceSelf,
+                        destination: PublicZoneDestination::Graveyard,
+                        replace_with: PublicZoneDestination::Exile,
+                        choice: ZoneReplacementChoice::Mandatory,
+                    };
+                    if sources
+                        .insert(
+                            instance,
+                            ZoneReplacementSource {
+                                instance,
+                                before: before.clone(),
+                                definition,
+                            },
+                        )
+                        .is_some()
+                    {
+                        return Err(ZoneReplacementError::InconsistentBatch.into());
+                    }
+                }
+            }
+            if let Some(shields) = self.regeneration_shields.get(&before.id()) {
+                for &(entry, instruction) in shields {
+                    let instance = ZoneEffectInstance {
+                        source: before.id(),
+                        ability: ZoneReplacementAbilityId(0),
+                        unearth: false,
+                        madness: false,
+                        created: Some(CreatedZoneEffect::Regenerate { entry, instruction }),
+                    };
+                    let definition = ZoneReplacementAbility {
+                        id: instance.ability,
+                        actions: ZoneActionPredicate::OneOf(BTreeSet::from([
+                            ZoneActionKind::StateBased,
+                            ZoneActionKind::EffectDestroy,
+                        ])),
+                        destination: PublicZoneDestination::Graveyard,
+                        replace_with: PublicZoneDestination::Battlefield,
+                        objects: ZoneObjectKind::Either,
+                        subject: ZoneReplacementSubject::SourceSelf,
+                        choice: ZoneReplacementChoice::Mandatory,
+                    };
+                    sources.insert(
+                        instance,
+                        ZoneReplacementSource {
+                            instance,
+                            before: before.clone(),
+                            definition,
+                        },
+                    );
+                }
+            }
+            if before.is_unearthed() || before.has_corpse_return() {
+                let instance = ZoneEffectInstance {
+                    source: before.id(),
+                    ability: ZoneReplacementAbilityId(0),
+                    unearth: before.is_unearthed(),
+                    madness: false,
+                    created: before
+                        .has_corpse_return()
+                        .then_some(CreatedZoneEffect::CorpseReturn),
+                };
+                let definition = ZoneReplacementAbility {
+                    id: instance.ability,
+                    actions: ZoneActionPredicate::OneOf(BTreeSet::from([
+                        ZoneActionKind::StateBased,
+                        ZoneActionKind::EffectDestroy,
+                        ZoneActionKind::EffectReturnSelected,
+                        ZoneActionKind::EffectPutIntoLibrary,
+                        ZoneActionKind::EffectSacrifice,
+                        ZoneActionKind::SacrificeCost,
+                    ])),
+                    objects: ZoneObjectKind::Card,
+                    subject: ZoneReplacementSubject::SourceSelf,
+                    destination: PublicZoneDestination::Graveyard,
+                    replace_with: PublicZoneDestination::Exile,
+                    choice: ZoneReplacementChoice::Mandatory,
+                };
+                sources.insert(
+                    instance,
+                    ZoneReplacementSource {
+                        instance,
+                        before: before.clone(),
+                        definition,
+                    },
+                );
+            }
             for &ability in &current.abilities.zone_replacements {
                 let definition = current
                     .printed_text
@@ -1032,6 +1315,9 @@ impl EffectWindow {
                 let instance = ZoneEffectInstance {
                     source: before.id(),
                     ability,
+                    unearth: false,
+                    madness: false,
+                    created: None,
                 };
                 if sources
                     .insert(
@@ -1055,65 +1341,257 @@ impl EffectWindow {
         cursor: &ResolutionCursor,
         operation: &ResolutionSelectionOperation,
         selections: Vec<ResolutionAcceptedSelection>,
-        retain_candidates: bool,
     ) -> Result<ZoneReplacementBatch, EffectError> {
         let action = match operation {
-            ResolutionSelectionOperation::Sacrifice { .. } => ZoneActionKind::EffectSacrifice,
-            ResolutionSelectionOperation::Discard => ZoneActionKind::EffectDiscard,
+            ResolutionSelectionOperation::ShuffleAnnouncedTargets { .. }
+            | ResolutionSelectionOperation::PutInLibrary { .. }
+            | ResolutionSelectionOperation::PutHandCardOnBottom => {
+                ZoneActionKind::EffectPutIntoLibrary
+            }
+            ResolutionSelectionOperation::ReturnAnnouncedTargets { .. }
+            | ResolutionSelectionOperation::ReturnSingle { .. } => {
+                ZoneActionKind::EffectReturnSelected
+            }
+            ResolutionSelectionOperation::ChooseVow
+            | ResolutionSelectionOperation::ChooseCreaturesToKeep
+            | ResolutionSelectionOperation::AttachToSource { .. }
+            | ResolutionSelectionOperation::EnterAurasAttachedToSource { .. }
+            | ResolutionSelectionOperation::CopyDifferentlyNamedTokens
+            | ResolutionSelectionOperation::Bolster { .. }
+            | ResolutionSelectionOperation::Amass { .. }
+            | ResolutionSelectionOperation::Untap { .. } => {
+                return Err(EffectError::InconsistentSelectionWork);
+            }
+            ResolutionSelectionOperation::DestroyAnnouncedTargets { .. }
+            | ResolutionSelectionOperation::DestroySingle { .. } => ZoneActionKind::EffectDestroy,
+            ResolutionSelectionOperation::ExileAnnouncedTargets { .. }
+            | ResolutionSelectionOperation::ExileLibrarySegment { .. }
+            | ResolutionSelectionOperation::ExileGraveyardTargets { .. }
+            | ResolutionSelectionOperation::ExileChosenGraveyardCards { .. }
+            | ResolutionSelectionOperation::ExileLinkedTargets { .. }
+            | ResolutionSelectionOperation::ExileChosen { .. }
+            | ResolutionSelectionOperation::ExileFromHand { .. }
+            | ResolutionSelectionOperation::ExileSingle { .. } => ZoneActionKind::EffectExile,
+            ResolutionSelectionOperation::WholeGroup { destination, .. } => match destination {
+                PublicZoneDestination::Hand => ZoneActionKind::EffectReturnSelected,
+                PublicZoneDestination::Exile => ZoneActionKind::EffectExile,
+                PublicZoneDestination::Graveyard => ZoneActionKind::EffectDestroy,
+                PublicZoneDestination::Battlefield => ZoneActionKind::EffectEnterBattlefield,
+                PublicZoneDestination::Command => {
+                    return Err(EffectError::InconsistentSelectionWork);
+                }
+                PublicZoneDestination::Library => ZoneActionKind::EffectShuffleGraveyard,
+            },
+            ResolutionSelectionOperation::OtherControlledCreature {
+                sacrifice: true, ..
+            }
+            | ResolutionSelectionOperation::SacrificeExceptVowed { .. }
+            | ResolutionSelectionOperation::SacrificeContributor { .. }
+            | ResolutionSelectionOperation::SacrificeColored
+            | ResolutionSelectionOperation::Sacrifice { .. }
+            | ResolutionSelectionOperation::SacrificeMatching(_)
+            | ResolutionSelectionOperation::RandomSacrifice { .. }
+            | ResolutionSelectionOperation::PayLifeToSaveCreatures { .. } => {
+                ZoneActionKind::EffectSacrifice
+            }
+            ResolutionSelectionOperation::MillEachPlayer { .. } => ZoneActionKind::EffectMill,
+            ResolutionSelectionOperation::LibraryCohortToGraveyard { .. } => {
+                ZoneActionKind::EffectRevealedToGraveyard
+            }
+            ResolutionSelectionOperation::RevealedHand {
+                action: crate::program::ChosenHandAction::Exile,
+                ..
+            } => ZoneActionKind::EffectExile,
+            ResolutionSelectionOperation::RevealedHand {
+                action: crate::program::ChosenHandAction::Discard,
+                ..
+            }
+            | ResolutionSelectionOperation::DiscardUpTo
+            | ResolutionSelectionOperation::Discard
+            | ResolutionSelectionOperation::RandomDiscard { .. } => ZoneActionKind::EffectDiscard,
+            ResolutionSelectionOperation::OtherControlledCreature {
+                sacrifice: false, ..
+            }
+            | ResolutionSelectionOperation::OwnedCommandersToHand
+            | ResolutionSelectionOperation::ReturnToHand { .. }
+            | ResolutionSelectionOperation::GraveyardCreatureToHand
+            | ResolutionSelectionOperation::ReturnGraveyardCardsToHand { .. } => {
+                ZoneActionKind::EffectReturnSelected
+            }
         };
-        self.begin_zone_replacements_authorized(
-            AuthorizedZoneBatch {
-                cause: EventCause::Instruction {
-                    entry: cursor.entry,
-                    instruction: cursor.instruction,
-                },
-                action,
-                intents: selections
-                    .into_iter()
-                    .flat_map(|row| {
-                        row.objects.into_iter().map(move |before| ZoneMoveIntent {
+        let mut batch = self.begin_zone_replacements(AuthorizedZoneBatch {
+            cause: EventCause::Instruction {
+                entry: cursor.entry,
+                instruction: cursor.instruction,
+            },
+            action,
+            intents: selections
+                .into_iter()
+                .flat_map(|row| {
+                    row.objects.into_iter().map(move |before| {
+                        Ok(ZoneMoveIntent {
                             before,
-                            reason: operation.reason(row.player),
+                            reason: operation.reason(row.player)?,
                         })
                     })
-                    .collect(),
-            },
-            retain_candidates,
-        )
+                })
+                .collect::<Result<Vec<_>, EffectError>>()?,
+        })?;
+        if let ResolutionSelectionOperation::PutInLibrary { placement, .. } = operation {
+            batch.ordered_library_placement = Some(*placement);
+        }
+        Ok(batch)
     }
     pub(super) fn begin_zone_replacements(
         &self,
         input: AuthorizedZoneBatch,
     ) -> Result<ZoneReplacementBatch, EffectError> {
-        self.begin_zone_replacements_authorized(input, false)
+        self.begin_zone_replacements_with_entry(input, None)
     }
-    pub(super) fn begin_zone_replacements_authorized(
+    pub(super) fn begin_zone_replacements_with_entry(
         &self,
         input: AuthorizedZoneBatch,
-        retain_candidates: bool,
+        entering_controllers: Option<&BTreeMap<ObjectId, SeatId>>,
     ) -> Result<ZoneReplacementBatch, EffectError> {
-        let ZoneReplacementSources { evaluated, sources } = self.zone_replacement_sources()?;
+        let ZoneReplacementSources {
+            evaluated,
+            mut sources,
+        } = self.zone_replacement_sources()?;
+        if input.action == ZoneActionKind::EffectEnterBattlefield {
+            for intent in &input.intents {
+                if self.face_down_entry_for(intent.before).is_some() {
+                    continue;
+                }
+                let before = self
+                    .window
+                    .cards()
+                    .get(intent.before)
+                    .ok_or(ZoneReplacementError::InconsistentBatch)?;
+                let face = self
+                    .prospective_entry_face(intent.before)
+                    .ok_or(ZoneReplacementError::InconsistentBatch)?;
+                ZoneReplacementBatch::set_entrant_replacements(
+                    &mut sources,
+                    before,
+                    &face.zone_replacements,
+                );
+            }
+        }
         let mut candidates = BTreeMap::new();
         let action = input.action;
+        if action == ZoneActionKind::EffectSacrifice
+            && let Some(entry) = self.window.resolving()
+        {
+            for intent in &input.intents {
+                if let Some(player) = evaluated
+                    .get(intent.before)
+                    .and_then(|card| card.controller)
+                    && self.opposing_sacrifice_prohibited(&evaluated, player, entry.controller())?
+                {
+                    return Err(EffectError::InconsistentSelectionWork);
+                }
+            }
+        }
+        if action == ZoneActionKind::SacrificeCost
+            && input.intents.iter().any(|intent| {
+                evaluated.sacrifice_prohibited(intent.before)
+                    || (evaluated.life_and_creature_costs_prohibited()
+                        && evaluated
+                            .get(intent.before)
+                            .is_some_and(|card| card.is_creature()))
+            })
+        {
+            return Err(EffectError::InvalidCastResource);
+        }
         match (&input.cause, action) {
             (
                 EventCause::Instruction { entry, .. },
                 ZoneActionKind::EffectSacrifice
+                | ZoneActionKind::EffectExile
+                | ZoneActionKind::EffectDestroy
+                | ZoneActionKind::EffectReturnSelected
+                | ZoneActionKind::EffectLookToHand
                 | ZoneActionKind::EffectDiscard
+                | ZoneActionKind::EffectPutIntoLibrary
+                | ZoneActionKind::EffectShuffleGraveyard
+                | ZoneActionKind::EffectRevealedToGraveyard
+                | ZoneActionKind::EffectSearchToGraveyard
                 | ZoneActionKind::EffectMill
-                | ZoneActionKind::EffectSurveil,
+                | ZoneActionKind::EffectSurveil
+                | ZoneActionKind::EffectEnterBattlefield,
             ) if self
                 .window
                 .resolving()
                 .is_some_and(|actual| actual.id() == *entry) => {}
+            (EventCause::Draw { .. }, ZoneActionKind::EffectLookToHand) => {}
+            (
+                EventCause::DamageAdjusted { batch },
+                ZoneActionKind::EffectExile | ZoneActionKind::EffectMill,
+            ) if matches!(&self.pending_work, Some(PendingWork::Damage(work)) if work.results_committed && work.batch.id() == *batch) =>
+                {}
             (EventCause::CleanupDiscard { .. }, ZoneActionKind::CleanupDiscard)
             | (EventCause::StateBasedActions { .. }, ZoneActionKind::StateBased) => {
                 self.authorize_check_zone_input(&input.cause, action, &input.intents)?;
             }
+            (
+                EventCause::MechanismUnit | EventCause::LandPlay { .. },
+                ZoneActionKind::EffectEnterBattlefield,
+            ) if entering_controllers.is_some() => {}
+            (
+                EventCause::ResolutionCompleted { entry, .. },
+                ZoneActionKind::EffectEnterBattlefield,
+            ) if self
+                .window
+                .resolving()
+                .is_some_and(|actual| actual.id() == *entry)
+                && entering_controllers.is_some() => {}
+            (
+                EventCause::ActivatedAbilityCost { entry, .. },
+                ZoneActionKind::MillCost
+                | ZoneActionKind::DiscardCost
+                | ZoneActionKind::SacrificeCost
+                | ZoneActionKind::ExileCost,
+            )
+            | (
+                EventCause::CastObjectPayment { entry, .. },
+                ZoneActionKind::ExileCost
+                | ZoneActionKind::DiscardCost
+                | ZoneActionKind::SacrificeCost,
+            ) if self
+                .window
+                .entries()
+                .iter()
+                .any(|actual| actual.id() == *entry) => {}
+            (EventCause::ManaAbilityCost { .. }, ZoneActionKind::SacrificeCost)
+                if input.intents.len() == 1 => {}
             _ => return Err(ZoneReplacementError::InconsistentBatch.into()),
         }
         // Preserve the existing selection error owner when no replacement exists.
-        if retain_candidates || !sources.is_empty() {
+        let destination = match action {
+            ZoneActionKind::EffectReturnSelected | ZoneActionKind::EffectLookToHand => {
+                PublicZoneDestination::Hand
+            }
+            ZoneActionKind::EffectPutIntoLibrary | ZoneActionKind::EffectShuffleGraveyard => {
+                PublicZoneDestination::Library
+            }
+            ZoneActionKind::EffectExile | ZoneActionKind::ExileCost => PublicZoneDestination::Exile,
+            ZoneActionKind::EffectEnterBattlefield => PublicZoneDestination::Battlefield,
+            _ => PublicZoneDestination::Graveyard,
+        };
+        let restrict_entry = action == ZoneActionKind::EffectEnterBattlefield
+            && Self::graveyard_and_library_restricted(&evaluated);
+        if !sources.is_empty()
+            || destination != PublicZoneDestination::Graveyard
+            || matches!(
+                action,
+                ZoneActionKind::DiscardCost
+                    | ZoneActionKind::SacrificeCost
+                    | ZoneActionKind::MillCost
+                    | ZoneActionKind::EffectMill
+                    | ZoneActionKind::EffectRevealedToGraveyard
+                    | ZoneActionKind::EffectSearchToGraveyard
+            )
+        {
             for intent in &input.intents {
                 let object = intent.before;
                 let reason_ok = matches!(
@@ -1122,10 +1600,62 @@ impl EffectWindow {
                         ZoneActionKind::EffectSacrifice,
                         ZoneReason::Sacrifice { .. }
                     ) | (
-                        ZoneActionKind::EffectDiscard | ZoneActionKind::CleanupDiscard,
+                        ZoneActionKind::EffectDiscard
+                            | ZoneActionKind::DiscardCost
+                            | ZoneActionKind::CleanupDiscard,
                         ZoneReason::Discard { .. }
-                    ) | (ZoneActionKind::EffectMill, ZoneReason::Mill { .. })
+                    ) | (ZoneActionKind::EffectExile, ZoneReason::ExiledByEffect)
+                        | (ZoneActionKind::EffectDestroy, ZoneReason::Destroyed)
+                        | (
+                            ZoneActionKind::EffectReturnSelected,
+                            ZoneReason::ReturnToOwnersHand
+                        )
+                        | (ZoneActionKind::EffectLookToHand, ZoneReason::LookTopToHand)
+                        | (
+                            ZoneActionKind::EffectPutIntoLibrary,
+                            ZoneReason::ShufflePermanentIntoLibrary
+                                | ZoneReason::ExiledCardsToLibraryBottom
+                                | ZoneReason::PutIntoOwnersLibrary(_)
+                        )
+                        | (
+                            ZoneActionKind::EffectShuffleGraveyard,
+                            ZoneReason::ShuffleGraveyardIntoLibrary
+                                | ZoneReason::ShuffleHandAndGraveyardIntoLibrary
+                        )
+                        | (
+                            ZoneActionKind::EffectRevealedToGraveyard,
+                            ZoneReason::RevealedToGraveyard
+                                | ZoneReason::PutLibraryCohortIntoGraveyard
+                        )
+                        | (
+                            ZoneActionKind::EffectSearchToGraveyard,
+                            ZoneReason::SearchToGraveyard
+                        )
+                        | (
+                            ZoneActionKind::EffectMill | ZoneActionKind::MillCost,
+                            ZoneReason::Mill { .. }
+                        )
                         | (ZoneActionKind::EffectSurveil, ZoneReason::Surveil { .. })
+                        | (
+                            ZoneActionKind::EffectEnterBattlefield,
+                            ZoneReason::ReturnFromLinkedExile
+                                | ZoneReason::ReturnFromGraveyardToBattlefield
+                                | ZoneReason::ReturnFromSacrifice
+                                | ZoneReason::PermanentResolution
+                                | ZoneReason::LandPlay
+                                | ZoneReason::UnearthReturn
+                                | ZoneReason::NinjutsuEntry
+                                | ZoneReason::PersistReturn
+                                | ZoneReason::UndyingReturn
+                                | ZoneReason::SearchToBattlefield
+                                | ZoneReason::Manifest
+                                | ZoneReason::ExileToBattlefield
+                                | ZoneReason::HandToBattlefield
+                                | ZoneReason::LookTopToBattlefield
+                                | ZoneReason::TransfigureEntry
+                        )
+                        | (ZoneActionKind::SacrificeCost, ZoneReason::SacrificeCost)
+                        | (ZoneActionKind::ExileCost, ZoneReason::ExileCost)
                         | (ZoneActionKind::StateBased, ZoneReason::StateBased(_))
                 );
                 if !reason_ok {
@@ -1138,6 +1668,17 @@ impl EffectWindow {
                     .ok_or(ZoneReplacementError::InconsistentBatch)?
                     .clone();
                 let key = match input.cause {
+                    EventCause::DamageAdjusted { batch }
+                        if matches!(
+                            action,
+                            ZoneActionKind::EffectExile | ZoneActionKind::EffectMill
+                        ) =>
+                    {
+                        ZoneEventKey::DamageFollowup {
+                            batch,
+                            before: object,
+                        }
+                    }
                     EventCause::Instruction { entry, instruction } => ZoneEventKey::Instruction {
                         entry,
                         instruction,
@@ -1148,38 +1689,257 @@ impl EffectWindow {
                         event,
                         before: object,
                     },
+                    EventCause::MechanismUnit
+                        if action == ZoneActionKind::EffectEnterBattlefield =>
+                    {
+                        ZoneEventKey::LinkedReturn { before: object }
+                    }
+                    EventCause::Draw { .. } if action == ZoneActionKind::EffectLookToHand => {
+                        ZoneEventKey::DrawReveal { before: object }
+                    }
+                    EventCause::LandPlay { .. }
+                        if action == ZoneActionKind::EffectEnterBattlefield =>
+                    {
+                        ZoneEventKey::LandPlay { before: object }
+                    }
+                    EventCause::ResolutionCompleted { entry, .. }
+                        if action == ZoneActionKind::EffectEnterBattlefield =>
+                    {
+                        ZoneEventKey::PermanentEntry {
+                            entry,
+                            before: object,
+                        }
+                    }
+                    EventCause::ActivatedAbilityCost { entry, .. }
+                    | EventCause::CastObjectPayment { entry, .. }
+                        if matches!(
+                            action,
+                            ZoneActionKind::MillCost
+                                | ZoneActionKind::DiscardCost
+                                | ZoneActionKind::SacrificeCost
+                                | ZoneActionKind::ExileCost
+                        ) =>
+                    {
+                        ZoneEventKey::Cost {
+                            entry,
+                            before: object,
+                        }
+                    }
+                    EventCause::ManaAbilityCost { source, ability }
+                        if action == ZoneActionKind::SacrificeCost =>
+                    {
+                        ZoneEventKey::ManaCost {
+                            source,
+                            ability,
+                            before: object,
+                        }
+                    }
                     _ => return Err(ZoneReplacementError::InconsistentBatch.into()),
                 };
+                if matches!(
+                    action,
+                    ZoneActionKind::EffectReturnSelected
+                        | ZoneActionKind::EffectLookToHand
+                        | ZoneActionKind::EffectPutIntoLibrary
+                        | ZoneActionKind::EffectShuffleGraveyard
+                ) && before
+                    .card_id()
+                    .is_some_and(|id| self.commanders.contains_key(&id))
+                {
+                    let instance = ZoneEffectInstance {
+                        source: object,
+                        ability: ZoneReplacementAbilityId(0),
+                        unearth: false,
+                        madness: false,
+                        created: Some(CreatedZoneEffect::Commander),
+                    };
+                    let definition = ZoneReplacementAbility {
+                        id: instance.ability,
+                        objects: ZoneObjectKind::Card,
+                        subject: ZoneReplacementSubject::SourceSelf,
+                        actions: ZoneActionPredicate::OneOf([action].into()),
+                        destination,
+                        replace_with: PublicZoneDestination::Command,
+                        choice: ZoneReplacementChoice::OptionalAffectedPlayer,
+                    };
+                    sources.insert(
+                        instance,
+                        ZoneReplacementSource {
+                            instance,
+                            before: before.clone(),
+                            definition,
+                        },
+                    );
+                }
+                let staying = if restrict_entry
+                    && before.card_id().is_some()
+                    && evaluated
+                        .get(object)
+                        .is_some_and(ObjectCharacteristics::is_creature)
+                {
+                    match before.zone() {
+                        ObjectZone::Graveyard(_) => Some(PublicZoneDestination::Graveyard),
+                        ObjectZone::Library(_) => Some(PublicZoneDestination::Library),
+                        _ => None,
+                    }
+                } else {
+                    None
+                };
+                let current = staying.unwrap_or(destination);
                 let candidate = ZoneCandidate {
                     key,
                     before,
                     action,
                     reason: intent.reason,
-                    original: PublicZoneDestination::Graveyard,
-                    current: PublicZoneDestination::Graveyard,
+                    original: destination,
+                    current,
+                    entry_prohibited: staying.is_some(),
+                    entering_controller: entering_controllers
+                        .and_then(|map| map.get(&object).copied())
+                        .filter(|_| staying.is_none()),
                 };
+                if action == ZoneActionKind::EffectEnterBattlefield
+                    && !candidate.entry_prohibited
+                    && candidate.entering_controller.is_none()
+                {
+                    return Err(ZoneReplacementError::InconsistentBatch.into());
+                }
                 if candidates.insert(key, candidate).is_some() {
                     return Err(ZoneReplacementError::InconsistentBatch.into());
                 }
             }
         }
-        Ok(ZoneReplacementBatch {
+        let regeneration_prohibited = match &input.cause {
+            EventCause::Instruction { entry, instruction } => matches!(
+                self.payloads
+                    .get(entry)
+                    .and_then(StackPayload::instructions)
+                    .and_then(|ops| ops.get(*instruction)),
+                Some(
+                    Instruction::DestroyGroupWithoutRegeneration(_)
+                        | Instruction::DestroyCapturedCombatCreature {
+                            no_regeneration: true
+                        }
+                )
+            ),
+            _ => false,
+        };
+        let mut controller_domains = BTreeMap::new();
+        for candidate in candidates.values() {
+            if let Some(controller) = candidate.entering_controller
+                && candidate.current == PublicZoneDestination::Battlefield
+                && self.face_down_entry_for(candidate.before.id()).is_none()
+                && self
+                    .prospective_entry_face(candidate.before.id())
+                    .and_then(Program::permanent)
+                    .is_some_and(|card| {
+                        card.entry_tap == Some(crate::land::EntryTap::ChosenOpponentControls)
+                    })
+            {
+                let opponents = self
+                    .combat_rules
+                    .opponents(self.window.participants(), controller)?;
+                if !opponents.is_empty() {
+                    controller_domains.insert(candidate.before.id(), (controller, opponents));
+                }
+            }
+        }
+        let copy_rules = candidates
+            .values()
+            .filter(|candidate| {
+                candidate.current == PublicZoneDestination::Battlefield
+                    && self.face_down_entry_for(candidate.before.id()).is_none()
+                    && candidate.entering_controller.is_some()
+            })
+            .filter_map(|candidate| {
+                Some((
+                    candidate.before.id(),
+                    self.prospective_entry_face(candidate.before.id())?
+                        .entry_copy
+                        .clone()?,
+                ))
+            })
+            .collect::<BTreeMap<_, _>>();
+        let has_battlefield_copy_rule = action == ZoneActionKind::EffectEnterBattlefield
+            && entry_copy::EntryCopyPool::has_battlefield_copy_rules(&evaluated, false);
+        let eligible_nontoken_creatures = if has_battlefield_copy_rule {
+            candidates
+                .values()
+                .filter(|candidate| {
+                    candidate.current == PublicZoneDestination::Battlefield
+                        && candidate.before.card_id().is_some()
+                        && self.face_down_entry_for(candidate.before.id()).is_none()
+                        && self
+                            .prospective_entry_face(candidate.before.id())
+                            .is_some_and(|view| view.has_type(crate::program::CardType::Creature))
+                })
+                .map(|candidate| candidate.before.id())
+                .collect::<BTreeSet<_>>()
+        } else {
+            BTreeSet::new()
+        };
+        let mut entry_opponents = BTreeMap::new();
+        let copy_pool = if copy_rules.is_empty() && eligible_nontoken_creatures.is_empty() {
+            entry_copy::EntryCopyPool::default()
+        } else {
+            for &seat in self.window.participants() {
+                entry_opponents.insert(seat, self.opponents_of(seat)?);
+            }
+            entry_copy::EntryCopyPool::capture(self, &evaluated)?
+        };
+        let devour_rules = candidates
+            .values()
+            .filter(|c| {
+                c.entering_controller.is_some() && self.face_down_entry_for(c.before.id()).is_none()
+            })
+            .filter_map(|c| {
+                Some((
+                    EntryCopySubject::Card(c.before.id()),
+                    (
+                        c.entering_controller?,
+                        devour::multiplier(self.prospective_entry_face(c.before.id())?)?,
+                    ),
+                ))
+            })
+            .collect::<BTreeMap<_, _>>();
+        let may_devour = !devour_rules.is_empty()
+            || ((!copy_rules.is_empty() || !eligible_nontoken_creatures.is_empty())
+                && self.window.cards().iter().any(|card| {
+                    self.copiable_program(card.id())
+                        .and_then(devour::multiplier)
+                        .is_some()
+                }));
+        let mut batch = ZoneReplacementBatch {
+            devour: devour::Devour::default(),
+            copy_rules,
+            copy_pool,
+            eligible_nontoken_creatures,
+            used_battlefield_copies: BTreeMap::new(),
+            used_intrinsic_copies: BTreeMap::new(),
+            copies: BTreeMap::new(),
+            entry_opponents,
+            entry_history: Vec::new(),
+            controller_domains,
+            selected_controllers: Vec::new(),
+            regeneration_prohibited,
+            ordered_library_placement: None,
             cause: input.cause,
             intents: input.intents,
             window_revision: self.window.revision(),
             evaluated,
             apnap: self.window.apnap_players()?.collect(),
             candidates,
-            selection_origins: None,
-            application_sources: BTreeMap::new(),
             sources,
             applied: BTreeMap::new(),
             optional: BTreeMap::new(),
             history: vec![],
             stage: 0,
             phase: ZoneReplacementPhase::Selecting,
-            retained_prefix: None,
-        })
+        };
+        if may_devour {
+            batch.enable_devour(self, devour_rules);
+        }
+        Ok(batch)
     }
 }
 
@@ -1190,6 +1950,8 @@ pub struct ZoneGraveyardGroup {
     pub owner: SeatId,
     /// Complete final Graveyard card entrants.
     pub entrants: Vec<ObjectId>,
+    /// Final destination. A library group retains its instruction's placement.
+    pub destination: PublicZoneDestination,
 }
 /// Exact accepted final top-first arrangement above an owner's old pile.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1210,7 +1972,7 @@ impl EffectWindow {
         objects: &[ObjectId],
         replacements: Option<&ZoneReplacementBatch>,
     ) -> Result<Vec<ZoneGraveyardGroup>, EffectError> {
-        let mut owners = BTreeMap::<SeatId, Vec<ObjectId>>::new();
+        let mut owners = BTreeMap::<(SeatId, PublicZoneDestination), Vec<ObjectId>>::new();
         let mut unique = BTreeSet::new();
         for &id in objects {
             if !unique.insert(id) {
@@ -1223,14 +1985,38 @@ impl EffectWindow {
                 .ok_or(EffectError::InconsistentSelectionWork)?;
             let destination =
                 replacements.map_or(Ok(PublicZoneDestination::Graveyard), |b| b.destination(id))?;
-            if object.card_id().is_some() && destination == PublicZoneDestination::Graveyard {
-                owners.entry(object.owner()).or_default().push(id);
+            let order_destination = match destination {
+                PublicZoneDestination::Graveyard => {
+                    !matches!(object.zone(), ObjectZone::Graveyard(_))
+                }
+                PublicZoneDestination::Library => {
+                    replacements.is_some_and(|batch| batch.ordered_library_placement.is_some())
+                }
+                _ => false,
+            };
+            if order_destination
+                && !replacements.is_some_and(|b| b.regenerated(id))
+                && object.card_id().is_some()
+            {
+                owners
+                    .entry((object.owner(), destination))
+                    .or_default()
+                    .push(id);
             }
         }
         let mut groups = vec![];
         for owner in self.window.apnap_players()? {
-            if let Some(entrants) = owners.remove(&owner) {
-                groups.push(ZoneGraveyardGroup { owner, entrants });
+            for destination in [
+                PublicZoneDestination::Graveyard,
+                PublicZoneDestination::Library,
+            ] {
+                if let Some(entrants) = owners.remove(&(owner, destination)) {
+                    groups.push(ZoneGraveyardGroup {
+                        owner,
+                        entrants,
+                        destination,
+                    });
+                }
             }
         }
         if !owners.is_empty() {
@@ -1244,6 +2030,26 @@ impl EffectWindow {
         orders: &[ZoneOwnerOrder],
         replacements: Option<&ZoneReplacementBatch>,
     ) -> Result<ZoneMovePlan, EffectError> {
+        let moving: Vec<_> = objects
+            .iter()
+            .copied()
+            .filter(|id| {
+                !replacements.is_some_and(|batch| {
+                    batch.regenerated(*id)
+                        || (batch.destination(*id) == Ok(PublicZoneDestination::Command)
+                            && self
+                                .window
+                                .cards()
+                                .get(*id)
+                                .is_some_and(|object| object.zone() == ObjectZone::Command))
+                        || (batch.destination(*id) == Ok(PublicZoneDestination::Graveyard)
+                            && self.window.cards().get(*id).is_some_and(|object| {
+                                matches!(object.zone(), ObjectZone::Graveyard(_))
+                            }))
+                })
+            })
+            .collect();
+        let objects = moving.as_slice();
         let groups = self.zone_arrival_groups(objects, replacements)?;
         if orders.len() != groups.len() {
             return Err(EffectError::InconsistentSelectionWork);
@@ -1255,7 +2061,7 @@ impl EffectWindow {
         };
         let mut groups = groups.iter().zip(orders).peekable();
         for owner in self.window.apnap_players()? {
-            if groups.peek().is_some_and(|(g, _)| g.owner == owner) {
+            while groups.peek().is_some_and(|(g, _)| g.owner == owner) {
                 let (group, order) = groups
                     .next()
                     .ok_or(EffectError::InconsistentSelectionWork)?;
@@ -1267,13 +2073,20 @@ impl EffectWindow {
                     return Err(EffectError::InconsistentSelectionWork);
                 }
                 plan.logical.extend(&order.top_to_bottom);
-                plan.application.extend(
-                    order
-                        .top_to_bottom
-                        .iter()
-                        .rev()
-                        .map(|id| (*id, PublicZoneDestination::Graveyard)),
-                );
+                let entries = order
+                    .top_to_bottom
+                    .iter()
+                    .map(|id| (*id, group.destination));
+                if group.destination == PublicZoneDestination::Library
+                    && replacements.is_some_and(|batch| {
+                        batch.ordered_library_placement
+                            == Some(crate::program::LibraryPlacement::Bottom)
+                    })
+                {
+                    plan.application.extend(entries);
+                } else {
+                    plan.application.extend(entries.rev());
+                }
             }
             for &id in objects {
                 let object = self
@@ -1283,11 +2096,14 @@ impl EffectWindow {
                     .ok_or(EffectError::InconsistentSelectionWork)?;
                 if object.owner() == owner
                     && object.card_id().is_some()
-                    && replacements
-                        .is_some_and(|b| b.destination(id) == Ok(PublicZoneDestination::Exile))
+                    && let Some(batch) = replacements
+                    && let destination = batch.destination(id)?
+                    && destination != PublicZoneDestination::Graveyard
+                    && !(batch.ordered_library_placement.is_some()
+                        && destination == PublicZoneDestination::Library)
                 {
                     plan.logical.push(id);
-                    plan.application.push((id, PublicZoneDestination::Exile));
+                    plan.application.push((id, destination));
                 }
             }
             for id in objects.iter().copied().collect::<BTreeSet<_>>() {

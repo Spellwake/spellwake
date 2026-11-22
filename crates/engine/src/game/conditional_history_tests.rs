@@ -7,9 +7,7 @@ use crate::{
     life::LifeAdjustment,
     mana::ManaCost,
     object_identity::{CardId, ObjectDestination},
-    program::{
-        Comparison, ConditionValue, CreatureTypeSlot, Instruction, Program, ResolutionCondition,
-    },
+    program::{Comparison, CreatureTypeSlot, Instruction, Program, ResolutionCondition},
     test_support::{
         creature_types,
         current_profile::{
@@ -31,9 +29,11 @@ fn before_resolution() -> GameState {
     let ops = vec![
         Instruction::BranchIfFalse {
             condition: ResolutionCondition {
-                left: ConditionValue::ControllerLife,
+                left: crate::program::ValueExpr::PlayerStat(
+                    crate::program::PlayerStatExpr::ControllerLife,
+                ),
                 comparison: Comparison::GreaterOrEqual,
-                right: ConditionValue::Literal(20.into()),
+                right: crate::program::ValueExpr::Literal(20.into()),
             },
             destination: 3,
         },

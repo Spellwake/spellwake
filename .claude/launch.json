@@ -1,0 +1,55 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "spellwake-play",
+      "runtimeExecutable": "bun",
+      "runtimeArgs": [
+        "run",
+        "play:dev"
+      ],
+      "port": 6204
+    },
+    {
+      "name": "spellwake-phone-review",
+      "runtimeExecutable": "python3",
+      "runtimeArgs": [
+        "-m",
+        "http.server",
+        "6231",
+        "--bind",
+        "127.0.0.1",
+        "--directory",
+        ".impeccable/review/open-play/phone-review"
+      ],
+      "port": 6231
+    },
+    {
+      "name": "spellwake-tablet-review",
+      "runtimeExecutable": "python3",
+      "runtimeArgs": [
+        "-m",
+        "http.server",
+        "6232",
+        "--bind",
+        "127.0.0.1",
+        "--directory",
+        ".impeccable/review/open-play/tablet-review"
+      ],
+      "port": 6232
+    },
+    {
+      "name": "spellwake-play-packs",
+      "runtimeExecutable": "bun",
+      "runtimeArgs": [
+        "run",
+        "--cwd",
+        "apps/play",
+        "dev",
+        "--port",
+        "6214"
+      ],
+      "port": 6214
+    }
+  ]
+}

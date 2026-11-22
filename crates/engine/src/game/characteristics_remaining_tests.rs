@@ -10,10 +10,7 @@ use crate::{
     mana::ManaCost,
     object_identity::{CardId, ObjectDestination},
     occurrence::{RulesOccurrence, RulesRecord},
-    program::{
-        CardType, Instruction, InstructionAmount, ObjectRelation, OrdinaryCondition, Program,
-        ProgramKind, TriggeredAbility, TriggeredAbilityId,
-    },
+    program::{CardType, Instruction, Program, ProgramKind, TriggeredAbility, TriggeredAbilityId},
 };
 
 const A: SeatId = SeatId(0);
@@ -123,6 +120,7 @@ fn declare(game: &mut GameState, x: ObjectId, records: &mut Vec<RulesRecord>) {
             choice: DecisionReply::DeclareAttackers(vec![AttackDeclaration {
                 attacker: x,
                 defender: B,
+                defending_planeswalker: None,
             }]),
         },
         records,
@@ -193,12 +191,33 @@ fn cl_combat_static_entry() {
     source.continuous = Some(StaticContinuousAbility::Battlefield {
         id: StaticAbilityId(1),
         selector: PermanentSelector {
+            requires_untapped: false,
+            sole_controlled_creature: false,
+            token: None,
+            combat_role: None,
+            requires_flying: false,
+            plus_one_counter: false,
+            minimum_plus_one_counters: 0,
+            any_counter: false,
+            source_has_imprinted_creature: false,
+            controlled_creatures_and_typed_tokens: None,
+            exclude_auras: false,
+            artifact_subtype: None,
+            matches_source_entry_type: false,
+            controller_type_threshold: None,
+            source_condition: None,
+            equipped_by_at_least: 0,
+            devotion_below: None,
+            while_controlling_own_commander: false,
+            station_at: None,
+            attached_to_source: false,
             land_subtype: None,
             required_supertypes: BTreeSet::new(),
             forbidden_supertypes: BTreeSet::new(),
             name: crate::characteristics::NameFilter::Any,
             required_types: BTreeSet::from([CardType::Artifact]),
             forbidden_types: BTreeSet::new(),
+            forbidden_creature_subtype: None,
             creature_subtype: None,
             color: Default::default(),
             controller: ControllerSelector::Any,
@@ -235,7 +254,7 @@ fn cl_combat_static_entry() {
         .unwrap();
     let entered = entry.result()[0].after.id();
     let entry_records = entry.append().records.clone();
-    game.execution = entry.into_state();
+    *game.execution = entry.into_state();
     // MAP CL-COMBAT-STATIC-ENTRY assertion 1
     assert_current(&game, x, &[CardType::Artifact], None);
     assert_eq!(game.execution.combat().unwrap().attackers().count(), 0);
@@ -249,7 +268,7 @@ fn cl_combat_static_entry() {
             &[(entered, ObjectDestination::Hand)],
         )
         .unwrap();
-    game.execution = exit.into_state();
+    *game.execution = exit.into_state();
     // MAP CL-COMBAT-STATIC-ENTRY assertion 2
     assert_current(
         &game,
@@ -349,11 +368,11 @@ fn cleanup_repeat_prefix() -> (
     n.triggered.push(TriggeredAbility {
         grouping: spellwake_engine::program::TriggerGrouping::EachOccurrence,
         id: TriggeredAbilityId(1),
-        condition: OrdinaryCondition::Dies(ObjectRelation::SelfObject),
+        condition: crate::program::TriggerSpec::dies(crate::program::ObjectFilter::self_object()),
         body: ExecutableBody::new(
             BodyTarget::None,
             vec![Instruction::DrawController {
-                amount: InstructionAmount::Literal(1.into()),
+                amount: crate::program::ValueExpr::Literal(1.into()),
             }],
         ),
     });

@@ -77,9 +77,9 @@ impl Selectors {
         let position = state.turn().map(|v| v.position());
         let turn = position.map(|v| v.number);
         let personal = turn.map(|v| v.div_ceil(2));
-        let seat = if state.execution().window().turn_owner() == A {
+        let seat = if state.execution().window().active_player() == A {
             "A"
-        } else if state.execution().window().turn_owner() == B {
+        } else if state.execution().window().active_player() == B {
             "B"
         } else {
             return Err("unknown active selector seat".into());
@@ -144,7 +144,7 @@ impl Selectors {
                     if p.step != Step::Cleanup {
                         return Err("discard source not cleanup".into());
                     }
-                    let player = prior.execution().window().turn_owner();
+                    let player = prior.execution().window().active_player();
                     let n = p.number.div_ceil(2);
                     let label = if player == A {
                         "A"

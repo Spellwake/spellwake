@@ -22,19 +22,24 @@ use crate::occurrence::{
     TriggerTargetChoice,
 };
 #[cfg(test)]
-use crate::program::{BodyTarget, ExecutableBody, SpellTargetFilter};
+use crate::program::{BodyTarget, ExecutableBody, SpellFilter};
 use crate::setup::GameSeed;
 #[cfg(test)]
 mod action_tests;
+mod attack_mana;
 #[cfg(test)]
 mod characteristics_remaining_tests;
 #[cfg(test)]
 mod characteristics_tests;
 #[cfg(test)]
 mod cleanup_tests;
+#[cfg(test)]
+mod commander_identity_tests;
+pub use attack_mana::{AttackManaChoice, AttackManaId};
 mod conclusion;
+mod counter_replacement;
 mod facts;
-pub use conclusion::{BankExpiryInput, GameConclusion, GameConclusionCause};
+pub use conclusion::{GameConclusion, GameConclusionCause};
 #[cfg(test)]
 mod concession_tests;
 #[cfg(test)]
@@ -166,7 +171,14 @@ pub use crate::effects::DecisionReply;
 /// Game-level choice vocabulary; mana abilities have no stack-resolution frame.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RuleFrame {
-    ReplacementChooser(crate::effects::ReplacementChooserFrame),
+    Mutation(crate::effects::MutationFrame),
+    CounterReplacement(crate::effects::CounterReplacementChoice),
+    CastRecovery(crate::effects::CastRecoveryFrame),
+    LinkedAuraChoice(crate::effects::LinkedAuraChoiceFrame),
+    LinkedReturnOrder(crate::effects::LinkedReturnOrderFrame),
+    EntryChoice(crate::effects::EntryChoiceFrame),
+    TokenEntryChoice(crate::token::TokenEntryChoiceFrame),
+    TokenAuraChoice(crate::token::TokenAuraChoiceFrame),
     /// Privileged native precommit replacement request.
     ZoneReplacement(crate::effects::ZoneReplacementFrame),
     /// Privileged genuine library partition; not a production seat-safe view.
@@ -176,7 +188,12 @@ pub enum RuleFrame {
     /// The executor's complete physical owner order, after all selections.
     ResolutionGraveyardOrder(crate::effects::ResolutionGraveyardOrderFrame),
     OptionalEffect(crate::effects::OptionalEffectFrame),
+    ReplacementChooser(crate::effects::ReplacementChooserFrame),
     ResolutionPayment(crate::effects::ResolutionPaymentFrame),
+    MyriadDefender(crate::effects::MyriadDefenderFrame),
+    ReselectAttackDefender(crate::effects::AttackDefenderFrame),
+    TokenDefender(crate::token::TokenDefenderFrame),
+    TransformOrder(crate::day_night::TransformOrder),
     TimestampOrder(crate::token::TokenTimestampOrder),
     Checks(CheckDecision),
     Triggers(TriggerOrder),
@@ -185,19 +202,40 @@ pub enum RuleFrame {
     CopyTargets(CopyResolution),
     Damage(DamageDecision),
     ManaColor(ManaColorChoice),
+    ResolutionManaColor(crate::effects::ResolutionManaColorChoice),
+    RevealedPiles(crate::effects::PileChoiceFrame),
+    PlaneswalkerType(crate::effects::PlaneswalkerTypeFrame),
+    AttackDirection(crate::effects::AttackDirectionFrame),
+    DrawReplacement(crate::effects::DrawReplacementFrame),
+    OpponentChoice(crate::effects::OpponentChoiceFrame),
+    DamageRecipientChoice(crate::effects::DamageRecipientChoiceFrame),
+    LoyaltyRemoval(crate::effects::LoyaltyRemovalChoice),
     Combat(CombatDecision),
+    Proliferate(crate::effects::ProliferateChoice),
+    CounterRemoval(crate::effects::CounterRemovalChoice),
     CreatureType(crate::effects::CreatureTypeChoice),
 }
 impl RuleFrame {
     pub fn chooser(&self) -> SeatId {
         match self {
-            Self::ReplacementChooser(f) => f.chooser(),
+            Self::CounterReplacement(choice) => choice.chooser(),
+            Self::CastRecovery(f) => f.chooser(),
+            Self::LinkedAuraChoice(f) => f.chooser(),
+            Self::LinkedReturnOrder(f) => f.chooser(),
+            Self::EntryChoice(f) => f.chooser(),
+            Self::TokenEntryChoice(f) => f.chooser(),
+            Self::TokenAuraChoice(f) => f.chooser(),
             Self::ZoneReplacement(f) => f.chooser(),
             Self::LibraryTop(f) => f.chooser(),
             Self::ResolutionSelect(f) => f.chooser(),
             Self::ResolutionGraveyardOrder(f) => f.chooser(),
             Self::OptionalEffect(f) => f.chooser(),
+            Self::ReplacementChooser(f) => f.chooser(),
             Self::ResolutionPayment(f) => f.chooser(),
+            Self::MyriadDefender(f) => f.chooser(),
+            Self::ReselectAttackDefender(f) => f.chooser(),
+            Self::TokenDefender(f) => f.chooser(),
+            Self::TransformOrder(f) => f.chooser(),
             Self::TimestampOrder(f) => f.chooser(),
             Self::Checks(f) => f.chooser(),
             Self::Triggers(f) => f.chooser(),
@@ -206,60 +244,29 @@ impl RuleFrame {
             Self::CopyTargets(f) => f.chooser(),
             Self::Damage(f) => f.chooser(),
             Self::ManaColor(f) => f.chooser(),
+            Self::ResolutionManaColor(f) => f.chooser(),
+            Self::Mutation(f) => f.chooser(),
+            Self::RevealedPiles(f) => f.chooser(),
+            Self::PlaneswalkerType(f) => f.chooser(),
+            Self::AttackDirection(f) => f.chooser(),
+            Self::DrawReplacement(f) => f.chooser,
+            Self::OpponentChoice(f) => f.chooser(),
+            Self::DamageRecipientChoice(f) => f.chooser(),
+            Self::LoyaltyRemoval(f) => f.chooser(),
             Self::Combat(f) => f.chooser(),
+            Self::Proliferate(f) => f.chooser(),
+            Self::CounterRemoval(f) => f.chooser(),
             Self::CreatureType(f) => f.chooser(),
-        }
-    }
-    /// Whether a reissued decision still asks for the same native response.
-    /// Used to carry a running deadline across unrelated transitions. The
-    /// command path separately authenticates the original, revision-bound frame.
-    pub fn same_response_obligation(&self, other: &Self) -> bool {
-        fn issuance_revision(frame: &mut RuleFrame) -> Option<&mut u64> {
-            Some(match frame {
-                RuleFrame::Opening(_) => return None,
-                RuleFrame::ReplacementChooser(f) => &mut f.revision,
-                RuleFrame::ZoneReplacement(f) => &mut f.revision,
-                RuleFrame::LibraryTop(f) => &mut f.revision,
-                RuleFrame::ResolutionSelect(f) => &mut f.revision,
-                RuleFrame::ResolutionGraveyardOrder(f) => &mut f.revision,
-                RuleFrame::OptionalEffect(f) => &mut f.revision,
-                RuleFrame::ResolutionPayment(f) => &mut f.revision,
-                RuleFrame::TimestampOrder(f) => &mut f.revision,
-                RuleFrame::Checks(
-                    CheckDecision::CleanupDiscard(f) | CheckDecision::CleanupSelect(f),
-                ) => &mut f.revision,
-                RuleFrame::Checks(CheckDecision::GraveyardOrder(f)) => &mut f.revision,
-                RuleFrame::Checks(CheckDecision::Legend(f)) => &mut f.revision,
-                RuleFrame::Triggers(f) => &mut f.revision,
-                RuleFrame::TriggerTarget(f) => &mut f.revision,
-                RuleFrame::CopyTargets(f) => &mut f.revision,
-                RuleFrame::Damage(DamageDecision::Order(f)) => &mut f.revision,
-                RuleFrame::Damage(DamageDecision::Allocation(f)) => &mut f.revision,
-                RuleFrame::ManaColor(f) => &mut f.revision,
-                RuleFrame::Combat(CombatDecision::Attackers(f)) => &mut f.revision,
-                RuleFrame::Combat(CombatDecision::Blockers(f)) => &mut f.revision,
-                RuleFrame::Combat(CombatDecision::DamageAssignments(f)) => &mut f.revision,
-                RuleFrame::CreatureType(f) => &mut f.revision,
-            })
-        }
-        if self == other {
-            return true;
-        }
-        if std::mem::discriminant(self) != std::mem::discriminant(other) {
-            return false;
-        }
-        let mut left = self.clone();
-        let mut right = other.clone();
-        if let (Some(a), Some(b)) = (issuance_revision(&mut left), issuance_revision(&mut right)) {
-            *a = *b;
-            left == right
-        } else {
-            false
         }
     }
     fn effect_decision(&self) -> Option<EffectDecision> {
         match self {
-            Self::ReplacementChooser(f) => Some(EffectDecision::ReplacementChooser(f.clone())),
+            Self::CastRecovery(f) => Some(EffectDecision::CastRecovery(f.clone())),
+            Self::LinkedAuraChoice(f) => Some(EffectDecision::LinkedAuraChoice(f.clone())),
+            Self::LinkedReturnOrder(f) => Some(EffectDecision::LinkedReturnOrder(f.clone())),
+            Self::EntryChoice(f) => Some(EffectDecision::EntryChoice(f.clone())),
+            Self::TokenEntryChoice(f) => Some(EffectDecision::TokenEntryChoice(f.clone())),
+            Self::TokenAuraChoice(f) => Some(EffectDecision::TokenAuraChoice(f.clone())),
             Self::ZoneReplacement(f) => Some(EffectDecision::ZoneReplacement(f.clone())),
             Self::LibraryTop(f) => Some(EffectDecision::LibraryTop(f.clone())),
             Self::ResolutionSelect(f) => Some(EffectDecision::ResolutionSelect(f.clone())),
@@ -267,7 +274,13 @@ impl RuleFrame {
                 Some(EffectDecision::ResolutionGraveyardOrder(f.clone()))
             }
             Self::OptionalEffect(f) => Some(EffectDecision::OptionalEffect(f.clone())),
+            Self::ReplacementChooser(f) => Some(EffectDecision::ReplacementChooser(f.clone())),
             Self::ResolutionPayment(f) => Some(EffectDecision::ResolutionPayment(f.clone())),
+            Self::MyriadDefender(f) => Some(EffectDecision::MyriadDefender(f.clone())),
+            Self::ReselectAttackDefender(f) => {
+                Some(EffectDecision::ReselectAttackDefender(f.clone()))
+            }
+            Self::TokenDefender(f) => Some(EffectDecision::TokenDefender(f.clone())),
             Self::TimestampOrder(f) => Some(EffectDecision::TimestampOrder(f.clone())),
             Self::Checks(f) => Some(EffectDecision::Checks(f.clone())),
             Self::Triggers(f) => Some(EffectDecision::Triggers(f.clone())),
@@ -275,28 +288,64 @@ impl RuleFrame {
             Self::CopyTargets(f) => Some(EffectDecision::CopyTargets(f.clone())),
             Self::Damage(f) => Some(EffectDecision::Damage(f.clone())),
             Self::Combat(f) => Some(EffectDecision::Combat(f.clone())),
+            Self::Proliferate(f) => Some(EffectDecision::Proliferate(f.clone())),
+            Self::CounterRemoval(f) => Some(EffectDecision::CounterRemoval(f.clone())),
             Self::CreatureType(f) => Some(EffectDecision::CreatureType(f.clone())),
-            Self::Opening(_) | Self::ManaColor(_) => None,
+            Self::ResolutionManaColor(f) => Some(EffectDecision::ResolutionManaColor(f.clone())),
+            Self::Mutation(f) => Some(EffectDecision::Mutation(f.clone())),
+            Self::RevealedPiles(f) => Some(EffectDecision::RevealedPiles(f.clone())),
+            Self::PlaneswalkerType(f) => Some(EffectDecision::PlaneswalkerType(f.clone())),
+            Self::AttackDirection(f) => Some(EffectDecision::AttackDirection(f.clone())),
+            Self::DrawReplacement(f) => Some(EffectDecision::DrawReplacement(f.clone())),
+            Self::OpponentChoice(f) => Some(EffectDecision::OpponentChoice(f.clone())),
+            Self::DamageRecipientChoice(f) => {
+                Some(EffectDecision::DamageRecipientChoice(f.clone()))
+            }
+            Self::LoyaltyRemoval(f) => Some(EffectDecision::LoyaltyRemoval(f.clone())),
+            Self::TransformOrder(f) => Some(EffectDecision::TransformOrder(f.clone())),
+            Self::Opening(_) | Self::ManaColor(_) | Self::CounterReplacement(_) => None,
         }
     }
 }
 impl From<EffectDecision> for RuleFrame {
     fn from(frame: EffectDecision) -> Self {
         match frame {
-            EffectDecision::ReplacementChooser(f) => Self::ReplacementChooser(f),
+            EffectDecision::ManaColor(f) => Self::ManaColor(f),
+            EffectDecision::ResolutionManaColor(f) => Self::ResolutionManaColor(f),
+            EffectDecision::Mutation(f) => Self::Mutation(f),
+            EffectDecision::RevealedPiles(f) => Self::RevealedPiles(f),
+            EffectDecision::PlaneswalkerType(f) => Self::PlaneswalkerType(f),
+            EffectDecision::AttackDirection(f) => Self::AttackDirection(f),
+            EffectDecision::DrawReplacement(f) => Self::DrawReplacement(f),
+            EffectDecision::OpponentChoice(f) => Self::OpponentChoice(f),
+            EffectDecision::DamageRecipientChoice(f) => Self::DamageRecipientChoice(f),
+            EffectDecision::LoyaltyRemoval(f) => Self::LoyaltyRemoval(f),
+            EffectDecision::CastRecovery(f) => Self::CastRecovery(f),
+            EffectDecision::LinkedAuraChoice(f) => Self::LinkedAuraChoice(f),
+            EffectDecision::LinkedReturnOrder(f) => Self::LinkedReturnOrder(f),
+            EffectDecision::EntryChoice(f) => Self::EntryChoice(f),
+            EffectDecision::TokenEntryChoice(f) => Self::TokenEntryChoice(f),
+            EffectDecision::TokenAuraChoice(f) => Self::TokenAuraChoice(f),
             EffectDecision::ZoneReplacement(f) => Self::ZoneReplacement(f),
             EffectDecision::LibraryTop(f) => Self::LibraryTop(f),
             EffectDecision::ResolutionSelect(f) => Self::ResolutionSelect(f),
             EffectDecision::ResolutionGraveyardOrder(f) => Self::ResolutionGraveyardOrder(f),
             EffectDecision::OptionalEffect(f) => Self::OptionalEffect(f),
+            EffectDecision::ReplacementChooser(f) => Self::ReplacementChooser(f),
             EffectDecision::ResolutionPayment(f) => Self::ResolutionPayment(f),
+            EffectDecision::MyriadDefender(f) => Self::MyriadDefender(f),
+            EffectDecision::ReselectAttackDefender(f) => Self::ReselectAttackDefender(f),
+            EffectDecision::TokenDefender(f) => Self::TokenDefender(f),
             EffectDecision::TimestampOrder(f) => Self::TimestampOrder(f),
+            EffectDecision::TransformOrder(f) => Self::TransformOrder(f),
             EffectDecision::Checks(f) => Self::Checks(f),
             EffectDecision::Triggers(f) => Self::Triggers(f),
             EffectDecision::TriggerTarget(f) => Self::TriggerTarget(f),
             EffectDecision::CopyTargets(f) => Self::CopyTargets(f),
             EffectDecision::Damage(f) => Self::Damage(f),
             EffectDecision::Combat(f) => Self::Combat(f),
+            EffectDecision::Proliferate(f) => Self::Proliferate(f),
+            EffectDecision::CounterRemoval(f) => Self::CounterRemoval(f),
             EffectDecision::CreatureType(f) => Self::CreatureType(f),
         }
     }
@@ -328,15 +377,131 @@ impl DecisionState {
 /// Only commands supported by the current closed-world executor.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum GameCommand {
-    /// Concede as the acting seat. Multiplayer continuation is bounded by its
-    /// admitted departure owners; the last remaining opponent wins immediately.
+    /// Cast a face-down creature using morph/megamorph or disguise for {3}.
+    CastFaceDown {
+        spell: ObjectId,
+        kind: crate::face_down::FaceDownKind,
+        payment: Option<ManaPayment>,
+    },
+    /// Turn this controlled face-down permanent up as a special action.
+    TurnFaceUp {
+        permanent: ObjectId,
+        ability: usize,
+        payment: Option<ManaPayment>,
+    },
+    /// Immediately concede this originally two-player game as the acting seat.
     Concede,
+    /// Cast using explicitly chosen alternative payments for individual mana symbols.
+    CastWithResources {
+        spell: ObjectId,
+        target: Option<TargetRef>,
+        payment: crate::mana::CastingPayment,
+    },
     CastUntargeted {
         spell: ObjectId,
         payment: Option<ManaPayment>,
     },
+    /// Exile a card from hand by paying its plot cost at sorcery timing.
+    Plot {
+        source: ObjectId,
+        payment: Option<ManaPayment>,
+    },
+    Foretell {
+        source: ObjectId,
+        payment: Option<ManaPayment>,
+    },
+    Suspend {
+        source: ObjectId,
+        payment: Option<ManaPayment>,
+    },
     PlayLand {
         land: ObjectId,
+    },
+    /// Play a land and provide its required as-entry color choice.
+    PlayLandWithEntryColor {
+        land: ObjectId,
+        color: crate::mana::ManaType,
+    },
+    /// Play a land, either revealing the selected hand card or explicitly declining.
+    PlayLandWithEntryReveal {
+        land: ObjectId,
+        reveal: Option<ObjectId>,
+    },
+    /// Activate a cycling ability of this exact card in the acting player's hand.
+    Cycle {
+        source: ObjectId,
+        ability: ActivatedAbilityId,
+        payment: Option<ManaPayment>,
+    },
+    /// Reveal a card from hand and return the selected unblocked attacker.
+    Ninjutsu {
+        source: ObjectId,
+        ability: ActivatedAbilityId,
+        attacker: ObjectId,
+        payment: Option<ManaPayment>,
+    },
+    /// Activate a transmute ability from hand at sorcery timing.
+    Transmute {
+        source: ObjectId,
+        ability: ActivatedAbilityId,
+        payment: Option<ManaPayment>,
+    },
+    /// Activate a nontargeted ability of a permanent on the battlefield.
+    ActivateWithCreatures {
+        source: ObjectId,
+        ability: ActivatedAbilityId,
+        creatures: Vec<ObjectId>,
+    },
+    /// Activate using selected sacrifice/discard cost objects.
+    ActivateWithCostObjects {
+        source: ObjectId,
+        ability: ActivatedAbilityId,
+        granting_effect: Option<crate::characteristics::EffectInstanceKey>,
+        target: Option<TargetRef>,
+        objects: Vec<ObjectId>,
+        payment: Option<ManaPayment>,
+    },
+    /// Activate a nonmana ability using explicitly selected restricted mana.
+    ActivateWithRestrictedMana {
+        source: ObjectId,
+        ability: ActivatedAbilityId,
+        granting_effect: Option<crate::characteristics::EffectInstanceKey>,
+        origin: crate::activated::ActivationOrigin,
+        chosen_x: Option<spellwake_contracts::RulesInteger>,
+        payment: Option<ManaPayment>,
+        restricted_mana: Vec<crate::mana::RestrictedManaSpend>,
+    },
+    ActivateUntargetedAbility {
+        source: ObjectId,
+        ability: ActivatedAbilityId,
+        payment: Option<ManaPayment>,
+    },
+    /// Activate a targeted loyalty ability with a chosen nonnegative X.
+    /// Activate the ability currently granted to this exact permanent by the identified continuous effect.
+    /// Activate a command-zone emblem by paying mana and sacrificing a controlled creature.
+    ActivateEmblem {
+        emblem: crate::emblem::EmblemId,
+        creature: ObjectId,
+        payment: Option<ManaPayment>,
+    },
+    ActivatePermanentTargets {
+        source: ObjectId,
+        ability: ActivatedAbilityId,
+        targets: Vec<TargetRef>,
+        payment: Option<ManaPayment>,
+    },
+    ActivateGranted {
+        source: ObjectId,
+        effect: crate::characteristics::EffectInstanceKey,
+        target: Option<TargetRef>,
+        payment: Option<ManaPayment>,
+    },
+    ActivateLoyaltyX {
+        source: ObjectId,
+        ability: ActivatedAbilityId,
+        target: TargetRef,
+        chosen_x: spellwake_contracts::RulesInteger,
+        payment: Option<ManaPayment>,
     },
     ActivateAbility {
         source: ObjectId,
@@ -347,6 +512,44 @@ pub enum GameCommand {
     ActivateMana {
         source: ObjectId,
         ability: crate::mana::ManaAbilityRef,
+    },
+    /// Activate a mana ability with selected objects sacrificed as its cost.
+    ActivateManaWithCostObjects {
+        source: ObjectId,
+        ability: crate::mana::ManaAbilityRef,
+        objects: Vec<ObjectId>,
+    },
+    /// Activate a mana ability whose recipient is chosen by its controller.
+    ActivateManaForPlayer {
+        source: ObjectId,
+        ability: crate::mana::ManaAbilityRef,
+        recipient: SeatId,
+    },
+    ActivateManaWithRestrictedPayment {
+        source: ObjectId,
+        ability: crate::mana::ManaAbilityRef,
+        payment: ManaPayment,
+        restricted_mana: Vec<crate::mana::RestrictedManaSpend>,
+        bundle: Option<BTreeMap<crate::mana::ManaType, spellwake_contracts::RulesInteger>>,
+    },
+    /// Pay a hybrid filter cost and choose its exact two-mana output bundle.
+    ActivateHybridMana {
+        source: ObjectId,
+        ability: crate::mana::ManaAbilityRef,
+        payment: ManaPayment,
+        bundle: BTreeMap<crate::mana::ManaType, spellwake_contracts::RulesInteger>,
+    },
+    /// Activate a tap mana ability with a chosen multi-color bundle.
+    ActivateManaWithBundle {
+        source: ObjectId,
+        ability: crate::mana::ManaAbilityRef,
+        bundle: BTreeMap<crate::mana::ManaType, spellwake_contracts::RulesInteger>,
+    },
+    /// Activate a mana ability and explicitly allocate mana to its cost.
+    ActivateManaWithPayment {
+        source: ObjectId,
+        ability: crate::mana::ManaAbilityRef,
+        payment: ManaPayment,
     },
     Cast {
         spell: ObjectId,
@@ -401,9 +604,7 @@ pub struct NativeCandidate {
 pub struct TurnTransition {
     pub from: Option<TurnPosition>,
     pub to: TurnPosition,
-    /// Historical turn owner before entry, even if that owner has left.
     pub active_before: SeatId,
-    /// Historical turn owner after entry; current participation is separate.
     pub active_after: SeatId,
 }
 impl NativeCandidate {
@@ -466,13 +667,22 @@ impl NativeCandidate {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GameState {
     basis: GameBasis,
-    execution: EffectWindow,
-    original_participants: Vec<SeatId>,
+    execution: Box<EffectWindow>,
+    attack_mana: Option<std::sync::Arc<attack_mana::AttackManaHistory>>,
     pending: Option<DecisionState>,
+    counter_replacement: Option<counter_replacement::SuspendedCounterPlacement>,
     next_decision: u64,
     turn: Option<TurnScheduler>,
     opening: Option<OpeningState>,
     random: Option<EntropyTape>,
+    search_reveal: Option<(u64, Vec<crate::object_identity::GameObject>)>,
+    face_down_reveals: Vec<crate::object_identity::GameObject>,
+    /// Public library disclosures retained while their resolving entry is pending.
+    library_reveals: Vec<(
+        crate::stack_window::StackEntryId,
+        crate::object_identity::GameObject,
+    )>,
+    cascade_reveals: Vec<crate::object_identity::GameObject>,
     conclusion: Option<GameConclusion>,
 }
 
@@ -481,16 +691,8 @@ pub enum GameError {
     Opening(OpeningError),
     Entropy(EntropyError),
     GameEnded,
-    /// The current multiplayer cut requires an unimplemented departure owner.
+    /// The suspended game process cannot yet be safely continued after departure.
     UnsupportedConcessionScope,
-    /// Whole-match bank expiry currently requires an originally two-seat game.
-    UnsupportedBankExpiryScope,
-    /// The expired participant does not own the current native wait.
-    BankPlayerNotWaiting,
-    /// Response timeout belongs to originally multiplayer games.
-    UnsupportedResponseExpiryScope,
-    /// The named participant does not own this revision's response.
-    ResponsePlayerNotWaiting,
     PlayerEliminationRequired,
     TurnWorkRequired(TurnWork),
     Turn(TurnError),
@@ -560,13 +762,6 @@ impl GameState {
         self.next_decision
     }
 
-    /// Original ordered native identities, retained independently from live seats.
-    /// Historical bindings and original multiplayer policy use this namespace;
-    /// current action/priority authority still belongs to the live execution.
-    pub fn original_participants(&self) -> &[SeatId] {
-        &self.original_participants
-    }
-
     pub fn initialize(
         game: GameId,
         context: GameContext,
@@ -585,6 +780,90 @@ impl GameState {
     ) -> Result<NativeCandidate, GameError> {
         let scheduler = TurnScheduler::new(start, seed.seats.len() == 2)?;
         Self::initialize_boundary(game, context, seed, InitialBoundary::Turn(scheduler))
+    }
+    /// Start a constructed Commander game with the declared command cards face up.
+    /// Card and partner eligibility is determined by the catalogue's pregame deck admission.
+    ///
+    /// # Errors
+    /// Requires 100 cards, one or two command cards and 40 starting life per participant,
+    /// in addition to the ordinary opening requirements.
+    pub fn initialize_commander_opening(
+        game: GameId,
+        context: GameContext,
+        mut setup: OpeningSetup,
+    ) -> Result<NativeCandidate, GameError> {
+        let mut designated = BTreeSet::new();
+        for &seat in &setup.seed.seats {
+            let mut personal = 0;
+            let mut commanders = 0;
+            for card in setup
+                .seed
+                .cards
+                .iter_mut()
+                .filter(|card| card.owner == seat)
+            {
+                personal += 1;
+                if card.destination == crate::object_identity::ObjectDestination::Command {
+                    if card
+                        .program
+                        .commander_color_choice_mut()
+                        .is_some_and(|choice| choice.is_none())
+                    {
+                        return Err(OpeningError::InvalidSetup.into());
+                    }
+                    commanders += 1;
+                    designated.insert(card.card);
+                }
+            }
+            if personal != 100
+                || !(1..=2).contains(&commanders)
+                || !setup
+                    .seed
+                    .life
+                    .iter()
+                    .any(|life| life.player == seat && life.total == 40.into())
+            {
+                return Err(OpeningError::InvalidSetup.into());
+            }
+        }
+        let mut opening = Self::initialize_opening(game, context, setup)?;
+        opening.next.execution.designate_commanders(designated);
+        Ok(opening)
+    }
+    /// Start a Commander opening with the trusted, deck-admitted combined identity for each player.
+    /// Partner and pregame color choices must already be included in each set.
+    ///
+    /// # Errors
+    /// Rejects missing, extra or duplicate-seat identity coverage and all invalid Commander setups.
+    pub fn initialize_commander_opening_with_identities(
+        game: GameId,
+        context: GameContext,
+        setup: OpeningSetup,
+        identities: BTreeMap<SeatId, BTreeSet<crate::characteristics::Color>>,
+    ) -> Result<NativeCandidate, GameError> {
+        let seats: BTreeSet<_> = setup.seed.seats.iter().copied().collect();
+        if identities.keys().copied().collect::<BTreeSet<_>>() != seats
+            || seats.len() != setup.seed.seats.len()
+        {
+            return Err(OpeningError::InvalidSetup.into());
+        }
+        let mut opening = Self::initialize_commander_opening(game, context, setup)?;
+        for card in opening.next.execution.window().cards().iter() {
+            if let Some(chosen) = card
+                .card_id()
+                .and_then(|id| opening.next.execution.commander_chosen_color(id))
+                && identities
+                    .get(&card.owner())
+                    .is_none_or(|colors| !colors.contains(&chosen))
+            {
+                return Err(OpeningError::InvalidSetup.into());
+            }
+        }
+        opening
+            .next
+            .execution
+            .set_commander_color_identities(identities);
+        Ok(opening)
     }
     pub fn initialize_opening(
         game: GameId,
@@ -645,8 +924,7 @@ impl GameState {
             context: context.clone(),
         };
         let mut facts = TransitionFacts::default();
-        let original_participants = seed.seats.clone();
-        let multiplayer = original_participants.len() > 2;
+        let multiplayer = seed.seats.len() > 2;
         let active = seed.active;
         let (turn, opening, random) = match boundary {
             InitialBoundary::Interaction => (None, None, None),
@@ -659,6 +937,7 @@ impl GameState {
         if opening.is_some() {
             execution = execution.begin_opening(execution.revision())?;
         } else if let Some(schedule) = &turn {
+            execution.enter_speed_turn(schedule.position().number, active);
             let transition = execution.enter_turn_step(
                 execution.revision(),
                 active,
@@ -668,6 +947,7 @@ impl GameState {
             let (state, (), append) = transition.into_parts();
             facts.rules_journal.append(append);
             execution = state;
+            execution.set_calendar_position(schedule.position());
             if schedule.position().step == Step::Untap {
                 execution = execution.record_turn_start(execution.revision())?;
             }
@@ -685,13 +965,18 @@ impl GameState {
                 epoch: 0,
                 revision: 0,
             },
-            execution,
-            original_participants,
+            execution: Box::new(execution),
+            search_reveal: None,
+            face_down_reveals: Vec::new(),
+            library_reveals: Vec::new(),
+            cascade_reveals: Vec::new(),
             pending: None,
+            counter_replacement: None,
             next_decision: 1,
             turn,
             opening,
             random,
+            attack_mana: None,
             conclusion: None,
         };
         if next.opening.is_some() {
@@ -704,11 +989,155 @@ impl GameState {
             }
         }
         let mut next = next.drive(&mut facts)?;
+        next.capture_face_down_reveals(&facts.rules_journal);
         next.finalize_checked_losses();
         Ok(NativeCandidate { base, next, facts })
     }
     pub fn basis(&self) -> &GameBasis {
         &self.basis
+    }
+    /// The first card publicly revealed by a library search at this revision.
+    /// Its original incarnation discloses no handle in its new hidden zone.
+    pub fn search_reveal(
+        &self,
+    ) -> Option<(
+        &crate::object_identity::GameObject,
+        &crate::program::Program,
+    )> {
+        self.search_reveals().into_iter().next()
+    }
+    /// Every card publicly revealed by the most recent search at this revision.
+    pub fn search_reveals(
+        &self,
+    ) -> Vec<(
+        &crate::object_identity::GameObject,
+        &crate::program::Program,
+    )> {
+        let Some((revision, cards)) = self.search_reveal.as_ref() else {
+            return Vec::new();
+        };
+        if *revision != self.basis.revision {
+            return Vec::new();
+        }
+        cards
+            .iter()
+            .filter_map(|card| {
+                let id = card.card_id()?;
+                self.execution
+                    .programs()
+                    .find(|(key, _)| *key == id)
+                    .map(|(_, program)| (card, program))
+            })
+            .collect()
+    }
+    fn capture_face_down_reveals(&mut self, journal: &RulesJournal) {
+        self.face_down_reveals.clear();
+        self.cascade_reveals.clear();
+        let resolving = self.execution.window().resolving().map(|entry| entry.id());
+        self.library_reveals
+            .retain(|(entry, _)| Some(*entry) == resolving);
+        for record in &journal.records {
+            if let crate::occurrence::RulesRecord::Event(event) = record {
+                if let crate::occurrence::EventCause::Instruction { entry, .. } = &event.cause {
+                    for row in &event.occurrences {
+                        if let crate::occurrence::RulesOccurrence::LibraryCardRevealed { object } =
+                            &row.value
+                            && !self.library_reveals.iter().any(|(known_entry, known)| {
+                                known_entry == entry && known.id() == object.id()
+                            })
+                        {
+                            self.library_reveals.push((*entry, object.clone()));
+                        }
+                    }
+                }
+                self.cascade_reveals
+                    .extend(event.occurrences.iter().filter_map(|row| match &row.value {
+                        crate::occurrence::RulesOccurrence::ZoneChange(moved)
+                            if moved.reason == crate::occurrence::ZoneReason::CascadeExile =>
+                        {
+                            Some(moved.after.object.clone())
+                        }
+                        _ => None,
+                    }));
+                self.face_down_reveals
+                    .extend(event.occurrences.iter().filter_map(|row| match &row.value {
+                        crate::occurrence::RulesOccurrence::LibraryCardRevealed { object }
+                            if matches!(
+                                event.cause,
+                                crate::occurrence::EventCause::Draw { .. }
+                            ) =>
+                        {
+                            Some(object.clone())
+                        }
+                        crate::occurrence::RulesOccurrence::FaceDownRevealed { object }
+                        | crate::occurrence::RulesOccurrence::HandCardRevealed { object } => {
+                            Some(object.clone())
+                        }
+                        _ => None,
+                    }));
+            }
+        }
+        for card in self.execution.miracle_reveals() {
+            if !self
+                .face_down_reveals
+                .iter()
+                .any(|known| known.id() == card.id())
+            {
+                self.face_down_reveals.push(card.clone());
+            }
+        }
+        for card in self.execution.revealed_cast_cost_cards() {
+            if !self
+                .face_down_reveals
+                .iter()
+                .any(|known| known.id() == card.id())
+            {
+                self.face_down_reveals.push(card.clone());
+            }
+        }
+        self.face_down_reveals.extend(
+            self.library_reveals
+                .iter()
+                .map(|(_, object)| object.clone()),
+        );
+    }
+
+    /// Faces publicly exiled by cascade in the most recently accepted operation, in actual reveal order.
+    /// Historical exile incarnations never supply a handle into the player's library.
+    pub fn cascade_reveals(
+        &self,
+    ) -> impl Iterator<
+        Item = (
+            &crate::object_identity::GameObject,
+            &crate::program::Program,
+        ),
+    > {
+        self.cascade_reveals
+            .iter()
+            .filter_map(|o| self.execution.printed_face(o).map(|p| (o, p)))
+    }
+    /// Previously hidden cards disclosed at this cut, paired with their printed face.
+    /// The revealed incarnation carries no public handle into its destination zone.
+    pub fn face_down_reveals(
+        &self,
+    ) -> impl Iterator<
+        Item = (
+            &crate::object_identity::GameObject,
+            &crate::program::Program,
+        ),
+    > {
+        self.face_down_reveals
+            .iter()
+            .chain(
+                self.conclusion
+                    .iter()
+                    .flat_map(|result| result.face_down_reveals()),
+            )
+            .filter_map(|object| {
+                self.execution
+                    .printed_face(object)
+                    .map(|face| (object, face))
+            })
     }
     /// Current active choice; terminal roots retain only inactive evidence.
     pub fn pending_decision(&self) -> Option<&DecisionState> {
@@ -749,14 +1178,13 @@ impl GameState {
             _ => None,
         }
     }
-    /// Restricted originally two-player result from the common root conclusion.
-    /// Other winning conditions and multiplayer departure remain unimplemented.
+    /// Winner or draw from the common root conclusion.
     pub fn outcome(&self) -> Option<GameOutcome> {
         self.conclusion.as_ref().map(GameConclusion::outcome)
     }
-    /// This is a blocked rules boundary, not a completed multiplayer outcome.
+    /// Checked losses still awaiting a departure or a root conclusion.
     pub fn pending_eliminations(&self) -> Vec<SeatId> {
-        if self.original_participants.len() > 2 {
+        if self.conclusion.is_none() {
             self.execution
                 .state_based_losses()
                 .iter()
@@ -771,9 +1199,13 @@ impl GameState {
     ///
     /// # Errors
     /// Validates basis, actor and terminal status before command-specific work.
-    /// Concession additionally rejects root revision exhaustion or unsupported
-    /// original participant scope, without consulting priority or a pending chooser.
+    /// Concession additionally rejects root revision exhaustion and unsupported
+    /// suspended continuations.
     pub fn advance(&self, input: GameInput) -> Result<NativeCandidate, GameError> {
+        self.advance_with_attack_mana(input)
+    }
+
+    fn advance_inner(&self, input: GameInput) -> Result<NativeCandidate, GameError> {
         self.validate_basis(&input.basis)?;
         if !self
             .execution
@@ -803,7 +1235,19 @@ impl GameState {
                     .pending
                     .as_ref()
                     .is_some_and(|pending| self.frame_matches_turn_work(&pending.frame, work));
-            if !work_reply {
+            let attack_mana = work == TurnWork::DeclareAttackers
+                && self.execution.is_paying_attack_cost()
+                && matches!(
+                    input.command,
+                    GameCommand::ActivateMana { .. }
+                        | GameCommand::ActivateHybridMana { .. }
+                        | GameCommand::ActivateManaWithBundle { .. }
+                        | GameCommand::ActivateManaWithCostObjects { .. }
+                        | GameCommand::ActivateManaForPlayer { .. }
+                        | GameCommand::ActivateManaWithRestrictedPayment { .. }
+                        | GameCommand::ActivateManaWithPayment { .. }
+                );
+            if !work_reply && !attack_mana {
                 return Err(GameError::TurnWorkRequired(work));
             }
         }
@@ -818,25 +1262,350 @@ impl GameState {
                 if input.actor != pending.chooser {
                     return Err(GameError::WrongChooser);
                 }
-                if let RuleFrame::Opening(frame) = &pending.frame {
+                if self.pending_turn_work() == Some(TurnWork::Draw)
+                    && let Some(frame) = pending.frame.effect_decision()
+                    && self.execution.draw_decision() == Some(frame.clone())
+                {
+                    next.execution.accept_draw_decision(
+                        self.execution.revision(),
+                        &frame,
+                        input.actor,
+                        choice,
+                    )?;
+                    next.pending = None;
+                    None
+                } else if let RuleFrame::TransformOrder(frame) = &pending.frame
+                    && self.pending_turn_work() == Some(TurnWork::Untap)
+                {
+                    let DecisionReply::TransformOrder(objects) = choice else {
+                        return Err(EffectError::WrongDecisionKind.into());
+                    };
+                    next.execution.choose_transform_order(frame, objects)?;
+                    next.pending = None;
+                    None
+                } else if let RuleFrame::Opening(frame) = &pending.frame {
                     next.reply_opening(frame, choice)?;
                     next.pending = None;
                     None
+                } else if let RuleFrame::LibraryTop(frame) = &pending.frame
+                    && frame.chooses_land_kind()
+                {
+                    let DecisionReply::ChooseLandKind(land) = choice else {
+                        return Err(EffectError::WrongDecisionKind.into());
+                    };
+                    let empty = EntropyTape::new(vec![]);
+                    let (progress, entropy) = self.execution.resume_reveal_land_kind(
+                        self.execution.revision(),
+                        frame,
+                        input.actor,
+                        land,
+                        self.random.as_ref().unwrap_or(&empty),
+                    )?;
+                    next.random = Some(entropy);
+                    Some(progress)
+                } else if let RuleFrame::LibraryTop(frame) = &pending.frame
+                    && frame.is_look_top()
+                {
+                    let selected = match choice {
+                        DecisionReply::LibraryTop(crate::effects::LibraryTopReply::Search {
+                            selected,
+                        }) => selected.into_iter().collect(),
+                        DecisionReply::LibraryTop(
+                            crate::effects::LibraryTopReply::SearchBattlefield {
+                                selected_in_timestamp_order,
+                            },
+                        ) if frame.is_battlefield_batch_search() => selected_in_timestamp_order,
+                        DecisionReply::LibraryTop(
+                            crate::effects::LibraryTopReply::SearchWithEntryColors {
+                                selected,
+                                colors,
+                            },
+                        ) if colors.is_empty() => selected,
+                        DecisionReply::LibraryTop(
+                            crate::effects::LibraryTopReply::SearchWithEntryChoices {
+                                selected,
+                                choices,
+                            },
+                        ) if choices.is_empty() => selected,
+                        _ => return Err(EffectError::WrongDecisionKind.into()),
+                    };
+                    let revealed = if frame.looked_card_is_revealed() && !selected.is_empty() {
+                        Some(
+                            selected
+                                .iter()
+                                .map(|id| {
+                                    self.execution
+                                        .window()
+                                        .cards()
+                                        .get(*id)
+                                        .cloned()
+                                        .ok_or(EffectError::UnknownObject)
+                                })
+                                .collect::<Result<Vec<_>, _>>()?,
+                        )
+                    } else {
+                        None
+                    };
+                    let empty = EntropyTape::new(vec![]);
+                    let (progress, entropy) = self.execution.resume_look_top(
+                        self.execution.revision(),
+                        frame,
+                        input.actor,
+                        selected,
+                        self.random.as_ref().unwrap_or(&empty),
+                    )?;
+                    next.search_reveal = revealed.map(|cards| (revision, cards));
+                    next.random = Some(entropy);
+                    Some(progress)
+                } else if let RuleFrame::LibraryTop(frame) = &pending.frame
+                    && frame.kind() == crate::effects::LibraryChoiceKind::Search
+                {
+                    let empty = EntropyTape::new(vec![]);
+                    let tape = self.random.as_ref().unwrap_or(&empty);
+                    let (progress, shuffled, selected) = match choice {
+                        DecisionReply::LibraryTop(crate::effects::LibraryTopReply::Search {
+                            selected,
+                        }) => {
+                            let (progress, shuffled) = self.execution.resume_search(
+                                self.execution.revision(),
+                                frame,
+                                input.actor,
+                                selected,
+                                &[],
+                                &[],
+                                tape,
+                            )?;
+                            (progress, shuffled, selected.into_iter().collect::<Vec<_>>())
+                        }
+                        DecisionReply::LibraryTop(
+                            crate::effects::LibraryTopReply::SearchHandGraveyard {
+                                hand,
+                                graveyard,
+                            },
+                        ) => {
+                            let (progress, shuffled) =
+                                self.execution.resume_hand_graveyard_search(
+                                    self.execution.revision(),
+                                    frame,
+                                    input.actor,
+                                    hand,
+                                    graveyard,
+                                    tape,
+                                )?;
+                            (
+                                progress,
+                                shuffled,
+                                hand.into_iter().chain(graveyard).collect(),
+                            )
+                        }
+                        DecisionReply::LibraryTop(
+                            crate::effects::LibraryTopReply::SearchSplit { battlefield, hand },
+                        ) => {
+                            let (progress, shuffled) = self.execution.resume_split_search(
+                                self.execution.revision(),
+                                frame,
+                                input.actor,
+                                (battlefield, hand),
+                                &[],
+                                &[],
+                                tape,
+                            )?;
+                            (
+                                progress,
+                                shuffled,
+                                battlefield.into_iter().chain(hand).collect(),
+                            )
+                        }
+                        DecisionReply::LibraryTop(
+                            crate::effects::LibraryTopReply::SearchBattlefield {
+                                selected_in_timestamp_order,
+                            },
+                        ) => {
+                            let (progress, shuffled) = self.execution.resume_battlefield_search(
+                                self.execution.revision(),
+                                frame,
+                                input.actor,
+                                selected_in_timestamp_order.clone(),
+                                &[],
+                                &[],
+                                tape,
+                            )?;
+                            (progress, shuffled, selected_in_timestamp_order)
+                        }
+                        DecisionReply::LibraryTop(
+                            crate::effects::LibraryTopReply::SearchWithEntryColors {
+                                selected,
+                                colors,
+                            },
+                        ) => {
+                            let (progress, shuffled) =
+                                if frame.is_bounded_batch_search() && colors.is_empty() {
+                                    self.execution.resume_bounded_batch_search(
+                                        self.execution.revision(),
+                                        frame,
+                                        input.actor,
+                                        selected.clone(),
+                                        tape,
+                                    )?
+                                } else if frame.is_split_search() && selected.len() <= 2 {
+                                    self.execution.resume_split_search(
+                                        self.execution.revision(),
+                                        frame,
+                                        input.actor,
+                                        (selected.first().copied(), selected.get(1).copied()),
+                                        &colors,
+                                        &[],
+                                        tape,
+                                    )?
+                                } else if frame.is_battlefield_batch_search() {
+                                    self.execution.resume_battlefield_search(
+                                        self.execution.revision(),
+                                        frame,
+                                        input.actor,
+                                        selected.clone(),
+                                        &colors,
+                                        &[],
+                                        tape,
+                                    )?
+                                } else if selected.len() <= 1 {
+                                    self.execution.resume_search(
+                                        self.execution.revision(),
+                                        frame,
+                                        input.actor,
+                                        selected.first().copied(),
+                                        &colors,
+                                        &[],
+                                        tape,
+                                    )?
+                                } else {
+                                    return Err(EffectError::WrongDecisionKind.into());
+                                };
+                            (progress, shuffled, selected)
+                        }
+                        DecisionReply::LibraryTop(
+                            crate::effects::LibraryTopReply::SearchWithEntryChoices {
+                                selected,
+                                choices,
+                            },
+                        ) => {
+                            let mut colors = Vec::new();
+                            let mut reveals = Vec::new();
+                            for (object, choice) in choices {
+                                match choice {
+                                    crate::land::EntryChoice::Color(color) => {
+                                        colors.push((object, color))
+                                    }
+                                    crate::land::EntryChoice::Reveal(card) => {
+                                        reveals.push((object, card))
+                                    }
+                                    crate::land::EntryChoice::Opponent(_)
+                                    | crate::land::EntryChoice::Players(_)
+                                    | crate::land::EntryChoice::Chapter(_)
+                                    | crate::land::EntryChoice::CreatureType(_)
+                                    | crate::land::EntryChoice::CardName(_) => {
+                                        return Err(EffectError::WrongDecisionKind.into());
+                                    }
+                                }
+                            }
+                            let (progress, shuffled) = if frame.is_bounded_batch_search()
+                                && colors.is_empty()
+                                && reveals.is_empty()
+                            {
+                                self.execution.resume_bounded_batch_search(
+                                    self.execution.revision(),
+                                    frame,
+                                    input.actor,
+                                    selected.clone(),
+                                    tape,
+                                )?
+                            } else if frame.is_split_search() && selected.len() <= 2 {
+                                self.execution.resume_split_search(
+                                    self.execution.revision(),
+                                    frame,
+                                    input.actor,
+                                    (selected.first().copied(), selected.get(1).copied()),
+                                    &colors,
+                                    &reveals,
+                                    tape,
+                                )?
+                            } else if frame.is_battlefield_batch_search() {
+                                self.execution.resume_battlefield_search(
+                                    self.execution.revision(),
+                                    frame,
+                                    input.actor,
+                                    selected.clone(),
+                                    &colors,
+                                    &reveals,
+                                    tape,
+                                )?
+                            } else if selected.len() <= 1 {
+                                self.execution.resume_search(
+                                    self.execution.revision(),
+                                    frame,
+                                    input.actor,
+                                    selected.first().copied(),
+                                    &colors,
+                                    &reveals,
+                                    tape,
+                                )?
+                            } else {
+                                return Err(EffectError::WrongDecisionKind.into());
+                            };
+                            (progress, shuffled, selected)
+                        }
+                        _ => return Err(EffectError::WrongDecisionKind.into()),
+                    };
+                    let reveal_selected = self.execution.search_reveals_selected()?;
+                    let revealed = if reveal_selected {
+                        selected
+                            .into_iter()
+                            .map(|id| {
+                                self.execution
+                                    .window()
+                                    .cards()
+                                    .get(id)
+                                    .cloned()
+                                    .ok_or(EffectError::UnknownObject)
+                            })
+                            .collect::<Result<Vec<_>, _>>()?
+                    } else {
+                        Vec::new()
+                    };
+                    next.search_reveal = (!revealed.is_empty()).then_some((revision, revealed));
+                    if let Some((entropy, shuffle)) = shuffled {
+                        next.random = Some(entropy);
+                        facts.shuffle_journal.push(shuffle);
+                    }
+                    Some(progress)
                 } else if let RuleFrame::ManaColor(frame) = &pending.frame {
                     let DecisionReply::ManaColor(color) = choice else {
                         return Err(EffectError::WrongDecisionKind.into());
                     };
-                    let completed = self.execution.resume_mana_color(
+                    let completed = self.execution.resume_mana_color_with_rules(
                         self.execution.revision(),
                         frame,
                         input.actor,
                         color,
                     )?;
-                    mana_progress = Some(
-                        completed
-                            .map_result(|production| ManaActivationResult::Complete { production }),
-                    );
-                    None
+                    match completed {
+                        crate::effects::ManaColorResolution::Complete(completed) => {
+                            mana_progress = Some(completed.map_result(|production| {
+                                ManaActivationResult::Complete { production }
+                            }));
+                            None
+                        }
+                        crate::effects::ManaColorResolution::Pending(progress) => {
+                            mana_progress = Some(progress);
+                            None
+                        }
+                        crate::effects::ManaColorResolution::Damage {
+                            production,
+                            progress,
+                        } => {
+                            facts.mana_production = Some(production);
+                            Some(progress)
+                        }
+                    }
                 } else {
                     Some(
                         self.execution.resume_rule(
@@ -853,7 +1622,11 @@ impl GameState {
                 }
             }
             (Some(pending), GameCommand::ActivateMana { source, ability })
-                if matches!(pending.frame, RuleFrame::ResolutionPayment(_)) =>
+                if self.execution.is_paying_attack_cost()
+                    || matches!(
+                        pending.frame,
+                        RuleFrame::ResolutionPayment(_) | RuleFrame::CastRecovery(_)
+                    ) =>
             {
                 if input.actor != pending.chooser {
                     return Err(GameError::WrongChooser);
@@ -866,13 +1639,229 @@ impl GameState {
                 )?);
                 None
             }
+            (
+                Some(pending),
+                GameCommand::ActivateManaWithCostObjects {
+                    source,
+                    ability,
+                    objects,
+                },
+            ) if self.execution.is_paying_attack_cost()
+                || matches!(
+                    pending.frame,
+                    RuleFrame::ResolutionPayment(_) | RuleFrame::CastRecovery(_)
+                ) =>
+            {
+                if input.actor != pending.chooser {
+                    return Err(GameError::WrongChooser);
+                }
+                mana_progress = Some(self.execution.begin_mana_activation_with_cost_objects(
+                    self.execution.revision(),
+                    input.actor,
+                    source,
+                    ability,
+                    &objects,
+                )?);
+                None
+            }
+            (
+                Some(pending),
+                GameCommand::ActivateManaForPlayer {
+                    source,
+                    ability,
+                    recipient,
+                },
+            ) if self.execution.is_paying_attack_cost()
+                || matches!(
+                    pending.frame,
+                    RuleFrame::ResolutionPayment(_) | RuleFrame::CastRecovery(_)
+                ) =>
+            {
+                if input.actor != pending.chooser {
+                    return Err(GameError::WrongChooser);
+                }
+                mana_progress = Some(self.execution.begin_mana_activation_for_player(
+                    self.execution.revision(),
+                    input.actor,
+                    source,
+                    ability,
+                    recipient,
+                )?);
+                None
+            }
+            (
+                Some(pending),
+                GameCommand::ActivateManaWithRestrictedPayment {
+                    source,
+                    ability,
+                    payment,
+                    restricted_mana,
+                    bundle,
+                },
+            ) if self.execution.is_paying_attack_cost()
+                || matches!(
+                    pending.frame,
+                    RuleFrame::ResolutionPayment(_) | RuleFrame::CastRecovery(_)
+                ) =>
+            {
+                if input.actor != pending.chooser {
+                    return Err(GameError::WrongChooser);
+                }
+                mana_progress = Some(
+                    self.execution
+                        .begin_mana_activation_with_restricted_payment(
+                            self.execution.revision(),
+                            input.actor,
+                            source,
+                            ability,
+                            &payment,
+                            &restricted_mana,
+                            bundle.as_ref(),
+                        )?,
+                );
+                None
+            }
             (None, GameCommand::Concede) => return Err(GameError::UnexpectedKernelPhase),
+            (
+                Some(pending),
+                GameCommand::ActivateManaWithPayment {
+                    source,
+                    ability,
+                    payment,
+                },
+            ) if self.execution.is_paying_attack_cost()
+                || matches!(
+                    pending.frame,
+                    RuleFrame::ResolutionPayment(_) | RuleFrame::CastRecovery(_)
+                ) =>
+            {
+                if input.actor != pending.chooser {
+                    return Err(GameError::WrongChooser);
+                }
+                mana_progress = Some(self.execution.begin_mana_activation_with_payment(
+                    self.execution.revision(),
+                    input.actor,
+                    source,
+                    ability,
+                    &payment,
+                )?);
+                None
+            }
+            (
+                Some(pending),
+                GameCommand::ActivateHybridMana {
+                    source,
+                    ability,
+                    payment,
+                    bundle,
+                },
+            ) if self.execution.is_paying_attack_cost()
+                || matches!(
+                    pending.frame,
+                    RuleFrame::ResolutionPayment(_) | RuleFrame::CastRecovery(_)
+                ) =>
+            {
+                if input.actor != pending.chooser {
+                    return Err(GameError::WrongChooser);
+                }
+                mana_progress = Some(self.execution.begin_hybrid_mana_activation(
+                    self.execution.revision(),
+                    input.actor,
+                    source,
+                    ability,
+                    &payment,
+                    &bundle,
+                )?);
+                None
+            }
+            (
+                Some(pending),
+                GameCommand::ActivateManaWithBundle {
+                    source,
+                    ability,
+                    bundle,
+                },
+            ) if self.execution.is_paying_attack_cost()
+                || matches!(
+                    pending.frame,
+                    RuleFrame::ResolutionPayment(_) | RuleFrame::CastRecovery(_)
+                ) =>
+            {
+                if input.actor != pending.chooser {
+                    return Err(GameError::WrongChooser);
+                }
+                mana_progress = Some(self.execution.begin_mana_activation_with_bundle(
+                    self.execution.revision(),
+                    input.actor,
+                    source,
+                    ability,
+                    &bundle,
+                )?);
+                None
+            }
             (Some(_), _) => return Err(GameError::DecisionRequired),
             (None, GameCommand::Reply { .. }) => return Err(GameError::NoDecision),
             (None, GameCommand::Pass) => {
-                next.execution = self
-                    .execution
-                    .pass(self.execution.revision(), input.actor)?;
+                next.execution = Box::new(
+                    self.execution
+                        .pass(self.execution.revision(), input.actor)?,
+                );
+                None
+            }
+            (
+                None,
+                command @ (GameCommand::Plot { .. }
+                | GameCommand::Foretell { .. }
+                | GameCommand::Suspend { .. }),
+            ) => {
+                let (action, source, payment) = match command {
+                    GameCommand::Plot { source, payment } => {
+                        (crate::effects::ExileHandAction::Plot, source, payment)
+                    }
+                    GameCommand::Foretell { source, payment } => {
+                        (crate::effects::ExileHandAction::Foretell, source, payment)
+                    }
+                    GameCommand::Suspend { source, payment } => {
+                        (crate::effects::ExileHandAction::Suspend, source, payment)
+                    }
+                    _ => return Err(GameError::UnexpectedKernelPhase),
+                };
+                let turn = self
+                    .turn
+                    .as_ref()
+                    .ok_or(EffectError::Timing(TimingError::TurnRequired))?;
+                let transition = self.execution.exile_from_hand(
+                    action,
+                    self.execution.revision(),
+                    input.actor,
+                    source,
+                    payment.as_ref(),
+                    turn,
+                )?;
+                next.accept_execution(transition, &mut facts);
+                None
+            }
+            (
+                None,
+                GameCommand::Ninjutsu {
+                    source,
+                    ability,
+                    attacker,
+                    payment,
+                },
+            ) => {
+                next.activate_for_input(
+                    input.actor,
+                    crate::activated::ActivationRequest {
+                        granting_effect: None,
+                        source,
+                        ability,
+                        chosen_x: None,
+                        origin: crate::activated::ActivationOrigin::Ninjutsu(attacker),
+                    },
+                    payment,
+                    &mut facts,
+                )?;
                 None
             }
             (None, GameCommand::PlayLand { land }) => {
@@ -880,13 +1869,193 @@ impl GameState {
                     .turn
                     .as_ref()
                     .ok_or(EffectError::Timing(TimingError::TurnRequired))?;
-                let schedule = turn.record_land_play()?;
-                let transition =
-                    self.execution
-                        .play_land(self.execution.revision(), input.actor, land, turn)?;
-                let record = next.accept_execution(transition, &mut facts);
+                let schedule =
+                    turn.record_land_play(&self.execution.land_play_allowance(input.actor)?)?;
+                let progress = self.execution.begin_land_play(
+                    self.execution.revision(),
+                    input.actor,
+                    land,
+                    turn,
+                    None,
+                )?;
                 next.turn = Some(schedule);
-                facts.land_play = Some(record);
+                Some(progress)
+            }
+            (None, GameCommand::PlayLandWithEntryColor { land, color }) => {
+                let turn = self
+                    .turn
+                    .as_ref()
+                    .ok_or(EffectError::Timing(TimingError::TurnRequired))?;
+                let schedule =
+                    turn.record_land_play(&self.execution.land_play_allowance(input.actor)?)?;
+                let progress = self.execution.begin_land_play(
+                    self.execution.revision(),
+                    input.actor,
+                    land,
+                    turn,
+                    Some(crate::land::EntryChoice::Color(color)),
+                )?;
+                next.turn = Some(schedule);
+                Some(progress)
+            }
+            (None, GameCommand::PlayLandWithEntryReveal { land, reveal }) => {
+                let turn = self
+                    .turn
+                    .as_ref()
+                    .ok_or(EffectError::Timing(TimingError::TurnRequired))?;
+                let schedule =
+                    turn.record_land_play(&self.execution.land_play_allowance(input.actor)?)?;
+                let progress = self.execution.begin_land_play(
+                    self.execution.revision(),
+                    input.actor,
+                    land,
+                    turn,
+                    Some(crate::land::EntryChoice::Reveal(reveal)),
+                )?;
+                next.turn = Some(schedule);
+                Some(progress)
+            }
+            (
+                None,
+                GameCommand::ActivateEmblem {
+                    emblem,
+                    creature,
+                    payment,
+                },
+            ) => Some(next.execution.activate_sacrifice_emblem(
+                input.actor,
+                emblem,
+                creature,
+                payment.as_ref(),
+                next.turn.as_ref(),
+            )?),
+            (
+                None,
+                GameCommand::ActivatePermanentTargets {
+                    source,
+                    ability,
+                    targets,
+                    payment,
+                },
+            ) => {
+                next.activate_for_input(
+                    input.actor,
+                    crate::activated::ActivationRequest {
+                        source,
+                        ability,
+                        chosen_x: None,
+                        granting_effect: None,
+                        origin: crate::activated::ActivationOrigin::PermanentTargets(targets),
+                    },
+                    payment,
+                    &mut facts,
+                )?;
+                None
+            }
+            (
+                None,
+                GameCommand::ActivateWithRestrictedMana {
+                    source,
+                    ability,
+                    granting_effect,
+                    origin,
+                    chosen_x,
+                    payment,
+                    restricted_mana,
+                },
+            ) => {
+                next.activate_for_input_restricted(
+                    input.actor,
+                    crate::activated::ActivationRequest {
+                        source,
+                        ability,
+                        granting_effect,
+                        chosen_x,
+                        origin,
+                    },
+                    payment,
+                    &restricted_mana,
+                    &mut facts,
+                )?;
+                None
+            }
+            (
+                None,
+                GameCommand::ActivateWithCostObjects {
+                    source,
+                    ability,
+                    granting_effect,
+                    target,
+                    objects,
+                    payment,
+                },
+            ) => {
+                next.activate_for_input(
+                    input.actor,
+                    crate::activated::ActivationRequest {
+                        granting_effect,
+                        source,
+                        ability,
+                        chosen_x: None,
+                        origin: crate::activated::ActivationOrigin::SelectedCost {
+                            target,
+                            objects,
+                        },
+                    },
+                    payment,
+                    &mut facts,
+                )?;
+                None
+            }
+            (
+                None,
+                GameCommand::ActivateGranted {
+                    source,
+                    effect,
+                    target,
+                    payment,
+                },
+            ) => {
+                let origin = target.map_or(
+                    crate::activated::ActivationOrigin::Untargeted,
+                    crate::activated::ActivationOrigin::Targeted,
+                );
+                next.activate_for_input(
+                    input.actor,
+                    crate::activated::ActivationRequest {
+                        source,
+                        ability: ActivatedAbilityId(0),
+                        chosen_x: None,
+                        granting_effect: Some(effect),
+                        origin,
+                    },
+                    payment,
+                    &mut facts,
+                )?;
+                None
+            }
+            (
+                None,
+                GameCommand::ActivateLoyaltyX {
+                    source,
+                    ability,
+                    target,
+                    chosen_x,
+                    payment,
+                },
+            ) => {
+                next.activate_for_input(
+                    input.actor,
+                    crate::activated::ActivationRequest {
+                        granting_effect: None,
+                        source,
+                        ability,
+                        origin: crate::activated::ActivationOrigin::Targeted(target),
+                        chosen_x: Some(chosen_x),
+                    },
+                    payment,
+                    &mut facts,
+                )?;
                 None
             }
             (
@@ -898,17 +2067,159 @@ impl GameState {
                     payment,
                 },
             ) => {
-                let activated = self.execution.activate_ability(
+                next.activate_for_input(
+                    input.actor,
+                    crate::activated::ActivationRequest {
+                        granting_effect: None,
+                        chosen_x: None,
+                        source,
+                        ability,
+                        origin: crate::activated::ActivationOrigin::Targeted(target),
+                    },
+                    payment,
+                    &mut facts,
+                )?;
+                None
+            }
+            (
+                None,
+                GameCommand::ActivateUntargetedAbility {
+                    source,
+                    ability,
+                    payment,
+                },
+            ) => {
+                next.activate_for_input(
+                    input.actor,
+                    crate::activated::ActivationRequest {
+                        granting_effect: None,
+                        chosen_x: None,
+                        source,
+                        ability,
+                        origin: crate::activated::ActivationOrigin::Untargeted,
+                    },
+                    payment,
+                    &mut facts,
+                )?;
+                None
+            }
+            (
+                None,
+                GameCommand::Cycle {
+                    source,
+                    ability,
+                    payment,
+                },
+            ) => {
+                next.activate_for_input(
+                    input.actor,
+                    crate::activated::ActivationRequest {
+                        granting_effect: None,
+                        chosen_x: None,
+                        source,
+                        ability,
+                        origin: crate::activated::ActivationOrigin::Cycling,
+                    },
+                    payment,
+                    &mut facts,
+                )?;
+                None
+            }
+            (
+                None,
+                GameCommand::Transmute {
+                    source,
+                    ability,
+                    payment,
+                },
+            ) => {
+                next.activate_for_input(
+                    input.actor,
+                    crate::activated::ActivationRequest {
+                        granting_effect: None,
+                        chosen_x: None,
+                        source,
+                        ability,
+                        origin: crate::activated::ActivationOrigin::Transmute,
+                    },
+                    payment,
+                    &mut facts,
+                )?;
+                None
+            }
+            (
+                None,
+                GameCommand::ActivateWithCreatures {
+                    source,
+                    ability,
+                    creatures,
+                },
+            ) => {
+                next.activate_for_input(
+                    input.actor,
+                    crate::activated::ActivationRequest {
+                        granting_effect: None,
+                        chosen_x: None,
+                        source,
+                        ability,
+                        origin: crate::activated::ActivationOrigin::Contributors(creatures),
+                    },
+                    None,
+                    &mut facts,
+                )?;
+                None
+            }
+            (
+                None,
+                GameCommand::ActivateManaWithBundle {
+                    source,
+                    ability,
+                    bundle,
+                },
+            ) => {
+                mana_progress = Some(self.execution.begin_mana_activation_with_bundle(
                     self.execution.revision(),
                     input.actor,
                     source,
                     ability,
-                    target,
+                    &bundle,
+                )?);
+                None
+            }
+            (
+                None,
+                GameCommand::ActivateHybridMana {
+                    source,
+                    ability,
                     payment,
-                )?;
-                let result = next.accept_execution(activated, &mut facts);
-                facts.mana_payment = Some(result.payment);
-                facts.ability_activation = Some(result.activation);
+                    bundle,
+                },
+            ) => {
+                mana_progress = Some(self.execution.begin_hybrid_mana_activation(
+                    self.execution.revision(),
+                    input.actor,
+                    source,
+                    ability,
+                    &payment,
+                    &bundle,
+                )?);
+                None
+            }
+            (
+                None,
+                GameCommand::ActivateManaWithPayment {
+                    source,
+                    ability,
+                    payment,
+                },
+            ) => {
+                mana_progress = Some(self.execution.begin_mana_activation_with_payment(
+                    self.execution.revision(),
+                    input.actor,
+                    source,
+                    ability,
+                    &payment,
+                )?);
                 None
             }
             (None, GameCommand::ActivateMana { source, ability }) => {
@@ -918,6 +2229,127 @@ impl GameState {
                     source,
                     ability,
                 )?);
+                None
+            }
+            (
+                None,
+                GameCommand::ActivateManaWithCostObjects {
+                    source,
+                    ability,
+                    objects,
+                },
+            ) => {
+                mana_progress = Some(self.execution.begin_mana_activation_with_cost_objects(
+                    self.execution.revision(),
+                    input.actor,
+                    source,
+                    ability,
+                    &objects,
+                )?);
+                None
+            }
+            (
+                None,
+                GameCommand::ActivateManaForPlayer {
+                    source,
+                    ability,
+                    recipient,
+                },
+            ) => {
+                mana_progress = Some(self.execution.begin_mana_activation_for_player(
+                    self.execution.revision(),
+                    input.actor,
+                    source,
+                    ability,
+                    recipient,
+                )?);
+                None
+            }
+            (
+                None,
+                GameCommand::ActivateManaWithRestrictedPayment {
+                    source,
+                    ability,
+                    payment,
+                    restricted_mana,
+                    bundle,
+                },
+            ) => {
+                mana_progress = Some(
+                    self.execution
+                        .begin_mana_activation_with_restricted_payment(
+                            self.execution.revision(),
+                            input.actor,
+                            source,
+                            ability,
+                            &payment,
+                            &restricted_mana,
+                            bundle.as_ref(),
+                        )?,
+                );
+                None
+            }
+            (
+                None,
+                GameCommand::CastWithResources {
+                    spell,
+                    target,
+                    payment,
+                },
+            ) => {
+                let cast = self.execution.cast_with_resources(
+                    self.execution.revision(),
+                    input.actor,
+                    spell,
+                    target,
+                    payment,
+                    self.turn.as_ref(),
+                )?;
+                let payment = next.accept_execution(cast, &mut facts);
+                if !next.execution.has_deferred_payment() {
+                    facts.mana_payment = Some(payment);
+                }
+                None
+            }
+            (
+                None,
+                GameCommand::CastFaceDown {
+                    spell,
+                    kind,
+                    payment,
+                },
+            ) => {
+                let cast = self.execution.cast_face_down(
+                    self.execution.revision(),
+                    input.actor,
+                    spell,
+                    kind,
+                    payment,
+                    self.turn.as_ref(),
+                )?;
+                let payment = next.accept_execution(cast, &mut facts);
+                if !next.execution.has_deferred_payment() {
+                    facts.mana_payment = Some(payment);
+                }
+                None
+            }
+            (
+                None,
+                GameCommand::TurnFaceUp {
+                    permanent,
+                    ability,
+                    payment,
+                },
+            ) => {
+                let action = self.execution.turn_face_up(
+                    self.execution.revision(),
+                    input.actor,
+                    permanent,
+                    ability,
+                    payment.as_ref(),
+                    self.turn.as_ref(),
+                )?;
+                next.accept_execution(action, &mut facts);
                 None
             }
             (None, GameCommand::Cast { spell, target }) => {
@@ -930,7 +2362,9 @@ impl GameState {
                     self.turn.as_ref(),
                 )?;
                 let payment = next.accept_execution(cast, &mut facts);
-                facts.mana_payment = Some(payment);
+                if !next.execution.has_deferred_payment() {
+                    facts.mana_payment = Some(payment);
+                }
                 None
             }
             (
@@ -950,7 +2384,9 @@ impl GameState {
                     self.turn.as_ref(),
                 )?;
                 let payment = next.accept_execution(cast, &mut facts);
-                facts.mana_payment = Some(payment);
+                if !next.execution.has_deferred_payment() {
+                    facts.mana_payment = Some(payment);
+                }
                 None
             }
             (None, GameCommand::CastUntargeted { spell, payment }) => {
@@ -963,7 +2399,9 @@ impl GameState {
                     self.turn.as_ref(),
                 )?;
                 let payment = next.accept_execution(cast, &mut facts);
-                facts.mana_payment = Some(payment);
+                if !next.execution.has_deferred_payment() {
+                    facts.mana_payment = Some(payment);
+                }
                 None
             }
         };
@@ -975,6 +2413,7 @@ impl GameState {
             next.accept_mana_progress(progress, &mut facts)?;
         }
         let mut next = next.drive(&mut facts)?;
+        next.capture_face_down_reveals(&facts.rules_journal);
         next.finalize_checked_losses();
         Ok(NativeCandidate {
             base: CandidateBase::Advance(self.basis.clone()),
@@ -998,7 +2437,29 @@ impl GameState {
         Ok(())
     }
     fn frame_matches_turn_work(&self, frame: &RuleFrame, work: TurnWork) -> bool {
+        if work == TurnWork::DeclareAttackers
+            && self.execution.has_attack_mana_child()
+            && matches!(
+                frame,
+                RuleFrame::ManaColor(_) | RuleFrame::Damage(_) | RuleFrame::ZoneReplacement(_)
+            )
+        {
+            return true;
+        }
         match (frame, work) {
+            (RuleFrame::DrawReplacement(_) | RuleFrame::ZoneReplacement(_), TurnWork::Draw) => {
+                self.execution.draw_decision() == frame.effect_decision()
+            }
+            (RuleFrame::TransformOrder(_), TurnWork::Untap) => true,
+            (
+                RuleFrame::EntryChoice(_)
+                | RuleFrame::LinkedReturnOrder(_)
+                | RuleFrame::LinkedAuraChoice(_),
+                _,
+            ) => self.execution.has_pending_cost_or_linked(),
+            (RuleFrame::ZoneReplacement(_), _) if self.execution.has_pending_cost_or_linked() => {
+                true
+            }
             (RuleFrame::ZoneReplacement(frame), TurnWork::Cleanup)
                 if self.execution.has_check_replacement_work() =>
             {
@@ -1012,25 +2473,60 @@ impl GameState {
             | (RuleFrame::Combat(CombatDecision::Blockers(_)), TurnWork::DeclareBlockers) => true,
             (
                 RuleFrame::Combat(CombatDecision::DamageAssignments(frame)),
-                TurnWork::CombatDamage { additional: false },
-            ) => self
-                .turn
-                .as_ref()
-                .is_some_and(|turn| frame.position() == turn.position()),
-            (RuleFrame::Damage(frame), TurnWork::CombatDamage { additional: false }) => {
-                matches!(frame.origin(), DamageOrigin::Combat { position }
-                    if self.turn.as_ref().is_some_and(|turn| *position == turn.position()))
+                TurnWork::CombatDamage { additional },
+            ) => self.turn.as_ref().is_some_and(|turn| {
+                frame.position() == turn.position()
+                    && frame.position().additional_damage == additional
+            }),
+            (
+                RuleFrame::Damage(_) | RuleFrame::ZoneReplacement(_) | RuleFrame::RevealedPiles(_),
+                TurnWork::CombatDamage { additional },
+            ) => {
+                matches!(self.execution.original_damage_origin(), Some(DamageOrigin::Combat { position })
+                    if self.turn.as_ref().is_some_and(|turn| position == turn.position() && position.additional_damage == additional))
             }
             _ => false,
         }
     }
     /// Adopt every child append before the next owning operation or scheduler work.
+    fn activate_for_input(
+        &mut self,
+        actor: SeatId,
+        request: crate::activated::ActivationRequest,
+        payment: Option<ManaPayment>,
+        facts: &mut TransitionFacts,
+    ) -> Result<(), GameError> {
+        self.activate_for_input_restricted(actor, request, payment, &[], facts)
+    }
+    fn activate_for_input_restricted(
+        &mut self,
+        actor: SeatId,
+        request: crate::activated::ActivationRequest,
+        payment: Option<ManaPayment>,
+        restricted: &[crate::mana::RestrictedManaSpend],
+        facts: &mut TransitionFacts,
+    ) -> Result<(), GameError> {
+        let activated = self.execution.activate_ability_on_turn_restricted(
+            self.execution.revision(),
+            actor,
+            request,
+            payment,
+            restricted,
+            self.turn.as_ref(),
+        )?;
+        let result = self.accept_execution(activated, facts);
+        if !self.execution.has_deferred_payment() {
+            facts.mana_payment = Some(result.payment);
+            facts.ability_activation = Some(result.activation);
+        }
+        Ok(())
+    }
     fn accept_execution<R>(
         &mut self,
         transition: RulesTransition<EffectWindow, R>,
         facts: &mut TransitionFacts,
     ) -> R {
-        let (state, result, append) = transition.into_parts();
+        let (state, result, append) = transition.into_boxed_parts();
         facts.rules_journal.append(append);
         self.execution = state;
         result
@@ -1040,8 +2536,19 @@ impl GameState {
         progress: RuleProgress,
         facts: &mut TransitionFacts,
     ) -> Result<(), GameError> {
-        let (state, result, append) = progress.into_parts();
+        let (mut state, result, append) = progress.into_boxed_parts();
         facts.rules_journal.append(append);
+        if let Some(record) = state.take_completed_land_play() {
+            facts.land_play = Some(record);
+        }
+        if let Some((entropy, shuffle)) = state.take_completed_search_shuffle() {
+            self.random = Some(entropy);
+            facts.shuffle_journal.push(shuffle);
+        }
+        if let Some((payment, activation)) = state.take_completed_deferred_receipts() {
+            facts.mana_payment = Some(payment);
+            facts.ability_activation = activation;
+        }
         match result {
             RuleResult::Complete {
                 completion,
@@ -1063,6 +2570,17 @@ impl GameState {
                             return Err(GameError::UnexpectedKernelPhase);
                         }
                         match completed.boundary() {
+                            CheckBoundary::Priority
+                                if state.take_end_turn_jump()
+                                    && state.state_based_losses().is_empty() =>
+                            {
+                                Some(
+                                    self.turn
+                                        .as_ref()
+                                        .ok_or(GameError::UnexpectedKernelPhase)?
+                                        .jump_to_cleanup()?,
+                                )
+                            }
                             CheckBoundary::Priority => None,
                             CheckBoundary::Cleanup(position) => {
                                 let turn =
@@ -1083,7 +2601,11 @@ impl GameState {
                             }
                         }
                     }
-                    RuleCompletion::Resolution => None,
+                    RuleCompletion::Resolution | RuleCompletion::GameEnded => None,
+                    RuleCompletion::ManaAbility
+                    | RuleCompletion::LinkedReturn
+                    | RuleCompletion::LandPlay
+                    | RuleCompletion::ActivationCost => None,
                     RuleCompletion::TurnWork(work) => {
                         if entry.is_some() {
                             return Err(GameError::UnexpectedKernelPhase);
@@ -1121,6 +2643,24 @@ impl GameState {
                 facts.damage_journal.append(journal);
                 facts.combat_declarations.extend(declarations);
                 facts.combat_assignments.extend(assignments);
+                if state.graveyard_shuffle_pending() {
+                    let empty = EntropyTape::new(vec![]);
+                    state.preflight_graveyard_shuffle(self.random.as_ref().unwrap_or(&empty))?;
+                    if state.graveyard_shuffle_ready() {
+                        let (next, entropy, shuffle) = state
+                            .finish_graveyard_shuffle(self.random.as_ref().unwrap_or(&empty))?;
+                        self.random = Some(entropy);
+                        facts.shuffle_journal.push(shuffle);
+                        return self.accept_rule_progress(next, facts);
+                    }
+                }
+                if state.random_resolution_pending() {
+                    let empty = EntropyTape::new(vec![]);
+                    let (next, entropy) =
+                        state.finish_random_resolution(self.random.as_ref().unwrap_or(&empty))?;
+                    self.random = Some(entropy);
+                    return self.accept_rule_progress(next, facts);
+                }
                 self.bind_decision(frame.into())?;
                 self.execution = state;
             }
@@ -1149,7 +2689,7 @@ impl GameState {
         progress: ManaActivationProgress,
         facts: &mut TransitionFacts,
     ) -> Result<(), GameError> {
-        let (state, result, append) = progress.into_parts();
+        let (state, result, append) = progress.into_boxed_parts();
         facts.rules_journal.append(append);
         match result {
             ManaActivationResult::Complete { production } => {
@@ -1161,6 +2701,10 @@ impl GameState {
                 self.bind_decision(RuleFrame::ManaColor(frame))?;
                 self.execution = state;
             }
+            ManaActivationResult::PendingRule { frame } => {
+                self.bind_decision(frame.into())?;
+                self.execution = state;
+            }
         }
         Ok(())
     }
@@ -1169,11 +2713,47 @@ impl GameState {
             return Err(GameError::GameEnded);
         }
         loop {
+            if self.finalize_effect_win(facts) {
+                return Ok(self);
+            }
             if self.pending.is_some() || !self.execution.state_based_losses().is_empty() {
                 self.finalize_checked_losses();
                 return Ok(self);
             }
+            if let Some(frame) = self.execution.linked_return_decision()? {
+                self.bind_decision(frame.into())?;
+                return Ok(self);
+            }
+            if let Some(frame) = self.execution.pending_cast_cost_decision() {
+                self.bind_decision(frame.into())?;
+                return Ok(self);
+            }
             if let Some(frame) = self.execution.pending_resolution_decision() {
+                if self.execution.graveyard_shuffle_pending() {
+                    let empty = EntropyTape::new(vec![]);
+                    self.execution
+                        .preflight_graveyard_shuffle(self.random.as_ref().unwrap_or(&empty))?;
+                    if self.execution.graveyard_shuffle_ready() {
+                        let (next, entropy, shuffle) = self
+                            .execution
+                            .clone()
+                            .finish_graveyard_shuffle(self.random.as_ref().unwrap_or(&empty))?;
+                        self.random = Some(entropy);
+                        facts.shuffle_journal.push(shuffle);
+                        self.accept_rule_progress(next, facts)?;
+                        continue;
+                    }
+                }
+                if self.execution.random_resolution_pending() {
+                    let empty = EntropyTape::new(vec![]);
+                    let (next, entropy) = self
+                        .execution
+                        .clone()
+                        .finish_random_resolution(self.random.as_ref().unwrap_or(&empty))?;
+                    self.random = Some(entropy);
+                    self.accept_rule_progress(next, facts)?;
+                    continue;
+                }
                 self.bind_decision(frame.into())?;
                 return Ok(self);
             }
@@ -1197,17 +2777,24 @@ impl GameState {
                 WindowPhase::StepEnded if self.turn.is_some() => {
                     let turn = self.turn.as_ref().ok_or(GameError::UnexpectedKernelPhase)?;
                     let completed = if turn.position().step == Step::DeclareAttackers {
+                        let combat = self
+                            .execution
+                            .combat()
+                            .ok_or(GameError::UnexpectedKernelPhase)?;
                         PriorityCompleted::Attackers {
-                            declared_or_put_attacking: match self.execution.combat() {
-                                Some(combat) => combat.had_attackers(),
-                                None if self.execution.window().active_player().is_none() => false,
-                                None => return Err(GameError::UnexpectedKernelPhase),
-                            },
+                            declared_or_put_attacking: combat.had_attackers(),
                         }
                     } else {
                         PriorityCompleted::Ordinary
                     };
-                    let next = turn.complete_priority(completed)?;
+                    let skip_draw = turn.position().step==Step::Upkeep && self.execution.evaluated_characteristics()?.controlled_rules(self.execution.window().active_player(),|rule|matches!(rule,crate::characteristics::StaticContinuousAbility::DrawRule { rule: crate::characteristics::StaticDrawRule::SkipControllerDrawStep, .. }))>0;
+                    let mut next = turn.complete_priority_with_draw_skip(completed, skip_draw)?;
+                    if turn.position().step == Step::EndCombat
+                        && self.execution.take_additional_combat()
+                    {
+                        next = next.begin_additional_combat();
+                    }
+
                     self.accept_schedule(next, facts)?;
                 }
                 WindowPhase::TurnWork => {
@@ -1216,6 +2803,10 @@ impl GameState {
                     };
                     let result = match work {
                         TurnWork::Untap => {
+                            if let Some(frame) = self.execution.next_transform_order()? {
+                                self.bind_decision(RuleFrame::TransformOrder(frame))?;
+                                return Ok(self);
+                            }
                             let turn =
                                 self.turn.as_ref().ok_or(GameError::UnexpectedKernelPhase)?;
                             let transition = self
@@ -1224,28 +2815,35 @@ impl GameState {
                             self.accept_execution(transition, facts);
                             WorkCompleted::Untap
                         }
+                        TurnWork::Draw
+                            if self.execution.window().active_participant().is_none() =>
+                        {
+                            WorkCompleted::Draw
+                        }
                         TurnWork::Draw => {
-                            if self.execution.window().active_player().is_none() {
-                                let next = self
-                                    .turn
-                                    .as_ref()
-                                    .ok_or(GameError::UnexpectedKernelPhase)?
-                                    .complete_work(WorkCompleted::Draw)?;
-                                self.accept_schedule(next, facts)?;
-                                continue;
-                            }
                             let turn =
                                 self.turn.as_ref().ok_or(GameError::UnexpectedKernelPhase)?;
-                            let transition = self.execution.draw_cards_with_origin(
+                            let transition = self.execution.progress_direct_draw(
                                 self.execution.revision(),
-                                self.execution.window().turn_owner(),
+                                self.execution.window().active_player(),
                                 1.into(),
                                 DrawOrigin::Turn {
                                     position: turn.position(),
                                 },
                             )?;
-                            let journal = self.accept_execution(transition, facts);
-                            facts.draw_journal.append(journal);
+                            match self.accept_execution(transition, facts) {
+                                Ok(journal) => facts.draw_journal.append(journal),
+                                Err(frame) => {
+                                    facts
+                                        .draw_journal
+                                        .append(self.execution.take_draw_receipts());
+                                    self.bind_decision(frame.into())?;
+                                    return Ok(self);
+                                }
+                            }
+                            if self.execution.won_by_effect.is_some() {
+                                continue;
+                            }
                             WorkCompleted::Draw
                         }
                         TurnWork::Cleanup => {
@@ -1258,17 +2856,6 @@ impl GameState {
                             continue;
                         }
                         TurnWork::DeclareAttackers | TurnWork::DeclareBlockers => {
-                            if work == TurnWork::DeclareAttackers
-                                && self.execution.window().active_player().is_none()
-                            {
-                                let next = self
-                                    .turn
-                                    .as_ref()
-                                    .ok_or(GameError::UnexpectedKernelPhase)?
-                                    .complete_work(WorkCompleted::DeclareAttackers)?;
-                                self.accept_schedule(next, facts)?;
-                                continue;
-                            }
                             let turn =
                                 self.turn.as_ref().ok_or(GameError::UnexpectedKernelPhase)?;
                             let progress = if work == TurnWork::DeclareAttackers {
@@ -1323,26 +2910,17 @@ impl GameState {
             .clone();
         let previous = previous_turn.position();
         let position = next.position();
-        let before = self.execution.window().turn_owner();
+        let before = self.execution.window().active_player();
         let after = if previous.number != position.number {
-            let order = self.execution.window().participants();
-            let original = self.original_participants();
-            let index = original
-                .iter()
-                .position(|seat| *seat == before)
-                .ok_or(GameError::UnexpectedKernelPhase)?;
-            original
-                .iter()
-                .cycle()
-                .skip(index + 1)
-                .take(original.len())
-                .copied()
-                .find(|seat| order.contains(seat))
-                .ok_or(GameError::UnexpectedKernelPhase)?
+            self.execution.take_next_active_player()?
         } else {
             before
         };
-        if previous.step == Step::EndCombat && previous != position {
+        if (previous.step == Step::EndCombat
+            || previous.step.phase() == crate::turn::Phase::Combat
+                && position.step == Step::Cleanup)
+            && previous != position
+        {
             let transition = self
                 .execution
                 .finish_combat_on_turn(self.execution.revision(), &previous_turn)?;
@@ -1503,12 +3081,17 @@ mod tests {
                 epoch: 0,
                 revision: 0,
             },
-            original_participants: execution.window().participants().to_vec(),
-            execution,
+            execution: Box::new(execution),
+            search_reveal: None,
+            face_down_reveals: Vec::new(),
+            library_reveals: Vec::new(),
+            cascade_reveals: Vec::new(),
             pending: None,
+            counter_replacement: None,
             next_decision: 1,
             opening: None,
             random: None,
+            attack_mana: None,
             conclusion: None,
             turn: if cleanup {
                 Some(
@@ -1544,7 +3127,7 @@ mod tests {
             crate::turn::Step::Cleanup
         );
         assert!(facts.turn_transitions.is_empty());
-        assert_eq!(state.execution.window().turn_owner(), SeatId(0));
+        assert_eq!(state.execution.window().active_player(), SeatId(0));
         assert_eq!(state.execution.window().phase(), WindowPhase::TurnWork);
     }
 
@@ -2639,7 +4222,7 @@ mod tests {
                         b,
                         ManaType::Blue,
                         vec![Instruction::CopySpell, Instruction::CopySpell],
-                        BodyTarget::SingleSpell(SpellTargetFilter::CopyableInstructionSpell),
+                        BodyTarget::SingleSpell(SpellFilter::copyable_instruction()),
                     ),
                     SeedCard {
                         card: CardId(3),
@@ -2923,6 +4506,7 @@ mod combat_tests {
                     .map(|&(id, defender)| AttackDeclaration {
                         attacker: object(game, id),
                         defender,
+                        defending_planeswalker: None,
                     })
                     .collect(),
             ),
@@ -3112,10 +4696,12 @@ mod combat_tests {
                     AttackDeclaration {
                         attacker: object(&game, 1),
                         defender: B,
+                        defending_planeswalker: None,
                     },
                     AttackDeclaration {
                         attacker: object(&game, 2),
                         defender: B,
+                        defending_planeswalker: None,
                     },
                 ]),
             );

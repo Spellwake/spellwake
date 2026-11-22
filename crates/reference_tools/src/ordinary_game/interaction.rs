@@ -824,7 +824,7 @@ impl InteractionPolicy {
         let WindowPhase::Priority(PriorityPhase::Ready { holder }) = w.phase() else {
             return Ok(None);
         };
-        let active = w.turn_owner();
+        let active = w.active_player();
         if active != seat(active_role)? || holder != seat(priority_holder)? {
             return Ok(None);
         }
@@ -1000,6 +1000,7 @@ impl InteractionPolicy {
                     return Err("interaction cast payment missing".into());
                 }
                 let payment = ManaPayment {
+                    from_lots: Default::default(),
                     spend: a
                         .payment
                         .iter()
@@ -1143,7 +1144,11 @@ impl InteractionPolicy {
                         DecisionReply::DeclareAttackers(
                             self.objects(state, &aliases)?
                                 .into_iter()
-                                .map(|attacker| AttackDeclaration { attacker, defender })
+                                .map(|attacker| AttackDeclaration {
+                                    attacker,
+                                    defender,
+                                    defending_planeswalker: None,
+                                })
                                 .collect(),
                         ),
                         intent,
@@ -1154,7 +1159,7 @@ impl InteractionPolicy {
                         .turn()
                         .ok_or("block decision missing turn")?
                         .position();
-                    let active = state.execution().window().turn_owner();
+                    let active = state.execution().window().active_player();
                     let authored = self.recipe.combat.iter().enumerate().find(|(_, c)| {
                         seat(&c.active_role).ok() == Some(active)
                             && c.own_turn == turn.number.div_ceil(2)
@@ -1217,7 +1222,7 @@ impl InteractionPolicy {
                 }
                 if turn.number == a.individual_turn
                     && turn.step == step(&a.step)?
-                    && state.execution().window().turn_owner() == seat(&a.active_role)?
+                    && state.execution().window().active_player() == seat(&a.active_role)?
                     && holder == seat(&a.actor_role)?
                     && self.stack_matches(state, a)?
                     && a.after_settled_action
@@ -1350,6 +1355,7 @@ pub(super) fn reached_probes(
                             spell: *spell,
                             target: *target,
                             payment: ManaPayment {
+                                from_lots: Default::default(),
                                 spend: vec![ManaSpend {
                                     mana_type: ManaType::Blue,
                                     amount: units.into(),
@@ -1409,6 +1415,7 @@ pub(super) fn reached_probes(
                             _ => unreachable!("outer paid cast"),
                         },
                         payment: ManaPayment {
+                            from_lots: Default::default(),
                             spend: vec![
                                 ManaSpend {
                                     mana_type: ManaType::Blue,
@@ -1565,7 +1572,7 @@ pub(super) fn reached_probes(
         state.execution().window().phase()
     {
         let turn = state.turn().ok_or("probe priority lacks turn")?;
-        let active = state.execution().window().turn_owner();
+        let active = state.execution().window().active_player();
         if holder == active
             && matches!(
                 turn.position().step,
@@ -1662,6 +1669,7 @@ pub(super) fn reached_probes(
                         choice: DecisionReply::DeclareAttackers(vec![AttackDeclaration {
                             attacker: current,
                             defender: other(valid.actor)?,
+                            defending_planeswalker: None,
                         }]),
                     },
                     GameError::Effect(EffectError::Combat(CombatError::IllegalAttacker)),
@@ -1674,6 +1682,7 @@ pub(super) fn reached_probes(
                             choice: DecisionReply::DeclareAttackers(vec![AttackDeclaration {
                                 attacker: *old,
                                 defender: other(valid.actor)?,
+                                defending_planeswalker: None,
                             }]),
                         },
                         GameError::Effect(EffectError::Combat(CombatError::IllegalAttacker)),

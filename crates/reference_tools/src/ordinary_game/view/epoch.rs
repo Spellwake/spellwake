@@ -341,7 +341,9 @@ fn check_predecessor_instruction_journal(journal: &RulesJournal) -> Result<(), S
     for record in &journal.records {
         if matches!(
             record,
-            RulesRecord::InstructionBranch { .. } | RulesRecord::InstructionJump { .. }
+            RulesRecord::InstructionBranch { .. }
+                | RulesRecord::InstructionJump { .. }
+                | RulesRecord::ChooserReplaced { .. }
         ) || matches!(record, RulesRecord::Event(event) if event.occurrences.iter().any(|occurrence|
                 matches!(occurrence.value, RulesOccurrence::CreatureTypeChosen { .. })))
         {

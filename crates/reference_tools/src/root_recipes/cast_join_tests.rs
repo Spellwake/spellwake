@@ -5,8 +5,8 @@ use spellwake_engine::{
     life::LifeAdjustment,
     mana::ManaCost,
     program::{
-        BodyTarget, ExecutableBody, Instruction, OrdinaryCondition, PlayerRelation, Program,
-        SpellCastFilter, TriggerGrouping, TriggeredAbility, TriggeredAbilityId,
+        BodyTarget, ExecutableBody, Instruction, PlayerRelation, Program, TriggerGrouping,
+        TriggeredAbility, TriggeredAbilityId,
     },
 };
 
@@ -22,10 +22,10 @@ fn cast_join_packet() -> Value {
     let mut watcher = Program::artifact(None, vec![]);
     watcher.triggered.push(TriggeredAbility {
         id: TriggeredAbilityId(7),
-        condition: OrdinaryCondition::SpellCast {
-            player: PlayerRelation::Controller,
-            filter: SpellCastFilter::AnySpell,
-        },
+        condition: spellwake_engine::program::TriggerSpec::spell_cast(
+            PlayerRelation::Controller,
+            spellwake_engine::program::SpellFilter::any(),
+        ),
         grouping: TriggerGrouping::EachOccurrence,
         body,
     });
@@ -106,10 +106,10 @@ fn actual_root_recipe_target_reply_and_frame_guard_use_existing_player_resolver(
         let mut program = Program::artifact(None, vec![]);
         program.triggered.push(TriggeredAbility {
             id: TriggeredAbilityId(7),
-            condition: OrdinaryCondition::SpellCast {
-                player: PlayerRelation::Controller,
-                filter: SpellCastFilter::AnySpell,
-            },
+            condition: spellwake_engine::program::TriggerSpec::spell_cast(
+                PlayerRelation::Controller,
+                spellwake_engine::program::SpellFilter::any(),
+            ),
             grouping: TriggerGrouping::EachOccurrence,
             body: ExecutableBody::new(
                 BodyTarget::SinglePlayer,

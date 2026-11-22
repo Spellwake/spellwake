@@ -122,8 +122,6 @@ export function validPlayerReplayFrame(
     frame.schemaRevision !== f.source.schemaRevision ||
     frame.snapshot.basis.gameId !== original.gameId ||
     frame.snapshot.basis.contextId !== original.contextId ||
-    frame.snapshot.turn?.priorityDeadlineAt !== undefined ||
-    frame.snapshot.decisions.some((choice) => choice.deadlineAt !== null) ||
     frame.snapshot.viewerSeatId !== original.perspectiveSeatId ||
     frame.snapshot.throughEventSequence !== original.atEventSequence ||
     f.projection.authorizedFullDisclosure !== full ||

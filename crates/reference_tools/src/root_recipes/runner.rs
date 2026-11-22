@@ -40,6 +40,8 @@ struct Bindings {
     damage_effects: BTreeMap<String, DamageEffectId>,
     production_joins: BTreeMap<String, (ObjectId, ManaAbilityRef)>,
 }
+// Test recipe runner command enum kept inline for concise pattern matching.
+#[allow(clippy::large_enum_variant)]
 #[derive(Clone)]
 enum RootCall {
     Advance(GameInput),
@@ -923,11 +925,6 @@ impl Bindings {
                                         .get(name)
                                         .ok_or_else(|| format!("missing related object {name}"))?;
                                     match relation {
-                                        TriggerRelated::LeftGame { .. } => {
-                                            return Err(
-                                                "root recipe profile excludes departures".into()
-                                            );
-                                        }
                                         TriggerRelated::SpellCast(value) => {
                                             value.spell().object.id() == expected
                                         }
@@ -940,11 +937,45 @@ impl Bindings {
                                         }
                                         TriggerRelated::Step { .. } => false,
                                         TriggerRelated::TokenCreated { .. } => false,
+                                        TriggerRelated::CombatDamageToPlaneswalker { .. }
+                                        | TriggerRelated::SubtypeCombatDamage { .. }
+                                        | TriggerRelated::AttachedCreatureDamaged { .. }
+                                        | TriggerRelated::DamageToOpponent { .. }
+                                        | TriggerRelated::ReflexiveDiscardDamage { .. }
+                                        | TriggerRelated::DamageReceived { .. }
+                                        | TriggerRelated::CombatDamageToPlayer { .. }
+                                        | TriggerRelated::ManaSource(_)
+                                        | TriggerRelated::AttackGroup { .. }
+                                        | TriggerRelated::CardDrawn { .. }
+                                        | TriggerRelated::PlayerLost(_)
+                                        | TriggerRelated::SagaChapter { .. }
+                                        | TriggerRelated::CounterSource(_)
+                                        | TriggerRelated::Combatant(_)
+                                        | TriggerRelated::DeclaredSubtypeAttackers(_)
+                                        | TriggerRelated::AttackedWithTotalPower(_)
+                                        | TriggerRelated::AttackedAlone(_) => {
+                                            return Err(
+                                                "historical recipe excludes solo attack triggers"
+                                                    .into(),
+                                            );
+                                        }
                                         TriggerRelated::LibraryAction(_) => return Err(
                                             "root recipe profile excludes library action triggers"
                                                 .into(),
                                         ),
-                                        TriggerRelated::LifeChanged(_) => false,
+                                        TriggerRelated::GraveyardReturnPaid { .. }
+                                        | TriggerRelated::AbilityForCopy(_)
+                                        | TriggerRelated::SpellCopied(_)
+                                        | TriggerRelated::TargetingEntry(_)
+                                        | TriggerRelated::TargetedPermanent(_)
+                                        | TriggerRelated::DamageSource(_)
+                                        | TriggerRelated::StateTriggerSource(_)
+                                        | TriggerRelated::FinalSagaChapter { .. }
+                                        | TriggerRelated::LifeChanged(_)
+                                        | TriggerRelated::Phased(_)
+                                        | TriggerRelated::Mutated(_)
+                                        | TriggerRelated::MiracleRevealed(_)
+                                        | TriggerRelated::LeftGame(_) => false,
                                     }
                                 }
                                 _ => false,
@@ -965,6 +996,7 @@ impl Bindings {
 }
 fn payment(rows: &[input::Spend]) -> Result<ManaPayment, String> {
     Ok(ManaPayment {
+        from_lots: Default::default(),
         spend: rows
             .iter()
             .map(|row| {
@@ -1143,6 +1175,7 @@ impl Driver<'_> {
                                 false,
                             )?,
                             defender: input::seat(&row.defender)?,
+                            defending_planeswalker: None,
                         })
                     })
                     .collect::<Result<Vec<_>, String>>()?,

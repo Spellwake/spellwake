@@ -1,9 +1,9 @@
-//! Admission of live target-spell controller reads, not positive LKI support.
+//! Admission of live and retained target-spell controller reads.
 use super::*;
 use crate::test_support::creature_types;
 
 fn spell_target() -> BodyTarget {
-    BodyTarget::SingleSpell(SpellTargetFilter::AnySpell)
+    BodyTarget::SingleSpell(crate::program::SpellFilter::any())
 }
 
 fn gain() -> Instruction {
@@ -15,15 +15,16 @@ fn gain() -> Instruction {
 fn discard(player: ResolvingPlayer, amount: i64) -> Instruction {
     Instruction::Discard {
         players: AffectedPlayers::One(player),
-        amount: InstructionAmount::Literal(amount.into()),
+        amount: crate::program::ValueExpr::Literal(amount.into()),
     }
 }
 
 fn sacrifice(player: ResolvingPlayer, amount: i64) -> Instruction {
     Instruction::Sacrifice {
         players: AffectedPlayers::One(player),
-        amount: InstructionAmount::Literal(amount.into()),
+        amount: crate::program::ValueExpr::Literal(amount.into()),
         filter: PermanentTypeFilter {
+            any_types: Default::default(),
             required_types: BTreeSet::from([CardType::Creature]),
             forbidden_types: BTreeSet::new(),
         },
@@ -46,9 +47,11 @@ fn payment(player: ResolvingPlayer, destination: usize) -> Instruction {
 fn branch(destination: usize) -> Instruction {
     Instruction::BranchIfFalse {
         condition: ResolutionCondition {
-            left: ConditionValue::ControllerLife,
+            left: crate::program::ValueExpr::PlayerStat(
+                crate::program::PlayerStatExpr::ControllerLife,
+            ),
             comparison: Comparison::Greater,
-            right: ConditionValue::Literal(0.into()),
+            right: crate::program::ValueExpr::Literal(0.into()),
         },
         destination,
     }
@@ -60,9 +63,8 @@ fn check(target: BodyTarget, instructions: Vec<Instruction>) -> Result<(), Defin
 }
 
 #[test]
-fn countered_target_spell_controller_requires_unimplemented_lki() {
-    // CR 701.6a removes the bound spell from the stack. The live-entry role
-    // cannot supply CR 608.2h controller LKI for this later discard.
+fn countered_target_spell_controller_uses_retained_controller() {
+    // CR 608.2h reads the controller as the countered spell last existed.
     assert_eq!(
         check(
             spell_target(),
@@ -71,12 +73,12 @@ fn countered_target_spell_controller_requires_unimplemented_lki() {
                 discard(ResolvingPlayer::TargetSpellController, 1),
             ],
         ),
-        Err(DefinitionError::InvalidInstruction)
+        Ok(())
     );
 }
 
 #[test]
-fn all_shared_role_consumers_reject_after_possible_target_countering() {
+fn shared_player_roles_accept_retained_controllers() {
     for instructions in [
         vec![
             Instruction::CounterSpell,
@@ -96,22 +98,19 @@ fn all_shared_role_consumers_reject_after_possible_target_countering() {
             discard(ResolvingPlayer::TargetSpellController, 1),
         ],
     ] {
-        assert_eq!(
-            check(spell_target(), instructions),
-            Err(DefinitionError::InvalidInstruction)
-        );
+        assert_eq!(check(spell_target(), instructions), Ok(()));
     }
 }
 
 #[test]
-fn zero_selection_amount_does_not_invent_a_departed_spell_controller() {
+fn zero_selection_after_countering_is_admitted() {
     for operation in [
         sacrifice(ResolvingPlayer::TargetSpellController, 0),
         discard(ResolvingPlayer::TargetSpellController, 0),
     ] {
         assert_eq!(
             check(spell_target(), vec![Instruction::CounterSpell, operation]),
-            Err(DefinitionError::InvalidInstruction)
+            Ok(())
         );
     }
 }
@@ -146,7 +145,7 @@ fn role_before_countering_and_copy_without_departure_remain_admitted() {
 }
 
 #[test]
-fn an_intervening_nondeparture_does_not_clear_countering_history() {
+fn copy_after_attempted_countering_is_valid_for_a_remaining_spell() {
     assert_eq!(
         check(
             spell_target(),
@@ -156,12 +155,12 @@ fn an_intervening_nondeparture_does_not_clear_countering_history() {
                 discard(ResolvingPlayer::TargetSpellController, 1),
             ],
         ),
-        Err(DefinitionError::InvalidInstruction)
+        Ok(())
     );
 }
 
 #[test]
-fn possible_countering_at_branch_and_optional_joins_rejects_later_roles() {
+fn live_and_retained_controller_paths_join() {
     for instructions in [
         vec![
             branch(2),
@@ -184,10 +183,7 @@ fn possible_countering_at_branch_and_optional_joins_rejects_later_roles() {
             discard(ResolvingPlayer::TargetSpellController, 1),
         ],
     ] {
-        assert_eq!(
-            check(spell_target(), instructions),
-            Err(DefinitionError::InvalidInstruction)
-        );
+        assert_eq!(check(spell_target(), instructions), Ok(()));
     }
 }
 
@@ -227,12 +223,13 @@ fn other_player_roles_and_body_locals_survive_target_countering() {
         sacrifice(ResolvingPlayer::Controller, 1),
         Instruction::Discard {
             players: AffectedPlayers::EachPlayer,
-            amount: InstructionAmount::Literal(1.into()),
+            amount: crate::program::ValueExpr::Literal(1.into()),
         },
         Instruction::Sacrifice {
             players: AffectedPlayers::EachPlayer,
-            amount: InstructionAmount::Literal(1.into()),
+            amount: crate::program::ValueExpr::Literal(1.into()),
             filter: PermanentTypeFilter {
+                any_types: Default::default(),
                 required_types: BTreeSet::from([CardType::Creature]),
                 forbidden_types: BTreeSet::new(),
             },
@@ -258,7 +255,11 @@ fn other_player_roles_and_body_locals_survive_target_countering() {
                 },
                 Instruction::CounterSpell,
                 Instruction::DrawController {
-                    amount: InstructionAmount::ControlledPermanentsOfChosenType { chosen },
+                    amount: crate::program::ValueExpr::count_battlefield(
+                        crate::program::ObjectFilter::any()
+                            .controlled()
+                            .of_chosen_slot(chosen)
+                    ),
                 },
             ],
         ),
@@ -298,7 +299,7 @@ fn trigger_bound_related_player_keeps_its_context_contract_after_countering() {
             body.validate_in(
                 &vocabulary,
                 BodyContext::TriggerBound {
-                    condition: OrdinaryCondition::SelfCast,
+                    condition: &crate::program::TriggerSpec::self_cast(),
                     grouping,
                 },
             ),
@@ -309,7 +310,7 @@ fn trigger_bound_related_player_keeps_its_context_contract_after_countering() {
         body.validate_in(
             &vocabulary,
             BodyContext::TriggerBound {
-                condition: OrdinaryCondition::SelfCast,
+                condition: &crate::program::TriggerSpec::self_cast(),
                 grouping: TriggerGrouping::OneOrMoreTogether,
             },
         ),

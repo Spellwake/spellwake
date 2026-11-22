@@ -53,31 +53,31 @@
       "source": "Quzzar/skills",
       "sourceType": "github",
       "skillPath": "skills/quzzar-backend/SKILL.md",
-      "computedHash": "d6c23fb0a6dfa16771d38e7941ee497202c507ae9cf63ce6d23f5e7e8c25dbd5"
-    },
-    "quzzar-design": {
-      "source": "Quzzar/skills",
-      "sourceType": "github",
-      "skillPath": "skills/quzzar-design/SKILL.md",
-      "computedHash": "27e2cf2d96e11f82d52e547980cfd1fb565240726e7e7dbec7b21461bb90d305"
+      "computedHash": "f6e83fb3f7f2bc9fb0b826926e9d979a8682c97d4d26e737ccf6f06864accfe6"
     },
     "quzzar-frontend": {
       "source": "Quzzar/skills",
       "sourceType": "github",
       "skillPath": "skills/quzzar-frontend/SKILL.md",
-      "computedHash": "dc57b4fa40a2a90ce2f58dece59b0d9d9cccedd13b9d40e9a9eaa1627eb6ac92"
+      "computedHash": "69fdd1e1096e1b568386fd73815a4bee91a81eb689cc17e75c55bf9b25840fd5"
     },
     "quzzar-system-design": {
       "source": "Quzzar/skills",
       "sourceType": "github",
       "skillPath": "skills/quzzar-system-design/SKILL.md",
-      "computedHash": "a7dd9b2a2c5a9a0246280266cef3b0275604ef39351440db73df9923d7e5f6c3"
+      "computedHash": "1068612e1e36fae8411ce405c34e0bf69372fe6b071bc0a6a7278dc3dd153c05"
+    },
+    "quzzar-ui-ux-design": {
+      "source": "Quzzar/skills",
+      "sourceType": "github",
+      "skillPath": "skills/quzzar-ui-ux-design/SKILL.md",
+      "computedHash": "116192364a638e83b1c4157c8fc49af9f3bc265359a7ca8ff8cb0732a155524f"
     },
     "quzzar-workplace": {
       "source": "Quzzar/skills",
       "sourceType": "github",
       "skillPath": "skills/quzzar-workplace/SKILL.md",
-      "computedHash": "012a7a8295b6264a1486148dd7c89ad023f248dab9db36829412d143a6a84e82"
+      "computedHash": "91cf15f13b5fa5cccf80b5053103de75381148e2c7757c03be61485a7a9f1089"
     },
     "remotion-video": {
       "source": "Quzzar/skills",
@@ -85,11 +85,11 @@
       "skillPath": "skills/remotion-video/SKILL.md",
       "computedHash": "d9990e8300d55add0afa8ada16f38fb15ed3b19cdf960111e628a4ae331f6e02"
     },
-    "setup": {
+    "rust-skills": {
       "source": "Quzzar/skills",
       "sourceType": "github",
-      "skillPath": "skills/setup/SKILL.md",
-      "computedHash": "82aaae12075470d33a466339ffb582e470c674784ffb312e6c2db357acfb7eea"
+      "skillPath": "skills/rust-skills/SKILL.md",
+      "computedHash": "15be225f4d6a9e5832449e0e4c89247fc8dc9814e1a4e36f6cb0aa5824bf2aa2"
     },
     "shot-composition": {
       "source": "Quzzar/skills",

@@ -1,6 +1,6 @@
 ---
 name: quzzar-frontend
-description: Quzzar's frontend conventions covering UI architecture, tokens, state, forms, accessibility, and the component gallery, with Mobbin reference research and Impeccable design and quality checks for visual work. Use before writing or changing any UI code, React components, styles, or client-side state.
+description: Quzzar's frontend conventions covering UI architecture, tokens, state, forms, accessibility, and the component gallery, with reference research and rendered verification for visual work. Use before writing or changing any UI code, React components, styles, or client-side state.
 ---
 
 # quzzar-frontend
@@ -8,26 +8,25 @@ description: Quzzar's frontend conventions covering UI architecture, tokens, sta
 Frontend conventions. Repo-wide rules (naming, file organization, error handling, formatting)
 live in `quzzar-workplace`. Read that too.
 
-This file covers **how to write** UI code. Whether the result actually looks good, and how to
-render and critique it instead of guessing, is `quzzar-design`. Read that as well for anything
-where "does it look right" is the real acceptance criterion.
+This file covers UI implementation. For every new UI, including new screens, components,
+flows, or redesigned surfaces, read `quzzar-ui-ux-design` and follow its image-first approval,
+complete interaction coverage, faithful implementation, and consolidation review process.
+Purely nonvisual maintenance does not require a new design round. Follow the user's brief and
+existing product constraints; do not add unapproved UI copy or controls.
 
-## Design tools are part of the workflow
+## Shared application and visual verification
 
-For every visual UI change, read the installed `impeccable` skill and follow
-`quzzar-design`'s [Impeccable workflow](../quzzar-design/references/impeccable.md).
-Execute the playbook appropriate to the task, including context loading, craft-floor guidance,
-required review artifacts, and detector directives. Verify the changed surface rendered and
-record concrete findings and fixes before reporting the result. These are agent
-skills and tools; they do not change the runtime stack below.
+Use the same React application source for browser and Tauri desktop/mobile builds, normally
+with Vite. Follow `quzzar-workplace`'s shared-source architecture. Keep platform access in a
+small typed host adapter; keep UI, flows, and reusable state shared. Browser support should
+be a small addition, not a separate frontend implementation. Put reusable domain logic in
+Rust rather than duplicating it in UI code.
 
-For a new surface or materially changed journey, first complete `quzzar-design`'s Mobbin
-flow research and source-linked visual report, including the proposed flow's deliberate
-deviations. Use website references when visual identity or composition is open. Purely
-behavioral changes do not need a visual design pass.
-
-When asked for multiple versions, follow the linked variation workflow to produce the
-requested count of distinct directions and refine each with Impeccable before comparison.
+For a visual change, render the actual surface, inspect it at relevant viewport sizes and
+states, and fix observed issues before reporting completion. Verify native integration in
+the relevant native host; a browser screenshot cannot establish native capability behavior.
+When asked for alternatives, deliver the requested count and render each. Preserve the
+existing UI direction and keep copy terse.
 
 ## When to use
 
@@ -38,21 +37,20 @@ requested count of distinct directions and refine each with Impeccable before co
 
 ## First: read the repo's own context
 
-`CLAUDE.md` at the repo root carries this repo's real framework, styling approach, and
-commands. Repo facts beat anything general below. If it has no
-`<!-- quzzar-skills:start -->` block, run the `setup` skill first.
+Read the applicable repository instructions, starting with `AGENTS.md`, and inspect the
+project configuration for its framework, styling approach, and commands. Honor other
+instruction files used by the active agent. Repo facts beat general preferences below.
 
-## Tool choices are already decided
+## Recommended tools
 
-**Which** tool to use is fixed by the stack table in `quzzar-workplace`: React + Vite +
-TypeScript, React Router, vanilla-extract, Jotai, React Query, nuqs, TanStack Table, React Hook
-Form, Radix, Motion, Playwright, and the rest, each with its stated role and layer.
+Use `quzzar-workplace`'s stack as the starting point: React + Vite + TypeScript for shared UI,
+Rust + Tauri for native hosts and application logic, and the listed UI/state libraries for
+their intended roles. Motion remains the preferred general UI animation library.
 
-**The list is closed.** It's a standard, so a new library is the exception, not a judgment call.
-When a frontend need comes up (dates, a table, a toast, a command palette, URL state), the
-answer is almost always already on the list. If a genuine gap appears, decide the layer first
-(does it belong inside the shared UI package, or app-level?), then raise it with
-`AskUserQuestion`.
+The list is recommended, not closed. Reuse installed tools when they fit. Choose additions
+for a concrete unmet need, maintenance cost, accessibility, and supported targets; explain
+material tradeoffs. Routine library selection does not need user approval unless it changes
+the agreed product or architectural direction.
 
 ---
 
@@ -74,8 +72,9 @@ Jotai, React Router, nuqs, and anything 3D cannot.
 - **Named exports**, barrelled through the package's `src/index.ts`.
 - Each interactive component wraps a primitive from the accessible-primitives library and is
   skinned with token CSS. That's what keeps behaviour correct and appearance ours.
-- A file earns promotion into the shared package when a second surface needs it, not when you
-  anticipate one might.
+- Share proven responsibilities and avoid speculative global APIs. During an approved UI/UX
+  design build, put the required component families and states in the scoped library before
+  assembling screens, as described by `quzzar-ui-ux-design`.
 
 ## Don't re-implement what the stack already owns
 
@@ -178,8 +177,7 @@ states the way a story would: variants, sizes, hover/focus/disabled/loading, emp
 The gallery page is how the component gets verified; treat it as the story.
 
 It's also the screenshot target. Because it renders every state on one page with no auth and no
-seed data, it's the cheapest surface to point a browser at when verifying visual work. See
-`quzzar-design`.
+seed data, it's the cheapest surface to point a browser at when verifying visual work. Use the gallery to inspect the rendered result.
 
 ## Testing
 
@@ -189,12 +187,12 @@ Playwright, end-to-end against a running app, per `quzzar-workplace`.
 
 ## Rules
 
-- The stack list is closed. Something outside it is an `AskUserQuestion`.
+- Treat the stack as recommendations; reuse suitable existing tools and explain material additions.
 - Data, state, and routing libraries never become dependencies of the shared UI package.
 - Fetched data is parsed through its Zod schema. No casting into shape.
 - Tokens, not raw values.
 - Short copy. Don't narrate; gate.
-- Never report a visual change as done without rendering it and looking at it (`quzzar-design`).
-- `CLAUDE.md` overrides this file. It holds the facts of the repo in front of you.
+- Never report a visual change as done without rendering it and looking at it.
+- Repository instructions and actual project configuration override general preferences here.
 - Deleting an unused component means deleting its styles, gallery page, tests, and exports too
   (core guideline 1).

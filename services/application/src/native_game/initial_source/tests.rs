@@ -15,7 +15,6 @@ use spellwake_engine::{
     shuffle::EntropyTape,
 };
 use std::{fs, sync::OnceLock, time::Duration};
-mod bank_expiry;
 pub(in crate::native_game) mod cast_activity;
 mod clocks;
 mod events;
@@ -80,8 +79,10 @@ fn original_vocabulary_bytes_survive_source_construction() {
 }
 pub(in crate::native_game) fn source(pool: NativeProgramPool) -> &'static NativeProgramSource {
     static NINE: OnceLock<NativeProgramSource> = OnceLock::new();
+    static KEYWORDS: OnceLock<NativeProgramSource> = OnceLock::new();
     static TWELVE: OnceLock<NativeProgramSource> = OnceLock::new();
     let cell = match pool {
+        NativeProgramPool::KeywordGameplay => &KEYWORDS,
         NativeProgramPool::ResolutionSelection => &NINE,
         NativeProgramPool::ResolutionSelectionNaturalMana => &TWELVE,
     };
@@ -135,7 +136,7 @@ pub(in crate::native_game) fn spec() -> NativeInitialSpec {
 fn expected(reference: NativeArtifactRef) -> NativeInitialExpected {
     NativeInitialExpected::new(reference, ids().release_id, ids().profile_id, seats()).unwrap()
 }
-pub(super) fn with_store<T>(
+fn with_store<T>(
     bytes: &[u8],
     reference: &NativeArtifactRef,
     apply: impl FnOnce(&NativeArtifactStore) -> T,
@@ -1329,7 +1330,7 @@ fn frozen_catalogue_rejects_missing_and_duplicate_materialized_source_records() 
         .unwrap();
     missing.cards.remove(index);
     assert!(matches!(
-        super::catalogue::retain(missing.cards, &package.registry),
+        super::catalogue::retain(&missing.cards, &package.registry),
         Err(NativeInitialError::Invalid)
     ));
     let mut duplicate = spellwake_content::snapshot::decode(&metadata, bytes).unwrap();
@@ -1344,7 +1345,7 @@ fn frozen_catalogue_rejects_missing_and_duplicate_materialized_source_records() 
         .unwrap();
     duplicate.cards.push(donor.cards.remove(index));
     assert!(matches!(
-        super::catalogue::retain(duplicate.cards, &package.registry),
+        super::catalogue::retain(&duplicate.cards, &package.registry),
         Err(NativeInitialError::Invalid)
     ));
 }
@@ -1532,4 +1533,65 @@ fn original_program_identity_rejects_root_and_nested_shape_faults_with_json_caus
     }
 }
 
-mod constructed_cards;
+#[test]
+#[ignore = "requires the saved catalogue and vocabulary to open both seats through the keyword source pool"]
+fn keyword_pool_opens_a_game_with_real_lands_and_morph_and_foretell_cards() {
+    let source = source(NativeProgramPool::KeywordGameplay);
+    let oracle = |name: &str| {
+        source
+            .catalogue
+            .iter()
+            .find(|(_, card)| card.name == name)
+            .unwrap_or_else(|| panic!("missing {name}"))
+            .0
+            .clone()
+    };
+    let mut spec = spec();
+    for p in &mut spec.participants {
+        p.cards = [
+            "Island",
+            "Plains",
+            "Zoetic Cavern",
+            "Scorn Effigy",
+            "Durkwood Baloth",
+            "Scab-Clan Mauler",
+            "Putrid Goblin",
+            "Saw It Coming",
+        ]
+        .into_iter()
+        .map(|name| NativeInitialCard {
+            oracle_id: oracle(name),
+            zone: NativeInitialZone::Library,
+        })
+        .collect();
+    }
+    let expected_cards = spec
+        .participants
+        .iter()
+        .map(|p| p.cards.len())
+        .sum::<usize>();
+    let opened = prepare_initial(ids(), source, spec).unwrap();
+    assert_eq!(
+        opened
+            .candidate()
+            .state()
+            .execution()
+            .window()
+            .cards()
+            .iter()
+            .count(),
+        expected_cards
+    );
+    let effigy = source
+        .registry
+        .seed(
+            &oracle("Scorn Effigy"),
+            CardId(1),
+            SeatId(0),
+            ObjectDestination::Hand,
+        )
+        .unwrap();
+    let printed = source.printed_card(&effigy.program).unwrap().unwrap();
+    assert_eq!(printed.characteristics().name, "Scorn Effigy");
+    assert!(printed.characteristics().rules_text.contains("Foretell"));
+}

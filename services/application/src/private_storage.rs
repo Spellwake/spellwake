@@ -333,7 +333,10 @@ pub(crate) fn retain_file(
         .send();
     let failure = upload_failure(upload);
     if failure.is_some() {
-        eprintln!("private_storage event=upload_ack_unconfirmed");
+        tracing::warn!(
+            event = "upload_ack_unconfirmed",
+            "private storage upload ack unconfirmed"
+        );
     }
     if !verify_file(backend, bucket, key, hash, size, stage)? {
         return Err(failure.unwrap_or(StorageError::Contract));
@@ -350,6 +353,27 @@ pub(crate) fn retain_bytes(
     if existing(backend, bucket, key, bytes)? {
         return Ok(());
     }
+    upload_and_verify_bytes(backend, bucket, key, bytes)
+}
+
+/// A create-only write followed by the same authenticated exact-byte read.
+/// Use for newly generated content, where an existing object is unlikely.
+pub(crate) fn retain_new_bytes(
+    backend: &BackendClient,
+    bucket: &str,
+    key: &str,
+    bytes: &[u8],
+) -> Result<(), StorageError> {
+    private_bucket(backend, bucket)?;
+    upload_and_verify_bytes(backend, bucket, key, bytes)
+}
+
+fn upload_and_verify_bytes(
+    backend: &BackendClient,
+    bucket: &str,
+    key: &str,
+    bytes: &[u8],
+) -> Result<(), StorageError> {
     let sent = backend
         .request(Method::POST, object_url(backend, bucket, key, false)?)?
         .header("Content-Type", "application/json")
@@ -358,7 +382,10 @@ pub(crate) fn retain_bytes(
         .send();
     let failure = upload_failure(sent);
     if failure.is_some() {
-        eprintln!("private_storage event=upload_ack_unconfirmed");
+        tracing::warn!(
+            event = "upload_ack_unconfirmed",
+            "private storage upload ack unconfirmed"
+        );
     }
     if !existing(backend, bucket, key, bytes)? {
         return Err(failure.unwrap_or(StorageError::Contract));
@@ -394,7 +421,10 @@ pub(crate) fn delete_private_object(
         .json(&serde_json::json!({"prefixes":[key]}))
         .send();
     if !attempt.as_ref().is_ok_and(|r| r.status().is_success()) {
-        eprintln!("private_storage event=delete_ack_unconfirmed");
+        tracing::warn!(
+            event = "delete_ack_unconfirmed",
+            "private storage delete ack unconfirmed"
+        );
     }
     let response = backend.request(Method::GET, object)?.send()?;
     if present_object(response)?.is_none() {

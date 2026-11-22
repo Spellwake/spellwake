@@ -77,6 +77,13 @@
     ]
   },
   {
+    "name": "begin_commander_pilot_catalogue",
+    "arguments": "p_terms jsonb",
+    "roles": [
+      "service_role"
+    ]
+  },
+  {
     "name": "begin_patreon_evidence_expiry",
     "arguments": "p_event uuid",
     "roles": [
@@ -130,6 +137,13 @@
     "arguments": "p_subject uuid, p_session uuid, p_request uuid, p_entry uuid",
     "roles": [
       "service_role"
+    ]
+  },
+  {
+    "name": "cancel_trade_session",
+    "arguments": "p_session uuid",
+    "roles": [
+      "authenticated"
     ]
   },
   {
@@ -210,6 +224,20 @@
     ]
   },
   {
+    "name": "commander_worker_has_due_work",
+    "arguments": "p_release uuid",
+    "roles": [
+      "service_role"
+    ]
+  },
+  {
+    "name": "commander_worker_has_due_work",
+    "arguments": "p_release uuid, p_owner text",
+    "roles": [
+      "service_role"
+    ]
+  },
+  {
     "name": "commit_ai_ready_confirmation",
     "arguments": "p_grant uuid, p_epoch numeric, p_revision uuid, p_qualification text, p_authentication text, p_configuration uuid, p_request uuid",
     "roles": [
@@ -280,6 +308,13 @@
     ]
   },
   {
+    "name": "confirm_trade_session",
+    "arguments": "p_session uuid, p_expected_revision bigint",
+    "roles": [
+      "authenticated"
+    ]
+  },
+  {
     "name": "consume_game_outcome",
     "arguments": "p_result uuid, p_expected numeric",
     "roles": [
@@ -315,6 +350,13 @@
     ]
   },
   {
+    "name": "create_trade_session",
+    "arguments": "p_counterparty uuid, p_request uuid",
+    "roles": [
+      "authenticated"
+    ]
+  },
+  {
     "name": "current_account_id",
     "arguments": "",
     "roles": [
@@ -336,6 +378,13 @@
     ]
   },
   {
+    "name": "delete_deck_command",
+    "arguments": "p_subject uuid, p_session uuid, p_request uuid, p_deck uuid",
+    "roles": [
+      "service_role"
+    ]
+  },
+  {
     "name": "deliver_native_between_decision",
     "arguments": "p_decision uuid, p_basis numeric, p_deadline numeric, p_request uuid, p_seconds integer, p_selected uuid, p_hash text, p_reply text, p_qualification text",
     "roles": [
@@ -345,6 +394,13 @@
   {
     "name": "deliver_native_match_handoff",
     "arguments": "p_handoff uuid",
+    "roles": [
+      "service_role"
+    ]
+  },
+  {
+    "name": "duplicate_deck_command",
+    "arguments": "p_subject uuid, p_session uuid, p_request uuid, p_source_deck uuid, p_name text",
     "roles": [
       "service_role"
     ]
@@ -441,6 +497,13 @@
     ]
   },
   {
+    "name": "invite_room_player_by_username",
+    "arguments": "p_room uuid, p_username text, p_request uuid",
+    "roles": [
+      "authenticated"
+    ]
+  },
+  {
     "name": "issue_ai_grant",
     "arguments": "p_binding uuid, p_epoch numeric, p_secret_ref text, p_request uuid",
     "roles": [
@@ -473,6 +536,13 @@
     "arguments": "p_subject uuid, p_session uuid, p_request uuid, p_room uuid, p_expected numeric",
     "roles": [
       "service_role"
+    ]
+  },
+  {
+    "name": "list_my_trade_sessions",
+    "arguments": "p_state text, p_limit integer",
+    "roles": [
+      "authenticated"
     ]
   },
   {
@@ -595,10 +665,31 @@
     ]
   },
   {
+    "name": "pick_limited_draft_card",
+    "arguments": "p_room uuid, p_draft uuid, p_step integer, p_item uuid, p_request uuid",
+    "roles": [
+      "authenticated"
+    ]
+  },
+  {
     "name": "prepare_handoff_delivery",
     "arguments": "p_destination text, p_handoff uuid",
     "roles": [
       "service_role"
+    ]
+  },
+  {
+    "name": "private_limited_format_visible",
+    "arguments": "p_format uuid",
+    "roles": [
+      "authenticated"
+    ]
+  },
+  {
+    "name": "private_pilot_format_visible",
+    "arguments": "p_format uuid",
+    "roles": [
+      "authenticated"
     ]
   },
   {
@@ -714,6 +805,34 @@
     ]
   },
   {
+    "name": "read_card_metadata",
+    "arguments": "p_printing_ids uuid[], p_definition_ids uuid[]",
+    "roles": [
+      "authenticated"
+    ]
+  },
+  {
+    "name": "read_commander_clock_page",
+    "arguments": "p_release uuid, p_owner text, p_after uuid, p_limit integer",
+    "roles": [
+      "service_role"
+    ]
+  },
+  {
+    "name": "read_commander_handoff_page",
+    "arguments": "p_release uuid, p_after uuid, p_limit integer",
+    "roles": [
+      "service_role"
+    ]
+  },
+  {
+    "name": "read_commander_opening_page",
+    "arguments": "p_release uuid, p_after uuid, p_limit integer",
+    "roles": [
+      "service_role"
+    ]
+  },
+  {
     "name": "read_controller_ai_ante_context",
     "arguments": "p_grant uuid, p_epoch numeric, p_secret_ref text, p_match uuid",
     "roles": [
@@ -725,6 +844,13 @@
     "arguments": "p_grant uuid, p_epoch numeric, p_secret_ref text, p_source jsonb",
     "roles": [
       "service_role"
+    ]
+  },
+  {
+    "name": "read_cosmetic_catalogue_rich",
+    "arguments": "p_kind text, p_after uuid, p_limit integer",
+    "roles": [
+      "authenticated"
     ]
   },
   {
@@ -837,6 +963,13 @@
     "arguments": "p_subject uuid, p_session uuid, p_request uuid, p_kind text, p_target uuid, p_expected numeric, p_lines jsonb, p_hash text",
     "roles": [
       "service_role"
+    ]
+  },
+  {
+    "name": "read_league_leaderboard",
+    "arguments": "p_format uuid, p_season uuid, p_offset integer, p_limit integer",
+    "roles": [
+      "authenticated"
     ]
   },
   {
@@ -959,6 +1092,13 @@
     ]
   },
   {
+    "name": "read_my_limited_draft",
+    "arguments": "p_room uuid",
+    "roles": [
+      "authenticated"
+    ]
+  },
+  {
     "name": "read_my_market",
     "arguments": "p_after uuid, p_limit integer, p_owned boolean",
     "roles": [
@@ -1010,6 +1150,13 @@
   {
     "name": "read_my_pack_quote",
     "arguments": "p_recipe uuid, p_quantity integer",
+    "roles": [
+      "authenticated"
+    ]
+  },
+  {
+    "name": "read_my_patreon_status",
+    "arguments": "",
     "roles": [
       "authenticated"
     ]
@@ -1148,8 +1295,22 @@
     ]
   },
   {
+    "name": "read_my_stripe_customer",
+    "arguments": "",
+    "roles": [
+      "authenticated"
+    ]
+  },
+  {
     "name": "read_my_trade",
     "arguments": "p_trade uuid",
+    "roles": [
+      "authenticated"
+    ]
+  },
+  {
+    "name": "read_my_trade_session",
+    "arguments": "p_session uuid",
     "roles": [
       "authenticated"
     ]
@@ -1400,6 +1561,13 @@
     ]
   },
   {
+    "name": "read_player_public_summary",
+    "arguments": "p_player uuid",
+    "roles": [
+      "authenticated"
+    ]
+  },
+  {
     "name": "read_prediction_command",
     "arguments": "p_subject uuid, p_session uuid, p_input jsonb",
     "roles": [
@@ -1416,6 +1584,27 @@
   {
     "name": "read_prediction_maintenance_page",
     "arguments": "p_after uuid, p_limit integer",
+    "roles": [
+      "service_role"
+    ]
+  },
+  {
+    "name": "read_private_pilot_clock_page",
+    "arguments": "p_release uuid, p_owner text, p_after uuid, p_limit integer",
+    "roles": [
+      "service_role"
+    ]
+  },
+  {
+    "name": "read_private_pilot_handoff_page",
+    "arguments": "p_release uuid, p_after uuid, p_limit integer",
+    "roles": [
+      "service_role"
+    ]
+  },
+  {
+    "name": "read_private_pilot_opening_page",
+    "arguments": "p_release uuid, p_after uuid, p_limit integer",
     "roles": [
       "service_role"
     ]
@@ -1495,6 +1684,13 @@
     "arguments": "p_subject uuid, p_session uuid, p_request uuid, p_room uuid, p_expected numeric, p_profile uuid, p_structure text, p_teams jsonb",
     "roles": [
       "service_role"
+    ]
+  },
+  {
+    "name": "read_room_enriched",
+    "arguments": "p_room uuid",
+    "roles": [
+      "authenticated"
     ]
   },
   {
@@ -1598,6 +1794,13 @@
   {
     "name": "rebind_ai_runner",
     "arguments": "p_binding uuid, p_epoch numeric, p_proof text, p_request uuid",
+    "roles": [
+      "service_role"
+    ]
+  },
+  {
+    "name": "record_account_stripe_customer",
+    "arguments": "p_account uuid, p_customer_id text",
     "roles": [
       "service_role"
     ]
@@ -1736,6 +1939,41 @@
     ]
   },
   {
+    "name": "seal_limited_match_seat_pool",
+    "arguments": "p_room uuid, p_slot uuid, p_source_revision uuid, p_release uuid, p_printing_counts jsonb",
+    "roles": [
+      "service_role"
+    ]
+  },
+  {
+    "name": "seal_my_limited_draft_pool",
+    "arguments": "p_room uuid",
+    "roles": [
+      "authenticated"
+    ]
+  },
+  {
+    "name": "search_cards_rich",
+    "arguments": "p_query text, p_format uuid, p_rarity text, p_set_id uuid, p_after uuid, p_limit integer",
+    "roles": [
+      "authenticated"
+    ]
+  },
+  {
+    "name": "search_market_listings",
+    "arguments": "p_search text, p_kind text, p_rarity text, p_min_price numeric, p_max_price numeric, p_owned boolean, p_sort text, p_offset integer, p_limit integer",
+    "roles": [
+      "authenticated"
+    ]
+  },
+  {
+    "name": "search_prediction_markets",
+    "arguments": "p_search text, p_state text, p_sort text, p_offset integer, p_limit integer",
+    "roles": [
+      "authenticated"
+    ]
+  },
+  {
     "name": "select_room_deck_command",
     "arguments": "p_subject uuid, p_session uuid, p_request uuid, p_room uuid, p_expected numeric, p_revision uuid",
     "roles": [
@@ -1743,10 +1981,38 @@
     ]
   },
   {
+    "name": "send_dm_attachment",
+    "arguments": "p_conversation uuid, p_body text, p_attachment jsonb, p_request uuid",
+    "roles": [
+      "authenticated"
+    ]
+  },
+  {
     "name": "send_game_message_command",
     "arguments": "p_subject uuid, p_session uuid, p_request uuid, p_match uuid, p_body text",
     "roles": [
       "service_role"
+    ]
+  },
+  {
+    "name": "set_my_profile_badge",
+    "arguments": "p_badge text",
+    "roles": [
+      "authenticated"
+    ]
+  },
+  {
+    "name": "set_trade_session_ready",
+    "arguments": "p_session uuid, p_expected_revision bigint, p_ready boolean",
+    "roles": [
+      "authenticated"
+    ]
+  },
+  {
+    "name": "start_limited_draft",
+    "arguments": "p_room uuid, p_source uuid, p_request uuid",
+    "roles": [
+      "authenticated"
     ]
   },
   {
@@ -1804,6 +2070,20 @@
     "arguments": "p_subject uuid, p_session uuid, p_request uuid, p_room uuid, p_expected numeric",
     "roles": [
       "service_role"
+    ]
+  },
+  {
+    "name": "update_room_options",
+    "arguments": "p_room uuid, p_format_id uuid, p_ai_difficulty text, p_planechase_enabled boolean, p_range_of_influence integer",
+    "roles": [
+      "authenticated"
+    ]
+  },
+  {
+    "name": "update_trade_session_offer",
+    "arguments": "p_session uuid, p_expected_revision bigint, p_coins numeric, p_items jsonb",
+    "roles": [
+      "authenticated"
     ]
   }
 ]

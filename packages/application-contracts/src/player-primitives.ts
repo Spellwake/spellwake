@@ -106,3 +106,15 @@ export function playerBasisRegresses(
     BigInt(previous.revision) > BigInt(next.revision)
   );
 }
+
+export const playerCardTypeSchema = z.enum([
+  "planeswalker",
+  "land",
+  "artifact",
+  "creature",
+  "enchantment",
+  "kindred",
+  "battle",
+  "instant",
+  "sorcery",
+]);

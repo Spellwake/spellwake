@@ -83,7 +83,7 @@ impl ChecksRun {
     }
 }
 
-pub(super) fn replacement_source(action: ZoneActionKind) -> Program {
+fn replacement_source(action: ZoneActionKind) -> Program {
     let mut program = Program::enchantment(None);
     program.zone_replacements.push(ZoneReplacementAbility {
         id: ZoneReplacementAbilityId(0),
@@ -133,6 +133,12 @@ fn assert_frame_v2(state: &GameState, expected_cause: &str) {
                     .clone(),
             )
         }
+        ZoneReplacementRequest::Devour { .. }
+        | ZoneReplacementRequest::DevourGraveyardOrder { .. }
+        | ZoneReplacementRequest::EntryCopy { .. }
+        | ZoneReplacementRequest::EntryController { .. } => {
+            panic!("fixture has no controller-changing entrants")
+        }
         ZoneReplacementRequest::ConfirmOptional { application } => {
             assert_eq!(encoded["request"]["tag"], "ConfirmOptional");
             (
@@ -161,9 +167,6 @@ fn assert_frame_v2(state: &GameState, expected_cause: &str) {
                 assert_eq!(value["event"]["instruction"], instruction.to_string());
                 assert!(value["event"].get("event").is_none());
             }
-            ZoneEventKey::Selection { .. } => {
-                panic!("Checks must not use selected-action namespace")
-            }
             ZoneEventKey::Check { event, .. } => {
                 assert_eq!(value["event"]["tag"], "Check");
                 assert_eq!(
@@ -175,6 +178,20 @@ fn assert_frame_v2(state: &GameState, expected_cause: &str) {
                     value["event"].get("entry").is_none()
                         && value["event"].get("instruction").is_none()
                 );
+            }
+            ZoneEventKey::LinkedReturn { .. } => {
+                panic!("unexpected linked return in concession fixture")
+            }
+            ZoneEventKey::Cost { .. } => panic!("unexpected cost event in concession fixture"),
+            ZoneEventKey::ManaCost { .. } => panic!("unexpected mana cost in concession fixture"),
+            ZoneEventKey::PermanentEntry { .. } => {
+                panic!("unexpected permanent entry in concession fixture")
+            }
+            ZoneEventKey::DrawReveal { .. } => {
+                panic!("unexpected replaced draw in concession fixture")
+            }
+            ZoneEventKey::DamageFollowup { .. } | ZoneEventKey::LandPlay { .. } => {
+                panic!("unexpected land play in concession fixture")
             }
         }
     }
@@ -241,6 +258,12 @@ fn reduce_to_order(run: &mut ChecksRun, expected_cleanup: bool) {
         let choice = match frame.request() {
             ZoneReplacementRequest::Select { applications } => {
                 ZoneReplacementReply::Select(applications[0])
+            }
+            ZoneReplacementRequest::Devour { .. }
+            | ZoneReplacementRequest::DevourGraveyardOrder { .. }
+            | ZoneReplacementRequest::EntryCopy { .. }
+            | ZoneReplacementRequest::EntryController { .. } => {
+                panic!("fixture has no controller-changing entrants")
             }
             ZoneReplacementRequest::ConfirmOptional { application } => {
                 let before = run
@@ -390,7 +413,7 @@ fn concession_combined_complete_sba_copy_token_counter_loss_work_is_frozen() {
             Program::instant(
                 ManaCost::free(),
                 ExecutableBody::new(
-                    BodyTarget::SingleSpell(SpellTargetFilter::CopyableInstructionSpell),
+                    BodyTarget::SingleSpell(crate::program::SpellFilter::copyable_instruction()),
                     vec![Instruction::CopySpell],
                 ),
             ),
@@ -403,8 +426,9 @@ fn concession_combined_complete_sba_copy_token_counter_loss_work_is_frozen() {
             },
             Instruction::Sacrifice {
                 players: AffectedPlayers::One(ResolvingPlayer::Controller),
-                amount: InstructionAmount::Literal(1.into()),
+                amount: crate::program::ValueExpr::Literal(1.into()),
                 filter: crate::program::PermanentTypeFilter {
+                    any_types: Default::default(),
                     required_types: BTreeSet::from([crate::program::CardType::Creature]),
                     forbidden_types: BTreeSet::new(),
                 },
@@ -554,7 +578,7 @@ fn concession_combined_instruction_frame_uses_v2_real_cause_and_key() {
     let state = fixture(
         vec![Instruction::Mill {
             player: ResolvingPlayer::TargetPlayer,
-            amount: InstructionAmount::Literal(2.into()),
+            amount: crate::program::ValueExpr::Literal(2.into()),
         }],
         BodyTarget::SinglePlayer,
         cards,

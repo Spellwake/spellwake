@@ -1,0 +1,1461 @@
+[
+  {
+    "name": "Shattered Sanctum",
+    "oracle_id": "c854ecb0-cc60-4c48-a9aa-7f2348a7a8c6",
+    "printed_faces_sha256": "ab42f2d752093021055baa1c2a977e549455c64d422ba13f34d52b1f480b38ff",
+    "scope": "complete",
+    "evidence": "Land entry with zero, one and two other lands, opponent exclusion, both printed colors and tap restrictions.",
+    "tests": [
+      "shattered_sanctum_uses_only_its_controllers_other_lands_and_printed_colors"
+    ]
+  },
+  {
+    "name": "Lab Rats",
+    "oracle_id": "c53d6d3e-64e3-48b9-afab-3bde3164888f",
+    "printed_faces_sha256": "5b5b94e77f216a09e5faad3c6b1da50d6c887f4ff4bd5a17a346de0d04d334c0",
+    "scope": "partial",
+    "evidence": "Paid ordinary and buyback casts, Rat creation, and the two resolution destinations plus countered buyback. Casting another player’s copy of the physical card from exile remains unverified.",
+    "tests": [
+      "lab_rats_uses_printed_buyback_and_only_successful_resolution_creates_a_rat"
+    ]
+  },
+  {
+    "name": "Wurmcoil Larva",
+    "oracle_id": "72a39730-acc3-470c-960e-3a91c5eae4be",
+    "printed_faces_sha256": "97a3d7270fc65da99ede155866aab99468e3c63a1eb2aaa018b9ed5c1ae309a0",
+    "scope": "complete",
+    "evidence": "Source deathtouch and lifelink, graveyard destination, death controller, and simultaneous entry of the two tokens with distinct characteristics.",
+    "tests": [
+      "wurmcoil_larva_death_uses_last_controller_and_creates_both_tokens_together",
+      "wurmcoil_larva_applies_deathtouch_and_lifelink_to_the_same_damage"
+    ]
+  },
+  {
+    "name": "Stormcloud Spirit",
+    "oracle_id": "0dc8bdbb-996b-47d7-a5e5-7bdb6d9280fe",
+    "printed_faces_sha256": "d4507e5e3ca7622c829e6f3c47c5c1957accaeb7207767d857ba356e7273f54f",
+    "scope": "complete",
+    "evidence": "Paid blue 4/4 Spirit with flying, attacking into ground, flying or reach blockers, and blocking a ground attacker.",
+    "tests": [
+      "stormcloud_spirit_flies_over_ground_but_blocks_ground_and_can_be_blocked_by_flying_or_reach"
+    ]
+  },
+  {
+    "name": "Defiant Elf",
+    "oracle_id": "6faa29c4-582a-42d5-b80c-4dc0bd738493",
+    "printed_faces_sha256": "ed2371a9886f32159ca917930a88f112fc4207deed828164a9e11d4684b5e489",
+    "scope": "complete",
+    "evidence": "Paid creature with trample, enforcing lethal assignment, prevention and assignment after its blockers leave.",
+    "tests": [
+      "defiant_elf_tramples_after_lethal_even_with_prevention_and_when_all_blockers_leave"
+    ]
+  },
+  {
+    "name": "Forked-Branch Garami",
+    "oracle_id": "c918baa5-0e7c-4df2-8567-64a7fbef4df8",
+    "printed_faces_sha256": "8b60a8f862933ef53fcb21c4c1f40f0c2fed4f92b3f364ccb5cacab233889142",
+    "scope": "complete",
+    "evidence": "Two independent optional Soulshift 4 triggers use their controller’s graveyard, including distinct, shared and departed targets.",
+    "tests": [
+      "forked_branch_garami_can_return_two_distinct_spirits_with_separate_choices",
+      "forked_branch_garami_can_choose_the_same_spirit_twice_and_loses_the_second_target",
+      "forked_branch_garami_returns_only_the_spirit_that_survives_delve"
+    ]
+  },
+  {
+    "name": "Merciless Executioner",
+    "oracle_id": "c3c45d50-9038-41df-bb2f-9bc40071845b",
+    "printed_faces_sha256": "0aaa6e7251613d3ae92dea2a7922fc1f5ca16983b7dc26a297756dc95568bafd",
+    "scope": "complete",
+    "evidence": "Paid self-entry, each player chooses in APNAP order and eligible creatures are sacrificed together, including the source and nonowned permanents.",
+    "tests": [
+      "merciless_executioner_collects_apnap_choices_before_one_sacrifice_batch"
+    ]
+  },
+  {
+    "name": "Darksteel Garrison",
+    "oracle_id": "48bf020e-45b9-4c27-82e0-80d942656a67",
+    "printed_faces_sha256": "686be3f446d91c4beadf6e1e0236bc7177294073fe8d0820cb06e45d7cb5dc15",
+    "scope": "complete",
+    "evidence": "Paying fortify, attached-land indestructibility, legal and lost targets, reattachment, departure and expiration of the tap-triggered boost.",
+    "tests": [
+      "darksteel_garrison_protects_the_fortified_forest_and_its_tap_pump_expires_at_cleanup",
+      "darksteel_garrison_moves_its_grant_taps_an_indestructible_land_and_detaches_when_the_land_leaves",
+      "darksteel_garrison_fortify_rechecks_control_and_target_identity_at_resolution",
+      "darksteel_garrison_loses_its_tap_target_and_detaches_when_the_fortified_land_is_exiled"
+    ]
+  },
+  {
+    "name": "Skyshroud Ridgeback",
+    "oracle_id": "34a160bc-5d7e-483c-b24c-ab30b7d313b0",
+    "printed_faces_sha256": "9ebd5c28c31fddb46f0bc5ea25e4764db661cecb6871162f77070604dbe8ec79",
+    "scope": "complete",
+    "evidence": "Paid 2/3 with two fade counters, surviving at zero and sacrificed on the following controller upkeep.",
+    "tests": [
+      "skyshroud_ridgeback_fades_only_on_its_controllers_upkeep"
+    ]
+  },
+  {
+    "name": "Knighthood",
+    "oracle_id": "22f008b3-c263-4dcc-855f-403da9ca4cd9",
+    "printed_faces_sha256": "1e1bdc2a2a50df846e57ac28993003e9aa9d2c10740d9d2d6b9e1a259d6a4f84",
+    "scope": "complete",
+    "evidence": "First strike follows current creatures and controller, ends when its source leaves, and changes the actual combat damage steps.",
+    "tests": [
+      "knighthood_tracks_current_controller_types_and_source_departure",
+      "knighthood_wins_equal_combat_as_attacker_or_blocker_in_first_damage_step",
+      "knighthood_leaving_between_damage_steps_does_not_let_its_attacker_strike_twice"
+    ]
+  },
+  {
+    "name": "Frontier Bivouac",
+    "oracle_id": "e4cf6c2f-0f1e-4980-9ef9-e4eabcae42a9",
+    "printed_faces_sha256": "0643e42e43f7cbbeb5c49d3cb8940241ed046bdde2ebb299eb4bab0d24580073",
+    "scope": "complete",
+    "evidence": "Land enters tapped; after untapping, each printed color can be selected, nonprinted color is rejected, and tapping prevents reuse.",
+    "tests": [
+      "cmm_three_color_lands_enter_tapped_and_produce_each_printed_color"
+    ]
+  },
+  {
+    "name": "Jungle Shrine",
+    "oracle_id": "2e69537c-c898-4e13-a72d-ce3957a90304",
+    "printed_faces_sha256": "e946ae6226879006b9e6904ce9bb5fc4b86e42a723b85830269547520cd8e7e4",
+    "scope": "complete",
+    "evidence": "Land enters tapped; after untapping, each printed color can be selected, nonprinted color is rejected, and tapping prevents reuse.",
+    "tests": [
+      "cmm_three_color_lands_enter_tapped_and_produce_each_printed_color"
+    ]
+  },
+  {
+    "name": "Mystic Monastery",
+    "oracle_id": "834b8f71-9a45-42ae-9e99-e749fa6fb45e",
+    "printed_faces_sha256": "3a0bb48ab17296b77719af543536ea13c3f2e748f0594372db9283d27c009384",
+    "scope": "complete",
+    "evidence": "Land enters tapped; after untapping, each printed color can be selected, nonprinted color is rejected, and tapping prevents reuse.",
+    "tests": [
+      "cmm_three_color_lands_enter_tapped_and_produce_each_printed_color"
+    ]
+  },
+  {
+    "name": "Nomad Outpost",
+    "oracle_id": "4619de7e-3d6e-4c6b-8e6e-e24db324839d",
+    "printed_faces_sha256": "776bf0fde325835c30d1bdc031ecfe3d3d0d2c3c19a01575861f717eefad716f",
+    "scope": "complete",
+    "evidence": "Land enters tapped; after untapping, each printed color can be selected, nonprinted color is rejected, and tapping prevents reuse.",
+    "tests": [
+      "cmm_three_color_lands_enter_tapped_and_produce_each_printed_color"
+    ]
+  },
+  {
+    "name": "Opulent Palace",
+    "oracle_id": "f9e7e855-1e3b-42d3-91b0-64ba8b5b8982",
+    "printed_faces_sha256": "ba2ad7db86ee0df1bd0b2f3d3ad9fc878ae349b9aed3bf3f9ede756f67be2a32",
+    "scope": "complete",
+    "evidence": "Land enters tapped; after untapping, each printed color can be selected, nonprinted color is rejected, and tapping prevents reuse.",
+    "tests": [
+      "cmm_three_color_lands_enter_tapped_and_produce_each_printed_color"
+    ]
+  },
+  {
+    "name": "Sandsteppe Citadel",
+    "oracle_id": "544dbabd-cbfc-40da-a5ba-2fea9cddb453",
+    "printed_faces_sha256": "632e7e5e47beb979d1e1c64701e0cadde258b85da4cafe2198d791375af87436",
+    "scope": "complete",
+    "evidence": "Land enters tapped; after untapping, each printed color can be selected, nonprinted color is rejected, and tapping prevents reuse.",
+    "tests": [
+      "cmm_three_color_lands_enter_tapped_and_produce_each_printed_color"
+    ]
+  },
+  {
+    "name": "Savage Lands",
+    "oracle_id": "a3292406-3f49-42d6-a547-e43dd5797f84",
+    "printed_faces_sha256": "595fe351c794bfb7d80ca73230a7e7c6f6e9b48c21adc1e79dafb966d84c194b",
+    "scope": "complete",
+    "evidence": "Land enters tapped; after untapping, each printed color can be selected, nonprinted color is rejected, and tapping prevents reuse.",
+    "tests": [
+      "cmm_three_color_lands_enter_tapped_and_produce_each_printed_color"
+    ]
+  },
+  {
+    "name": "Seaside Citadel",
+    "oracle_id": "2ae77795-6a80-498b-bf69-6fd612f601e4",
+    "printed_faces_sha256": "52deab8ba7721c0eeceff6364451170cfcf4517007fb3b7efb78c3c158d7b433",
+    "scope": "complete",
+    "evidence": "Land enters tapped; after untapping, each printed color can be selected, nonprinted color is rejected, and tapping prevents reuse.",
+    "tests": [
+      "cmm_three_color_lands_enter_tapped_and_produce_each_printed_color"
+    ]
+  },
+  {
+    "name": "Bogwater Lumaret",
+    "oracle_id": "0109432d-5a2a-456f-ad39-b75cb4c73420",
+    "printed_faces_sha256": "011f283f00f795ffe3150b2b0ab3388ce32e4a9518e2282b2bcf66fe89b7022d",
+    "scope": "complete",
+    "evidence": "Paid self-entry and creature entry under each player, self-entry, noncreature exclusion, and life gain to the watcher controller.",
+    "tests": [
+      "life_gain_watchers_use_actual_cards_and_entry_relations"
+    ]
+  },
+  {
+    "name": "Dazzling Angel",
+    "oracle_id": "7de464e3-fae3-44cc-8233-776fc727c00a",
+    "printed_faces_sha256": "d5bba343d2be77181c67ea43c44dcfe37776d179f597a6effc1867a20fc60d8b",
+    "scope": "partial",
+    "evidence": "Paid self-entry and creature entry under each player, self-entry, noncreature exclusion, and life gain to the watcher controller. Flying combat behavior remains unverified.",
+    "tests": [
+      "life_gain_watchers_use_actual_cards_and_entry_relations"
+    ]
+  },
+  {
+    "name": "Essence Warden",
+    "oracle_id": "6ca2a89e-7032-4864-b4e9-66f3178f90ab",
+    "printed_faces_sha256": "72b27f67a7dc35cedf7963bdb41b76fd80e4be7620411f76767a73aa267b8cee",
+    "scope": "complete",
+    "evidence": "Paid self-entry and creature entry under each player, self-entry, noncreature exclusion, and life gain to the watcher controller.",
+    "tests": [
+      "life_gain_watchers_use_actual_cards_and_entry_relations"
+    ]
+  },
+  {
+    "name": "Healer of the Pride",
+    "oracle_id": "69b9fa68-b409-4de1-9a40-5262386a0180",
+    "printed_faces_sha256": "d8591ac9bd2007d8f5c755b656058544ba77c6899ef06033e252389893f9be11",
+    "scope": "complete",
+    "evidence": "Paid self-entry and creature entry under each player, self-entry, noncreature exclusion, and life gain to the watcher controller.",
+    "tests": [
+      "life_gain_watchers_use_actual_cards_and_entry_relations"
+    ]
+  },
+  {
+    "name": "Hinterland Sanctifier",
+    "oracle_id": "d812fc6d-b96d-4986-b171-9f3feee603dc",
+    "printed_faces_sha256": "9d93d82591da465fd17102ac2b9c636792f12c9773f5cc0577225a04fd4eae41",
+    "scope": "complete",
+    "evidence": "Paid self-entry and creature entry under each player, self-entry, noncreature exclusion, and life gain to the watcher controller.",
+    "tests": [
+      "life_gain_watchers_use_actual_cards_and_entry_relations"
+    ]
+  },
+  {
+    "name": "Kor Celebrant",
+    "oracle_id": "3f8f0ce9-d2ce-45cc-9fbf-0e2819b07a3e",
+    "printed_faces_sha256": "a382f19ff3fcacbc016b35540ab28efd6a64eca305d4ff36bb6c8d90839108da",
+    "scope": "complete",
+    "evidence": "Paid self-entry and creature entry under each player, self-entry, noncreature exclusion, and life gain to the watcher controller.",
+    "tests": [
+      "life_gain_watchers_use_actual_cards_and_entry_relations"
+    ]
+  },
+  {
+    "name": "Lifecreed Duo",
+    "oracle_id": "63686c6b-9051-4002-aa8e-da8a3021330f",
+    "printed_faces_sha256": "94073d06950ae1ac3c871d859cd931fb66a6d2bdc25fb3ccff1ab161a81e517d",
+    "scope": "partial",
+    "evidence": "Paid self-entry and creature entry under each player, self-entry, noncreature exclusion, and life gain to the watcher controller. Flying combat behavior remains unverified.",
+    "tests": [
+      "life_gain_watchers_use_actual_cards_and_entry_relations"
+    ]
+  },
+  {
+    "name": "Blade Sliver",
+    "oracle_id": "110e5695-a9df-4201-9230-99f6abe9978f",
+    "printed_faces_sha256": "f4e0d5725f3d10eccbc8c359384490d621298c1d3c7abb602496ae6b1dd9d949",
+    "scope": "complete",
+    "evidence": "Named paid-cast game checks printed name, creature type, Sliver subtype, color and body, then exact fixed bonus on source, controlled and opposing Slivers, excludes non-Slivers and observes both bonuses end when the source is destroyed.",
+    "tests": [
+      "cmm_sliver_stat_lords_apply_to_correct_controllers_and_end_on_departure"
+    ]
+  },
+  {
+    "name": "Bonesplitter Sliver",
+    "oracle_id": "a0f6834c-faa9-4d90-adad-847a8b337fe6",
+    "printed_faces_sha256": "8031af65e9d2287882eb526cfeea6c401fafc68cfd8a9cf36929e83adce9aa8f",
+    "scope": "complete",
+    "evidence": "Named paid-cast game checks printed name, creature type, Sliver subtype, color and body, then exact fixed bonus on source, controlled and opposing Slivers, excludes non-Slivers and observes both bonuses end when the source is destroyed.",
+    "tests": [
+      "cmm_sliver_stat_lords_apply_to_correct_controllers_and_end_on_departure"
+    ]
+  },
+  {
+    "name": "Cleaving Sliver",
+    "oracle_id": "9b33059c-c862-4452-8609-14a0e2551fb3",
+    "printed_faces_sha256": "35b83ebd9d4deafbc986b6be51175f5c8c9cf11f1cb3330d94fbbb167ae1ee5e",
+    "scope": "complete",
+    "evidence": "Named paid-cast game checks printed name, creature type, Sliver subtype, color and body, then exact fixed bonus on source, controlled and opposing Slivers, excludes non-Slivers and observes both bonuses end when the source is destroyed.",
+    "tests": [
+      "cmm_sliver_stat_lords_apply_to_correct_controllers_and_end_on_departure"
+    ]
+  },
+  {
+    "name": "Megantic Sliver",
+    "oracle_id": "52e8ec03-23ed-43a0-bce2-ad0cd5c4d737",
+    "printed_faces_sha256": "5699ce62bfe5ea5d7d19804fd46a7edeb71f459feaf4be56c575539beb71d61a",
+    "scope": "complete",
+    "evidence": "Named paid-cast game checks printed name, creature type, Sliver subtype, color and body, then exact fixed bonus on source, controlled and opposing Slivers, excludes non-Slivers and observes both bonuses end when the source is destroyed.",
+    "tests": [
+      "cmm_sliver_stat_lords_apply_to_correct_controllers_and_end_on_departure"
+    ]
+  },
+  {
+    "name": "Might Sliver",
+    "oracle_id": "92f5f80c-de1a-44e8-93f1-e405241c1e82",
+    "printed_faces_sha256": "ce3f98d98b44387a909daddacfd3379b940da3f82ef80f951d4df9e569c059e7",
+    "scope": "complete",
+    "evidence": "Named paid-cast game checks printed name, creature type, Sliver subtype, color and body, then exact fixed bonus on source, controlled and opposing Slivers, excludes non-Slivers and observes both bonuses end when the source is destroyed.",
+    "tests": [
+      "cmm_sliver_stat_lords_apply_to_correct_controllers_and_end_on_departure"
+    ]
+  },
+  {
+    "name": "Sinew Sliver",
+    "oracle_id": "ffff90c3-63c4-4dee-a21d-6b2b113f4f80",
+    "printed_faces_sha256": "8bca98715950202d3a6d07654e30f7502b44b3c65443c446689f0142c276c621",
+    "scope": "complete",
+    "evidence": "Named paid-cast game checks printed name, creature type, Sliver subtype, color and body, then exact fixed bonus on source, controlled and opposing Slivers, excludes non-Slivers and observes both bonuses end when the source is destroyed.",
+    "tests": [
+      "cmm_sliver_stat_lords_apply_to_correct_controllers_and_end_on_departure"
+    ]
+  },
+  {
+    "name": "Azorius Signet",
+    "oracle_id": "e018773f-95b3-49a3-9674-6f04ddef2092",
+    "printed_faces_sha256": "5ec98c172e5543f110fa4889cc276f0a67bfe2adede707e6dc0c69c078e1e03e",
+    "scope": "complete",
+    "evidence": "The source-qualified full definition was cast or played, then activated by paying Forest-produced green mana; the exact two printed colors were credited. Omitted, unavailable or excessive payment, repeated tap and opposing-player activation were rejected. A synthetic same-shape ability also passed during a real resolution payment. The Azorius-to-Boros spell-casting test is additional evidence for those two cards.",
+    "tests": [
+      "cmm_five_paid_tap_mana_cards_use_land_mana_and_reject_illegal_payments",
+      "paid_mana_ability_works_inside_resolution_payment_and_rejects_atomically",
+      "cmm_signet_converts_land_mana_to_pay_another_spell_once"
+    ]
+  },
+  {
+    "name": "Blur Sliver",
+    "oracle_id": "e0f05979-daba-43eb-b356-24284e7ca99c",
+    "printed_faces_sha256": "77f96c8ca7861eba0a3135f4a33f51d67cddec4f6a1b5064d0191280d4eb6106",
+    "scope": "complete",
+    "evidence": "Paid cast; exact source name, types, subtypes, colors, cost and stats; controller and opponent scope; printed keyword effects in combat or via destroy; source departure where targetable. Hivelord legend rule and Winged type-change are separately exercised.",
+    "tests": [
+      "cmm_sliver_keyword_definitions_cast_and_track_control_and_source_departure",
+      "cmm_sliver_keyword_grants_change_combat_and_destruction_rules"
+    ]
+  },
+  {
+    "name": "Bonescythe Sliver",
+    "oracle_id": "1d95ad32-768f-40a1-a461-e0562326b2b7",
+    "printed_faces_sha256": "cb28e8e771a5074bb373118e23222fd808d6c7080d93cb8809219476154baaa6",
+    "scope": "complete",
+    "evidence": "Paid cast; exact source name, types, subtypes, colors, cost and stats; controller and opponent scope; printed keyword effects in combat or via destroy; source departure where targetable. Hivelord legend rule and Winged type-change are separately exercised.",
+    "tests": [
+      "cmm_sliver_keyword_definitions_cast_and_track_control_and_source_departure",
+      "cmm_sliver_keyword_grants_change_combat_and_destruction_rules"
+    ]
+  },
+  {
+    "name": "Boros Signet",
+    "oracle_id": "41c84665-1f99-40ab-aaca-1188649eb263",
+    "printed_faces_sha256": "ff34e554fe762d71a34385c3fde2f8fcb441d1ba95383e0a8d65c014ad2327b2",
+    "scope": "complete",
+    "evidence": "The source-qualified full definition was cast or played, then activated by paying Forest-produced green mana; the exact two printed colors were credited. Omitted, unavailable or excessive payment, repeated tap and opposing-player activation were rejected. A synthetic same-shape ability also passed during a real resolution payment. The Azorius-to-Boros spell-casting test is additional evidence for those two cards.",
+    "tests": [
+      "cmm_five_paid_tap_mana_cards_use_land_mana_and_reject_illegal_payments",
+      "paid_mana_ability_works_inside_resolution_payment_and_rejects_atomically",
+      "cmm_signet_converts_land_mana_to_pay_another_spell_once"
+    ]
+  },
+  {
+    "name": "Canopy Vista",
+    "oracle_id": "dcb7e046-f01b-497c-88e5-57794eb30ce5",
+    "printed_faces_sha256": "347b8290f93cdbc07a464fc63defc614e050cd12cbb029d79c02928a5a18bce3",
+    "scope": "complete",
+    "evidence": "Played with basic-land counts on both sides of the threshold, including opponent and nonbasic controls. Activated each printed intrinsic color.",
+    "tests": [
+      "cmm_land_games_count_only_controlled_basic_lands_and_produce_intrinsic_colors"
+    ]
+  },
+  {
+    "name": "Cinder Glade",
+    "oracle_id": "dfac0258-e148-4d7d-8ded-fc2466d9caa6",
+    "printed_faces_sha256": "893cee65101153eb66a2e1bdf1d52d82f327c3df2ceec2d8287fa8a1af86a141",
+    "scope": "complete",
+    "evidence": "Played with basic-land counts on both sides of the threshold, including opponent and nonbasic controls. Activated each printed intrinsic color.",
+    "tests": [
+      "cmm_land_games_count_only_controlled_basic_lands_and_produce_intrinsic_colors"
+    ]
+  },
+  {
+    "name": "Cloudshredder Sliver",
+    "oracle_id": "f943c005-9b77-411a-b522-1182e22724e1",
+    "printed_faces_sha256": "f4af59d6c74c646d9a11fc120258514b35b5f69e53d7bea16f2f1a7cf22d74a2",
+    "scope": "complete",
+    "evidence": "Paid cast; exact source name, types, subtypes, colors, cost and stats; controller and opponent scope; printed keyword effects in combat or via destroy; source departure where targetable. Hivelord legend rule and Winged type-change are separately exercised.",
+    "tests": [
+      "cmm_sliver_keyword_definitions_cast_and_track_control_and_source_departure",
+      "cmm_sliver_keyword_grants_change_combat_and_destruction_rules"
+    ]
+  },
+  {
+    "name": "Counterspell",
+    "oracle_id": "cc187110-1148-4090-bbb8-e205694a39f5",
+    "printed_faces_sha256": "9c04cb95b155c0a588faf6ef9924fdee1a192b04769f9687a42a6bc25e78cc7d",
+    "scope": "complete",
+    "evidence": "Paid UU to counter a spell, then resolved a separate game in which another counter removed the original stack target first.",
+    "tests": [
+      "cmm_spell_games_counterspell_revalidates_the_targeted_stack_entry"
+    ]
+  },
+  {
+    "name": "Crystalline Sliver",
+    "oracle_id": "ba3aa1eb-722a-47d3-83be-96daddb50265",
+    "printed_faces_sha256": "977e5a727b18a64287f2d1a31ec0e53b50d191b9cb7023505c5edc308ce89e19",
+    "scope": "complete",
+    "evidence": "Paid cast and printed source characteristics; shroud applies to Slivers controlled by either player, including a noncreature Kindred Sliver. Targeting each is rejected, a non-Sliver is targetable, and sacrifice of the source removes its grant.",
+    "tests": [
+      "cmm_sliver_keyword_definitions_cast_and_track_control_and_source_departure",
+      "crystalline_sliver_grants_shroud_to_noncreature_slivers_and_both_players"
+    ]
+  },
+  {
+    "name": "Deadly Recluse",
+    "oracle_id": "6b941291-1802-4ced-9869-39fa43825550",
+    "printed_faces_sha256": "80625e43fb8aa99ead51e795ea3cebd7d650e78c1f683c83b78fae56489275e8",
+    "scope": "complete",
+    "evidence": "Cast the creature, exercised the printed combat and targeting restrictions, then verified the legal block and its outcome.",
+    "tests": [
+      "cmm_creature_games_reach_deathtouch_vigilance_defender_and_shroud"
+    ]
+  },
+  {
+    "name": "Dreamstone Hedron",
+    "oracle_id": "0e2575be-c596-4c8c-bf07-7941ca065721",
+    "printed_faces_sha256": "17b5fb1ff7dcff9c6087c859250c26856802be6936b8a74c75c1d1e8d6ea9166",
+    "scope": "complete",
+    "evidence": "Cast the artifact. Checked all printed mana outputs, then activated the draw ability by paying, tapping and sacrificing. Verified stack timing, exact cards drawn and invalid costs.",
+    "tests": [
+      "cmm_draw_rock_games_pay_tap_sacrifice_and_verify_printed_mana_modes"
+    ]
+  },
+  {
+    "name": "Elvish Mystic",
+    "oracle_id": "3f3b2c10-21f8-4e13-be83-4ef3fa36e123",
+    "printed_faces_sha256": "99099794b39d924eff77a8bffcef0270c61f6dac6d70ba86e79529806fabad55",
+    "scope": "complete",
+    "evidence": "Paid the named permanent’s cost, resolved it and verified its exact output and tap restrictions. Creature cases tested summoning sickness. Ornithopter also faced ground and reach blockers.",
+    "tests": [
+      "cmm_permanent_games_cast_then_tap_for_exact_printed_mana"
+    ]
+  },
+  {
+    "name": "Emerald Medallion",
+    "oracle_id": "d683024d-8fe7-4509-851b-7655fadc1de7",
+    "printed_faces_sha256": "e8edb2dcc0c8fce4c37eca358b5cce5f4cf776a4a48f9ea0fc0510366cd4e7c9",
+    "scope": "complete",
+    "evidence": "Paid the cost of the Medallion, used its discount on the matching color, checked printed colored requirements, stacking sources, controller, and ability removal.",
+    "tests": [
+      "cmm_discount_games_medallions_reduce_generic_cost_and_track_active_source"
+    ]
+  },
+  {
+    "name": "Fencing Ace",
+    "oracle_id": "2f810936-2ba6-4c2b-84a0-ff4c1deb026b",
+    "printed_faces_sha256": "2e4b0bfe467cb81d94569a89e71a59d919c59174fe85ed9d5024da5f16667f57",
+    "scope": "complete",
+    "evidence": "Paid the printed cost and exercised the creature’s printed abilities through attack and block decisions, damage steps and final state.",
+    "tests": [
+      "cmm_creature_games_flying_haste_vigilance_strike_and_lifelink"
+    ]
+  },
+  {
+    "name": "Fireshrieker",
+    "oracle_id": "a02e1ca7-23c5-41e3-a744-72fc9e9dd8ba",
+    "printed_faces_sha256": "ce8869b1477684eea175cb5aecef26ed29dcce21fc83cd244f633605fa656d74",
+    "scope": "complete",
+    "evidence": "Cast and equipped the permanent, verified equip costs and legal hosts, transferred it and exercised the granted characteristics in gameplay.",
+    "tests": [
+      "cmm_permanent_games_equipment_costs_targets_transfers_and_combat"
+    ]
+  },
+  {
+    "name": "Font of Fertility",
+    "oracle_id": "7fb6f960-38f6-45fa-bfec-d43fc174daa7",
+    "printed_faces_sha256": "ed39433d27850a7d9bdad67f89b514d82faf782be20db0698d0b00f0ffd328f1",
+    "scope": "complete",
+    "evidence": "Paid source-qualified {G} permanent cast and {1}{G} sacrifice activation; search selects a basic land which enters tapped under controller without a reveal, with one shuffle. Fail-to-find still shuffles; targeted engine tests reject nonbasics and verify entry counter/status processing. Existing typecycling search-to-hand control passes.",
+    "tests": [
+      "keyword_creatures::tests::basic_land_search::cmm_rampant_growth_and_font_of_fertility_search_tapped_with_real_definitions",
+      "basic_land_search::paid_basic_land_search_enters_tapped_with_entry_replacements_and_shuffles",
+      "basic_land_search::basic_land_search_can_fail_to_find_and_still_shuffles",
+      "cycling::typecycling_uses_the_searchers_library_actual_subtypes_and_host_shuffle"
+    ]
+  },
+  {
+    "name": "Foundry Inspector",
+    "oracle_id": "18f22960-87ec-43cd-82ea-ec5cabf49ad3",
+    "printed_faces_sha256": "51e1e6b66a3681e2d822b4d690bd6784780d442e43e2932ea6bf43938de30645",
+    "scope": "complete",
+    "evidence": "Paid the source cost and exercised matching and nonmatching spell types. Resolved combat and verified Jukai Naturalist’s lifelink.",
+    "tests": [
+      "cmm_discount_games_foundry_inspector_and_jukai_naturalist_filter_spell_types"
+    ]
+  },
+  {
+    "name": "Galerider Sliver",
+    "oracle_id": "1ad78038-44f9-4599-84db-fc1a87d9ed45",
+    "printed_faces_sha256": "5b5e3fcd91f7d666db2ff5dde4e40d1fb675f5b3eecb310ac97b5ef0b7a03a82",
+    "scope": "complete",
+    "evidence": "Paid cast; exact source name, types, subtypes, colors, cost and stats; controller and opponent scope; printed keyword effects in combat or via destroy; source departure where targetable. Hivelord legend rule and Winged type-change are separately exercised.",
+    "tests": [
+      "cmm_sliver_keyword_definitions_cast_and_track_control_and_source_departure",
+      "cmm_sliver_keyword_grants_change_combat_and_destruction_rules"
+    ]
+  },
+  {
+    "name": "Gargadon",
+    "oracle_id": "73f808f0-3d56-46c9-967b-d452bb3611af",
+    "printed_faces_sha256": "2440266d5efae1caf42846e6ffb97fa334265f4ae8a873c9b82e8d1edf0658e9",
+    "scope": "complete",
+    "evidence": "Paid the suspend cost, advanced four upkeeps, exercised the cast choice and verified haste and trample in combat.",
+    "tests": [
+      "cmm_permanent_games_gargadon_suspends_for_four_upkeeps_then_has_haste_and_trample"
+    ]
+  },
+  {
+    "name": "Gilded Lotus",
+    "oracle_id": "9a02a9a7-39d9-4763-85d3-747a0540b60b",
+    "printed_faces_sha256": "1bc1a66862c18467c46a31b01080786b1acf9571f81e23f243f85bb2f831870a",
+    "scope": "complete",
+    "evidence": "Paid the named permanent’s cost, resolved it and verified its exact output and tap restrictions. Creature cases tested summoning sickness. Ornithopter also faced ground and reach blockers.",
+    "tests": [
+      "cmm_permanent_games_cast_then_tap_for_exact_printed_mana"
+    ]
+  },
+  {
+    "name": "Goliath Sphinx",
+    "oracle_id": "73115500-4468-43b3-9151-13e3da9050c5",
+    "printed_faces_sha256": "55d1e3f5a4792d67899c298e5f92b23cb4938f5ff4730783bde890a2d0c2bff9",
+    "scope": "complete",
+    "evidence": "Paid the printed cost and exercised the creature’s printed abilities through attack and block decisions, damage steps and final state.",
+    "tests": [
+      "cmm_creature_games_flying_haste_vigilance_strike_and_lifelink"
+    ]
+  },
+  {
+    "name": "Haunted Cloak",
+    "oracle_id": "74fc88d5-19c3-4516-9a06-e9573d659caa",
+    "printed_faces_sha256": "7a279a742eb10acbd7cd3db94c4bc5dcdd6a87accb0e56b5e13514f08206fc10",
+    "scope": "complete",
+    "evidence": "Cast and equipped the permanent, verified equip costs and legal hosts, transferred it and exercised the granted characteristics in gameplay.",
+    "tests": [
+      "cmm_permanent_games_equipment_costs_targets_transfers_and_combat"
+    ]
+  },
+  {
+    "name": "Hedron Archive",
+    "oracle_id": "32263baa-d3f0-463f-92b3-4e9938476add",
+    "printed_faces_sha256": "6088624c8a80e7d3904dfaa2eed2a43ea0f4694deea1de0d8cb20cc8911baf63",
+    "scope": "complete",
+    "evidence": "Cast the artifact. Checked all printed mana outputs, then activated the draw ability by paying, tapping and sacrificing. Verified stack timing, exact cards drawn and invalid costs.",
+    "tests": [
+      "cmm_draw_rock_games_pay_tap_sacrifice_and_verify_printed_mana_modes"
+    ]
+  },
+  {
+    "name": "Irrigated Farmland",
+    "oracle_id": "406eabe2-df62-49e2-bb39-c0227509d875",
+    "printed_faces_sha256": "a617091fc9a5b04176b2b9dda4da30cd01a771eae125270625dce3f2cd9ff1d2",
+    "scope": "complete",
+    "evidence": "Paid two to cycle from hand and draw. Played the other branch, checked tapped entry, untapped and activated both intrinsic colors.",
+    "tests": [
+      "cmm_land_games_cycle_for_two_or_play_tapped_then_use_either_intrinsic_color"
+    ]
+  },
+  {
+    "name": "Izzet Signet",
+    "oracle_id": "2fda4fe7-8b0c-489c-a000-6d358e614e34",
+    "printed_faces_sha256": "bd688a398943342040d7df2e58a1ff7f0e4c39b2f2bd86e4d50ffcf5207913db",
+    "scope": "complete",
+    "evidence": "The source-qualified full definition was cast or played, then activated by paying Forest-produced green mana; the exact two printed colors were credited. Omitted, unavailable or excessive payment, repeated tap and opposing-player activation were rejected. A synthetic same-shape ability also passed during a real resolution payment. The Azorius-to-Boros spell-casting test is additional evidence for those two cards.",
+    "tests": [
+      "cmm_five_paid_tap_mana_cards_use_land_mana_and_reject_illegal_payments",
+      "paid_mana_ability_works_inside_resolution_payment_and_rejects_atomically"
+    ]
+  },
+  {
+    "name": "Jet Medallion",
+    "oracle_id": "bccb06f1-8839-4104-9ffa-c79a817f8378",
+    "printed_faces_sha256": "96a0c3033e5a43ac408bc40c3634fbfbd8f5d1ce299471ec6c6a285aac66861d",
+    "scope": "complete",
+    "evidence": "Paid the cost of the Medallion, used its discount on the matching color, checked printed colored requirements, stacking sources, controller, and ability removal.",
+    "tests": [
+      "cmm_discount_games_medallions_reduce_generic_cost_and_track_active_source"
+    ]
+  },
+  {
+    "name": "Jukai Naturalist",
+    "oracle_id": "c4d1a78f-0cca-4042-862c-8f322ee25d50",
+    "printed_faces_sha256": "de1fdbc1a520a3b40897a85642f1bea66d707f8fb6dca0add627179e35a4fdcf",
+    "scope": "complete",
+    "evidence": "Paid the source cost and exercised matching and nonmatching spell types. Resolved combat and verified Jukai Naturalist’s lifelink.",
+    "tests": [
+      "cmm_discount_games_foundry_inspector_and_jukai_naturalist_filter_spell_types"
+    ]
+  },
+  {
+    "name": "Letter of Acceptance",
+    "oracle_id": "e0cb503e-9814-4280-9c29-4eff3379bc24",
+    "printed_faces_sha256": "045710dc92e9b63c124a1cd0e1686eec984e6f1fa38a5ed073acf6206b61a1b7",
+    "scope": "complete",
+    "evidence": "Cast the artifact. Checked all printed mana outputs, then activated the draw ability by paying, tapping and sacrificing. Verified stack timing, exact cards drawn and invalid costs.",
+    "tests": [
+      "cmm_draw_rock_games_pay_tap_sacrifice_and_verify_printed_mana_modes"
+    ]
+  },
+  {
+    "name": "Lightning Greaves",
+    "oracle_id": "ca204b66-8d0c-431a-8d34-282f7c2d17da",
+    "printed_faces_sha256": "af80abccd1383af9f9495224b6a54a8b912397b20efaf9069b2901c589fb8b6a",
+    "scope": "complete",
+    "evidence": "Cast and equipped the permanent, verified equip costs and legal hosts, transferred it and exercised the granted characteristics in gameplay.",
+    "tests": [
+      "cmm_permanent_games_equipment_costs_targets_transfers_and_combat"
+    ]
+  },
+  {
+    "name": "Mind Stone",
+    "oracle_id": "c97361b5-af16-4a7b-af85-a429dbaf4ad2",
+    "printed_faces_sha256": "9dff9dea5beea23d8efe375ed7dc90b3ebeb0d10478dc04101a3b3a96d4e81f5",
+    "scope": "complete",
+    "evidence": "Cast the artifact. Checked all printed mana outputs, then activated the draw ability by paying, tapping and sacrificing. Verified stack timing, exact cards drawn and invalid costs.",
+    "tests": [
+      "cmm_draw_rock_games_pay_tap_sacrifice_and_verify_printed_mana_modes"
+    ]
+  },
+  {
+    "name": "Ministrant of Obligation",
+    "oracle_id": "0cee5539-d10b-4de2-aee8-e02f0e24ac26",
+    "printed_faces_sha256": "b5b16a44a8ce90e70bd20e8f767d859c109a29fbb28dd5ea2d1d856c8ecc15ee",
+    "scope": "complete",
+    "evidence": "Cast the creature, destroyed it, resolved afterlife and verified both Spirit tokens and their flying blocker restrictions.",
+    "tests": [
+      "cmm_permanent_games_ministrant_dies_and_both_afterlife_spirits_fly"
+    ]
+  },
+  {
+    "name": "Omen of the Hunt",
+    "oracle_id": "53295b03-717d-481d-9d5c-212c5f30bbbf",
+    "printed_faces_sha256": "fa86ed4bc4a9095e3a41fdc5b8bce787236fbe56d037d714b9942a18b24bfa2e",
+    "scope": "complete",
+    "evidence": "Source-qualified opponent-turn flash cast, optional entry search take and decline, tapped basic land entry and shuffle, and {2}{G} sacrifice activation scrying two cards.",
+    "tests": [
+      "keyword_creatures::tests::basic_land_search::cmm_omen_and_solemn_offer_optional_entry_search",
+      "keyword_creatures::tests::basic_land_search::cmm_omen_scry_and_solemn_death_draw",
+      "keyword_creatures::tests::basic_land_search::cmm_omen_flash_casts_on_opponents_turn"
+    ]
+  },
+  {
+    "name": "Ornithopter of Paradise",
+    "oracle_id": "3a940dfa-a026-4969-8981-ef90cdfbe9ef",
+    "printed_faces_sha256": "f0c6c5c439af3a0159ea945382f13ad747451e05473916c38af15a4f7d66c3ba",
+    "scope": "complete",
+    "evidence": "Paid the named permanent’s cost, resolved it and verified its exact output and tap restrictions. Creature cases tested summoning sickness. Ornithopter also faced ground and reach blockers.",
+    "tests": [
+      "cmm_permanent_games_cast_then_tap_for_exact_printed_mana"
+    ]
+  },
+  {
+    "name": "Palladium Myr",
+    "oracle_id": "7b0767b8-b504-456e-93bd-218502f73b3d",
+    "printed_faces_sha256": "523493a05afc577f4c537a4337d47c004cb451aaa86b9203391ba86afdba328d",
+    "scope": "complete",
+    "evidence": "Paid the named permanent’s cost, resolved it and verified its exact output and tap restrictions. Creature cases tested summoning sickness. Ornithopter also faced ground and reach blockers.",
+    "tests": [
+      "cmm_permanent_games_cast_then_tap_for_exact_printed_mana"
+    ]
+  },
+  {
+    "name": "Pearl Medallion",
+    "oracle_id": "19015380-1332-4960-8cc6-0732009525a2",
+    "printed_faces_sha256": "b12425054c50946c381ec7f986a3c148f9b74d54b2f64709e02dfe238549c639",
+    "scope": "complete",
+    "evidence": "Paid the cost of the Medallion, used its discount on the matching color, checked printed colored requirements, stacking sources, controller, and ability removal.",
+    "tests": [
+      "cmm_discount_games_medallions_reduce_generic_cost_and_track_active_source"
+    ]
+  },
+  {
+    "name": "Prairie Stream",
+    "oracle_id": "5330e24a-8568-446e-840a-594cd08bd1bc",
+    "printed_faces_sha256": "020905645952982e4e4be300e79e1fb56056074e3dad5cdcb5fecc62fe810151",
+    "scope": "complete",
+    "evidence": "Played with basic-land counts on both sides of the threshold, including opponent and nonbasic controls. Activated each printed intrinsic color.",
+    "tests": [
+      "cmm_land_games_count_only_controlled_basic_lands_and_produce_intrinsic_colors"
+    ]
+  },
+  {
+    "name": "Rampant Growth",
+    "oracle_id": "8539f295-5d58-4436-a73a-b9277c4c7795",
+    "printed_faces_sha256": "d1d808007c9fdf62164d133d8170fd583412740294bc559a4e64686013604134",
+    "scope": "complete",
+    "evidence": "Paid source-qualified {1}{G} cast; search selects a basic land which enters tapped under controller without a reveal, with one shuffle. Fail-to-find still shuffles; targeted engine tests reject nonbasics and verify entry counter/status processing. Existing typecycling search-to-hand control passes.",
+    "tests": [
+      "keyword_creatures::tests::basic_land_search::cmm_rampant_growth_and_font_of_fertility_search_tapped_with_real_definitions",
+      "basic_land_search::paid_basic_land_search_enters_tapped_with_entry_replacements_and_shuffles",
+      "basic_land_search::basic_land_search_can_fail_to_find_and_still_shuffles",
+      "cycling::typecycling_uses_the_searchers_library_actual_subtypes_and_host_shuffle"
+    ]
+  },
+  {
+    "name": "Read the Bones",
+    "oracle_id": "5bf4d8d9-a2b2-4dba-ac05-9d4470a89db2",
+    "printed_faces_sha256": "6b731b927823421b034c313b29f698fa0c14d3f384eb65e2e793ce23308cca37",
+    "scope": "partial",
+    "evidence": "Paid the printed cost, chose scry order, drew the resulting cards and lost two life. The required interaction with a draw replacement remains open.",
+    "tests": [
+      "cmm_spell_games_read_the_bones_scry_order_draw_and_life"
+    ]
+  },
+  {
+    "name": "Rejuvenating Springs",
+    "oracle_id": "d1620449-930a-4895-a143-fd2a0a3c8b17",
+    "printed_faces_sha256": "9eb8df8bcceb407a18a76905e1a4c22c2ddaaa316f7d6596f724a4aa2a7bd047",
+    "scope": "complete",
+    "evidence": "Played in games with different opponent counts and checked tapped entry and the exact two mana options.",
+    "tests": [
+      "cmm_land_games_count_opponents_and_offer_only_the_two_printed_colors"
+    ]
+  },
+  {
+    "name": "Reverse Engineer",
+    "oracle_id": "f56596be-e12f-4ab6-af61-3ef8dc87134c",
+    "printed_faces_sha256": "8224c107bb0b3f60fda7ecc24c65d58237a4c8e52e590f7976c41ef974f39102",
+    "scope": "complete",
+    "evidence": "Spirited Companion was cast and its entry trigger drew a card. Reverse Engineer was cast with improvise and ordinary mana payments and drew three cards.",
+    "tests": [
+      "cmm_spell_games_spirited_companion_and_reverse_engineer"
+    ]
+  },
+  {
+    "name": "Rorix Bladewing",
+    "oracle_id": "48fe0f52-1676-49d5-acf6-5476081e8e1b",
+    "printed_faces_sha256": "b84e889bde5e7d7e2347a43077c409c8b7ac882594cc8d9f52f5f36b906c2a48",
+    "scope": "complete",
+    "evidence": "Paid the printed cost and exercised the creature’s printed abilities through attack and block decisions, damage steps and final state.",
+    "tests": [
+      "cmm_creature_games_flying_haste_vigilance_strike_and_lifelink"
+    ]
+  },
+  {
+    "name": "Ruby Medallion",
+    "oracle_id": "0c367958-729e-416d-988b-098e90e7a1fd",
+    "printed_faces_sha256": "493935f357b5be9d99ff407f1c1e256e0c99d6a481087139ba72ecb3a49aba8f",
+    "scope": "complete",
+    "evidence": "Paid the cost of the Medallion, used its discount on the matching color, checked printed colored requirements, stacking sources, controller, and ability removal.",
+    "tests": [
+      "cmm_discount_games_medallions_reduce_generic_cost_and_track_active_source"
+    ]
+  },
+  {
+    "name": "Sapphire Medallion",
+    "oracle_id": "f1ef5698-14bd-42bf-aae5-2870699e4186",
+    "printed_faces_sha256": "817a5bc9bb9c4892f3895b29aad3f0c81dd4533fb884bbdc8ce75df57ca02627",
+    "scope": "complete",
+    "evidence": "Paid the cost of the Medallion, used its discount on the matching color, checked printed colored requirements, stacking sources, controller, and ability removal.",
+    "tests": [
+      "cmm_discount_games_medallions_reduce_generic_cost_and_track_active_source"
+    ]
+  },
+  {
+    "name": "Scattered Groves",
+    "oracle_id": "3c87ea85-ca29-45a7-b5b2-758c62898b0a",
+    "printed_faces_sha256": "a7b48368d5befdd33a6c17561f6ffd69f2485ff3031aab2b521aec4b3817b074",
+    "scope": "complete",
+    "evidence": "Paid two to cycle from hand and draw. Played the other branch, checked tapped entry, untapped and activated both intrinsic colors.",
+    "tests": [
+      "cmm_land_games_cycle_for_two_or_play_tapped_then_use_either_intrinsic_color"
+    ]
+  },
+  {
+    "name": "Sentinel Sliver",
+    "oracle_id": "1d0f1186-be6c-45c3-9703-f0c1e13892fb",
+    "printed_faces_sha256": "ddcfea9910e8a5bb541a27bbbbaac84c4ee91a6aef924b3aa8afccea244a813d",
+    "scope": "complete",
+    "evidence": "Paid cast; exact source name, types, subtypes, colors, cost and stats; controller and opponent scope; printed keyword effects in combat or via destroy; source departure where targetable. Hivelord legend rule and Winged type-change are separately exercised.",
+    "tests": [
+      "cmm_sliver_keyword_definitions_cast_and_track_control_and_source_departure",
+      "cmm_sliver_keyword_grants_change_combat_and_destruction_rules"
+    ]
+  },
+  {
+    "name": "Sheltered Thicket",
+    "oracle_id": "db8d8643-3d0b-4f20-bf53-f4cd26a0e8df",
+    "printed_faces_sha256": "9b492603a811e3922b323c63a5dbe91b913d19e6e6c14c94175125198424beb0",
+    "scope": "complete",
+    "evidence": "Paid two to cycle from hand and draw. Played the other branch, checked tapped entry, untapped and activated both intrinsic colors.",
+    "tests": [
+      "cmm_land_games_cycle_for_two_or_play_tapped_then_use_either_intrinsic_color"
+    ]
+  },
+  {
+    "name": "Skycloud Expanse",
+    "oracle_id": "76f335d0-7f71-4b1a-b60d-73de954cbe2c",
+    "printed_faces_sha256": "a36e6b5586a22702e5a78eaf570172ee46f11a2cfc9336cf2a11ccece6127fa2",
+    "scope": "complete",
+    "evidence": "The source-qualified full definition was cast or played, then activated by paying Forest-produced green mana; the exact two printed colors were credited. Omitted, unavailable or excessive payment, repeated tap and opposing-player activation were rejected. A synthetic same-shape ability also passed during a real resolution payment. The Azorius-to-Boros spell-casting test is additional evidence for those two cards.",
+    "tests": [
+      "cmm_five_paid_tap_mana_cards_use_land_mana_and_reject_illegal_payments",
+      "paid_mana_ability_works_inside_resolution_payment_and_rejects_atomically"
+    ]
+  },
+  {
+    "name": "Skysnare Spider",
+    "oracle_id": "b820c29e-2428-4074-a024-9502848484d6",
+    "printed_faces_sha256": "31c2276605a638b22402ff048c0c18b36fba54dc6865997acd26545925019173",
+    "scope": "complete",
+    "evidence": "Cast the creature, exercised the printed combat and targeting restrictions, then verified the legal block and its outcome.",
+    "tests": [
+      "cmm_creature_games_reach_deathtouch_vigilance_defender_and_shroud"
+    ]
+  },
+  {
+    "name": "Sliver Hivelord",
+    "oracle_id": "e4fe33e7-b952-4152-8c83-81d948756d2f",
+    "printed_faces_sha256": "8783691f41b6bb756334b1e2c0f243890476db9839ff34d5ebebbbba8955f686",
+    "scope": "complete",
+    "evidence": "Paid cast; exact source name, types, subtypes, colors, cost and stats; controller and opponent scope; printed keyword effects in combat or via destroy; source departure where targetable. Hivelord legend rule and Winged type-change are separately exercised.",
+    "tests": [
+      "cmm_sliver_keyword_definitions_cast_and_track_control_and_source_departure",
+      "cmm_sliver_keyword_grants_change_combat_and_destruction_rules",
+      "sliver_hivelord_obeys_legend_rule_despite_indestructible"
+    ]
+  },
+  {
+    "name": "Smoldering Marsh",
+    "oracle_id": "390f1b56-264e-4336-83be-dc1fe79bfdcf",
+    "printed_faces_sha256": "e2b0d1703402f7358b40c8f971a84f266667c77686b1da482fd05d60911c0f19",
+    "scope": "complete",
+    "evidence": "Played with basic-land counts on both sides of the threshold, including opponent and nonbasic controls. Activated each printed intrinsic color.",
+    "tests": [
+      "cmm_land_games_count_only_controlled_basic_lands_and_produce_intrinsic_colors"
+    ]
+  },
+  {
+    "name": "Solemn Simulacrum",
+    "oracle_id": "00c0543c-2a1f-4425-8283-4062d74a1637",
+    "printed_faces_sha256": "d52a8019e4ea896eb1a97dfbfba01bb43e1d004d8740afdb0351876eb53ef1b9",
+    "scope": "complete",
+    "evidence": "Source-qualified paid cast and optional entry search: take enters a basic tapped and shuffles, decline performs no search or shuffle. An opposing destruction moves the source to its graveyard and its death trigger offers draw or decline; both branches pass.",
+    "tests": [
+      "keyword_creatures::tests::basic_land_search::cmm_omen_and_solemn_offer_optional_entry_search",
+      "keyword_creatures::tests::basic_land_search::cmm_omen_scry_and_solemn_death_draw"
+    ]
+  },
+  {
+    "name": "Spectator Seating",
+    "oracle_id": "cf6d10ed-85c3-48f2-8ba0-2960e03b408b",
+    "printed_faces_sha256": "f14a764ef974307167be22d596850793641a2fbd37290f05dbe943aafdcd7fec",
+    "scope": "complete",
+    "evidence": "Played in games with different opponent counts and checked tapped entry and the exact two mana options.",
+    "tests": [
+      "cmm_land_games_count_opponents_and_offer_only_the_two_printed_colors"
+    ]
+  },
+  {
+    "name": "Spirited Companion",
+    "oracle_id": "9c5f0d91-9d86-4e66-94fd-4af93ad01838",
+    "printed_faces_sha256": "d5bcda0d15c5ded3e6e316b50127dbef8d7c242881ac9ca4be51164249a31730",
+    "scope": "complete",
+    "evidence": "Spirited Companion was cast and its entry trigger drew a card. Reverse Engineer was cast with improvise and ordinary mana payments and drew three cards.",
+    "tests": [
+      "cmm_spell_games_spirited_companion_and_reverse_engineer"
+    ]
+  },
+  {
+    "name": "Spitebellows",
+    "oracle_id": "fee18f57-4ae5-4df8-af3b-f82ed2157ac3",
+    "printed_faces_sha256": "962bcfd1d674088b65729ea51611005b4982f3cc6c65e953b9ff7f40bdc522f2",
+    "scope": "complete",
+    "evidence": "Cast normally and for evoke, resolved the leaves-the-battlefield damage and checked target revalidation.",
+    "tests": [
+      "cmm_permanent_games_spitebellows_normal_evoke_and_leaves_damage"
+    ]
+  },
+  {
+    "name": "Striking Sliver",
+    "oracle_id": "6a15599d-8b00-4e0f-ac0c-d05f07c1e50d",
+    "printed_faces_sha256": "1b9ffb8f6889090f3b36e3083ef51101e1b43a3c79f220c639be4c1668218903",
+    "scope": "complete",
+    "evidence": "Paid cast; exact source name, types, subtypes, colors, cost and stats; controller and opponent scope; printed keyword effects in combat or via destroy; source departure where targetable. Hivelord legend rule and Winged type-change are separately exercised.",
+    "tests": [
+      "cmm_sliver_keyword_definitions_cast_and_track_control_and_source_departure",
+      "cmm_sliver_keyword_grants_change_combat_and_destruction_rules"
+    ]
+  },
+  {
+    "name": "Sunblade Angel",
+    "oracle_id": "be37ef9d-955a-417e-bde8-bb9e0bdf3612",
+    "printed_faces_sha256": "57ee0a6367e4eb4dfb27bca99cbb1616bdabd38339baaf396439c6eb51442898",
+    "scope": "complete",
+    "evidence": "Paid the printed cost and exercised the creature’s printed abilities through attack and block decisions, damage steps and final state.",
+    "tests": [
+      "cmm_creature_games_flying_haste_vigilance_strike_and_lifelink"
+    ]
+  },
+  {
+    "name": "Sungrass Prairie",
+    "oracle_id": "0a28dff0-2bd6-4105-b73a-b6c4735833fd",
+    "printed_faces_sha256": "c5d9fc91ae14bd17939c559e51f2e2cbca5f3cc6eca787d530be353857c6daac",
+    "scope": "complete",
+    "evidence": "The source-qualified full definition was cast or played, then activated by paying Forest-produced green mana; the exact two printed colors were credited. Omitted, unavailable or excessive payment, repeated tap and opposing-player activation were rejected. A synthetic same-shape ability also passed during a real resolution payment. The Azorius-to-Boros spell-casting test is additional evidence for those two cards.",
+    "tests": [
+      "cmm_five_paid_tap_mana_cards_use_land_mana_and_reject_illegal_payments",
+      "paid_mana_ability_works_inside_resolution_payment_and_rejects_atomically"
+    ]
+  },
+  {
+    "name": "Sunken Hollow",
+    "oracle_id": "cd2c90ac-2b04-461c-92f3-939871b6b6a3",
+    "printed_faces_sha256": "79c13d5bd2297d7de046558fc4956cd6a111a60ca7034c7fcc143d25daf5cd40",
+    "scope": "complete",
+    "evidence": "Played with basic-land counts on both sides of the threshold, including opponent and nonbasic controls. Activated each printed intrinsic color.",
+    "tests": [
+      "cmm_land_games_count_only_controlled_basic_lands_and_produce_intrinsic_colors"
+    ]
+  },
+  {
+    "name": "Syphon Sliver",
+    "oracle_id": "61f18560-8f26-4d7b-a6f8-ec388766123b",
+    "printed_faces_sha256": "90b195ef76b7c746111e54860218a9a0ec5687c9186341662c4be217034b6231",
+    "scope": "complete",
+    "evidence": "Paid cast; exact source name, types, subtypes, colors, cost and stats; controller and opponent scope; printed keyword effects in combat or via destroy; source departure where targetable. Hivelord legend rule and Winged type-change are separately exercised.",
+    "tests": [
+      "cmm_sliver_keyword_definitions_cast_and_track_control_and_source_departure",
+      "cmm_sliver_keyword_grants_change_combat_and_destruction_rules"
+    ]
+  },
+  {
+    "name": "Temple of Enlightenment",
+    "oracle_id": "89f43e27-790b-4ca1-8ba7-0882b31e0783",
+    "printed_faces_sha256": "3429b12e3d0659632ac17f0ae760714183a6326856a8615ce233465eb91eb71b",
+    "scope": "complete",
+    "evidence": "Played the Temple tapped, resolved its private scry with top, bottom and empty-library controls, then untapped and used each printed color.",
+    "tests": [
+      "cmm_land_games_temple_scry_choices_empty_library_and_printed_mana"
+    ]
+  },
+  {
+    "name": "Temple of Epiphany",
+    "oracle_id": "79f94050-d850-41ca-b1db-5ae0cf743f0a",
+    "printed_faces_sha256": "aa57895eb5784d549b28ff0af1b5d7781070b7e19043c69c94fd271b41684784",
+    "scope": "complete",
+    "evidence": "Played the Temple tapped, resolved its private scry with top, bottom and empty-library controls, then untapped and used each printed color.",
+    "tests": [
+      "cmm_land_games_temple_scry_choices_empty_library_and_printed_mana"
+    ]
+  },
+  {
+    "name": "Temple of Malady",
+    "oracle_id": "dc55421f-dee8-4263-9df0-2365df5f14bb",
+    "printed_faces_sha256": "d580aee7521927244260e7c67619493f5d7f225d6c824e5b24cc7ebeaab790d1",
+    "scope": "complete",
+    "evidence": "Played the Temple tapped, resolved its private scry with top, bottom and empty-library controls, then untapped and used each printed color.",
+    "tests": [
+      "cmm_land_games_temple_scry_choices_empty_library_and_printed_mana"
+    ]
+  },
+  {
+    "name": "Temple of Plenty",
+    "oracle_id": "e521322b-0e83-458c-8936-7021a80ee279",
+    "printed_faces_sha256": "8a5ff8a92da97745a443057cef9445f7e0804f0e1c0f6e9ed2277e1c8ed33b76",
+    "scope": "complete",
+    "evidence": "Played the Temple tapped, resolved its private scry with top, bottom and empty-library controls, then untapped and used each printed color.",
+    "tests": [
+      "cmm_land_games_temple_scry_choices_empty_library_and_printed_mana"
+    ]
+  },
+  {
+    "name": "Temple of Silence",
+    "oracle_id": "e6e6fce8-0f6a-4b84-865e-d4e4a4182f9f",
+    "printed_faces_sha256": "f3446d0b458ab4b82c4516e3b83ff669e4a3423ea55cb89dcd7b2db6abc7d435",
+    "scope": "complete",
+    "evidence": "Played the Temple tapped, resolved its private scry with top, bottom and empty-library controls, then untapped and used each printed color.",
+    "tests": [
+      "cmm_land_games_temple_scry_choices_empty_library_and_printed_mana"
+    ]
+  },
+  {
+    "name": "Temple of Triumph",
+    "oracle_id": "6f0d94d9-64bb-4175-83bc-301e8f79f54f",
+    "printed_faces_sha256": "394da049815d3766b9e6f9dc734af5594ab35d483ed159c917982a4b849f443f",
+    "scope": "complete",
+    "evidence": "Played the Temple tapped, resolved its private scry with top, bottom and empty-library controls, then untapped and used each printed color.",
+    "tests": [
+      "cmm_land_games_temple_scry_choices_empty_library_and_printed_mana"
+    ]
+  },
+  {
+    "name": "Terramorphic Expanse",
+    "oracle_id": "1bd3e453-aa21-4ee6-95c2-d6d920ee8e7a",
+    "printed_faces_sha256": "8f99f922c8d0005468d630f72767c6befbada84c72c7a769f828131253604805",
+    "scope": "complete",
+    "evidence": "Source-qualified paid artifact cast or land play, tap and sacrifice cost with ordered tapped last-known information, then search resolves after the source has left; chosen basic enters tapped without reveal and shuffles once; choosing no card shuffles. Engine test also verifies rejected insufficient payment and already-tapped source are atomic.",
+    "tests": [
+      "keyword_creatures::tests::basic_land_search::cmm_bauble_and_expanse_pay_tap_sacrifice_and_search_tapped",
+      "basic_land_search::tap_and_sacrifice_cost_is_atomic_and_records_tapped_lki_before_search"
+    ]
+  },
+  {
+    "name": "Thran Dynamo",
+    "oracle_id": "a699c663-8131-4045-9265-a83e86609374",
+    "printed_faces_sha256": "9daabc36360e8db253ce3052e85895e471b1fa22cc8fc4503b78cdc7f6d4d7f9",
+    "scope": "complete",
+    "evidence": "Paid the named permanent’s cost, resolved it and verified its exact output and tap restrictions. Creature cases tested summoning sickness. Ornithopter also faced ground and reach blockers.",
+    "tests": [
+      "cmm_permanent_games_cast_then_tap_for_exact_printed_mana"
+    ]
+  },
+  {
+    "name": "Training Center",
+    "oracle_id": "e3570ac7-c593-40e3-bbd6-ec3da6d8158d",
+    "printed_faces_sha256": "ee308341ae014ef702a1e2f87eb4ebb1c6952090744055f2f467c64848392bb3",
+    "scope": "complete",
+    "evidence": "Played in games with different opponent counts and checked tapped entry and the exact two mana options.",
+    "tests": [
+      "cmm_land_games_count_opponents_and_offer_only_the_two_printed_colors"
+    ]
+  },
+  {
+    "name": "Two-Headed Sliver",
+    "oracle_id": "be857d6e-5bf2-491b-ab46-963b4d45adee",
+    "printed_faces_sha256": "ef47156aba8e1316ccc20ee110a3990cba16cacce609aafdddfa4306cd4d85c7",
+    "scope": "complete",
+    "evidence": "Paid cast; exact source name, types, subtypes, colors, cost and stats; controller and opponent scope; printed keyword effects in combat or via destroy; source departure where targetable. Hivelord legend rule and Winged type-change are separately exercised.",
+    "tests": [
+      "cmm_sliver_keyword_definitions_cast_and_track_control_and_source_departure",
+      "cmm_sliver_keyword_grants_change_combat_and_destruction_rules"
+    ]
+  },
+  {
+    "name": "Undergrowth Stadium",
+    "oracle_id": "7c69f718-acc8-4851-8e5d-0cbaaa86192c",
+    "printed_faces_sha256": "e44ec44ab829769239ba50022fc7488c488362cacf075988c85a6acc1e4856cb",
+    "scope": "complete",
+    "evidence": "Played in games with different opponent counts and checked tapped entry and the exact two mana options.",
+    "tests": [
+      "cmm_land_games_count_opponents_and_offer_only_the_two_printed_colors"
+    ]
+  },
+  {
+    "name": "Vault of Champions",
+    "oracle_id": "ebc5ac83-08d4-4d6b-b840-0c4ba71a38ab",
+    "printed_faces_sha256": "d0307dfde4d77d04ea793e1728bf33bc462812807569ac16d2e74ce4d6f69577",
+    "scope": "complete",
+    "evidence": "Played in games with different opponent counts and checked tapped entry and the exact two mana options.",
+    "tests": [
+      "cmm_land_games_count_opponents_and_offer_only_the_two_printed_colors"
+    ]
+  },
+  {
+    "name": "Venom Sliver",
+    "oracle_id": "ffe05d4b-0ec9-4319-bb11-1366dc091224",
+    "printed_faces_sha256": "5a2769975298b0adb68b2ef1bc2367c44f7dd568ee13d3fae7336e34f5e099d6",
+    "scope": "complete",
+    "evidence": "Paid cast; exact source name, types, subtypes, colors, cost and stats; controller and opponent scope; printed keyword effects in combat or via destroy; source departure where targetable. Hivelord legend rule and Winged type-change are separately exercised.",
+    "tests": [
+      "cmm_sliver_keyword_definitions_cast_and_track_control_and_source_departure",
+      "cmm_sliver_keyword_grants_change_combat_and_destruction_rules"
+    ]
+  },
+  {
+    "name": "Vulshok Battlegear",
+    "oracle_id": "708df587-3b13-42cb-8341-f476ab4cbe45",
+    "printed_faces_sha256": "249c6fb166d6af1a3b5b05638b075941990eee0b5bf52671ae5b4435f998ca10",
+    "scope": "complete",
+    "evidence": "Cast and equipped the permanent, verified equip costs and legal hosts, transferred it and exercised the granted characteristics in gameplay.",
+    "tests": [
+      "cmm_permanent_games_equipment_costs_targets_transfers_and_combat"
+    ]
+  },
+  {
+    "name": "Wall of Denial",
+    "oracle_id": "9cc092f9-e8f0-40ea-847d-813b70f889db",
+    "printed_faces_sha256": "862cfa5e4ecee07d4281986212e5c27f0c329fbee2eee82fd271568e9d821957",
+    "scope": "complete",
+    "evidence": "Cast the creature, exercised the printed combat and targeting restrictions, then verified the legal block and its outcome.",
+    "tests": [
+      "cmm_creature_games_reach_deathtouch_vigilance_defender_and_shroud"
+    ]
+  },
+  {
+    "name": "Wayfarer's Bauble",
+    "oracle_id": "31f15274-301b-47c5-ba19-0ced04520878",
+    "printed_faces_sha256": "69151cabd284095ed08c2c6de90ee05f90fe56bcb8bec8d013fb8b435c8d5385",
+    "scope": "complete",
+    "evidence": "Source-qualified paid artifact cast or land play, tap and sacrifice cost with ordered tapped last-known information, then search resolves after the source has left; chosen basic enters tapped without reveal and shuffles once; choosing no card shuffles. Engine test also verifies rejected insufficient payment and already-tapped source are atomic.",
+    "tests": [
+      "keyword_creatures::tests::basic_land_search::cmm_bauble_and_expanse_pay_tap_sacrifice_and_search_tapped",
+      "basic_land_search::tap_and_sacrifice_cost_is_atomic_and_records_tapped_lki_before_search"
+    ]
+  },
+  {
+    "name": "Winged Sliver",
+    "oracle_id": "24e96682-14ca-4a62-a920-2d686c8a5dbf",
+    "printed_faces_sha256": "3817528862c0bce4ec3f17f39bb802ad8344a4c504f86a5758b0bcf98c98cacf",
+    "scope": "complete",
+    "evidence": "Paid cast; exact source name, types, subtypes, colors, cost and stats; controller and opponent scope; printed keyword effects in combat or via destroy; source departure where targetable. Hivelord legend rule and Winged type-change are separately exercised.",
+    "tests": [
+      "cmm_sliver_keyword_definitions_cast_and_track_control_and_source_departure",
+      "cmm_sliver_keyword_grants_change_combat_and_destruction_rules",
+      "sliver_creature_grants_follow_host_type_changes"
+    ]
+  },
+  {
+    "name": "Zetalpa, Primal Dawn",
+    "oracle_id": "7da0e5de-3e4c-420a-8685-991206100b9d",
+    "printed_faces_sha256": "56524c516166d846787b9b0734c51d92e113c1075c6d0841982e4672d484dae9",
+    "scope": "complete",
+    "evidence": "Paid the printed cost and exercised the creature’s printed abilities through attack and block decisions, damage steps and final state.",
+    "tests": [
+      "cmm_creature_games_flying_haste_vigilance_strike_and_lifelink"
+    ]
+  },
+  {
+    "name": "Arcane Signet",
+    "oracle_id": "0bc7f093-bef0-4f1a-852c-4b75ebf54838",
+    "printed_faces_sha256": "55ca52eab4b61d854a96fc2926ba48f02131ddcfa2f7f163dd434b24279fb9f2",
+    "scope": "complete",
+    "evidence": "Source-bound Commander opening with admitted Rograkh/Ishai partner union offers white, blue and red, rejects green, and produces chosen blue. In a non-Commander game the source taps but produces no mana. A game-boundary synthetic colorless commander with explicitly empty identity also produces no mana. ",
+    "tests": [
+      "cmm_commander_identity_mana_uses_admitted_partner_union_and_sphere_draws",
+      "cmm_commander_identity_mana_taps_without_producing_when_no_commander",
+      "empty_commander_identity_taps_without_mana_and_missing_input_is_rejected"
+    ]
+  },
+  {
+    "name": "Command Tower",
+    "oracle_id": "0895c9b7-ae7d-4bb3-af17-3b75deb50a25",
+    "printed_faces_sha256": "4256ba2b89f2b21ec19369ce60357891b7bcd1da1776003d8120513cabd23106",
+    "scope": "complete",
+    "evidence": "Source-bound Commander opening with admitted Rograkh/Ishai partner union offers white, blue and red, rejects green, and produces chosen blue. In a non-Commander game the source taps but produces no mana. A game-boundary synthetic colorless commander with explicitly empty identity also produces no mana. ",
+    "tests": [
+      "cmm_commander_identity_mana_uses_admitted_partner_union_and_sphere_draws",
+      "cmm_commander_identity_mana_taps_without_producing_when_no_commander",
+      "empty_commander_identity_taps_without_mana_and_missing_input_is_rejected"
+    ]
+  },
+  {
+    "name": "Commander's Sphere",
+    "oracle_id": "0b67c4e2-f88b-4e01-85a1-9d5f5b8db13b",
+    "printed_faces_sha256": "c40c14a52c2a66d6bf6cf30e98d5766d965632ed2f9c3b7f9d0974e3d9a94728",
+    "scope": "complete",
+    "evidence": "Source-bound Commander opening with admitted Rograkh/Ishai partner union offers white, blue and red, rejects green, and produces chosen blue. In a non-Commander game the source taps but produces no mana. A game-boundary synthetic colorless commander with explicitly empty identity also produces no mana. The tapped Sphere was sacrificed and its draw resolved.",
+    "tests": [
+      "cmm_commander_identity_mana_uses_admitted_partner_union_and_sphere_draws",
+      "cmm_commander_identity_mana_taps_without_producing_when_no_commander",
+      "empty_commander_identity_taps_without_mana_and_missing_input_is_rejected"
+    ]
+  },
+  {
+    "name": "Darksteel Ingot",
+    "oracle_id": "a2529491-7389-4cfa-92d2-145eda779603",
+    "printed_faces_sha256": "b3414c0657a4000ee2ca8bfd9c2baa55c543bf5d1d88444c83dc816b253590d7",
+    "scope": "complete",
+    "evidence": "Cast the Ingot, tapped it for each of the five colors, checked a repeat activation, resolved a destroy spell against it and then sacrificed it.",
+    "tests": [
+      "cmm_darksteel_ingot_survives_destroy_but_can_be_sacrificed_and_adds_each_color"
+    ]
+  },
+  {
+    "name": "Worn Powerstone",
+    "oracle_id": "b166b670-febc-4821-855e-f8d465644c03",
+    "printed_faces_sha256": "4d7ad09014f998d68d034e0a94fae8642c9611d0feeb007e231eb2e4d2f823d9",
+    "scope": "complete",
+    "evidence": "Cast the Powerstone for three, verified tapped entry and denied activation, then untapped and produced exactly two colorless mana without using the stack.",
+    "tests": [
+      "cmm_worn_powerstone_enters_tapped_then_adds_two_without_using_the_stack"
+    ]
+  },
+  {
+    "name": "Enchantress's Presence",
+    "oracle_id": "795b096a-2bce-4588-a2c9-abc5ea40dc0c",
+    "printed_faces_sha256": "0bf1b4db962ac0dca8b67cc0342c26bea3ee18cc175b712c036d20cdb4e1a815",
+    "scope": "complete",
+    "evidence": "Paid source cast and exact source name, type, subtype, colors, cost and stats. Actual controller enchantment and enchantment-creature casts trigger before the spell resolves; artifact and opponent casts do not. Optional Mesa/Verduran choices take or decline; Presence and Satyr draws are mandatory.",
+    "tests": [
+      "cmm_enchantress_watchers_draw_on_controller_cast_with_printed_optionality"
+    ]
+  },
+  {
+    "name": "Mesa Enchantress",
+    "oracle_id": "8f4b8a19-72f4-48ed-ac05-62a7c7525797",
+    "printed_faces_sha256": "1c5d94468b96957cddc172da485419df3f14aaa32cca8bd1af26b8e2dc7cdcfe",
+    "scope": "complete",
+    "evidence": "Paid source cast and exact source name, type, subtype, colors, cost and stats. Actual controller enchantment and enchantment-creature casts trigger before the spell resolves; artifact and opponent casts do not. Optional Mesa/Verduran choices take or decline; Presence and Satyr draws are mandatory.",
+    "tests": [
+      "cmm_enchantress_watchers_draw_on_controller_cast_with_printed_optionality"
+    ]
+  },
+  {
+    "name": "Murmuring Mystic",
+    "oracle_id": "dcd4da46-5438-4454-8b1b-43ca51bda1f9",
+    "printed_faces_sha256": "98e16e5b455ad7f53e7db6914477e3523685d3977915922d7b04613d42089bd4",
+    "scope": "complete",
+    "evidence": "Paid source cast and printed source characteristics. Controller instant and sorcery casts each create the exact blue flying token, with the first token before the triggering spell resolves; artifact and opponent casts produce none. Talrand legend-rule interaction was not directly tested.",
+    "tests": [
+      "cmm_spell_token_watchers_create_exact_flying_tokens_on_controller_casts"
+    ]
+  },
+  {
+    "name": "Nature's Lore",
+    "oracle_id": "78826359-fe63-44ad-adc4-a17ffcd710e4",
+    "printed_faces_sha256": "002042bfa7f52e9e3610b8fc5ab581cdd0ccb1ba9735727e5aafc893c862f8c5",
+    "scope": "complete",
+    "evidence": "Source-qualified paid {1}{G} cast searches for a Forest without reveal. Basic Forest enters untapped; nonbasic Forest Cinder Glade is eligible and enters tapped under its own conditional entry rule. Both selections and failing to find shuffle once.",
+    "tests": [
+      "keyword_creatures::tests::basic_land_search::cmm_natures_lore_and_three_visits_find_basic_or_nonbasic_forest",
+      "basic_land_search::forest_search_accepts_nonbasic_and_preserves_land_entry_tap_rules"
+    ]
+  },
+  {
+    "name": "Satyr Enchanter",
+    "oracle_id": "aa321138-b1a7-4b8e-a2ca-b9ce65704e92",
+    "printed_faces_sha256": "5b71af4aff9aa4e4f1c81b2e3ed329e6fdf9681729e925643bec542dae8abb5f",
+    "scope": "complete",
+    "evidence": "Paid source cast and exact source name, type, subtype, colors, cost and stats. Actual controller enchantment and enchantment-creature casts trigger before the spell resolves; artifact and opponent casts do not. Optional Mesa/Verduran choices take or decline; Presence and Satyr draws are mandatory.",
+    "tests": [
+      "cmm_enchantress_watchers_draw_on_controller_cast_with_printed_optionality"
+    ]
+  },
+  {
+    "name": "Talrand, Sky Summoner",
+    "oracle_id": "ea1eb902-a23c-44ff-9169-19baf71de238",
+    "printed_faces_sha256": "280e5c220b0a29032ddc444106d4839b09bf16aa7e756f9add44a89c53ae26c8",
+    "scope": "complete",
+    "evidence": "Paid source cast and printed source characteristics. Controller instant and sorcery casts each create the exact blue flying token, with the first token before the triggering spell resolves; artifact and opponent casts produce none. Talrand legend-rule choice was exercised with a second copy.",
+    "tests": [
+      "cmm_spell_token_watchers_create_exact_flying_tokens_on_controller_casts",
+      "talrand_obeys_the_legend_rule"
+    ]
+  },
+  {
+    "name": "Three Visits",
+    "oracle_id": "1b882a0e-0ede-4d1a-bd1a-9b7cffbcde8e",
+    "printed_faces_sha256": "26db20696801b12bf097b7cbccd62d186c2ec42e4ecadc6c8d77240fc4937212",
+    "scope": "complete",
+    "evidence": "Source-qualified paid {1}{G} cast searches for a Forest without reveal. Basic Forest enters untapped; nonbasic Forest Cinder Glade is eligible and enters tapped under its own conditional entry rule. Both selections and failing to find shuffle once.",
+    "tests": [
+      "keyword_creatures::tests::basic_land_search::cmm_natures_lore_and_three_visits_find_basic_or_nonbasic_forest",
+      "basic_land_search::forest_search_accepts_nonbasic_and_preserves_land_entry_tap_rules"
+    ]
+  },
+  {
+    "name": "Urza's Mine",
+    "oracle_id": "33e85a8a-86df-4cdc-a9cc-8cbabe92c3c0",
+    "printed_faces_sha256": "322adb361309df4440a91dd450afb23b0de86a2b5db4fa1e8d2f5fa28da12ef8",
+    "scope": "complete",
+    "evidence": "Source-qualified land was played, activated with zero, one, opponent-controlled and both controlled companion subtype pairs, and produced its exact conditional colorless amount; reuse while tapped rejected.",
+    "tests": [
+      "cmm_urza_lands_check_both_controlled_land_subtype_pairs"
+    ]
+  },
+  {
+    "name": "Urza's Power Plant",
+    "oracle_id": "e11966cd-2ee3-4df4-b099-abf42dcdf0db",
+    "printed_faces_sha256": "398c69746e7de361e50139aacfac1018c7e5958c70196d633b46daf95d876140",
+    "scope": "complete",
+    "evidence": "Source-qualified land was played, activated with zero, one, opponent-controlled and both controlled companion subtype pairs, and produced its exact conditional colorless amount; reuse while tapped rejected.",
+    "tests": [
+      "cmm_urza_lands_check_both_controlled_land_subtype_pairs"
+    ]
+  },
+  {
+    "name": "Urza's Tower",
+    "oracle_id": "32fbb638-ab14-4e8b-a07a-d4c44e3496f2",
+    "printed_faces_sha256": "86e9246cc97405cf0bd955bb76b479960455d097ed2213333d8d1d0187bad378",
+    "scope": "complete",
+    "evidence": "Source-qualified land was played, activated with zero, one, opponent-controlled and both controlled companion subtype pairs, and produced its exact conditional colorless amount; reuse while tapped rejected.",
+    "tests": [
+      "cmm_urza_lands_check_both_controlled_land_subtype_pairs"
+    ]
+  },
+  {
+    "name": "Verduran Enchantress",
+    "oracle_id": "cd98a31b-cc7e-43f9-982e-109ad9850908",
+    "printed_faces_sha256": "7528086511e406549c2be6eadac796b7f43e1aa81ad83851e613333bbf337ed1",
+    "scope": "complete",
+    "evidence": "Paid source cast and exact source name, type, subtype, colors, cost and stats. Actual controller enchantment and enchantment-creature casts trigger before the spell resolves; artifact and opponent casts do not. Optional Mesa/Verduran choices take or decline; Presence and Satyr draws are mandatory.",
+    "tests": [
+      "cmm_enchantress_watchers_draw_on_controller_cast_with_printed_optionality"
+    ]
+  },
+  {
+    "name": "Azusa, Lost but Seeking",
+    "oracle_id": "6c2c8bf3-9bf8-4a86-89d3-3bb36260dc51",
+    "printed_faces_sha256": "9d93a95ccee3f583e31cd987ac38c5fe2d8ec93943381c38f25203b945c6613a",
+    "scope": "complete",
+    "evidence": "Played the ordinary land, cast Azusa and played the second and third land. Checked the fourth against the limit, removed Azusa after the second, then verified the original limit and next-turn reset.",
+    "tests": [
+      "cmm_azusa_rechecks_additional_land_plays_after_source_departure_and_next_turn"
+    ]
+  },
+  {
+    "name": "Danitha Capashen, Paragon",
+    "oracle_id": "4b6377da-83e7-4519-9582-16a9c16b8faa",
+    "printed_faces_sha256": "fe2f2b242a5126f4a68db174c745bd36cc5fae374e009c642fca779229fe62b8",
+    "scope": "complete",
+    "evidence": "Paid the full creature cost, cast an Aura and Equipment at their reduced costs and verified a Fortification did not qualify. Removed Danitha and checked the price again. Blocked her untapped attack with a 2/2, which died in first strike while she gained two life.",
+    "tests": [
+      "cmm_danitha_discounts_auras_and_equipment_and_deals_first_strike_lifelink_damage"
+    ]
+  },
+  {
+    "name": "Dragon Fodder",
+    "oracle_id": "d0d2c45b-b6e3-4999-bdab-976e8f0d6617",
+    "printed_faces_sha256": "6fe364c0b933ccc6f04392bebde84cc66e07f61cad26d0fee39b1c410e1bef10",
+    "scope": "complete",
+    "evidence": "Dragon Fodder created two simultaneous 1/1 red Goblin tokens. Rakka Mar tapped on her first turn to make a 3/1 red Elemental with haste that attacked immediately.",
+    "tests": [
+      "cmm_dragon_fodder_makes_two_goblins_together_and_rakka_makes_an_attacking_elemental"
+    ]
+  },
+  {
+    "name": "Exclude",
+    "oracle_id": "a8c9f91a-b1e7-451d-b6db-ae865e2b853c",
+    "printed_faces_sha256": "8348d79ae294ef65df8f35462c0b7e977ab18a3e56873d7886031fed7f7444d3",
+    "scope": "complete",
+    "evidence": "Countered a creature spell and drew one card. An artifact spell was an illegal target. After another spell countered the target first, Exclude resolved without drawing.",
+    "tests": [
+      "cmm_exclude_counters_only_a_creature_spell_and_draws_only_on_resolution"
+    ]
+  },
+  {
+    "name": "Jade Mage",
+    "oracle_id": "6daf3c59-7636-4d44-872b-67722b4868cb",
+    "printed_faces_sha256": "e0eec1d32809c503c51e4d3fbbcfc3aaf47c72dbae72e5088388603bb8013719",
+    "scope": "complete",
+    "evidence": "Paid for the Mage and created two separately paid Saprolings on its first turn. Verified each token’s name, color, subtype, power, toughness and controller, rejection of incorrect mana, and the untapped source.",
+    "tests": [
+      "cmm_jade_mage_pays_for_each_saproling_without_tapping"
+    ]
+  },
+  {
+    "name": "Rakka Mar",
+    "oracle_id": "6d92f14b-470b-40bc-b294-f725d46f307e",
+    "printed_faces_sha256": "ae33cd9142b4e3a8a22b9b1dbea847fdb8fd93c6734166150f7ac1ec90b70f66",
+    "scope": "complete",
+    "evidence": "Dragon Fodder created two simultaneous 1/1 red Goblin tokens. Rakka Mar tapped on her first turn to make a 3/1 red Elemental with haste that attacked immediately.",
+    "tests": [
+      "cmm_dragon_fodder_makes_two_goblins_together_and_rakka_makes_an_attacking_elemental"
+    ]
+  },
+  {
+    "name": "Unstable Obelisk",
+    "oracle_id": "060ae1bb-956a-4264-b405-a33151f31493",
+    "printed_faces_sha256": "e851417c24e3fca22f607428f68d1e5c5a4739b205e0da28942543940cc435f4",
+    "scope": "complete",
+    "evidence": "Paid the printed casting and activation costs and sacrificed the source before resolution. Checked legal and departed targets. Vial dealt two damage from its original source. Obelisk also tapped for colorless and could not pay the tap cost again.",
+    "tests": [
+      "cmm_vial_and_obelisk_pay_and_sacrifice_before_the_targeted_effect"
+    ]
+  },
+  {
+    "name": "Vial of Dragonfire",
+    "oracle_id": "17be934e-1e33-4b95-a984-242fa018e280",
+    "printed_faces_sha256": "18702b71bc710c8cb4ea388c8211026a2bd85b6edc63ec7b51cb972d9d169e85",
+    "scope": "complete",
+    "evidence": "Paid the printed casting and activation costs and sacrificed the source before resolution. Checked legal and departed targets. Vial dealt two damage from its original source. Obelisk also tapped for colorless and could not pay the tap cost again.",
+    "tests": [
+      "cmm_vial_and_obelisk_pay_and_sacrifice_before_the_targeted_effect"
+    ]
+  },
+  {
+    "name": "Farseek",
+    "oracle_id": "495e52e6-4c2b-4574-9474-eadbdcc8b4ac",
+    "printed_faces_sha256": "c4ad9bd4a57c4591e754d0eacaeba30abbcc7d4622216d577489c8b0e12bb378",
+    "scope": "complete",
+    "evidence": "Source-qualified {1}{G} paid cast; only Plains, Island, Swamp and Mountain are eligible, chosen land enters tapped without a reveal, and both finding and failing to find shuffle once.",
+    "tests": [
+      "keyword_creatures::tests::basic_land_search::cmm_farseek_and_tapped_fetchlands_find_their_printed_subtypes"
+    ]
+  },
+  {
+    "name": "Flood Plain",
+    "oracle_id": "9043d8d5-b38a-406f-a44c-49f579c644f0",
+    "printed_faces_sha256": "7ff890acc8adfa071a9da657e6a7b4132207968783934b6e0fdef2e2769e50cd",
+    "scope": "complete",
+    "evidence": "Source-qualified land play enters tapped and rejects immediate activation atomically; a separately seeded untapped copy taps and sacrifices, selects exactly its two printed land subtypes, puts a basic choice onto the battlefield untapped, and shuffles after finding or failing to find.",
+    "tests": [
+      "keyword_creatures::tests::basic_land_search::cmm_farseek_and_tapped_fetchlands_find_their_printed_subtypes"
+    ]
+  },
+  {
+    "name": "Grasslands",
+    "oracle_id": "e80bd454-8bc5-4921-90cf-6ad28a27a88b",
+    "printed_faces_sha256": "40faf9c7d19aa0e7127e129d563c87617c10a2f4d04ec5dcc442a5ba0ea95482",
+    "scope": "complete",
+    "evidence": "Source-qualified land play enters tapped and rejects immediate activation atomically; a separately seeded untapped copy taps and sacrifices, selects exactly its two printed land subtypes, puts a basic choice onto the battlefield untapped, and shuffles after finding or failing to find.",
+    "tests": [
+      "keyword_creatures::tests::basic_land_search::cmm_farseek_and_tapped_fetchlands_find_their_printed_subtypes"
+    ]
+  },
+  {
+    "name": "Mountain Valley",
+    "oracle_id": "0b7393aa-d563-45bc-9946-8e7d1729d498",
+    "printed_faces_sha256": "ded73877cfb18bf8c8b7a5a24caf537de3934156eb49fa7f77acd7c742ccee4f",
+    "scope": "complete",
+    "evidence": "Source-qualified land play enters tapped and rejects immediate activation atomically; a separately seeded untapped copy taps and sacrifices, selects exactly its two printed land subtypes, puts a basic choice onto the battlefield untapped, and shuffles after finding or failing to find.",
+    "tests": [
+      "keyword_creatures::tests::basic_land_search::cmm_farseek_and_tapped_fetchlands_find_their_printed_subtypes"
+    ]
+  },
+  {
+    "name": "Rocky Tar Pit",
+    "oracle_id": "8709b5b1-ef9e-45b2-bf4f-ef4c4d613dcd",
+    "printed_faces_sha256": "ab4bc0a140ea065253f877c9a5e6620ba60ce1a6e006281cc85467a35b9f2121",
+    "scope": "complete",
+    "evidence": "Source-qualified land play enters tapped and rejects immediate activation atomically; a separately seeded untapped copy taps and sacrifices, selects exactly its two printed land subtypes, puts a basic choice onto the battlefield untapped, and shuffles after finding or failing to find.",
+    "tests": [
+      "keyword_creatures::tests::basic_land_search::cmm_farseek_and_tapped_fetchlands_find_their_printed_subtypes"
+    ]
+  },
+  {
+    "name": "Sigil of the Empty Throne",
+    "oracle_id": "3b9b5b22-5a7d-4e37-a870-ca0f0efa4f36",
+    "printed_faces_sha256": "8fe4b63f53fe0a5443b961f5d32441fbd89226016ea8b56aff692ed0b2e3475c",
+    "scope": "complete",
+    "evidence": "Paid source cast and printed source characteristics, exact 4/4 white flying Angel token on controller enchantment and enchantment-creature casts before spell resolution, plus instant/artifact/opponent controls.",
+    "tests": [
+      "sigil_of_the_empty_throne_creates_angels_only_for_controllers_enchantment_casts"
+    ]
+  },
+  {
+    "name": "Sythis, Harvest's Hand",
+    "oracle_id": "0fc64fd6-f057-4056-9dca-47accb7ff036",
+    "printed_faces_sha256": "61952ea4e927017d19d0b298575dbc9f8b21f717df006d5db9e2571a35466168",
+    "scope": "partial",
+    "evidence": "Paid source cast, printed color/type/subtype/PT, controller enchantment and enchantment-creature cast gain life then draw, nonmatching and opponent controls. The legendary second-copy game has not been run.",
+    "tests": [
+      "cmm_enchantress_watchers_draw_on_controller_cast_with_printed_optionality"
+    ]
+  },
+  {
+    "name": "Reliquary Tower",
+    "oracle_id": "c23e5b80-08d2-4e24-9908-fe2aa4f30f6f",
+    "printed_faces_sha256": "4eeadc2b2c6d1b982c74987d49f6feb089c0d4e62174b3b13beb302b81f820c6",
+    "scope": "partial",
+    "evidence": "Played and tapped the land for one colorless, then retained eight through cleanup. The removal branch spent a card to destroy the land, leaving only seven before cleanup. Confirm the restored limit with excess cards in the consolidated pass.",
+    "tests": [
+      "cmm_tower_and_vessel_prevent_only_their_controllers_cleanup_discard"
+    ]
+  },
+  {
+    "name": "Thought Vessel",
+    "oracle_id": "9965d9c5-2ebf-4a6c-930e-55c5890979be",
+    "printed_faces_sha256": "42ae5fd7d2239c5aadda4b21db6aa3019b87441e8969da7cbc3abef86f07a13a",
+    "scope": "complete",
+    "evidence": "Cast for two, tapped for one colorless and carried nine cards through cleanup. After removal, the controller discarded down to seven.",
+    "tests": [
+      "cmm_tower_and_vessel_prevent_only_their_controllers_cleanup_discard"
+    ]
+  }
+]

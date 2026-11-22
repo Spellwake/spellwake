@@ -34,6 +34,9 @@ mod exchange_reads;
 #[path = "api_tests/object_shapes.rs"]
 mod object_shapes;
 
+#[path = "api_tests/ui_surface.rs"]
+mod ui_surface;
+
 #[tokio::test]
 async fn private_objects_registration_ack_requires_a_record_without_duplicate_keys() {
     let (token, session) = identity();
@@ -1707,6 +1710,3 @@ mod canonical_identifiers;
 
 #[path = "api_tests/human_foundation.rs"]
 mod human_foundation;
-
-#[path = "api_tests/admission_receipts.rs"]
-mod admission_receipts;

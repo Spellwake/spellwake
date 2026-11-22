@@ -5,9 +5,7 @@ use spellwake_content::{Inventory, Legality};
 use spellwake_contracts::creature_types::CreatureTypeVocabulary;
 use spellwake_engine::{
     mana::{ManaCost, ManaType},
-    program::{
-        BodyTarget, ExecutableBody, Instruction, InstructionAmount, Program, ResolvingPlayer,
-    },
+    program::{BodyTarget, ExecutableBody, Instruction, Program, ResolvingPlayer},
 };
 
 /// Independent coverage revision for the four-source library-action pool.
@@ -102,12 +100,12 @@ pub(super) fn definition(
     let Some(card) = CARDS.iter().find(|card| card.oracle_id == id.as_str()) else {
         return Ok(None);
     };
-    let one = || InstructionAmount::Literal(1.into());
-    let (key, name, text_sha256, target, action) = match card.kind {
+    let one = || spellwake_engine::program::ValueExpr::Literal(1.into());
+    let (key, name, text, target, action) = match card.kind {
         Kind::Scry => (
             ProgramKey::LibraryTopScryDrawSpellV1,
             "Opt",
-            "1eccd7bd99ba95e48986c4f2ca4d1db4fcee5a7dbf7bc749bf498e7a4aa66dbc",
+            "Scry 1. (Look at the top card of your library. You may put that card on the bottom.)\nDraw a card.",
             BodyTarget::None,
             Instruction::Scry {
                 player: ResolvingPlayer::Controller,
@@ -117,7 +115,7 @@ pub(super) fn definition(
         Kind::Surveil => (
             ProgramKey::LibraryTopSurveilDrawSpellV1,
             "Consider",
-            "09d6b1512d351d402a63efdf1267efc15e1fa22fc97ab2d2db7a61f4e639e0d9",
+            "Surveil 1. (Look at the top card of your library. You may put it into your graveyard.)\nDraw a card.",
             BodyTarget::None,
             Instruction::Surveil {
                 player: ResolvingPlayer::Controller,
@@ -127,11 +125,11 @@ pub(super) fn definition(
         Kind::Mill => (
             ProgramKey::LibraryTopMillDrawSpellV1,
             "Thought Scour",
-            "8a35d5ab9f0323bdc0442643e7975c137407a7520e7f32fd0b5f4abd8c060bab",
+            "Target player mills two cards.\nDraw a card.",
             BodyTarget::SinglePlayer,
             Instruction::Mill {
                 player: ResolvingPlayer::TargetPlayer,
-                amount: InstructionAmount::Literal(2.into()),
+                amount: spellwake_engine::program::ValueExpr::Literal(2.into()),
             },
         ),
         Kind::Island => {
@@ -153,7 +151,7 @@ pub(super) fn definition(
         name,
         mana: "{U}",
         type_line: "Instant",
-        text_sha256,
+        text,
         power: None,
         toughness: None,
         program: Program::instant(

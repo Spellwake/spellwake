@@ -1,6 +1,6 @@
 //! Restricted spell-copy behavior, including boundaries hidden by settled reference snapshots.
 use spellwake_engine::combat::CombatRules;
-use spellwake_engine::program::{BodyTarget, ExecutableBody, SpellTargetFilter};
+use spellwake_engine::program::{BodyTarget, ExecutableBody};
 use spellwake_engine::program::{CardType, Supertype};
 use spellwake_engine::setup::GameSeed;
 use spellwake_engine::{
@@ -67,7 +67,7 @@ fn setup_with_card_types(
             ManaType::Blue,
             2,
             Instruction::CopySpell,
-            BodyTarget::SingleSpell(SpellTargetFilter::CopyableInstructionSpell),
+            BodyTarget::SingleSpell(spellwake_engine::program::SpellFilter::copyable_instruction()),
         ),
         instant(
             3,
@@ -75,7 +75,7 @@ fn setup_with_card_types(
             ManaType::Blue,
             2,
             Instruction::CounterSpell,
-            BodyTarget::SingleSpell(SpellTargetFilter::AnySpell),
+            BodyTarget::SingleSpell(spellwake_engine::program::SpellFilter::any()),
         ),
         instant(
             4,
@@ -433,7 +433,7 @@ fn copy_of_copy_keeps_owned_traits_after_original_is_countered() {
             ManaType::Blue,
             0,
             Instruction::CopySpell,
-            BodyTarget::SingleSpell(SpellTargetFilter::CopyableInstructionSpell),
+            BodyTarget::SingleSpell(spellwake_engine::program::SpellFilter::copyable_instruction()),
         )],
         expected_supertypes.clone(),
         expected_types.clone(),

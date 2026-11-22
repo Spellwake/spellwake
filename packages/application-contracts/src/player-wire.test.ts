@@ -48,6 +48,7 @@ import {
   validPlayerReplayFrame,
 } from "./player.ts";
 import { amountSchema, identifierSchema } from "./primitives.ts";
+import { playerPublicPropertiesSchema } from "./player-views.ts";
 import { parseStrictJson } from "./raw-json.ts";
 const baseContext = z.strictObject({
   basis: playerBasisSchema,
@@ -418,5 +419,81 @@ describe("shared original player wire", () => {
       }
       expect(valid).toBe(fixture.valid);
     });
+  }
+});
+
+test("current keyword properties admit combined abilities and reject duplicates or unknown labels", () => {
+  const keywords = playerPublicPropertiesSchema.shape.keywords;
+  expect(
+    keywords.safeParse(["flying", "double-strike", "lifelink"]).success,
+  ).toBe(true);
+  expect(keywords.safeParse(["flying", "flying"]).success).toBe(false);
+  expect(keywords.safeParse(["unknown-keyword"]).success).toBe(false);
+});
+
+test("library search permits one offered card or a failed find, privately", () => {
+  const [viewer, opponent] = [
+    "00000000-0000-4000-8000-000000000001",
+    "00000000-0000-4000-8000-000000000002",
+  ];
+  const roster = [viewer!, opponent!];
+  const basis = {
+    gameId: viewer!,
+    contextId: opponent!,
+    epoch: "0",
+    revision: "4",
+  };
+  const offer = playerDecisionSchema.parse({
+    basis,
+    decision: "search",
+    respondingSeatIds: [viewer],
+    visibility: "responding-seat",
+    kind: "library-search",
+    deadlineAt: null,
+    domain: {
+      kind: "library-search",
+      inspected: ["Island", "Swamp"],
+      eligible: [{ handle: "island", label: "Island" }],
+    },
+  });
+  expect(validPlayerDecision(offer, basis, viewer!, roster)).toBe(true);
+  expect(validPlayerDecision(offer, basis, opponent!, roster)).toBe(false);
+  expect(
+    validPlayerDecision(
+      { ...offer, visibility: "public" },
+      basis,
+      opponent!,
+      roster,
+    ),
+  ).toBe(false);
+  for (const [objects, expected] of [
+    [[], true],
+    [["island"], true],
+    [["swamp"], false],
+  ] as const) {
+    const command = playerCommandSchema.parse({
+      requestId: viewer,
+      basis,
+      action: {
+        kind: "choose",
+        decision: "search",
+        response: { kind: "objects", objects },
+      },
+    });
+    expect(validPlayerChoice(offer, command, viewer!, roster)).toBe(expected);
+  }
+  for (const kind of ["cycle", "transmute"]) {
+    const body = {
+      requestId: viewer,
+      basis,
+      action: { kind, source: "hand", ability: "ability", payment: null },
+    };
+    expect(playerCommandSchema.safeParse(body).success).toBe(true);
+    expect(
+      playerCommandSchema.safeParse({
+        ...body,
+        action: { ...body.action, target: "invented" },
+      }).success,
+    ).toBe(false);
   }
 });
