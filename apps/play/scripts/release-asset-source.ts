@@ -23,7 +23,7 @@ export function appAssetSource(): string {
 export function logoAssetSource(): string {
   return process.env.SPELLWAKE_RELEASE_ASSETS === "true"
     ? resolve(root, ".release-assets/logo.svg")
-    : resolve(previewRoot(), "assets/logo/spellwake-gold-two-dots.svg");
+    : resolve(previewRoot(), "assets/logo/spellwake-gold.svg");
 }
 
 export type AssetScope =
