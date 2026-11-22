@@ -78,7 +78,18 @@ type Case = {
     /** Supply's Buy packs (and with three typed), and its vote. */
     | "supply-buy"
     | "supply-buy-three"
-    | "supply-vote";
+    | "supply-vote"
+    /** Predictions: a bet (and armed), a read-only view, Create, its picker and calendar. */
+    | "prediction-bet"
+    | "prediction-bet-armed"
+    | "prediction-view"
+    | "prediction-mine-view"
+    | "prediction-create"
+    | "prediction-picker"
+    | "prediction-calendar"
+    /** League: Standings scrolled to your row, and a player's profile from it. */
+    | "league-scrolled"
+    | "league-profile";
 };
 
 const viewports: Viewport[] = [
@@ -103,6 +114,8 @@ const shelf = "/collection/decks";
 const LOBBY_PATH = "/open-play/lobby?deck=00000000-0000-4000-8000-000000000001";
 /** Market Supply with the preview supply. */
 const SUPPLY_PATH = "/market/supply";
+/** Market Predictions with the preview questions. */
+const PREDICTIONS_PATH = "/market/predictions";
 /** Market Listings with the preview market. */
 const LISTINGS_PATH = "/market/listings";
 /** The preview trade room with Mira, as Messages opens it. */
@@ -311,6 +324,145 @@ const cases: Case[] = [
         "vote-closed",
         "vote-results",
       ].map((state) => at(probe(state), "supply-vote")),
+    ];
+  }),
+  // League on every screen, both sections, then its formats and states.
+  ...viewports.flatMap((viewport): Case[] =>
+    ["/league/season", "/league/standings"].map((path) => ({
+      viewport,
+      art: "dark",
+      decks: "six",
+      path,
+    })),
+  ),
+  ...(
+    [
+      "phone-small",
+      "phone",
+      "phone-landscape",
+      "tablet-portrait",
+      "desktop",
+    ] as const
+  ).flatMap((name): Case[] => {
+    const at = (path: string, state?: Case["state"]): Case => ({
+      viewport: named(name),
+      art: "dark",
+      decks: "six",
+      path,
+      ...(state ? { state } : {}),
+    });
+    const standings = (format: string) =>
+      `/league/standings?format=preview-format-${format}`;
+    const probe = (state: string, page = "") =>
+      `/probe/league?state=${state}${page ? `&page=${page}` : ""}`;
+    return [
+      ...["standard", "premodern", "pioneer"].map((format) =>
+        at(standings(format)),
+      ),
+      at(standings("modern"), "league-scrolled"),
+      at(standings("modern"), "league-profile"),
+      ...[
+        "loading",
+        "signed-out",
+        "unavailable",
+        "ranks-loading",
+        "ranks-failed",
+        "ranks-refresh-failed",
+        "all-new",
+        "many-formats",
+      ].map((state) => at(probe(state))),
+      ...[
+        "loading",
+        "unavailable",
+        "standings-loading",
+        "standings-failed",
+        "standings-refresh-failed",
+        "standings-appending",
+        "append-failed",
+        "own-unavailable",
+        "many-formats",
+      ].map((state) => at(probe(state, "standings"))),
+    ];
+  }),
+  // Market Predictions on every screen, both tabs, then its dialogs and states.
+  ...viewports.flatMap((viewport): Case[] =>
+    [PREDICTIONS_PATH, `${PREDICTIONS_PATH}?tab=mine`].map((path) => ({
+      viewport,
+      art: "dark",
+      decks: "six",
+      path,
+    })),
+  ),
+  ...(
+    [
+      "phone-small",
+      "phone",
+      "phone-landscape",
+      "tablet-portrait",
+      "desktop",
+    ] as const
+  ).flatMap((name): Case[] => {
+    const at = (path: string, state?: Case["state"]): Case => ({
+      viewport: named(name),
+      art: "dark",
+      decks: "six",
+      path,
+      ...(state ? { state } : {}),
+    });
+    const probe = (state: string) => `/probe/predictions?state=${state}`;
+    return [
+      at(PREDICTIONS_PATH, "prediction-bet"),
+      at(PREDICTIONS_PATH, "prediction-bet-armed"),
+      at(PREDICTIONS_PATH, "prediction-view"),
+      at(`${PREDICTIONS_PATH}?tab=mine`, "prediction-mine-view"),
+      at(PREDICTIONS_PATH, "prediction-create"),
+      at(PREDICTIONS_PATH, "prediction-picker"),
+      at(PREDICTIONS_PATH, "prediction-calendar"),
+      at(`${PREDICTIONS_PATH}?q=zzzz`),
+      at(`${PREDICTIONS_PATH}?tab=mine&mq=ring`),
+      at(`${PREDICTIONS_PATH}?tab=mine&mq=zzzz`),
+      ...[
+        "loading",
+        "signed-out",
+        "unavailable",
+        "explore-loading",
+        "explore-failed",
+        "explore-empty",
+        "explore-appending",
+        "refresh-failed",
+        "result-unknown",
+      ].map((state) => at(probe(state))),
+      ...[
+        "mine-loading",
+        "mine-failed",
+        "mine-partial",
+        "mine-empty",
+        "mine-long",
+      ].map((state) => at(`${probe(state)}&tab=mine`)),
+      ...[
+        "bet-checking",
+        "bet-failed",
+        "bet-expired",
+        "bet-none",
+        "bet-side",
+        "bet-too-much",
+        "bet-pending",
+        "bet-closed",
+        "bet-not-accepting",
+        "no-coins",
+      ].map((state) => at(probe(state), "prediction-bet")),
+      at(probe("bet-changed"), "prediction-bet-armed"),
+      at(probe("bet-failure"), "prediction-bet-armed"),
+      at(probe("result-unverified"), "prediction-view"),
+      ...["create-pending", "create-failed"].map((state) =>
+        at(probe(state), "prediction-create"),
+      ),
+      ...["create-checking", "create-unavailable", "create-price-failed"].map(
+        (state) => at(probe(state), "prediction-calendar"),
+      ),
+      ...["picker-loading", "picker-failed", "picker-appending"].map((state) =>
+        at(probe(state), "prediction-picker"),
+      ),
     ];
   }),
   // Market Listings on every screen, then its dialogs and states where space is tightest.
@@ -1056,6 +1208,93 @@ async function run(browser: Browser, test: Case): Promise<Finding[]> {
       .getByRole("heading", { name: /Supply (vote|results)/ })
       .waitFor();
     await page.waitForTimeout(900);
+  }
+  if (state === "league-scrolled") {
+    await page
+      .getByRole("table", { name: /standings$/ })
+      .locator("[tabindex='0']")
+      .first()
+      .evaluate(async (body) => {
+        // Your row is past the first page, so read on until it arrives.
+        for (let pass = 0; pass < 6; pass += 1) {
+          if (body.querySelector("[data-you='true']")) break;
+          // A sideways phone scrolls the page, not the list.
+          const scroller =
+            getComputedStyle(body).overflowY === "visible"
+              ? (body.closest("section") ?? body)
+              : body;
+          scroller.scrollTop = scroller.scrollHeight;
+          await new Promise((resolve) => setTimeout(resolve, 1000));
+        }
+        body
+          .querySelector<HTMLElement>("[data-you='true']")
+          ?.scrollIntoView({ block: "center" });
+      });
+    await page.waitForTimeout(1200);
+  }
+  if (state === "league-profile") {
+    await page.getByRole("button", { name: "EmberFox’s profile" }).click();
+    await page
+      .getByRole("dialog")
+      .getByRole("heading", { name: "EmberFox" })
+      .first()
+      .waitFor();
+    await page.waitForTimeout(900);
+  }
+  if (state === "prediction-bet" || state === "prediction-bet-armed") {
+    await page
+      .getByRole("button", { name: /^Make a prediction: Will Lightning Bolt/ })
+      .click();
+    await page.getByRole("heading", { name: "Make a prediction" }).waitFor();
+    await page.waitForTimeout(800);
+    if (state === "prediction-bet-armed") {
+      await page.getByRole("button", { name: "Yes", exact: true }).click();
+      await page.waitForTimeout(1400);
+    }
+  }
+  if (state === "prediction-view") {
+    await page
+      .getByRole("button", { name: /^View prediction: / })
+      .first()
+      .click();
+    await page
+      .getByRole("heading", { name: /^Prediction( result)?$/ })
+      .waitFor();
+    await page.waitForTimeout(800);
+  }
+  if (state === "prediction-mine-view") {
+    await page
+      .getByRole("button", { name: /^View: Will Goblin Bushwhacker/ })
+      .click();
+    await page.getByRole("heading", { name: "Prediction result" }).waitFor();
+    await page.waitForTimeout(800);
+  }
+  if (
+    state === "prediction-create" ||
+    state === "prediction-picker" ||
+    state === "prediction-calendar"
+  ) {
+    await page
+      .getByRole("button", { name: "Create prediction", exact: true })
+      .first()
+      .click();
+    await page.getByRole("heading", { name: "Create prediction" }).waitFor();
+    await page.waitForTimeout(600);
+    if (state !== "prediction-create") {
+      await page.getByRole("button", { name: "Choose card" }).click();
+      await page.getByRole("heading", { name: "Choose card" }).waitFor();
+      await page.waitForTimeout(700);
+    }
+    if (state === "prediction-calendar") {
+      const first = page.getByRole("option").first();
+      if (await first.isVisible()) {
+        await first.click();
+        await page.getByRole("button", { name: "Select" }).click();
+      } else await page.getByRole("button", { name: /^Back/ }).click();
+      await page.getByRole("heading", { name: "Create prediction" }).waitFor();
+      await page.getByRole("button", { name: /^End date/ }).click();
+      await page.waitForTimeout(800);
+    }
   }
   if (state === "market-filters") {
     await page.getByRole("button", { name: /^Filters/ }).click();

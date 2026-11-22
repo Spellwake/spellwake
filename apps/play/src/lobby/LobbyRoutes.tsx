@@ -22,7 +22,14 @@ function PreviewLobby({ mode }: { mode: PlayMode }): ReactElement {
     () => void navigate(shelfPath(mode)),
     [navigate, mode],
   );
-  const started = useCallback(() => void navigate("/match"), [navigate]);
+  const roomId = params.get("room");
+  const started = useCallback(
+    () =>
+      void navigate(
+        roomId ? `/match?room=${encodeURIComponent(roomId)}` : "/match",
+      ),
+    [navigate, roomId],
+  );
   const source = useDemoLobby(mode, params.get("deck"), back, started);
   return <LobbyPage source={source} onBack={back} />;
 }
@@ -34,7 +41,14 @@ function AccountLobby({ mode }: { mode: PlayMode }): ReactElement {
     () => void navigate(shelfPath(mode)),
     [navigate, mode],
   );
-  const started = useCallback(() => void navigate("/match"), [navigate]);
+  const roomId = params.get("room");
+  const started = useCallback(
+    () =>
+      void navigate(
+        roomId ? `/match?room=${encodeURIComponent(roomId)}` : "/match",
+      ),
+    [navigate, roomId],
+  );
   // A new room replaces the deck in the address, so a reload returns to the room.
   const onRoom = useCallback(
     (roomId: string) =>
