@@ -54,6 +54,7 @@ mod prediction_routes;
 mod profile_routes;
 mod progression_routes;
 mod quest_reroll_routes;
+mod reconcile_routes;
 mod room_configuration_routes;
 mod room_control_routes;
 mod room_routes;
@@ -89,6 +90,7 @@ pub struct ApiConfig {
     admission: Option<Arc<crate::native_game::AdmissionManifest>>,
     native_views: Option<Arc<crate::native_game::NativeGameRuntime>>,
     native_host_owner: Option<crate::native_game::NativeHostOwner>,
+    reconcile_secret: Option<String>,
 }
 impl ApiConfig {
     pub fn new(
@@ -143,6 +145,7 @@ impl ApiConfig {
             admission: None,
             native_views: None,
             native_host_owner: None,
+            reconcile_secret: None,
         })
     }
 
@@ -219,6 +222,16 @@ impl ApiConfig {
                 .map_err(|_| ActorError::Configuration)?,
             ));
         }
+        if let Some(secret) = std::env::var_os("SPELLWAKE_RECONCILE_SECRET") {
+            let secret = secret
+                .into_string()
+                .map_err(|_| ActorError::Configuration)?;
+            if !(32..=256).contains(&secret.len()) || !secret.bytes().all(|b| b.is_ascii_graphic())
+            {
+                return Err(ActorError::Configuration);
+            }
+            config.reconcile_secret = Some(secret);
+        }
         config.commander_admission =
             crate::native_game::CommanderRelease::from_env()?.map(Arc::new);
         config.admission = crate::native_game::AdmissionManifest::from_env()?.map(Arc::new);
@@ -268,15 +281,15 @@ impl ApiConfig {
         )?)
     }
 
+    pub(super) fn backend_config(&self) -> Result<BackendConfig, crate::backend::BackendError> {
+        BackendConfig::new(&self.base, &self.secret_key)
+    }
+
     pub(super) fn backend(
         &self,
         user_agent: &'static str,
     ) -> Result<BackendClient, crate::backend::BackendError> {
-        BackendClient::new(
-            BackendConfig::new(&self.base, &self.secret_key)?,
-            user_agent,
-            Duration::from_secs(60),
-        )
+        BackendClient::new(self.backend_config()?, user_agent, Duration::from_secs(60))
     }
 }
 
@@ -884,6 +897,7 @@ fn router_with_state(state: ApiState) -> Router {
         )
         .route("/v1/webhooks/stripe", post(stripe_webhook))
         .route("/v1/webhooks/patreon", post(patreon_routes::webhook))
+        .route("/v1/internal/reconcile", post(reconcile_routes::reconcile))
         .fallback(|| async { fail(StatusCode::NOT_FOUND, "route", "not_found") })
         .method_not_allowed_fallback(|| async {
             fail(StatusCode::METHOD_NOT_ALLOWED, "method", "not_allowed")

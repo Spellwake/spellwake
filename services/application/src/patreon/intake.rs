@@ -40,6 +40,9 @@ impl IntakeConfig {
             read("SPELLWAKE_PATREON_EVIDENCE_BUCKET")?,
         )
     }
+    pub(crate) fn bucket(&self) -> &str {
+        &self.bucket
+    }
 }
 pub(crate) enum IntakeError {
     Authentication(PatreonError),
