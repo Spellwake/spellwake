@@ -47,9 +47,13 @@ export function useSetSymbol(
       // Scryfall's full names carry subtitles: "Duskmourn: House of Horror".
       set.name.toLowerCase().startsWith(`${name}:`),
   );
+  const remoteUrl =
+    !entry && code && /^[a-z0-9]{2,6}$/.test(code)
+      ? `https://svgs.scryfall.io/sets/${code}.svg`
+      : null;
   return {
     isSettled: !index.isPending,
-    url: entry ? `${SETS}${entry.file}` : null,
+    url: entry ? `${SETS}${entry.file}` : remoteUrl,
   };
 }
 

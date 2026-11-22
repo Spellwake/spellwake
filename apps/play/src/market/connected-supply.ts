@@ -1,6 +1,14 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { useInfiniteQuery } from "@tanstack/react-query";
-import type { EconomyCommand } from "@spellwake/application-contracts";
+import {
+  useInfiniteQuery,
+  useQuery,
+  useQueryClient,
+} from "@tanstack/react-query";
+import {
+  ballotPageSchema,
+  type BallotPage,
+  type EconomyCommand,
+} from "@spellwake/application-contracts";
 import { useAccount } from "../auth/AccountProvider";
 import { ownerBearer, useAccountSummary } from "../data/account";
 import { useEconomyCommand } from "../data/economy-commands";
@@ -14,13 +22,17 @@ import {
   READ_ATTEMPTS,
   useInventoryGap,
 } from "../collection/connected-inventory";
-import type {
-  Completed,
-  Purchase,
-  PurchaseStage,
-  QuoteTerms,
-  SupplySource,
-  SupplyTile,
+import {
+  ballotDates,
+  shortDate,
+  type Ballot,
+  type BallotSave,
+  type Completed,
+  type Purchase,
+  type PurchaseStage,
+  type QuoteTerms,
+  type SupplySource,
+  type SupplyTile,
 } from "./supply-sources";
 
 const LOAD_FAILED = "Couldn’t load sets.";
@@ -304,6 +316,128 @@ export function useConnectedSupply(): SupplySource {
     }
   }, [origin, accountId, purchase]);
 
+  const queries = useQueryClient();
+  const [ballotSave, setBallotSave] = useState<BallotSave | null>(null);
+
+  // Read active seasons and their supply ballot when available.
+  const ballotQuery = useQuery({
+    queryKey: ["supply-ballot", session?.accountId, session?.sessionId],
+    enabled: !!session && !!services,
+    retry: READ_ATTEMPTS - 1,
+    queryFn: async ({
+      signal,
+    }): Promise<{
+      seasonId: string;
+      page: BallotPage;
+    } | null> => {
+      if (!session || !services) return null;
+      const bearer = await ownerBearer(services, session);
+      const seasonsRes = await services.api.seasons(bearer, null, 20, signal);
+      if (seasonsRes.status !== "success") return null;
+      const rawItems = Array.isArray(seasonsRes.data["items"])
+        ? (seasonsRes.data["items"] as Array<Record<string, unknown>>)
+        : [];
+      const active =
+        rawItems.find((s) => s["state"] === "active") ?? rawItems[0];
+      const seasonId =
+        active && typeof active["id"] === "string" ? active["id"] : null;
+      if (!seasonId) return null;
+      const ballotRes = await services.api.seasonBallot(
+        bearer,
+        seasonId,
+        signal,
+      );
+      if (ballotRes.status !== "success") return null;
+      const parsed = ballotPageSchema.safeParse(ballotRes.data);
+      return parsed.success ? { seasonId, page: parsed.data } : null;
+    },
+  });
+
+  const setCodes = useMemo(
+    () =>
+      new Map(
+        (sets.data?.pages ?? []).flatMap((page) =>
+          page.items.map(
+            (set) => [set.id, set.code?.toUpperCase() ?? null] as const,
+          ),
+        ),
+      ),
+    [sets.data],
+  );
+
+  const ballot: Ballot | null = useMemo(() => {
+    if (!ballotQuery.data) return null;
+    const { page } = ballotQuery.data;
+    const dates = ballotDates(new Date(page.cutoff));
+    const closes = shortDate(new Date(page.cutoff));
+    const nextDrop = shortDate(dates.nextDrop);
+    const winners = page.items.filter((c) => c.winner === true);
+    return {
+      status: "ready",
+      closes,
+      nextDrop,
+      isOpen: page.isOpen,
+      canVote: page.canVote,
+      qualifies: page.qualifies,
+      candidates: page.items.map((item) => ({
+        setId: item.setId,
+        name: item.name,
+        code: setCodes.get(item.setId) ?? null,
+      })),
+      saved: page.approvedSetIds,
+      results:
+        page.publication !== null
+          ? winners.map((w) => ({
+              name: w.name,
+              votes: Number(w.finalApprovals ?? 0),
+              packs: Number(w.dropQuantity ?? 0),
+            }))
+          : null,
+      readFailed: ballotQuery.isError,
+      save: ballotSave,
+    };
+  }, [ballotQuery.data, ballotQuery.isError, setCodes, ballotSave]);
+
+  const saveBallot = useCallback(
+    async (setIds: readonly string[]) => {
+      if (!session || !services || !ballotQuery.data) return;
+      setBallotSave({ kind: "pending" });
+      try {
+        const bearer = await ownerBearer(services, session);
+        const res = await services.api.replaceSeasonBallot(
+          bearer,
+          ballotQuery.data.seasonId,
+          { requestId: crypto.randomUUID(), setIds: [...setIds] },
+        );
+        if (res.status === "success") {
+          setBallotSave(null);
+          setCompleted({ kind: "voted" });
+          await queries.invalidateQueries({
+            queryKey: ["supply-ballot", session.accountId],
+          });
+        } else if (res.status === "fail") {
+          setBallotSave({
+            kind: "rejected",
+            message: "Couldn’t save vote. Check your eligibility and choices.",
+          });
+        } else {
+          setBallotSave({ kind: "unconfirmed", isChecking: false });
+        }
+      } catch {
+        setBallotSave({ kind: "unconfirmed", isChecking: false });
+      }
+    },
+    [session, services, ballotQuery.data, queries],
+  );
+
+  const checkBallot = useCallback(async () => {
+    setBallotSave({ kind: "unconfirmed", isChecking: true });
+    const fresh = await ballotQuery.refetch();
+    setBallotSave(
+      fresh.data ? null : { kind: "unconfirmed", isChecking: false },
+    );
+  }, [ballotQuery]);
+
   if (gap) return { status: gap };
   if (sets.isPending && products.isPending) return { status: "loading" };
   const readFailed =
@@ -367,10 +501,10 @@ export function useConnectedSupply(): SupplySource {
       setPurchase((current) =>
         current?.stage.kind === "rejected" ? null : current,
       ),
-    ballot: null,
-    saveBallot: () => undefined,
-    checkBallot: () => undefined,
-    dismissBallot: () => undefined,
+    ballot,
+    saveBallot: (ids) => void saveBallot(ids),
+    checkBallot: () => void checkBallot(),
+    dismissBallot: () => setBallotSave(null),
     completed,
     dismissCompleted: () => setCompleted(null),
   };

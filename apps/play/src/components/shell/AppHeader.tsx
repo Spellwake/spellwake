@@ -35,11 +35,10 @@ const SIGN_OUT = "sign-out";
 const VIEW_PROFILE = "view-profile";
 const COSMETICS = "cosmetics";
 const DEFAULTS = "default-settings";
-const AGREEMENT = "community-agreement";
+const POLICY = "policy-commitment";
 /**
- * The account menu, as approved: identity, cosmetics, defaults, then Sign out
- * apart. The Community agreement was added on the owner's request, apart
- * from the account's own settings.
+ * The account menu, as approved: identity, cosmetics, defaults, then Policy &
+ * Commitment and Sign out apart from the account's own settings.
  */
 const accountCommands = (
   username: string | null,
@@ -59,8 +58,8 @@ const accountCommands = (
   },
   { id: DEFAULTS, label: "Default settings", leading: <Settings /> },
   {
-    id: AGREEMENT,
-    label: "Community agreement",
+    id: POLICY,
+    label: "Policy & Commitment",
     leading: <Handshake />,
     dividerBefore: true,
   },
@@ -147,7 +146,7 @@ export function AppHeader({
   onViewProfile,
   onOpenCosmetics,
   onOpenDefaults,
-  onOpenAgreement,
+  onOpenPolicy,
   onToggleMessages,
   isMessagesOpen,
   messagesRef,
@@ -165,7 +164,7 @@ export function AppHeader({
   onViewProfile: () => void;
   onOpenCosmetics: () => void;
   onOpenDefaults: () => void;
-  onOpenAgreement: () => void;
+  onOpenPolicy: () => void;
   /** Opens or closes Messages under its button. */
   onToggleMessages: () => void;
   isMessagesOpen: boolean;
@@ -207,7 +206,7 @@ export function AppHeader({
             else if (command === VIEW_PROFILE) onViewProfile();
             else if (command === COSMETICS) onOpenCosmetics();
             else if (command === DEFAULTS) onOpenDefaults();
-            else if (command === AGREEMENT) onOpenAgreement();
+            else if (command === POLICY) onOpenPolicy();
             else void navigate(command);
           }}
           trigger={
