@@ -1,53 +1,6 @@
 import { style } from "@vanilla-extract/css";
 import { controlTokens as t } from "@spellwake/ui/tokens";
 
-export const tableSurface = style({
-  position: "relative",
-  width: "100%",
-  height: "100%",
-  display: "flex",
-  flexDirection: "column",
-  justifyContent: "space-between",
-  paddingTop: 84,
-  paddingBottom: 210,
-  paddingLeft: 24,
-  paddingRight: 368,
-  boxSizing: "border-box",
-  gap: 12,
-  overflow: "hidden",
-  "@media": {
-    "(max-width: 960px)": {
-      paddingTop: 136,
-      paddingRight: 20,
-      paddingLeft: 20,
-      paddingBottom: 376,
-    },
-  },
-});
-
-export const boardHalf = style({
-  flex: 1,
-  minHeight: 0,
-  display: "flex",
-  flexDirection: "column",
-  justifyContent: "center",
-  gap: 8,
-  padding: "10px 14px",
-  borderRadius: t.size.radius,
-  background: `color-mix(in srgb, ${t.color.surface} 62%, transparent)`,
-  border: `1px solid color-mix(in srgb, ${t.color.edge} 48%, transparent)`,
-  overflow: "auto",
-});
-
-export const boardHeader = style({
-  display: "flex",
-  alignItems: "center",
-  justifyContent: "space-between",
-  gap: 12,
-  fontSize: t.font.hint,
-  color: t.color.muted,
-});
-
 export const boardRow = style({
   display: "flex",
   flexWrap: "wrap",
@@ -142,18 +95,6 @@ export const cardMeta = style({
   borderRadius: 4,
 });
 
-export const handTray = style({
-  display: "flex",
-  alignItems: "flex-end",
-  justifyContent: "center",
-  gap: 10,
-  width: "100%",
-  height: "100%",
-  padding: "6px 16px 10px",
-  boxSizing: "border-box",
-  overflowX: "auto",
-});
-
 export const zoneCluster = style({
   display: "flex",
   alignItems: "center",
@@ -175,14 +116,6 @@ export const zonePill = style({
       borderColor: t.color.goldEdge,
     },
   },
-});
-
-export const centerStrip = style({
-  display: "flex",
-  alignItems: "center",
-  justifyContent: "space-between",
-  gap: 12,
-  flexWrap: "wrap",
 });
 
 export const decisionCard = style({
@@ -288,4 +221,12 @@ export const statusBadge = style({
   fontSize: 13,
   lineHeight: 1.2,
   whiteSpace: "nowrap",
+});
+
+/** The stack, an opening choice and a pending decision, under the actions. */
+export const sideDecisions = style({
+  display: "flex",
+  flexDirection: "column",
+  gap: 10,
+  minWidth: 0,
 });

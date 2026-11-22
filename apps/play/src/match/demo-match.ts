@@ -1,355 +1,22 @@
 import { useCallback, useMemo, useState } from "react";
 import type { PlayerSnapshot } from "@spellwake/application-contracts";
+import { useBuilderCatalogue } from "../data/builder-catalogue";
+import {
+  catalogueName,
+  PREVIEW_GAME,
+  PREVIEW_SEATS,
+  PREVIEW_VIEWER,
+  previewSnapshot,
+} from "./preview-table";
 import type {
   MatchActionCommand,
   MatchChatEntry,
   MatchSource,
 } from "./match-sources";
 
-const VIEWER_SEAT = "00000000-0000-4000-8000-000000000101";
-const OPPONENT_SEAT = "00000000-0000-4000-8000-000000000102";
-const DEMO_GAME_ID = "00000000-0000-4000-8000-000000000201";
-const DEMO_CONTEXT_ID = "00000000-0000-4000-8000-000000000202";
-
-const INITIAL_SNAPSHOT: PlayerSnapshot = {
-  basis: {
-    gameId: DEMO_GAME_ID,
-    contextId: DEMO_CONTEXT_ID,
-    epoch: "1",
-    revision: "12",
-  },
-  viewerSeatId: VIEWER_SEAT,
-  players: [
-    {
-      seatId: VIEWER_SEAT,
-      life: "20",
-      poison: "0",
-      counters: [],
-      manaPool: [{ color: "red", amount: "1" }],
-      handCount: "3",
-      libraryCount: "48",
-      eliminated: false,
-    },
-    {
-      seatId: OPPONENT_SEAT,
-      life: "17",
-      poison: "0",
-      counters: [],
-      manaPool: [],
-      handCount: "4",
-      libraryCount: "49",
-      eliminated: false,
-    },
-  ],
-  turn: {
-    number: "3",
-    activeSeatIds: [VIEWER_SEAT],
-    prioritySeatIds: [VIEWER_SEAT],
-    phase: "precombat-main",
-    step: "precombat-main",
-  },
-  visibleObjects: [
-    {
-      handle: "obj-mountain-1",
-      zone: "zone-battlefield",
-      ownerSeatId: VIEWER_SEAT,
-      controllerSeatId: VIEWER_SEAT,
-      identity: {
-        kind: "known",
-        definitionId: null,
-        printingId: null,
-        characteristics: {
-          name: "Mountain",
-          typeLine: "Basic Land — Mountain",
-          rulesText: "({T}: Add {R}.)",
-          manaCost: null,
-          printedPower: null,
-          printedToughness: null,
-          printedLoyalty: null,
-        },
-        currentNames: ["Mountain"],
-      },
-      publicProperties: {
-        cardTypes: ["land"],
-        supertypes: ["basic"],
-        landTypes: ["Mountain"],
-        creatureTypes: [],
-        colors: [],
-        keywords: [],
-        power: null,
-        toughness: null,
-      },
-      tapped: false,
-      counters: [],
-      abilities: [{ handle: "ab-m1", kind: "mana", label: "{T}: Add {R}." }],
-      damageMarked: "0",
-      attachedTo: null,
-    },
-    {
-      handle: "obj-goblin-1",
-      zone: "zone-battlefield",
-      ownerSeatId: VIEWER_SEAT,
-      controllerSeatId: VIEWER_SEAT,
-      identity: {
-        kind: "known",
-        definitionId: null,
-        printingId: null,
-        characteristics: {
-          name: "Goblin Guide",
-          typeLine: "Creature — Goblin Scout",
-          rulesText:
-            "Haste\nWhenever Goblin Guide attacks, defending player reveals the top card of their library.",
-          manaCost: "{R}",
-          printedPower: "2",
-          printedToughness: "2",
-          printedLoyalty: null,
-        },
-        currentNames: ["Goblin Guide"],
-      },
-      publicProperties: {
-        cardTypes: ["creature"],
-        supertypes: [],
-        landTypes: [],
-        creatureTypes: ["Goblin", "Scout"],
-        colors: ["red"],
-        keywords: ["haste"],
-        power: "2",
-        toughness: "2",
-      },
-      tapped: false,
-      counters: [],
-      abilities: [],
-      damageMarked: "0",
-      attachedTo: null,
-    },
-    {
-      handle: "obj-island-1",
-      zone: "zone-battlefield",
-      ownerSeatId: OPPONENT_SEAT,
-      controllerSeatId: OPPONENT_SEAT,
-      identity: {
-        kind: "known",
-        definitionId: null,
-        printingId: null,
-        characteristics: {
-          name: "Island",
-          typeLine: "Basic Land — Island",
-          rulesText: "({T}: Add {U}.)",
-          manaCost: null,
-          printedPower: null,
-          printedToughness: null,
-          printedLoyalty: null,
-        },
-        currentNames: ["Island"],
-      },
-      publicProperties: {
-        cardTypes: ["land"],
-        supertypes: ["basic"],
-        landTypes: ["Island"],
-        creatureTypes: [],
-        colors: [],
-        keywords: [],
-        power: null,
-        toughness: null,
-      },
-      tapped: false,
-      counters: [],
-      abilities: [{ handle: "ab-i1", kind: "mana", label: "{T}: Add {U}." }],
-      damageMarked: "0",
-      attachedTo: null,
-    },
-    {
-      handle: "obj-bolt-hand",
-      zone: "zone-hand-you",
-      ownerSeatId: VIEWER_SEAT,
-      controllerSeatId: VIEWER_SEAT,
-      identity: {
-        kind: "known",
-        definitionId: null,
-        printingId: null,
-        characteristics: {
-          name: "Lightning Bolt",
-          typeLine: "Instant",
-          rulesText: "Lightning Bolt deals 3 damage to any target.",
-          manaCost: "{R}",
-          printedPower: null,
-          printedToughness: null,
-          printedLoyalty: null,
-        },
-        currentNames: ["Lightning Bolt"],
-      },
-      publicProperties: {
-        cardTypes: ["instant"],
-        supertypes: [],
-        landTypes: [],
-        creatureTypes: [],
-        colors: ["red"],
-        keywords: [],
-        power: null,
-        toughness: null,
-      },
-      tapped: false,
-      counters: [],
-      abilities: [],
-      damageMarked: "0",
-      attachedTo: null,
-    },
-    {
-      handle: "obj-mountain-hand",
-      zone: "zone-hand-you",
-      ownerSeatId: VIEWER_SEAT,
-      controllerSeatId: VIEWER_SEAT,
-      identity: {
-        kind: "known",
-        definitionId: null,
-        printingId: null,
-        characteristics: {
-          name: "Mountain",
-          typeLine: "Basic Land — Mountain",
-          rulesText: "({T}: Add {R}.)",
-          manaCost: null,
-          printedPower: null,
-          printedToughness: null,
-          printedLoyalty: null,
-        },
-        currentNames: ["Mountain"],
-      },
-      publicProperties: {
-        cardTypes: ["land"],
-        supertypes: ["basic"],
-        landTypes: ["Mountain"],
-        creatureTypes: [],
-        colors: [],
-        keywords: [],
-        power: null,
-        toughness: null,
-      },
-      tapped: false,
-      counters: [],
-      abilities: [],
-      damageMarked: "0",
-      attachedTo: null,
-    },
-    {
-      handle: "obj-monastery-hand",
-      zone: "zone-hand-you",
-      ownerSeatId: VIEWER_SEAT,
-      controllerSeatId: VIEWER_SEAT,
-      identity: {
-        kind: "known",
-        definitionId: null,
-        printingId: null,
-        characteristics: {
-          name: "Monastery Swiftspear",
-          typeLine: "Creature — Human Monk",
-          rulesText: "Haste, prowess",
-          manaCost: "{R}",
-          printedPower: "1",
-          printedToughness: "2",
-          printedLoyalty: null,
-        },
-        currentNames: ["Monastery Swiftspear"],
-      },
-      publicProperties: {
-        cardTypes: ["creature"],
-        supertypes: [],
-        landTypes: [],
-        creatureTypes: ["Human", "Monk"],
-        colors: ["red"],
-        keywords: ["haste", "prowess"],
-        power: "1",
-        toughness: "2",
-      },
-      tapped: false,
-      counters: [],
-      abilities: [],
-      damageMarked: "0",
-      attachedTo: null,
-    },
-  ],
-  zones: [
-    {
-      handle: "zone-battlefield",
-      zoneType: "battlefield",
-      ownerSeatId: null,
-      visibility: "visible",
-      objects: ["obj-mountain-1", "obj-goblin-1", "obj-island-1"],
-      orderKnown: false,
-    },
-    {
-      handle: "zone-stack",
-      zoneType: "stack",
-      ownerSeatId: null,
-      visibility: "visible",
-      objects: [],
-      orderKnown: true,
-    },
-    {
-      handle: "zone-exile",
-      zoneType: "exile",
-      ownerSeatId: null,
-      visibility: "visible",
-      objects: [],
-      orderKnown: false,
-    },
-    {
-      handle: "zone-command",
-      zoneType: "command",
-      ownerSeatId: null,
-      visibility: "visible",
-      objects: [],
-      orderKnown: false,
-    },
-    {
-      handle: "zone-hand-you",
-      zoneType: "hand",
-      ownerSeatId: VIEWER_SEAT,
-      visibility: "visible",
-      objects: ["obj-bolt-hand", "obj-mountain-hand", "obj-monastery-hand"],
-      orderKnown: false,
-    },
-    {
-      handle: "zone-library-you",
-      zoneType: "library",
-      ownerSeatId: VIEWER_SEAT,
-      visibility: "hidden",
-      hiddenCount: "48",
-    },
-    {
-      handle: "zone-graveyard-you",
-      zoneType: "graveyard",
-      ownerSeatId: VIEWER_SEAT,
-      visibility: "visible",
-      objects: [],
-      orderKnown: true,
-    },
-    {
-      handle: "zone-hand-opp",
-      zoneType: "hand",
-      ownerSeatId: OPPONENT_SEAT,
-      visibility: "hidden",
-      hiddenCount: "4",
-    },
-    {
-      handle: "zone-library-opp",
-      zoneType: "library",
-      ownerSeatId: OPPONENT_SEAT,
-      visibility: "hidden",
-      hiddenCount: "49",
-    },
-    {
-      handle: "zone-graveyard-opp",
-      zoneType: "graveyard",
-      ownerSeatId: OPPONENT_SEAT,
-      visibility: "visible",
-      objects: [],
-      orderKnown: true,
-    },
-  ],
-  stack: [],
-  decisions: [],
-  throughEventSequence: "12",
-};
+const VIEWER_SEAT = PREVIEW_VIEWER;
+const OPPONENT_SEAT = PREVIEW_SEATS[1].seatId;
+const DEMO_GAME_ID = PREVIEW_GAME;
 
 const PHASE_ORDER = [
   { phase: "beginning", step: "upkeep" },
@@ -361,13 +28,13 @@ const PHASE_ORDER = [
 
 /** Local interactive preview match for unconfigured builds. */
 export function useDemoMatch(onLeave: () => void): MatchSource {
-  const [snapshot, setSnapshot] = useState<PlayerSnapshot>(INITIAL_SNAPSHOT);
+  const [snapshot, setSnapshot] = useState<PlayerSnapshot>(previewSnapshot);
   const [commandError, setCommandError] = useState<string | null>(null);
   const [messages, setMessages] = useState<MatchChatEntry[]>([
     {
       id: "demo-chat-1",
       senderId: OPPONENT_SEAT,
-      senderName: "Mira",
+      senderName: "Alex",
       body: "Good luck, have fun!",
       sentAt: new Date().toISOString(),
       isMine: false,
@@ -376,12 +43,23 @@ export function useDemoMatch(onLeave: () => void): MatchSource {
 
   const seatNames = useMemo(
     () =>
-      new Map<string, string>([
-        [VIEWER_SEAT, "You"],
-        [OPPONENT_SEAT, "Mira"],
-      ]),
+      new Map<string, string>(
+        PREVIEW_SEATS.map((seat) => [seat.seatId, seat.name]),
+      ),
     [],
   );
+  // The preview's cards have no printing, so their pictures are found by name.
+  const { catalogue } = useBuilderCatalogue();
+  const faceByName = useMemo(() => {
+    const faces = new Map<string, string>();
+    for (const object of previewSnapshot().visibleObjects) {
+      if (object.identity.kind !== "known") continue;
+      const name = object.identity.characteristics.name;
+      const found = catalogue?.find(catalogueName(name));
+      if (found) faces.set(name, found.faceUrl);
+    }
+    return faces;
+  }, [catalogue]);
 
   const sendAction = useCallback(
     async (action: MatchActionCommand) => {
@@ -465,6 +143,7 @@ export function useDemoMatch(onLeave: () => void): MatchSource {
     snapshot,
     seatNames,
     artByPrintingId: new Map(),
+    faceByName,
     connectionState: "live",
     commandPending: false,
     commandError,
