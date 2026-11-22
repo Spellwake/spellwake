@@ -24,9 +24,7 @@ use spellwake_engine::{
     },
     object_identity::{ObjectDestination, ObjectZone},
     occurrence::{EntryCompletion, EventCause, RulesOccurrence, RulesRecord, ZoneReason},
-    program::{
-        BodyTarget, CardType, ExecutableBody, Instruction, Program, SpellTargetFilter, Supertype,
-    },
+    program::{BodyTarget, CardType, ExecutableBody, Instruction, Program, Supertype},
     setup::GameSeed,
     stack_window::StackKind,
     targets::TargetRef,
@@ -111,6 +109,7 @@ fn initial(cards: Vec<SeedCard>) -> GameState {
 }
 fn payment() -> ManaPayment {
     ManaPayment {
+        from_lots: Default::default(),
         spend: vec![ManaSpend {
             mana_type: ManaType::Green,
             amount: 1.into(),
@@ -519,7 +518,7 @@ fn sacrificing_the_qualifier_after_announcement_allows_spell_copy_and_both_resol
         mana_cost: ManaCost::free(),
         source_cost: SourceCost::Sacrifice,
         body: ExecutableBody::new(
-            BodyTarget::SingleSpell(SpellTargetFilter::CopyableInstructionSpell),
+            BodyTarget::SingleSpell(spellwake_engine::program::SpellFilter::copyable_instruction()),
             vec![Instruction::CopySpell],
         ),
     });

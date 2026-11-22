@@ -48,7 +48,10 @@ fn completed_capture_owns_the_exact_new_stack_incarnation() {
     assert_eq!(before, saved);
     let entry = cast.state().window.entries().last().unwrap().id();
     let snapshot = cast.state().rules_snapshot(None).unwrap();
-    let capture = snapshot.view().cast_occurrence(entry, A).unwrap();
+    let capture = snapshot
+        .view()
+        .cast_occurrence(entry, A, &[], 0.into())
+        .unwrap();
     let emitted = cast
         .append()
         .records
@@ -88,18 +91,18 @@ fn capture_rejects_missing_entry_wrong_controller_and_hand_era_overlay() {
             .rules_snapshot(None)
             .unwrap()
             .view()
-            .cast_occurrence(entry, A),
+            .cast_occurrence(entry, A, &[], 0.into()),
         Err(TriggerError::InvalidWorld)
     );
     assert_eq!(
-        snapshot.view().cast_occurrence(entry, B),
+        snapshot.view().cast_occurrence(entry, B, &[], 0.into()),
         Err(TriggerError::InvalidWorld)
     );
     assert_eq!(
         snapshot
             .view_with_cards(before.window.cards())
             .unwrap()
-            .cast_occurrence(entry, A),
+            .cast_occurrence(entry, A, &[], 0.into()),
         Err(TriggerError::InvalidWorld)
     );
 }
@@ -115,7 +118,7 @@ fn capture_rejects_incoherent_evaluated_identity_controller_and_roster() {
     let snapshot = cast.state().rules_snapshot(None).unwrap();
     let object = snapshot
         .view()
-        .cast_occurrence(entry, A)
+        .cast_occurrence(entry, A, &[], 0.into())
         .unwrap()
         .spell()
         .object
@@ -136,7 +139,7 @@ fn capture_rejects_incoherent_evaluated_identity_controller_and_roster() {
             }
         }
         assert_eq!(
-            view.cast_occurrence(entry, A),
+            view.cast_occurrence(entry, A, &[], 0.into()),
             Err(TriggerError::InvalidWorld)
         );
     }
@@ -170,7 +173,7 @@ fn canonical_noncard_copy_is_not_a_physical_cast_capture() {
         cast.rules_snapshot(None)
             .unwrap()
             .view()
-            .cast_occurrence(copy, A),
+            .cast_occurrence(copy, A, &[], 0.into()),
         Err(TriggerError::InvalidWorld)
     );
 }
@@ -179,10 +182,7 @@ fn canonical_noncard_copy_is_not_a_physical_cast_capture() {
 fn privileged_projection_carries_the_same_cast_through_events_waiting_and_bindings() {
     use crate::{
         game::{GameCommand, RuleFrame},
-        program::{
-            OrdinaryCondition, PlayerRelation, SpellCastFilter, TriggerGrouping, TriggeredAbility,
-            TriggeredAbilityId,
-        },
+        program::{PlayerRelation, TriggerGrouping, TriggeredAbility, TriggeredAbilityId},
         test_support::{
             characteristic_trajectories as tr, packet::AliasContext, program as codec, projection,
         },
@@ -198,7 +198,7 @@ fn privileged_projection_carries_the_same_cast_through_events_waiting_and_bindin
         if self_cast {
             spell.triggered.push(TriggeredAbility {
                 id: TriggeredAbilityId(1),
-                condition: OrdinaryCondition::SelfCast,
+                condition: crate::program::TriggerSpec::self_cast(),
                 grouping: TriggerGrouping::EachOccurrence,
                 body: body.clone(),
             });
@@ -207,10 +207,10 @@ fn privileged_projection_carries_the_same_cast_through_events_waiting_and_bindin
         let mut watcher = Program::artifact(None, vec![]);
         watcher.triggered.push(TriggeredAbility {
             id: TriggeredAbilityId(1),
-            condition: OrdinaryCondition::SpellCast {
-                player: PlayerRelation::Controller,
-                filter: SpellCastFilter::AnySpell,
-            },
+            condition: crate::program::TriggerSpec::spell_cast(
+                PlayerRelation::Controller,
+                crate::program::SpellFilter::any(),
+            ),
             grouping: TriggerGrouping::EachOccurrence,
             body: body.clone(),
         });

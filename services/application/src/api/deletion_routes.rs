@@ -16,7 +16,7 @@ async fn request_inner(state: ApiState, input: Request) -> Response {
         Ok(token) => token,
         Err(error) => return actor_error(error),
     };
-    if !single_content_type(input.headers()).is_some_and(|value| value == "application/json") {
+    if !is_json_content_type(input.headers()) {
         return fail(StatusCode::BAD_REQUEST, "body", "json_required");
     }
     let command: RequestDeletion = match to_bytes(input.into_body(), 1024)
@@ -55,7 +55,7 @@ async fn observe_inner(state: ApiState, input: Request) -> Response {
     if input.uri().query().is_some() {
         return observer_unavailable();
     }
-    if !single_content_type(input.headers()).is_some_and(|value| value == "application/json") {
+    if !is_json_content_type(input.headers()) {
         return observer_unavailable();
     }
     let capability: ObserveDeletion = match to_bytes(input.into_body(), 1024)

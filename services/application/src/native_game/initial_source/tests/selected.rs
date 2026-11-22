@@ -254,6 +254,7 @@ fn immutable_display_separates_copied_text_physical_printing_and_source_token_te
                         );
                         assert!(described.characteristics.rules_text.is_empty());
                         let preview = TokenEntryPreview {
+                            enters_tapped: false,
                             member: TokenBatchMember::new(0),
                             creator: SeatId(0),
                             definition: definition.clone(),

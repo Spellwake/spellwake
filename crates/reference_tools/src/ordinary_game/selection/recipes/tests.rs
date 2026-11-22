@@ -271,7 +271,7 @@ fn all_twenty_public_fixtures_preserve_exact_partitions_resources_and_actual_ini
         assert_eq!(position.number, start.number);
         assert_eq!(position.step, start.step);
         assert_eq!(
-            state.execution().window().turn_owner(),
+            state.execution().window().active_player(),
             fixture.setup.seed.active
         );
         for life in &fixture.setup.seed.life {

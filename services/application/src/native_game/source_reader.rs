@@ -24,8 +24,6 @@ mod rpc;
 pub use cursor::IssuedNativeCursor;
 pub use presentation::{NativeHumanPresentation, NativePresentationOutcome};
 mod host_owner;
-mod response_wait;
-pub use response_wait::NativeOpeningResponseWait;
 mod lifecycle;
 pub use access::{
     NativeControllerAccess, NativeControllerAccessOutcome, NativeHumanAccess,
@@ -45,6 +43,7 @@ pub use history_replay::NativeHistoryEvidence;
 mod opening;
 mod originals;
 mod prepared_candidate;
+mod response_wait;
 mod rule_rejection;
 pub use history::{NativeActivityFactSource, NativeTransitionSources};
 pub use originals::{
@@ -57,8 +56,8 @@ pub use lifecycle::RecoveredNativeGame;
 pub use opening::{NativeOpeningArtifacts, NativeOpeningSource};
 pub use view::{IssuedNativeHumanView, IssuedNativePlayerView};
 pub use view_runtime::{
-    NativeGameRuntime, NativeMatchWorker, NativeResponseJobOutcome, NativeViewOutcome,
-    run_owned_response_job,
+    CommanderWorker, NativeGameRuntime, NativeViewOutcome, ReleaseOpeningWorker,
+    open_commander_game_from_env, open_qualified_game_from_env,
 };
 pub(crate) use view_runtime::{
     NativeHistoryRead, NativeReadOutcome, NativeReadRefusal, NativeReplayRead,
@@ -69,7 +68,6 @@ pub struct NativeSourceError(Failure);
 enum Failure {
     Invalid,
     Backend(BackendError),
-    Preparation(super::preparation_source::NativePreparationError),
     Initial(NativeInitialError),
     Checkpoint(NativeCheckpointError),
     View(NativeViewError),
@@ -93,7 +91,6 @@ impl Error for NativeSourceError {
         match &self.0 {
             Failure::Invalid => None,
             Failure::Backend(e) => Some(e),
-            Failure::Preparation(e) => Some(e),
             Failure::Initial(e) => Some(e),
             Failure::Checkpoint(e) => Some(e),
             Failure::View(e) => Some(e),
@@ -260,10 +257,6 @@ pub struct NativeGameSource {
     record: Record,
 }
 impl NativeGameSource {
-    pub(super) fn checkpoint_reference(&self) -> &NativeArtifactRef {
-        &self.record.checkpoint.state_ref
-    }
-
     /// Exact game selected by the server call.
     pub fn game_id(&self) -> Uuid {
         self.record.game_id

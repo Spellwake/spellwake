@@ -30,6 +30,8 @@ pub struct BulkMetadata {
 }
 #[derive(Debug, Deserialize)]
 struct RawFace {
+    #[serde(default)]
+    color_indicator: Option<Vec<String>>,
     name: String,
     #[serde(default)]
     type_line: Option<String>,
@@ -41,9 +43,24 @@ struct RawFace {
     power: Option<String>,
     #[serde(default)]
     toughness: Option<String>,
+    #[serde(default)]
+    loyalty: Option<String>,
+    #[serde(default)]
+    defense: Option<String>,
 }
 #[derive(Debug, Deserialize)]
+struct RelatedPart {
+    component: String,
+    name: String,
+}
+
+#[derive(Debug, Deserialize)]
 struct RawCard {
+    #[serde(default)]
+    all_parts: Vec<RelatedPart>,
+
+    #[serde(default)]
+    color_identity: Option<Vec<String>>,
     object: String,
     id: String,
     #[serde(default)]
@@ -60,6 +77,10 @@ struct RawCard {
     power: Option<String>,
     #[serde(default)]
     toughness: Option<String>,
+    #[serde(default)]
+    loyalty: Option<String>,
+    #[serde(default)]
+    defense: Option<String>,
     #[serde(default)]
     card_faces: Option<Vec<RawFace>>,
     legalities: BTreeMap<String, String>,
@@ -89,7 +110,7 @@ impl Legality {
         matches!(self, Self::Legal | Self::Restricted)
     }
 }
-#[derive(Debug, Serialize)]
+#[derive(Debug, Clone, Serialize)]
 pub struct CatalogFace {
     pub name: String,
     pub type_line: Option<String>,
@@ -98,7 +119,7 @@ pub struct CatalogFace {
     pub power: Option<String>,
     pub toughness: Option<String>,
 }
-#[derive(Debug, Serialize)]
+#[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct InventoryCard {
     pub scryfall_id: String,
@@ -114,6 +135,19 @@ pub struct InventoryCard {
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Inventory {
+    // Additional source facts for format admission. Keep the published inventory contract stable.
+    #[serde(skip)]
+    source_back_indicators: BTreeMap<String, Vec<String>>,
+    #[serde(skip)]
+    source_meld_sets: BTreeMap<String, MeldSet>,
+    #[serde(skip)]
+    source_color_identities: BTreeMap<String, Vec<String>>,
+    // Source-only face data is immutable to inventory consumers and omitted from
+    // the historical materialized projection, like source_back_indicators.
+    #[serde(skip)]
+    source_loyalties: BTreeMap<String, Vec<Option<String>>>,
+    #[serde(skip)]
+    source_defenses: BTreeMap<String, Vec<Option<String>>>,
     pub source: BulkMetadata,
     pub compressed_sha256: String,
     pub source_records: usize,
@@ -131,6 +165,54 @@ pub struct Inventory {
     pub executable_registry: &'static str,
     pub scope: &'static str,
     pub cards: Vec<InventoryCard>,
+}
+/// Dated source identities for the two printed components and their combined back.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MeldSet {
+    pub parts: [String; 2],
+    pub result: String,
+}
+
+impl Inventory {
+    /// The two meld components and the result named by this row’s related-card data.
+    pub fn meld_set(&self, oracle: &str) -> Option<&MeldSet> {
+        self.source_meld_sets.get(oracle)
+    }
+    /// Printed color indicator from the second face of the pinned transforming card.
+    pub fn back_color_indicator(&self, oracle: &str) -> Option<&[String]> {
+        self.source_back_indicators.get(oracle).map(Vec::as_slice)
+    }
+    /// Printed loyalty of the exact source face; absent and nonnumeric values stay distinct.
+    pub fn source_loyalty(&self, oracle_id: &str, face_index: usize) -> Option<&str> {
+        self.source_loyalties
+            .get(oracle_id)?
+            .get(face_index)?
+            .as_deref()
+    }
+    /// Printed defense on the specified face in the exact catalogue input.
+    pub fn source_defense(&self, oracle_id: &str, face_index: usize) -> Option<&str> {
+        self.source_defenses
+            .get(oracle_id)?
+            .get(face_index)?
+            .as_deref()
+    }
+    /// Hash the immutable source loyalty sidecar in sorted Oracle-ID order.
+    ///
+    /// # Errors
+    /// Returns the JSON encoding error if the canonical sidecar cannot be encoded.
+    pub fn source_loyalty_sha256(&self) -> Result<String, serde_json::Error> {
+        use sha2::{Digest, Sha256};
+        let mut digest = Sha256::new();
+        serde_json::to_writer(&mut digest, &self.source_loyalties)?;
+        Ok(format!("{:x}", digest.finalize()))
+    }
+    /// Provider-declared full color identity, including back faces and indicators.
+    /// A missing source field is distinct from a colorless card.
+    pub fn source_color_identity(&self, oracle_id: &str) -> Option<&[String]> {
+        self.source_color_identities
+            .get(oracle_id)
+            .map(Vec::as_slice)
+    }
 }
 #[derive(Debug)]
 pub enum CatalogError {
@@ -180,6 +262,11 @@ pub fn inventory(
         return Err(CatalogError::Invalid("invalid snapshot SHA-256".into()));
     }
     let mut cards = Vec::new();
+    let mut source_back_indicators = BTreeMap::new();
+    let mut source_meld_sets = BTreeMap::new();
+    let mut source_color_identities = BTreeMap::new();
+    let mut source_defenses = BTreeMap::new();
+    let mut source_loyalties = BTreeMap::new();
     let mut record_ids = BTreeSet::new();
     let mut oracle_ids = BTreeSet::new();
     let mut duplicates = BTreeSet::new();
@@ -251,6 +338,61 @@ pub fn inventory(
                 .get_mut(format)
                 .expect("known format key") += 1;
         }
+        if raw.layout == "meld"
+            && let Some(id) = raw.oracle_id.as_ref()
+        {
+            let mut parts: Vec<_> = raw
+                .all_parts
+                .iter()
+                .filter(|p| p.component == "meld_part")
+                .map(|p| p.name.clone())
+                .collect();
+            parts.sort();
+            parts.dedup();
+            let results: Vec<_> = raw
+                .all_parts
+                .iter()
+                .filter(|p| p.component == "meld_result")
+                .map(|p| p.name.as_str())
+                .collect();
+            if let ([first, second], [result]) = (parts.as_slice(), results.as_slice())
+                && (raw.name == *first || raw.name == *second || raw.name == *result)
+            {
+                source_meld_sets.insert(
+                    id.clone(),
+                    MeldSet {
+                        parts: [first.clone(), second.clone()],
+                        result: (*result).to_owned(),
+                    },
+                );
+            }
+        }
+        if raw.layout == "transform"
+            && let Some(oracle) = &raw.oracle_id
+            && let Some(faces) = &raw.card_faces
+            && let [_, back] = faces.as_slice()
+            && let Some(indicator) = &back.color_indicator
+        {
+            source_back_indicators.insert(oracle.clone(), indicator.clone());
+        }
+        if let Some(oracle) = &raw.oracle_id {
+            let defenses: Vec<_> = match &raw.card_faces {
+                Some(faces) if !faces.is_empty() => {
+                    faces.iter().map(|face| face.defense.clone()).collect()
+                }
+                _ => vec![raw.defense.clone()],
+            };
+            if defenses.iter().any(Option::is_some) {
+                source_defenses.insert(oracle.clone(), defenses);
+            }
+            let loyalties = match &raw.card_faces {
+                Some(faces) if !faces.is_empty() => {
+                    faces.iter().map(|face| face.loyalty.clone()).collect()
+                }
+                _ => vec![raw.loyalty.clone()],
+            };
+            source_loyalties.insert(oracle.clone(), loyalties);
+        }
         let faces = match raw.card_faces {
             Some(faces) if !faces.is_empty() => faces
                 .into_iter()
@@ -286,6 +428,9 @@ pub fn inventory(
             required_records += 1;
             required_faces += faces.len();
         }
+        if let (Some(id), Some(colors)) = (&raw.oracle_id, raw.color_identity) {
+            source_color_identities.insert(id.clone(), colors);
+        }
         cards.push(InventoryCard {
             scryfall_id: raw.id,
             oracle_id: raw.oracle_id,
@@ -302,6 +447,11 @@ pub fn inventory(
         return Err(CatalogError::Invalid("empty Oracle snapshot".into()));
     }
     Ok(Inventory {
+        source_back_indicators,
+        source_meld_sets,
+        source_color_identities,
+        source_loyalties,
+        source_defenses,
         source,
         compressed_sha256,
         source_records: cards.len(),

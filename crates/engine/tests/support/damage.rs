@@ -37,7 +37,20 @@ pub fn application(game: &GameState, effect: impl Into<DamageEffectId>) -> Damag
     let component = singleton(batch);
     let effect = effect.into();
     let scope = match effect {
-        DamageEffectId::Prevention(_) => DamageScope::Recipient(component.attempt().target),
+        DamageEffectId::EmblemCap { .. }
+        | DamageEffectId::StaticPrevention(_)
+        | DamageEffectId::StaticPreventionWithExile(_, _)
+        | DamageEffectId::CombatDamageToMill(_, _)
+        | DamageEffectId::RemovePlusOneToPreventDamage(_, _)
+        | DamageEffectId::StaticDouble(_)
+        | DamageEffectId::DoubleDamageFromEquippedCreature(_)
+        | DamageEffectId::DoubleDamageToEquippedCreature(_)
+        | DamageEffectId::StaticHalfPrevention { .. }
+        | DamageEffectId::UntilEndOfTurn { .. }
+        | DamageEffectId::ProtectionMulticolored
+        | DamageEffectId::ProtectionSubtype(_)
+        | DamageEffectId::Protection(_)
+        | DamageEffectId::Prevention(_) => DamageScope::Recipient(component.attempt().target),
         DamageEffectId::Multiplier(_) => DamageScope::Component(component.attempt().id),
     };
     DamageApplication { effect, scope }
@@ -89,6 +102,13 @@ pub fn assert_transition_damage(before: &GameState, candidate: &NativeCandidate)
             entry
         );
         let expected = match actual.kind() {
+            StackKind::Speed | StackKind::Monarch | StackKind::DelayedCopy { .. } => {
+                panic!("a source-free rules trigger cannot deal damage")
+            }
+            StackKind::Emblem { emblem } => DamageSource::Emblem {
+                emblem: *emblem,
+                controller: actual.controller(),
+            },
             StackKind::CardSpell(object) => DamageSource::Object {
                 object: before
                     .execution()

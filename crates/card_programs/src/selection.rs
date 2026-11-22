@@ -8,9 +8,8 @@ use spellwake_engine::{
     life::LifeAdjustment,
     mana::{ManaCost, ManaType},
     program::{
-        AffectedPlayers, BodyTarget, CardType, ExecutableBody, Instruction, InstructionAmount,
-        ObjectRelation, OrdinaryCondition, PermanentTypeFilter, Program, ResolvingPlayer,
-        TriggerGrouping, TriggeredAbility, TriggeredAbilityId,
+        AffectedPlayers, BodyTarget, CardType, ExecutableBody, Instruction, PermanentTypeFilter,
+        Program, ResolvingPlayer, TriggerGrouping, TriggeredAbility, TriggeredAbilityId,
     },
 };
 use std::collections::BTreeSet;
@@ -100,8 +99,9 @@ pub(super) fn selected(oracle_id: &str) -> bool {
 fn sacrifice(players: AffectedPlayers) -> Instruction {
     Instruction::Sacrifice {
         players,
-        amount: InstructionAmount::Literal(1.into()),
+        amount: spellwake_engine::program::ValueExpr::Literal(1.into()),
         filter: PermanentTypeFilter {
+            any_types: Default::default(),
             required_types: BTreeSet::from([CardType::Creature]),
             forbidden_types: BTreeSet::new(),
         },
@@ -122,7 +122,7 @@ pub(super) fn definition(
     };
     let targeted = AffectedPlayers::One(ResolvingPlayer::TargetPlayer);
     let scope = Scope::ResolutionSelectionOrdinaryCardV1;
-    let (key, name, mana, type_line, text_sha256, power, toughness, program) = match card.kind {
+    let (key, name, mana, type_line, text, power, toughness, program) = match card.kind {
         Kind::Helper(key) => {
             // Preserve one maintained owner for Bears, Island and Raise's full
             // nested Soldier token definition. Only profile attribution changes.
@@ -142,7 +142,7 @@ pub(super) fn definition(
             "Diabolic Edict",
             "{1}{B}",
             "Instant",
-            "00a567ef84c001a04e785e03509e3c9f09a19413368d10a889afc235aa0da76b",
+            "Target player sacrifices a creature of their choice.",
             None,
             None,
             Program::instant(
@@ -155,7 +155,7 @@ pub(super) fn definition(
             "Geth's Verdict",
             "{B}{B}",
             "Instant",
-            "c05755e2da93c75f7bac4dc50c5ded35b6d5f1e53e816fa69f342d50b54bd29a",
+            "Target player sacrifices a creature of their choice and loses 1 life.",
             None,
             None,
             Program::instant(
@@ -176,7 +176,7 @@ pub(super) fn definition(
             "Innocent Blood",
             "{B}",
             "Sorcery",
-            "dacdd79c86ba78dc35bde77e451fc836c39d819eabcffbe0c6b4694a5a1598f6",
+            "Each player sacrifices a creature of their choice.",
             None,
             None,
             Program::sorcery(
@@ -192,7 +192,7 @@ pub(super) fn definition(
             "Mind Rot",
             "{2}{B}",
             "Sorcery",
-            "be31d499187526e99277a6b1646affbaea8bd58e28a08082da042dcaca0d55bd",
+            "Target player discards two cards.",
             None,
             None,
             Program::sorcery(
@@ -201,7 +201,7 @@ pub(super) fn definition(
                     BodyTarget::SinglePlayer,
                     vec![Instruction::Discard {
                         players: targeted,
-                        amount: InstructionAmount::Literal(2.into()),
+                        amount: spellwake_engine::program::ValueExpr::Literal(2.into()),
                     }],
                 ),
             ),
@@ -211,7 +211,7 @@ pub(super) fn definition(
             "Delirium Skeins",
             "{2}{B}",
             "Sorcery",
-            "35b0735d2fa535dd8e1f51a8d1d2ab57f9a2941769b306c9600b66cc74c45d42",
+            "Each player discards three cards.",
             None,
             None,
             Program::sorcery(
@@ -220,7 +220,7 @@ pub(super) fn definition(
                     BodyTarget::None,
                     vec![Instruction::Discard {
                         players: AffectedPlayers::EachPlayer,
-                        amount: InstructionAmount::Literal(3.into()),
+                        amount: spellwake_engine::program::ValueExpr::Literal(3.into()),
                     }],
                 ),
             ),
@@ -238,7 +238,9 @@ pub(super) fn definition(
             program.triggered.push(TriggeredAbility {
                 id: TriggeredAbilityId(1),
                 grouping: TriggerGrouping::EachOccurrence,
-                condition: OrdinaryCondition::Enters(ObjectRelation::SelfObject),
+                condition: spellwake_engine::program::TriggerSpec::enters(
+                    spellwake_engine::program::ObjectFilter::self_object(),
+                ),
                 body: ExecutableBody::new(
                     BodyTarget::None,
                     vec![sacrifice(AffectedPlayers::EachPlayer)],
@@ -249,7 +251,7 @@ pub(super) fn definition(
                 "Fleshbag Marauder",
                 "{2}{B}",
                 "Creature — Zombie Warrior",
-                "eca4f80ea4128d3b5457f32850fd149c304fbd683c8a3228ee5228f2b23fffd9",
+                "When this creature enters, each player sacrifices a creature of their choice.",
                 Some("3"),
                 Some("1"),
                 program,
@@ -262,7 +264,7 @@ pub(super) fn definition(
         name,
         mana,
         type_line,
-        text_sha256,
+        text,
         power,
         toughness,
         program,
@@ -418,8 +420,9 @@ mod tests {
         };
         let expected_sacrifice = |players| Instruction::Sacrifice {
             players,
-            amount: InstructionAmount::Literal(1.into()),
+            amount: spellwake_engine::program::ValueExpr::Literal(1.into()),
             filter: PermanentTypeFilter {
+                any_types: Default::default(),
                 required_types: BTreeSet::from([CardType::Creature]),
                 forbidden_types: BTreeSet::new(),
             },
@@ -436,7 +439,9 @@ mod tests {
         fleshbag.triggered.push(TriggeredAbility {
             id: TriggeredAbilityId(1),
             grouping: TriggerGrouping::EachOccurrence,
-            condition: OrdinaryCondition::Enters(ObjectRelation::SelfObject),
+            condition: spellwake_engine::program::TriggerSpec::enters(
+                spellwake_engine::program::ObjectFilter::self_object(),
+            ),
             body: ExecutableBody::new(
                 BodyTarget::None,
                 vec![expected_sacrifice(AffectedPlayers::EachPlayer)],
@@ -486,7 +491,7 @@ mod tests {
                         BodyTarget::SinglePlayer,
                         vec![Instruction::Discard {
                             players: targeted,
-                            amount: InstructionAmount::Literal(2.into()),
+                            amount: spellwake_engine::program::ValueExpr::Literal(2.into()),
                         }],
                     ),
                 ),
@@ -499,7 +504,7 @@ mod tests {
                         BodyTarget::None,
                         vec![Instruction::Discard {
                             players: AffectedPlayers::EachPlayer,
-                            amount: InstructionAmount::Literal(3.into()),
+                            amount: spellwake_engine::program::ValueExpr::Literal(3.into()),
                         }],
                     ),
                 ),
@@ -544,7 +549,9 @@ mod tests {
                         vec![TriggeredAbility {
                             id: TriggeredAbilityId(1),
                             grouping: TriggerGrouping::EachOccurrence,
-                            condition: OrdinaryCondition::Enters(ObjectRelation::SelfObject),
+                            condition: spellwake_engine::program::TriggerSpec::enters(
+                                spellwake_engine::program::ObjectFilter::self_object()
+                            ),
                             body: ExecutableBody::new(
                                 BodyTarget::None,
                                 vec![sacrifice(AffectedPlayers::EachPlayer)]
@@ -602,7 +609,10 @@ mod tests {
                                     AffectedPlayers::EachPlayer
                                 }
                             );
-                            assert_eq!(*amount, InstructionAmount::Literal(1.into()));
+                            assert_eq!(
+                                *amount,
+                                spellwake_engine::program::ValueExpr::Literal(1.into())
+                            );
                             assert_eq!(filter.required_types, BTreeSet::from([CardType::Creature]));
                             assert!(filter.forbidden_types.is_empty());
                         }
@@ -620,7 +630,7 @@ mod tests {
                             );
                             assert_eq!(
                                 *amount,
-                                InstructionAmount::Literal(
+                                spellwake_engine::program::ValueExpr::Literal(
                                     if matches!(card.kind, Kind::MindRot) {
                                         2
                                     } else {
@@ -851,7 +861,7 @@ mod tests {
                     (
                         Instruction::Sacrifice { amount, .. } | Instruction::Discard { amount, .. },
                         0,
-                    ) => *amount = InstructionAmount::Literal(7.into()),
+                    ) => *amount = spellwake_engine::program::ValueExpr::Literal(7.into()),
                     (
                         Instruction::Sacrifice { players, .. }
                         | Instruction::Discard { players, .. },

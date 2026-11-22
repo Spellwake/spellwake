@@ -49,7 +49,6 @@ class DisposableSupabase:
         self.network = 'spellwake-actor-net-' + suffix
         self.control = 'spellwake-actor-control-' + suffix
         self.stage = ROOT / 'target' / ('managed-actor-' + suffix)
-        self.stage.parent.mkdir(parents=True, exist_ok=True)
         self.stage.mkdir(mode=0o700)
         self.environment = {key: os.environ[key] for key in (
             'PATH', 'HOME', 'TMPDIR', 'LANG', 'LC_ALL', 'DOCKER_HOST', 'DOCKER_CONTEXT', 'DOCKER_CONFIG',
@@ -184,29 +183,8 @@ class DisposableSupabase:
             if self.command(['docker', 'ps', '-a', '--filter', 'name=^/' + self.control + '$', '--format', '{{.Names}}']).strip():
                 raise RuntimeError('Generated control namespace is not empty')
             self.network_attempted = True
-            create = ['docker', 'network', 'create', '--label', f'{LABEL}={self.project}',
-                      '--opt', 'com.docker.network.bridge.host_binding_ipv4=127.0.0.1']
-            try:
-                network = self.command([*create,self.network])
-            except QualificationCommandError as error:
-                diagnostic = (self.stage / f'private-command-{error.sequence}.log').read_bytes()
-                if b'all predefined address pools have been fully subnetted' not in diagnostic:
-                    raise
-                # A per-realm /26 is sufficient for the local services. Docker checks
-                # address overlap atomically before creating the labeled network.
-                for _ in range(8):
-                    slot = uuid.uuid4().int % (8*1024)
-                    subnet = f'10.{224+slot//1024}.{(slot//4)%256}.{(slot%4)*64}/26'
-                    try:
-                        network = self.command([*create,'--subnet',subnet,self.network])
-                        break
-                    except QualificationCommandError as collision:
-                        message = (self.stage / f'private-command-{collision.sequence}.log').read_bytes()
-                        if b'overlap' not in message.lower():
-                            raise
-                else:
-                    raise RuntimeError('No non-overlapping private qualification bridge available')
-            self.network_id = network.decode().strip()
+            self.network_id = self.command(['docker', 'network', 'create', '--label', f'{LABEL}={self.project}',
+                '--opt', 'com.docker.network.bridge.host_binding_ipv4=127.0.0.1', self.network]).decode().strip()
             metadata = self.inspect(self.network, '{{json .}}', 'network')
             if metadata['Id'] != self.network_id or metadata['Options'].get('com.docker.network.bridge.host_binding_ipv4') != '127.0.0.1':
                 raise RuntimeError('Owned loopback bridge configuration differs')

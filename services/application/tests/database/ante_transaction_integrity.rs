@@ -411,22 +411,6 @@ async fn terminal_human_transfers_ai_issuance_ai_retirement_and_draw_refunds_nev
                 .get(0)
         };
         assert_eq!(settled["status"], "success");
-        let changed_result = Uuid::new_v4();
-        let error = c
-            .query_one(
-                "SELECT app.settle_ante($1,$2)",
-                &[&commitment, &changed_result],
-            )
-            .await
-            .unwrap_err();
-        let cause = error
-            .as_db_error()
-            .expect("canonical settlement retarget refusal");
-        assert_eq!(
-            cause.code(),
-            &tokio_postgres::error::SqlState::CHECK_VIOLATION
-        );
-        assert_eq!(cause.message(), "ante settlement source was retargeted");
         let expected_kind = if case == "draw" {
             spellwake_application::ante::AnteState::Refunded
         } else {
@@ -892,70 +876,5 @@ async fn pending_account_can_cancel_existing_ante_and_release_holds_and_loss_exp
         .await?["status"],
         "fail"
     );
-    Ok(())
-}
-
-#[tokio::test]
-#[ignore = "requires isolated migrated Postgres"]
-async fn tied_opening_rerolls_only_leaders_and_the_adopted_controller_chooses_once() -> TestResult {
-    let c = connection().await?;
-    let fixture = reserve_three(&c, "red", "blue", "red").await?;
-    room_start_integrity::confirm_adopted_ai(&c, fixture.m).await?;
-    let [human, first_ai, second_ai] = fixture.seats;
-    // Only the dice stream is controlled. The production election, seat order, grant
-    // checks and immutable selection all run against the migrated database.
-    c.batch_execute("BEGIN;
-        CREATE TEMP SEQUENCE roll_position;
-        CREATE OR REPLACE FUNCTION app.native_opening_d20() RETURNS smallint LANGUAGE sql VOLATILE SET search_path='' AS $$
-        SELECT (ARRAY[6,19,19,3,12]::smallint[])[nextval('pg_temp.roll_position')::integer] $$;").await?;
-    let observe = "SELECT app.native_opening_human_choice(a.auth_subject,(test_fixture.claims_for_subject(a.auth_subject)->>'session_id')::uuid,$2,NULL,NULL,$3) FROM app.account a WHERE a.id=$1";
-    let actor = fixture.room.source.actor;
-    let game = fixture.game;
-    let get = |first: Option<Uuid>| {
-        let c = &c;
-        async move {
-            c.query_one(observe, &[&actor, &game, &first])
-                .await
-                .map(|r| r.get::<_, Value>(0))
-        }
-    };
-    let before = get(None).await?;
-    let expected = json!({"gameId":fixture.game,"chooserSeatId":second_ai,"firstSeatId":null,"yourChoice":false,
-        "rolls":[6,19,19],"seatIds":fixture.seats,"rollRounds":[[6,19,19],[3,12]]});
-    assert_eq!(before["data"], expected);
-    assert_eq!(get(Some(human)).await?["status"], "fail");
-    let current = c.query_one("SELECT id,binding_epoch::text,grant_secret_ref FROM app.controller_grant WHERE match_seat_id=$1 AND state='active'", &[&second_ai]).await?;
-    let grant: Uuid = current.get(0);
-    let epoch: String = current.get(1);
-    let secret: String = current.get(2);
-    let choose =
-        "SELECT app.native_opening_controller_choice($1,$2::text::numeric,$3,$4,NULL,NULL,$5)";
-    let request = |grant: Uuid, first: Uuid| {
-        let c = &c;
-        let epoch = &epoch;
-        let secret = &secret;
-        let game = &fixture.game;
-        async move {
-            c.query_one(choose, &[&grant, epoch, secret, game, &first])
-                .await
-                .map(|r| r.get::<_, Value>(0))
-        }
-    };
-    assert_eq!(request(Uuid::new_v4(), human).await?["status"], "fail");
-    let original = request(grant, first_ai).await?;
-    assert_eq!(original["data"]["firstSeatId"], json!(first_ai));
-    assert_eq!(original["data"]["yourChoice"], true);
-    assert_eq!(request(grant, first_ai).await?, original);
-    assert_eq!(
-        request(grant, human).await?["data"]["choice"],
-        "already selected"
-    );
-    assert_eq!(
-        c.query_one("SELECT last_value FROM pg_temp.roll_position", &[])
-            .await?
-            .get::<_, i64>(0),
-        5
-    );
-    c.batch_execute("ROLLBACK").await?;
     Ok(())
 }

@@ -28,217 +28,37 @@
     }
   },
   {
-    "relation": "account_qualifying_count",
-    "kind": "view",
+    "relation": "profile",
+    "kind": "table",
     "reads": {
       "anon": [],
-      "authenticated": [],
+      "authenticated": [
+        "id",
+        "account_id",
+        "printing_id",
+        "crop_x",
+        "crop_y",
+        "crop_scale",
+        "default_back_id",
+        "default_sleeve_id",
+        "default_dice_id",
+        "default_playmat_id",
+        "default_pet_id",
+        "selected_badge"
+      ],
       "service_role": [
         "id",
         "account_id",
-        "qualifying_games",
-        "age_days",
-        "restricted"
-      ],
-      "supabase_auth_admin": []
-    }
-  },
-  {
-    "relation": "activity_consumer_cursor",
-    "kind": "table",
-    "reads": {
-      "anon": [],
-      "authenticated": [],
-      "service_role": [
-        "id",
-        "consumer_key",
-        "game_id",
-        "last_sequence",
-        "revision",
-        "initialized"
-      ],
-      "supabase_auth_admin": []
-    }
-  },
-  {
-    "relation": "ai_loss_bucket",
-    "kind": "table",
-    "reads": {
-      "anon": [],
-      "authenticated": [],
-      "service_role": [
-        "id",
-        "sponsor_id",
-        "utc_day",
-        "limit_coins",
-        "lost_coins",
-        "revision"
-      ],
-      "supabase_auth_admin": []
-    }
-  },
-  {
-    "relation": "ai_loss_exposure",
-    "kind": "table",
-    "reads": {
-      "anon": [],
-      "authenticated": [],
-      "service_role": [
-        "id",
-        "bucket_id",
-        "match_id",
-        "commitment_id",
-        "reserved_coins",
-        "state",
-        "loss_coins"
-      ],
-      "supabase_auth_admin": []
-    }
-  },
-  {
-    "relation": "ai_runner_binding",
-    "kind": "table",
-    "reads": {
-      "anon": [],
-      "authenticated": [],
-      "service_role": [
-        "id",
-        "room_slot_id",
-        "match_seat_id",
-        "provider_runner_ref",
-        "binding_epoch",
-        "desired_state",
-        "observed_state",
-        "ready_configuration_id",
-        "ready_epoch",
-        "ready_deck_revision_id",
-        "ready_qualification_ref",
-        "ready_authentication_ref",
-        "bootstrap_receipt_id",
-        "epoch_receipt_id",
-        "provider_observation_receipt_id",
-        "stop_receipt_id",
-        "stop_observation_receipt_id",
-        "provider_start_receipt_id"
-      ],
-      "supabase_auth_admin": []
-    }
-  },
-  {
-    "relation": "ante_commitment",
-    "kind": "table",
-    "reads": {
-      "anon": [],
-      "authenticated": [],
-      "service_role": [
-        "id",
-        "match_id",
-        "terms_revision",
-        "state",
-        "reservation_operation_id",
-        "settlement_operation_id",
-        "allocation_evidence_ref",
-        "valuation_evidence_ref",
-        "terms",
-        "terms_hash",
-        "accepted_seat_ids",
-        "accepted_at",
-        "start_day_utc",
-        "valuation_snapshot",
-        "settlement_result_id",
-        "settlement"
-      ],
-      "supabase_auth_admin": []
-    }
-  },
-  {
-    "relation": "ante_stake",
-    "kind": "table",
-    "reads": {
-      "anon": [],
-      "authenticated": [],
-      "service_role": [
-        "id",
-        "commitment_id",
-        "match_seat_id",
-        "funding_kind",
-        "hold_id",
-        "estimated_value_coins",
-        "valuation_policy_id",
-        "ai_exposure_id",
-        "value_numerator",
-        "value_denominator",
-        "bundle_assessment"
-      ],
-      "supabase_auth_admin": []
-    }
-  },
-  {
-    "relation": "asset_availability",
-    "kind": "view",
-    "reads": {
-      "anon": [],
-      "authenticated": [
-        "id",
-        "inventory_asset_id",
-        "owned",
-        "held",
-        "available"
-      ],
-      "service_role": [
-        "id",
-        "inventory_asset_id",
-        "owned",
-        "held",
-        "available"
-      ],
-      "supabase_auth_admin": []
-    }
-  },
-  {
-    "relation": "asset_definition",
-    "kind": "table",
-    "reads": {
-      "anon": [],
-      "authenticated": [
-        "id",
-        "kind",
-        "currency_key",
         "printing_id",
-        "recipe_id"
-      ],
-      "service_role": [
-        "id",
-        "kind",
-        "currency_key",
-        "printing_id",
-        "recipe_id"
-      ],
-      "supabase_auth_admin": []
-    }
-  },
-  {
-    "relation": "asset_hold",
-    "kind": "table",
-    "reads": {
-      "anon": [],
-      "authenticated": [
-        "id",
-        "owner_id",
-        "purpose",
-        "commitment_ref",
-        "state",
-        "operation_id",
-        "ante_commitment_id"
-      ],
-      "service_role": [
-        "id",
-        "owner_id",
-        "purpose",
-        "commitment_ref",
-        "state",
-        "operation_id",
-        "ante_commitment_id"
+        "crop_x",
+        "crop_y",
+        "crop_scale",
+        "default_back_id",
+        "default_sleeve_id",
+        "default_dice_id",
+        "default_playmat_id",
+        "default_pet_id",
+        "selected_badge"
       ],
       "supabase_auth_admin": []
     }
@@ -262,69 +82,372 @@
     }
   },
   {
-    "relation": "between_game_decision",
+    "relation": "cosmetic",
     "kind": "table",
     "reads": {
       "anon": [],
       "authenticated": [
         "id",
-        "match_id",
-        "seat_id",
-        "decision_kind",
-        "basis_revision",
-        "deadline_at",
-        "clock_revision",
+        "kind",
+        "asset_ref",
         "state",
-        "after_game_id",
-        "selected_deck_revision_id",
-        "opened_at",
-        "deadline_policy_ref",
-        "deadline_revision",
-        "deadline_availability_revision",
-        "deadline_remaining_us",
-        "deadline_accounted_at"
+        "is_free",
+        "display_name",
+        "name",
+        "description",
+        "price_cents",
+        "price_coins",
+        "preview_url",
+        "rarity"
       ],
       "service_role": [
         "id",
-        "match_id",
-        "seat_id",
-        "decision_kind",
-        "basis_revision",
-        "reply_ref",
-        "deadline_at",
-        "clock_revision",
+        "kind",
+        "asset_ref",
         "state",
-        "after_game_id",
-        "selected_deck_revision_id",
-        "terminal_receipt_id",
-        "opened_at",
-        "deadline_policy_ref",
-        "deadline_revision",
-        "deadline_origin_receipt_id",
-        "deadline_source_receipt_id",
-        "deadline_availability_revision",
-        "deadline_remaining_us",
-        "deadline_accounted_at"
+        "is_free",
+        "display_name",
+        "name",
+        "description",
+        "price_cents",
+        "price_coins",
+        "preview_url",
+        "rarity"
       ],
       "supabase_auth_admin": []
     }
   },
   {
-    "relation": "block",
+    "relation": "supporter_tier",
     "kind": "table",
     "reads": {
       "anon": [],
       "authenticated": [
         "id",
-        "blocker_id",
-        "blocked_id",
-        "created_at"
+        "patreon_tier_ref",
+        "name",
+        "rank"
       ],
       "service_role": [
         "id",
-        "blocker_id",
-        "blocked_id",
-        "created_at"
+        "patreon_tier_ref",
+        "name",
+        "rank"
+      ],
+      "supabase_auth_admin": []
+    }
+  },
+  {
+    "relation": "tier_cosmetic",
+    "kind": "table",
+    "reads": {
+      "anon": [],
+      "authenticated": [
+        "id",
+        "tier_id",
+        "cosmetic_id"
+      ],
+      "service_role": [
+        "id",
+        "tier_id",
+        "cosmetic_id"
+      ],
+      "supabase_auth_admin": []
+    }
+  },
+  {
+    "relation": "provider_event",
+    "kind": "table",
+    "reads": {
+      "anon": [],
+      "authenticated": [],
+      "service_role": [
+        "id",
+        "provider",
+        "external_event_ref",
+        "account_id",
+        "received_at",
+        "event_type",
+        "payload_ref",
+        "processing_state",
+        "capture",
+        "first_delivery_at",
+        "raw_evidence_state",
+        "effect",
+        "effect_key",
+        "raw_deleted_at"
+      ],
+      "supabase_auth_admin": []
+    }
+  },
+  {
+    "relation": "purchase",
+    "kind": "table",
+    "reads": {
+      "anon": [],
+      "authenticated": [
+        "id",
+        "account_id",
+        "cosmetic_id",
+        "requested_at",
+        "state",
+        "revision",
+        "checkout_url",
+        "checkout_expires_at",
+        "price_currency",
+        "price_minor_units"
+      ],
+      "service_role": [
+        "id",
+        "account_id",
+        "cosmetic_id",
+        "provider_request_ref",
+        "provider_event_id",
+        "stripe_payment_ref",
+        "stripe_checkout_ref",
+        "requested_at",
+        "state",
+        "checkout_terms",
+        "revision",
+        "first_create_attempt_at",
+        "create_deadline_at",
+        "checkout_url",
+        "checkout_expires_at",
+        "current_reversal_event_id",
+        "current_reversal_key",
+        "price_currency",
+        "price_minor_units"
+      ],
+      "supabase_auth_admin": []
+    }
+  },
+  {
+    "relation": "patreon_membership",
+    "kind": "table",
+    "reads": {
+      "anon": [],
+      "authenticated": [
+        "id",
+        "account_id",
+        "active_tier_id",
+        "active"
+      ],
+      "service_role": [
+        "id",
+        "account_id",
+        "patreon_member_ref",
+        "active_tier_id",
+        "active",
+        "source_event_id",
+        "patreon_user_ref",
+        "patreon_campaign_ref"
+      ],
+      "supabase_auth_admin": []
+    }
+  },
+  {
+    "relation": "patreon_payment",
+    "kind": "table",
+    "reads": {
+      "anon": [],
+      "authenticated": [
+        "id",
+        "membership_id",
+        "tier_id",
+        "provider_event_id",
+        "payment_ref",
+        "paid_at",
+        "state"
+      ],
+      "service_role": [
+        "id",
+        "membership_id",
+        "tier_id",
+        "provider_event_id",
+        "payment_ref",
+        "paid_at",
+        "state"
+      ],
+      "supabase_auth_admin": []
+    }
+  },
+  {
+    "relation": "cosmetic_grant",
+    "kind": "table",
+    "reads": {
+      "anon": [],
+      "authenticated": [
+        "id",
+        "account_id",
+        "cosmetic_id",
+        "source_kind",
+        "purchase_id",
+        "patreon_payment_id",
+        "state",
+        "provider_event_id"
+      ],
+      "service_role": [
+        "id",
+        "account_id",
+        "cosmetic_id",
+        "source_kind",
+        "purchase_id",
+        "patreon_payment_id",
+        "state",
+        "provider_event_id"
+      ],
+      "supabase_auth_admin": []
+    }
+  },
+  {
+    "relation": "card_set",
+    "kind": "table",
+    "reads": {
+      "anon": [],
+      "authenticated": [
+        "id",
+        "name",
+        "code"
+      ],
+      "service_role": [
+        "id",
+        "external_set_ref",
+        "name",
+        "code",
+        "catalogue_receipt_id"
+      ],
+      "supabase_auth_admin": []
+    }
+  },
+  {
+    "relation": "card_definition",
+    "kind": "table",
+    "reads": {
+      "anon": [],
+      "authenticated": [
+        "id",
+        "oracle_ref",
+        "name"
+      ],
+      "service_role": [
+        "id",
+        "oracle_ref",
+        "name",
+        "catalogue_receipt_id"
+      ],
+      "supabase_auth_admin": []
+    }
+  },
+  {
+    "relation": "card_definition_revision",
+    "kind": "table",
+    "reads": {
+      "anon": [],
+      "authenticated": [],
+      "service_role": [
+        "id",
+        "definition_id",
+        "revision_ref",
+        "rules_text_ref",
+        "catalogue_receipt_id",
+        "source_metadata"
+      ],
+      "supabase_auth_admin": []
+    }
+  },
+  {
+    "relation": "card_face",
+    "kind": "table",
+    "reads": {
+      "anon": [],
+      "authenticated": [],
+      "service_role": [
+        "id",
+        "definition_revision_id",
+        "face_index",
+        "name",
+        "characteristics_ref"
+      ],
+      "supabase_auth_admin": []
+    }
+  },
+  {
+    "relation": "printing",
+    "kind": "table",
+    "reads": {
+      "anon": [],
+      "authenticated": [
+        "id",
+        "definition_id",
+        "set_id",
+        "external_printing_ref",
+        "rarity",
+        "finish",
+        "collector_number",
+        "language"
+      ],
+      "service_role": [
+        "id",
+        "definition_id",
+        "set_id",
+        "external_printing_ref",
+        "rarity",
+        "finish",
+        "image_ref",
+        "collector_number",
+        "language",
+        "catalogue_receipt_id"
+      ],
+      "supabase_auth_admin": []
+    }
+  },
+  {
+    "relation": "format",
+    "kind": "table",
+    "reads": {
+      "anon": [],
+      "authenticated": [
+        "id",
+        "key",
+        "name"
+      ],
+      "service_role": [
+        "id",
+        "key",
+        "name",
+        "next_competitive_sequence",
+        "last_ranked_sequence"
+      ],
+      "supabase_auth_admin": []
+    }
+  },
+  {
+    "relation": "legality_revision",
+    "kind": "table",
+    "reads": {
+      "anon": [],
+      "authenticated": [],
+      "service_role": [
+        "id",
+        "source_ref",
+        "effective_at",
+        "imported_at"
+      ],
+      "supabase_auth_admin": []
+    }
+  },
+  {
+    "relation": "card_legality",
+    "kind": "table",
+    "reads": {
+      "anon": [],
+      "authenticated": [],
+      "service_role": [
+        "id",
+        "definition_id",
+        "format_id",
+        "legality_revision_id",
+        "status"
       ],
       "supabase_auth_admin": []
     }
@@ -401,107 +524,266 @@
     }
   },
   {
-    "relation": "card_definition",
-    "kind": "table",
-    "reads": {
-      "anon": [],
-      "authenticated": [
-        "id",
-        "oracle_ref",
-        "name"
-      ],
-      "service_role": [
-        "id",
-        "oracle_ref",
-        "name",
-        "catalogue_receipt_id"
-      ],
-      "supabase_auth_admin": []
-    }
-  },
-  {
-    "relation": "card_definition_revision",
+    "relation": "table_profile_revision",
     "kind": "table",
     "reads": {
       "anon": [],
       "authenticated": [],
       "service_role": [
         "id",
-        "definition_id",
+        "key",
         "revision_ref",
-        "rules_text_ref",
-        "catalogue_receipt_id",
-        "source_metadata"
+        "rules_ref",
+        "planar_pool_ref",
+        "minimum_seats",
+        "seat_capacity",
+        "admission_qualification_ref",
+        "matchmaking_config"
       ],
       "supabase_auth_admin": []
     }
   },
   {
-    "relation": "card_face",
+    "relation": "qualified_release",
     "kind": "table",
     "reads": {
       "anon": [],
       "authenticated": [],
       "service_role": [
         "id",
+        "release_ref",
+        "kernel_ref",
+        "rules_ref",
+        "program_manifest_ref",
+        "evidence_ref"
+      ],
+      "supabase_auth_admin": []
+    }
+  },
+  {
+    "relation": "release_card_program",
+    "kind": "table",
+    "reads": {
+      "anon": [],
+      "authenticated": [],
+      "service_role": [
+        "id",
+        "release_id",
         "definition_revision_id",
-        "face_index",
-        "name",
-        "characteristics_ref"
+        "program_ref",
+        "unlimited_basic_land"
       ],
       "supabase_auth_admin": []
     }
   },
   {
-    "relation": "card_legality",
-    "kind": "table",
-    "reads": {
-      "anon": [],
-      "authenticated": [],
-      "service_role": [
-        "id",
-        "definition_id",
-        "format_id",
-        "legality_revision_id",
-        "status"
-      ],
-      "supabase_auth_admin": []
-    }
-  },
-  {
-    "relation": "card_set",
+    "relation": "deck",
     "kind": "table",
     "reads": {
       "anon": [],
       "authenticated": [
         "id",
+        "account_id",
+        "source_kind",
+        "system_pool_ref",
+        "source_manifest_ref",
+        "mode",
+        "format_id",
         "name",
-        "code"
+        "current_revision_id",
+        "back_id",
+        "sleeve_id",
+        "dice_id",
+        "playmat_id",
+        "pet_id",
+        "face_definition_id"
       ],
       "service_role": [
         "id",
-        "external_set_ref",
+        "account_id",
+        "source_kind",
+        "system_pool_ref",
+        "source_manifest_ref",
+        "mode",
+        "format_id",
         "name",
-        "code",
-        "catalogue_receipt_id"
+        "current_revision_id",
+        "back_id",
+        "sleeve_id",
+        "dice_id",
+        "playmat_id",
+        "pet_id",
+        "face_definition_id"
       ],
       "supabase_auth_admin": []
     }
   },
   {
-    "relation": "coin_balance",
-    "kind": "view",
+    "relation": "deck_revision",
+    "kind": "table",
+    "reads": {
+      "anon": [],
+      "authenticated": [
+        "id",
+        "deck_id",
+        "revision_number",
+        "created_at",
+        "sealed_at"
+      ],
+      "service_role": [
+        "id",
+        "deck_id",
+        "revision_number",
+        "created_at",
+        "sealed_at"
+      ],
+      "supabase_auth_admin": []
+    }
+  },
+  {
+    "relation": "deck_entry",
+    "kind": "table",
+    "reads": {
+      "anon": [],
+      "authenticated": [
+        "id",
+        "revision_id",
+        "definition_id",
+        "printing_id",
+        "section",
+        "quantity"
+      ],
+      "service_role": [
+        "id",
+        "revision_id",
+        "definition_id",
+        "printing_id",
+        "section",
+        "quantity"
+      ],
+      "supabase_auth_admin": []
+    }
+  },
+  {
+    "relation": "asset_definition",
+    "kind": "table",
+    "reads": {
+      "anon": [],
+      "authenticated": [
+        "id",
+        "kind",
+        "currency_key",
+        "printing_id",
+        "recipe_id"
+      ],
+      "service_role": [
+        "id",
+        "kind",
+        "currency_key",
+        "printing_id",
+        "recipe_id"
+      ],
+      "supabase_auth_admin": []
+    }
+  },
+  {
+    "relation": "inventory_asset",
+    "kind": "table",
     "reads": {
       "anon": [],
       "authenticated": [
         "id",
         "owner_id",
+        "asset_definition_id",
+        "owned_quantity",
+        "revision"
+      ],
+      "service_role": [
+        "id",
+        "owner_id",
+        "asset_definition_id",
+        "owned_quantity",
+        "revision"
+      ],
+      "supabase_auth_admin": []
+    }
+  },
+  {
+    "relation": "ledger_operation",
+    "kind": "table",
+    "reads": {
+      "anon": [],
+      "authenticated": [],
+      "service_role": [
+        "id",
+        "kind",
+        "source_ref",
+        "source_scope",
+        "actor_account_id",
+        "created_at",
+        "state"
+      ],
+      "supabase_auth_admin": []
+    }
+  },
+  {
+    "relation": "ledger_posting",
+    "kind": "table",
+    "reads": {
+      "anon": [],
+      "authenticated": [],
+      "service_role": [
+        "id",
+        "operation_id",
+        "inventory_asset_id",
+        "direction",
+        "quantity",
+        "source_kind",
+        "source_ref"
+      ],
+      "supabase_auth_admin": []
+    }
+  },
+  {
+    "relation": "asset_hold",
+    "kind": "table",
+    "reads": {
+      "anon": [],
+      "authenticated": [
+        "id",
+        "owner_id",
+        "purpose",
+        "commitment_ref",
+        "state",
+        "operation_id",
+        "ante_commitment_id"
+      ],
+      "service_role": [
+        "id",
+        "owner_id",
+        "purpose",
+        "commitment_ref",
+        "state",
+        "operation_id",
+        "ante_commitment_id"
+      ],
+      "supabase_auth_admin": []
+    }
+  },
+  {
+    "relation": "hold_line",
+    "kind": "table",
+    "reads": {
+      "anon": [],
+      "authenticated": [
+        "id",
+        "hold_id",
         "inventory_asset_id",
         "quantity"
       ],
       "service_role": [
         "id",
-        "owner_id",
+        "hold_id",
         "inventory_asset_id",
         "quantity"
       ],
@@ -533,57 +815,78 @@
     }
   },
   {
-    "relation": "competitive_result",
-    "kind": "table",
-    "reads": {
-      "anon": [],
-      "authenticated": [
-        "id",
-        "account_id",
-        "match_result_id",
-        "format_id",
-        "win",
-        "completed_at",
-        "season_id",
-        "rating_before",
-        "rating_delta",
-        "rating_after"
-      ],
-      "service_role": [
-        "id",
-        "account_id",
-        "match_result_id",
-        "source_ref",
-        "format_id",
-        "win",
-        "completed_at",
-        "policy_ref",
-        "season_id",
-        "rating_before",
-        "rating_delta",
-        "rating_after",
-        "rating_evidence"
-      ],
-      "supabase_auth_admin": []
-    }
-  },
-  {
-    "relation": "controller_grant",
+    "relation": "valuation_policy_revision",
     "kind": "table",
     "reads": {
       "anon": [],
       "authenticated": [],
       "service_role": [
         "id",
-        "binding_id",
-        "binding_epoch",
-        "match_seat_id",
-        "grant_secret_ref",
+        "revision_ref",
+        "formula_ref",
+        "price_anchor_ref",
         "state",
-        "issue_receipt_id",
-        "delivery_state",
-        "delivery_revision",
-        "delivery_receipt_id"
+        "catalogue_revision"
+      ],
+      "supabase_auth_admin": []
+    }
+  },
+  {
+    "relation": "pack_open_receipt",
+    "kind": "table",
+    "reads": {
+      "anon": [],
+      "authenticated": [],
+      "service_role": [
+        "id",
+        "inventory_asset_id",
+        "recipe_id",
+        "operation_id",
+        "result_ref"
+      ],
+      "supabase_auth_admin": []
+    }
+  },
+  {
+    "relation": "friendship",
+    "kind": "table",
+    "reads": {
+      "anon": [],
+      "authenticated": [
+        "id",
+        "account_low_id",
+        "account_high_id",
+        "requested_by_id",
+        "state",
+        "accepted_at"
+      ],
+      "service_role": [
+        "id",
+        "account_low_id",
+        "account_high_id",
+        "requested_by_id",
+        "state",
+        "accepted_at"
+      ],
+      "supabase_auth_admin": []
+    }
+  },
+  {
+    "relation": "block",
+    "kind": "table",
+    "reads": {
+      "anon": [],
+      "authenticated": [
+        "id",
+        "blocker_id",
+        "blocked_id",
+        "created_at"
+      ],
+      "service_role": [
+        "id",
+        "blocker_id",
+        "blocked_id",
+        "created_at"
       ],
       "supabase_auth_admin": []
     }
@@ -631,541 +934,101 @@
     }
   },
   {
-    "relation": "cosmetic",
+    "relation": "message",
     "kind": "table",
     "reads": {
       "anon": [],
       "authenticated": [
         "id",
-        "kind",
-        "asset_ref",
-        "state",
-        "is_free",
-        "display_name"
+        "conversation_id",
+        "sender_id",
+        "send_request_ref",
+        "body",
+        "sent_at",
+        "attachment"
       ],
       "service_role": [
         "id",
-        "kind",
-        "asset_ref",
-        "state",
-        "is_free",
-        "display_name"
+        "conversation_id",
+        "sender_id",
+        "send_request_ref",
+        "body",
+        "sent_at",
+        "attachment"
       ],
       "supabase_auth_admin": []
     }
   },
   {
-    "relation": "cosmetic_grant",
+    "relation": "notification",
     "kind": "table",
     "reads": {
       "anon": [],
       "authenticated": [
         "id",
-        "account_id",
-        "cosmetic_id",
+        "recipient_id",
         "source_kind",
-        "purchase_id",
-        "patreon_payment_id",
-        "state",
-        "provider_event_id"
-      ],
-      "service_role": [
-        "id",
-        "account_id",
-        "cosmetic_id",
-        "source_kind",
-        "purchase_id",
-        "patreon_payment_id",
-        "state",
-        "provider_event_id"
-      ],
-      "supabase_auth_admin": []
-    }
-  },
-  {
-    "relation": "countdown_dispatch_cursor",
-    "kind": "table",
-    "reads": {
-      "anon": [],
-      "authenticated": [],
-      "service_role": [],
-      "supabase_auth_admin": []
-    }
-  },
-  {
-    "relation": "daily_quest_state",
-    "kind": "table",
-    "reads": {
-      "anon": [],
-      "authenticated": [
-        "id",
-        "account_id",
-        "utc_day",
-        "generated_assignment_id",
-        "rerolls_used",
-        "revision"
-      ],
-      "service_role": [
-        "id",
-        "account_id",
-        "utc_day",
-        "generated_assignment_id",
-        "rerolls_used",
-        "revision"
-      ],
-      "supabase_auth_admin": []
-    }
-  },
-  {
-    "relation": "daily_win_bucket",
-    "kind": "table",
-    "reads": {
-      "anon": [],
-      "authenticated": [
-        "id",
-        "account_id",
-        "utc_day",
-        "wins",
-        "issued_coins",
-        "revision"
-      ],
-      "service_role": [
-        "id",
-        "account_id",
-        "utc_day",
-        "wins",
-        "issued_coins",
-        "revision"
-      ],
-      "supabase_auth_admin": []
-    }
-  },
-  {
-    "relation": "deck",
-    "kind": "table",
-    "reads": {
-      "anon": [],
-      "authenticated": [
-        "id",
-        "account_id",
-        "source_kind",
-        "system_pool_ref",
-        "source_manifest_ref",
-        "mode",
-        "format_id",
-        "name",
-        "current_revision_id",
-        "back_id",
-        "sleeve_id",
-        "dice_id",
-        "playmat_id",
-        "face_definition_id"
-      ],
-      "service_role": [
-        "id",
-        "account_id",
-        "source_kind",
-        "system_pool_ref",
-        "source_manifest_ref",
-        "mode",
-        "format_id",
-        "name",
-        "current_revision_id",
-        "back_id",
-        "sleeve_id",
-        "dice_id",
-        "playmat_id",
-        "face_definition_id"
-      ],
-      "supabase_auth_admin": []
-    }
-  },
-  {
-    "relation": "deck_entry",
-    "kind": "table",
-    "reads": {
-      "anon": [],
-      "authenticated": [
-        "id",
-        "revision_id",
-        "definition_id",
-        "printing_id",
-        "section",
-        "quantity"
-      ],
-      "service_role": [
-        "id",
-        "revision_id",
-        "definition_id",
-        "printing_id",
-        "section",
-        "quantity"
-      ],
-      "supabase_auth_admin": []
-    }
-  },
-  {
-    "relation": "deck_revision",
-    "kind": "table",
-    "reads": {
-      "anon": [],
-      "authenticated": [
-        "id",
-        "deck_id",
-        "revision_number",
-        "created_at",
-        "sealed_at"
-      ],
-      "service_role": [
-        "id",
-        "deck_id",
-        "revision_number",
-        "created_at",
-        "sealed_at"
-      ],
-      "supabase_auth_admin": []
-    }
-  },
-  {
-    "relation": "durable_handoff",
-    "kind": "table",
-    "reads": {
-      "anon": [],
-      "authenticated": [],
-      "service_role": [
-        "id",
-        "match_id",
-        "game_id",
         "source_ref",
-        "destination",
-        "kind",
+        "body",
+        "read_at"
+      ],
+      "service_role": [
+        "id",
+        "recipient_id",
+        "source_kind",
+        "source_ref",
+        "body",
+        "read_at"
+      ],
+      "supabase_auth_admin": []
+    }
+  },
+  {
+    "relation": "trade_offer",
+    "kind": "table",
+    "reads": {
+      "anon": [],
+      "authenticated": [
+        "id",
+        "sender_id",
+        "recipient_id",
+        "terms_revision",
         "state",
-        "acknowledgement_receipt_id"
-      ],
-      "supabase_auth_admin": []
-    }
-  },
-  {
-    "relation": "format",
-    "kind": "table",
-    "reads": {
-      "anon": [],
-      "authenticated": [
-        "id",
-        "key",
-        "name"
+        "created_at"
       ],
       "service_role": [
         "id",
-        "key",
-        "name",
-        "next_competitive_sequence",
-        "last_ranked_sequence"
-      ],
-      "supabase_auth_admin": []
-    }
-  },
-  {
-    "relation": "friend_request",
-    "kind": "view",
-    "reads": {
-      "anon": [],
-      "authenticated": [
-        "id",
-        "friendship_id",
-        "requested_by_id"
-      ],
-      "service_role": [
-        "id",
-        "friendship_id",
-        "requested_by_id"
-      ],
-      "supabase_auth_admin": []
-    }
-  },
-  {
-    "relation": "friendship",
-    "kind": "table",
-    "reads": {
-      "anon": [],
-      "authenticated": [
-        "id",
-        "account_low_id",
-        "account_high_id",
-        "requested_by_id",
+        "sender_id",
+        "recipient_id",
+        "sender_hold_id",
+        "terms_revision",
         "state",
-        "accepted_at"
-      ],
-      "service_role": [
-        "id",
-        "account_low_id",
-        "account_high_id",
-        "requested_by_id",
-        "state",
-        "accepted_at"
+        "settlement_operation_id",
+        "created_at",
+        "sealed_at",
+        "assessment"
       ],
       "supabase_auth_admin": []
     }
   },
   {
-    "relation": "game",
+    "relation": "trade_line",
     "kind": "table",
     "reads": {
       "anon": [],
       "authenticated": [
         "id",
-        "match_id",
-        "game_index",
-        "state",
-        "accepted_revision"
-      ],
-      "service_role": [
-        "id",
-        "match_id",
-        "game_index",
-        "state",
-        "accepted_revision"
-      ],
-      "supabase_auth_admin": []
-    }
-  },
-  {
-    "relation": "game_activity_fact",
-    "kind": "table",
-    "reads": {
-      "anon": [],
-      "authenticated": [],
-      "service_role": [
-        "id",
-        "game_id",
-        "source_event_id",
-        "account_id",
-        "kind",
-        "value",
-        "fact_revision"
-      ],
-      "supabase_auth_admin": []
-    }
-  },
-  {
-    "relation": "game_checkpoint",
-    "kind": "table",
-    "reads": {
-      "anon": [],
-      "authenticated": [],
-      "service_role": [
-        "id",
-        "game_id",
-        "context_id",
-        "accepted_revision",
-        "private_state_ref",
-        "facts_ref",
-        "clock_revision",
-        "source_receipt_id"
-      ],
-      "supabase_auth_admin": []
-    }
-  },
-  {
-    "relation": "game_context",
-    "kind": "table",
-    "reads": {
-      "anon": [],
-      "authenticated": [],
-      "service_role": [
-        "id",
-        "game_id",
-        "release_id",
-        "profile_id",
-        "snapshot_ref",
-        "context_revision"
-      ],
-      "supabase_auth_admin": []
-    }
-  },
-  {
-    "relation": "game_event",
-    "kind": "table",
-    "reads": {
-      "anon": [],
-      "authenticated": [],
-      "service_role": [
-        "id",
-        "game_id",
-        "context_id",
-        "sequence",
-        "accepted_revision",
-        "private_payload_ref",
-        "accepted_at",
-        "source_receipt_id"
-      ],
-      "supabase_auth_admin": []
-    }
-  },
-  {
-    "relation": "game_participation",
-    "kind": "table",
-    "reads": {
-      "anon": [],
-      "authenticated": [],
-      "service_role": [
-        "id",
-        "game_id",
-        "match_seat_id",
-        "account_id",
-        "own_turns",
-        "real_game",
-        "reason",
-        "completed_at",
-        "accepted_revision"
-      ],
-      "supabase_auth_admin": []
-    }
-  },
-  {
-    "relation": "game_result",
-    "kind": "table",
-    "reads": {
-      "anon": [],
-      "authenticated": [],
-      "service_role": [
-        "id",
-        "game_id",
-        "source_event_id",
-        "outcome",
-        "winners_ref",
-        "end_reason",
-        "winner_seat_ids",
-        "bank_forfeit_receipt_id",
-        "bank_forfeit_seat_id"
-      ],
-      "supabase_auth_admin": []
-    }
-  },
-  {
-    "relation": "historical_context",
-    "kind": "view",
-    "reads": {
-      "anon": [],
-      "authenticated": [],
-      "service_role": [
-        "id",
-        "context_id",
-        "release_id"
-      ],
-      "supabase_auth_admin": []
-    }
-  },
-  {
-    "relation": "hold_line",
-    "kind": "table",
-    "reads": {
-      "anon": [],
-      "authenticated": [
-        "id",
-        "hold_id",
-        "inventory_asset_id",
-        "quantity"
-      ],
-      "service_role": [
-        "id",
-        "hold_id",
-        "inventory_asset_id",
-        "quantity"
-      ],
-      "supabase_auth_admin": []
-    }
-  },
-  {
-    "relation": "inventory_asset",
-    "kind": "table",
-    "reads": {
-      "anon": [],
-      "authenticated": [
-        "id",
-        "owner_id",
+        "trade_id",
         "asset_definition_id",
-        "owned_quantity",
-        "revision"
+        "side",
+        "quantity"
       ],
       "service_role": [
         "id",
-        "owner_id",
+        "trade_id",
         "asset_definition_id",
-        "owned_quantity",
-        "revision"
-      ],
-      "supabase_auth_admin": []
-    }
-  },
-  {
-    "relation": "invitation",
-    "kind": "table",
-    "reads": {
-      "anon": [],
-      "authenticated": [
-        "id",
-        "room_id",
-        "issuer_id",
-        "state"
-      ],
-      "service_role": [
-        "id",
-        "room_id",
-        "issuer_id",
-        "token_hash",
-        "state"
-      ],
-      "supabase_auth_admin": []
-    }
-  },
-  {
-    "relation": "ledger_operation",
-    "kind": "table",
-    "reads": {
-      "anon": [],
-      "authenticated": [],
-      "service_role": [
-        "id",
-        "kind",
-        "source_ref",
-        "source_scope",
-        "actor_account_id",
-        "created_at",
-        "state"
-      ],
-      "supabase_auth_admin": []
-    }
-  },
-  {
-    "relation": "ledger_posting",
-    "kind": "table",
-    "reads": {
-      "anon": [],
-      "authenticated": [],
-      "service_role": [
-        "id",
-        "operation_id",
-        "inventory_asset_id",
-        "direction",
-        "quantity",
-        "source_kind",
-        "source_ref"
-      ],
-      "supabase_auth_admin": []
-    }
-  },
-  {
-    "relation": "legality_revision",
-    "kind": "table",
-    "reads": {
-      "anon": [],
-      "authenticated": [],
-      "service_role": [
-        "id",
-        "source_ref",
-        "effective_at",
-        "imported_at"
+        "side",
+        "quantity"
       ],
       "supabase_auth_admin": []
     }
@@ -1198,364 +1061,6 @@
         "paid_coins",
         "completed_at",
         "assessment"
-      ],
-      "supabase_auth_admin": []
-    }
-  },
-  {
-    "relation": "match",
-    "kind": "table",
-    "reads": {
-      "anon": [],
-      "authenticated": [
-        "id",
-        "format_id",
-        "profile_id",
-        "legality_revision_id",
-        "mode",
-        "competitive",
-        "structure",
-        "state",
-        "revision",
-        "accepted_release_id",
-        "started_at",
-        "current_game_id",
-        "reserved_game_id",
-        "availability",
-        "availability_revision"
-      ],
-      "service_role": [
-        "id",
-        "room_id",
-        "format_id",
-        "profile_id",
-        "legality_revision_id",
-        "mode",
-        "competitive",
-        "structure",
-        "state",
-        "revision",
-        "accepted_release_id",
-        "admission_qualification_ref",
-        "started_at",
-        "current_game_id",
-        "reserved_game_id",
-        "availability",
-        "availability_revision",
-        "incident_receipt_id",
-        "restoration_receipt_id",
-        "terminal_receipt_id"
-      ],
-      "supabase_auth_admin": []
-    }
-  },
-  {
-    "relation": "match_clock",
-    "kind": "table",
-    "reads": {
-      "anon": [],
-      "authenticated": [
-        "id",
-        "match_seat_id",
-        "remaining_ms",
-        "clock_revision",
-        "policy_ref",
-        "paused",
-        "last_accounted_at"
-      ],
-      "service_role": [
-        "id",
-        "match_seat_id",
-        "remaining_ms",
-        "clock_revision",
-        "policy_ref",
-        "paused",
-        "last_accounted_at",
-        "eligibility_receipt_id"
-      ],
-      "supabase_auth_admin": []
-    }
-  },
-  {
-    "relation": "match_decision_deadline",
-    "kind": "view",
-    "reads": {
-      "anon": [],
-      "authenticated": [
-        "id",
-        "decision_id",
-        "deadline_at",
-        "clock_revision"
-      ],
-      "service_role": [
-        "id",
-        "decision_id",
-        "deadline_at",
-        "clock_revision"
-      ],
-      "supabase_auth_admin": []
-    }
-  },
-  {
-    "relation": "match_result",
-    "kind": "table",
-    "reads": {
-      "anon": [],
-      "authenticated": [
-        "id",
-        "match_id",
-        "outcome",
-        "committed_at",
-        "ranking_format_id",
-        "rank_sequence",
-        "winner_seat_ids",
-        "final_game_ids",
-        "terminal_kind"
-      ],
-      "service_role": [
-        "id",
-        "match_id",
-        "source_ref",
-        "outcome",
-        "winners_ref",
-        "committed_at",
-        "ranking_format_id",
-        "rank_sequence",
-        "winner_seat_ids",
-        "final_game_ids",
-        "source_game_result_id",
-        "terminal_kind",
-        "terminal_receipt_id"
-      ],
-      "supabase_auth_admin": []
-    }
-  },
-  {
-    "relation": "match_seat",
-    "kind": "table",
-    "reads": {
-      "anon": [],
-      "authenticated": [
-        "id",
-        "match_id",
-        "account_id",
-        "seat_index",
-        "controller_kind"
-      ],
-      "service_role": [
-        "id",
-        "match_id",
-        "account_id",
-        "sponsor_id",
-        "seat_index",
-        "team_ref",
-        "controller_kind",
-        "source_revision_id",
-        "deck_snapshot_ref",
-        "deck_accepted_at"
-      ],
-      "supabase_auth_admin": []
-    }
-  },
-  {
-    "relation": "message",
-    "kind": "table",
-    "reads": {
-      "anon": [],
-      "authenticated": [
-        "id",
-        "conversation_id",
-        "sender_id",
-        "send_request_ref",
-        "body",
-        "sent_at"
-      ],
-      "service_role": [
-        "id",
-        "conversation_id",
-        "sender_id",
-        "send_request_ref",
-        "body",
-        "sent_at"
-      ],
-      "supabase_auth_admin": []
-    }
-  },
-  {
-    "relation": "monthly_account_activity",
-    "kind": "table",
-    "reads": {
-      "anon": [],
-      "authenticated": [],
-      "service_role": [
-        "id",
-        "account_id",
-        "utc_month",
-        "activity_policy_ref",
-        "source_ref"
-      ],
-      "supabase_auth_admin": []
-    }
-  },
-  {
-    "relation": "native_entropy_seed",
-    "kind": "table",
-    "reads": {
-      "anon": [],
-      "authenticated": [],
-      "service_role": [],
-      "supabase_auth_admin": []
-    }
-  },
-  {
-    "relation": "native_host_watch",
-    "kind": "table",
-    "reads": {
-      "anon": [],
-      "authenticated": [],
-      "service_role": [],
-      "supabase_auth_admin": []
-    }
-  },
-  {
-    "relation": "native_legacy_chooser_report",
-    "kind": "table",
-    "reads": {
-      "anon": [],
-      "authenticated": [],
-      "service_role": [],
-      "supabase_auth_admin": []
-    }
-  },
-  {
-    "relation": "native_opening_selection",
-    "kind": "table",
-    "reads": {
-      "anon": [],
-      "authenticated": [],
-      "service_role": [],
-      "supabase_auth_admin": []
-    }
-  },
-  {
-    "relation": "native_response_adoption",
-    "kind": "table",
-    "reads": {
-      "anon": [],
-      "authenticated": [],
-      "service_role": [],
-      "supabase_auth_admin": []
-    }
-  },
-  {
-    "relation": "notification",
-    "kind": "table",
-    "reads": {
-      "anon": [],
-      "authenticated": [
-        "id",
-        "recipient_id",
-        "source_kind",
-        "source_ref",
-        "body",
-        "read_at"
-      ],
-      "service_role": [
-        "id",
-        "recipient_id",
-        "source_kind",
-        "source_ref",
-        "body",
-        "read_at"
-      ],
-      "supabase_auth_admin": []
-    }
-  },
-  {
-    "relation": "operational_state",
-    "kind": "table",
-    "reads": {
-      "anon": [],
-      "authenticated": [],
-      "service_role": [
-        "id",
-        "game_id",
-        "owner_instance_ref",
-        "fence_epoch",
-        "availability",
-        "incident_ref",
-        "revision",
-        "recovery_checkpoint_id",
-        "incident_at",
-        "incident_receipt_id",
-        "restoration_receipt_id",
-        "terminal_receipt_id"
-      ],
-      "supabase_auth_admin": []
-    }
-  },
-  {
-    "relation": "pack_open_receipt",
-    "kind": "table",
-    "reads": {
-      "anon": [],
-      "authenticated": [],
-      "service_role": [
-        "id",
-        "inventory_asset_id",
-        "recipe_id",
-        "operation_id",
-        "result_ref"
-      ],
-      "supabase_auth_admin": []
-    }
-  },
-  {
-    "relation": "patreon_membership",
-    "kind": "table",
-    "reads": {
-      "anon": [],
-      "authenticated": [
-        "id",
-        "account_id",
-        "active_tier_id",
-        "active"
-      ],
-      "service_role": [
-        "id",
-        "account_id",
-        "patreon_member_ref",
-        "active_tier_id",
-        "active",
-        "source_event_id",
-        "patreon_user_ref",
-        "patreon_campaign_ref"
-      ],
-      "supabase_auth_admin": []
-    }
-  },
-  {
-    "relation": "patreon_payment",
-    "kind": "table",
-    "reads": {
-      "anon": [],
-      "authenticated": [
-        "id",
-        "membership_id",
-        "tier_id",
-        "provider_event_id",
-        "payment_ref",
-        "paid_at",
-        "state"
-      ],
-      "service_role": [
-        "id",
-        "membership_id",
-        "tier_id",
-        "provider_event_id",
-        "payment_ref",
-        "paid_at",
-        "state"
       ],
       "supabase_auth_admin": []
     }
@@ -1638,24 +1143,6 @@
     }
   },
   {
-    "relation": "prediction_position",
-    "kind": "view",
-    "reads": {
-      "anon": [],
-      "authenticated": [],
-      "service_role": [
-        "id",
-        "pair_id",
-        "order_id",
-        "account_id",
-        "side",
-        "quantity",
-        "actual_cost_coins"
-      ],
-      "supabase_auth_admin": []
-    }
-  },
-  {
     "relation": "price_observation",
     "kind": "table",
     "reads": {
@@ -1679,225 +1166,96 @@
     }
   },
   {
-    "relation": "printing",
+    "relation": "room",
     "kind": "table",
     "reads": {
       "anon": [],
       "authenticated": [
         "id",
-        "definition_id",
-        "set_id",
-        "external_printing_ref",
-        "rarity",
-        "finish",
-        "collector_number",
-        "language"
-      ],
-      "service_role": [
-        "id",
-        "definition_id",
-        "set_id",
-        "external_printing_ref",
-        "rarity",
-        "finish",
-        "image_ref",
-        "collector_number",
-        "language",
-        "catalogue_receipt_id"
-      ],
-      "supabase_auth_admin": []
-    }
-  },
-  {
-    "relation": "profile",
-    "kind": "table",
-    "reads": {
-      "anon": [],
-      "authenticated": [
-        "id",
-        "account_id",
-        "printing_id",
-        "crop_x",
-        "crop_y",
-        "crop_scale",
-        "default_back_id",
-        "default_sleeve_id",
-        "default_dice_id",
-        "default_playmat_id"
-      ],
-      "service_role": [
-        "id",
-        "account_id",
-        "printing_id",
-        "crop_x",
-        "crop_y",
-        "crop_scale",
-        "default_back_id",
-        "default_sleeve_id",
-        "default_dice_id",
-        "default_playmat_id"
-      ],
-      "supabase_auth_admin": []
-    }
-  },
-  {
-    "relation": "provider_event",
-    "kind": "table",
-    "reads": {
-      "anon": [],
-      "authenticated": [],
-      "service_role": [
-        "id",
-        "provider",
-        "external_event_ref",
-        "account_id",
-        "received_at",
-        "event_type",
-        "payload_ref",
-        "processing_state",
-        "capture",
-        "first_delivery_at",
-        "raw_evidence_state",
-        "effect",
-        "effect_key",
-        "raw_deleted_at"
-      ],
-      "supabase_auth_admin": []
-    }
-  },
-  {
-    "relation": "purchase",
-    "kind": "table",
-    "reads": {
-      "anon": [],
-      "authenticated": [
-        "id",
-        "account_id",
-        "cosmetic_id",
-        "requested_at",
+        "host_id",
+        "format_id",
+        "profile_id",
+        "mode",
+        "competitive",
+        "visibility",
         "state",
         "revision",
-        "checkout_url",
-        "checkout_expires_at",
-        "price_currency",
-        "price_minor_units"
+        "countdown_at",
+        "structure",
+        "configuration_id",
+        "target_seat_count",
+        "queue_claim_receipt_id",
+        "ai_difficulty",
+        "planechase_enabled",
+        "range_of_influence"
       ],
       "service_role": [
         "id",
-        "account_id",
-        "cosmetic_id",
-        "provider_request_ref",
-        "provider_event_id",
-        "stripe_payment_ref",
-        "stripe_checkout_ref",
-        "requested_at",
+        "host_id",
+        "format_id",
+        "profile_id",
+        "mode",
+        "competitive",
+        "visibility",
         "state",
-        "checkout_terms",
         "revision",
-        "first_create_attempt_at",
-        "create_deadline_at",
-        "checkout_url",
-        "checkout_expires_at",
-        "current_reversal_event_id",
-        "current_reversal_key",
-        "price_currency",
-        "price_minor_units"
+        "countdown_at",
+        "structure",
+        "configuration_id",
+        "target_seat_count",
+        "queue_claim_receipt_id",
+        "ai_difficulty",
+        "planechase_enabled",
+        "range_of_influence"
       ],
       "supabase_auth_admin": []
     }
   },
   {
-    "relation": "qualified_release",
-    "kind": "table",
-    "reads": {
-      "anon": [],
-      "authenticated": [],
-      "service_role": [
-        "id",
-        "release_ref",
-        "kernel_ref",
-        "rules_ref",
-        "program_manifest_ref",
-        "evidence_ref"
-      ],
-      "supabase_auth_admin": []
-    }
-  },
-  {
-    "relation": "quest_assignment",
+    "relation": "room_slot",
     "kind": "table",
     "reads": {
       "anon": [],
       "authenticated": [
         "id",
+        "room_id",
         "account_id",
-        "definition_id",
-        "source_day",
-        "progress",
-        "completed_at",
-        "replaced_by_id",
-        "assigned_at"
+        "seat_index",
+        "controller_kind",
+        "ready"
       ],
       "service_role": [
         "id",
+        "room_id",
         "account_id",
-        "definition_id",
-        "source_day",
-        "assignment_ref",
-        "progress",
-        "completed_at",
-        "replaced_by_id",
-        "reward_operation_id",
-        "reward_source_fact_id",
-        "assigned_at"
+        "sponsor_id",
+        "deck_revision_id",
+        "seat_index",
+        "team_ref",
+        "controller_kind",
+        "ready",
+        "retired_at"
       ],
       "supabase_auth_admin": []
     }
   },
   {
-    "relation": "quest_definition_revision",
+    "relation": "invitation",
     "kind": "table",
     "reads": {
       "anon": [],
       "authenticated": [
         "id",
-        "definition_key",
-        "revision",
-        "objective_ref",
-        "target",
-        "reward_coins"
+        "room_id",
+        "issuer_id",
+        "state"
       ],
       "service_role": [
         "id",
-        "definition_key",
-        "revision",
-        "objective_ref",
-        "target",
-        "reward_coins",
-        "fact_kind",
-        "fact_schema_revision",
-        "objective_qualification_ref",
-        "reroll_enabled"
-      ],
-      "supabase_auth_admin": []
-    }
-  },
-  {
-    "relation": "quest_progress",
-    "kind": "view",
-    "reads": {
-      "anon": [],
-      "authenticated": [
-        "id",
-        "assignment_id",
-        "progress",
-        "complete"
-      ],
-      "service_role": [
-        "id",
-        "assignment_id",
-        "progress",
-        "complete"
+        "room_id",
+        "issuer_id",
+        "token_hash",
+        "state"
       ],
       "supabase_auth_admin": []
     }
@@ -1939,46 +1297,323 @@
     }
   },
   {
-    "relation": "rank",
+    "relation": "match",
     "kind": "table",
     "reads": {
       "anon": [],
       "authenticated": [
         "id",
-        "account_id",
         "format_id",
-        "season_id",
-        "tier",
+        "profile_id",
+        "legality_revision_id",
+        "mode",
+        "competitive",
+        "structure",
+        "state",
         "revision",
-        "finalized",
-        "rating"
+        "accepted_release_id",
+        "started_at",
+        "current_game_id",
+        "reserved_game_id",
+        "availability",
+        "availability_revision"
       ],
       "service_role": [
         "id",
-        "account_id",
+        "room_id",
         "format_id",
-        "season_id",
-        "tier",
-        "rating_ref",
+        "profile_id",
+        "legality_revision_id",
+        "mode",
+        "competitive",
+        "structure",
+        "state",
         "revision",
-        "finalized",
-        "rating"
+        "accepted_release_id",
+        "admission_qualification_ref",
+        "started_at",
+        "current_game_id",
+        "reserved_game_id",
+        "availability",
+        "availability_revision",
+        "incident_receipt_id",
+        "restoration_receipt_id",
+        "terminal_receipt_id"
       ],
       "supabase_auth_admin": []
     }
   },
   {
-    "relation": "release_card_program",
+    "relation": "match_seat",
+    "kind": "table",
+    "reads": {
+      "anon": [],
+      "authenticated": [
+        "id",
+        "match_id",
+        "account_id",
+        "seat_index",
+        "controller_kind"
+      ],
+      "service_role": [
+        "id",
+        "match_id",
+        "account_id",
+        "sponsor_id",
+        "seat_index",
+        "team_ref",
+        "controller_kind",
+        "source_revision_id",
+        "deck_snapshot_ref",
+        "deck_accepted_at"
+      ],
+      "supabase_auth_admin": []
+    }
+  },
+  {
+    "relation": "match_clock",
+    "kind": "table",
+    "reads": {
+      "anon": [],
+      "authenticated": [
+        "id",
+        "match_seat_id",
+        "remaining_ms",
+        "clock_revision",
+        "policy_ref",
+        "paused",
+        "last_accounted_at"
+      ],
+      "service_role": [
+        "id",
+        "match_seat_id",
+        "remaining_ms",
+        "clock_revision",
+        "policy_ref",
+        "paused",
+        "last_accounted_at",
+        "eligibility_receipt_id"
+      ],
+      "supabase_auth_admin": []
+    }
+  },
+  {
+    "relation": "between_game_decision",
+    "kind": "table",
+    "reads": {
+      "anon": [],
+      "authenticated": [
+        "id",
+        "match_id",
+        "seat_id",
+        "decision_kind",
+        "basis_revision",
+        "deadline_at",
+        "clock_revision",
+        "state",
+        "after_game_id",
+        "selected_deck_revision_id",
+        "opened_at",
+        "deadline_policy_ref",
+        "deadline_revision",
+        "deadline_availability_revision",
+        "deadline_remaining_us",
+        "deadline_accounted_at"
+      ],
+      "service_role": [
+        "id",
+        "match_id",
+        "seat_id",
+        "decision_kind",
+        "basis_revision",
+        "reply_ref",
+        "deadline_at",
+        "clock_revision",
+        "state",
+        "after_game_id",
+        "selected_deck_revision_id",
+        "terminal_receipt_id",
+        "opened_at",
+        "deadline_policy_ref",
+        "deadline_revision",
+        "deadline_origin_receipt_id",
+        "deadline_source_receipt_id",
+        "deadline_availability_revision",
+        "deadline_remaining_us",
+        "deadline_accounted_at"
+      ],
+      "supabase_auth_admin": []
+    }
+  },
+  {
+    "relation": "match_result",
+    "kind": "table",
+    "reads": {
+      "anon": [],
+      "authenticated": [
+        "id",
+        "match_id",
+        "outcome",
+        "committed_at",
+        "ranking_format_id",
+        "rank_sequence",
+        "winner_seat_ids",
+        "final_game_ids",
+        "terminal_kind"
+      ],
+      "service_role": [
+        "id",
+        "match_id",
+        "source_ref",
+        "outcome",
+        "winners_ref",
+        "committed_at",
+        "ranking_format_id",
+        "rank_sequence",
+        "winner_seat_ids",
+        "final_game_ids",
+        "source_game_result_id",
+        "terminal_kind",
+        "terminal_receipt_id"
+      ],
+      "supabase_auth_admin": []
+    }
+  },
+  {
+    "relation": "game",
+    "kind": "table",
+    "reads": {
+      "anon": [],
+      "authenticated": [
+        "id",
+        "match_id",
+        "game_index",
+        "state",
+        "accepted_revision"
+      ],
+      "service_role": [
+        "id",
+        "match_id",
+        "game_index",
+        "state",
+        "accepted_revision"
+      ],
+      "supabase_auth_admin": []
+    }
+  },
+  {
+    "relation": "game_context",
     "kind": "table",
     "reads": {
       "anon": [],
       "authenticated": [],
       "service_role": [
         "id",
+        "game_id",
         "release_id",
-        "definition_revision_id",
-        "program_ref",
-        "unlimited_basic_land"
+        "profile_id",
+        "snapshot_ref",
+        "context_revision"
+      ],
+      "supabase_auth_admin": []
+    }
+  },
+  {
+    "relation": "game_checkpoint",
+    "kind": "table",
+    "reads": {
+      "anon": [],
+      "authenticated": [],
+      "service_role": [
+        "id",
+        "game_id",
+        "context_id",
+        "accepted_revision",
+        "private_state_ref",
+        "facts_ref",
+        "clock_revision",
+        "source_receipt_id"
+      ],
+      "supabase_auth_admin": []
+    }
+  },
+  {
+    "relation": "game_event",
+    "kind": "table",
+    "reads": {
+      "anon": [],
+      "authenticated": [],
+      "service_role": [
+        "id",
+        "game_id",
+        "context_id",
+        "sequence",
+        "accepted_revision",
+        "private_payload_ref",
+        "accepted_at",
+        "source_receipt_id"
+      ],
+      "supabase_auth_admin": []
+    }
+  },
+  {
+    "relation": "game_result",
+    "kind": "table",
+    "reads": {
+      "anon": [],
+      "authenticated": [],
+      "service_role": [
+        "id",
+        "game_id",
+        "source_event_id",
+        "outcome",
+        "winners_ref",
+        "end_reason",
+        "winner_seat_ids",
+        "bank_forfeit_receipt_id",
+        "bank_forfeit_seat_id"
+      ],
+      "supabase_auth_admin": []
+    }
+  },
+  {
+    "relation": "operational_state",
+    "kind": "table",
+    "reads": {
+      "anon": [],
+      "authenticated": [],
+      "service_role": [
+        "id",
+        "game_id",
+        "owner_instance_ref",
+        "fence_epoch",
+        "availability",
+        "incident_ref",
+        "revision",
+        "recovery_checkpoint_id",
+        "incident_at",
+        "incident_receipt_id",
+        "restoration_receipt_id",
+        "terminal_receipt_id"
+      ],
+      "supabase_auth_admin": []
+    }
+  },
+  {
+    "relation": "durable_handoff",
+    "kind": "table",
+    "reads": {
+      "anon": [],
+      "authenticated": [],
+      "service_role": [
+        "id",
+        "match_id",
+        "game_id",
+        "source_ref",
+        "destination",
+        "kind",
+        "state",
+        "acknowledgement_receipt_id"
       ],
       "supabase_auth_admin": []
     }
@@ -2006,69 +1641,190 @@
     }
   },
   {
-    "relation": "room",
+    "relation": "ai_runner_binding",
     "kind": "table",
     "reads": {
       "anon": [],
-      "authenticated": [
-        "id",
-        "host_id",
-        "format_id",
-        "profile_id",
-        "mode",
-        "competitive",
-        "visibility",
-        "state",
-        "revision",
-        "countdown_at",
-        "structure",
-        "configuration_id",
-        "target_seat_count",
-        "queue_claim_receipt_id"
-      ],
+      "authenticated": [],
       "service_role": [
         "id",
-        "host_id",
-        "format_id",
-        "profile_id",
-        "mode",
-        "competitive",
-        "visibility",
-        "state",
-        "revision",
-        "countdown_at",
-        "structure",
-        "configuration_id",
-        "target_seat_count",
-        "queue_claim_receipt_id"
+        "room_slot_id",
+        "match_seat_id",
+        "provider_runner_ref",
+        "binding_epoch",
+        "desired_state",
+        "observed_state",
+        "ready_configuration_id",
+        "ready_epoch",
+        "ready_deck_revision_id",
+        "ready_qualification_ref",
+        "ready_authentication_ref",
+        "bootstrap_receipt_id",
+        "epoch_receipt_id",
+        "provider_observation_receipt_id",
+        "stop_receipt_id",
+        "stop_observation_receipt_id",
+        "provider_start_receipt_id"
       ],
       "supabase_auth_admin": []
     }
   },
   {
-    "relation": "room_slot",
+    "relation": "controller_grant",
     "kind": "table",
     "reads": {
       "anon": [],
-      "authenticated": [
-        "id",
-        "room_id",
-        "account_id",
-        "seat_index",
-        "controller_kind",
-        "ready"
-      ],
+      "authenticated": [],
       "service_role": [
         "id",
-        "room_id",
-        "account_id",
+        "binding_id",
+        "binding_epoch",
+        "match_seat_id",
+        "grant_secret_ref",
+        "state",
+        "issue_receipt_id",
+        "delivery_state",
+        "delivery_revision",
+        "delivery_receipt_id"
+      ],
+      "supabase_auth_admin": []
+    }
+  },
+  {
+    "relation": "ai_loss_bucket",
+    "kind": "table",
+    "reads": {
+      "anon": [],
+      "authenticated": [],
+      "service_role": [
+        "id",
         "sponsor_id",
-        "deck_revision_id",
-        "seat_index",
-        "team_ref",
-        "controller_kind",
-        "ready",
-        "retired_at"
+        "utc_day",
+        "limit_coins",
+        "lost_coins",
+        "revision"
+      ],
+      "supabase_auth_admin": []
+    }
+  },
+  {
+    "relation": "ai_loss_exposure",
+    "kind": "table",
+    "reads": {
+      "anon": [],
+      "authenticated": [],
+      "service_role": [
+        "id",
+        "bucket_id",
+        "match_id",
+        "commitment_id",
+        "reserved_coins",
+        "state",
+        "loss_coins"
+      ],
+      "supabase_auth_admin": []
+    }
+  },
+  {
+    "relation": "ante_commitment",
+    "kind": "table",
+    "reads": {
+      "anon": [],
+      "authenticated": [],
+      "service_role": [
+        "id",
+        "match_id",
+        "terms_revision",
+        "state",
+        "reservation_operation_id",
+        "settlement_operation_id",
+        "allocation_evidence_ref",
+        "valuation_evidence_ref",
+        "terms",
+        "terms_hash",
+        "accepted_seat_ids",
+        "accepted_at",
+        "start_day_utc",
+        "valuation_snapshot",
+        "settlement_result_id",
+        "settlement"
+      ],
+      "supabase_auth_admin": []
+    }
+  },
+  {
+    "relation": "ante_stake",
+    "kind": "table",
+    "reads": {
+      "anon": [],
+      "authenticated": [],
+      "service_role": [
+        "id",
+        "commitment_id",
+        "match_seat_id",
+        "funding_kind",
+        "hold_id",
+        "estimated_value_coins",
+        "valuation_policy_id",
+        "ai_exposure_id",
+        "value_numerator",
+        "value_denominator",
+        "bundle_assessment"
+      ],
+      "supabase_auth_admin": []
+    }
+  },
+  {
+    "relation": "game_participation",
+    "kind": "table",
+    "reads": {
+      "anon": [],
+      "authenticated": [],
+      "service_role": [
+        "id",
+        "game_id",
+        "match_seat_id",
+        "account_id",
+        "own_turns",
+        "real_game",
+        "reason",
+        "completed_at",
+        "accepted_revision"
+      ],
+      "supabase_auth_admin": []
+    }
+  },
+  {
+    "relation": "game_activity_fact",
+    "kind": "table",
+    "reads": {
+      "anon": [],
+      "authenticated": [],
+      "service_role": [
+        "id",
+        "game_id",
+        "source_event_id",
+        "account_id",
+        "kind",
+        "value",
+        "fact_revision"
+      ],
+      "supabase_auth_admin": []
+    }
+  },
+  {
+    "relation": "activity_consumer_cursor",
+    "kind": "table",
+    "reads": {
+      "anon": [],
+      "authenticated": [],
+      "service_role": [
+        "id",
+        "consumer_key",
+        "game_id",
+        "last_sequence",
+        "revision",
+        "initialized"
       ],
       "supabase_auth_admin": []
     }
@@ -2103,24 +1859,6 @@
     }
   },
   {
-    "relation": "season_rank_snapshot",
-    "kind": "view",
-    "reads": {
-      "anon": [],
-      "authenticated": [
-        "id",
-        "rank_id",
-        "season_id"
-      ],
-      "service_role": [
-        "id",
-        "rank_id",
-        "season_id"
-      ],
-      "supabase_auth_admin": []
-    }
-  },
-  {
     "relation": "set_ballot",
     "kind": "table",
     "reads": {
@@ -2137,17 +1875,17 @@
     }
   },
   {
-    "relation": "shared_real_game",
-    "kind": "view",
+    "relation": "monthly_account_activity",
+    "kind": "table",
     "reads": {
       "anon": [],
       "authenticated": [],
       "service_role": [
         "id",
-        "left_participation_id",
-        "right_participation_id",
-        "game_id",
-        "shared_at"
+        "account_id",
+        "utc_month",
+        "activity_policy_ref",
+        "source_ref"
       ],
       "supabase_auth_admin": []
     }
@@ -2193,24 +1931,6 @@
     }
   },
   {
-    "relation": "supply_purchase",
-    "kind": "table",
-    "reads": {
-      "anon": [],
-      "authenticated": [],
-      "service_role": [
-        "id",
-        "stock_id",
-        "pricing_policy_id",
-        "buyer_id",
-        "operation_id",
-        "quantity",
-        "paid_coins"
-      ],
-      "supabase_auth_admin": []
-    }
-  },
-  {
     "relation": "supply_stock",
     "kind": "table",
     "reads": {
@@ -2232,127 +1952,563 @@
     }
   },
   {
-    "relation": "supporter_tier",
-    "kind": "table",
-    "reads": {
-      "anon": [],
-      "authenticated": [
-        "id",
-        "patreon_tier_ref",
-        "name",
-        "rank"
-      ],
-      "service_role": [
-        "id",
-        "patreon_tier_ref",
-        "name",
-        "rank"
-      ],
-      "supabase_auth_admin": []
-    }
-  },
-  {
-    "relation": "table_profile_revision",
+    "relation": "supply_purchase",
     "kind": "table",
     "reads": {
       "anon": [],
       "authenticated": [],
       "service_role": [
         "id",
-        "key",
-        "revision_ref",
-        "rules_ref",
-        "planar_pool_ref",
-        "minimum_seats",
-        "seat_capacity",
-        "admission_qualification_ref",
-        "matchmaking_config"
+        "stock_id",
+        "pricing_policy_id",
+        "buyer_id",
+        "operation_id",
+        "quantity",
+        "paid_coins"
       ],
       "supabase_auth_admin": []
     }
   },
   {
-    "relation": "tier_cosmetic",
+    "relation": "quest_definition_revision",
     "kind": "table",
     "reads": {
       "anon": [],
       "authenticated": [
         "id",
-        "tier_id",
-        "cosmetic_id"
+        "definition_key",
+        "revision",
+        "objective_ref",
+        "target",
+        "reward_coins"
       ],
       "service_role": [
         "id",
-        "tier_id",
-        "cosmetic_id"
+        "definition_key",
+        "revision",
+        "objective_ref",
+        "target",
+        "reward_coins",
+        "fact_kind",
+        "fact_schema_revision",
+        "objective_qualification_ref",
+        "reroll_enabled"
       ],
       "supabase_auth_admin": []
     }
   },
   {
-    "relation": "trade_line",
+    "relation": "quest_assignment",
     "kind": "table",
     "reads": {
       "anon": [],
       "authenticated": [
         "id",
-        "trade_id",
-        "asset_definition_id",
-        "side",
-        "quantity"
+        "account_id",
+        "definition_id",
+        "source_day",
+        "progress",
+        "completed_at",
+        "replaced_by_id",
+        "assigned_at"
       ],
       "service_role": [
         "id",
-        "trade_id",
-        "asset_definition_id",
-        "side",
-        "quantity"
+        "account_id",
+        "definition_id",
+        "source_day",
+        "assignment_ref",
+        "progress",
+        "completed_at",
+        "replaced_by_id",
+        "reward_operation_id",
+        "reward_source_fact_id",
+        "assigned_at"
       ],
       "supabase_auth_admin": []
     }
   },
   {
-    "relation": "trade_offer",
+    "relation": "daily_quest_state",
     "kind": "table",
     "reads": {
       "anon": [],
       "authenticated": [
         "id",
-        "sender_id",
-        "recipient_id",
-        "terms_revision",
-        "state",
-        "created_at"
+        "account_id",
+        "utc_day",
+        "generated_assignment_id",
+        "rerolls_used",
+        "revision"
       ],
       "service_role": [
         "id",
-        "sender_id",
-        "recipient_id",
-        "sender_hold_id",
-        "terms_revision",
-        "state",
-        "settlement_operation_id",
-        "created_at",
-        "sealed_at",
-        "assessment"
+        "account_id",
+        "utc_day",
+        "generated_assignment_id",
+        "rerolls_used",
+        "revision"
       ],
       "supabase_auth_admin": []
     }
   },
   {
-    "relation": "valuation_policy_revision",
+    "relation": "competitive_result",
     "kind": "table",
+    "reads": {
+      "anon": [],
+      "authenticated": [
+        "id",
+        "account_id",
+        "match_result_id",
+        "format_id",
+        "win",
+        "completed_at",
+        "season_id",
+        "rating_before",
+        "rating_delta",
+        "rating_after"
+      ],
+      "service_role": [
+        "id",
+        "account_id",
+        "match_result_id",
+        "source_ref",
+        "format_id",
+        "win",
+        "completed_at",
+        "policy_ref",
+        "season_id",
+        "rating_before",
+        "rating_delta",
+        "rating_after",
+        "rating_evidence"
+      ],
+      "supabase_auth_admin": []
+    }
+  },
+  {
+    "relation": "rank",
+    "kind": "table",
+    "reads": {
+      "anon": [],
+      "authenticated": [
+        "id",
+        "account_id",
+        "format_id",
+        "season_id",
+        "tier",
+        "revision",
+        "finalized",
+        "rating"
+      ],
+      "service_role": [
+        "id",
+        "account_id",
+        "format_id",
+        "season_id",
+        "tier",
+        "rating_ref",
+        "revision",
+        "finalized",
+        "rating"
+      ],
+      "supabase_auth_admin": []
+    }
+  },
+  {
+    "relation": "daily_win_bucket",
+    "kind": "table",
+    "reads": {
+      "anon": [],
+      "authenticated": [
+        "id",
+        "account_id",
+        "utc_day",
+        "wins",
+        "issued_coins",
+        "revision"
+      ],
+      "service_role": [
+        "id",
+        "account_id",
+        "utc_day",
+        "wins",
+        "issued_coins",
+        "revision"
+      ],
+      "supabase_auth_admin": []
+    }
+  },
+  {
+    "relation": "prediction_position",
+    "kind": "view",
     "reads": {
       "anon": [],
       "authenticated": [],
       "service_role": [
         "id",
-        "revision_ref",
-        "formula_ref",
-        "price_anchor_ref",
-        "state",
-        "catalogue_revision"
+        "pair_id",
+        "order_id",
+        "account_id",
+        "side",
+        "quantity",
+        "actual_cost_coins"
       ],
+      "supabase_auth_admin": []
+    }
+  },
+  {
+    "relation": "coin_balance",
+    "kind": "view",
+    "reads": {
+      "anon": [],
+      "authenticated": [
+        "id",
+        "owner_id",
+        "inventory_asset_id",
+        "quantity"
+      ],
+      "service_role": [
+        "id",
+        "owner_id",
+        "inventory_asset_id",
+        "quantity"
+      ],
+      "supabase_auth_admin": []
+    }
+  },
+  {
+    "relation": "asset_availability",
+    "kind": "view",
+    "reads": {
+      "anon": [],
+      "authenticated": [
+        "id",
+        "inventory_asset_id",
+        "owned",
+        "held",
+        "available"
+      ],
+      "service_role": [
+        "id",
+        "inventory_asset_id",
+        "owned",
+        "held",
+        "available"
+      ],
+      "supabase_auth_admin": []
+    }
+  },
+  {
+    "relation": "friend_request",
+    "kind": "view",
+    "reads": {
+      "anon": [],
+      "authenticated": [
+        "id",
+        "friendship_id",
+        "requested_by_id"
+      ],
+      "service_role": [
+        "id",
+        "friendship_id",
+        "requested_by_id"
+      ],
+      "supabase_auth_admin": []
+    }
+  },
+  {
+    "relation": "shared_real_game",
+    "kind": "view",
+    "reads": {
+      "anon": [],
+      "authenticated": [],
+      "service_role": [
+        "id",
+        "left_participation_id",
+        "right_participation_id",
+        "game_id",
+        "shared_at"
+      ],
+      "supabase_auth_admin": []
+    }
+  },
+  {
+    "relation": "account_qualifying_count",
+    "kind": "view",
+    "reads": {
+      "anon": [],
+      "authenticated": [],
+      "service_role": [
+        "id",
+        "account_id",
+        "qualifying_games",
+        "age_days",
+        "restricted"
+      ],
+      "supabase_auth_admin": []
+    }
+  },
+  {
+    "relation": "quest_progress",
+    "kind": "view",
+    "reads": {
+      "anon": [],
+      "authenticated": [
+        "id",
+        "assignment_id",
+        "progress",
+        "complete"
+      ],
+      "service_role": [
+        "id",
+        "assignment_id",
+        "progress",
+        "complete"
+      ],
+      "supabase_auth_admin": []
+    }
+  },
+  {
+    "relation": "season_rank_snapshot",
+    "kind": "view",
+    "reads": {
+      "anon": [],
+      "authenticated": [
+        "id",
+        "rank_id",
+        "season_id"
+      ],
+      "service_role": [
+        "id",
+        "rank_id",
+        "season_id"
+      ],
+      "supabase_auth_admin": []
+    }
+  },
+  {
+    "relation": "match_decision_deadline",
+    "kind": "view",
+    "reads": {
+      "anon": [],
+      "authenticated": [
+        "id",
+        "decision_id",
+        "deadline_at",
+        "clock_revision"
+      ],
+      "service_role": [
+        "id",
+        "decision_id",
+        "deadline_at",
+        "clock_revision"
+      ],
+      "supabase_auth_admin": []
+    }
+  },
+  {
+    "relation": "historical_context",
+    "kind": "view",
+    "reads": {
+      "anon": [],
+      "authenticated": [],
+      "service_role": [
+        "id",
+        "context_id",
+        "release_id"
+      ],
+      "supabase_auth_admin": []
+    }
+  },
+  {
+    "relation": "commander_pilot_member",
+    "kind": "table",
+    "reads": {
+      "anon": [],
+      "authenticated": [],
+      "service_role": [],
+      "supabase_auth_admin": []
+    }
+  },
+  {
+    "relation": "countdown_dispatch_cursor",
+    "kind": "table",
+    "reads": {
+      "anon": [],
+      "authenticated": [],
+      "service_role": [],
+      "supabase_auth_admin": []
+    }
+  },
+  {
+    "relation": "limited_draft",
+    "kind": "table",
+    "reads": {
+      "anon": [],
+      "authenticated": [],
+      "service_role": [],
+      "supabase_auth_admin": []
+    }
+  },
+  {
+    "relation": "limited_draft_item",
+    "kind": "table",
+    "reads": {
+      "anon": [],
+      "authenticated": [],
+      "service_role": [],
+      "supabase_auth_admin": []
+    }
+  },
+  {
+    "relation": "limited_draft_pack",
+    "kind": "table",
+    "reads": {
+      "anon": [],
+      "authenticated": [],
+      "service_role": [],
+      "supabase_auth_admin": []
+    }
+  },
+  {
+    "relation": "limited_draft_pick",
+    "kind": "table",
+    "reads": {
+      "anon": [],
+      "authenticated": [],
+      "service_role": [],
+      "supabase_auth_admin": []
+    }
+  },
+  {
+    "relation": "limited_draft_seat",
+    "kind": "table",
+    "reads": {
+      "anon": [],
+      "authenticated": [],
+      "service_role": [],
+      "supabase_auth_admin": []
+    }
+  },
+  {
+    "relation": "limited_draft_source",
+    "kind": "table",
+    "reads": {
+      "anon": [],
+      "authenticated": [],
+      "service_role": [],
+      "supabase_auth_admin": []
+    }
+  },
+  {
+    "relation": "limited_match_seat_pool",
+    "kind": "table",
+    "reads": {
+      "anon": [],
+      "authenticated": [],
+      "service_role": [],
+      "supabase_auth_admin": []
+    }
+  },
+  {
+    "relation": "limited_pilot_member",
+    "kind": "table",
+    "reads": {
+      "anon": [],
+      "authenticated": [],
+      "service_role": [],
+      "supabase_auth_admin": []
+    }
+  },
+  {
+    "relation": "limited_private_profile",
+    "kind": "table",
+    "reads": {
+      "anon": [],
+      "authenticated": [],
+      "service_role": [],
+      "supabase_auth_admin": []
+    }
+  },
+  {
+    "relation": "native_entropy_seed",
+    "kind": "table",
+    "reads": {
+      "anon": [],
+      "authenticated": [],
+      "service_role": [],
+      "supabase_auth_admin": []
+    }
+  },
+  {
+    "relation": "native_host_watch",
+    "kind": "table",
+    "reads": {
+      "anon": [],
+      "authenticated": [],
+      "service_role": [],
+      "supabase_auth_admin": []
+    }
+  },
+  {
+    "relation": "native_legacy_chooser_report",
+    "kind": "table",
+    "reads": {
+      "anon": [],
+      "authenticated": [],
+      "service_role": [],
+      "supabase_auth_admin": []
+    }
+  },
+  {
+    "relation": "native_opening_selection",
+    "kind": "table",
+    "reads": {
+      "anon": [],
+      "authenticated": [],
+      "service_role": [],
+      "supabase_auth_admin": []
+    }
+  },
+  {
+    "relation": "native_response_adoption",
+    "kind": "table",
+    "reads": {
+      "anon": [],
+      "authenticated": [],
+      "service_role": [],
+      "supabase_auth_admin": []
+    }
+  },
+  {
+    "relation": "private_pilot_profile",
+    "kind": "table",
+    "reads": {
+      "anon": [],
+      "authenticated": [],
+      "service_role": [],
+      "supabase_auth_admin": []
+    }
+  },
+  {
+    "relation": "trade_session",
+    "kind": "table",
+    "reads": {
+      "anon": [],
+      "authenticated": [],
+      "service_role": [],
+      "supabase_auth_admin": []
+    }
+  },
+  {
+    "relation": "trade_session_item",
+    "kind": "table",
+    "reads": {
+      "anon": [],
+      "authenticated": [],
+      "service_role": [],
       "supabase_auth_admin": []
     }
   }

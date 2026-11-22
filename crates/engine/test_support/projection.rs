@@ -65,13 +65,24 @@ pub fn damage_parent(value: DamageParentView<'_>) -> Value {
             json!({"tag":"Resolution","cursor":resolution_state(cursor)})
         }
         DamageParentView::Combat => json!({"tag":"Combat"}),
+        DamageParentView::ManaAbility => json!({"tag":"ManaAbility"}),
     }
 }
 pub fn turn_scheduler(value: &TurnScheduler) -> Value {
     json!({"position":damage_trace::turn_position_view(value.position()),"stage":opaque(value.stage()),"lands_played":value.lands_played()})
 }
 pub fn object(value: &GameObject) -> Value {
-    json!(damage_trace::game_object_view(value))
+    let mut result = json!(damage_trace::game_object_view(value));
+    if value.transformed() {
+        result["transformed"] = json!(true);
+    }
+    if let Some(kind) = value.face_down() {
+        result["face_down"] = json!(format!("{kind:?}"));
+    }
+    if value.is_unearthed() {
+        result["unearth_departure"] = json!(true);
+    }
+    result
 }
 pub fn zone_move_outcome(value: &spellwake_engine::object_identity::ZoneMoveOutcome) -> Value {
     use spellwake_engine::object_identity::ZoneMoveOutcome;
@@ -104,25 +115,119 @@ pub fn basis(value: &GameBasis) -> Value {
     json!({"game":value.game.0.to_string(),"context":context(&value.context),"epoch":value.epoch.to_string(),"revision":value.revision.to_string()})
 }
 fn spend(value: &ManaPayment) -> Value {
-    json!(
+    let rows = json!(
         value
             .spend
             .iter()
             .map(|row| json!({"type":opaque(row.mana_type),"amount":row.amount}))
             .collect::<Vec<_>>()
-    )
+    );
+    if value.from_lots.is_empty() {
+        rows
+    } else {
+        json!({"spend":rows,"from_lots":value.from_lots})
+    }
 }
 pub fn payment(value: &ManaPaymentRecord) -> Value {
-    json!({"entry":opaque(value.source),"payer":value.payer.0,"cost":program::cost(&value.cost),"spend":value.spend.iter().map(|row|json!({"type":opaque(row.mana_type),"amount":row.amount})).collect::<Vec<_>>()})
+    let mut result = json!({"entry":opaque(value.source),"payer":value.payer.0,"cost":program::cost(&value.cost),"spend":value.spend.iter().map(|row|json!({"type":opaque(row.mana_type),"amount":row.amount})).collect::<Vec<_>>()});
+    if !value.from_lots.is_empty() {
+        result["from_lots"] = json!(value.from_lots);
+    }
+    if !value.restricted_mana.is_empty() {
+        result["restricted_mana"] = json!(value.restricted_mana.iter().map(|row| json!({"type":opaque(row.mana_type),"restriction":format!("{:?}",row.restriction),"amount":row.amount})).collect::<Vec<_>>());
+    }
+    result
 }
 pub fn production(value: &ManaProductionRecord) -> Value {
-    json!({"source":opaque(value.source),"ability":mana_ref::view(value.ability),"controller":value.controller.0,"produced":value.produced.iter().map(|(kind,amount)|(opaque(kind),amount)).collect::<BTreeMap<_,_>>()})
+    let mut result = json!({"source":opaque(value.source),"ability":mana_ref::view(value.ability),"controller":value.controller.0,"produced":value.produced.iter().map(|(kind,amount)|(opaque(kind),amount)).collect::<BTreeMap<_,_>>()});
+    if let Some(recipient) = value.recipient {
+        result["recipient"] = json!(recipient.0);
+    }
+    if let Some(restriction) = value.restriction {
+        result["restriction"] = json!(format!("{restriction:?}"));
+    }
+    result
+}
+fn casting_payment_view(
+    mut value: Value,
+    payment: &spellwake_engine::mana::CastingPayment,
+) -> Value {
+    if !payment.splice.is_empty() {
+        value["splice"] = json!(
+            payment
+                .splice
+                .iter()
+                .map(
+                    |choice| json!({"card":opaque(choice.card),"target":choice.target.map(target)})
+                )
+                .collect::<Vec<_>>()
+        );
+    }
+    if payment.disturb {
+        value["disturb"] = json!(true);
+    }
+    if let Some(half) = payment.split_half {
+        value["split_half"] = json!(match half {
+            spellwake_engine::program::SplitHalf::Left => "Left",
+            spellwake_engine::program::SplitHalf::Right => "Right",
+        });
+    }
+    if payment.adventure {
+        value["adventure"] = json!(true);
+    }
+    if !payment.modes.is_empty() {
+        value["modes"] = json!(
+            payment
+                .modes
+                .iter()
+                .map(|mode| {
+                    let mut row = json!({"mode":mode.mode,"target":mode.target.map(target)});
+                    if !mode.targets.is_empty() {
+                        row["targets"] =
+                            json!(mode.targets.iter().copied().map(target).collect::<Vec<_>>());
+                    }
+                    row
+                })
+                .collect::<Vec<_>>()
+        );
+    }
+    if !payment.hybrid_choices.is_empty() {
+        value["hybrid_choices"] = json!(
+            payment
+                .hybrid_choices
+                .iter()
+                .map(|side| format!("{side:?}"))
+                .collect::<Vec<_>>()
+        );
+    }
+    if !payment.fixed_targets.is_empty() {
+        value["fixed_targets"] = json!(
+            payment
+                .fixed_targets
+                .iter()
+                .copied()
+                .map(target)
+                .collect::<Vec<_>>()
+        );
+    }
+    if !payment.restricted_mana.is_empty() {
+        value["restricted_mana"] = json!(payment.restricted_mana.iter().map(|row| json!({"type":opaque(row.mana_type),"restriction":format!("{:?}",row.restriction),"amount":row.amount})).collect::<Vec<_>>());
+    }
+    value
 }
 pub fn ability_activation(value: &AbilityActivationRecord) -> Value {
-    json!({"entry":opaque(value.entry),"ability":value.ability.0,"controller":value.controller.0,"source":object(&value.source),"source_cost":opaque(value.source_cost),"resulting_source":opaque(value.resulting_source)})
+    let mut result = json!({"entry":opaque(value.entry),"ability":value.ability.0,"controller":value.controller.0,"source":object(&value.source),"source_cost":opaque(value.source_cost),"resulting_source":opaque(value.resulting_source)});
+    if let Some(effect) = value.granting_effect {
+        result["granting_effect"] = effect_instance(effect);
+    }
+    result
 }
 fn attack(value: &AttackDeclaration) -> Value {
-    json!({"attacker":opaque(value.attacker),"defender":value.defender.0})
+    let mut result = json!({"attacker":opaque(value.attacker),"defender":value.defender.0});
+    if let Some(id) = value.defending_planeswalker {
+        result["defending_planeswalker"] = json!(opaque(id));
+    }
+    result
 }
 fn block(value: &BlockDeclaration) -> Value {
     json!({"blocker":opaque(value.blocker),"attacker":opaque(value.attacker)})
@@ -132,10 +237,25 @@ fn assignment(value: &CombatDamageAssignment) -> Value {
 }
 pub fn reply(value: &DecisionReply) -> Value {
     match value {
-        DecisionReply::ReplacementChooser(player) => {
-            json!({"tag":"ReplacementChooser","player":player.0})
+        DecisionReply::CastRecovery(choice) => {
+            json!({"tag":"CastRecovery","choice":format!("{choice:?}")})
         }
         DecisionReply::ZoneReplacement(reply) => match reply {
+            spellwake_engine::effects::ZoneReplacementReply::Devour(id) => {
+                json!({"tag":"Devour","object":id.map(opaque)})
+            }
+            spellwake_engine::effects::ZoneReplacementReply::DevourGraveyardOrder(id) => {
+                json!({"tag":"DevourGraveyardOrder","object":opaque(id)})
+            }
+            spellwake_engine::effects::ZoneReplacementReply::EntryCopyFromPermanent(aura) => {
+                json!({"tag":"EntryCopyFromPermanent","aura":opaque(aura)})
+            }
+            spellwake_engine::effects::ZoneReplacementReply::EntryCopy(donor) => {
+                json!({"tag":"EntryCopy","donor":donor.map(opaque)})
+            }
+            spellwake_engine::effects::ZoneReplacementReply::EntryController(seat) => {
+                json!({"tag":"EntryController","seat":seat.0})
+            }
             spellwake_engine::effects::ZoneReplacementReply::Select(application) => {
                 json!({"tag":"ZoneReplacement","reply":{"tag":"Select","application":zone_application(*application)}})
             }
@@ -144,6 +264,32 @@ pub fn reply(value: &DecisionReply) -> Value {
             }
         },
         DecisionReply::LibraryTop(reply) => match reply {
+            spellwake_engine::effects::LibraryTopReply::Search { selected } => {
+                json!({"tag":"LibraryTop","kind":"Search","selected":selected.map(opaque)})
+            }
+            spellwake_engine::effects::LibraryTopReply::SearchHandGraveyard { hand, graveyard } => {
+                json!({"tag":"LibraryTop","kind":"SearchHandGraveyard","hand":hand.map(opaque),"graveyard":graveyard.map(opaque)})
+            }
+            spellwake_engine::effects::LibraryTopReply::SearchSplit { battlefield, hand } => {
+                json!({"tag":"LibraryTop","kind":"SearchSplit","battlefield":battlefield.map(opaque),"hand":hand.map(opaque)})
+            }
+            spellwake_engine::effects::LibraryTopReply::SearchBattlefield {
+                selected_in_timestamp_order,
+            } => {
+                json!({"tag":"LibraryTop","kind":"SearchBattlefield","selected_in_timestamp_order":selected_in_timestamp_order.iter().map(opaque).collect::<Vec<_>>()})
+            }
+            spellwake_engine::effects::LibraryTopReply::SearchWithEntryColors {
+                selected,
+                colors,
+            } => {
+                json!({"tag":"LibraryTop","kind":"SearchWithEntryColors","selected":selected.iter().map(opaque).collect::<Vec<_>>(),"colors":colors.iter().map(|(object,color)|json!({"object":opaque(object),"color":opaque(color)})).collect::<Vec<_>>()})
+            }
+            spellwake_engine::effects::LibraryTopReply::SearchWithEntryChoices {
+                selected,
+                choices,
+            } => {
+                json!({"tag":"LibraryTop","kind":"SearchWithEntryChoices","selected":selected.iter().map(opaque).collect::<Vec<_>>(),"choices":choices.iter().map(|(object,choice)|json!({"object":opaque(object),"choice":format!("{choice:?}")})).collect::<Vec<_>>()})
+            }
             spellwake_engine::effects::LibraryTopReply::Scry {
                 top_first,
                 bottom_top_first,
@@ -163,6 +309,43 @@ pub fn reply(value: &DecisionReply) -> Value {
         DecisionReply::OrderResolutionGraveyard(values) => {
             json!({"tag":"OrderResolutionGraveyard","objects":values.iter().map(opaque).collect::<Vec<_>>()})
         }
+        DecisionReply::CascadeCast {
+            target: choice,
+            payment,
+        } => casting_payment_view(
+            json!({"tag":"CascadeCast","target":choice.as_ref().map(|v|target(*v)),"payment":payment.mana.as_ref().map(spend),"additional":payment.additional,"objects":payment.objects.iter().copied().map(cast_resource).collect::<Vec<_>>() }),
+            payment,
+        ),
+        DecisionReply::MadnessCast {
+            target: choice,
+            payment,
+            mana_abilities,
+        } => casting_payment_view(
+            json!({"tag":"MadnessCast","target":choice.as_ref().map(|v|target(*v)),"spend":payment.mana.as_ref().map(spend),"additional":payment.additional,"objects":payment.objects.iter().copied().map(cast_resource).collect::<Vec<_>>(),"mana_abilities":mana_abilities.iter().map(opaque).collect::<Vec<_>>() }),
+            payment,
+        ),
+        DecisionReply::ImpulseCast {
+            target: choice,
+            payment,
+            mana_abilities,
+        } => casting_payment_view(
+            json!({"tag":"ImpulseCast","target":choice.as_ref().map(|v|target(*v)),"chosen_x":payment.chosen_x,"permanent_targets":payment.permanent_targets.iter().copied().map(target).collect::<Vec<_>>(),"modes":payment.modes.iter().map(|mode|json!({"mode":mode.mode,"target":mode.target.map(target)})).collect::<Vec<_>>(),"alternative":payment.use_alternative,"spend":payment.mana.as_ref().map(spend),"additional":payment.additional,"objects":payment.objects.iter().copied().map(cast_resource).collect::<Vec<_>>(),"mana_abilities":mana_abilities.iter().map(opaque).collect::<Vec<_>>() }),
+            payment,
+        ),
+        DecisionReply::ReboundCast {
+            target: choice,
+            payment,
+        } => casting_payment_view(
+            json!({"tag":"ReboundCast","target":choice.as_ref().map(|v|target(*v)),"spend":payment.mana.as_ref().map(spend),"additional":payment.additional,"objects":payment.objects.iter().copied().map(cast_resource).collect::<Vec<_>>(),"alternative":payment.use_alternative}),
+            payment,
+        ),
+        DecisionReply::SuspendCast {
+            target: choice,
+            payment,
+        } => casting_payment_view(
+            json!({"tag":"SuspendCast","target":choice.as_ref().map(|v|target(*v)),"spend":payment.mana.as_ref().map(spend),"additional":payment.additional,"objects":payment.objects.iter().copied().map(cast_resource).collect::<Vec<_>>(),"alternative":payment.use_alternative}),
+            payment,
+        ),
         DecisionReply::OptionalEffect(choice) => {
             json!({"tag":"OptionalEffect","choice":opaque(choice)})
         }
@@ -178,14 +361,41 @@ pub fn reply(value: &DecisionReply) -> Value {
         DecisionReply::KeepLegend { conflict, keep } => {
             json!({"tag":"KeepLegend","conflict":check_trace::legend_conflict_id_view(*conflict),"keep":opaque(keep)})
         }
+        DecisionReply::ReturnCommanders(values) => {
+            json!({"tag":"ReturnCommanders","items":values.iter().map(opaque).collect::<Vec<_>>()})
+        }
         DecisionReply::OrderGraveyard(values) => {
             json!({"tag":"OrderGraveyard","items":values.iter().map(opaque).collect::<Vec<_>>()})
+        }
+        DecisionReply::TriggerPermanentTargets(values) => {
+            json!({"tag":"TriggerPermanentTargets","targets":values.iter().copied().map(target).collect::<Vec<_>>()})
+        }
+        DecisionReply::ApplyCounterDoublersFirst(number) => {
+            json!({"tag":"ApplyCounterDoublersFirst","number":number})
+        }
+        DecisionReply::TriggerModes(modes) => {
+            json!({"tag":"TriggerModes","modes":modes.iter().map(|mode| {
+            json!({"index":mode.mode,"target":mode.target.map(target),
+                "targets":mode.targets.iter().copied().map(target).collect::<Vec<_>>()})
+        }).collect::<Vec<_>>()})
         }
         DecisionReply::TriggerTarget(value) => {
             json!({"tag":"TriggerTarget","target":target(*value)})
         }
         DecisionReply::OrderTriggers(values) => {
             json!({"tag":"OrderTriggers","items":values.iter().map(|id|id.sequence().to_string()).collect::<Vec<_>>()})
+        }
+        DecisionReply::PayAttackCost { life_symbols, mana } => {
+            json!({"tag":"PayAttackCost","life_symbols":life_symbols,"mana":mana.spend.iter().map(|s|json!([format!("{:?}",s.mana_type),s.amount])).collect::<Vec<_>>()})
+        }
+        DecisionReply::RedeclareReversingMana(ids) => {
+            json!({"tag":"RedeclareReversingMana", "ids":ids.iter().map(|id|id.0).collect::<Vec<_>>()})
+        }
+        DecisionReply::RedeclareKeepingMana => json!({"tag":"RedeclareKeepingMana"}),
+        DecisionReply::RedeclareAttackers => json!({"tag":"RedeclareAttackers"}),
+        DecisionReply::DeclareBandedAttackers { attackers, bands } => {
+            json!({"tag":"DeclareBandedAttackers","items":attackers.iter().map(attack).collect::<Vec<_>>(),
+                "bands":bands.iter().map(|members|members.iter().copied().map(opaque).collect::<Vec<_>>()).collect::<Vec<_>>()})
         }
         DecisionReply::DeclareAttackers(values) => {
             json!({"tag":"DeclareAttackers","items":values.iter().map(attack).collect::<Vec<_>>()})
@@ -209,13 +419,86 @@ pub fn reply(value: &DecisionReply) -> Value {
         DecisionReply::AllocatePrevention(values) => {
             json!({"tag":"AllocatePrevention","items":values.iter().map(|row|json!({"attempt":opaque(row.attempt),"amount":row.amount})).collect::<Vec<_>>()})
         }
+        DecisionReply::TransformOrder(objects) => {
+            json!({"tag":"TransformOrder","order":objects.iter().map(opaque).collect::<Vec<_>>()})
+        }
+        DecisionReply::LinkedReturnOrder(objects) => {
+            json!({"tag":"LinkedReturnOrder","order":objects.iter().map(opaque).collect::<Vec<_>>()})
+        }
+        DecisionReply::LinkedAuraChoice(value) => {
+            json!({"tag":"LinkedAuraChoice","target":target(*value)})
+        }
+        DecisionReply::PlaneswalkerType(direction) => {
+            json!({"tag":"PlaneswalkerType","subtype":direction.label()})
+        }
+        DecisionReply::AttackDirection(direction) => {
+            json!({"tag":"AttackDirection","direction":format!("{direction:?}")})
+        }
+        DecisionReply::ChooseLandKind(land) => json!({"tag":"ChooseLandKind","land":land}),
+        DecisionReply::MutateOnTop(value) => json!({"tag":"MutateOnTop","on_top":value}),
+        DecisionReply::ChoosePile(pile) => json!({"tag":"ChoosePile","pile":pile}),
+        DecisionReply::DrawReplacement(choice) => {
+            json!({"tag":"DrawReplacement","choice":format!("{choice:?}")})
+        }
+        DecisionReply::ChooseDamageRecipient(recipient) => {
+            json!({"tag":"ChooseDamageRecipient","recipient":target(*recipient)})
+        }
+        DecisionReply::OpponentChoice(seat) => json!({"tag":"OpponentChoice","player":seat.0}),
+        DecisionReply::ReplacementChooser(seat) => {
+            json!({"tag":"ReplacementChooser","player":seat.0})
+        }
+        DecisionReply::MyriadDefender(choice) => {
+            json!({"tag":"MyriadDefender","defender":choice.map(target)})
+        }
+        DecisionReply::ReselectAttackDefender(choice) => {
+            json!({"tag":"ReselectAttackDefender","defender":choice.map(target)})
+        }
+        DecisionReply::TokenDefender(chosen) => {
+            json!({"tag":"TokenDefender","target":target(*chosen)})
+        }
         DecisionReply::TimestampOrder(values) => {
             json!({"tag":"TimestampOrder","order":values.iter().map(|value|value.ordinal()).collect::<Vec<_>>()})
+        }
+        DecisionReply::RemoveCounters(counts) => {
+            json!({"tag":"RemoveCounters","counts":counts.iter().map(|(kind,count)|json!({"kind":format!("{kind:?}"),"count":count})).collect::<Vec<_>>()})
+        }
+        DecisionReply::Proliferate(values) => {
+            json!({"tag":"Proliferate","selected":values.iter().map(|value|target(*value)).collect::<Vec<_>>()})
         }
         DecisionReply::CreatureType(value) => {
             json!({"tag":"CreatureType","value":creature_type_id(*value)})
         }
         DecisionReply::ManaColor(value) => json!({"tag":"ManaColor","color":opaque(value)}),
+        DecisionReply::SplitMana(amount) => json!({"tag":"SplitMana","amount":amount}),
+        DecisionReply::EntryChoice(value) => match value {
+            spellwake_engine::land::EntryChoice::Color(color) => {
+                json!({"tag":"EntryColor","color":opaque(color)})
+            }
+            spellwake_engine::land::EntryChoice::Reveal(card) => {
+                json!({"tag":"EntryReveal","card":card.map(opaque)})
+            }
+            spellwake_engine::land::EntryChoice::Players(seats) => {
+                json!({"tag":"EntryPlayers","seats":seats.map(|seat|seat.0)})
+            }
+            spellwake_engine::land::EntryChoice::Opponent(seat) => {
+                json!({"tag":"EntryOpponent","seat":seat.0})
+            }
+            spellwake_engine::land::EntryChoice::Chapter(n) => {
+                json!({"tag":"SagaChapter","number":n})
+            }
+            spellwake_engine::land::EntryChoice::CardName(index) => {
+                json!({"tag":"EntryCardName","index":index.0})
+            }
+            spellwake_engine::land::EntryChoice::CreatureType(kind) => {
+                json!({"tag":"EntryCreatureType","value":creature_type_id(*kind)})
+            }
+        },
+        DecisionReply::TokenAuraChoice(host) => {
+            json!({"tag":"TokenAuraChoice","target":target(*host)})
+        }
+        DecisionReply::TokenEntryChoice(value) => {
+            json!({"tag":"TokenEntryChoice","choice":format!("{value:?}")})
+        }
     }
 }
 pub fn input(value: &GameInput) -> Value {
@@ -223,8 +506,189 @@ pub fn input(value: &GameInput) -> Value {
         GameCommand::Concede => json!({"tag":"Concede"}),
         GameCommand::Pass => json!({"tag":"Pass"}),
         GameCommand::PlayLand { land } => json!({"tag":"PlayLand","land":opaque(land)}),
+        GameCommand::PlayLandWithEntryColor { land, color } => {
+            json!({"tag":"PlayLandWithEntryColor","land":opaque(land),"color":opaque(color)})
+        }
+        GameCommand::PlayLandWithEntryReveal { land, reveal } => {
+            json!({"tag":"PlayLandWithEntryReveal","land":opaque(land),"reveal":reveal.map(opaque)})
+        }
         GameCommand::ActivateMana { source, ability } => {
             json!({"tag":"ActivateMana","source":opaque(source),"ability":mana_ref::view(*ability)})
+        }
+        GameCommand::ActivateManaForPlayer {
+            source,
+            ability,
+            recipient,
+        } => {
+            json!({"tag":"ActivateManaForPlayer","source":opaque(source),"ability":mana_ref::view(*ability),"recipient":recipient.0})
+        }
+        GameCommand::ActivateManaWithCostObjects {
+            source,
+            ability,
+            objects,
+        } => {
+            json!({"tag":"ActivateManaWithCostObjects","source":opaque(source),"ability":mana_ref::view(*ability),"objects":objects.iter().map(opaque).collect::<Vec<_>>()})
+        }
+        GameCommand::ActivateManaWithRestrictedPayment {
+            source,
+            ability,
+            payment,
+            restricted_mana,
+            bundle,
+        } => {
+            json!({"tag":"ActivateManaWithRestrictedPayment","source":opaque(source),"ability":mana_ref::view(*ability),"payment":spend(payment),"restricted_mana":format!("{restricted_mana:?}"),"bundle":format!("{bundle:?}")})
+        }
+        GameCommand::ActivateWithRestrictedMana {
+            source,
+            ability,
+            granting_effect,
+            origin,
+            chosen_x,
+            payment,
+            restricted_mana,
+        } => {
+            json!({"tag":"ActivateWithRestrictedMana","source":opaque(source),"ability":ability.0,"granting_effect":format!("{granting_effect:?}"),"origin":format!("{origin:?}"),"chosen_x":chosen_x,"payment":payment.as_ref().map(spend),"restricted_mana":format!("{restricted_mana:?}")})
+        }
+        GameCommand::ActivateManaWithBundle {
+            source,
+            ability,
+            bundle,
+        } => {
+            json!({"tag":"ActivateManaWithBundle","source":opaque(source),"ability":mana_ref::view(*ability),"bundle":bundle.iter().map(|(kind, amount)|(format!("{kind:?}"),amount)).collect::<BTreeMap<_,_>>()})
+        }
+        GameCommand::ActivateHybridMana {
+            source,
+            ability,
+            payment,
+            bundle,
+        } => {
+            json!({"tag":"ActivateHybridMana","source":opaque(source),"ability":mana_ref::view(*ability),"payment":spend(payment),"bundle":bundle.iter().map(|(kind, amount)|(format!("{kind:?}"),amount)).collect::<BTreeMap<_,_>>()})
+        }
+        GameCommand::ActivateManaWithPayment {
+            source,
+            ability,
+            payment,
+        } => {
+            json!({"tag":"ActivateManaWithPayment","source":opaque(source),"ability":mana_ref::view(*ability),"payment":spend(payment)})
+        }
+        GameCommand::Foretell { source, payment } => {
+            json!({"tag":"Foretell","source":opaque(source),"payment":payment.as_ref().map(spend)})
+        }
+        GameCommand::Suspend { source, payment } => {
+            json!({"tag":"Suspend","source":opaque(source),"payment":payment.as_ref().map(spend)})
+        }
+        GameCommand::CastFaceDown {
+            spell,
+            kind,
+            payment,
+        } => {
+            json!({"tag":"CastFaceDown","spell":opaque(spell),"kind":format!("{kind:?}"),"payment":payment.as_ref().map(spend)})
+        }
+        GameCommand::TurnFaceUp {
+            permanent,
+            ability,
+            payment,
+        } => {
+            json!({"tag":"TurnFaceUp","permanent":opaque(permanent),"ability":ability,"payment":payment.as_ref().map(spend)})
+        }
+        GameCommand::Plot { source, payment } => {
+            json!({"tag":"Plot","source":opaque(source),"payment":payment.as_ref().map(spend)})
+        }
+        GameCommand::CastWithResources {
+            spell,
+            target: choice,
+            payment,
+        } => {
+            let mut row = json!({"tag":"CastWithResources","use_alternative":payment.use_alternative,"additional":payment.additional,"spell":opaque(spell),"target":choice.as_ref().map(|v|target(*v)),"payment":payment.mana.as_ref().map(spend),"resources":payment.objects.iter().copied().map(cast_resource).collect::<Vec<_>>() });
+            if !payment.permanent_targets.is_empty() {
+                row["permanent_targets"] = json!(
+                    payment
+                        .permanent_targets
+                        .iter()
+                        .copied()
+                        .map(target)
+                        .collect::<Vec<_>>()
+                );
+            }
+            casting_payment_view(row, payment)
+        }
+        GameCommand::ActivateWithCreatures {
+            source,
+            ability,
+            creatures,
+        } => {
+            json!({"tag":"ActivateWithCreatures","source":opaque(source),"ability":ability.0,"creatures":creatures.iter().map(opaque).collect::<Vec<_>>() })
+        }
+        GameCommand::ActivateUntargetedAbility {
+            source,
+            ability,
+            payment,
+        } => {
+            json!({"tag":"ActivateUntargetedAbility","source":opaque(source),"ability":ability.0,"payment":payment.as_ref().map(spend)})
+        }
+        GameCommand::Ninjutsu {
+            source,
+            ability,
+            attacker,
+            payment,
+        } => {
+            json!({"tag":"Ninjutsu","source":opaque(source),"ability":ability.0,"attacker":opaque(attacker),"payment":payment.as_ref().map(spend)})
+        }
+        GameCommand::Transmute {
+            source,
+            ability,
+            payment,
+        } => {
+            json!({"tag":"Transmute","source":opaque(source),"ability":ability.0,"payment":payment.as_ref().map(spend)})
+        }
+        GameCommand::Cycle {
+            source,
+            ability,
+            payment,
+        } => {
+            json!({"tag":"Cycle","source":opaque(source),"ability":ability.0,"payment":payment.as_ref().map(spend)})
+        }
+        GameCommand::ActivateEmblem {
+            emblem,
+            creature,
+            payment,
+        } => {
+            json!({"tag":"ActivateEmblem","emblem":emblem.sequence(),"creature":opaque(creature),"payment":payment.as_ref().map(spend)})
+        }
+        GameCommand::ActivatePermanentTargets {
+            source,
+            ability,
+            targets,
+            payment,
+        } => {
+            json!({"tag":"ActivatePermanentTargets","source":opaque(source),"ability":ability.0,"targets":targets.iter().copied().map(target).collect::<Vec<_>>(),"payment":payment.as_ref().map(spend)})
+        }
+        GameCommand::ActivateWithCostObjects {
+            source,
+            ability,
+            granting_effect,
+            target: value,
+            objects,
+            payment,
+        } => {
+            json!({"tag":"ActivateWithCostObjects","source":opaque(source),"ability":opaque(ability),"granting_effect":granting_effect.map(effect_instance),"target":value.map(target),"objects":objects.iter().map(opaque).collect::<Vec<_>>(),"payment":payment.as_ref().map(spend)})
+        }
+        GameCommand::ActivateGranted {
+            source,
+            effect,
+            target: value,
+            payment,
+        } => {
+            json!({"tag":"ActivateGranted","source":opaque(source),"effect":effect_instance(*effect),"target":value.map(target),"payment":payment.as_ref().map(spend)})
+        }
+        GameCommand::ActivateLoyaltyX {
+            source,
+            ability,
+            target: value,
+            chosen_x,
+            payment,
+        } => {
+            json!({"tag":"ActivateLoyaltyX","source":opaque(source),"ability":ability.0,"target":target(*value),"chosen_x":chosen_x,"payment":payment.as_ref().map(spend)})
         }
         GameCommand::ActivateAbility {
             source,
@@ -1215,6 +1679,27 @@ fn ability_roster(value: &PrintedAbilityRoster) -> Value {
         "triggered":value.triggered.iter().map(|id|id.0).collect::<Vec<_>>(),
         "continuous":value.continuous.map(|id|id.0),
     });
+    if !value.additional_battlefield_abilities.is_empty() {
+        result["additional_battlefield_abilities"] = json!(
+            value
+                .additional_battlefield_abilities
+                .iter()
+                .map(|id| id.0)
+                .collect::<Vec<_>>()
+        );
+    }
+    if value.combat_limits.one_attacker {
+        result["one_attacker"] = json!(true);
+    }
+    if value.combat_limits.one_blocker {
+        result["one_blocker"] = json!(true);
+    }
+    if let Some(requirement) = value.attack_requirement {
+        result["attack_requirement"] = json!(format!("{requirement:?}"));
+    }
+    if !value.face_up.is_empty() {
+        result["face_up"] = json!(value.face_up);
+    }
     if !value.zone_replacements.is_empty() {
         result["zone_replacements"] = json!(
             value
@@ -1226,8 +1711,21 @@ fn ability_roster(value: &PrintedAbilityRoster) -> Value {
     }
     result
 }
+fn granted_combat_keywords(
+    grants: &BTreeMap<EffectInstanceKey, Vec<spellwake_engine::program::CombatTriggerKeyword>>,
+) -> Value {
+    json!(grants.iter().map(|(grant,keywords)|json!({"grant":effect_instance(*grant),"keywords":keywords.iter().map(program::combat_keyword).collect::<Vec<_>>()})).collect::<Vec<_>>())
+}
+fn granted_exalted(grants: &BTreeMap<EffectInstanceKey, u16>) -> Value {
+    json!(
+        grants
+            .iter()
+            .map(|(grant, count)| json!({"grant":effect_instance(*grant), "count":count}))
+            .collect::<Vec<_>>()
+    )
+}
 fn appearance(value: &SupportedAppearance) -> Value {
-    json!({
+    let mut projected = json!({
         "object":object(&value.object),
         "copiable_card_types":value.copiable_card_types.iter().map(opaque).collect::<Vec<_>>(),
         "copiable_creature_subtypes":value.copiable_creature_subtypes.iter().map(|id|creature_type_id(*id)).collect::<Vec<_>>(),
@@ -1248,26 +1746,224 @@ fn appearance(value: &SupportedAppearance) -> Value {
         "battlefield_counters":value.battlefield_counters.as_ref().map(program::counters),
         "battlefield_marked_damage":value.battlefield_marked_damage,
         "current_power_toughness":value.current_power_toughness.as_ref().map(program::pt),
-    })
+    });
+    if !value.copiable_spell_subtypes.is_empty() {
+        projected["copiable_spell_subtypes"] = json!(
+            value
+                .copiable_spell_subtypes
+                .iter()
+                .map(|kind| kind.wire_label())
+                .collect::<Vec<_>>()
+        );
+    }
+    if !value.spell_subtypes.is_empty() {
+        projected["spell_subtypes"] = json!(
+            value
+                .spell_subtypes
+                .iter()
+                .map(|kind| kind.wire_label())
+                .collect::<Vec<_>>()
+        );
+    }
+    if !value.copiable_artifact_subtypes.is_empty() {
+        projected["copiable_artifact_subtypes"] = json!(
+            value
+                .copiable_artifact_subtypes
+                .iter()
+                .map(|kind| kind.wire_label())
+                .collect::<Vec<_>>()
+        );
+    }
+    if !value.copiable_enchantment_subtypes.is_empty() {
+        projected["copiable_enchantment_subtypes"] = json!(
+            value
+                .copiable_enchantment_subtypes
+                .iter()
+                .map(|kind| kind.wire_label())
+                .collect::<Vec<_>>()
+        );
+    }
+    if !value.artifact_subtypes.is_empty() {
+        projected["artifact_subtypes"] = json!(
+            value
+                .artifact_subtypes
+                .iter()
+                .map(|kind| kind.wire_label())
+                .collect::<Vec<_>>()
+        );
+    }
+    if !value.enchantment_subtypes.is_empty() {
+        projected["enchantment_subtypes"] = json!(
+            value
+                .enchantment_subtypes
+                .iter()
+                .map(|kind| kind.wire_label())
+                .collect::<Vec<_>>()
+        );
+    }
+    for (label, count) in [
+        ("time_counters", &value.time_counters),
+        ("fade_counters", &value.fade_counters),
+    ] {
+        if let Some(count) = count {
+            projected[label] = json!(count);
+        }
+    }
+    if let Some(epoch) = value.previous_upkeep {
+        projected["previous_upkeep"] = json!(opaque(epoch));
+    }
+    if value.renowned {
+        projected["renowned"] = json!(true);
+    }
+    if let Some(amount) = &value.toxic_value {
+        projected["toxic_value"] = json!(amount);
+    }
+    if !value.granted_triggers.is_empty() {
+        projected["granted_triggers"] = json!(value.granted_triggers.iter().map(|(grant, ability)|
+            json!({"grant":effect_instance(*grant),"ability":program::triggered_abilities(std::slice::from_ref(ability))[0]})).collect::<Vec<_>>());
+    }
+    if !value.granted_combat_keywords.is_empty() {
+        projected["granted_combat_keywords"] =
+            granted_combat_keywords(&value.granted_combat_keywords);
+    }
+    if value.saddled {
+        projected["saddled"] = json!(true);
+    }
+    if let Some(host) = value.attached_to {
+        projected["attached_to"] = target(host);
+    }
+    if value.granted_unblockable {
+        projected["granted_unblockable"] = json!(true);
+    }
+    if !value.granted_exalted.is_empty() {
+        projected["granted_exalted"] = granted_exalted(&value.granted_exalted);
+    }
+    projected
 }
 fn appearance_change(value: &CharacteristicAppearanceChange) -> Value {
     json!({"object":opaque(value.object),"before":appearance(&value.before),"after":appearance(&value.after)})
 }
 fn life_change(value: &LifeChange) -> Value {
-    json!({"player":value.player.0,"kind":format!("{:?}",value.kind),"amount":value.amount,"before":value.before,"after":value.after})
+    let mut projected = json!({"player":value.player.0,"kind":format!("{:?}",value.kind),"amount":value.amount,"before":value.before,"after":value.after});
+    if let Some(origin) = &value.lifelink {
+        projected["lifelink"] = json!({"batch":opaque(origin.batch),"source":damage_trace::source_id_view(origin.source),"attempts":origin.attempts.iter().map(opaque).collect::<Vec<_>>()});
+    }
+    projected
 }
 /// Shared captured cast payload for both event and related-cause projections.
 pub fn cast_occurrence(value: &CastOccurrence) -> Value {
-    json!({"entry":opaque(value.entry()),"controller":value.controller().0,"spell":appearance(value.spell())})
+    let mut encoded = json!({"entry":opaque(value.entry()),"controller":value.controller().0,"spell":appearance(value.spell())});
+    if value.spell().printed_text.triggered.iter().any(|t| {
+        t.body
+            .instructions
+            .contains(&spellwake_engine::program::Instruction::Cascade)
+    }) {
+        encoded["mana_value"] = json!(value.mana_value());
+    }
+    if let Some(ordinal) = value.ordinal_this_turn() {
+        encoded["ordinal_this_turn"] = json!(ordinal);
+    }
+    if let Some(spent) = value.spent_for_increment() {
+        encoded["mana_spent"] = json!(spent);
+    }
+    encoded
 }
 fn related(value: &TriggerRelated) -> Value {
     match value {
-        TriggerRelated::LeftGame { before } => {
-            json!({"tag":"LeftGame","before":appearance(before)})
+        TriggerRelated::CombatDamageToPlaneswalker {
+            planeswalker,
+            attempt,
+        } => {
+            json!({"tag":"CombatDamageToPlaneswalker","planeswalker":opaque(planeswalker),"attempt":opaque(attempt)})
+        }
+        TriggerRelated::SubtypeCombatDamage {
+            creature,
+            player,
+            attempt,
+        } => {
+            json!({"tag":"SubtypeCombatDamage","creature":opaque(creature),"player":player.0,"attempt":opaque(attempt)})
+        }
+        TriggerRelated::AttachedCreatureDamaged {
+            creature, attempt, ..
+        } => {
+            json!({"tag":"AttachedCreatureDamaged","creature":opaque(creature),"attempt":opaque(attempt)})
+        }
+        TriggerRelated::DamageToOpponent { player, attempt } => {
+            json!({"tag":"DamageToOpponent","player":player.0,"attempt":opaque(attempt)})
+        }
+        TriggerRelated::GraveyardReturnPaid { mana_value } => {
+            json!({"tag":"GraveyardReturnPaid","mana_value":mana_value})
+        }
+        TriggerRelated::MiracleRevealed(object) => {
+            json!({"tag":"MiracleRevealed","object":opaque(object)})
+        }
+        TriggerRelated::ReflexiveDiscardDamage { amount } => {
+            json!({"tag":"ReflexiveDiscardDamage","amount":amount})
+        }
+        TriggerRelated::DamageReceived { attempt, amount } => {
+            json!({"tag":"DamageReceived","attempt":opaque(attempt),"amount":amount})
+        }
+        TriggerRelated::CombatDamageToPlayer {
+            player, attempt, ..
+        } => {
+            json!({"tag":"CombatDamageToPlayer","player":player.0,"attempt":opaque(attempt)})
+        }
+        TriggerRelated::DamageSource(source) => {
+            use spellwake_engine::damage::DamageSourceId;
+            let source = match source {
+                DamageSourceId::Object(object) => json!({"tag":"Object","object":opaque(object)}),
+                DamageSourceId::SpellCopy(entry) => {
+                    json!({"tag":"SpellCopy","entry":opaque(entry)})
+                }
+                DamageSourceId::Emblem(emblem) => json!({"tag":"Emblem","emblem":opaque(emblem)}),
+            };
+            json!({"tag":"DamageSource","source":source})
+        }
+        TriggerRelated::TargetedPermanent(object) => {
+            json!({"tag":"TargetedPermanent","object":opaque(object)})
+        }
+        TriggerRelated::TargetingEntry(entry) => {
+            json!({"tag":"TargetingEntry","entry":opaque(entry)})
+        }
+        TriggerRelated::CardDrawn { player } => json!({"tag":"CardDrawn","player":player.0}),
+        TriggerRelated::PlayerLost(player) => json!({"tag":"PlayerLost","player":player.0}),
+        TriggerRelated::LeftGame(object) => json!({"tag":"LeftGame","object":opaque(object)}),
+        TriggerRelated::FinalSagaChapter { saga, mana_value } => {
+            json!({"tag":"FinalSagaChapter","saga":opaque(saga),"mana_value":mana_value})
+        }
+        TriggerRelated::SagaChapter { number } => json!({"tag":"SagaChapter","number":number}),
+        TriggerRelated::StateTriggerSource(object) => {
+            json!({"tag":"StateTriggerSource","object":opaque(object)})
+        }
+        TriggerRelated::Mutated(object) => json!({"tag":"Mutated","object":opaque(object)}),
+        TriggerRelated::Phased(object) => json!({"tag":"Phased","object":opaque(object)}),
+        TriggerRelated::CounterSource(object) => {
+            json!({"tag":"CounterSource","object":opaque(object)})
+        }
+        TriggerRelated::AttackGroup {
+            attacked,
+            creatures,
+        } => {
+            json!({"tag":"AttackGroup","attacked":target(*attacked),"creatures":creatures.iter().map(opaque).collect::<Vec<_>>()})
+        }
+        TriggerRelated::ManaSource(object) => json!({"tag":"ManaSource","object":opaque(object)}),
+        TriggerRelated::Combatant(object) => json!({"tag":"Combatant", "object":opaque(object)}),
+        TriggerRelated::DeclaredSubtypeAttackers(attackers) => {
+            json!({"tag":"DeclaredSubtypeAttackers","attackers":attackers.iter().map(|id|opaque(*id)).collect::<Vec<_>>()})
+        }
+        TriggerRelated::AttackedWithTotalPower(power) => {
+            json!({"tag":"AttackedWithTotalPower","power":power})
+        }
+        TriggerRelated::AttackedAlone(attacker) => {
+            json!({"tag":"AttackedAlone","attacker":opaque(attacker)})
         }
         TriggerRelated::LibraryAction(value) => {
             json!({"tag":"LibraryAction","action":library_action(value)})
         }
+        TriggerRelated::AbilityForCopy(source) => {
+            json!({"tag":"AbilityForCopy","original":opaque(source.original())})
+        }
+        TriggerRelated::SpellCopied(entry) => json!({"tag":"SpellCopied","entry":opaque(entry)}),
         TriggerRelated::SpellCast(value) => {
             json!({"tag":"SpellCast","cast":cast_occurrence(value)})
         }
@@ -1299,10 +1995,18 @@ fn occurrence_id(value: spellwake_engine::occurrence::OccurrenceId) -> Value {
     json!({"event":value.event.sequence().to_string(),"index":value.index.to_string()})
 }
 pub fn waiting(value: &WaitingInstance) -> Value {
-    json!({"instance":value.id.sequence().to_string(),"definition":value.definition.0,"causes":trigger_causes(&value.causes),"source":appearance(&value.source),"controller":value.controller.0,"body":program::body(&value.body)})
+    let mut projected = json!({"instance":value.id.sequence().to_string(),"definition":value.definition.0,"causes":trigger_causes(&value.causes),"source":appearance(&value.source),"controller":value.controller.0,"body":program::body(&value.body)});
+    if let Some(grant) = value.granting_effect {
+        projected["granting_effect"] = effect_instance(grant);
+    }
+    projected
 }
 fn binding(value: &TriggerBinding) -> Value {
-    json!({"instance":value.instance.sequence().to_string(),"definition":value.definition.0,"causes":trigger_causes(&value.causes),"source":appearance(&value.source)})
+    let mut projected = json!({"instance":value.instance.sequence().to_string(),"definition":value.definition.0,"causes":trigger_causes(&value.causes),"source":appearance(&value.source)});
+    if let Some(grant) = value.granting_effect {
+        projected["granting_effect"] = effect_instance(grant);
+    }
+    projected
 }
 fn trigger_causes(value: &spellwake_engine::occurrence::TriggerCauseSet) -> Value {
     use spellwake_engine::occurrence::TriggerCauseKey;
@@ -1328,6 +2032,12 @@ fn kind(value: &StackKind) -> Value {
         StackKind::SpellCopy { copied_from, owner } => {
             json!({"tag":"SpellCopy","copied_from":opaque(copied_from),"owner":owner.0})
         }
+        StackKind::Speed => json!({"tag":"Speed"}),
+        StackKind::Monarch => json!({"tag":"Monarch"}),
+        StackKind::DelayedCopy { original } => {
+            json!({"tag":"DelayedCopy","original":opaque(original)})
+        }
+        StackKind::Emblem { emblem } => json!({"tag":"Emblem","emblem":emblem.sequence()}),
         StackKind::ActivatedAbility { source } => {
             json!({"tag":"ActivatedAbility","source":object(source)})
         }
@@ -1336,8 +2046,88 @@ fn kind(value: &StackKind) -> Value {
         }
     }
 }
+fn cast_resource(resource: spellwake_engine::mana::CastResource) -> Value {
+    use spellwake_engine::mana::CastResource;
+    match resource {
+        CastResource::Convoke { creature, color } => {
+            json!({"tag":"Convoke","creature":opaque(creature),"color":color.map(opaque)})
+        }
+        CastResource::Improvise(artifact) => json!({"tag":"Improvise","artifact":opaque(artifact)}),
+        CastResource::Retrace(card) => json!({"tag":"Retrace","card":opaque(card)}),
+        CastResource::Emerge(card) => json!({"tag":"Emerge","card":opaque(card)}),
+        CastResource::Sneak(card) => json!({"tag":"Sneak","card":opaque(card)}),
+        CastResource::TapCreatureForSpell(card) => {
+            json!({"tag":"TapCreatureForSpell","card":opaque(card)})
+        }
+        CastResource::TapForFlashback(card) => json!({"tag":"TapForFlashback","card":opaque(card)}),
+        CastResource::ExileHandForAlternative(card) => {
+            json!({"tag":"ExileHandForAlternative","card":opaque(card)})
+        }
+        CastResource::TapForAlternative(card) => {
+            json!({"tag":"TapForAlternative","card":opaque(card)})
+        }
+        CastResource::WebSlinging(card) => json!({"tag":"WebSlinging","card":opaque(card)}),
+        CastResource::Bargain(card) => json!({"tag":"Bargain","card":opaque(card)}),
+        CastResource::RevealColorlessCreature(card) => {
+            json!({"tag":"RevealColorlessCreature","card":opaque(card)})
+        }
+        CastResource::ExileGraveyardCardForSpell(card) => {
+            json!({"tag":"ExileGraveyardCardForSpell","card":opaque(card)})
+        }
+        CastResource::ExileGraveyardCreatureForSpell(card) => {
+            json!({"tag":"ExileGraveyardCreatureForSpell","card":opaque(card)})
+        }
+        CastResource::SacrificeForSpell(card) => {
+            json!({"tag":"SacrificeForSpell","card":opaque(card)})
+        }
+        CastResource::DiscardForSpell(card) => json!({"tag":"DiscardForSpell","card":opaque(card)}),
+        CastResource::JumpStart(card) => json!({"tag":"JumpStart","card":opaque(card)}),
+        CastResource::Escape(card) => json!({"tag":"Escape","card":opaque(card)}),
+        CastResource::ExileCreatureForReduction(card) => {
+            json!({"tag":"ExileCreatureForReduction","card":opaque(card)})
+        }
+        CastResource::Delve(card) => json!({"tag":"Delve","card":opaque(card)}),
+        CastResource::FlashbackSacrifice(object) => {
+            json!({"tag":"FlashbackSacrifice","object":opaque(object)})
+        }
+    }
+}
 fn stack_entry(entry: &StackEntry) -> Value {
-    json!({"entry":opaque(entry.id()),"controller":entry.controller().0,"kind":kind(entry.kind()),"targets":entry.targets().targets().iter().map(|bound|json!({"id":opaque(bound.choice().id),"clause":bound.choice().clause.0,"target":target(bound.choice().target)})).collect::<Vec<_>>()})
+    let mut row = json!({"entry":opaque(entry.id()),"controller":entry.controller().0,"kind":kind(entry.kind()),"targets":entry.targets().targets().iter().map(|bound|json!({"id":opaque(bound.choice().id),"clause":bound.choice().clause.0,"target":target(bound.choice().target)})).collect::<Vec<_>>()});
+    if let Some(seat) = entry.attacking_defender() {
+        row["attacking_defender"] = json!(seat.0);
+    }
+    if let Some(original) = entry.ability_copy_of() {
+        row["ability_copy_of"] = json!(opaque(original));
+    }
+    if !entry.power_contributors().is_empty() {
+        row["power_contributors"] = json!(
+            entry
+                .power_contributors()
+                .iter()
+                .map(opaque)
+                .collect::<Vec<_>>()
+        );
+    }
+    if entry.bought_back() {
+        row["buyback"] = json!(true);
+    }
+    if let Some(x) = entry.chosen_x() {
+        row["chosen_x"] = json!(x);
+    }
+    if !entry.kicker_choices().is_empty() {
+        row["kicker"] = json!(entry.kicker_choices());
+    }
+    if entry.paid_conditional_cost() {
+        row["paid_conditional_cost"] = json!(true);
+    }
+    if entry.cast_with_jump_start() {
+        row["jump_start"] = json!(true);
+    }
+    if entry.cast_with_flashback() {
+        row["flashback"] = json!(true);
+    }
+    row
 }
 fn window_phase(value: WindowPhase) -> Value {
     match value {
@@ -1365,7 +2155,7 @@ fn window_phase(value: WindowPhase) -> Value {
 }
 /// Observe the actual standalone window, without executor bodies or root metadata.
 pub fn stack_window(window: &StackWindow) -> Value {
-    json!({"revision":window.revision().to_string(),"next_entry":window.next_entry_sequence().to_string(),"priority_revision":window.priority_revision().map(|value|value.to_string()),"phase":window_phase(window.phase()),"participants":window.participants().iter().map(|seat|seat.0).collect::<Vec<_>>(),"active":window.active_player().map(|seat| seat.0),"cards":card_objects(window.cards(),window.participants()),"entries":window.entries().iter().map(stack_entry).collect::<Vec<_>>(),"copies":window.spell_copies().values().map(copy).collect::<Vec<_>>(),"resolving":window.resolving().map(stack_entry)})
+    json!({"revision":window.revision().to_string(),"next_entry":window.next_entry_sequence().to_string(),"priority_revision":window.priority_revision().map(|value|value.to_string()),"phase":window_phase(window.phase()),"participants":window.participants().iter().map(|seat|seat.0).collect::<Vec<_>>(),"active":window.active_player().0,"cards":card_objects(window.cards(),window.participants()),"entries":window.entries().iter().map(stack_entry).collect::<Vec<_>>(),"copies":window.spell_copies().values().map(copy).collect::<Vec<_>>(),"resolving":window.resolving().map(stack_entry)})
 }
 pub(crate) fn continuous_effect(value: &ResolvedContinuousEffect) -> Value {
     json!({
@@ -1379,6 +2169,18 @@ pub(crate) fn continuous_effect(value: &ResolvedContinuousEffect) -> Value {
 }
 fn effect_instance(value: EffectInstanceKey) -> Value {
     match value {
+        EffectInstanceKey::Emblem(id) => json!({"tag":"Emblem","id":id.sequence()}),
+        EffectInstanceKey::Inherited {
+            source,
+            ability,
+            donor,
+            ordinal,
+        } => {
+            json!({"tag":"Inherited", "source":opaque(source), "ability":ability.0, "donor":opaque(donor), "ordinal":ordinal})
+        }
+        EffectInstanceKey::PrintedKeyword { source, keyword } => {
+            json!({"tag": "PrintedKeyword", "source": opaque(source), "keyword": opaque(keyword)})
+        }
         EffectInstanceKey::Resolved(id) => json!({"tag":"Resolved","id":opaque(id)}),
         EffectInstanceKey::Static { source, ability } => {
             json!({"tag":"Static","source":opaque(source),"ability":ability.0})
@@ -1409,7 +2211,7 @@ fn pt_evaluation(value: &PowerToughnessEvaluation) -> Value {
     })
 }
 pub(crate) fn current_characteristics(value: &ObjectCharacteristics) -> Value {
-    json!({
+    let mut projected = json!({
         "object":opaque(value.object),
         "zone":opaque(value.zone),
         "defined":{
@@ -1434,7 +2236,88 @@ pub(crate) fn current_characteristics(value: &ObjectCharacteristics) -> Value {
         "printed_text":program::printed_text(&value.printed_text),
         "keywords":value.keywords.iter().map(opaque).collect::<Vec<_>>(),
         "power_toughness":value.power_toughness.as_ref().map(pt_evaluation),
-    })
+    });
+    if !value.defined.spell_subtypes.is_empty() {
+        projected["defined"]["spell_subtypes"] = json!(
+            value
+                .defined
+                .spell_subtypes
+                .iter()
+                .map(|kind| kind.wire_label())
+                .collect::<Vec<_>>()
+        );
+    }
+    if !value.current_spell_subtypes.is_empty() {
+        projected["current_spell_subtypes"] = json!(
+            value
+                .current_spell_subtypes
+                .iter()
+                .map(|kind| kind.wire_label())
+                .collect::<Vec<_>>()
+        );
+    }
+    if !value.defined.artifact_subtypes.is_empty() {
+        projected["defined"]["artifact_subtypes"] = json!(
+            value
+                .defined
+                .artifact_subtypes
+                .iter()
+                .map(|kind| kind.wire_label())
+                .collect::<Vec<_>>()
+        );
+    }
+    if !value.defined.enchantment_subtypes.is_empty() {
+        projected["defined"]["enchantment_subtypes"] = json!(
+            value
+                .defined
+                .enchantment_subtypes
+                .iter()
+                .map(|kind| kind.wire_label())
+                .collect::<Vec<_>>()
+        );
+    }
+    if !value.current_artifact_subtypes.is_empty() {
+        projected["current_artifact_subtypes"] = json!(
+            value
+                .current_artifact_subtypes
+                .iter()
+                .map(|kind| kind.wire_label())
+                .collect::<Vec<_>>()
+        );
+    }
+    if !value.current_enchantment_subtypes.is_empty() {
+        projected["current_enchantment_subtypes"] = json!(
+            value
+                .current_enchantment_subtypes
+                .iter()
+                .map(|kind| kind.wire_label())
+                .collect::<Vec<_>>()
+        );
+    }
+    if value.saddled {
+        projected["saddled"] = json!(true);
+    }
+    if let Some(host) = value.attached_to {
+        projected["attached_to"] = target(host);
+    }
+    if let Some(amount) = &value.toxic_value {
+        projected["toxic_value"] = json!(amount);
+    }
+    if !value.granted_triggers.is_empty() {
+        projected["granted_triggers"] = json!(value.granted_triggers.iter().map(|(grant, ability)|
+            json!({"grant":effect_instance(*grant),"ability":program::triggered_abilities(std::slice::from_ref(ability))[0]})).collect::<Vec<_>>());
+    }
+    if !value.granted_combat_keywords.is_empty() {
+        projected["granted_combat_keywords"] =
+            granted_combat_keywords(&value.granted_combat_keywords);
+    }
+    if value.granted_unblockable {
+        projected["granted_unblockable"] = json!(true);
+    }
+    if !value.granted_exalted.is_empty() {
+        projected["granted_exalted"] = granted_exalted(&value.granted_exalted);
+    }
+    projected
 }
 fn generated_operations(values: &BTreeMap<ObjectId, ResolvedPart>) -> Value {
     json!(
@@ -1496,8 +2379,34 @@ pub(crate) fn evaluation_trace(value: &EvaluationTrace) -> Value {
 fn combatant(value: &Combatant) -> Value {
     json!({"object":opaque(value.object()),"controller":value.controller().0,"control_epoch":opaque(value.control_epoch())})
 }
+fn attacking_creature(row: &spellwake_engine::combat::AttackingCreature) -> Value {
+    let mut value = json!({"object":opaque(row.combatant().object()),"controller":row.combatant().controller().0,"control_epoch":opaque(row.combatant().control_epoch()),"defender":row.defender().0,"block_status":opaque(row.block_status())});
+    if let Some(id) = row.defending_planeswalker() {
+        value["defending_planeswalker"] = json!(opaque(id));
+    }
+    value
+}
+fn blocking_creature(row: &spellwake_engine::combat::BlockingCreature) -> Value {
+    let mut value = json!({"object":opaque(row.combatant().object()),"controller":row.combatant().controller().0,"control_epoch":opaque(row.combatant().control_epoch()),"attacker":row.attacker().map(opaque)});
+    if row.attackers().len() > 1 {
+        value["attackers"] = json!(row.attackers().iter().map(opaque).collect::<Vec<_>>());
+    }
+    value
+}
 fn combat(value: &CombatState) -> Value {
-    json!({"had_attackers":value.had_attackers(),"attackers":value.attackers().map(|row|json!({"object":opaque(row.combatant().object()),"controller":row.combatant().controller().0,"control_epoch":opaque(row.combatant().control_epoch()),"defender":row.defender().0,"block_status":opaque(row.block_status())})).collect::<Vec<_>>(),"blockers":value.blockers().map(|row|json!({"object":opaque(row.combatant().object()),"controller":row.combatant().controller().0,"control_epoch":opaque(row.combatant().control_epoch()),"attacker":row.attacker().map(opaque)})).collect::<Vec<_>>()})
+    let mut out = json!({"had_attackers":value.had_attackers(),"attackers":value.attackers().map(attacking_creature).collect::<Vec<_>>(),"blockers":value.blockers().map(blocking_creature).collect::<Vec<_>>()});
+    let visible_defenders = value
+        .attackers()
+        .map(|row| row.defender())
+        .collect::<std::collections::BTreeSet<_>>()
+        .len();
+    if value.attacked_player_count() > visible_defenders.max(1) {
+        out["attacked_player_count"] = json!(value.attacked_player_count());
+    }
+    if !value.first_strike_participants().is_empty() {
+        out["first_strike_participants"] = json!(value.first_strike_participants().values().map(|row| json!({"object":opaque(row.object()),"controller":row.controller().0,"control_epoch":opaque(row.control_epoch())})).collect::<Vec<_>>());
+    }
+    out
 }
 
 pub fn frame(value: &RuleFrame, state: &GameState) -> Result<Value, String> {
@@ -1511,12 +2420,32 @@ fn frame_with_cards(value: &RuleFrame, cards: &GameObjects) -> Result<Value, Str
     Ok(match value {
         RuleFrame::ZoneReplacement(value) => {
             json!({"tag":"ZoneReplacement","schema":"zone-replacement-native-frame-v2","revision":value.revision().to_string(),"cause":cause(value.cause()),"stage":value.stage().to_string(),"chooser":value.chooser().0,"request":match value.request(){
+                spellwake_engine::effects::ZoneReplacementRequest::Devour { entrant, choices } => json!({"tag":"Devour","entrant":opaque(entrant),"choices":choices.iter().map(opaque).collect::<Vec<_>>()}),
+                spellwake_engine::effects::ZoneReplacementRequest::DevourGraveyardOrder{choices}=>json!({"tag":"DevourGraveyardOrder","choices":choices.iter().map(opaque).collect::<Vec<_>>()}),
+                spellwake_engine::effects::ZoneReplacementRequest::EntryCopy {object,donors,battlefield_donors} => {
+                    let mut value = json!({"tag":"EntryCopy","object":opaque(object),"donors":donors.iter().map(opaque).collect::<Vec<_>>() });
+                    if !battlefield_donors.is_empty() {
+                        value["auras"] = json!(battlefield_donors.iter().map(|(aura, host)| json!({"aura":opaque(aura),"host":opaque(host)})).collect::<Vec<_>>());
+                    }
+                    value
+                },
+                spellwake_engine::effects::ZoneReplacementRequest::EntryController {object,opponents}=>json!({"tag":"EntryController","object":opaque(object),"opponents":opponents.iter().map(|seat|seat.0).collect::<Vec<_>>()}),
                 spellwake_engine::effects::ZoneReplacementRequest::Select{applications}=>json!({"tag":"Select","applications":applications.iter().map(|a|zone_application(*a)).collect::<Vec<_>>()}),
                 spellwake_engine::effects::ZoneReplacementRequest::ConfirmOptional{application}=>json!({"tag":"ConfirmOptional","application":zone_application(*application)})
             }})
         }
         RuleFrame::LibraryTop(value) => {
-            json!({"tag":"LibraryTop","kind":opaque(value.kind()),"revision":value.revision().to_string(),"entry":opaque(value.entry()),"instruction":value.instruction().to_string(),"chooser":value.chooser().0,"domain_top_first":value.domain_top_first().iter().map(opaque).collect::<Vec<_>>()})
+            let mut frame = json!({"tag":"LibraryTop","kind":opaque(value.kind()),"revision":value.revision().to_string(),"entry":opaque(value.entry()),"instruction":value.instruction().to_string(),"chooser":value.chooser().0,"domain_top_first":value.domain_top_first().iter().map(opaque).collect::<Vec<_>>()});
+            if value.kind() == spellwake_engine::effects::LibraryChoiceKind::Search {
+                frame["eligible"] = json!(
+                    value
+                        .eligible_results()
+                        .iter()
+                        .map(opaque)
+                        .collect::<Vec<_>>()
+                );
+            }
+            frame
         }
         RuleFrame::ResolutionSelect(value) => json!({
             "tag":"ResolutionSelect","revision":value.revision().to_string(),
@@ -1525,22 +2454,120 @@ fn frame_with_cards(value: &RuleFrame, cards: &GameObjects) -> Result<Value, Str
             "domain":value.domain().iter().map(opaque).collect::<Vec<_>>(),
             "required":value.required().to_string()
         }),
-        RuleFrame::ResolutionGraveyardOrder(value) => json!({
-            "tag":"ResolutionGraveyardOrder","revision":value.revision().to_string(),
-            "entry":opaque(value.entry()),"instruction":value.instruction().to_string(),
-            "chooser":value.chooser().0,"domain":value.domain().iter().map(opaque).collect::<Vec<_>>()
-        }),
-        RuleFrame::ReplacementChooser(value) => json!({
-            "tag":"ReplacementChooser","revision":value.revision().to_string(),
-            "entry":opaque(value.entry()),"instruction":value.instruction().to_string(),
-            "departed":value.departed().0,"chooser":value.chooser().0,
-            "candidates":value.candidates().iter().map(|seat|seat.0).collect::<Vec<_>>()
-        }),
+        RuleFrame::ResolutionGraveyardOrder(value) => {
+            let mut order = json!({
+                "tag":"ResolutionGraveyardOrder","revision":value.revision().to_string(),
+                "entry":opaque(value.entry()),"instruction":value.instruction().to_string(),
+                "chooser":value.chooser().0,"domain":value.domain().iter().map(opaque).collect::<Vec<_>>()
+            });
+            if value.destination() == spellwake_engine::program::PublicZoneDestination::Library {
+                order["destination"] = json!("Library");
+            }
+            order
+        }
         RuleFrame::OptionalEffect(value) => {
-            json!({"tag":"OptionalEffect","revision":value.revision().to_string(),"entry":opaque(value.entry()),"instruction":value.instruction().to_string(),"chooser":value.chooser().0,"options":value.options().iter().map(opaque).collect::<Vec<_>>()})
+            let mut encoded = json!({"tag":"OptionalEffect","revision":value.revision().to_string(),"entry":opaque(value.entry()),"instruction":value.instruction().to_string(),"chooser":value.chooser().0,"options":value.options().iter().map(opaque).collect::<Vec<_>>()});
+            if value.rebound_or_buyback() {
+                encoded["rebound_or_buyback"] = json!(true);
+            }
+            if let Some(offer) = value.exile_cast() {
+                let key = match offer.ability {
+                    spellwake_engine::effects::ExileCastAbility::Suspend => "suspended_cast",
+                    spellwake_engine::effects::ExileCastAbility::Rebound => "rebound_cast",
+                    spellwake_engine::effects::ExileCastAbility::Cascade => "cascade_cast",
+                    spellwake_engine::effects::ExileCastAbility::Miracle => "impulse_cast",
+                    spellwake_engine::effects::ExileCastAbility::Madness => "madness_cast",
+                    spellwake_engine::effects::ExileCastAbility::Siege => "siege",
+                    spellwake_engine::effects::ExileCastAbility::FoundSpell => "found_spell",
+                    spellwake_engine::effects::ExileCastAbility::Commander => "commander",
+                    spellwake_engine::effects::ExileCastAbility::TargetedGraveyard => {
+                        "targeted_graveyard"
+                    }
+                    spellwake_engine::effects::ExileCastAbility::RevealedLibrary => {
+                        "revealed_library"
+                    }
+                    spellwake_engine::effects::ExileCastAbility::Impulse
+                    | spellwake_engine::effects::ExileCastAbility::MatchingHand => "impulse_cast",
+                };
+                fn face(offer: &spellwake_engine::effects::ExileCastOffer) -> Value {
+                    let mut value = json!({"spell":opaque(offer.spell),"targets":offer.targets.as_ref().map(|choices|choices.iter().copied().map(target).collect::<Vec<_>>())});
+                    if let Some(cost) = &offer.normal_price {
+                        value["cost"] = program::cost(cost);
+                    }
+                    if matches!(
+                        offer.ability,
+                        spellwake_engine::effects::ExileCastAbility::Miracle
+                            | spellwake_engine::effects::ExileCastAbility::Impulse
+                            | spellwake_engine::effects::ExileCastAbility::RevealedLibrary
+                            | spellwake_engine::effects::ExileCastAbility::Commander
+                            | spellwake_engine::effects::ExileCastAbility::Siege
+                            | spellwake_engine::effects::ExileCastAbility::FoundSpell
+                            | spellwake_engine::effects::ExileCastAbility::TargetedGraveyard
+                    ) {
+                        value["allows_x"] = json!(offer.allows_x);
+                        value["allows_alternative"] = json!(offer.allows_alternative);
+                        if offer.alternative_targetless {
+                            value["alternative_targetless"] = json!(true);
+                        }
+                        if let Some(price) = &offer.alternative_price {
+                            value["alternative_price"] = program::cost(price);
+                        }
+                        if let Some(spec) = &offer.modes {
+                            value["modes"] = json!({"minimum":spec.minimum,"maximum":spec.maximum,"allow_repeat":spec.allow_repeat,"modes":spec.modes.iter().map(|mode|json!({"index":mode.index,"targets":mode.targets.as_ref().map(|items|items.iter().copied().map(target).collect::<Vec<_>>())})).collect::<Vec<_>>()});
+                        }
+                        if !offer.hybrid_symbols.is_empty() {
+                            value["hybrid_symbols"] = json!(
+                                offer
+                                    .hybrid_symbols
+                                    .iter()
+                                    .map(|s| [
+                                        format!("{:?}", s.first),
+                                        format!("{:?}", s.alternative)
+                                    ])
+                                    .collect::<Vec<_>>()
+                            );
+                        }
+                        if let Some(spec) = &offer.fixed_targets {
+                            value["fixed_targets"] = json!(
+                                spec.iter()
+                                    .map(|values| values
+                                        .iter()
+                                        .copied()
+                                        .map(target)
+                                        .collect::<Vec<_>>())
+                                    .collect::<Vec<_>>()
+                            );
+                        }
+                        if let Some(spec) = &offer.permanent_targets {
+                            value["permanent_targets"] = json!({"minimum":spec.minimum,"maximum":spec.maximum,"targets":spec.targets.iter().copied().map(target).collect::<Vec<_>>()});
+                        }
+                    }
+                    if let Some(cost) = &offer.madness_price {
+                        value["cost"] = program::cost(cost);
+                    }
+                    value
+                }
+                encoded[key] = face(offer);
+                if let Some(right) = &offer.split_right {
+                    encoded[key]["normal_available"] = json!(offer.normal_available);
+                    encoded[key]["split_right"] = face(right);
+                }
+                if let Some(alternate) = &offer.adventure {
+                    encoded[key]["normal_available"] = json!(offer.normal_available);
+                    encoded[key]["adventure"] = face(alternate);
+                }
+            }
+            encoded
         }
         RuleFrame::ResolutionPayment(value) => {
-            json!({"tag":"ResolutionPayment","revision":value.revision().to_string(),"entry":opaque(value.entry()),"instruction":value.instruction().to_string(),"payer":value.payer().0,"cost":program::cost(value.cost())})
+            let mut encoded = json!({"tag":"ResolutionPayment","revision":value.revision().to_string(),"entry":opaque(value.entry()),"instruction":value.instruction().to_string(),"payer":value.payer().0,"cost":program::cost(value.cost())});
+            if value.variable() {
+                encoded["variable"] = json!(true);
+            }
+            if let Some(colors) = value.restricted_colors() {
+                encoded["restricted_colors"] = json!(colors.iter().map(opaque).collect::<Vec<_>>());
+            }
+            encoded
         }
         RuleFrame::Checks(value) => {
             json!({"tag":"Checks","frame":check_trace::check_decision_view(value,cards,|card|card.0.to_string())?})
@@ -1567,10 +2594,117 @@ fn frame_with_cards(value: &RuleFrame, cards: &GameObjects) -> Result<Value, Str
                 json!({"tag":"Bottom","chooser":player.0,"count":count,"hand":hand.iter().map(opaque).collect::<Vec<_>>()})
             }
         },
+        RuleFrame::CounterReplacement(frame) => json!({
+            "tag":"CounterReplacement","chooser":frame.chooser().0,"object":opaque(frame.object()),
+            "doublers":frame.doublers(),"plus_one":frame.original().plus_one,"minus_one":frame.original().minus_one,
+        }),
+        RuleFrame::TransformOrder(f) => {
+            json!({"tag":"TransformOrder","chooser":f.chooser().0,"order":f.objects().iter().map(opaque).collect::<Vec<_>>()})
+        }
+        RuleFrame::LinkedReturnOrder(f) => {
+            json!({"tag":"LinkedReturnOrder","chooser":f.chooser().0,"destination":opaque(f.destination()),"order":f.objects().iter().map(opaque).collect::<Vec<_>>()})
+        }
+        RuleFrame::LinkedAuraChoice(f) => {
+            json!({"tag":"LinkedAuraChoice","chooser":f.chooser().0,"object":opaque(f.object()),"domain":f.domain().iter().copied().map(target).collect::<Vec<_>>()})
+        }
+        RuleFrame::PlaneswalkerType(value) => {
+            json!({"tag":"PlaneswalkerType","chooser":value.chooser().0})
+        }
+        RuleFrame::AttackDirection(value) => {
+            json!({"tag":"AttackDirection","chooser":value.chooser().0})
+        }
+        RuleFrame::MyriadDefender(value) => {
+            json!({"tag":"MyriadDefender","chooser":value.chooser().0,"opponent":value.opponent().0,"may_decline":value.may_decline(),"defenders":value.defenders().map(target).collect::<Vec<_>>()})
+        }
+        RuleFrame::ReselectAttackDefender(value) => {
+            json!({"tag":"ReselectAttackDefender","chooser":value.chooser().0,"attacker":opaque(value.attacker()),"defenders":value.defenders().map(target).collect::<Vec<_>>()})
+        }
+        RuleFrame::TokenDefender(value) => {
+            json!({"tag":"TokenDefender","chooser":value.chooser().0,"member":value.member().ordinal(),"defenders":value.defenders().map(target).collect::<Vec<_>>()})
+        }
         RuleFrame::TimestampOrder(value) => {
             json!({"tag":"TimestampOrder","revision":value.revision().to_string(),"entry":opaque(value.entry()),"instruction":value.instruction(),"chooser":value.chooser().0,"members":value.members().iter().map(|member|json!({"ordinal":member.member.ordinal(),"creator":member.creator.0,"definition":program::view(&member.definition)})).collect::<Vec<_>>()})
         }
+        RuleFrame::CounterRemoval(frame) => {
+            json!({"tag":"CounterRemoval","chooser":frame.chooser().0,"object":opaque(frame.object()),"maximum":frame.maximum(),"domain":frame.domain().iter().map(|(kind,count)|json!({"kind":format!("{kind:?}"),"count":count})).collect::<Vec<_>>()})
+        }
+        RuleFrame::Proliferate(frame) => {
+            json!({"tag":"Proliferate","chooser":frame.chooser().0,"revision":frame.revision().to_string(),"domain":frame.domain().iter().map(|(who,kinds)|json!({"recipient":target(*who),"counters":kinds.iter().map(opaque).collect::<Vec<_>>()})).collect::<Vec<_>>()})
+        }
+        RuleFrame::DrawReplacement(value) => {
+            json!({"tag":"DrawReplacement","revision":value.revision,"chooser":value.chooser.0,"domain":format!("{:?}",value.domain)})
+        }
+        RuleFrame::DamageRecipientChoice(value) => {
+            json!({"tag":"DamageRecipientChoice","chooser":value.chooser().0,"recipients":value.recipients().iter().copied().map(target).collect::<Vec<_>>()})
+        }
+        RuleFrame::OpponentChoice(value) => {
+            json!({"tag":"OpponentChoice","chooser":value.chooser().0,"opponents":value.opponents().iter().map(|s|s.0).collect::<Vec<_>>()})
+        }
+        RuleFrame::ReplacementChooser(value) => {
+            json!({"tag":"ReplacementChooser","entry":opaque(value.entry()),"instruction":value.instruction(),"departed":value.departed().0,"chooser":value.chooser().0,"candidates":value.candidates().iter().map(|seat|seat.0).collect::<Vec<_>>()})
+        }
+        RuleFrame::Mutation(value) => {
+            json!({"tag":"Mutation","chooser":value.chooser().0,"host":opaque(value.host()),"spell":opaque(value.spell())})
+        }
+        RuleFrame::RevealedPiles(value) => {
+            use spellwake_engine::effects::PileChoice;
+            let choice = match value.choice() {
+                PileChoice::DividePermanents(cards) => {
+                    json!({"kind":"DividePermanents","cards":cards.iter().map(opaque).collect::<Vec<_>>()})
+                }
+                PileChoice::Sacrifice { first, second } => {
+                    json!({"kind":"Sacrifice","first":first.iter().map(opaque).collect::<Vec<_>>(),"second":second.iter().map(opaque).collect::<Vec<_>>()})
+                }
+                PileChoice::Divide(cards) => {
+                    json!({"kind":"Divide","cards":cards.iter().map(opaque).collect::<Vec<_>>()})
+                }
+                PileChoice::Take { first, second } => {
+                    json!({"kind":"Take","first":first.iter().map(opaque).collect::<Vec<_>>(),"second":second.iter().map(opaque).collect::<Vec<_>>()})
+                }
+                PileChoice::OneToHandRestBottom(cards) => {
+                    json!({"kind":"OneToHandRestBottom","cards":cards.iter().map(opaque).collect::<Vec<_>>()})
+                }
+                PileChoice::OptionalCreatureToBattlefield { looked, eligible } => {
+                    json!({"kind":"OptionalCreatureToBattlefield","looked":looked.iter().map(opaque).collect::<Vec<_>>(),"eligible":eligible.iter().map(opaque).collect::<Vec<_>>()})
+                }
+                PileChoice::OneToHand(cards) => {
+                    json!({"kind":"OneToHand","cards":cards.iter().map(opaque).collect::<Vec<_>>()})
+                }
+                PileChoice::Creature(cards) => {
+                    json!({"kind":"Creature","cards":cards.iter().map(opaque).collect::<Vec<_>>()})
+                }
+                PileChoice::BottomOrder(cards) => {
+                    json!({"kind":"BottomOrder","cards":cards.iter().map(opaque).collect::<Vec<_>>()})
+                }
+                PileChoice::GraveyardOrder(cards) => {
+                    json!({"kind":"GraveyardOrder","cards":cards.iter().map(opaque).collect::<Vec<_>>()})
+                }
+            };
+            json!({"tag":"RevealedPiles","chooser":value.chooser().0,"choice":choice})
+        }
+        RuleFrame::LoyaltyRemoval(value) => {
+            json!({"tag":"LoyaltyRemoval","revision":value.revision().to_string(),"entry":opaque(value.entry()),"instruction":value.instruction(),"chooser":value.chooser().0,"objects":value.objects().iter().map(opaque).collect::<Vec<_>>()})
+        }
+        RuleFrame::ResolutionManaColor(value) if value.split().is_some() => {
+            let (first, second, total) = value.split().expect("split checked by pattern guard");
+            json!({"tag":"SplitMana","revision":value.revision().to_string(),"entry":opaque(value.entry()),"instruction":value.instruction(),"chooser":value.chooser().0,"first":opaque(first),"second":opaque(second),"total":total})
+        }
+        RuleFrame::ResolutionManaColor(value) => {
+            json!({"tag":"ResolutionManaColor","revision":value.revision().to_string(),"entry":opaque(value.entry()),"instruction":value.instruction(),"chooser":value.chooser().0,"colors":value.colors().iter().map(opaque).collect::<Vec<_>>()})
+        }
         RuleFrame::CreatureType(value) => creature_type_frame(value),
+        RuleFrame::CastRecovery(value) => {
+            json!({"tag":"CastRecovery","revision":value.revision().to_string(),"chooser":value.chooser().0,"spell":opaque(value.spell()),"life_cost":value.life_cost(),"mana_cost":program::cost(value.mana_cost())})
+        }
+        RuleFrame::EntryChoice(value) => {
+            json!({"tag":"EntryChoice","revision":value.revision().to_string(),"chooser":value.chooser().0,"object":opaque(value.object()),"rule":format!("{:?}",value.rule()),"eligible_reveals":value.eligible_reveals().iter().map(opaque).collect::<Vec<_>>() })
+        }
+        RuleFrame::TokenAuraChoice(f) => {
+            json!({"tag":"TokenAuraChoice","chooser":f.chooser().0,"member":f.preview().member.ordinal(),"domain":f.domain().iter().copied().map(target).collect::<Vec<_>>()})
+        }
+        RuleFrame::TokenEntryChoice(value) => {
+            json!({"tag":"TokenEntryChoice","revision":value.revision().to_string(),"chooser":value.chooser().0,"member":value.member().ordinal(),"rule":format!("{:?}",value.rule()),"eligible_reveals":value.eligible_reveals().iter().map(opaque).collect::<Vec<_>>() })
+        }
         RuleFrame::CopyTargets(value) => {
             json!({"tag":"CopyTargets","entry":opaque(value.entry()),"original":opaque(value.original()),"instruction":value.instruction_index(),"chooser":value.chooser().0})
         }
@@ -1579,13 +2713,76 @@ fn frame_with_cards(value: &RuleFrame, cards: &GameObjects) -> Result<Value, Str
         }
         RuleFrame::Combat(value) => match value {
             CombatDecision::Attackers(value) => {
-                json!({"tag":"DeclareAttackers","revision":value.revision().to_string(),"chooser":value.chooser().0,"attackers":value.eligible_attackers().iter().map(opaque).collect::<Vec<_>>(),"defenders":value.defenders().iter().map(|seat|seat.0).collect::<Vec<_>>()})
+                let mut view = json!({"tag":"DeclareAttackers","revision":value.revision().to_string(),"chooser":value.chooser().0,"attackers":value.eligible_attackers().iter().map(opaque).collect::<Vec<_>>(),"defenders":value.defenders().iter().map(|seat|seat.0).collect::<Vec<_>>()});
+                if !value.capped_defenders().is_empty() {
+                    view["capped_defenders"] = json!(
+                        value
+                            .capped_defenders()
+                            .iter()
+                            .map(|p| p.0)
+                            .collect::<Vec<_>>()
+                    );
+                }
+                if let Some(cost) = value.payment() {
+                    view["payment"] =
+                        json!({"generic":cost.generic,"white_phyrexian":cost.white_phyrexian});
+                }
+                if !value.defender_costs().is_empty() {
+                    view["prices"]=json!(value.defender_costs().iter().map(|(&defender,cost)|json!({"defender":target(defender),"generic":cost.generic,"white_phyrexian":cost.white_phyrexian})).collect::<Vec<_>>());
+                }
+                if value.single_attacker() {
+                    view["single_attacker"] = json!(true);
+                }
+                if !value.forbidden_defenders().is_empty() {
+                    view["forbidden_defenders"]=json!(value.forbidden_defenders().iter().map(|(id,set)|json!({"attacker":opaque(id),"defenders":set.iter().map(|v|target(*v)).collect::<Vec<_>>()})).collect::<Vec<_>>());
+                }
+                if !value.required_attacks().is_empty() {
+                    view["required_attacks"] = json!(value.required_attacks().iter().map(|(id, defenders)| json!({"attacker":opaque(id),"defenders":defenders.iter().map(|v| target(*v)).collect::<Vec<_>>()})).collect::<Vec<_>>());
+                }
+                if !value.battles().is_empty() {
+                    view["battles"] = json!(value.battles().iter().map(opaque).collect::<Vec<_>>());
+                }
+                if !value.planeswalkers().is_empty() {
+                    view["planeswalkers"] =
+                        json!(value.planeswalkers().iter().map(opaque).collect::<Vec<_>>());
+                }
+                view
             }
             CombatDecision::Blockers(value) => {
-                json!({"tag":"DeclareBlockers","revision":value.revision().to_string(),"chooser":value.chooser().0,"blockers":value.eligible_blockers().iter().map(opaque).collect::<Vec<_>>(),"attackers":value.attackers().iter().map(opaque).collect::<Vec<_>>()})
+                let mut projected = json!({"tag":"DeclareBlockers","revision":value.revision().to_string(),"chooser":value.chooser().0,"blockers":value.eligible_blockers().iter().map(opaque).collect::<Vec<_>>(),"attackers":value.attackers().iter().map(opaque).collect::<Vec<_>>()});
+                if value.defending_player() != value.chooser() {
+                    projected["defending_player"] = json!(value.defending_player().0);
+                }
+                if value.single_blocker() {
+                    projected["single_blocker"] = json!(true);
+                }
+                let pairs: Vec<_> = value.restricted_blockers().map(|(blocker, attackers)| json!({"blocker":opaque(blocker),"attackers": attackers.iter().map(opaque).collect::<Vec<_>>() })).collect();
+                if !pairs.is_empty() {
+                    projected["restricted_blockers"] = json!(pairs);
+                }
+                let groups: Vec<_> = value.group_minimums().map(|(attacker, minimum)| json!({"attacker":opaque(attacker),"minimum":minimum})).collect();
+                if !groups.is_empty() {
+                    projected["minimum_if_blocked"] = json!(groups);
+                }
+                let extra: Vec<_> = value
+                    .eligible_blockers()
+                    .iter()
+                    .filter(|id| value.maximum_blocks(**id) > 1)
+                    .map(|id| json!({"blocker":opaque(id),"maximum":value.maximum_blocks(*id)}))
+                    .collect();
+                if !extra.is_empty() {
+                    projected["maximum_blocks"] = json!(extra);
+                }
+                projected
             }
             CombatDecision::DamageAssignments(value) => {
-                json!({"tag":"AssignCombatDamage","revision":value.revision().to_string(),"chooser":value.chooser().0,"position":damage_trace::turn_position_view(value.position()),"domains":value.domains().iter().map(|domain|json!({"source":opaque(domain.source()),"power":domain.power(),"recipients":domain.recipients().iter().map(|target|damage_trace::damage_recipient_view(*target)).collect::<Vec<_>>()})).collect::<Vec<_>>()})
+                json!({"tag":"AssignCombatDamage","revision":value.revision().to_string(),"chooser":value.chooser().0,"position":damage_trace::turn_position_view(value.position()),"domains":value.domains().iter().map(|domain| {
+                    let mut row = json!({"source":opaque(domain.source()),"power":domain.power(),"recipients":domain.recipients().iter().map(|target|damage_trace::damage_recipient_view(*target)).collect::<Vec<_>>()});
+                    if !domain.trample_lethal().is_empty() {
+                        row["trample_lethal"] = json!(domain.trample_lethal().iter().map(|(blocker,minimum)| json!({"blocker":opaque(blocker),"minimum":minimum})).collect::<Vec<_>>());
+                    }
+                    row
+                }).collect::<Vec<_>>()})
             }
         },
         RuleFrame::Damage(value) => match value {
@@ -1603,6 +2800,9 @@ fn frame_with_cards(value: &RuleFrame, cards: &GameObjects) -> Result<Value, Str
 /// This observes the stack only; it does not evaluate the battlefield or execute rules.
 fn stack_payload(execution: &EffectWindow, entry: &StackEntry) -> Value {
     let mut value = stack_entry(entry);
+    if entry.sunburst_colors() > 0 {
+        value["sunburst_colors"] = json!(entry.sunburst_colors());
+    }
     value["body"] = json!(execution.stack_body(entry.id()).map(program::body));
     value["copiable_card_types"] = json!(
         execution
@@ -1617,6 +2817,41 @@ fn stack_payload(execution: &EffectWindow, entry: &StackEntry) -> Value {
                 .map(|id| creature_type_id(*id))
                 .collect::<Vec<_>>())
     );
+    if let Some(subtypes) = execution.stack_copiable_spell_subtypes(entry.id())
+        && !subtypes.is_empty()
+    {
+        value["copiable_spell_subtypes"] = json!(
+            subtypes
+                .iter()
+                .map(|kind| kind.wire_label())
+                .collect::<Vec<_>>()
+        );
+    }
+    if let Some(subtypes) = execution.stack_copiable_artifact_subtypes(entry.id())
+        && !subtypes.is_empty()
+    {
+        value["copiable_artifact_subtypes"] = json!(
+            subtypes
+                .iter()
+                .map(|kind| kind.wire_label())
+                .collect::<Vec<_>>()
+        );
+    }
+    if let Some(subtypes) = execution.stack_copiable_enchantment_subtypes(entry.id())
+        && !subtypes.is_empty()
+    {
+        value["copiable_enchantment_subtypes"] = json!(
+            subtypes
+                .iter()
+                .map(|kind| kind.wire_label())
+                .collect::<Vec<_>>()
+        );
+    }
+    if let Some(keywords) = execution.stack_copiable_keywords(entry.id())
+        && !keywords.is_empty()
+    {
+        value["copiable_keywords"] = json!(keywords.iter().map(opaque).collect::<Vec<_>>());
+    }
     value["copiable_names"] = json!(execution.stack_copiable_names(entry.id()));
     value["copiable_supertypes"] = json!(
         execution
@@ -1682,7 +2917,7 @@ pub fn effect(execution: &EffectWindow, aliases: &AliasContext) -> Result<Value,
         .collect::<Result<Vec<_>, String>>()?;
     let stack = stack_payloads(execution);
     let resources = json!({"next_object":window.cards().next_identity_sequence().to_string(),"next_stack_entry":window.next_entry_sequence().to_string(),"priority_revision":window.priority_revision().map(|revision|revision.to_string()),"next_event":counters.next_event.to_string(),"next_instance":counters.next_instance.to_string(),"next_wave":counters.next_wave.to_string(),"next_effect":counters.next_effect.to_string(),"next_characteristic_timestamp":counters.next_characteristic_timestamp.to_string(),"next_world_tenure":counters.next_world_tenure.to_string(),"next_shield":counters.next_shield.to_string(),"next_multiplier":counters.next_multiplier.to_string(),"next_batch":counters.next_batch.to_string(),"next_attempt":counters.next_attempt.to_string()});
-    let mut result = json!({"effect_revision":execution.revision().to_string(),"window_revision":window.revision().to_string(),"objects_revision":window.cards().revision().to_string(),"resources":resources,"instruction_cursor":execution.instruction_index(),"window_phase":opaque(window.phase()),"participants":window.participants().iter().map(|seat|seat.0).collect::<Vec<_>>(),"active":window.active_player().map(|seat| seat.0),"objects":objects,
+    let mut result = json!({"effect_revision":execution.revision().to_string(),"window_revision":window.revision().to_string(),"objects_revision":window.cards().revision().to_string(),"resources":resources,"instruction_cursor":execution.instruction_index(),"window_phase":opaque(window.phase()),"participants":window.participants().iter().map(|seat|seat.0).collect::<Vec<_>>(),"active":window.active_player().0,"objects":objects,
         "programs":programs.iter().map(|(card,definition)|json!({"card_id":card.0,"definition":program::view(definition)})).collect::<Vec<_>>(),
         "characteristic_timestamps":execution.characteristic_timestamps().map(|(object,timestamp)|json!({"object":opaque(object),"timestamp":timestamp.sequence().to_string()})).collect::<Vec<_>>(),
         "evaluation_trace":evaluation_trace(&evaluated.trace),
@@ -1694,6 +2929,158 @@ pub fn effect(execution: &EffectWindow, aliases: &AliasContext) -> Result<Value,
         "continuous_effects":execution.continuous_effects().map(continuous_effect).collect::<Vec<_>>(),"prevention_shields":execution.prevention_shields().map(|shield|json!({"id":opaque(shield.id),"creator":opaque(shield.creator),"target":damage_trace::damage_effect_target_view(shield.target),"remaining":shield.remaining})).collect::<Vec<_>>(),"damage_multipliers":execution.damage_multipliers().map(|value|json!({"id":opaque(value.id),"creator":opaque(value.creator),"target":damage_trace::damage_effect_target_view(value.target),"factor":value.factor,"filter":damage_trace::filter_view(value.filter)})).collect::<Vec<_>>(),
         "creature_vocabulary":execution.creature_vocabulary().id().to_string(),"name_rules":execution.name_rules().groups(),"name_rules_id":execution.name_rules().id().to_string(),"resolution_state":execution.resolution_state().map(resolution_state),
         "pending_damage":execution.pending_damage().map(|batch|json!({"parent":execution.damage_parent().map(damage_parent),"id":opaque(batch.id()),"origin":damage_trace::damage_origin_view(batch.origin()),"kind":opaque(batch.kind()),"stage":batch.stage().to_string(),"phase":damage_trace::damage_batch_phase_view(batch.phase()),"consumed_shields":batch.consumed_shields().iter().map(|application|damage_trace::damage_application_view(*application)).collect::<Vec<_>>(),"components":batch.components().map(|component|json!({"attempt":damage_trace::damage_attempt_view(component.attempt()),"remaining":component.remaining(),"used_multipliers":component.used_multipliers().iter().map(opaque).collect::<Vec<_>>()})).collect::<Vec<_>>()}))});
+    if !execution.deathtouch_damage().is_empty() {
+        result["deathtouch_damage"] = json!(
+            execution
+                .deathtouch_damage()
+                .iter()
+                .map(opaque)
+                .collect::<Vec<_>>()
+        );
+    }
+    let plotted: Vec<_> = execution
+        .window()
+        .cards()
+        .iter()
+        .filter_map(|card| {
+            execution
+                .plotted_on(card.id())
+                .map(|turn| json!({"object":opaque(card.id()), "turn":turn.to_string()}))
+        })
+        .collect();
+    if !plotted.is_empty() {
+        result["plotted"] = json!(plotted);
+    }
+    if let Some(damage) = execution.damage_to_players_this_turn() {
+        result["damage_to_players_this_turn"] = json!(
+            damage
+                .iter()
+                .map(|(p, n)| json!({"player":p.0,"amount":n}))
+                .collect::<Vec<_>>()
+        );
+    }
+    if !execution.charge_counters().is_empty() {
+        result["charge_counters"] = json!(
+            execution
+                .charge_counters()
+                .iter()
+                .map(|(o, n)| json!({"object":opaque(o),"amount":n}))
+                .collect::<Vec<_>>()
+        );
+    }
+    if !execution.suspect_counters().is_empty() {
+        result["suspect_counters"] = json!(
+            execution
+                .suspect_counters()
+                .iter()
+                .map(|(object, amount)| json!({"object":opaque(object),"amount":amount}))
+                .collect::<Vec<_>>()
+        );
+    }
+    if !execution.storage_counters().is_empty() {
+        result["storage_counters"] = json!(
+            execution
+                .storage_counters()
+                .iter()
+                .map(|(object, amount)| json!({"object":opaque(object),"amount":amount}))
+                .collect::<Vec<_>>()
+        );
+    }
+    if let Some(history) = execution.cast_turn_history() {
+        result["cast_turn_history"] = json!({"casters":history.casters.iter().map(|s|s.0).collect::<Vec<_>>(),"lost_life":history.lost_life.iter().map(|s|s.0).collect::<Vec<_>>()});
+        let facts = &mut result["cast_turn_history"];
+        if !history.discarded.is_empty() {
+            facts["discarded"] = json!(
+                history
+                    .discarded
+                    .iter()
+                    .map(|(card, seat)| json!({"object":opaque(card),"player":seat.0}))
+                    .collect::<Vec<_>>()
+            );
+        }
+        if !history.combat_types.is_empty() {
+            facts["combat_types"] = json!(
+                history
+                    .combat_types
+                    .iter()
+                    .map(|(seat, types)| json!({"player":seat.0,"types":types}))
+                    .collect::<Vec<_>>()
+            );
+        }
+        if !history.freerunning.is_empty() {
+            facts["freerunning"] = json!(
+                history
+                    .freerunning
+                    .iter()
+                    .map(|seat| seat.0)
+                    .collect::<Vec<_>>()
+            );
+        }
+    }
+    for (label, counters) in [
+        ("time_counters", execution.time_counters()),
+        ("lore_counters", execution.lore_counters()),
+        ("fade_counters", execution.fade_counters()),
+    ] {
+        if !counters.is_empty() {
+            result[label] = json!(
+                counters
+                    .iter()
+                    .map(|(id, n)| json!({"object":opaque(id),"count":n}))
+                    .collect::<Vec<_>>()
+            );
+        }
+    }
+    if !execution.growth_last_known().is_empty() {
+        result["growth_last_known"] = json!(
+            execution
+                .growth_last_known()
+                .values()
+                .map(appearance)
+                .collect::<Vec<_>>()
+        );
+    }
+    if let Some(cuts) = execution.upkeep_cuts() {
+        result["upkeep_cuts"] = json!(
+            cuts.iter()
+                .map(|(p, epoch)| json!({"player":p.0,"epoch":opaque(epoch)}))
+                .collect::<Vec<_>>()
+        );
+    }
+    if !execution.age_counters().is_empty() {
+        result["age_counters"] = json!(
+            execution
+                .age_counters()
+                .iter()
+                .map(|(id, count)| json!({"object":opaque(id),"count":count}))
+                .collect::<Vec<_>>()
+        );
+    }
+    if !execution.renowned_objects().is_empty() {
+        result["renowned_objects"] = json!(
+            execution
+                .renowned_objects()
+                .iter()
+                .map(opaque)
+                .collect::<Vec<_>>()
+        );
+    }
+    if !execution.poisoned_players().is_empty() {
+        result["poison"] = json!(
+            execution
+                .poisoned_players()
+                .iter()
+                .map(|(player, total)| json!({"player":player.0,"total":total}))
+                .collect::<Vec<_>>()
+        );
+    }
+    if !execution.regeneration_shields().is_empty() {
+        result["regeneration_shields"] = json!(execution.regeneration_shields().iter().flat_map(|(permanent, origins)| origins.iter()
+            .map(move |(entry, instruction)| json!({"object":opaque(permanent),"entry":opaque(entry),"instruction":instruction}))).collect::<Vec<_>>());
+    }
+    if !execution.departed_damage_sources().is_empty() {
+        result["departed_damage_sources"] = json!(execution.departed_damage_sources().values().map(|source|{let mut row=json!({"object":object(&source.object),"keywords":source.keywords.iter().map(opaque).collect::<Vec<_>>() }); if !source.colors.is_empty() || source.keywords.is_empty() {row["colors"]=json!(source.colors.iter().map(opaque).collect::<Vec<_>>());} row}).collect::<Vec<_>>());
+    }
     result["pending_trigger_placement"] = execution
         .pending_trigger_placement()
         .map_err(|error| format!("pending trigger projection rejected: {error:?}"))?
@@ -1709,13 +3096,12 @@ pub fn effect(execution: &EffectWindow, aliases: &AliasContext) -> Result<Value,
 /// Project the actual process discriminator and its existing borrowed payload.
 pub fn pending_work(execution: &EffectWindow) -> Result<Value, String> {
     let choice = execution.resolution_choice_state().map(|state| match state {
-        ResolutionChoiceState::ChooserSubstitution { cursor, departed, controller, candidates, options } => json!({
-            "stage":"ChooserSubstitution","cursor":resolution_state(cursor),"departed":departed.0,
-            "controller":controller.0,"candidates":candidates.iter().map(|seat|seat.0).collect::<Vec<_>>(),
-            "options":options.iter().map(opaque).collect::<Vec<_>>()
-        }),
         ResolutionChoiceState::Optional { cursor, chooser, options } => json!({"cursor":resolution_state(cursor),"chooser":chooser.0,"options":options.iter().map(opaque).collect::<Vec<_>>()}),
-        ResolutionChoiceState::Payment { cursor, payer, cost, paid_destination, declined_destination, .. } => json!({"cursor":resolution_state(cursor),"payer":payer.0,"cost":program::cost(cost),"paid_destination":paid_destination.to_string(),"declined_destination":declined_destination.to_string()}),
+        ResolutionChoiceState::Payment { cursor, payer, cost, restricted_colors, paid_destination, declined_destination, .. } => {
+            let mut encoded=json!({"cursor":resolution_state(cursor),"payer":payer.0,"cost":program::cost(cost),"paid_destination":paid_destination.to_string(),"declined_destination":declined_destination.to_string()});
+            if let Some(colors)=restricted_colors {encoded["restricted_colors"]=json!(colors.iter().map(opaque).collect::<Vec<_>>());}
+            encoded
+        },
     });
     let cursor = || {
         execution
@@ -1727,6 +3113,32 @@ pub fn pending_work(execution: &EffectWindow) -> Result<Value, String> {
         None => Value::Null,
         Some(PendingWorkKind::LibraryTop) => {
             return Err("historical pending-work projection excludes native library work".into());
+        }
+        Some(PendingWorkKind::ActivationCost) => {
+            return Err(
+                "historical pending-work projection excludes activation cost replacement work"
+                    .into(),
+            );
+        }
+        Some(PendingWorkKind::LookTop) => {
+            return Err("historical pending-work projection excludes private top-look work".into());
+        }
+        Some(PendingWorkKind::ImpulseReplacement) => {
+            return Err(
+                "historical pending-work projection excludes impulse replacement work".into(),
+            );
+        }
+        Some(
+            PendingWorkKind::BattlefieldEntry
+            | PendingWorkKind::PermanentEntry
+            | PendingWorkKind::SearchEntry
+            | PendingWorkKind::LandPlay
+            | PendingWorkKind::ZoneMove,
+        ) => {
+            return Err(
+                "historical pending-work projection excludes battlefield entry replacement work"
+                    .into(),
+            );
         }
         Some(PendingWorkKind::ResolutionSelection) => json!({
             "tag":"ResolutionSelection",
@@ -1764,11 +3176,37 @@ pub fn pending_work(execution: &EffectWindow) -> Result<Value, String> {
             json!({"tag":"Checks"})
         }
         Some(PendingWorkKind::Combat) => json!({"tag":"Combat"}),
+        Some(PendingWorkKind::CastRecovery) => json!({"tag":"CastRecovery"}),
     })
 }
 
 fn zone_event(value: spellwake_engine::effects::ZoneEventKey) -> Value {
     match value {
+        spellwake_engine::effects::ZoneEventKey::DrawReveal { before } => {
+            json!({"tag":"DrawReveal","before":opaque(before)})
+        }
+        spellwake_engine::effects::ZoneEventKey::DamageFollowup { batch, before } => {
+            json!({"tag":"DamageFollowup","batch":opaque(batch),"before":opaque(before)})
+        }
+        spellwake_engine::effects::ZoneEventKey::LandPlay { before } => {
+            json!({"tag":"LandPlay","before":opaque(before)})
+        }
+        spellwake_engine::effects::ZoneEventKey::LinkedReturn { before } => {
+            json!({"tag":"LinkedReturn","before":opaque(before)})
+        }
+        spellwake_engine::effects::ZoneEventKey::Cost { entry, before } => {
+            json!({"tag":"Cost","entry":opaque(entry),"before":opaque(before)})
+        }
+        spellwake_engine::effects::ZoneEventKey::ManaCost {
+            source,
+            ability,
+            before,
+        } => {
+            json!({"tag":"ManaCost","source":opaque(source),"ability":mana_ref::view(ability),"before":opaque(before)})
+        }
+        spellwake_engine::effects::ZoneEventKey::PermanentEntry { entry, before } => {
+            json!({"tag":"PermanentEntry","entry":opaque(entry),"before":opaque(before)})
+        }
         spellwake_engine::effects::ZoneEventKey::Instruction {
             entry,
             instruction,
@@ -1776,20 +3214,36 @@ fn zone_event(value: spellwake_engine::effects::ZoneEventKey) -> Value {
         } => {
             json!({"tag":"Instruction","entry":opaque(entry),"instruction":instruction.to_string(),"before":opaque(before)})
         }
-        spellwake_engine::effects::ZoneEventKey::Selection {
-            entry,
-            instruction,
-            before,
-            player,
-        } => {
-            json!({"tag":"Selection","entry":opaque(entry),"instruction":instruction.to_string(),"before":opaque(before),"player":player.0})
-        }
         spellwake_engine::effects::ZoneEventKey::Check { event, before } => {
             json!({"tag":"Check","event":check_trace::check_event_view(event),"before":opaque(before)})
         }
     }
 }
 fn zone_instance(value: spellwake_engine::effects::ZoneEffectInstance) -> Value {
+    if let Some(created) = value.created {
+        use spellwake_engine::effects::CreatedZoneEffect;
+        let (kind, entry, instruction) = match created {
+            CreatedZoneEffect::CorpseReturn => {
+                return json!({"source":opaque(value.source),"effect":"CorpseReturn"});
+            }
+            CreatedZoneEffect::Commander => {
+                return json!({"source":opaque(value.source),"effect":"Commander"});
+            }
+            CreatedZoneEffect::Regenerate { entry, instruction } => {
+                ("Regenerate", entry, instruction)
+            }
+            CreatedZoneEffect::ExileIfDies { entry, instruction } => {
+                ("ExileIfDies", entry, instruction)
+            }
+        };
+        return json!({"source":opaque(value.source),"effect":kind,"entry":opaque(entry),"instruction":instruction});
+    }
+    if value.madness {
+        return json!({"source":opaque(value.source),"effect":"Madness"});
+    }
+    if value.unearth {
+        return json!({"source":opaque(value.source),"effect":"Unearth"});
+    }
     json!({"source":opaque(value.source),"ability":value.ability.0})
 }
 fn zone_application(value: spellwake_engine::effects::ZoneApplication) -> Value {
@@ -1797,39 +3251,171 @@ fn zone_application(value: spellwake_engine::effects::ZoneApplication) -> Value 
 }
 /// Complete generic replacement continuation in its new privileged epoch.
 /// This is neither a complete Checks archive nor public transport authority.
-/// Frozen departure v3 exposed aggregate source witnesses. V4 distinguishes
-/// original choices and per-application source snapshots from the current cut.
-/// Neither exports the trusted private prefix seal or grants reconstruction authority.
 pub fn zone_replacement_work(value: &spellwake_engine::effects::ZoneReplacementBatch) -> Value {
-    let mut result = json!({"schema":"zone-replacement-native-work-v2","cause":cause(value.cause()),"apnap":value.apnap().iter().map(|seat|seat.0).collect::<Vec<_>>(),"window_revision":value.window_revision().to_string(),"stage":value.stage().to_string(),"phase":match value.phase(){spellwake_engine::effects::ZoneReplacementPhase::Selecting=>json!({"tag":"Selecting"}),spellwake_engine::effects::ZoneReplacementPhase::Settled=>json!({"tag":"Settled"}),spellwake_engine::effects::ZoneReplacementPhase::Confirming{application}=>json!({"tag":"Confirming","application":zone_application(*application)})},
+    json!({"schema":"zone-replacement-native-work-v2","cause":cause(value.cause()),"apnap":value.apnap().iter().map(|seat|seat.0).collect::<Vec<_>>(),"window_revision":value.window_revision().to_string(),"stage":value.stage().to_string(),"phase":match value.phase(){spellwake_engine::effects::ZoneReplacementPhase::Selecting=>json!({"tag":"Selecting"}),spellwake_engine::effects::ZoneReplacementPhase::Settled=>json!({"tag":"Settled"}),spellwake_engine::effects::ZoneReplacementPhase::Confirming{application}=>json!({"tag":"Confirming","application":zone_application(*application)})},
     "intents":value.intents().iter().map(|i|json!({"before":opaque(i.before),"reason":opaque(i.reason)})).collect::<Vec<_>>(),
-    "candidates":value.candidates().values().map(|c|json!({"key":zone_event(c.key),"before":object(&c.before),"action":opaque(c.action),"reason":opaque(c.reason),"original":opaque(c.original),"current":opaque(c.current)})).collect::<Vec<_>>(),
+    "candidates":value.candidates().values().map(|c|{let mut row=json!({"key":zone_event(c.key),"before":object(&c.before),"action":opaque(c.action),"reason":opaque(c.reason),"original":opaque(c.original),"current":opaque(c.current)});if let Some(controller)=c.entering_controller {row["entering_controller"]=json!(controller.0);}row}).collect::<Vec<_>>(),
     "sources":value.sources().values().map(|s|json!({"instance":zone_instance(s.instance),"before":object(&s.before),"definition":program::zone_replacements(std::slice::from_ref(&s.definition))})).collect::<Vec<_>>(),
     "applied":value.applied().iter().map(|(event,effects)|json!({"event":zone_event(*event),"effects":effects.iter().map(|e|zone_instance(*e)).collect::<Vec<_>>()})).collect::<Vec<_>>(),
     "optional":value.optional().iter().map(|(application,answer)|json!({"application":zone_application(*application),"answer":opaque(answer)})).collect::<Vec<_>>(),
     "history":value.history().iter().map(|step|json!({"application":zone_application(step.application),"optional":step.optional.map(opaque)})).collect::<Vec<_>>(),
     "evaluated":{"objects":value.evaluated().objects.values().map(current_characteristics).collect::<Vec<_>>(),"trace":evaluation_trace(&value.evaluated().trace)}
-     });
-    if let Some(sources) = value.departed_prefix_sources() {
-        result["schema"] = json!("zone-replacement-native-work-v3-departure-prefix");
-        result["departed_prefix_sources"] = json!(sources.values().map(|s| json!({"instance":zone_instance(s.instance),"before":object(&s.before),"definition":program::zone_replacements(std::slice::from_ref(&s.definition))})).collect::<Vec<_>>());
-    }
-    if value.selection_origins().is_some() || value.departed_prefix_sources().is_some() {
-        result["schema"] = json!("zone-replacement-native-work-v4-provenance");
-        result["selection_origins"]=value.selection_origins().map(|origins|json!(origins.values().map(|candidate|json!({"key":zone_event(candidate.key),"before_at_choice":object(&candidate.before),"action":opaque(candidate.action),"reason":opaque(candidate.reason),"original":opaque(candidate.original)})).collect::<Vec<_>>())).unwrap_or(Value::Null);
-        result["consumed_source_witnesses"]=json!(value.consumed_sources().iter().map(|(application,source)|json!({"application":zone_application(*application),"source":{"instance":zone_instance(source.instance),"before_at_application":object(&source.before),"definition":program::zone_replacements(std::slice::from_ref(&source.definition))}})).collect::<Vec<_>>());
-        result["aggregate_witness_semantics"] = json!("first-consumed-instance");
-    }
-    result
+    })
 }
 /// Complete privileged selected-object continuation; every accepted prefix stays explicit.
 pub fn resolution_selection_state(value: ResolutionSelectionState<'_>) -> Value {
     let operation = match value.operation {
+        ResolutionSelectionOperation::MillEachPlayer { amount, segments } => {
+            json!({"tag":"MillEachPlayer","amount":amount,"segments":segments.iter().map(|(seat,cards)|json!({"player":seat.0,"cards":cards.iter().map(opaque).collect::<Vec<_>>()})).collect::<Vec<_>>()})
+        }
+        ResolutionSelectionOperation::DestroyAnnouncedTargets { objects } => {
+            json!({"tag":"DestroyAnnouncedTargets","objects":objects.iter().map(opaque).collect::<Vec<_>>()})
+        }
+        ResolutionSelectionOperation::SacrificeContributor { eligible } => {
+            json!({"tag":"SacrificeContributor","eligible":eligible.iter().map(opaque).collect::<Vec<_>>()})
+        }
+        ResolutionSelectionOperation::OtherControlledCreature {
+            source, sacrifice, ..
+        } => json!({"tag":"OtherControlledCreature","source":opaque(source),"sacrifice":sacrifice}),
+        ResolutionSelectionOperation::PutHandCardOnBottom => json!({"tag":"PutHandCardOnBottom"}),
+        ResolutionSelectionOperation::PutInLibrary { objects, placement } => {
+            json!({"tag":"PutInLibrary","placement":opaque(placement),"objects":objects.iter().map(opaque).collect::<Vec<_>>()})
+        }
+        ResolutionSelectionOperation::ShuffleAnnouncedTargets { objects } => {
+            json!({"tag":"ShuffleAnnouncedTargets","objects":objects.iter().map(opaque).collect::<Vec<_>>()})
+        }
+        ResolutionSelectionOperation::ExileAnnouncedTargets { objects } => {
+            json!({"tag":"ExileAnnouncedTargets","objects":objects.iter().map(opaque).collect::<Vec<_>>()})
+        }
+        ResolutionSelectionOperation::ExileLibrarySegment { player, cards } => {
+            json!({"tag":"ExileLibrarySegment","player":player.0,"cards":cards.iter().map(opaque).collect::<Vec<_>>()})
+        }
+        ResolutionSelectionOperation::ReturnAnnouncedTargets { objects } => {
+            json!({"tag":"ReturnAnnouncedTargets","objects":objects.iter().map(opaque).collect::<Vec<_>>()})
+        }
+        ResolutionSelectionOperation::ReturnSingle { object } => {
+            json!({"tag":"ReturnSingle","object":opaque(object)})
+        }
+        ResolutionSelectionOperation::DestroySingle { object } => {
+            json!({"tag":"DestroySingle","object":opaque(object)})
+        }
+        ResolutionSelectionOperation::WholeGroup { group, destination } => {
+            json!({"tag":"WholeGroup","group":opaque(group),"destination":opaque(destination)})
+        }
+        ResolutionSelectionOperation::ExileSingle {
+            object,
+            source,
+            monarch_controller,
+        } => {
+            json!({"tag":"ExileSingle","object":opaque(object),"source":source.map(opaque),"monarch_controller":monarch_controller.map(|seat|seat.0)})
+        }
+        ResolutionSelectionOperation::SacrificeMatching(filter) => match filter {
+            spellwake_engine::program::SacrificeSelection::Subtype(kind) => {
+                json!({"tag":"SacrificeMatching","subtype":creature_type_id(*kind)})
+            }
+            spellwake_engine::program::SacrificeSelection::NontokenCreature => {
+                json!({"tag":"SacrificeMatching","subtype":null})
+            }
+        },
         ResolutionSelectionOperation::Sacrifice { filter } => json!({
             "tag":"Sacrifice",
             "filter":{"required_types":filter.required_types.iter().map(opaque).collect::<Vec<_>>(),
                       "forbidden_types":filter.forbidden_types.iter().map(opaque).collect::<Vec<_>>()}
         }),
+        ResolutionSelectionOperation::ExileLinkedTargets { objects, source } => {
+            json!({"tag":"ExileLinkedTargets","objects":objects.iter().map(opaque).collect::<Vec<_>>(),"source":opaque(source)})
+        }
+        ResolutionSelectionOperation::AttachToSource {
+            source,
+            eligible,
+            optional,
+        } => {
+            json!({"tag":"AttachToSource","source":opaque(source),"eligible":eligible.iter().map(opaque).collect::<Vec<_>>(),"optional":optional})
+        }
+        ResolutionSelectionOperation::CopyDifferentlyNamedTokens => {
+            json!({"tag":"CopyDifferentlyNamedTokens"})
+        }
+        ResolutionSelectionOperation::Amass {
+            amount,
+            army,
+            subtype,
+            eligible,
+        } => {
+            json!({"tag":"Amass","amount":amount,"army":creature_type_id(*army),"subtype":creature_type_id(*subtype),"eligible":eligible.iter().map(opaque).collect::<Vec<_>>()})
+        }
+        ResolutionSelectionOperation::Bolster { amount, eligible } => {
+            json!({"tag":"Bolster","amount":amount,"eligible":eligible.iter().map(opaque).collect::<Vec<_>>()})
+        }
+        ResolutionSelectionOperation::Untap { kind } => json!({"tag":"Untap","kind":opaque(kind)}),
+        ResolutionSelectionOperation::EnterAurasAttachedToSource { source, eligible } => {
+            json!({"tag":"EnterAurasAttachedToSource","source":opaque(source),"eligible":eligible.iter().map(opaque).collect::<Vec<_>>() })
+        }
+        ResolutionSelectionOperation::ChooseCreaturesToKeep => {
+            json!({"tag":"ChooseCreaturesToKeep"})
+        }
+        ResolutionSelectionOperation::LibraryCohortToGraveyard { player, cards } => {
+            json!({"tag":"LibraryCohortToGraveyard","player":player.0,"count":cards.len()})
+        }
+        ResolutionSelectionOperation::ChooseVow => json!({"tag":"ChooseVow"}),
+        ResolutionSelectionOperation::ExileFromHand {
+            allow_battlefield: true,
+        } => json!({"tag":"ExileFromHandOrBattlefield"}),
+        ResolutionSelectionOperation::ExileFromHand {
+            allow_battlefield: false,
+        } => json!({"tag":"ExileFromHand"}),
+        ResolutionSelectionOperation::PayLifeToSaveCreatures { cost, saved } => json!({
+            "tag":"PayLifeToSaveCreatures","cost":cost,"saved":saved.iter()
+                .map(|(player, objects)| json!({"player":player.0,"objects":objects.iter().map(opaque).collect::<Vec<_>>() }))
+                .collect::<Vec<_>>(),
+        }),
+        ResolutionSelectionOperation::SacrificeExceptVowed { kept } => {
+            json!({"tag":"SacrificeExceptVowed","kept":kept.iter().map(opaque).collect::<Vec<_>>()})
+        }
+        ResolutionSelectionOperation::SacrificeColored => json!({"tag":"SacrificeColored"}),
+        ResolutionSelectionOperation::ExileChosen { filter } => {
+            json!({"tag":"ExileChosen","required_types":filter.required_types.iter().map(|v|format!("{v:?}")).collect::<Vec<_>>(),"forbidden_types":filter.forbidden_types.iter().map(|v|format!("{v:?}")).collect::<Vec<_>>()})
+        }
+        ResolutionSelectionOperation::ReturnToHand { filter } => {
+            json!({"tag":"ReturnToHand","required_types":filter.required_types.iter().map(|v|format!("{v:?}")).collect::<Vec<_>>(),"forbidden_types":filter.forbidden_types.iter().map(|v|format!("{v:?}")).collect::<Vec<_>>()})
+        }
+        ResolutionSelectionOperation::ExileChosenGraveyardCards { player, domain } => {
+            json!({"tag":"ExileChosenGraveyardCards","player":player.0,"domain":domain.iter().map(opaque).collect::<Vec<_>>() })
+        }
+        ResolutionSelectionOperation::ExileGraveyardTargets { objects } => {
+            json!({"tag":"ExileGraveyardTargets","objects":objects.iter().map(opaque).collect::<Vec<_>>()})
+        }
+        ResolutionSelectionOperation::ReturnGraveyardCardsToHand { objects } => {
+            json!({"tag":"ReturnTargetGraveyardCreatureToHand","objects":objects.iter().map(opaque).collect::<Vec<_>>() })
+        }
+        ResolutionSelectionOperation::RevealedHand {
+            chooser,
+            minimum_mana_value,
+            nonland_only,
+            count,
+            action,
+        } => {
+            let mut row = json!({"tag":"RevealedHand","chooser":chooser.0,"minimum_mana_value":minimum_mana_value,"action":opaque(action)});
+            if *nonland_only {
+                row["nonland_only"] = json!(true);
+            }
+            if count.get() != 1 {
+                row["count"] = json!(count.get());
+            }
+            row
+        }
+        ResolutionSelectionOperation::GraveyardCreatureToHand => {
+            json!({"tag":"GraveyardCreatureToHand"})
+        }
+        ResolutionSelectionOperation::DiscardUpTo => json!({"tag":"DiscardUpTo"}),
+        ResolutionSelectionOperation::OwnedCommandersToHand => {
+            json!({"tag":"OwnedCommandersToHand"})
+        }
+        ResolutionSelectionOperation::RandomDiscard { object } => {
+            json!({"tag":"RandomDiscard","object":opaque(object)})
+        }
+        ResolutionSelectionOperation::RandomSacrifice { object } => {
+            json!({"tag":"RandomSacrifice","object":opaque(object)})
+        }
         ResolutionSelectionOperation::Discard => json!({"tag":"Discard"}),
     };
     let selected = |rows: &[spellwake_engine::effects::ResolutionAcceptedSelection]| {
@@ -1885,16 +3471,7 @@ pub fn resolution_selection_state(value: ResolutionSelectionState<'_>) -> Value 
             result
         }
     };
-    let mut result =
-        json!({"cursor":resolution_state(value.cursor),"operation":operation,"stage":stage});
-    if let Some(departure) = value.departure {
-        result["schema"] = json!("resolution-selection-native-work-v2-departure");
-        result["departure"] = json!({"requested":String::from(departure.requested.clone()),"players":departure.players.iter().map(|player|player.0).collect::<Vec<_>>(),
-            "original_choices":departure.choices.iter().map(|choice|json!({"player":choice.requirement.player.0,"domain":choice.requirement.domain.iter().map(opaque).collect::<Vec<_>>(),"required":choice.requirement.required.to_string(),"objects":choice.objects.iter().map(opaque).collect::<Vec<_>>(),"before_at_choice":choice.before.iter().map(object).collect::<Vec<_>>(),"forced":choice.forced})).collect::<Vec<_>>(),
-            "owner_choices":departure.owner_choices.iter().map(|choice|json!({"owner":choice.group.owner.0,"original_entrants":choice.group.entrants.iter().map(opaque).collect::<Vec<_>>(),"top_to_bottom":choice.order.top_to_bottom.iter().map(opaque).collect::<Vec<_>>()})).collect::<Vec<_>>(),
-            "held_orders":departure.held_orders.values().map(|order|json!({"owner":order.owner.0,"top_to_bottom":order.top_to_bottom.iter().map(opaque).collect::<Vec<_>>()})).collect::<Vec<_>>()});
-    }
-    result
+    json!({"cursor":resolution_state(value.cursor),"operation":operation,"stage":stage})
 }
 
 /// Full current root projection, adding only fields actually owned by GameState.
@@ -1903,19 +3480,9 @@ pub fn state(value: &GameState, aliases: &AliasContext) -> Result<Value, String>
         matches!(
             c.cause(),
             spellwake_engine::game::GameConclusionCause::Conceded { .. }
-                | spellwake_engine::game::GameConclusionCause::ConcededLastSurvivor { .. }
         )
     }) {
         return Err("historical root projection excludes concession".into());
-    }
-    if value.conclusion().is_some_and(|c| {
-        matches!(
-            c.cause(),
-            spellwake_engine::game::GameConclusionCause::BankExpired { .. }
-                | spellwake_engine::game::GameConclusionCause::ResponseExpiredLastSurvivor { .. }
-        )
-    }) {
-        return Err("historical root projection excludes clock expiry".into());
     }
     let mut result = effect(value.execution(), aliases)?;
     let decision=value.pending_decision().map(|decision|Ok::<Value,String>(json!({"id":decision.id().0.to_string(),"basis":basis(decision.basis()),"chooser":decision.chooser().0,"frame":frame(decision.frame(),value)?}))).transpose()?;
@@ -1954,21 +3521,71 @@ pub(crate) fn draw_origin(value: &DrawOrigin) -> Value {
 }
 fn zone_reason(value: ZoneReason) -> Value {
     match value {
-        ZoneReason::DefaultControllerDeparted => json!({"tag":"DefaultControllerDeparted"}),
-        ZoneReason::PlayerDeparture => json!({"tag":"PlayerDeparture"}),
         ZoneReason::Surveil { player } => json!({"tag":"Surveil","player":player.0}),
         ZoneReason::Mill { player } => json!({"tag":"Mill","player":player.0}),
         ZoneReason::Opening(phase) => json!({"tag":"Opening","phase":opaque(phase)}),
         ZoneReason::LandPlay => json!({"tag":"LandPlay"}),
+        ZoneReason::Manifest => json!({"tag":"Manifest"}),
+        ZoneReason::ReturnFromSacrifice => json!({"tag":"ReturnFromSacrifice"}),
+        ZoneReason::ExileToBattlefield => json!({"tag":"ExileToBattlefield"}),
+        ZoneReason::HandToBattlefield => json!({"tag":"HandToBattlefield"}),
+        ZoneReason::LookTopToBattlefield => json!({"tag":"LookTopToBattlefield"}),
+        ZoneReason::SearchToBattlefield => json!({"tag":"SearchToBattlefield"}),
+        ZoneReason::PutIntoOwnersLibrary(placement) => {
+            json!({"tag":"PutIntoOwnersLibrary","placement":opaque(placement)})
+        }
+        ZoneReason::ShufflePermanentIntoLibrary => json!({"tag":"ShufflePermanentIntoLibrary"}),
+        ZoneReason::ExiledCardsToLibraryBottom => json!({"tag":"ExiledCardsToLibraryBottom"}),
+        ZoneReason::ShuffleHandAndGraveyardIntoLibrary => {
+            json!({"tag":"ShuffleHandAndGraveyardIntoLibrary"})
+        }
+        ZoneReason::ShuffleGraveyardIntoLibrary => json!({"tag":"ShuffleGraveyardIntoLibrary"}),
+        ZoneReason::PutLibraryCohortIntoGraveyard => json!({"tag":"PutLibraryCohortIntoGraveyard"}),
+        ZoneReason::RevealedToGraveyard => json!({"tag":"RevealedToGraveyard"}),
+        ZoneReason::SearchToGraveyard => json!({"tag":"SearchToGraveyard"}),
+        ZoneReason::ReturnFromGraveyardToBattlefield => {
+            json!({"tag":"ReturnFromGraveyardToBattlefield"})
+        }
+        ZoneReason::ReturnFromLinkedExile => json!({"tag":"ReturnFromLinkedExile"}),
         ZoneReason::CastAnnouncement => json!({"tag":"CastAnnouncement"}),
         ZoneReason::PermanentResolution => json!({"tag":"PermanentResolution"}),
         ZoneReason::ResolutionExit => json!({"tag":"ResolutionExit"}),
         ZoneReason::AllTargetsIllegalExit => json!({"tag":"AllTargetsIllegalExit"}),
+        ZoneReason::Foretell => json!({"tag":"Foretell"}),
+        ZoneReason::Suspend => json!({"tag":"Suspend"}),
+        ZoneReason::Plot => json!({"tag":"Plot"}),
+        ZoneReason::AlternativeHandExileCost => json!({"tag":"AlternativeHandExileCost"}),
+        ZoneReason::EscapeCost => json!({"tag":"EscapeCost"}),
+        ZoneReason::DelveCost => json!({"tag":"DelveCost"}),
+        ZoneReason::ExiledByEffect => json!({"tag":"ExiledByEffect"}),
+        ZoneReason::Destroyed => json!({"tag":"Destroyed"}),
         ZoneReason::ReturnToOwnersHand => json!({"tag":"ReturnToOwnersHand"}),
         ZoneReason::Countered => json!({"tag":"Countered"}),
+        ZoneReason::ExileCost => json!({"tag":"ExileCost"}),
         ZoneReason::SacrificeCost => json!({"tag":"SacrificeCost"}),
         ZoneReason::Sacrifice { player } => json!({"tag":"Sacrifice","player":player.0}),
         ZoneReason::Draw { player } => json!({"tag":"Draw","player":player.0}),
+        ZoneReason::CascadeExile => json!({"tag":"CascadeExile"}),
+        ZoneReason::CascadeBottom => json!({"tag":"CascadeBottom"}),
+        ZoneReason::MadnessDeclined => json!({"tag":"MadnessDeclined"}),
+        ZoneReason::CommanderReturn => json!({"tag":"CommanderReturn"}),
+        ZoneReason::PlayerDeparture => json!({"tag":"PlayerDeparture"}),
+        ZoneReason::PersistReturn => json!({"tag":"PersistReturn"}),
+        ZoneReason::UndyingReturn => json!({"tag":"UndyingReturn"}),
+        ZoneReason::NinjutsuEntry => json!({"tag":"NinjutsuEntry"}),
+        ZoneReason::UnearthReturn => json!({"tag":"UnearthReturn"}),
+        ZoneReason::DashReturn => json!({"tag":"DashReturn"}),
+        ZoneReason::WarpExile => json!({"tag":"WarpExile"}),
+        ZoneReason::Ingest { player } => json!({"tag":"Ingest","player":player.0}),
+        ZoneReason::UnearthExile => json!({"tag":"UnearthExile"}),
+        ZoneReason::SearchToExile => json!({"tag":"SearchToExile"}),
+        ZoneReason::TransfigureEntry => json!({"tag":"TransfigureEntry"}),
+        ZoneReason::SearchToHand => json!({"tag":"SearchToHand"}),
+        ZoneReason::LookTopToHand => json!({"tag":"LookTopToHand"}),
+        ZoneReason::TransmuteDiscard { player } => {
+            json!({"tag":"TransmuteDiscard","player":player.0})
+        }
+        ZoneReason::CycleDiscard { player } => json!({"tag":"CycleDiscard","player":player.0}),
         ZoneReason::Discard { player } => json!({"tag":"Discard","player":player.0}),
         ZoneReason::StateBased(causes) => {
             json!({"tag":"StateBased","causes":causes.iter().map(opaque).collect::<Vec<_>>()})
@@ -1979,9 +3596,6 @@ fn zone_reason(value: ZoneReason) -> Value {
 fn cause(value: &EventCause) -> Value {
     macro_rules! tagged { ($tag:literal, $($key:literal:$value:expr),* $(,)?)=>{json!({"tag":$tag,$($key:$value),*})}; }
     match value {
-        EventCause::PlayerDeparture { players } => {
-            json!({"tag":"PlayerDeparture","players":players.iter().map(|seat| seat.0).collect::<Vec<_>>()})
-        }
         EventCause::OpeningShuffle { player, phase } => {
             tagged!("OpeningShuffle","player":player.0,"phase":opaque(phase))
         }
@@ -1991,8 +3605,41 @@ fn cause(value: &EventCause) -> Value {
         EventCause::OpeningCardsMoved { phase, cohort } => {
             tagged!("OpeningCardsMoved","phase":opaque(phase),"cohort":cohort.iter().map(|seat|seat.0).collect::<Vec<_>>())
         }
+        EventCause::Foretell {
+            actor,
+            source,
+            payment,
+        } => {
+            json!({"tag":"Foretell","actor":actor.0,"source":opaque(source),"payment":spend(payment)})
+        }
+        EventCause::Suspend {
+            actor,
+            source,
+            payment,
+        } => {
+            json!({"tag":"Suspend","actor":actor.0,"source":opaque(source),"payment":spend(payment)})
+        }
+        EventCause::TurnFaceUp {
+            actor,
+            source,
+            payment,
+        } => {
+            json!({"tag":"TurnFaceUp","actor":actor.0,"source":opaque(source),"payment":spend(payment)})
+        }
+        EventCause::Plot {
+            actor,
+            source,
+            payment,
+        } => json!({"tag":"Plot","actor":actor.0,"source":opaque(source),"payment":spend(payment)}),
         EventCause::LandPlay { actor } => tagged!("LandPlay","actor":actor.0),
         EventCause::CastAnnouncement { entry } => tagged!("CastAnnouncement","entry":opaque(entry)),
+        EventCause::CastLifePayment { entry } => {
+            json!({"tag":"CastLifePayment","entry":opaque(entry)})
+        }
+        EventCause::EscapePayment { entry } => json!({"tag":"EscapePayment","entry":opaque(entry)}),
+        EventCause::CastObjectPayment { entry, resource } => {
+            json!({"tag":"CastObjectPayment","entry":opaque(entry),"resource":cast_resource(*resource)})
+        }
         EventCause::CastCompleted { entry } => tagged!("CastCompleted","entry":opaque(entry)),
         EventCause::ActivatedAbilityCost { entry, ability } => {
             tagged!("ActivatedAbilityCost","entry":opaque(entry),"ability":ability.0)
@@ -2010,6 +3657,9 @@ fn cause(value: &EventCause) -> Value {
             tagged!("ManaProduced","source":opaque(source),"ability":mana_ref::view(*ability))
         }
         EventCause::ManaDebited { entry } => tagged!("ManaDebited","entry":opaque(entry)),
+        EventCause::TriggerTargetsBound { entry } => {
+            json!({"tag":"TriggerTargetsBound","entry":opaque(entry)})
+        }
         EventCause::Instruction { entry, instruction } => {
             tagged!("Instruction","entry":opaque(entry),"instruction":instruction)
         }
@@ -2033,9 +3683,13 @@ fn cause(value: &EventCause) -> Value {
         EventCause::StateBasedActions { event, boundary } => {
             tagged!("StateBasedActions","event":check_trace::check_event_view(*event),"boundary":check_trace::check_boundary_view(*boundary))
         }
+        EventCause::PlayerDeparture => tagged!("PlayerDeparture",),
         EventCause::DamageAdjusted { batch } => tagged!("DamageAdjusted","batch":opaque(batch)),
         EventCause::DamageDealt { batch } => tagged!("DamageDealt","batch":opaque(batch)),
         EventCause::DamageResults { batch } => tagged!("DamageResults","batch":opaque(batch)),
+        EventCause::AttackCostPaid { position, player } => {
+            tagged!("AttackCostPaid","position":damage_trace::turn_position_view(*position),"player":player.0)
+        }
         EventCause::AttackTaps { position, actor } => {
             tagged!("AttackTaps","position":damage_trace::turn_position_view(*position),"actor":actor.0)
         }
@@ -2058,6 +3712,9 @@ fn cause(value: &EventCause) -> Value {
         EventCause::ManaPoolsEmptied { ended } => {
             tagged!("ManaPoolsEmptied","ended":damage_trace::turn_position_view(*ended))
         }
+        EventCause::TurnOrderAdvanced { position } => {
+            tagged!("TurnOrderAdvanced","position":damage_trace::turn_position_view(*position))
+        }
         EventCause::StepBegan { position } => {
             tagged!("StepBegan","position":damage_trace::turn_position_view(*position))
         }
@@ -2074,9 +3731,6 @@ pub fn library_action(value: &spellwake_engine::effects::LibraryAction) -> Value
 }
 pub fn occurrence(value: &RulesOccurrence) -> Value {
     match value {
-        RulesOccurrence::ObjectLeftGame { before } => {
-            json!({"tag":"ObjectLeftGame","before":appearance(before)})
-        }
         RulesOccurrence::LibraryAction(value) => {
             json!({"tag":"LibraryAction","action":library_action(value)})
         }
@@ -2102,14 +3756,266 @@ pub fn occurrence(value: &RulesOccurrence) -> Value {
             json!({"tag":"CreatureTypeChosen","entry":opaque(entry),"instruction":instruction.to_string(),"slot":slot.ordinal().to_string(),"chooser":chooser.0,"value":creature_type_id(*value)})
         }
         RulesOccurrence::ZoneChange(value) => {
-            json!({"tag":"ZoneChange","before":appearance(&value.before),"after":appearance(&value.after),"reason":zone_reason(value.reason)})
+            let mut row = json!({"tag":"ZoneChange","before":appearance(&value.before),"after":appearance(&value.after),"reason":zone_reason(value.reason)});
+            if !value.additional_arrivals.is_empty() {
+                row["additionalArrivals"] = json!(
+                    value
+                        .additional_arrivals
+                        .iter()
+                        .map(appearance)
+                        .collect::<Vec<_>>()
+                );
+            }
+            if value.madness {
+                row["madness"] = json!(true);
+            }
+            row
         }
         RulesOccurrence::StatusChange { change, reason } => {
             json!({"tag":"StatusChange","before":object(&change.before),"after":object(&change.after),"reason":opaque(reason)})
         }
+        RulesOccurrence::StackExiledToEndTurn { entries } => {
+            json!({"tag":"StackExiledToEndTurn","entries":entries.iter().map(opaque).collect::<Vec<_>>()})
+        }
+        RulesOccurrence::GraveyardReturnPaid {
+            controller,
+            mana_value,
+            source,
+        } => {
+            json!({"tag":"GraveyardReturnPaid","controller":controller.0,"mana_value":mana_value,"source":opaque(source.object.id())})
+        }
+        RulesOccurrence::CardVoteCast { player, object } => {
+            json!({"tag":"CardVoteCast","player":player.0,"object":opaque(object)})
+        }
+        RulesOccurrence::CoinFlipped { player, won } => {
+            json!({"tag":"CoinFlipped","player":player.0,"won":won})
+        }
         RulesOccurrence::Shuffled(value) => json!({"tag":"Shuffled","value":shuffle(value)}),
         RulesOccurrence::FailedDraw { player, attempts } => {
             json!({"tag":"FailedDraw","player":player.0,"attempts":attempts})
+        }
+        RulesOccurrence::PermanentTargeted {
+            object,
+            entry,
+            controller,
+            ..
+        } => {
+            json!({"tag":"WardTargeted","object":opaque(object),"entry":opaque(entry),"controller":controller.0})
+        }
+        RulesOccurrence::RegenerationShieldCreated {
+            object,
+            entry,
+            instruction,
+        } => {
+            json!({"tag":"RegenerationShieldCreated","object":opaque(object),"entry":opaque(entry),"instruction":instruction})
+        }
+        RulesOccurrence::PermanentRegenerated {
+            object,
+            entry,
+            instruction,
+            removed_damage,
+            removed_from_combat,
+        } => {
+            json!({"tag":"PermanentRegenerated","object":opaque(object),"entry":opaque(entry),"instruction":instruction,"removed_damage":removed_damage,"removed_from_combat":removed_from_combat})
+        }
+        RulesOccurrence::CreaturesGoaded { player, objects } => {
+            json!({"tag":"CreaturesGoaded","player":player.0,"objects":objects.iter().map(opaque).collect::<Vec<_>>()})
+        }
+        RulesOccurrence::AdditionalCombatCreated => json!({"tag":"AdditionalCombatCreated"}),
+        RulesOccurrence::ExtraTurnCreated { player } => {
+            json!({"tag":"ExtraTurnCreated","player":player.0})
+        }
+        RulesOccurrence::CardDrawOrdinal { player, number } => {
+            json!({"tag":"CardDrawOrdinal","player":player.0,"number":number})
+        }
+        RulesOccurrence::CityBlessingGained { player } => {
+            json!({"tag":"CityBlessingGained","player":player.0})
+        }
+        RulesOccurrence::MonarchChanged { before, after } => {
+            json!({"tag":"MonarchChanged","before":before.map(|seat|seat.0),"after":after.map(|seat|seat.0)})
+        }
+        RulesOccurrence::TurnPreventionCreated {
+            creator,
+            instruction,
+            controller,
+            filter,
+        } => {
+            json!({"tag":"TurnPreventionCreated","creator":opaque(creator),"instruction":instruction,"controller":controller.0,"filter":opaque(filter)})
+        }
+        RulesOccurrence::CommanderTypeManaSpent {
+            source,
+            player,
+            units,
+        } => {
+            json!({"tag":"CommanderTypeManaSpent","source":appearance(source),"player":player.0,"units":units})
+        }
+        RulesOccurrence::ReflexiveDiscardDamage {
+            source,
+            controller,
+            amount,
+        } => {
+            json!({"tag":"ReflexiveDiscardDamage","source":appearance(source),"controller":controller.0,"amount":amount})
+        }
+        RulesOccurrence::ManaAddedByEffect {
+            entry,
+            player,
+            produced,
+            before,
+            after,
+        } => {
+            json!({"tag":"ManaAddedByEffect","entry":opaque(entry),"player":player.0,"produced":program::mana_values(produced),"before":program::mana_values(before),"after":program::mana_values(after)})
+        }
+        RulesOccurrence::AttackCostPaid {
+            player,
+            cost,
+            white_symbols_paid_with_life,
+            mana,
+        } => {
+            json!({"tag":"AttackCostPaid","player":player.0,"generic":cost.generic,"white_phyrexian":cost.white_phyrexian,"life_symbols":white_symbols_paid_with_life,"mana":mana.iter().map(|s|json!([format!("{:?}",s.mana_type),s.amount])).collect::<Vec<_>>()})
+        }
+        RulesOccurrence::AttackDefenderChanged { attacker, from, to } => {
+            json!({"tag":"AttackDefenderChanged","attacker":opaque(attacker),"from":target(*from),"to":target(*to)})
+        }
+        RulesOccurrence::Mutated { permanent } => {
+            json!({"tag":"Mutated","object":opaque(permanent)})
+        }
+        RulesOccurrence::Phased { objects, out } => {
+            json!({"tag":"Phased","objects":objects.iter().map(opaque).collect::<Vec<_>>(),"out":out})
+        }
+        RulesOccurrence::EmblemActivated {
+            entry,
+            emblem,
+            controller,
+        } => {
+            json!({"tag":"EmblemActivated","entry":opaque(entry),"emblem":emblem.sequence(),"controller":controller.0})
+        }
+        RulesOccurrence::EmblemCreated { emblem } => {
+            json!({"tag":"EmblemCreated","id":emblem.id.sequence(),"controller":emblem.controller.0,"definition":format!("{:?}", emblem.definition)})
+        }
+        RulesOccurrence::EmblemDamagePrevented {
+            emblem,
+            source,
+            batch,
+            stage,
+            recipient,
+            allocations,
+        } => {
+            json!({"tag":"EmblemDamagePrevented","emblem":opaque(emblem),"source":opaque(source),"batch":opaque(batch),"stage":stage,"recipient":opaque(recipient),"allocations":allocations.iter().map(|a|json!({"attempt":opaque(a.attempt),"amount":a.amount})).collect::<Vec<_>>()})
+        }
+        RulesOccurrence::StaticDamageMultiplied {
+            source,
+            batch,
+            stage,
+            attempt,
+            before,
+            after,
+        } => json!({
+            "tag":"StaticDamageMultiplied","source":opaque(source),"batch":opaque(batch),
+            "stage":stage,"attempt":opaque(attempt),"before":before,"after":after,
+        }),
+        RulesOccurrence::DamageReplacedWithMill {
+            source,
+            batch,
+            stage,
+            player,
+            allocations,
+        } => {
+            json!({"tag":"DamageReplacedWithMill","source":opaque(source),"batch":opaque(batch),"stage":stage,
+                "player":player.0,"allocations":allocations.iter().map(|a|json!({"attempt":opaque(a.attempt),"amount":a.amount})).collect::<Vec<_>>()})
+        }
+        RulesOccurrence::StaticDamagePrevented {
+            source,
+            batch,
+            stage,
+            recipient,
+            allocations,
+        } => {
+            json!({"tag":"StaticDamagePrevented","source":opaque(source),"batch":opaque(batch),"stage":stage,"recipient":opaque(recipient),"allocations":allocations.iter().map(|a|json!({"attempt":opaque(a.attempt),"amount":a.amount})).collect::<Vec<_>>()})
+        }
+        RulesOccurrence::TurnDamagePrevented {
+            creator,
+            instruction,
+            batch,
+            stage,
+            recipient,
+            allocations,
+        } => {
+            json!({"tag":"TurnDamagePrevented","creator":opaque(creator),"instruction":instruction,"batch":opaque(batch),"stage":stage,"recipient":opaque(recipient),"allocations":allocations.iter().map(|a|json!({"attempt":opaque(a.attempt),"amount":a.amount})).collect::<Vec<_>>()})
+        }
+        RulesOccurrence::SpellControllerChanged {
+            entry,
+            before,
+            after,
+        } => {
+            json!({"tag":"SpellControllerChanged","entry":opaque(entry),"before":before.0,"after":after.0})
+        }
+        RulesOccurrence::StackTargetsChanged {
+            entry,
+            before,
+            after,
+        } => {
+            let choices = |bounds: &[spellwake_engine::targets::TargetChoice]| {
+                bounds.iter().map(|choice| json!({"id":choice.id.0,"clause":choice.clause.0,"target":target(choice.target)})).collect::<Vec<_>>()
+            };
+            json!({"tag":"StackTargetsChanged","entry":opaque(entry),"before":choices(before),"after":choices(after)})
+        }
+        RulesOccurrence::AbilityCountered { entry } => {
+            json!({"tag":"AbilityCountered","entry":opaque(entry)})
+        }
+        RulesOccurrence::SpeedChanged {
+            player,
+            before,
+            after,
+        } => json!({"tag":"SpeedChanged","player":player.0,"before":before,"after":after}),
+        RulesOccurrence::PowerAbilityResolved {
+            source,
+            kind,
+            contributors,
+            charge_placed,
+        } => {
+            let mut value = json!({"tag":"PowerAbilityResolved","source":opaque(source),"kind":format!("{kind:?}"),"contributors":contributors.iter().map(opaque).collect::<Vec<_>>()});
+            if let Some(amount) = charge_placed {
+                value["charge_placed"] = json!(amount);
+            }
+            value
+        }
+        RulesOccurrence::DayNightChanged { before, after } => {
+            json!({"tag":"DayNightChanged","before":format!("{before:?}"),"after":format!("{after:?}")})
+        }
+        RulesOccurrence::Transformed { before, after } => {
+            json!({"tag":"Transformed","before":appearance(before),"after":appearance(after)})
+        }
+        RulesOccurrence::TurnedFaceUp {
+            before,
+            after,
+            ability,
+        } => {
+            json!({"tag":"TurnedFaceUp","before":appearance(before),"after":appearance(after),"ability":ability})
+        }
+        RulesOccurrence::FaceDownRevealed { object: value } => {
+            json!({"tag":"FaceDownRevealed","object":object(value)})
+        }
+        RulesOccurrence::Explored { source, controller } => {
+            json!({"tag":"Explored","source":object(source),"controller":controller.0})
+        }
+        RulesOccurrence::TurnedFaceUpByEffect { before, after } => {
+            json!({"tag":"TurnedFaceUpByEffect","before":appearance(before),"after":appearance(after)})
+        }
+        RulesOccurrence::LibraryCardRevealed { object: value } => {
+            json!({"tag":"LibraryCardRevealed","object":object(value)})
+        }
+        RulesOccurrence::MiracleRevealed { object: value } => {
+            json!({"tag":"MiracleRevealed","object":object(&value.object)})
+        }
+        RulesOccurrence::HandCardRevealed { object: value } => {
+            json!({"tag":"HandCardRevealed","object":object(value)})
+        }
+        RulesOccurrence::AttachmentChanged {
+            source,
+            before,
+            after,
+        } => {
+            json!({"tag":"AttachmentChanged","source":opaque(source),"before":before.map(target),"after":after.map(target)})
         }
         RulesOccurrence::CastCompleted(value) => {
             json!({"tag":"CastCompleted","cast":cast_occurrence(value)})
@@ -2144,12 +4050,34 @@ pub fn occurrence(value: &RulesOccurrence) -> Value {
         } => {
             json!({"tag":"ManaDebited","payment":payment(value),"type":opaque(mana_type),"amount":amount,"before":before,"after":after})
         }
+        RulesOccurrence::ManaExpired {
+            player,
+            expired,
+            remaining,
+        } => {
+            json!({"tag":"ManaExpired","player":player.0,"expired":program::mana_values(expired),"remaining":program::mana_values(remaining)})
+        }
+        RulesOccurrence::ArtifactTappedForMana { source, actor } => {
+            json!({"tag":"ArtifactTappedForMana","source":opaque(source),"actor":actor.0})
+        }
         RulesOccurrence::ManaPoolEmptied { player, previous } => {
             json!({"tag":"ManaPoolEmptied","player":player.0,"previous":previous.iter().map(|(kind,amount)|(opaque(kind),amount)).collect::<BTreeMap<_,_>>()})
         }
+        RulesOccurrence::AbilityCopied {
+            entry,
+            original,
+            controller,
+            targets,
+        } => {
+            json!({"tag":"AbilityCopied","entry":opaque(entry),"original":opaque(original),"controller":controller.0,"targets":targets.iter().map(|t|json!({"id":t.id.0,"clause":t.clause.0,"target":target(t.target)})).collect::<Vec<_>>()})
+        }
         RulesOccurrence::CopyCreated {
+            copiable_keywords,
             copiable_card_types,
             copiable_creature_subtypes,
+            copiable_spell_subtypes,
+            copiable_artifact_subtypes,
+            copiable_enchantment_subtypes,
             copiable_names,
             copiable_supertypes,
             copiable_triggered,
@@ -2158,7 +4086,36 @@ pub fn occurrence(value: &RulesOccurrence) -> Value {
             controller,
             targets,
         } => {
-            json!({"tag":"CopyCreated","copiable_card_types":copiable_card_types.iter().map(opaque).collect::<Vec<_>>(),"copiable_creature_subtypes":copiable_creature_subtypes.iter().map(|id|creature_type_id(*id)).collect::<Vec<_>>(),"copiable_names":copiable_names,"copiable_supertypes":copiable_supertypes.iter().map(opaque).collect::<Vec<_>>(),"copiable_triggered":program::triggered_abilities(copiable_triggered),"entry":opaque(entry),"original":opaque(original),"controller":controller.0,"targets":targets.iter().map(|choice|json!({"clause":choice.clause.0,"target":target(choice.target)})).collect::<Vec<_>>()})
+            let mut value = json!({"tag":"CopyCreated","copiable_card_types":copiable_card_types.iter().map(opaque).collect::<Vec<_>>(),"copiable_creature_subtypes":copiable_creature_subtypes.iter().map(|id|creature_type_id(*id)).collect::<Vec<_>>(),"copiable_names":copiable_names,"copiable_supertypes":copiable_supertypes.iter().map(opaque).collect::<Vec<_>>(),"copiable_triggered":program::triggered_abilities(copiable_triggered),"entry":opaque(entry),"original":opaque(original),"controller":controller.0,"targets":targets.iter().map(|choice|json!({"clause":choice.clause.0,"target":target(choice.target)})).collect::<Vec<_>>()});
+            if !copiable_spell_subtypes.is_empty() {
+                value["copiable_spell_subtypes"] = json!(
+                    copiable_spell_subtypes
+                        .iter()
+                        .map(|kind| kind.wire_label())
+                        .collect::<Vec<_>>()
+                );
+            }
+            if !copiable_artifact_subtypes.is_empty() {
+                value["copiable_artifact_subtypes"] = json!(
+                    copiable_artifact_subtypes
+                        .iter()
+                        .map(|kind| kind.wire_label())
+                        .collect::<Vec<_>>()
+                );
+            }
+            if !copiable_enchantment_subtypes.is_empty() {
+                value["copiable_enchantment_subtypes"] = json!(
+                    copiable_enchantment_subtypes
+                        .iter()
+                        .map(|kind| kind.wire_label())
+                        .collect::<Vec<_>>()
+                );
+            }
+            if !copiable_keywords.is_empty() {
+                value["copiable_keywords"] =
+                    json!(copiable_keywords.iter().map(opaque).collect::<Vec<_>>());
+            }
+            value
         }
         RulesOccurrence::WorldTenureChanged(change) => {
             let (kind, object, tenure) = match change {
@@ -2177,11 +4134,17 @@ pub fn occurrence(value: &RulesOccurrence) -> Value {
         RulesOccurrence::CopyCeased { copy: value } => {
             json!({"tag":"CopyCeased","copy":copy(value)})
         }
+        RulesOccurrence::PlayerProtectionGranted { player, color } => {
+            json!({"tag":"PlayerProtectionGranted","player":player.0,"color":format!("{color:?}")})
+        }
         RulesOccurrence::ContinuousEffectCreated {
             effect,
             appearances,
         } => {
             json!({"tag":"ContinuousEffectCreated","effect":continuous_effect(effect),"appearances":appearances.iter().map(appearance_change).collect::<Vec<_>>()})
+        }
+        RulesOccurrence::SourceControlEffectsEnded { effects } => {
+            json!({"tag":"SourceControlEffectsEnded","effects":effects.iter().map(opaque).collect::<Vec<_>>()})
         }
         RulesOccurrence::CleanupCharacteristics {
             expired_effects,
@@ -2192,6 +4155,96 @@ pub fn occurrence(value: &RulesOccurrence) -> Value {
         }
         RulesOccurrence::CombatantsRemoved { participants } => {
             json!({"tag":"CombatantsRemoved","participants":participants.iter().map(combatant).collect::<Vec<_>>()})
+        }
+        RulesOccurrence::TimeCounterRemoved {
+            object,
+            before,
+            after,
+        } => {
+            json!({"tag":"TimeCounterRemoved","object":opaque(object),"before":before,"after":after})
+        }
+        RulesOccurrence::FadeCounterRemoved {
+            object,
+            before,
+            after,
+        } => {
+            json!({"tag":"FadeCounterRemoved","object":opaque(object),"before":before,"after":after})
+        }
+        RulesOccurrence::PermanentCountersDoubled { selected } => {
+            json!({"tag":"PermanentCountersDoubled","selected":selected.iter().map(|(who,kinds)|json!({"recipient":target(*who),"counters":kinds.iter().map(opaque).collect::<Vec<_>>()})).collect::<Vec<_>>()})
+        }
+        RulesOccurrence::Proliferated { player, selected } => {
+            json!({"tag":"Proliferated","player":player.0,"selected":selected.iter().map(|(who,kinds)|json!({"recipient":target(*who),"counters":kinds.iter().map(opaque).collect::<Vec<_>>()})).collect::<Vec<_>>()})
+        }
+        RulesOccurrence::AgeCounterPlaced {
+            object,
+            before,
+            after,
+        } => {
+            json!({"tag":"AgeCounterPlaced","object":opaque(object),"before":before,"after":after})
+        }
+        RulesOccurrence::LoreCountersChanged {
+            object,
+            before,
+            after,
+            exact_chapter_only,
+        } => {
+            json!({"tag":"LoreCountersChanged","object":opaque(object),"before":before,"after":after,"exact_chapter_only":exact_chapter_only})
+        }
+        RulesOccurrence::SubtypeThresholdMet {
+            object,
+            definition,
+            grant,
+        } => {
+            json!({"tag":"SubtypeThresholdMet","object":opaque(object),"definition":opaque(definition),"grant":format!("{grant:?}")})
+        }
+        RulesOccurrence::CounterThresholdMet {
+            object,
+            definition,
+            grant,
+            kind,
+        } => {
+            if *kind == spellwake_engine::effects::CounterKind::Page {
+                json!({"tag":"PageThresholdMet","object":opaque(object),"definition":opaque(definition),"grant":format!("{grant:?}")})
+            } else {
+                json!({"tag":"CounterThresholdMet","object":opaque(object),"definition":opaque(definition),"grant":format!("{grant:?}"),"kind":format!("{kind:?}")})
+            }
+        }
+        RulesOccurrence::PermanentCounterChanged {
+            object,
+            kind,
+            before,
+            after,
+        } => {
+            json!({"tag":"PermanentCounterChanged","object":opaque(object),"kind":format!("{kind:?}"),"before":before,"after":after})
+        }
+        RulesOccurrence::SuspectCountersChanged {
+            object,
+            before,
+            after,
+        } => {
+            json!({"tag":"SuspectCountersChanged","object":opaque(object),"before":before,"after":after})
+        }
+        RulesOccurrence::ChargeCountersChanged {
+            object,
+            before,
+            after,
+        } => {
+            json!({"tag":"ChargeCountersChanged","object":opaque(object),"before":before,"after":after})
+        }
+        RulesOccurrence::StorageCountersChanged {
+            object,
+            before,
+            after,
+        } => {
+            json!({"tag":"StorageCountersChanged","object":opaque(object),"before":before,"after":after})
+        }
+        RulesOccurrence::LoyaltyCountersChanged {
+            object,
+            before,
+            after,
+        } => {
+            json!({"tag":"LoyaltyCountersChanged","object":opaque(object),"before":before,"after":after})
         }
         RulesOccurrence::CountersPlaced {
             object,
@@ -2221,6 +4274,9 @@ pub fn occurrence(value: &RulesOccurrence) -> Value {
         } => {
             json!({"tag":"DamagePrevented","application":damage_trace::damage_journal_view(&DamageJournal{preventions:vec![application.clone()],..Default::default()}).preventions,"damage_before":damage_before.iter().map(|(attempt,amount)|(opaque(attempt),amount)).collect::<BTreeMap<_,_>>(),"shield_before":shield_before})
         }
+        RulesOccurrence::ProtectionPrevented(value) => {
+            json!({"tag":"ProtectionPrevented","value":damage_trace::protection_view(value)})
+        }
         RulesOccurrence::DamageMultiplied(value) => {
             json!({"tag":"DamageMultiplied","value":damage_trace::damage_journal_view(&DamageJournal{multiplications:vec![value.clone()],..Default::default()}).multiplications})
         }
@@ -2228,6 +4284,7 @@ pub fn occurrence(value: &RulesOccurrence) -> Value {
             damage,
             kind,
             origin,
+            ..
         } => {
             json!({"tag":"DamageDealt","damage":damage_trace::damage_journal_view(&DamageJournal{applied:vec![damage.clone()],..Default::default()}).applied,"kind":opaque(kind),"origin":damage_trace::damage_origin_view(*origin)})
         }
@@ -2239,15 +4296,62 @@ pub fn occurrence(value: &RulesOccurrence) -> Value {
         } => {
             json!({"tag":"DamageResult","recipient":damage_trace::damage_recipient_view(*recipient),"before":before,"after":after,"components":components.iter().map(opaque).collect::<Vec<_>>()})
         }
+        RulesOccurrence::PowerToughnessCountersRemoved {
+            object,
+            before,
+            after,
+        } => {
+            json!({"tag":"PowerToughnessCountersRemoved","object":opaque(object),"before":program::counters(before),"after":program::counters(after)})
+        }
+        RulesOccurrence::CounterRemovedForGraft {
+            object,
+            before,
+            after,
+        } => {
+            json!({"tag":"CounterRemovedForGraft","object":opaque(object),"before":program::counters(before),"after":program::counters(after)})
+        }
+        RulesOccurrence::CreatureEvolved { object } => {
+            json!({"tag":"CreatureEvolved","object":opaque(object)})
+        }
+        RulesOccurrence::CreatureMentored { source, target } => {
+            json!({"tag":"CreatureMentored","source":opaque(source),"target":opaque(target)})
+        }
+        RulesOccurrence::BecameRenowned { object } => {
+            json!({"tag":"BecameRenowned","object":opaque(object)})
+        }
+        RulesOccurrence::ExperienceCountersChanged {
+            player,
+            before,
+            after,
+        } => {
+            json!({"tag":"ExperienceCountersChanged","player":player.0,"before":before,"after":after})
+        }
+        RulesOccurrence::PlayerPoisoned {
+            player,
+            before,
+            after,
+            contributions,
+        } => {
+            json!({"tag":"PlayerPoisoned","player":player.0,"before":before,"after":after,"contributions":contributions.iter().map(|c|json!({"origin":opaque(c.origin),"source":opaque(c.source),"controller":c.controller.0,"amount":c.amount})).collect::<Vec<_>>()})
+        }
         RulesOccurrence::PlayerLost { player, reasons } => {
             json!({"tag":"PlayerLost","player":player.0,"reasons":reasons.iter().map(opaque).collect::<Vec<_>>()})
+        }
+        RulesOccurrence::TurnsSkipped {
+            players,
+            expired_effects,
+        } => {
+            json!({"tag":"TurnsSkipped","players":players.iter().map(|seat|seat.0).collect::<Vec<_>>(),"expired_effects":expired_effects.iter().map(opaque).collect::<Vec<_>>()})
+        }
+        RulesOccurrence::PermanentLeftGame { before } => {
+            json!({"tag":"PermanentLeftGame","object":opaque(before.object.id())})
         }
         RulesOccurrence::AttackersDeclared {
             origin,
             selected,
             membership,
         } => {
-            json!({"tag":"AttackersDeclared","origin":opaque(origin),"selected":selected.iter().map(attack).collect::<Vec<_>>(),"membership":membership.iter().map(|row|json!({"object":opaque(row.combatant().object()),"controller":row.combatant().controller().0,"control_epoch":opaque(row.combatant().control_epoch()),"defender":row.defender().0,"block_status":opaque(row.block_status())})).collect::<Vec<_>>()})
+            json!({"tag":"AttackersDeclared","origin":opaque(origin),"selected":selected.iter().map(attack).collect::<Vec<_>>(),"membership":membership.iter().map(attacking_creature).collect::<Vec<_>>()})
         }
         RulesOccurrence::BlockersDeclared {
             origin,
@@ -2255,13 +4359,20 @@ pub fn occurrence(value: &RulesOccurrence) -> Value {
             membership,
             statuses,
         } => {
-            json!({"tag":"BlockersDeclared","origin":opaque(origin),"selected":selected.iter().map(block).collect::<Vec<_>>(),"membership":membership.iter().map(|row|json!({"object":opaque(row.combatant().object()),"controller":row.combatant().controller().0,"control_epoch":opaque(row.combatant().control_epoch()),"attacker":row.attacker().map(opaque)})).collect::<Vec<_>>(),"statuses":statuses.iter().map(|(object,before,after)|json!({"object":opaque(object),"before":opaque(before),"after":opaque(after)})).collect::<Vec<_>>()})
+            json!({"tag":"BlockersDeclared","origin":opaque(origin),"selected":selected.iter().map(block).collect::<Vec<_>>(),"membership":membership.iter().map(blocking_creature).collect::<Vec<_>>(),"statuses":statuses.iter().map(|(object,before,after)|json!({"object":opaque(object),"before":opaque(before),"after":opaque(after)})).collect::<Vec<_>>()})
         }
         RulesOccurrence::CombatDamageAssigned(value) => {
             json!({"tag":"CombatDamageAssigned","value":assignment(value)})
         }
         RulesOccurrence::CombatEnded { previous } => {
             json!({"tag":"CombatEnded","previous":previous.as_ref().map(combat)})
+        }
+        RulesOccurrence::FinalSagaChapterCompleted {
+            saga,
+            controller,
+            mana_value,
+        } => {
+            json!({"tag":"FinalSagaChapterCompleted","saga":opaque(saga),"controller":controller.0,"mana_value":mana_value})
         }
         RulesOccurrence::EntryCompleted {
             entry,
@@ -2272,7 +4383,7 @@ pub fn occurrence(value: &RulesOccurrence) -> Value {
             json!({"tag":"EntryCompleted","entry":opaque(entry),"controller":controller.0,"kind":kind(value),"completion":opaque(completion)})
         }
         RulesOccurrence::StepBegan { position, active } => {
-            json!({"tag":"StepBegan","position":damage_trace::turn_position_view(*position),"active":active.map(|seat| seat.0)})
+            json!({"tag":"StepBegan","position":damage_trace::turn_position_view(*position),"active":active.0})
         }
     }
 }
@@ -2283,80 +4394,62 @@ pub fn trigger_placement(value: &spellwake_engine::occurrence::TriggerPlacement)
 }
 /// Current native required target frame, using the shared TargetRef encoder.
 pub fn trigger_target_view(value: &spellwake_engine::occurrence::TriggerTargetChoice) -> Value {
-    json!({"revision":value.revision().to_string(),"boundary":check_trace::check_boundary_view(value.boundary()),
+    let mut result = json!({"revision":value.revision().to_string(),"boundary":check_trace::check_boundary_view(value.boundary()),
         "event":check_trace::check_event_view(value.event()),"wave":value.wave().sequence().to_string(),
         "chooser":value.chooser().0,"instance":value.instance().sequence().to_string(),"entry":opaque(value.entry()),
-        "domain":value.domain().iter().copied().map(target).collect::<Vec<_>>()})
+        "domain":value.domain().iter().copied().map(target).collect::<Vec<_>>()});
+    if let Some(modal) = value.modal() {
+        result["modes"] = json!({
+            "minimum": modal.minimum, "maximum": modal.maximum, "distinct_targets": modal.distinct_targets,
+            "options": modal.modes.iter().map(|mode| json!({
+                "index": mode.index, "target_required": mode.target_required, "multiple": mode.multiple,
+                "targets": mode.targets.iter().copied().map(target).collect::<Vec<_>>(),
+            })).collect::<Vec<_>>(),
+        });
+    }
+    if let Some((min, max)) = value.permanent_target_bounds() {
+        result["minimum"] = json!(min);
+        result["maximum"] = json!(max);
+    }
+    if let Some((min, max)) = value.ordered_any_target_bounds() {
+        result["ordered_any_minimum"] = json!(min);
+        result["ordered_any_maximum"] = json!(max);
+    }
+    result
 }
 /// One actual journal record; pending placement metadata shares only its fields.
 pub fn rules_record(record: &RulesRecord) -> Value {
     match record {
-        RulesRecord::ChooserReplaced {
+        RulesRecord::AttackDeclarationReversed {
+            player,
+            attackers,
+            kept_mana_abilities,
+            reversed_mana,
+            retracted_tap_triggers,
+        } => {
+            json!({"tag":"AttackDeclarationReversed","player":player.0,"attackers":attackers.iter().map(opaque).collect::<Vec<_>>(),"kept_mana_abilities":kept_mana_abilities,"reversed_mana":reversed_mana.iter().map(|id|id.0).collect::<Vec<_>>(),"retracted_tap_triggers":retracted_tap_triggers.iter().map(|id|id.sequence()).collect::<Vec<_>>()})
+        }
+        RulesRecord::CastAnnouncementReversed {
             entry,
-            instruction,
-            departed,
-            controller,
-            candidates,
-            selected,
-        } => json!({
-            "tag":"ChooserReplaced","entry":opaque(entry),"instruction":instruction.to_string(),
-            "departed":departed.0,"controller":controller.0,"selected":selected.0,
-            "candidates":candidates.iter().map(|seat|seat.0).collect::<Vec<_>>()
-        }),
-        RulesRecord::PlayersDeparted {
-            players,
-            owned_objects,
-            ended_control,
-            ceased_entries,
-            ceased_copies,
-            discarded_triggers,
-        } => json!({
-            "tag":"PlayersDeparted", "players":players.iter().map(|seat| seat.0).collect::<Vec<_>>(),
-            "owned_objects":owned_objects.iter().map(object).collect::<Vec<_>>(),
-            "ended_control":ended_control.iter().map(continuous_effect).collect::<Vec<_>>(),
-            "ceased_entries":ceased_entries.iter().map(stack_entry).collect::<Vec<_>>(),
-            "ceased_copies":ceased_copies.iter().map(copy).collect::<Vec<_>>(),
-            "discarded_triggers":discarded_triggers.iter().map(waiting).collect::<Vec<_>>()
-        }),
+            stack_object,
+            restored,
+        } => {
+            json!({"tag":"CastAnnouncementReversed","entry":opaque(entry),"stack_object":opaque(stack_object),"restored":opaque(restored)})
+        }
         RulesRecord::GameConcluded { conclusion } => {
-            use spellwake_engine::game::GameConclusionCause;
-            let cause = match conclusion.cause() {
-                GameConclusionCause::CheckedLosses { players } => {
-                    json!({"tag":"CheckedLosses","players":players.iter().map(|p|p.0).collect::<Vec<_>>()})
-                }
-                GameConclusionCause::CheckedLossesAfterDepartures {
-                    players,
-                    earlier_departures,
-                } => {
-                    json!({"tag":"CheckedLossesAfterDepartures","players":players.iter().map(|p|p.0).collect::<Vec<_>>(),
-                        "earlierDepartures":earlier_departures.iter().map(|p|p.0).collect::<Vec<_>>()})
-                }
-                GameConclusionCause::ConcededLastSurvivor {
-                    player,
-                    earlier_departures,
-                }
-                | GameConclusionCause::ResponseExpiredLastSurvivor {
-                    player,
-                    earlier_departures,
-                } => {
-                    let tag = if matches!(
-                        conclusion.cause(),
-                        GameConclusionCause::ConcededLastSurvivor { .. }
-                    ) {
-                        "ConcededLastSurvivor"
-                    } else {
-                        "ResponseExpiredLastSurvivor"
-                    };
-                    json!({"tag":tag,"player":player.0,"earlier_departures":earlier_departures.iter().map(|p|p.0).collect::<Vec<_>>()})
-                }
-                GameConclusionCause::Conceded { player } => {
-                    json!({"tag":"Conceded","player":player.0})
-                }
-                GameConclusionCause::BankExpired { player } => {
-                    json!({"tag":"BankExpired","player":player.0})
-                }
-            };
-            json!({"tag":"GameConcluded","outcome":opaque(conclusion.outcome()),"cause":cause})
+            let mut encoded = json!({"tag":"GameConcluded","outcome":opaque(conclusion.outcome()),"cause":match conclusion.cause() {spellwake_engine::game::GameConclusionCause::Conceded { player } => json!({"tag":"Conceded","player":player.0}),spellwake_engine::game::GameConclusionCause::CheckedLosses {players} => json!({"tag":"CheckedLosses","players":players.iter().map(|p|p.0).collect::<Vec<_>>()}),
+                    spellwake_engine::game::GameConclusionCause::WonByEffect {winner,source,other_players} =>
+                        json!({"tag":"WonByEffect","winner":winner.0,"source":opaque(source),"other_players":other_players.iter().map(|p|p.0).collect::<Vec<_>>()})}});
+            if !conclusion.face_down_reveals().is_empty() {
+                encoded["face_down_reveals"] = json!(
+                    conclusion
+                        .face_down_reveals()
+                        .iter()
+                        .map(object)
+                        .collect::<Vec<_>>()
+                );
+            }
+            encoded
         }
         RulesRecord::OptionalEffectOutcome {
             entry,
@@ -2367,19 +4460,33 @@ pub fn rules_record(record: &RulesRecord) -> Value {
         } => {
             json!({"tag":"OptionalEffectOutcome","entry":opaque(entry),"instruction":instruction.to_string(),"chooser":chooser.0,"outcome":opaque(outcome),"next":next.to_string()})
         }
+        RulesRecord::ChooserReplaced {
+            entry,
+            instruction,
+            departed,
+            chooser,
+            selected,
+        } => {
+            json!({"tag":"ChooserReplaced","entry":opaque(entry),"instruction":instruction.to_string(),"departed":departed.0,"chooser":chooser.0,"selected":selected.0})
+        }
         RulesRecord::ResolutionPaymentOutcome {
             entry,
             instruction,
             payer,
             cost,
+            restricted_colors,
             outcome,
             next,
         } => {
-            json!({"tag":"ResolutionPaymentOutcome","entry":opaque(entry),"instruction":instruction.to_string(),"payer":payer.0,"cost":program::cost(cost),"outcome":match outcome {
+            let mut encoded = json!({"tag":"ResolutionPaymentOutcome","entry":opaque(entry),"instruction":instruction.to_string(),"payer":payer.0,"cost":program::cost(cost),"outcome":match outcome {
             ResolutionPaymentOutcome::Paid(record) => json!({"tag":"Paid","payment":payment(record)}),
             ResolutionPaymentOutcome::Declined => json!({"tag":"Declined"}),
             ResolutionPaymentOutcome::UnpaidDeparted => json!({"tag":"UnpaidDeparted"}),
-        },"next":next.to_string()})
+        },"next":next.to_string()});
+            if let Some(colors) = restricted_colors {
+                encoded["restricted_colors"] = json!(colors.iter().map(opaque).collect::<Vec<_>>());
+            }
+            encoded
         }
         RulesRecord::InstructionBranch {
             entry,
@@ -2401,6 +4508,37 @@ pub fn rules_record(record: &RulesRecord) -> Value {
         }
         RulesRecord::Event(value) => {
             json!({"tag":"Event","event":value.id.sequence().to_string(),"cause":cause(&value.cause),"occurrences":value.occurrences.iter().map(|row|json!({"id":occurrence_id(row.id),"value":occurrence(&row.value)})).collect::<Vec<_>>()})
+        }
+        RulesRecord::SpeedTriggerDiscovered {
+            instance,
+            controller,
+            causes,
+        } => {
+            json!({"tag":"SpeedTriggerDiscovered","instance":opaque(instance),"controller":controller.0,"causes":causes.iter().map(opaque).collect::<Vec<_>>()})
+        }
+        RulesRecord::EmblemTriggerDiscovered {
+            instance,
+            controller,
+            emblem,
+            cause,
+        } => {
+            json!({"tag":"EmblemTriggerDiscovered","instance":opaque(instance),"controller":controller.0,"emblem":emblem.sequence(),"cause":opaque(cause)})
+        }
+        RulesRecord::DelayedCopyTriggerDiscovered {
+            instance,
+            controller,
+            original,
+            cause,
+        } => {
+            json!({"tag":"DelayedCopyTriggerDiscovered","instance":opaque(instance),"controller":controller.0,"original":opaque(original),"cause":opaque(cause)})
+        }
+        RulesRecord::MonarchTriggerDiscovered {
+            instance,
+            controller,
+            beneficiary,
+            causes,
+        } => {
+            json!({"tag":"MonarchTriggerDiscovered","instance":opaque(instance),"controller":controller.0,"beneficiary":beneficiary.map(|seat|seat.0),"causes":causes.iter().map(opaque).collect::<Vec<_>>() })
         }
         RulesRecord::TriggerDiscovered(value) => {
             json!({"tag":"TriggerDiscovered","value":waiting(value)})
@@ -2459,6 +4597,11 @@ fn completion(value: &RuleCompletion) -> Value {
             json!({"tag":"Checks","boundary":check_trace::check_boundary_view(value.boundary()),"performed":value.performed(),"waiting_triggers":value.waiting_triggers()})
         }
         RuleCompletion::Resolution => json!({"tag":"Resolution"}),
+        RuleCompletion::GameEnded => json!({"tag":"GameEnded"}),
+        RuleCompletion::ManaAbility => json!({"tag":"ManaAbility"}),
+        RuleCompletion::LinkedReturn => json!({"tag":"LinkedReturn"}),
+        RuleCompletion::LandPlay => json!({"tag":"LandPlay"}),
+        RuleCompletion::ActivationCost => json!({"tag":"ActivationCost"}),
         RuleCompletion::TurnWork(value) => {
             let work = match value {
                 WorkCompleted::Untap => json!({"tag":"Untap"}),

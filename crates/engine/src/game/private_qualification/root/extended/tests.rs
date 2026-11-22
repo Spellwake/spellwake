@@ -54,7 +54,7 @@ fn actual_entry_joins_and_bounded_passes_reach_copy_pending_before_private_fault
         ),
         (
             "P".into(),
-            json!({"native_program":program::view(&Program::instant(ManaCost::free(),ExecutableBody::new(BodyTarget::SingleSpell(SpellTargetFilter::CopyableInstructionSpell),vec![Instruction::CopySpell])))}),
+            json!({"native_program":program::view(&Program::instant(ManaCost::free(),ExecutableBody::new(BodyTarget::SingleSpell(crate::program::SpellFilter::copyable_instruction()),vec![Instruction::CopySpell])))}),
         ),
     ]);
     let cards = vec![
@@ -225,7 +225,7 @@ fn prepared_calendar_clears_all_positive_players_in_old_active_order() {
         }
     ));
     let final_state = final_state.unwrap();
-    assert_eq!(final_state.execution.window().turn_owner(), SeatId(0));
+    assert_eq!(final_state.execution.window().active_player(), SeatId(0));
     assert_eq!(final_state.turn().unwrap().position().number, 2);
 }
 
@@ -236,13 +236,11 @@ fn genuine_later_owner_order_keeps_earlier_placements_through_private_wrong_wave
     program.triggered.push(crate::program::TriggeredAbility {
         grouping: spellwake_engine::program::TriggerGrouping::EachOccurrence,
         id: crate::program::TriggeredAbilityId(1),
-        condition: crate::program::OrdinaryCondition::Dies(
-            crate::program::ObjectRelation::SelfObject,
-        ),
+        condition: crate::program::TriggerSpec::dies(crate::program::ObjectFilter::self_object()),
         body: ExecutableBody::new(
             BodyTarget::None,
             vec![Instruction::DrawController {
-                amount: crate::program::InstructionAmount::Literal(0.into()),
+                amount: crate::program::ValueExpr::Literal(0.into()),
             }],
         ),
     });

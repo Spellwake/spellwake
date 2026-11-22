@@ -45,6 +45,8 @@ jobs:
       - run: cargo fmt --manifest-path services/application/Cargo.toml --all --check
       - run: cargo clippy --locked --manifest-path services/application/Cargo.toml --workspace --all-targets -- -D warnings
       - run: cargo test --locked --manifest-path services/application/Cargo.toml --workspace
+        env:
+          RUST_MIN_STACK: "67108864"
       - name: Start an isolated PostgreSQL test container
         shell: bash
         run: |
@@ -59,6 +61,8 @@ jobs:
           done
           exit 1
       - run: python3 services/application/tools/test_database.py
+        env:
+          RUST_MIN_STACK: "67108864"
       - name: Stop the job's PostgreSQL container
         if: always()
         run: |
@@ -79,12 +83,12 @@ jobs:
       - name: Build locked API, worker and release tool
         run: |
           cargo build --locked --release --manifest-path services/application/Cargo.toml \
-            --bin application_api --bin native_match_worker --bin native_release_candidate
+            --bin application_api --bin qualified_opening_worker --bin unified_release_candidate
       - name: Record Linux binary digests and native runtime identity
         working-directory: services/application/target/release
         shell: bash
         run: |
-          sha256sum application_api native_match_worker native_release_candidate
+          sha256sum application_api qualified_opening_worker unified_release_candidate
           shopt -s nullglob
           manifests=(build/spellwake-application-*/out/native-runtime-inputs.json)
           test "${#manifests[@]}" -eq 1

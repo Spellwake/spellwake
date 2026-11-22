@@ -3,7 +3,7 @@
 //! native-scenarios.md. These authored programs qualify no whole cards or games.
 use spellwake_contracts::RulesInteger;
 use spellwake_engine::combat::CombatRules;
-use spellwake_engine::program::{BodyTarget, ExecutableBody, SpellTargetFilter};
+use spellwake_engine::program::{BodyTarget, ExecutableBody};
 use spellwake_engine::setup::GameSeed;
 use spellwake_engine::{
     damage::DamageJournal,
@@ -574,6 +574,7 @@ fn newly_produced_output_pays_a_real_exact_cast() {
         spell: object(&game, 90),
         target: TargetRef::Object(object(&game, 99)),
         payment: ManaPayment {
+            from_lots: Default::default(),
             spend: vec![ManaSpend {
                 mana_type: ManaType::Blue,
                 amount: 3.into(),
@@ -1150,7 +1151,9 @@ fn copy_pending() -> GameState {
                 B,
                 ManaCost::free(),
                 vec![Instruction::CopySpell],
-                BodyTarget::SingleSpell(SpellTargetFilter::CopyableInstructionSpell),
+                BodyTarget::SingleSpell(
+                    spellwake_engine::program::SpellFilter::copyable_instruction(),
+                ),
             ),
             creature(),
         ],

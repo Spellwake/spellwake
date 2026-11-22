@@ -394,7 +394,7 @@ async fn refresh_runtime_capabilities_are_private_and_two_service_rpcs_do_not_re
         )
         .await?
         .get::<_, i64>(0),
-        96
+        109
     );
     Ok(())
 }

@@ -4,6 +4,11 @@ Use the shared `.quzzar-system-design/` workspace and functional, data-oriented 
 from SKILL.md. Keep the scope, raw user requirements, design iterations, decisions,
 reviews, and implementation plan in that ignored folder.
 
+Before authoring the data model or diagram, read [data-contracts.md](data-contracts.md).
+Use schema-backed table rows and actual consumer input/output contracts throughout discovery,
+design iterations, specification, implementation, and review. Run quzzar-flow validation and
+inspect field bindings; decorative table content and labeled connections are not sufficient.
+
 ## Step 1: listen, document scope, and clarify
 
 Let the user explain the idea. Do not jump into implementation, diagram construction,
@@ -52,7 +57,8 @@ whether the design is good.
 
 Have the reviewer assess whether the structure is appropriate for what the user actually
 requested, whether the inputs and outputs make sense, and whether requirements have
-been omitted, distorted, or invented. Require specific evidence and open questions.
+been omitted, distorted, or invented. Require specific evidence and open questions. Have the reviewer inspect row schemas,
+consumer projections, mappings, and contract-validation results as well as visual structure.
 
 Iterate with the reviewer on grounded corrections. Ask the user about unresolved intent
 rather than letting the reviewer decide it. Then present the reviewed quzzar-flow design
@@ -106,14 +112,23 @@ must be accommodated, explicitly ask the user unless already answered:
 - Does the system need backward compatibility?
 - Does existing work or data need to be migrated? If so, what migration flow do we want?
 
-Add backward compatibility only when explicitly required. A migration requirement does
-not authorize compatibility layers or fallback behavior. Resolve applicable questions
-before finalizing those plan items.
+If live data or deployed consumers exist, use additive expansion and a separately tracked
+after-live migration/removal phase. Agree on the compatibility period and cutover/removal
+conditions. Add compatibility only for that need; migration does not authorize fallback
+behavior. A genuinely new system with no existing data needs no invented migration period.
 
 Write `plan.md` as a full, exhaustive checklist of everything needed to build the approved
 system. Cover database structures and relationships, backend processing, frontend
 consumers, contracts, connections, user-agreed failure behavior, any required migrations,
 and verification wherever applicable.
+
+Include row schemas, consumer projections, transformation contracts, explicit mappings,
+and contract checks in the specification and implementation checklist.
+
+Order the checklist using [implementation-order.md](implementation-order.md): database
+structures, RLS/access tests, contracts and endpoints, required services, typed client
+functions, and UI integration. Give each stage an exit condition and verification. If
+live data is involved, include a separate after-live migration and removal section.
 
 Make each item concrete: what is built, where it belongs, what it depends on, and how to
 confirm it is complete. Account for every requirement in the approved specification.
@@ -135,8 +150,11 @@ then repeat the affected design review and planning checks.
 
 ## Step 5: implement
 
-When implementation is requested, build the whole reviewed checklist. Track completion
-in `plan.md` with the verification supporting each completed item. Keep the code aligned
+When implementation is requested, follow [implementation-order.md](implementation-order.md)
+and build the whole reviewed checklist from the database outward. Verify each affected layer
+before proceeding to its consumers. Track completion in `plan.md` with evidence for each stage.
+For live data, keep additive rollout, after-live migration, and destructive cleanup separately
+tracked; execute each only when its prerequisites and authorization hold. Keep the code aligned
 with the approved structure, contracts, user journeys, limits, and decided failure
 behavior, including any explicit compatibility or migration requirements.
 
@@ -155,7 +173,9 @@ checks below against the resulting code and diagram.
 
 Confirm that the structures, relationships, inputs, outputs, transformations, user
 journeys, and decided failure behavior match what was agreed. Verify any required
-migration behavior rather than assuming a completed checklist proves it.
+migration behavior rather than assuming a completed checklist proves it. Review the layer
+checks and any after-live migration/removal list; disclose future rollout-dependent work
+without marking it complete.
 
 Fix verified discrepancies and have the affected work checked again. Show the user the
 final layout, the comparison, and any remaining gaps. Report completion only when the
@@ -170,7 +190,8 @@ code exists. Do not feed them your conclusions or each other's findings.
 - One checks coverage against requirements and specification, and code when it exists:
   omitted systems, structures, consumers, connections, and unsupported claims.
 - One follows the data end to end: inputs, outputs, transformations, relationships, user
-  journeys, and whether the plan or implementation fulfills the agreed system.
+  journeys, row schemas, projections, mappings, validation bindings, and whether the plan or
+  implementation fulfills the agreed system.
 
 Require each reviewer to report evidence, gaps, and the limits of what they inspected.
 Synthesize findings after both finish. Correct verified issues and have corrections

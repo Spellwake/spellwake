@@ -20,9 +20,8 @@ use spellwake_engine::{
     object_identity::{CardId, ObjectId, ObjectZone},
     occurrence::{EntryCompletion, EventCause, RulesOccurrence, RulesRecord},
     program::{
-        BodyTarget, CardType, CreatureTypeSlot, ExecutableBody, Instruction, InstructionAmount,
-        ObjectRelation, OrdinaryCondition, Program, ProgramKind, SpellTargetFilter,
-        TriggeredAbility, TriggeredAbilityId,
+        BodyTarget, CardType, CreatureTypeSlot, ExecutableBody, Instruction, Program, ProgramKind,
+        TriggerSpec, TriggeredAbility, TriggeredAbilityId,
     },
     targets::TargetRef,
     turn::Step,
@@ -425,7 +424,7 @@ fn cl_dep_additive_not_totals() {
     additive_not_totals();
 }
 
-fn draw_one_trigger(mut program: Program, condition: OrdinaryCondition) -> Program {
+fn draw_one_trigger(mut program: Program, condition: TriggerSpec) -> Program {
     program.triggered.push(TriggeredAbility {
         grouping: spellwake_engine::program::TriggerGrouping::EachOccurrence,
         id: TriggeredAbilityId(1),
@@ -433,7 +432,7 @@ fn draw_one_trigger(mut program: Program, condition: OrdinaryCondition) -> Progr
         body: ExecutableBody::new(
             BodyTarget::None,
             vec![Instruction::DrawController {
-                amount: InstructionAmount::Literal(1.into()),
+                amount: spellwake_engine::program::ValueExpr::Literal(1.into()),
             }],
         ),
     });
@@ -709,6 +708,7 @@ fn declared_unblocked(game: &GameState, x: ObjectId) -> GameState {
         DecisionReply::DeclareAttackers(vec![AttackDeclaration {
             attacker: x,
             defender: P1,
+            defending_planeswalker: None,
         }]),
     );
     let blockers = pass_pair(declared.state());
@@ -930,7 +930,9 @@ fn cl_cleanup_repeat() {
     let v = vocabulary();
     let n = draw_one_trigger(
         permanent(&v, &[CardType::Artifact], None, &[]),
-        OrdinaryCondition::Dies(ObjectRelation::SelfObject),
+        spellwake_engine::program::TriggerSpec::dies(
+            spellwake_engine::program::ObjectFilter::self_object(),
+        ),
     );
     let game = world(
         v.clone(),
@@ -1034,7 +1036,7 @@ fn cl_cleanup_repeat() {
         ExecutableBody::new(
             BodyTarget::None,
             vec![Instruction::DrawController {
-                amount: InstructionAmount::Literal(1.into())
+                amount: spellwake_engine::program::ValueExpr::Literal(1.into())
             }]
         )
     );
@@ -1159,7 +1161,9 @@ fn cl_lifetimes_lookback() {
     );
     let target = draw_one_trigger(
         permanent(&v, &[CardType::Creature], Some((2, 3)), &["Elf"]),
-        OrdinaryCondition::LeavesBattlefield(ObjectRelation::SelfObject),
+        spellwake_engine::program::TriggerSpec::leaves_battlefield(
+            spellwake_engine::program::ObjectFilter::self_object(),
+        ),
     );
     let game = world(
         v.clone(),
@@ -1281,7 +1285,7 @@ fn cl_lifetimes_lookback() {
         ExecutableBody::new(
             BodyTarget::None,
             vec![Instruction::DrawController {
-                amount: InstructionAmount::Literal(1.into())
+                amount: spellwake_engine::program::ValueExpr::Literal(1.into())
             }]
         )
     );
@@ -1414,7 +1418,9 @@ fn cl_copied_body_fresh_locals() {
             ),
             spell(
                 6,
-                BodyTarget::SingleSpell(SpellTargetFilter::CopyableInstructionSpell),
+                BodyTarget::SingleSpell(
+                    spellwake_engine::program::SpellFilter::copyable_instruction(),
+                ),
                 vec![Instruction::CopySpell],
             ),
         ],

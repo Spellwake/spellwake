@@ -323,10 +323,7 @@ fn stored_view_restores_triggered_and_continuous_descriptors_without_activating_
             AbilityChange, KeywordAbility, PermanentSelector, StaticAbilityId,
             StaticContinuousAbility, StaticPart, StaticParts,
         },
-        program::{
-            ObjectRelation, OrdinaryCondition, TriggerGrouping, TriggeredAbility,
-            TriggeredAbilityId,
-        },
+        program::{TriggerGrouping, TriggeredAbility, TriggeredAbilityId},
     };
     let mut creature = Program::creature(None, 2.into(), 2.into(), BTreeSet::new());
     creature.continuous = Some(StaticContinuousAbility::Battlefield {
@@ -338,7 +335,9 @@ fn stored_view_restores_triggered_and_continuous_descriptors_without_activating_
     });
     creature.triggered = vec![TriggeredAbility {
         id: TriggeredAbilityId(8),
-        condition: OrdinaryCondition::BecomesTapped(ObjectRelation::SelfObject),
+        condition: spellwake_engine::program::TriggerSpec::becomes_tapped(
+            spellwake_engine::program::ObjectFilter::self_object(),
+        ),
         grouping: TriggerGrouping::EachOccurrence,
         body: ExecutableBody::new(
             BodyTarget::None,

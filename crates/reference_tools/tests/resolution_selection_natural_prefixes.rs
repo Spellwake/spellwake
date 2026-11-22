@@ -317,7 +317,7 @@ impl Prefix {
     fn ready(&self, active: SeatId, number: u64, step: Step) {
         assert_eq!(self.state.turn().unwrap().position().number, number);
         assert_eq!(self.state.turn().unwrap().position().step, step);
-        assert_eq!(self.state.execution().window().turn_owner(), active);
+        assert_eq!(self.state.execution().window().active_player(), active);
         assert_eq!(
             self.state.execution().window().phase(),
             WindowPhase::Priority(PriorityPhase::Ready { holder: active })
@@ -496,6 +496,7 @@ impl Prefix {
             GameCommand::CastUntargeted {
                 spell,
                 payment: Some(ManaPayment {
+                    from_lots: Default::default(),
                     spend: vec![
                         ManaSpend {
                             mana_type: ManaType::Black,

@@ -56,6 +56,8 @@ fn words(count: usize) -> Vec<u64> {
         })
         .collect()
 }
+// Integration test harness call enum kept inline.
+#[allow(clippy::large_enum_variant)]
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum Call {
     Player(GameInput),
@@ -228,6 +230,9 @@ fn authenticated_four_sources_complete_a_natural_game_with_typed_entropy_and_ful
                     };
                     let make = |top, rest| {
                         DecisionReply::LibraryTop(match frame.kind() {
+                            LibraryChoiceKind::Search => {
+                                panic!("opening profile only admits scry and surveil")
+                            }
                             LibraryChoiceKind::Scry => LibraryTopReply::Scry {
                                 top_first: top,
                                 bottom_top_first: rest,
@@ -292,7 +297,7 @@ fn authenticated_four_sources_complete_a_natural_game_with_typed_entropy_and_ful
         else {
             panic!("unexpected root stop {:?}", run.state.pending_turn_work())
         };
-        let active = run.state.execution().window().turn_owner();
+        let active = run.state.execution().window().active_player();
         let turn = run.state.turn().unwrap();
         let main = matches!(
             turn.position().step,
@@ -367,6 +372,7 @@ fn authenticated_four_sources_complete_a_natural_game_with_typed_entropy_and_ful
                     run.command(
                         holder,
                         cast(ManaPayment {
+                            from_lots: Default::default(),
                             spend: vec![ManaSpend {
                                 mana_type: ManaType::Blue,
                                 amount: 1.into(),

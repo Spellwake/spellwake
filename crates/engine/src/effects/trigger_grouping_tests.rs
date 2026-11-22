@@ -6,15 +6,12 @@ use crate::{
     occurrence::{
         EventCause, RulesOccurrence, RulesRecord, StatusReason, TriggerRelated, TriggerState,
     },
-    program::{
-        ObjectRelation, OrdinaryCondition, PlayerRelation, TriggerGrouping, TriggeredAbility,
-        TriggeredAbilityId,
-    },
+    program::{PlayerRelation, TriggerGrouping, TriggerSpec, TriggeredAbility, TriggeredAbilityId},
 };
 const A: SeatId = SeatId(0);
 const B: SeatId = SeatId(1);
 const C: SeatId = SeatId(2);
-fn base(conditions: &[OrdinaryCondition], target_destination: ObjectDestination) -> EffectWindow {
+fn base(conditions: &[TriggerSpec], target_destination: ObjectDestination) -> EffectWindow {
     base_with_grouping(
         conditions,
         target_destination,
@@ -22,7 +19,7 @@ fn base(conditions: &[OrdinaryCondition], target_destination: ObjectDestination)
     )
 }
 fn base_with_grouping(
-    conditions: &[OrdinaryCondition],
+    conditions: &[TriggerSpec],
     target_destination: ObjectDestination,
     grouping: TriggerGrouping,
 ) -> EffectWindow {
@@ -32,7 +29,7 @@ fn base_with_grouping(
         .enumerate()
         .map(|(id, condition)| TriggeredAbility {
             id: TriggeredAbilityId(u64::try_from(id).unwrap()),
-            condition: *condition,
+            condition: condition.clone(),
             grouping,
             body: ExecutableBody::new(
                 BodyTarget::None,
@@ -136,8 +133,11 @@ fn assert_roles(append: &RulesJournal, expected: &[SeatId]) {
 fn p01_p05_token_creator_and_after_entry_controller_are_different_roles() {
     let state = base(
         &[
-            OrdinaryCondition::TokenCreated(PlayerRelation::AnyParticipant),
-            OrdinaryCondition::Enters(ObjectRelation::AnyCreature),
+            crate::program::TriggerSpec::player_action(
+                PlayerRelation::AnyParticipant,
+                crate::program::PlayerTriggerAction::TokenCreated,
+            ),
+            crate::program::TriggerSpec::enters(crate::program::ObjectFilter::creature()),
         ],
         ObjectDestination::Hand,
     );
@@ -191,10 +191,10 @@ fn p01_p05_token_creator_and_after_entry_controller_are_different_roles() {
 #[test]
 fn p02_life_changed_player_is_captured_from_the_actual_life_owner() {
     let state = base(
-        &[OrdinaryCondition::LifeChanged {
-            kind: LifeChangeKind::Gain,
-            player: PlayerRelation::AnyParticipant,
-        }],
+        &[crate::program::TriggerSpec::life_changed(
+            LifeChangeKind::Gain,
+            PlayerRelation::AnyParticipant,
+        )],
         ObjectDestination::Hand,
     );
     let before = state.rules_snapshot(None).unwrap();
@@ -223,28 +223,33 @@ fn p02_life_changed_player_is_captured_from_the_actual_life_owner() {
 fn p03_p05_p06_p07_actual_movement_uses_discard_or_correct_side_controller() {
     for (condition, start, destination, discarding, expected) in [
         (
-            OrdinaryCondition::Discarded(PlayerRelation::AnyParticipant),
+            crate::program::TriggerSpec::player_action(
+                PlayerRelation::AnyParticipant,
+                crate::program::PlayerTriggerAction::Discarded,
+            ),
             ObjectDestination::Hand,
             ObjectDestination::Graveyard,
             true,
             C,
         ),
         (
-            OrdinaryCondition::Enters(ObjectRelation::AnyCreature),
+            crate::program::TriggerSpec::enters(crate::program::ObjectFilter::creature()),
             ObjectDestination::Hand,
             ObjectDestination::Battlefield { controller: B },
             false,
             B,
         ),
         (
-            OrdinaryCondition::LeavesBattlefield(ObjectRelation::AnyCreature),
+            crate::program::TriggerSpec::leaves_battlefield(
+                crate::program::ObjectFilter::creature(),
+            ),
             ObjectDestination::Battlefield { controller: B },
             ObjectDestination::Hand,
             false,
             B,
         ),
         (
-            OrdinaryCondition::Dies(ObjectRelation::AnyCreature),
+            crate::program::TriggerSpec::dies(crate::program::ObjectFilter::creature()),
             ObjectDestination::Battlefield { controller: B },
             ObjectDestination::Graveyard,
             false,
@@ -266,10 +271,10 @@ fn p03_p05_p06_p07_actual_movement_uses_discard_or_correct_side_controller() {
 #[test]
 fn p04_actual_step_occurrence_retains_active_player() {
     let state = base(
-        &[OrdinaryCondition::StepBegan {
-            step: crate::turn::Step::Upkeep,
-            player: PlayerRelation::AnyParticipant,
-        }],
+        &[crate::program::TriggerSpec::step_began(
+            crate::turn::Step::Upkeep,
+            PlayerRelation::AnyParticipant,
+        )],
         ObjectDestination::Hand,
     );
     let snapshot = state.rules_snapshot(None).unwrap();
@@ -287,7 +292,7 @@ fn p04_actual_step_occurrence_retains_active_player() {
             EventCause::StepBegan { position },
             vec![RulesOccurrence::StepBegan {
                 position,
-                active: Some(C),
+                active: C,
             }],
             &view,
             &view,
@@ -298,8 +303,8 @@ fn p04_actual_step_occurrence_retains_active_player() {
 #[test]
 fn p08_tap_role_reads_after_view_and_missing_required_context_rejects_atomically() {
     let state = base(
-        &[OrdinaryCondition::BecomesTapped(
-            ObjectRelation::AnyCreature,
+        &[crate::program::TriggerSpec::becomes_tapped(
+            crate::program::ObjectFilter::creature(),
         )],
         ObjectDestination::Battlefield { controller: B },
     );
@@ -364,19 +369,21 @@ fn p08_tap_role_reads_after_view_and_missing_required_context_rejects_atomically
 fn p08_entry_and_departure_missing_participant_context_reject_without_adoption() {
     for (condition, start, destination, corrupt_after) in [
         (
-            OrdinaryCondition::Enters(ObjectRelation::AnyCreature),
+            crate::program::TriggerSpec::enters(crate::program::ObjectFilter::creature()),
             ObjectDestination::Hand,
             ObjectDestination::Battlefield { controller: B },
             true,
         ),
         (
-            OrdinaryCondition::LeavesBattlefield(ObjectRelation::AnyCreature),
+            crate::program::TriggerSpec::leaves_battlefield(
+                crate::program::ObjectFilter::creature(),
+            ),
             ObjectDestination::Battlefield { controller: B },
             ObjectDestination::Hand,
             false,
         ),
         (
-            OrdinaryCondition::Dies(ObjectRelation::AnyCreature),
+            crate::program::TriggerSpec::dies(crate::program::ObjectFilter::creature()),
             ObjectDestination::Battlefield { controller: B },
             ObjectDestination::Graveyard,
             false,
@@ -439,14 +446,14 @@ fn matched_count_rejects_missing_or_inconsistent_actual_installed_bindings() {
     use crate::test_support::characteristic_trajectories as t;
     use crate::{
         game::{DecisionReply, RuleFrame},
-        program::{CreatureTypeSlot, InstructionAmount},
+        program::CreatureTypeSlot,
         token::{TokenCreation, TokenDefinition, TokenName, TokenRecipients},
     };
     let vocabulary = t::vocabulary();
     let mut watcher = Program::artifact(None, vec![]);
     watcher.triggered.push(TriggeredAbility {
         id: TriggeredAbilityId(7),
-        condition: OrdinaryCondition::Enters(ObjectRelation::AnyCreature),
+        condition: crate::program::TriggerSpec::enters(crate::program::ObjectFilter::creature()),
         grouping: TriggerGrouping::OneOrMoreTogether,
         body: ExecutableBody::new(
             BodyTarget::None,
@@ -456,7 +463,9 @@ fn matched_count_rejects_missing_or_inconsistent_actual_installed_bindings() {
                     excluding: BTreeSet::new(),
                 },
                 Instruction::DrawController {
-                    amount: InstructionAmount::MatchedOccurrences,
+                    amount: crate::program::ValueExpr::event(
+                        crate::program::EventValueKind::MatchedOccurrences,
+                    ),
                 },
             ],
         ),
@@ -478,7 +487,9 @@ fn matched_count_rejects_missing_or_inconsistent_actual_installed_bindings() {
                             &vocabulary,
                         )
                         .unwrap(),
-                        amount: InstructionAmount::Literal(2.into()),
+                        amount: crate::program::ValueExpr::Literal(2.into()),
+                        base_size: None,
+                        enters_tapped: false,
                         recipients: TokenRecipients::Controller,
                     }],
                 }],
@@ -513,11 +524,17 @@ fn matched_count_rejects_missing_or_inconsistent_actual_installed_bindings() {
     let entry = execution.window.resolving().unwrap().id();
     let saved = execution.clone();
     assert_eq!(
-        execution.resolve_instruction_amount(A, &InstructionAmount::MatchedOccurrences),
+        execution.resolve_value_expr(
+            A,
+            &crate::program::ValueExpr::event(crate::program::EventValueKind::MatchedOccurrences)
+        ),
         Ok(2.into())
     );
     assert_eq!(
-        execution.resolve_instruction_amount(B, &InstructionAmount::MatchedOccurrences),
+        execution.resolve_value_expr(
+            B,
+            &crate::program::ValueExpr::event(crate::program::EventValueKind::MatchedOccurrences)
+        ),
         Err(EffectError::InconsistentProgram)
     );
     for missing in [false, true] {
@@ -540,7 +557,12 @@ fn matched_count_rejects_missing_or_inconsistent_actual_installed_bindings() {
         }
         let malformed_saved = malformed.clone();
         assert_eq!(
-            malformed.resolve_instruction_amount(A, &InstructionAmount::MatchedOccurrences),
+            malformed.resolve_value_expr(
+                A,
+                &crate::program::ValueExpr::event(
+                    crate::program::EventValueKind::MatchedOccurrences
+                )
+            ),
             Err(EffectError::InconsistentProgram)
         );
         assert_eq!(malformed, malformed_saved);
@@ -555,8 +577,9 @@ fn actual_discovery_selection_counts_instances_once_and_rejects_distinct_matches
         TriggerGrouping::EachOccurrence,
     ] {
         let state = base_with_grouping(
-            &[OrdinaryCondition::TokenCreated(
+            &[crate::program::TriggerSpec::player_action(
                 PlayerRelation::AnyParticipant,
+                crate::program::PlayerTriggerAction::TokenCreated,
             )],
             ObjectDestination::Hand,
             policy,

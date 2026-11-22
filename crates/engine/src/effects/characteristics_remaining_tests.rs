@@ -11,8 +11,8 @@ use crate::{
     object_identity::{CardId, ObjectDestination, ObjectZone},
     occurrence::{EventCause, RulesOccurrence, RulesRecord, ZoneReason},
     program::{
-        CardType, InstructionAmount, ObjectRelation, OrdinaryCondition, PermanentDefinition,
-        PlayerRelation, ProgramKind, TriggeredAbility, TriggeredAbilityId,
+        CardType, PermanentDefinition, PlayerRelation, ProgramKind, TriggerSpec, TriggeredAbility,
+        TriggeredAbilityId,
     },
     targets::TargetCheck,
     turn::Step,
@@ -29,10 +29,10 @@ fn body(target: BodyTarget, instructions: Vec<Instruction>) -> ExecutableBody {
 }
 fn draw(amount: i64) -> Instruction {
     Instruction::DrawController {
-        amount: InstructionAmount::Literal(amount.into()),
+        amount: crate::program::ValueExpr::Literal(amount.into()),
     }
 }
-fn trigger(condition: OrdinaryCondition) -> TriggeredAbility {
+fn trigger(condition: TriggerSpec) -> TriggeredAbility {
     TriggeredAbility {
         grouping: spellwake_engine::program::TriggerGrouping::EachOccurrence,
         id: TriggeredAbilityId(1),
@@ -72,8 +72,8 @@ fn reach() -> Program {
 fn leave_sac() -> Program {
     let mut p = Program::artifact(None, vec![activation(SourceCost::Sacrifice)]);
     p.triggered
-        .push(trigger(OrdinaryCondition::LeavesBattlefield(
-            ObjectRelation::SelfObject,
+        .push(trigger(crate::program::TriggerSpec::leaves_battlefield(
+            crate::program::ObjectFilter::self_object(),
         )));
     p
 }
@@ -88,9 +88,10 @@ fn tap_self() -> Program {
             },
         }],
     );
-    p.triggered.push(trigger(OrdinaryCondition::BecomesTapped(
-        ObjectRelation::SelfObject,
-    )));
+    p.triggered
+        .push(trigger(crate::program::TriggerSpec::becomes_tapped(
+            crate::program::ObjectFilter::self_object(),
+        )));
     p
 }
 fn staff() -> Program {
@@ -100,10 +101,11 @@ fn staff() -> Program {
         vec![Instruction::Damage { amount: 1.into() }],
     );
     let mut p = Program::artifact(Some(ManaCost::generic(6.into())), vec![a]);
-    p.triggered.push(trigger(OrdinaryCondition::StepBegan {
-        step: Step::Upkeep,
-        player: PlayerRelation::Controller,
-    }));
+    p.triggered
+        .push(trigger(crate::program::TriggerSpec::step_began(
+            Step::Upkeep,
+            PlayerRelation::Controller,
+        )));
     p
 }
 fn definition(p: &mut Program) -> &mut PermanentDefinition {
@@ -158,7 +160,9 @@ fn historical_roles() -> Vec<(&'static str, Program, bool)> {
         BTreeSet::new(),
     );
     sage.triggered
-        .push(trigger(OrdinaryCondition::Dies(ObjectRelation::SelfObject)));
+        .push(trigger(crate::program::TriggerSpec::dies(
+            crate::program::ObjectFilter::self_object(),
+        )));
     let mut rows = vec![
         ("DA-P01", forest(), true),
         ("DA-P02", creature(), true),
@@ -172,7 +176,7 @@ fn historical_roles() -> Vec<(&'static str, Program, bool)> {
             Program::instant(
                 ManaCost::one(ManaType::Blue),
                 body(
-                    BodyTarget::SingleSpell(SpellTargetFilter::AnySpell),
+                    BodyTarget::SingleSpell(crate::program::SpellFilter::any()),
                     vec![Instruction::CounterSpell],
                 ),
             ),
@@ -303,7 +307,7 @@ fn da_successor(id: &str) {
         BTreeMap::from([(CardId(1), &program)])
     );
     assert_eq!(state.window.participants(), &[A, B]);
-    assert_eq!(state.window.turn_owner(), A);
+    assert_eq!(state.window.active_player(), A);
     assert_eq!(state.life_total(A), Some(&20.into()));
     assert_eq!(state.life_total(B), Some(&20.into()));
     assert!(state.mana.is_empty());
@@ -388,9 +392,9 @@ fn historical_33_roles_remain_explicit() {
     assert_eq!(rows.iter().filter(|row| !row.2).count(), 14);
     for (id, p, accept) in rows {
         let result = EffectWindow::new(seed(vec![card(1, p, ObjectDestination::Hand)], vec![]));
-        // Historical role labels remain immutable. Mandatory targeted triggers
-        // now have a reviewed native successor; this is not a sealed reissue.
-        if accept || id == "DA-N20" {
+        // Keep the historical classification above. Current admission also covers
+        // sacrificing the source to draw and mandatory targeted triggers.
+        if accept || matches!(id, "DA-N19" | "DA-N20") {
             assert!(result.is_ok(), "{id}");
         } else {
             assert_eq!(result, Err(EffectError::InvalidSetup), "{id}");
@@ -567,7 +571,11 @@ fn cl_target_depart_return() {
     assert_eq!(bound.target, TargetRef::Object(old));
     assert_eq!(state.window.cards().get(old).unwrap().tapped(), Some(true));
     let legal = state
-        .legal_body_target(state.payloads[&entry.id()].body().unwrap(), bound.target)
+        .legal_body_target(
+            state.payloads[&entry.id()].body().unwrap(),
+            bound.target,
+            entry.controller(),
+        )
         .unwrap();
     assert!(legal);
     state.window = state
@@ -584,8 +592,30 @@ fn cl_target_depart_return() {
     // Exact private cursor cut permitted by the frozen unit: gate accepted once,
     // body owned by the real paid activation, zero locals, instruction zero.
     state.pending_work = Some(PendingWork::Resolution(ResolutionCursor {
+        revealed_piles: None,
+        chosen_opponent: None,
+        chosen_damage_recipient: None,
+        damage_offer_opponents: None,
+        vowed_creatures: Default::default(),
+        meld_pair: None,
+        manifest_remaining: None,
+        random_selection: None,
+        results: ResolutionResults::default(),
+        chosen_effect_color: None,
+        chosen_mana_split: None,
+        tempting_token_offer: None,
+        destroyed_permanents: None,
+        chosen_loyalty_removals: None,
+        discarded_nonland_mana_value: None,
+        last_created_tokens: Vec::new(),
+        chosen_token_equipment: None,
+        found_spells: Vec::new(),
+        largest_discard: None,
+        impulse: ImpulseState::default(),
         entry: entry.id(),
         instruction: 0,
+        exiled_target: None,
+        remembered_permanent: None,
         values: BTreeMap::new(),
     }));
     let mut damage = DamageJournal::default();

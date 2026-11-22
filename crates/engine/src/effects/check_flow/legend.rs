@@ -12,9 +12,15 @@ impl EffectWindow {
         let mut conflicts = Vec::new();
         for controller in self.window.apnap_players()? {
             let mut by_name: BTreeMap<EnglishCardName, BTreeSet<ObjectId>> = BTreeMap::new();
+            let exempt_subtypes=current.objects.values().filter(|o|o.zone==ObjectZone::Battlefield && o.controller==Some(controller)).flat_map(|source|
+                source.printed_text.continuous.iter().chain(&source.printed_text.additional_battlefield_abilities).filter_map(move |rule| {
+                    let crate::characteristics::StaticContinuousAbility::Modifier { id, rule: crate::characteristics::StaticModifierRule::IgnoreLegendForSubtype(subtype) }=rule else {return None;};
+                    (source.abilities.continuous==Some(*id) || source.abilities.additional_battlefield_abilities.contains(id)).then_some(*subtype)
+                })).collect::<BTreeSet<_>>();
             for (id, traits) in &current.objects {
                 if traits.zone != ObjectZone::Battlefield
                     || traits.controller != Some(controller)
+                    || !exempt_subtypes.is_disjoint(&traits.current_creature_subtypes)
                     || !traits.current_supertypes.contains(&Supertype::Legendary)
                 {
                     continue;
@@ -53,7 +59,7 @@ impl EffectWindow {
                         comparison_names: names.clone(),
                         domain: members.iter().copied().collect(),
                     },
-                    accepted: None,
+                    keep: None,
                 });
             }
         }
@@ -66,11 +72,7 @@ impl EffectWindow {
     ) -> Result<BTreeMap<ObjectId, StateBasedMoveReasons>, EffectError> {
         let mut dead = actions.dead.clone();
         for staged in &actions.legends {
-            let keep = staged
-                .accepted
-                .as_ref()
-                .ok_or(EffectError::WrongPhase)?
-                .keep;
+            let keep = staged.keep.ok_or(EffectError::WrongPhase)?;
             if !staged.conflict.domain.contains(&keep) {
                 return Err(CheckError::WrongFrame.into());
             }

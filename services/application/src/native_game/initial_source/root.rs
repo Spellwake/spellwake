@@ -2,6 +2,8 @@
 use super::selected::SelectedRoot;
 use super::*;
 use crate::native_game::preparation_source::NativeReservedGameSource;
+use spellwake_card_programs::commander::prepare_deck;
+use spellwake_engine::characteristics::Color;
 use spellwake_engine::{
     combat::CombatRules,
     effects::SeedCard,
@@ -11,6 +13,8 @@ use spellwake_engine::{
     shuffle::EntropyTape,
 };
 use std::collections::BTreeMap;
+
+const COMMANDER_ROOT: &str = "native-initial-commander-v3";
 const MAX_ROOT_BYTES: usize = 1_048_576;
 const MAX_ENTROPY_WORDS: usize = 65_536;
 /// One original prepared zone, never an arbitrary saved continuation.
@@ -177,7 +181,7 @@ impl Root {
         let roster = self.roster();
         if !matches!(
             (self.version.as_str(), self.selected.is_some()),
-            ("native-initial-v1", false) | ("native-initial-v2", true)
+            ("native-initial-v1", false) | ("native-initial-v2" | COMMANDER_ROOT, true)
         ) || !valid_ids(self.ids())
             || !valid_roster(&roster)
             || !roster.contains(&self.first_player_seat_id)
@@ -189,21 +193,65 @@ impl Root {
         {
             return Err(NativeInitialError::Invalid);
         }
+        if self.version == COMMANDER_ROOT && !(2..=3).contains(&roster.len()) {
+            return Err(NativeInitialError::Invalid);
+        }
         if &self.program_source_id != source.identity() {
             return Err(NativeInitialError::ForeignSource);
         }
-        if let Some(selected) = &self.selected {
-            selected.validate(self.ids(), &self.participants)?;
-        }
+        self.selected_indices()?;
         Ok(())
     }
+    fn selected_indices(&self) -> Result<Option<Vec<Vec<usize>>>, NativeInitialError> {
+        self.selected
+            .as_ref()
+            .map(|selected| {
+                if self.version == COMMANDER_ROOT {
+                    selected.validate_commander(self.ids(), &self.participants)
+                } else {
+                    selected.validate(self.ids(), &self.participants)
+                }
+            })
+            .transpose()
+    }
+
+    fn commander_identities(
+        &self,
+        source: &NativeProgramSource,
+        roster: &[NativeSeatBinding],
+    ) -> Result<BTreeMap<SeatId, BTreeSet<Color>>, NativeInitialError> {
+        let inventory = source
+            .commander_inventory
+            .as_ref()
+            .ok_or(NativeInitialError::ForeignSource)?;
+        self.participants
+            .iter()
+            .zip(roster)
+            .map(|(participant, seat)| {
+                let mut commanders = Vec::new();
+                let mut library = Vec::new();
+                for card in &participant.cards {
+                    match card.zone {
+                        NativeInitialZone::Library => library.push(card.oracle_id.clone()),
+                        NativeInitialZone::Command => commanders.push(card.oracle_id.clone()),
+                    }
+                }
+                let deck = prepare_deck(
+                    inventory,
+                    &source.names,
+                    &commanders,
+                    &library,
+                    &BTreeMap::new(),
+                )
+                .map_err(|_| NativeInitialError::ForeignSource)?;
+                Ok((seat.native_seat, deck.color_identity().clone()))
+            })
+            .collect()
+    }
+
     fn initialize(self, source: &NativeProgramSource) -> Result<Initialized, NativeInitialError> {
         self.validate(source)?;
-        let indices = self
-            .selected
-            .as_ref()
-            .map(|selected| selected.validate(self.ids(), &self.participants))
-            .transpose()?;
+        let indices = self.selected_indices()?;
         let mut physical = BTreeMap::new();
         let mut cards: Vec<SeedCard> = Vec::new();
         let mut roster = Vec::new();
@@ -258,12 +306,17 @@ impl Root {
             },
             entropy: EntropyTape::new(self.entropy.iter().map(|word| word.get()).collect()),
         };
-        let candidate = GameState::initialize_opening(
-            GameId(self.game_id.as_u128()),
-            source.context(self.release_id, self.profile_id)?,
-            setup,
-        )
-        .map_err(|e| NativeInitialError::Native(Box::new(e)))?;
+        let game = GameId(self.game_id.as_u128());
+        let context = source.context(self.release_id, self.profile_id)?;
+        let candidate = if self.version == COMMANDER_ROOT {
+            let identities = self.commander_identities(source, &roster)?;
+            GameState::initialize_commander_opening_with_identities(
+                game, context, setup, identities,
+            )
+        } else {
+            GameState::initialize_opening(game, context, setup)
+        }
+        .map_err(|error| NativeInitialError::Native(Box::new(error)))?;
         let ids = self.ids();
         Ok(Initialized {
             candidate,
@@ -377,6 +430,104 @@ pub fn prepare_selected_initial(
     };
     prepare_root(root, source)
 }
+/// Construct an exact Commander opening from an independently admitted reservation.
+/// The worker supplies the server-selected starter and entropy. The root keeps
+/// the original selected entry IDs and revalidates the same deck during replay.
+///
+/// # Errors
+/// Rejects mismatched format, release, roster, sections, deck rules, or
+/// unavailable executable definitions. This root covers two or three seats,
+/// with color identities determined by the selected cards.
+pub fn prepare_reserved_commander_opening(
+    context_id: Uuid,
+    source: &NativeProgramSource,
+    reservation: &NativeReservedGameSource,
+    format: &crate::account::FormatSummary,
+    first_player_seat_id: Uuid,
+    entropy: Vec<NativeRevision>,
+) -> Result<PreparedNativeOpening, NativeInitialError> {
+    use num_traits::ToPrimitive;
+    let r = reservation.metadata();
+    if format.key != "commander"
+        || format.id != r.format_id
+        || !r.game_index.is_zero()
+        || !(2..=3).contains(&r.seats.len())
+        || r.mode != crate::decks::PlayMode::Open
+        || r.competitive
+        || r.structure != crate::rooms::configuration::MatchStructure::Bo1
+        || r.profile.planar_pool_ref.is_some()
+        || !r
+            .admission_qualification_ref
+            .as_str()
+            .strip_prefix("native-constructed-ffa-candidate-v1/commander/sha256:")
+            .is_some_and(crate::source_protocol::valid_digest)
+        || r.release.program_manifest_ref.as_str() != source.identity().as_str()
+        || r.release.kernel_ref.as_str() != format!("sha256:{}", native_runtime_identity())
+        || r.release.rules_ref.as_str() != hash_text(source.vocabulary.rules_sha256()).as_str()
+    {
+        return Err(NativeInitialError::ForeignSource);
+    }
+    let mut participants = Vec::new();
+    let mut selection = Vec::new();
+    for seat in &r.seats {
+        if seat.controller_kind != crate::match_history::ControllerKind::Human {
+            return Err(NativeInitialError::ForeignSource);
+        }
+        let mut cards = Vec::new();
+        let mut entry_ids = Vec::new();
+        for entry in &seat.entries {
+            let zone = match entry.section.as_str() {
+                "commander" => NativeInitialZone::Command,
+                "main" => NativeInitialZone::Library,
+                _ => return Err(NativeInitialError::ForeignSource),
+            };
+            let oracle = OracleId::try_from(entry.oracle_ref.as_str().to_owned())
+                .map_err(|_| NativeInitialError::ForeignSource)?;
+            let quantity = entry
+                .quantity
+                .integer()
+                .to_usize()
+                .ok_or(NativeInitialError::Invalid)?;
+            if cards
+                .len()
+                .checked_add(quantity)
+                .is_none_or(|count| count > 100)
+            {
+                return Err(NativeInitialError::ForeignSource);
+            }
+            cards.extend((0..quantity).map(|_| NativeInitialCard {
+                oracle_id: oracle.clone(),
+                zone,
+            }));
+            entry_ids.extend(std::iter::repeat_n(entry.entry_id, quantity));
+        }
+        participants.push(NativeInitialParticipant {
+            seat_id: seat.seat_id,
+            life: 40.into(),
+            cards,
+        });
+        selection.push(NativeInitialSelection {
+            seat_id: seat.seat_id,
+            entry_ids,
+        });
+    }
+    prepare_root(
+        Root {
+            version: COMMANDER_ROOT.into(),
+            game_id: r.game_id,
+            context_id,
+            release_id: r.release.id,
+            profile_id: r.profile.id,
+            program_source_id: source.identity().clone(),
+            first_player_seat_id,
+            participants,
+            entropy,
+            selected: Some(SelectedRoot::from_reserved(reservation, selection)?),
+        },
+        source,
+    )
+}
+
 fn prepare_root(
     root: Root,
     source: &NativeProgramSource,

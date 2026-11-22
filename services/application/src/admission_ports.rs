@@ -12,46 +12,9 @@ use crate::{
 };
 use serde::{Deserialize, Deserializer, de};
 use uuid::Uuid;
-/// Current supported response outside the opening sequence, observed at a native checkpoint.
-#[derive(Clone, PartialEq, Eq, Deserialize, serde::Serialize)]
-#[serde(deny_unknown_fields, rename_all = "camelCase")]
-pub(crate) struct TurnResponse {
-    pub(crate) kind: TurnResponseKind,
-    pub(crate) same_native_wait: bool,
-    #[serde(deserialize_with = "crate::identifiers::uuid")]
-    pub(crate) seat_id: Uuid,
-    #[serde(deserialize_with = "crate::identifiers::uuid_list")]
-    pub(crate) remaining_seat_ids: Vec<Uuid>,
-}
-#[derive(Clone, Copy, PartialEq, Eq, Deserialize, serde::Serialize)]
-#[serde(rename_all = "lowercase")]
-pub(crate) enum TurnResponseKind {
-    Decision,
-    Priority,
-}
-
-pub(crate) fn present_turn_response<'de, D: Deserializer<'de>>(
-    input: D,
-) -> Result<Option<TurnResponse>, D::Error> {
-    crate::provider_json::Object::<TurnResponse>::deserialize(input).map(|object| Some(object.0))
-}
-#[derive(Clone, Copy, PartialEq, Eq, Deserialize, serde::Serialize)]
-pub(crate) enum TurnResponseProtocol {
-    #[serde(rename = "native-turn-response-v1")]
-    V1,
-    #[serde(rename = "native-turn-response-v2")]
-    V2,
-}
-pub(crate) fn present_turn_protocol<'de, D: Deserializer<'de>>(
-    input: D,
-) -> Result<Option<TurnResponseProtocol>, D::Error> {
-    TurnResponseProtocol::deserialize(input).map(Some)
-}
 mod event_schema;
 mod opening_clock;
 mod payload;
-pub use worker::AdmissionWorker;
-mod worker;
 pub use event_schema::NativeEventSchema;
 pub(crate) use event_schema::present as present_event_schema;
 pub use opening_clock::OpeningClockObservation;
@@ -279,7 +242,7 @@ pub struct StartRoomMatch {
     pub request_id: Uuid,
 }
 /// Newly admitted match and reserved game, not an operating native game.
-#[derive(Deserialize, serde::Serialize)]
+#[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct RoomStartAck {
     #[serde(deserialize_with = "crate::identifiers::uuid")]
@@ -295,28 +258,21 @@ impl StartRoomMatch {
         &self,
         bytes: &[u8],
     ) -> Result<ApiResponse<RoomStartAck>, SourceResponseError> {
-        checked(
-            ids(&[
-                self.room_id,
-                self.release_id,
-                self.legality_revision_id,
-                self.request_id,
-            ]),
-            (),
-        )?;
-        decode_start(bytes)
+        let response: ApiResponse<RoomStartAck> = record_response(bytes)?;
+        let valid = ids(&[
+            self.room_id,
+            self.release_id,
+            self.legality_revision_id,
+            self.request_id,
+        ]) && match &response {
+            ApiResponse::Success { .. } => true,
+            ApiResponse::Fail { data } => {
+                one_failure(data, START_FAILURES) || one_failure(data, ADMISSION_FAILURES)
+            }
+            ApiResponse::Error { .. } => false,
+        };
+        checked(valid, response)
     }
-}
-fn decode_start(bytes: &[u8]) -> Result<ApiResponse<RoomStartAck>, SourceResponseError> {
-    let response = record_response(bytes)?;
-    let valid = match &response {
-        ApiResponse::Success { .. } => true,
-        ApiResponse::Fail { data } => {
-            one_failure(data, START_FAILURES) || one_failure(data, ADMISSION_FAILURES)
-        }
-        ApiResponse::Error { .. } => false,
-    };
-    checked(valid, response)
 }
 ///189 match-opening:<match>/game_opening_v1; request/target are the game UUID.
 /// The fingerprint deliberately excludes expected_revision.

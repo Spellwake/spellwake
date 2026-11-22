@@ -7,11 +7,14 @@ pub(crate) mod test_support;
 
 pub mod actions;
 pub mod activated;
+pub mod attachment;
 pub mod characteristics;
 pub mod checks;
 pub mod combat;
 pub mod damage;
+pub mod day_night;
 pub mod draw;
+pub mod emblem;
 pub mod game;
 pub mod land;
 pub mod life;
@@ -173,3 +176,4 @@ mod tests {
 }
 
 pub mod effects;
+pub mod face_down;

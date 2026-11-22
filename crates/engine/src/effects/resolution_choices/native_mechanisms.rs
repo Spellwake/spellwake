@@ -10,10 +10,7 @@ use crate::{
     mana::ManaPaymentError,
     occurrence::EventCause,
     priority::PriorityPhase,
-    program::{
-        ObjectRelation, OrdinaryCondition, PlayerRelation, SpellCastFilter, TriggerGrouping,
-        TriggeredAbility, TriggeredAbilityId,
-    },
+    program::{PlayerRelation, TriggerGrouping, TriggerSpec, TriggeredAbility, TriggeredAbilityId},
     stack_window::{StackKind, StackWindowError, WindowPhase},
     token::{TokenCreation, TokenDefinition, TokenName},
 };
@@ -379,6 +376,7 @@ fn exact_spend_denials_preserve_the_entire_funded_payment_and_valid_continuation
     let color = tap(&state, 12).into_state();
     let funded = reply(&color, DecisionReply::ManaColor(ManaType::Blue)).into_state();
     let spend = |rows: &[(ManaType, i64)]| ManaPayment {
+        from_lots: Default::default(),
         spend: rows
             .iter()
             .map(|&(mana_type, amount)| ManaSpend {
@@ -481,7 +479,7 @@ fn positive_counted_production_restores_quote_then_fixed_production_pays_exactly
     source.mana.push(ManaAbility {
         id: ManaAbilityId(1),
         output: ManaOutput::Counted {
-            mana_type: ManaType::Blue,
+            mana_type: Some(ManaType::Blue),
             permanents: PermanentSelector {
                 required_types: BTreeSet::from([CardType::Creature]),
                 ..PermanentSelector::default()
@@ -542,6 +540,7 @@ fn positive_counted_production_restores_quote_then_fixed_production_pays_exactly
     let paid = reply(
         fixed.state(),
         DecisionReply::ResolutionPayment(ResolutionPaymentReply::Pay(ManaPayment {
+            from_lots: Default::default(),
             spend: vec![ManaSpend {
                 mana_type: ManaType::Blue,
                 amount: 3.into(),
@@ -880,7 +879,7 @@ fn optional_nonempty_draw_moves_library_top_once_or_skips_all_draw_work() {
                     A,
                     BodyTarget::None,
                     wrapped(Instruction::DrawController {
-                        amount: InstructionAmount::Literal(1.into()),
+                        amount: crate::program::ValueExpr::Literal(1.into()),
                     }),
                 ),
                 seed(2, A, ObjectDestination::LibraryBottom, creature()),
@@ -973,7 +972,7 @@ fn optional_token_batch_preserves_real_timestamp_child_then_creates_once_or_skip
     )
     .unwrap();
     let mut creation = TokenCreation::one(definition);
-    creation.amount = InstructionAmount::Literal(2.into());
+    creation.amount = crate::program::ValueExpr::Literal(2.into());
     for choice in [OptionalEffectChoice::Take, OptionalEffectChoice::Decline] {
         let state = pending(wrapped(Instruction::CreateTokens {
             creations: vec![creation.clone()],
@@ -1015,7 +1014,7 @@ fn optional_token_batch_preserves_real_timestamp_child_then_creates_once_or_skip
     }
 }
 
-fn watched(mut program: Program, condition: OrdinaryCondition, body: Vec<Instruction>) -> Program {
+fn watched(mut program: Program, condition: TriggerSpec, body: Vec<Instruction>) -> Program {
     program.triggered.push(TriggeredAbility {
         id: TriggeredAbilityId(1),
         condition,
@@ -1027,10 +1026,10 @@ fn watched(mut program: Program, condition: OrdinaryCondition, body: Vec<Instruc
 fn captured_after_source_change(control: bool, body: Vec<Instruction>) -> GameState {
     let watcher = watched(
         Program::artifact(None, vec![]),
-        OrdinaryCondition::SpellCast {
-            player: PlayerRelation::Opponent,
-            filter: SpellCastFilter::HasType(CardType::Kindred),
-        },
+        crate::program::TriggerSpec::spell_cast(
+            PlayerRelation::Opponent,
+            crate::program::SpellFilter::of_type(CardType::Kindred),
+        ),
         body,
     );
     let mut original = hand(1, B, BodyTarget::None, vec![gain(0)]);
@@ -1182,7 +1181,7 @@ fn captured_offer_body() -> Vec<Instruction> {
             chooser: ResolvingPlayer::Controller,
         },
         Instruction::DrawController {
-            amount: InstructionAmount::Literal(1.into()),
+            amount: crate::program::ValueExpr::Literal(1.into()),
         },
         gain(0),
     ]
@@ -1194,7 +1193,7 @@ fn active_controller_and_caster_keep_three_distinct_roles_after_source_change() 
         let state = captured_after_source_change(control, captured_offer_body());
         let frame = payment_frame(&state);
         assert_eq!(frame.payer(), B);
-        assert_eq!(state.execution().window().turn_owner(), C);
+        assert_eq!(state.execution().window().active_player(), C);
         for actor in [A, C] {
             reject(
                 &state,
@@ -1265,13 +1264,13 @@ fn active_controller_and_caster_keep_three_distinct_roles_after_source_change() 
 fn died_source_owner_graveyard_and_captured_controller_draw_are_independent() {
     let source = watched(
         Program::creature(None, 1.into(), 0.into(), BTreeSet::new()),
-        OrdinaryCondition::Dies(ObjectRelation::SelfObject),
+        crate::program::TriggerSpec::dies(crate::program::ObjectFilter::self_object()),
         vec![
             Instruction::OptionalEffect {
                 chooser: ResolvingPlayer::Controller,
             },
             Instruction::DrawController {
-                amount: InstructionAmount::Literal(1.into()),
+                amount: crate::program::ValueExpr::Literal(1.into()),
             },
         ],
     );
@@ -1410,7 +1409,7 @@ fn tap_watcher_waits_through_real_color_child_and_payment_until_the_rules_bounda
     for should_pay in [false, true] {
         let mut source = watched(
             Program::artifact(None, vec![]),
-            OrdinaryCondition::BecomesTapped(ObjectRelation::SelfObject),
+            crate::program::TriggerSpec::becomes_tapped(crate::program::ObjectFilter::self_object()),
             vec![gain(1)],
         );
         source.mana.push(ManaAbility {
@@ -1496,6 +1495,7 @@ fn tap_watcher_waits_through_real_color_child_and_payment_until_the_rules_bounda
             restored.state(),
             DecisionReply::ResolutionPayment(if should_pay {
                 ResolutionPaymentReply::Pay(ManaPayment {
+                    from_lots: Default::default(),
                     spend: vec![ManaSpend {
                         mana_type: ManaType::Blue,
                         amount: 1.into(),
@@ -1613,7 +1613,7 @@ fn spell_optional(operation: Instruction) -> (GameState, StackEntryId) {
             hand(
                 2,
                 A,
-                BodyTarget::SingleSpell(SpellTargetFilter::AnySpell),
+                BodyTarget::SingleSpell(crate::program::SpellFilter::any()),
                 wrapped(operation),
             ),
         ],
@@ -1697,13 +1697,13 @@ fn optional_copy_preserves_actual_copy_targets_child_and_rejects_reused_or_forei
             hand(
                 2,
                 A,
-                BodyTarget::SingleSpell(SpellTargetFilter::AnySpell),
+                BodyTarget::SingleSpell(crate::program::SpellFilter::any()),
                 vec![Instruction::CounterSpell],
             ),
             hand(
                 3,
                 A,
-                BodyTarget::SingleSpell(SpellTargetFilter::CopyableInstructionSpell),
+                BodyTarget::SingleSpell(crate::program::SpellFilter::copyable_instruction()),
                 wrapped(Instruction::CopySpell),
             ),
         ],
@@ -2018,13 +2018,13 @@ fn target_spell_controller_role_comes_from_the_actual_card_spell_or_spell_copy()
             hand(
                 2,
                 B,
-                BodyTarget::SingleSpell(SpellTargetFilter::CopyableInstructionSpell),
+                BodyTarget::SingleSpell(crate::program::SpellFilter::copyable_instruction()),
                 vec![Instruction::CopySpell],
             ),
             hand(
                 3,
                 A,
-                BodyTarget::SingleSpell(SpellTargetFilter::AnySpell),
+                BodyTarget::SingleSpell(crate::program::SpellFilter::any()),
                 vec![
                     Instruction::OfferManaPayment {
                         payer: ResolvingPlayer::TargetSpellController,
@@ -2226,6 +2226,7 @@ fn colored_resolution_cost_rejects_missing_required_color_before_valid_exact_spe
         command_reply(
             &state,
             DecisionReply::ResolutionPayment(ResolutionPaymentReply::Pay(ManaPayment {
+                from_lots: Default::default(),
                 spend: vec![ManaSpend {
                     mana_type: ManaType::Red,
                     amount: 1.into(),
@@ -2239,6 +2240,7 @@ fn colored_resolution_cost_rejects_missing_required_color_before_valid_exact_spe
     let result = reply(
         &state,
         DecisionReply::ResolutionPayment(ResolutionPaymentReply::Pay(ManaPayment {
+            from_lots: Default::default(),
             spend: vec![ManaSpend {
                 mana_type: ManaType::Blue,
                 amount: 1.into(),
@@ -2495,7 +2497,7 @@ fn optional_type_literal_zero_draw_continuation_assigns_only_on_take() {
                 excluding: BTreeSet::new(),
             },
             Instruction::DrawController {
-                amount: InstructionAmount::Literal(0.into()),
+                amount: crate::program::ValueExpr::Literal(0.into()),
             },
         ]);
         let result = take_or_decline(&state, choice);
@@ -2718,6 +2720,7 @@ fn same_original_typed_inputs_reexecute_every_payment_parent_child_journal_and_w
     state = result.into_state();
     for choice in [
         DecisionReply::ResolutionPayment(ResolutionPaymentReply::Pay(ManaPayment {
+            from_lots: Default::default(),
             spend: vec![ManaSpend {
                 mana_type: ManaType::Blue,
                 amount: 3.into(),
@@ -2828,6 +2831,7 @@ fn nonempty_resolution_locals_survive_each_mana_prefix_and_both_optional_outcome
     let paid = reply(
         &funded,
         DecisionReply::ResolutionPayment(ResolutionPaymentReply::Pay(ManaPayment {
+            from_lots: Default::default(),
             spend: vec![ManaSpend {
                 mana_type: ManaType::Blue,
                 amount: 3.into(),
@@ -2967,11 +2971,11 @@ fn actual_by_player_group_retains_two_entry_causes_for_distinct_payer_and_option
     )
     .unwrap();
     let mut creation = TokenCreation::one(definition);
-    creation.amount = InstructionAmount::Literal(2.into());
+    creation.amount = crate::program::ValueExpr::Literal(2.into());
     let mut watcher = Program::artifact(None, vec![]);
     watcher.triggered.push(TriggeredAbility {
         id: TriggeredAbilityId(1),
-        condition: OrdinaryCondition::Enters(ObjectRelation::AnyCreature),
+        condition: crate::program::TriggerSpec::enters(crate::program::ObjectFilter::creature()),
         grouping: TriggerGrouping::OneOrMoreByPlayer,
         body: ExecutableBody::new(
             BodyTarget::None,
@@ -3148,7 +3152,7 @@ fn actual_by_player_group_retains_two_entry_causes_for_distinct_payer_and_option
         projection::resolving_payload(offered.state().execution()),
         Some(queued_payload)
     );
-    assert_eq!(offered.state().execution().window().turn_owner(), C);
+    assert_eq!(offered.state().execution().window().active_player(), C);
     assert_eq!(payment_frame(offered.state()).entry(), trigger_entry);
     assert_eq!(payment_frame(offered.state()).payer(), A);
     assert_eq!(
@@ -3190,6 +3194,7 @@ fn actual_by_player_group_retains_two_entry_causes_for_distinct_payer_and_option
     let paid = reply(
         funded.state(),
         DecisionReply::ResolutionPayment(ResolutionPaymentReply::Pay(ManaPayment {
+            from_lots: Default::default(),
             spend: vec![ManaSpend {
                 mana_type: ManaType::Blue,
                 amount: 1.into(),

@@ -13,8 +13,7 @@ use spellwake_engine::{
     occurrence::{RulesRecord, TriggerError},
     priority::{PriorityPhase, SeatId},
     program::{
-        BodyTarget, ExecutableBody, Instruction, ObjectRelation, OrdinaryCondition, Program,
-        TriggeredAbility, TriggeredAbilityId,
+        BodyTarget, ExecutableBody, Instruction, Program, TriggeredAbility, TriggeredAbilityId,
     },
     setup::GameSeed,
     stack_window::WindowPhase,
@@ -29,11 +28,13 @@ fn issued() -> NativeCandidate {
     observer.triggered.push(TriggeredAbility {
         grouping: spellwake_engine::program::TriggerGrouping::EachOccurrence,
         id: TriggeredAbilityId(1),
-        condition: OrdinaryCondition::Dies(ObjectRelation::AnyCreature),
+        condition: spellwake_engine::program::TriggerSpec::dies(
+            spellwake_engine::program::ObjectFilter::creature(),
+        ),
         body: ExecutableBody::new(
             BodyTarget::None,
             vec![Instruction::DrawController {
-                amount: spellwake_engine::program::InstructionAmount::Literal(1.into()),
+                amount: spellwake_engine::program::ValueExpr::Literal(1.into()),
             }],
         ),
     });

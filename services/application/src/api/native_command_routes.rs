@@ -21,7 +21,7 @@ pub(super) async fn execute(
         Ok(game) => game,
         Err(reason) => return fail(StatusCode::BAD_REQUEST, "game", reason),
     };
-    if !single_content_type(request.headers()).is_some_and(|kind| kind == "application/json") {
+    if !is_json_content_type(request.headers()) {
         return fail(StatusCode::BAD_REQUEST, "body", "json_required");
     }
     let original: PlayerCommand = match to_bytes(request.into_body(), MAX_PLAYER_WIRE_BYTES)
@@ -85,7 +85,7 @@ pub(super) async fn execute(
             else {
                 return unavailable();
             };
-            match runtime.command_current(&repository, &actor, owner, &access, &original) {
+            match runtime.command_current_checked(&repository, &actor, owner, &access, &original) {
                 Ok(response) => reply(response),
                 Err(_) => unavailable(),
             }

@@ -93,7 +93,7 @@ impl CleanupDiscardChoice {
 /// graveyard arrivals. The reply gives final top-to-bottom entrant order above
 /// the unchanged old pile; it cannot reorder the old pile.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct GraveyardOrderChoice {
+pub struct CheckObjectDomain {
     pub(crate) player: SeatId,
     pub(crate) revision: u64,
     pub(crate) boundary: CheckBoundary,
@@ -101,7 +101,10 @@ pub struct GraveyardOrderChoice {
     pub(crate) domain: Vec<ObjectId>,
 }
 
-impl GraveyardOrderChoice {
+/// Object domain for simultaneous graveyard entry ordering.
+pub type GraveyardOrderChoice = CheckObjectDomain;
+
+impl CheckObjectDomain {
     pub fn chooser(&self) -> SeatId {
         self.player
     }
@@ -118,7 +121,7 @@ impl GraveyardOrderChoice {
         self.event
     }
 
-    /// Complete exact-current-object permutation domain, without an implied order.
+    /// Exact eligible object incarnations, without an implied order.
     pub fn domain(&self) -> &[ObjectId] {
         &self.domain
     }
@@ -202,6 +205,27 @@ impl LegendChoice {
     }
 }
 
+/// A Siege controller chooses a legal protector at a state-based action boundary.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BattleProtectorChoice {
+    pub(crate) player: SeatId,
+    pub(crate) revision: u64,
+    pub(crate) boundary: CheckBoundary,
+    pub(crate) event: CheckEventId,
+    pub(crate) battle: ObjectId,
+    pub(crate) domain: Vec<SeatId>,
+}
+impl BattleProtectorChoice {
+    /// Exact battlefield object whose protector is being chosen.
+    pub fn battle(&self) -> ObjectId {
+        self.battle
+    }
+    /// Eligible opponents at this simultaneous check boundary.
+    pub fn domain(&self) -> &[SeatId] {
+        &self.domain
+    }
+}
+
 /// Readonly native check boundary. A player reply supplies choices only.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CheckDecision {
@@ -209,6 +233,9 @@ pub enum CheckDecision {
     /// Replacement-aware hand selection; its vector is not a final Graveyard order.
     CleanupSelect(CleanupDiscardChoice),
     GraveyardOrder(GraveyardOrderChoice),
+    /// Owner may move any subset of their newly exiled or dead commanders to command.
+    ReturnCommanders(CheckObjectDomain),
+    BattleProtector(BattleProtectorChoice),
     Legend(LegendChoice),
 }
 
@@ -216,32 +243,36 @@ impl CheckDecision {
     pub fn chooser(&self) -> SeatId {
         match self {
             Self::CleanupDiscard(frame) | Self::CleanupSelect(frame) => frame.chooser(),
-            Self::GraveyardOrder(frame) => frame.chooser(),
+            Self::GraveyardOrder(frame) | Self::ReturnCommanders(frame) => frame.chooser(),
             Self::Legend(frame) => frame.chooser(),
+            Self::BattleProtector(frame) => frame.player,
         }
     }
 
     pub fn revision(&self) -> u64 {
         match self {
             Self::CleanupDiscard(frame) | Self::CleanupSelect(frame) => frame.revision(),
-            Self::GraveyardOrder(frame) => frame.revision(),
+            Self::GraveyardOrder(frame) | Self::ReturnCommanders(frame) => frame.revision(),
             Self::Legend(frame) => frame.revision(),
+            Self::BattleProtector(frame) => frame.revision,
         }
     }
 
     pub fn boundary(&self) -> CheckBoundary {
         match self {
             Self::CleanupDiscard(frame) | Self::CleanupSelect(frame) => frame.boundary(),
-            Self::GraveyardOrder(frame) => frame.boundary(),
+            Self::GraveyardOrder(frame) | Self::ReturnCommanders(frame) => frame.boundary(),
             Self::Legend(frame) => frame.boundary(),
+            Self::BattleProtector(frame) => frame.boundary,
         }
     }
 
     pub fn event(&self) -> CheckEventId {
         match self {
             Self::CleanupDiscard(frame) | Self::CleanupSelect(frame) => frame.event(),
-            Self::GraveyardOrder(frame) => frame.event(),
+            Self::GraveyardOrder(frame) | Self::ReturnCommanders(frame) => frame.event(),
             Self::Legend(frame) => frame.event(),
+            Self::BattleProtector(frame) => frame.event,
         }
     }
 }
@@ -277,7 +308,9 @@ pub enum CheckChoiceKind {
     CleanupSelected,
     CleanupDiscard,
     GraveyardOrder,
+    ReturnCommanders,
     LegendKeep,
+    BattleProtector,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -299,6 +332,13 @@ pub enum CheckChoice {
     GraveyardOrder {
         ordered: Vec<ObjectId>,
     },
+    ReturnCommanders {
+        selected: Vec<ObjectId>,
+    },
+    BattleProtector {
+        battle: ObjectId,
+        protector: SeatId,
+    },
     LegendKeep {
         conflict: LegendConflictId,
         domain: Vec<ObjectId>,
@@ -312,6 +352,8 @@ impl CheckChoice {
             Self::CleanupSelected { .. } => CheckChoiceKind::CleanupSelected,
             Self::CleanupDiscard { .. } => CheckChoiceKind::CleanupDiscard,
             Self::GraveyardOrder { .. } => CheckChoiceKind::GraveyardOrder,
+            Self::ReturnCommanders { .. } => CheckChoiceKind::ReturnCommanders,
+            Self::BattleProtector { .. } => CheckChoiceKind::BattleProtector,
             Self::LegendKeep { .. } => CheckChoiceKind::LegendKeep,
         }
     }
@@ -361,6 +403,8 @@ pub enum CheckError {
     WrongFrame,
     InvalidDiscard,
     InvalidGraveyardOrder,
+    InvalidCommanderSelection,
+    InvalidBattleProtector,
     InvalidLegendConflict,
     InvalidLegendKeep,
     ConflictCountExhausted,

@@ -58,9 +58,7 @@ impl NativeGameRuntime {
                 &metadata,
                 &display,
             )?;
-            let snapshot = issued
-                .with_live_deadline(repository, recovered.checkpoint(), access.viewer_seat_id())?
-                .into_snapshot();
+            let snapshot = issued.into_snapshot();
             #[cfg(test)]
             self.observe_delivery(TestDeliveryStage::Refresh, repository, &recovered);
             Ok(NativeViewOutcome::Snapshot(Box::new(snapshot)))

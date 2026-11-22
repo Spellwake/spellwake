@@ -13,7 +13,7 @@ pub(super) async fn create(State(state): State<ApiState>, request: Request) -> R
         Ok(value) => value,
         Err(error) => return actor_error(error),
     };
-    if !single_content_type(request.headers()).is_some_and(|value| value == "application/json") {
+    if !is_json_content_type(request.headers()) {
         return fail(StatusCode::BAD_REQUEST, "body", "json_required");
     }
     let input: CreateDeck = match to_bytes(request.into_body(), 4096)
@@ -50,7 +50,7 @@ pub(super) async fn save(
         Ok(id) => id,
         Err(_) => return fail(StatusCode::BAD_REQUEST, "deck", "invalid"),
     };
-    if !single_content_type(request.headers()).is_some_and(|value| value == "application/json") {
+    if !is_json_content_type(request.headers()) {
         return fail(StatusCode::BAD_REQUEST, "body", "json_required");
     }
     let input: SaveDeck = match to_bytes(request.into_body(), 262144)
@@ -88,7 +88,7 @@ pub(super) async fn settings(
         Ok(id) => id,
         Err(_) => return fail(StatusCode::BAD_REQUEST, "deck", "invalid"),
     };
-    if !single_content_type(request.headers()).is_some_and(|value| value == "application/json") {
+    if !is_json_content_type(request.headers()) {
         return fail(StatusCode::BAD_REQUEST, "body", "json_required");
     }
     let input: ChangeDeckSettings = match to_bytes(request.into_body(), 4096)
@@ -177,7 +177,7 @@ pub(super) async fn disposition(State(state): State<ApiState>, request: Request)
         Ok(token) => token,
         Err(error) => return actor_error(error),
     };
-    if !single_content_type(request.headers()).is_some_and(|value| value == "application/json") {
+    if !is_json_content_type(request.headers()) {
         return fail(StatusCode::BAD_REQUEST, "body", "json_required");
     }
     let input: DeckCommand = match to_bytes(request.into_body(), 264192)

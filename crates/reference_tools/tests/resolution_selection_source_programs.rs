@@ -16,8 +16,8 @@ use spellwake_engine::{
     object_identity::{CardId, ObjectDestination},
     priority::SeatId,
     program::{
-        AffectedPlayers, BodyTarget, CardType, Instruction, InstructionAmount, ObjectRelation,
-        OrdinaryCondition, Program, ProgramKind, TriggerGrouping,
+        AffectedPlayers, BodyTarget, CardType, Instruction, Program, ProgramKind, TriggerGrouping,
+        ValueExpr,
     },
     token::{TokenName, TokenRecipients, TokenSubtype},
 };
@@ -200,7 +200,7 @@ fn resolution_selection_source9_programs_roundtrip_and_export() -> Result<(), St
             let [creation] = creations.as_slice() else {
                 return Err("Raise must contain exactly one authored token group".into());
             };
-            assert_eq!(creation.amount, InstructionAmount::Literal(2.into()));
+            assert_eq!(creation.amount, ValueExpr::Literal(2.into()));
             assert_eq!(creation.recipients, TokenRecipients::Controller);
             let soldier = vocabulary
                 .resolve_label("Soldier")
@@ -251,7 +251,9 @@ fn resolution_selection_source9_programs_roundtrip_and_export() -> Result<(), St
             assert_eq!(trigger.grouping, TriggerGrouping::EachOccurrence);
             assert_eq!(
                 trigger.condition,
-                OrdinaryCondition::Enters(ObjectRelation::SelfObject)
+                spellwake_engine::program::TriggerSpec::enters(
+                    spellwake_engine::program::ObjectFilter::self_object()
+                )
             );
             assert_eq!(trigger.body.target, BodyTarget::None);
             let [
@@ -265,7 +267,7 @@ fn resolution_selection_source9_programs_roundtrip_and_export() -> Result<(), St
                 return Err("Fleshbag lacks its full selected sacrifice trigger body".into());
             };
             assert_eq!(*players, AffectedPlayers::EachPlayer);
-            assert_eq!(*amount, InstructionAmount::Literal(1.into()));
+            assert_eq!(*amount, ValueExpr::Literal(1.into()));
             assert_eq!(filter.required_types, BTreeSet::from([CardType::Creature]));
             assert!(filter.forbidden_types.is_empty());
             trigger_rows.push(json!({"source_oracle_id": oracle, "triggered_body": program::body(&trigger.body), "runtime_trigger_capture_executed": false}));

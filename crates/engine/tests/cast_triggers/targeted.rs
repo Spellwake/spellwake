@@ -1,14 +1,11 @@
 //! Focused public-root behavior. Selected reference evidence is frozen/run separately.
 use super::*;
-use spellwake_engine::{
-    occurrence::{TriggerRemovalReason, TriggerTargetChoice},
-    program::SpellTargetFilter,
-};
+use spellwake_engine::occurrence::{TriggerRemovalReason, TriggerTargetChoice};
 
 fn targeted(mut source: Program, target: BodyTarget, instructions: Vec<Instruction>) -> Program {
     source.triggered.push(TriggeredAbility {
         id: TriggeredAbilityId(1),
-        condition: OrdinaryCondition::SelfCast,
+        condition: spellwake_engine::program::TriggerSpec::self_cast(),
         grouping: TriggerGrouping::EachOccurrence,
         body: ExecutableBody::new(target, instructions),
     });
@@ -222,10 +219,10 @@ fn target_player_is_distinct_from_caster_and_captured_watcher_controller() {
     let mut watcher = Program::artifact(None, vec![]);
     watcher.triggered.push(TriggeredAbility {
         id: TriggeredAbilityId(1),
-        condition: OrdinaryCondition::SpellCast {
-            player: PlayerRelation::AnyParticipant,
-            filter: SpellCastFilter::AnySpell,
-        },
+        condition: spellwake_engine::program::TriggerSpec::spell_cast(
+            PlayerRelation::AnyParticipant,
+            spellwake_engine::program::SpellFilter::any(),
+        ),
         grouping: TriggerGrouping::EachOccurrence,
         body: ExecutableBody::new(BodyTarget::SinglePlayer, vec![gain_target(2), gain(1)]),
     });
@@ -281,7 +278,7 @@ fn target_player_is_distinct_from_caster_and_captured_watcher_controller() {
 fn self_cast_trigger_can_counter_causing_spell_and_keep_its_owned_body() {
     let source = targeted(
         instruction(),
-        BodyTarget::SingleSpell(SpellTargetFilter::AnySpell),
+        BodyTarget::SingleSpell(spellwake_engine::program::SpellFilter::any()),
         vec![Instruction::CounterSpell],
     );
     let game = two(vec![hand(1, P0, source)]);
@@ -355,7 +352,7 @@ fn later_target_loss_suppresses_targeted_instruction_and_untargeted_tail() {
 fn spell_copy_target_gate_uses_existing_copy_owner_without_an_extra_cast() {
     let source = targeted(
         instruction(),
-        BodyTarget::SingleSpell(SpellTargetFilter::CopyableInstructionSpell),
+        BodyTarget::SingleSpell(spellwake_engine::program::SpellFilter::copyable_instruction()),
         vec![Instruction::CopySpell],
     );
     let game = two(vec![hand(1, P0, source)]);
@@ -609,10 +606,10 @@ fn nonfirst_active_mixed_cohorts_choose_targets_in_accepted_order_before_priorit
         ] {
             watcher.triggered.push(TriggeredAbility {
                 id: TriggeredAbilityId(definition),
-                condition: OrdinaryCondition::SpellCast {
-                    player: PlayerRelation::AnyParticipant,
-                    filter: SpellCastFilter::AnySpell,
-                },
+                condition: spellwake_engine::program::TriggerSpec::spell_cast(
+                    PlayerRelation::AnyParticipant,
+                    spellwake_engine::program::SpellFilter::any(),
+                ),
                 grouping: TriggerGrouping::EachOccurrence,
                 body: ExecutableBody::new(target, body),
             });
@@ -709,7 +706,7 @@ fn removed_attempt_keeps_its_order_position_and_continues_targeted_and_targetles
     ] {
         source.triggered.push(TriggeredAbility {
             id: TriggeredAbilityId(id),
-            condition: OrdinaryCondition::SelfCast,
+            condition: spellwake_engine::program::TriggerSpec::self_cast(),
             grouping: TriggerGrouping::EachOccurrence,
             body: ExecutableBody::new(target, body),
         });
@@ -717,10 +714,10 @@ fn removed_attempt_keeps_its_order_position_and_continues_targeted_and_targetles
     let mut later = Program::artifact(None, vec![]);
     later.triggered.push(TriggeredAbility {
         id: TriggeredAbilityId(1),
-        condition: OrdinaryCondition::SpellCast {
-            player: PlayerRelation::AnyParticipant,
-            filter: SpellCastFilter::AnySpell,
-        },
+        condition: spellwake_engine::program::TriggerSpec::spell_cast(
+            PlayerRelation::AnyParticipant,
+            spellwake_engine::program::SpellFilter::any(),
+        ),
         grouping: TriggerGrouping::EachOccurrence,
         body: ExecutableBody::new(BodyTarget::SinglePlayer, vec![gain_target(4)]),
     });
@@ -886,8 +883,9 @@ fn targeted_entry_trigger_uses_the_real_new_battlefield_source_identity() {
         BodyTarget::SinglePlayer,
         vec![gain_target(2)],
     );
-    source.triggered[0].condition =
-        OrdinaryCondition::Enters(spellwake_engine::program::ObjectRelation::SelfObject);
+    source.triggered[0].condition = spellwake_engine::program::TriggerSpec::enters(
+        spellwake_engine::program::ObjectFilter::self_object(),
+    );
     let game = two(vec![hand(1, P0, source)]);
     let cast = paid(&game, P0, 1, 0, None);
     assert!(cast.state().pending_decision().is_none());
@@ -915,8 +913,9 @@ fn a_dead_source_places_and_executes_its_targeted_ability_from_the_captured_body
         BodyTarget::SinglePlayer,
         vec![gain_target(2)],
     );
-    creature.triggered[0].condition =
-        OrdinaryCondition::Dies(spellwake_engine::program::ObjectRelation::SelfObject);
+    creature.triggered[0].condition = spellwake_engine::program::TriggerSpec::dies(
+        spellwake_engine::program::ObjectFilter::self_object(),
+    );
     let damage = Program::instant(
         ManaCost::one(ManaType::Blue),
         ExecutableBody::new(
@@ -981,10 +980,10 @@ fn a_step_trigger_chooses_targets_for_its_controller_during_another_players_upke
         BodyTarget::SinglePlayer,
         vec![gain_target(2)],
     );
-    watcher.triggered[0].condition = OrdinaryCondition::StepBegan {
-        step: Step::Upkeep,
-        player: PlayerRelation::AnyParticipant,
-    };
+    watcher.triggered[0].condition = spellwake_engine::program::TriggerSpec::step_began(
+        Step::Upkeep,
+        PlayerRelation::AnyParticipant,
+    );
     let mut state = two(vec![tr::controlled(2, P0, P0, watcher)]);
     for _ in 0..60 {
         if let Some(pending) = state.pending_decision() {
@@ -1018,7 +1017,7 @@ fn a_step_trigger_chooses_targets_for_its_controller_during_another_players_upke
         }
     }
     assert_eq!(state.turn().unwrap().position().step, Step::Upkeep);
-    assert_eq!(state.execution().window().turn_owner(), P1);
+    assert_eq!(state.execution().window().active_player(), P1);
     assert_eq!(target_frame(&state).chooser(), P0);
     let captured = state.execution().waiting_triggers().next().unwrap();
     assert!(matches!(
@@ -1034,12 +1033,12 @@ fn a_step_trigger_chooses_targets_for_its_controller_during_another_players_upke
 #[test]
 fn both_spell_domains_include_real_noncard_instruction_copies_as_targets() {
     for filter in [
-        SpellTargetFilter::AnySpell,
-        SpellTargetFilter::CopyableInstructionSpell,
+        spellwake_engine::program::SpellFilter::any(),
+        spellwake_engine::program::SpellFilter::copyable_instruction(),
     ] {
         let source = targeted(
             instruction(),
-            BodyTarget::SingleSpell(SpellTargetFilter::CopyableInstructionSpell),
+            BodyTarget::SingleSpell(spellwake_engine::program::SpellFilter::copyable_instruction()),
             vec![Instruction::CopySpell],
         );
         let counter = targeted(
@@ -1100,8 +1099,8 @@ fn both_spell_domains_include_real_noncard_instruction_copies_as_targets() {
 #[test]
 fn any_spell_includes_permanent_spells_while_copyable_filter_preserves_interpreter_limit() {
     for filter in [
-        SpellTargetFilter::AnySpell,
-        SpellTargetFilter::CopyableInstructionSpell,
+        spellwake_engine::program::SpellFilter::any(),
+        spellwake_engine::program::SpellFilter::copyable_instruction(),
     ] {
         let counter = targeted(
             instruction(),
@@ -1116,7 +1115,7 @@ fn any_spell_includes_permanent_spells_while_copyable_filter_preserves_interpret
         let permanent_entry = entry(permanent.state(), 1);
         let response = paid(permanent.state(), P0, 3, 1, None);
         let causing = entry(response.state(), 3);
-        let chosen = if filter == SpellTargetFilter::AnySpell {
+        let chosen = if filter == spellwake_engine::program::SpellFilter::any() {
             assert_eq!(
                 target_frame(response.state()).domain(),
                 &[TargetRef::Stack(permanent_entry), TargetRef::Stack(causing)]
@@ -1132,7 +1131,7 @@ fn any_spell_includes_permanent_spells_while_copyable_filter_preserves_interpret
         let selected = select(response.state(), TargetRef::Stack(chosen));
         let triggered = resolve(selected.state());
         let done = resolve(triggered.state());
-        let expected_zone = if filter == SpellTargetFilter::AnySpell {
+        let expected_zone = if filter == spellwake_engine::program::SpellFilter::any() {
             ObjectZone::Graveyard(P0)
         } else {
             ObjectZone::Battlefield
@@ -1210,10 +1209,10 @@ fn source_control_change_preserves_the_targeted_trigger_controller_and_untargete
     let mut watcher = Program::artifact(None, vec![]);
     watcher.triggered.push(TriggeredAbility {
         id: TriggeredAbilityId(1),
-        condition: OrdinaryCondition::SpellCast {
-            player: PlayerRelation::Controller,
-            filter: SpellCastFilter::AnySpell,
-        },
+        condition: spellwake_engine::program::TriggerSpec::spell_cast(
+            PlayerRelation::Controller,
+            spellwake_engine::program::SpellFilter::any(),
+        ),
         grouping: TriggerGrouping::EachOccurrence,
         body: ExecutableBody::new(BodyTarget::SinglePlayer, vec![gain_target(2), gain(1)]),
     });
@@ -1381,7 +1380,7 @@ fn nested_copy_choice_changes_only_the_copy_plan_and_keeps_the_trigger_binding()
             ManaCost::one(ManaType::Blue),
             ExecutableBody::new(BodyTarget::SinglePlayer, vec![gain_target(2)]),
         ),
-        BodyTarget::SingleSpell(SpellTargetFilter::CopyableInstructionSpell),
+        BodyTarget::SingleSpell(spellwake_engine::program::SpellFilter::copyable_instruction()),
         vec![Instruction::CopySpell],
     );
     let game = two(vec![hand(1, P0, source)]);

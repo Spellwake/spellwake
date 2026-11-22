@@ -9,11 +9,12 @@ use crate::{
     life::LifeAdjustment,
     mana::{ManaAbility, ManaAbilityId, ManaAbilityRef},
     occurrence::{RulesOccurrence, RulesRecord},
-    program::{BodyTarget, CardType, CreatureTypeSlot, ExecutableBody, InstructionAmount},
+    program::{BodyTarget, CardType, CreatureTypeSlot, ExecutableBody},
     test_support::{creature_types, packet::AliasContext, projection},
 };
 use std::sync::Arc;
 
+mod departure;
 #[path = "native_mechanisms.rs"]
 mod native_mechanisms;
 mod selection_boundary_tests;
@@ -61,6 +62,13 @@ fn initialize(body: Vec<Instruction>) -> NativeCandidate {
     initialize_for_target(BodyTarget::None, body)
 }
 fn initialize_for_target(target: BodyTarget, body: Vec<Instruction>) -> NativeCandidate {
+    initialize_for_target_paid(target, body, false)
+}
+fn initialize_for_target_paid(
+    target: BodyTarget,
+    body: Vec<Instruction>,
+    with_paid: bool,
+) -> NativeCandidate {
     let mut cards = vec![SeedCard {
         card: CardId(1),
         owner: A,
@@ -86,7 +94,7 @@ fn initialize_for_target(target: BodyTarget, body: Vec<Instruction>) -> NativeCa
         (
             13,
             ManaOutput::Counted {
-                mana_type: ManaType::Blue,
+                mana_type: Some(ManaType::Blue),
                 permanents: PermanentSelector {
                     required_types: BTreeSet::from([CardType::Land]),
                     ..PermanentSelector::default()
@@ -106,6 +114,36 @@ fn initialize_for_target(target: BodyTarget, body: Vec<Instruction>) -> NativeCa
             program,
         });
     }
+    if with_paid {
+        let mut program = Program::artifact(None, vec![]);
+        program.mana.push(ManaAbility {
+            id: ManaAbilityId(1),
+            output: ManaOutput::Fixed(BTreeMap::from([
+                (ManaType::White, 1.into()),
+                (ManaType::Blue, 1.into()),
+            ]))
+            .paid(ManaCost::generic(1.into())),
+        });
+        cards.push(SeedCard {
+            card: CardId(14),
+            owner: A,
+            destination: ObjectDestination::Battlefield { controller: A },
+            program,
+        });
+        let mut hybrid = Program::artifact(None, vec![]);
+        hybrid.mana.push(ManaAbility {
+            id: ManaAbilityId(1),
+            output: ManaOutput::SpecialColor(crate::mana::SpecialColorYield::HybridFilter {
+                colors: [ManaType::White, ManaType::Blue],
+            }),
+        });
+        cards.push(SeedCard {
+            card: CardId(15),
+            owner: A,
+            destination: ObjectDestination::Battlefield { controller: A },
+            program: hybrid,
+        });
+    }
     let vocabulary = creature_types::selected_vocabulary().unwrap();
     let names = Arc::new(spellwake_contracts::names::NameRules::literal_names());
     let context = GameContext::new(
@@ -122,7 +160,18 @@ fn initialize_for_target(target: BodyTarget, body: Vec<Instruction>) -> NativeCa
         vec![A, B],
         A,
         cards,
-        vec![CardId(10), CardId(11), CardId(12), CardId(13)],
+        if with_paid {
+            vec![
+                CardId(10),
+                CardId(11),
+                CardId(12),
+                CardId(13),
+                CardId(14),
+                CardId(15),
+            ]
+        } else {
+            vec![CardId(10), CardId(11), CardId(12), CardId(13)]
+        },
         vec![],
         20.into(),
         CombatRules::UnrestrictedFreeForAll,
@@ -279,6 +328,7 @@ fn payment_allows_fixed_color_fixed_and_restores_exact_parent_before_pay() {
                     decision: first.pending_decision().unwrap().id(),
                     choice: DecisionReply::ResolutionPayment(ResolutionPaymentReply::Pay(
                         ManaPayment {
+                            from_lots: Default::default(),
                             spend: vec![ManaSpend {
                                 mana_type: ManaType::Blue,
                                 amount: 3.into()
@@ -318,6 +368,7 @@ fn payment_allows_fixed_color_fixed_and_restores_exact_parent_before_pay() {
     let result = reply(
         &funded,
         DecisionReply::ResolutionPayment(ResolutionPaymentReply::Pay(ManaPayment {
+            from_lots: Default::default(),
             spend: vec![ManaSpend {
                 mana_type: ManaType::Blue,
                 amount: 3.into(),
@@ -387,7 +438,7 @@ fn empty_draw_remains_optional_and_loss_waits_for_accepted_resolution() {
                 chooser: ResolvingPlayer::Controller,
             },
             Instruction::DrawController {
-                amount: InstructionAmount::Literal(1.into()),
+                amount: crate::program::ValueExpr::Literal(1.into()),
             },
         ]);
         assert!(state.outcome().is_none());
@@ -439,5 +490,144 @@ fn taking_optional_type_choice_preserves_the_actual_child_and_tail() {
             .records
             .iter()
             .any(|record| matches!(record, RulesRecord::OptionalEffectOutcome { .. }))
+    );
+}
+
+#[test]
+fn paid_mana_ability_works_inside_resolution_payment_and_rejects_atomically() {
+    let mut state = initialize_for_target_paid(BodyTarget::None, offer(2), true).into_state();
+    state = candidate(
+        &state,
+        A,
+        GameCommand::CastUntargeted {
+            spell: object(&state, 1),
+            payment: None,
+        },
+    )
+    .into_state();
+    state = candidate(&state, A, GameCommand::Pass).into_state();
+    state = candidate(&state, B, GameCommand::Pass).into_state();
+    let source = object(&state, 14);
+    let payment = |kind| ManaPayment {
+        from_lots: Default::default(),
+        spend: vec![ManaSpend {
+            mana_type: kind,
+            amount: 1.into(),
+        }],
+    };
+    let paid = |kind| GameCommand::ActivateManaWithPayment {
+        source,
+        ability: ABILITY,
+        payment: payment(kind),
+    };
+    let saved = state.clone();
+    assert!(
+        crate::test_support::current_capture::advance(
+            &state,
+            GameInput {
+                basis: state.basis().clone(),
+                actor: A,
+                command: paid(ManaType::Blue)
+            }
+        )
+        .is_err()
+    );
+    assert_eq!(state, saved);
+    state = tap(&state, 10).into_state();
+    state = candidate(&state, A, paid(ManaType::Blue)).into_state();
+    assert_eq!(state.execution().mana(A, ManaType::Blue), 1.into());
+    assert_eq!(state.execution().mana(A, ManaType::White), 1.into());
+    assert!(
+        state
+            .execution()
+            .window()
+            .cards()
+            .get(source)
+            .unwrap()
+            .tapped()
+            .unwrap()
+    );
+    assert!(
+        crate::test_support::current_capture::advance(
+            &state,
+            GameInput {
+                basis: state.basis().clone(),
+                actor: A,
+                command: paid(ManaType::Blue)
+            }
+        )
+        .is_err()
+    );
+    let result = reply(
+        &state,
+        DecisionReply::ResolutionPayment(ResolutionPaymentReply::Pay(ManaPayment {
+            from_lots: Default::default(),
+            spend: vec![
+                ManaSpend {
+                    mana_type: ManaType::Blue,
+                    amount: 1.into(),
+                },
+                ManaSpend {
+                    mana_type: ManaType::White,
+                    amount: 1.into(),
+                },
+            ],
+        })),
+    );
+    assert_eq!(result.state().execution().mana(A, ManaType::Blue), 0.into());
+    assert_eq!(
+        result.state().execution().mana(A, ManaType::White),
+        0.into()
+    );
+}
+
+#[test]
+fn hybrid_mana_ability_preserves_resolution_payment_parent_and_credits_exact_bundle() {
+    let mut state = initialize_for_target_paid(BodyTarget::None, offer(2), true).into_state();
+    state = candidate(
+        &state,
+        A,
+        GameCommand::CastUntargeted {
+            spell: object(&state, 1),
+            payment: None,
+        },
+    )
+    .into_state();
+    state = candidate(&state, A, GameCommand::Pass).into_state();
+    state = candidate(&state, B, GameCommand::Pass).into_state();
+    state = tap(&state, 10).into_state();
+    let source = object(&state, 15);
+    let paid = GameCommand::ActivateHybridMana {
+        source,
+        ability: ABILITY,
+        payment: ManaPayment {
+            from_lots: Default::default(),
+            spend: vec![ManaSpend {
+                mana_type: ManaType::Blue,
+                amount: 1.into(),
+            }],
+        },
+        bundle: BTreeMap::from([(ManaType::White, 2.into())]),
+    };
+    state = candidate(&state, A, paid).into_state();
+    assert_eq!(state.execution().mana(A, ManaType::Blue), 0.into());
+    assert_eq!(state.execution().mana(A, ManaType::White), 2.into());
+    assert!(matches!(
+        state.pending_decision().unwrap().frame(),
+        RuleFrame::ResolutionPayment(_)
+    ));
+    let result = reply(
+        &state,
+        DecisionReply::ResolutionPayment(ResolutionPaymentReply::Pay(ManaPayment {
+            from_lots: Default::default(),
+            spend: vec![ManaSpend {
+                mana_type: ManaType::White,
+                amount: 2.into(),
+            }],
+        })),
+    );
+    assert_eq!(
+        result.state().execution().mana(A, ManaType::White),
+        0.into()
     );
 }

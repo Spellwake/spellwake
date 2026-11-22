@@ -6,6 +6,8 @@ use crate::{
 };
 use spellwake_contracts::RulesInteger;
 
+// Keep Drawn inline as the primary high-frequency draw event payload.
+#[allow(clippy::large_enum_variant)]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DrawEvent {
     Drawn {

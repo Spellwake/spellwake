@@ -2,10 +2,7 @@
 use super::*;
 use crate::player_wire::PlayerCharacteristics;
 use spellwake_content::InventoryCard;
-use spellwake_engine::{
-    object_identity::{CardId, ObjectDestination},
-    program::Program,
-};
+use spellwake_engine::program::Program;
 
 /// A single immutable rules description, without a selected application printing.
 /// This is neither effective characteristics nor permission to expose a card.
@@ -25,14 +22,44 @@ impl NativePrintedCard<'_> {
 }
 
 fn characteristics(card: &InventoryCard) -> Result<PlayerCharacteristics, NativeInitialError> {
-    // The retained content format has no printed loyalty field. Do not silently
-    // represent a planeswalker or a multi-face layout with incomplete metadata.
     let [face] = card.faces.as_slice() else {
         return Err(NativeInitialError::Invalid);
     };
     if card.layout != "normal" || card.name != face.name {
         return Err(NativeInitialError::Invalid);
     }
+    face_characteristics(face, None, None)
+}
+fn split_characteristics(
+    card: &InventoryCard,
+) -> Result<PlayerCharacteristics, NativeInitialError> {
+    let [left, right] = card.faces.as_slice() else {
+        return Err(NativeInitialError::Invalid);
+    };
+    let mut result = face_characteristics(left, None, None)?;
+    let right = face_characteristics(right, None, None)?;
+    result.name = card.name.clone();
+    result.type_line = format!("{} // {}", result.type_line, right.type_line);
+    result.rules_text = format!(
+        "{}
+//
+{}",
+        result.rules_text, right.rules_text
+    );
+    result.mana_cost = result
+        .mana_cost
+        .zip(right.mana_cost)
+        .map(|(left, right)| format!("{left} // {right}"));
+    result
+        .valid()
+        .then_some(result)
+        .ok_or(NativeInitialError::Invalid)
+}
+fn face_characteristics(
+    face: &spellwake_content::CatalogFace,
+    loyalty: Option<&spellwake_contracts::RulesInteger>,
+    defense: Option<&spellwake_contracts::RulesInteger>,
+) -> Result<PlayerCharacteristics, NativeInitialError> {
     let result = PlayerCharacteristics {
         name: face.name.clone(),
         type_line: face.type_line.clone().ok_or(NativeInitialError::Invalid)?,
@@ -41,13 +68,15 @@ fn characteristics(card: &InventoryCard) -> Result<PlayerCharacteristics, Native
         mana_cost: face.mana_cost.clone(),
         printed_power: face.power.clone(),
         printed_toughness: face.toughness.clone(),
-        printed_loyalty: None,
+        printed_loyalty: loyalty.cloned().map(String::from),
+        printed_defense: defense.cloned().map(String::from),
     };
     if !result.valid()
-        || result
+        || (result
             .type_line
             .split_whitespace()
             .any(|word| word == "Planeswalker")
+            && loyalty.is_none())
     {
         return Err(NativeInitialError::Invalid);
     }
@@ -72,23 +101,83 @@ impl NativeProgramSource {
     ) -> Result<Option<NativePrintedCard<'_>>, NativeInitialError> {
         let mut found = None;
         for (oracle, card) in &self.catalogue {
-            // Reuse the sole guarded definition materializer. These coordinates
-            // only retrieve its Program; no GameObject or game is initialized.
-            let bound = self.registry.seed(
-                oracle,
-                CardId(1),
-                SeatId(0),
-                ObjectDestination::LibraryBottom,
-            )?;
-            if &bound.program != program {
+            let bound = self
+                .registry
+                .resolve(oracle)
+                .ok_or(RegistryError::MissingBinding)?;
+            if bound.scope() == spellwake_card_programs::Scope::SeededVanillaBattlefieldOnly {
+                return Err(RegistryError::UnsupportedPlacement.into());
+            }
+            if let Some((joined,face))=self.meld_results.get(oracle)
+                && bound.program().triggered.iter().any(|ability|ability.body.instructions.iter().any(|op|matches!(op,spellwake_engine::program::Instruction::MeldExiledPair(back) if back.as_ref()==program))) {
+                if found.is_some(){return Err(NativeInitialError::Invalid);}
+                found=Some(NativePrintedCard {oracle:joined,characteristics:face_characteristics(face,program.printed_loyalty.as_ref(),program.printed_defense.as_ref())?});
                 continue;
             }
+            let face = if bound.program() == program {
+                if program.split.is_some() {
+                    split_characteristics(card)?
+                } else if card.layout == "meld" && program.meld_partner.is_some() {
+                    let [face] = card.faces.as_slice() else {
+                        return Err(NativeInitialError::Invalid);
+                    };
+                    face_characteristics(
+                        face,
+                        program.printed_loyalty.as_ref(),
+                        program.printed_defense.as_ref(),
+                    )?
+                } else if program.reverse_face().is_some() || program.adventure.is_some() {
+                    let [front, _] = card.faces.as_slice() else {
+                        return Err(NativeInitialError::Invalid);
+                    };
+                    face_characteristics(
+                        front,
+                        program.printed_loyalty.as_ref(),
+                        program.printed_defense.as_ref(),
+                    )?
+                } else if program.has_type(spellwake_engine::program::CardType::Planeswalker) {
+                    let [face] = card.faces.as_slice() else {
+                        return Err(NativeInitialError::Invalid);
+                    };
+                    face_characteristics(
+                        face,
+                        program.printed_loyalty.as_ref(),
+                        program.printed_defense.as_ref(),
+                    )?
+                } else {
+                    characteristics(card)?
+                }
+            } else if let Some(split) = bound.program().split.as_ref()
+                && (split.left == *program || split.right == *program)
+            {
+                let [left, right] = card.faces.as_slice() else {
+                    return Err(NativeInitialError::Invalid);
+                };
+                face_characteristics(
+                    if split.left == *program { left } else { right },
+                    None,
+                    None,
+                )?
+            } else if bound.program().reverse_face() == Some(program)
+                || bound.program().adventure.as_deref() == Some(program)
+            {
+                let [_, back] = card.faces.as_slice() else {
+                    return Err(NativeInitialError::Invalid);
+                };
+                face_characteristics(
+                    back,
+                    program.printed_loyalty.as_ref(),
+                    program.printed_defense.as_ref(),
+                )?
+            } else {
+                continue;
+            };
             if found.is_some() || card.oracle_id.as_deref() != Some(oracle.as_str()) {
                 return Err(NativeInitialError::Invalid);
             }
             found = Some(NativePrintedCard {
                 oracle,
-                characteristics: characteristics(card)?,
+                characteristics: face,
             });
         }
         Ok(found)

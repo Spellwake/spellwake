@@ -62,6 +62,12 @@ fn inputs(scope: &mut NativeScope<'_>, source: &GameState) -> Vec<PlayerCommand>
     actions.push(PlayerAction::CastUntargeted {
         source: spell,
         payment: Some(PlayerPayment {
+            from_lots: Default::default(),
+            exile_cast_type: None,
+            alternative_cost_source: None,
+            graveyard_permission: None,
+            use_granted_flashback: false,
+            restricted_mana: Vec::new(),
             spend: vec![ManaSpend {
                 color: ManaColor::Green,
                 amount: crate::player_wire::RulesCount::try_from("2".to_owned()).unwrap(),
@@ -106,6 +112,12 @@ fn late_cast_failure_drops_all_staged_mana_without_mutating_original() {
     let mut originals = inputs(&mut scope, &source);
     if let PlayerAction::CastUntargeted { payment, .. } = &mut originals[2].action {
         *payment = Some(PlayerPayment {
+            from_lots: Default::default(),
+            exile_cast_type: None,
+            alternative_cost_source: None,
+            graveyard_permission: None,
+            use_granted_flashback: false,
+            restricted_mana: Vec::new(),
             spend: vec![ManaSpend {
                 color: ManaColor::Green,
                 amount: crate::player_wire::RulesCount::try_from("3".to_owned()).unwrap(),
@@ -236,6 +248,12 @@ fn required_mana_color_choice_interrupts_batch_without_committing_prefix() {
             PlayerAction::CastUntargeted {
                 source: spell,
                 payment: Some(PlayerPayment {
+                    from_lots: Default::default(),
+                    exile_cast_type: None,
+                    alternative_cost_source: None,
+                    graveyard_permission: None,
+                    use_granted_flashback: false,
+                    restricted_mana: Vec::new(),
                     spend: vec![ManaSpend {
                         color: ManaColor::Green,
                         amount: crate::player_wire::RulesCount::try_from("1".to_owned()).unwrap(),
@@ -329,6 +347,12 @@ fn zero_and_eight_mana_prefix_limits_are_real_native_paths() {
                     None
                 } else {
                     Some(PlayerPayment {
+                        from_lots: Default::default(),
+                        exile_cast_type: None,
+                        alternative_cost_source: None,
+                        graveyard_permission: None,
+                        use_granted_flashback: false,
+                        restricted_mana: Vec::new(),
                         spend: vec![ManaSpend {
                             color: ManaColor::Green,
                             amount: crate::player_wire::RulesCount::try_from("8".to_owned())

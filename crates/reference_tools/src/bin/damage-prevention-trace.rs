@@ -405,6 +405,20 @@ fn observe(
     let mut multiplier_instances = Vec::new();
     for (&alias, tracked) in effects {
         let id = match tracked.id {
+            // This tool tracks shield and multiplier objects created by its authored spell recipes.
+            DamageEffectId::EmblemCap { .. }
+            | DamageEffectId::StaticPrevention(_)
+            | DamageEffectId::StaticPreventionWithExile(_, _)
+            | DamageEffectId::CombatDamageToMill(_, _)
+            | DamageEffectId::RemovePlusOneToPreventDamage(_, _)
+            | DamageEffectId::StaticDouble(_)
+            | DamageEffectId::DoubleDamageFromEquippedCreature(_)
+            | DamageEffectId::DoubleDamageToEquippedCreature(_)
+            | DamageEffectId::StaticHalfPrevention { .. }
+            | DamageEffectId::ProtectionMulticolored
+            | DamageEffectId::ProtectionSubtype(_)
+            | DamageEffectId::Protection(_)
+            | DamageEffectId::UntilEndOfTurn { .. } => continue,
             DamageEffectId::Prevention(id) => id,
             DamageEffectId::Multiplier(id) => {
                 let active = execution.damage_multiplier(id);

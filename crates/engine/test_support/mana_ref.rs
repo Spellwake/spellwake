@@ -53,6 +53,15 @@ pub fn view(value: ManaAbilityRef) -> Value {
         ManaAbilityRef::BasicLand(kind) => {
             json!({"tag":"BasicLand","type":kind.land_type().wire_label()})
         }
+        // Dynamic effect identities must be resolved against a live registry;
+        // the context-free qualification input intentionally cannot forge one.
+        ManaAbilityRef::GrantedAnyColor(key) => {
+            json!({"tag":"GrantedAnyColor","effect":format!("{key:?}")})
+        }
+        ManaAbilityRef::Inherited(key) => json!({"tag":"Inherited","effect":format!("{key:?}")}),
+        ManaAbilityRef::GrantedFixedColor(key, color) => {
+            json!({"tag":"GrantedFixedColor","effect":format!("{key:?}"),"color":format!("{color:?}")})
+        }
     }
 }
 #[cfg(test)]

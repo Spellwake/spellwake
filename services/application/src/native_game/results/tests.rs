@@ -14,6 +14,119 @@ fn unknown_seat_and_turn_count_overflow_preserve_the_counter() {
     assert!(activity.credit_turn(SeatId(9)).is_err());
     assert_eq!(activity.own_turns(seat.seat_id), Some(u64::MAX));
 }
+
+#[test]
+#[ignore = "requires explicit genuine vocabulary; native opening activity only"]
+fn departed_opening_starter_rebases_without_credit_until_the_first_real_turn() {
+    use crate::native_game::tests::fixture::*;
+    use spellwake_engine::{
+        game::{DecisionReply, GameCommand, GameId, OpeningSetup},
+        object_identity::ObjectDestination,
+        opening::MulliganChoice,
+        program::Program,
+        setup::StartingLife,
+        shuffle::EntropyTape,
+    };
+
+    let third = SeatId(99);
+    let cards = [A, B, third]
+        .into_iter()
+        .flat_map(|owner| {
+            (0..15).map(move |index| {
+                card(
+                    100 + u64::from(owner.0) * 100 + index,
+                    owner,
+                    ObjectDestination::LibraryBottom,
+                    Program::artifact(None, vec![]),
+                )
+            })
+        })
+        .collect();
+    let mut input = seed(cards);
+    input.seats.push(third);
+    input.life.push(StartingLife {
+        player: third,
+        total: 20.into(),
+    });
+    let initial = GameState::initialize_opening(
+        GameId(90),
+        context(&input.creature_vocabulary),
+        OpeningSetup {
+            seed: input,
+            entropy: EntropyTape::new(vec![0; 300]),
+        },
+    )
+    .unwrap();
+    let third_viewer = Uuid::from_u128(104);
+    let roster = [
+        NativeSeatBinding {
+            seat_id: viewer_a(),
+            native_seat: A,
+        },
+        NativeSeatBinding {
+            seat_id: viewer_b(),
+            native_seat: B,
+        },
+        NativeSeatBinding {
+            seat_id: third_viewer,
+            native_seat: third,
+        },
+    ];
+    let activity = NativeActivity::initial(&initial, &roster).unwrap();
+    let advance = |state: &GameState, actor, command| {
+        state
+            .advance(GameInput {
+                basis: state.basis().clone(),
+                actor,
+                command,
+            })
+            .unwrap()
+    };
+    let mulligan = |state: &GameState, choice| {
+        let decision = state.pending_decision().unwrap();
+        advance(
+            state,
+            decision.chooser(),
+            GameCommand::Reply {
+                decision: decision.id(),
+                choice: DecisionReply::Mulligan(choice),
+            },
+        )
+    };
+
+    let departed = advance(initial.state(), A, GameCommand::Concede);
+    assert!(departed.turn_transitions().is_empty());
+    let activity_before_first_turn = activity.advance(initial.state(), &departed).unwrap();
+    assert_eq!(activity_before_first_turn.own_turns(viewer_b()), Some(0));
+    let kept = mulligan(departed.state(), MulliganChoice::Keep);
+    let activity_before_first_turn = activity_before_first_turn
+        .advance(departed.state(), &kept)
+        .unwrap();
+    let began = mulligan(kept.state(), MulliganChoice::Keep);
+    let after_first_turn = activity_before_first_turn
+        .advance(kept.state(), &began)
+        .unwrap();
+    assert_eq!(after_first_turn.own_turns(viewer_a()), Some(0));
+    assert_eq!(after_first_turn.own_turns(viewer_b()), Some(1));
+    assert_eq!(after_first_turn.own_turns(third_viewer), Some(0));
+
+    let mull = mulligan(initial.state(), MulliganChoice::Mulligan);
+    let kept = mulligan(mull.state(), MulliganChoice::Keep);
+    let kept = mulligan(kept.state(), MulliganChoice::Keep);
+    assert_eq!(kept.state().pending_decision().unwrap().chooser(), A);
+    let began = advance(kept.state(), A, GameCommand::Concede);
+    assert!(
+        began
+            .turn_transitions()
+            .iter()
+            .any(|transition| transition.from.is_none())
+    );
+    let after_first_turn = activity.advance(kept.state(), &began).unwrap();
+    assert_eq!(after_first_turn.own_turns(viewer_a()), Some(0));
+    assert_eq!(after_first_turn.own_turns(viewer_b()), Some(1));
+    assert_eq!(after_first_turn.own_turns(third_viewer), Some(0));
+}
+
 #[test]
 #[ignore = "requires explicit genuine vocabulary; native root conclusion mechanism only"]
 fn checked_loss_win_draw_and_concession_map_actual_root_without_required_terminal_event() {
@@ -293,8 +406,8 @@ fn synthetic_calendar_controls_reject_gaps_and_accept_legal_step_repetitions_wit
 }
 
 #[test]
-#[ignore = "requires explicit genuine vocabulary; candidate basis and surviving multiplayer roster"]
-fn foreign_candidate_base_and_nonterminal_multiplayer_loss_do_not_create_results_or_turns() {
+#[ignore = "requires explicit genuine vocabulary; base and pending-loss boundaries only"]
+fn foreign_candidate_base_and_multiplayer_pending_loss_do_not_create_results_or_turns() {
     use crate::native_game::tests::fixture::*;
     use spellwake_engine::game::{GameCommand, GameId};
     let source = state(vec![]);
@@ -348,15 +461,17 @@ fn foreign_candidate_base_and_nonterminal_multiplayer_loss_do_not_create_results
         player: third,
         total: 0.into(),
     });
-    let continued =
+    let pending =
         GameState::initialize(GameId(90), context(&input.creature_vocabulary), input).unwrap();
-    assert!(continued.state().pending_eliminations().is_empty());
-    assert_eq!(
-        continued.state().execution().window().participants(),
-        &[A, B]
+    assert!(
+        !pending
+            .state()
+            .execution()
+            .window()
+            .participants()
+            .contains(&third)
     );
-    assert!(continued.state().original_participants().contains(&third));
-    assert!(continued.state().outcome().is_none());
+    assert!(pending.state().outcome().is_none());
     let mut roster = binding(&source, viewer_a()).seats;
     roster.push(NativeSeatBinding {
         seat_id: Uuid::from_u128(104),
@@ -364,17 +479,34 @@ fn foreign_candidate_base_and_nonterminal_multiplayer_loss_do_not_create_results
     });
     let bound = NativeBinding::new(
         context_id(),
-        continued.state().basis().clone(),
-        roster,
+        pending.state().basis().clone(),
+        roster.clone(),
         viewer_a(),
     )
     .unwrap();
     assert!(
-        NativeTerminal::derive(continued.state(), &bound)
+        NativeTerminal::derive(pending.state(), &bound)
             .unwrap()
             .is_none()
     );
     assert!(
-        NativeTerminal::derive(continued.state(), &binding(continued.state(), viewer_a())).is_err()
+        NativeTerminal::derive(pending.state(), &binding(pending.state(), viewer_a())).is_err()
+    );
+    let terminal = pending
+        .state()
+        .advance(GameInput {
+            basis: pending.state().basis().clone(),
+            actor: A,
+            command: GameCommand::Concede,
+        })
+        .unwrap();
+    let terminal = terminal.state();
+    let bound =
+        NativeBinding::new(context_id(), terminal.basis().clone(), roster, viewer_b()).unwrap();
+    let result = NativeTerminal::derive(terminal, &bound).unwrap().unwrap();
+    assert_eq!(result.winner_seat_ids(), &[viewer_b()]);
+    assert_eq!(
+        result.losing_seat_ids(),
+        &[Uuid::from_u128(104), viewer_a()]
     );
 }

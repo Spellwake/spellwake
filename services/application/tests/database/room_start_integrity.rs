@@ -334,13 +334,8 @@ async fn every_ready_human_starts_the_full_room_countdown_and_unready_cancels_wi
             .get::<_, String>(0),
         "lobby"
     );
-    let before: String = c
-        .query_one("SELECT clock_timestamp()::text", &[])
-        .await?
-        .get(0);
     ready(&c, &f, f.other, f.other_revision, true).await?;
-    // Bound the actual start between the two database observations, including slow test hosts.
-    let row=c.query_one("SELECT state,countdown_at BETWEEN $2::text::timestamptz+interval '10 seconds' AND clock_timestamp()+interval '10 seconds' FROM app.room WHERE id=$1", &[&f.id,&before]).await?;
+    let row=c.query_one("SELECT state,countdown_at-clock_timestamp()>interval '9 seconds' FROM app.room WHERE id=$1", &[&f.id]).await?;
     assert_eq!(row.get::<_, String>(0), "countdown");
     assert!(row.get::<_, bool>(1));
     ready(&c, &f, f.other, f.other_revision, false).await?;

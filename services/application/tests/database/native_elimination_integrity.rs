@@ -13,10 +13,7 @@ pub(super) struct Fixture {
     context: Uuid,
     seats: Vec<Uuid>,
 }
-pub(super) async fn reserve_three(
-    c: &Client,
-    ai_third: bool,
-) -> FixtureResult<(lobby::Room, Uuid, Uuid)> {
+pub(super) async fn fixture(c: &Client, ai_third: bool) -> FixtureResult<Fixture> {
     let room = lobby::room_with_capacity(c, true, false, 3).await?;
     if ai_third {
         let slot:Uuid=c.query_one("INSERT INTO app.room_slot(room_id,sponsor_id,deck_revision_id,seat_index,controller_kind,ready) VALUES($1,$2,$3,2,'ai',false) RETURNING id",&[&room.id,&room.source.actor,&room.source.revision]).await?.get(0);
@@ -86,10 +83,6 @@ pub(super) async fn reserve_three(
     assert_eq!(started["status"], "success", "{started}");
     let matched: Uuid = started["data"]["resourceId"].as_str().unwrap().parse()?;
     let game: Uuid = started["data"]["gameId"].as_str().unwrap().parse()?;
-    Ok((room, matched, game))
-}
-pub(super) async fn fixture(c: &Client, ai_third: bool) -> FixtureResult<Fixture> {
-    let (_, matched, game) = reserve_three(c, ai_third).await?;
     assert_eq!(
         lifecycle::open(c, matched, game).await?["status"],
         "success"

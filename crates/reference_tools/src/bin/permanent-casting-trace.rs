@@ -6,7 +6,7 @@
 use serde::Serialize;
 use spellwake_contracts::RulesInteger;
 use spellwake_engine::combat::CombatRules;
-use spellwake_engine::program::{BodyTarget, ExecutableBody, SpellTargetFilter};
+use spellwake_engine::program::{BodyTarget, ExecutableBody};
 use spellwake_engine::setup::GameSeed;
 use spellwake_engine::{
     activated::{ActivatedAbility, ActivatedAbilityId, SourceCost},
@@ -305,7 +305,7 @@ fn fixture(
             Program::instant(
                 ManaCost::specific(ManaType::Blue, 2.into()),
                 ExecutableBody::new(
-                    BodyTarget::SingleSpell(SpellTargetFilter::AnySpell),
+                    BodyTarget::SingleSpell(spellwake_engine::program::SpellFilter::any()),
                     vec![Instruction::CounterSpell],
                 ),
             ),
@@ -574,7 +574,7 @@ fn observe(
         kind,
         turn: position.number,
         step: "MAIN1",
-        active: seat(state.execution().window().turn_owner()),
+        active: seat(state.execution().window().active_player()),
         actor: seat(actor),
         priority: seat(holder(state)),
         stack_size: state.execution().window().entries().len(),
@@ -624,6 +624,7 @@ fn cast(state: &GameState, green: i64, colourless: i64) -> GameCommand {
     GameCommand::CastUntargeted {
         spell: object(state, SPELL),
         payment: Some(ManaPayment {
+            from_lots: Default::default(),
             spend: [(ManaType::Green, green), (ManaType::Colourless, colourless)]
                 .into_iter()
                 .filter(|(_, amount)| *amount > 0)
@@ -734,6 +735,7 @@ fn scenario(
             ability: ActivatedAbilityId(0),
             target: TargetRef::Object(object(&state, TARGET)),
             payment: Some(ManaPayment {
+                from_lots: Default::default(),
                 spend: vec![ManaSpend {
                     mana_type: ManaType::Colourless,
                     amount: 3.into(),

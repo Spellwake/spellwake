@@ -12,12 +12,9 @@ ROOT = Path(__file__).resolve().parents[1]
 CONTAINER = 'spellwake-application-db'
 
 # These fixtures change shared state or inspect all games for a shared host.
-# The supervised exit case uses the fixture-host owner also used by other tests.
 # The UUID-named acl_probe function fixture is deliberately ordinary: it neither
 # replaces an existing function nor changes locks on an application relation.
 SHARED_STATE_TESTS = (
-    'countdown_dispatch::due_sweep_reserves_both_qualified_paths_and_isolates_policy_drift',
-    'countdown_dispatch::opening_choice_dispatch_handles_silent_rooms_and_preserves_explicit_choices',
     'native_opening_context::late_finalization_failure_rolls_back_context_artifacts_receipt_and_clocks',
     'retirement::retirement_rejects_stale_isolation_and_rolls_back_all_effects_on_late_failure',
     'patreon_intake::shared_evidence_scan_rediscovers_late_objects_and_preserves_stripe_nonwebhook_rules',
@@ -26,7 +23,6 @@ SHARED_STATE_TESTS = (
     'native_foundation::transition_sources::upgrade_recovers_unmarked_human_controller_and_system_originals_after_host_fencing',
     'native_foundation::clock_opening::forward_migration_preserves_legacy_native_bo3_originals_and_exact_recovery',
     'native_foundation::presentation::presentation_keeps_original_match_across_authenticated_mode_format_and_cosmetic_edits',
-    'recovery_integrity::supervised_exit_freezes_at_durable_clock_and_replays_after_host_replacement',
 )
 
 # These cases assert database lock schedules with short observation deadlines.
@@ -108,8 +104,9 @@ def main() -> None:
     inventory = [line.removesuffix(': test') for line in listing.splitlines() if line.endswith(': test')]
     if not inventory or len(inventory) != len(set(inventory)):
         raise RuntimeError('Empty or duplicate actual ignored database inventory')
-    if not set(PRIVATE_DATABASE_TESTS).issubset(inventory):
-        raise RuntimeError('Private-database test classification no longer matches actual inventory')
+    missing_classifications = sorted(set(PRIVATE_DATABASE_TESTS) - set(inventory))
+    if missing_classifications:
+        raise RuntimeError('Private-database test classifications absent from inventory: ' + ', '.join(missing_classifications))
     # libtest --skip is a substring. Do not silently exclude another test if a
     # future name embeds one of these full names.
     if any(private in name and private != name for private in PRIVATE_DATABASE_TESTS for name in inventory):

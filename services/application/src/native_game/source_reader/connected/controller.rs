@@ -76,7 +76,7 @@ impl fault_proxy::Fault for RevokeOnRecovery {
     }
     fn response(&self, _: &reqwest::Method, _: &str, _: u16, _: &mut Vec<u8>) {}
 }
-pub(super) fn metadata(database: &str, r: &Reservation) -> Value {
+fn metadata(database: &str, r: &Reservation) -> Value {
     lifecycle_reads::sql(
         database,
         "SELECT jsonb_build_object('grant',g.id,'binding',b.id,'epoch',b.binding_epoch::text,'reference',g.grant_secret_ref,'revision',s.deck_revision_id,'configuration',room.configuration_id) FROM app.controller_grant g JOIN app.ai_runner_binding b ON b.id=g.binding_id JOIN app.room_slot s ON s.id=b.room_slot_id JOIN app.room room ON room.id=s.room_id WHERE b.match_seat_id=$1 AND g.state='active' AND g.binding_epoch=b.binding_epoch",

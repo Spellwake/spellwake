@@ -470,7 +470,7 @@ fn drawn_card_can_be_cast_and_later_inputs_do_not_repeat_draw_journal() {
     assert!(resolved.state().outcome().is_none());
 }
 #[test]
-fn empty_draw_ends_a_duel_and_gives_the_next_multiplayer_survivor_priority() {
+fn empty_draw_ends_two_player_game_and_departs_multiplayer_loser_before_priority() {
     for count in [2, 3, 6] {
         let candidate = game(
             (0..count).map(SeatId).collect(),
@@ -482,7 +482,6 @@ fn empty_draw_ends_a_duel_and_gives_the_next_multiplayer_survivor_priority() {
             },
         );
         let state = candidate.into_state();
-        assert!(state.pending_eliminations().is_empty());
         if count == 2 {
             assert_eq!(
                 state
@@ -493,25 +492,25 @@ fn empty_draw_ends_a_duel_and_gives_the_next_multiplayer_survivor_priority() {
                     .collect::<Vec<_>>(),
                 [A]
             );
+            assert!(!matches!(
+                state.execution().window().phase(),
+                WindowPhase::Priority(PriorityPhase::Ready { .. })
+            ));
             assert_eq!(state.outcome(), Some(GameOutcome::Winner(B)));
+            assert!(state.pending_eliminations().is_empty());
         } else {
-            assert_eq!(state.outcome(), None);
             assert!(state.execution().state_based_losses().is_empty());
+            assert_eq!(state.outcome(), None);
+            assert!(state.pending_eliminations().is_empty());
             assert_eq!(
                 state.execution().window().participants(),
-                (1..count).map(SeatId).collect::<Vec<_>>()
+                &(1..count).map(SeatId).collect::<Vec<_>>()
             );
-            assert_eq!(
-                state.execution().window().phase(),
-                WindowPhase::Priority(PriorityPhase::Ready { holder: B })
-            );
-            assert_eq!(
-                pass(&state).state().execution().window().phase(),
-                WindowPhase::Priority(PriorityPhase::Ready { holder: SeatId(2) })
-            );
+            assert_eq!(state.execution().window().active_participant(), None);
+            assert_eq!(holder(&state), B);
         }
-        let rejected_actors: &[SeatId] = if count == 2 { &[A, B] } else { &[A] };
-        for &actor in rejected_actors {
+        let rejected_actors: Vec<SeatId> = if count == 2 { vec![A, B] } else { vec![A] };
+        for actor in rejected_actors {
             // Handles are irrelevant after the result gate, but use a separate
             // ordinary fixture's actual incarnations rather than forging one.
             let fixture = game(

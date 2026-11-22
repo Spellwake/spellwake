@@ -14,13 +14,13 @@ fn refusal(field: &str, reason: &str) -> ApiResponse<PlayerCommandAck> {
 }
 impl NativeGameRuntime {
     /// Execute a current human intent with explicit trusted process ownership.
-    /// The HTTP boundary reads originals before selecting optional runtime/config;
-    /// this method also recovers any original committed meanwhile. SQL owns final
-    /// actor/cut/host fencing and durable success or actual rule rejection.
+    /// The HTTP route verifies no prior original exists before calling this method,
+    /// avoiding a redundant back-to-back RPC while still recovering races on error.
+    /// SQL owns final actor/cut/host fencing and durable success or actual rule rejection.
     /// # Errors
     /// Source/runtime/registry/retention/clock/budget/internal native failures are
     /// safe service errors, never fabricated permanent player rejections.
-    pub(crate) fn command_current(
+    pub(crate) fn command_current_checked(
         &self,
         repository: &NativeSourceRepository,
         actor: &RequestActor,
@@ -29,9 +29,6 @@ impl NativeGameRuntime {
         original: &PlayerCommand,
     ) -> Result<ApiResponse<PlayerCommandAck>, NativeSourceError> {
         let authority = NativePlayerAuthority::Human(actor, access);
-        if let Some(response) = authority.original(repository, original)? {
-            return Ok(response);
-        }
         self.command_after_original(repository, authority, owner, original)
     }
     pub(super) fn command_after_original(
@@ -79,12 +76,13 @@ impl NativeGameRuntime {
         if let Some(hook) = &self.before_command_recovery {
             hook(repository);
         }
-        let Some(recovered) = repository.recover_owned_history(
+        let Some(recovered) = repository.recover_owned_history_cached(
             original.basis.game_id,
             &self.store,
             &self.programs,
             self.recovery.clone(),
             owner,
+            &self.checkpoints,
         )?
         else {
             return Ok(refusal("game", "unavailable"));
@@ -105,24 +103,6 @@ impl NativeGameRuntime {
         let proposal = match issued.view().scope().propose(original) {
             Ok(proposal) => proposal,
             Err(error) => {
-                if matches!(
-                    error.native_error(),
-                    Some(
-                        GameError::Entropy(spellwake_engine::shuffle::EntropyError::Exhausted)
-                            | GameError::Effect(EffectError::Window(
-                                spellwake_engine::stack_window::StackWindowError::Objects(
-                                    spellwake_engine::object_identity::ObjectIdentityError::Entropy(
-                                        spellwake_engine::shuffle::EntropyError::Exhausted
-                                    )
-                                )
-                            ))
-                    )
-                ) {
-                    super::match_worker::refill_after_exhaustion(
-                        repository, self, &recovered, owner,
-                    )?;
-                    return authority.stale_after_observation(repository, original);
-                }
                 let Some(rejection) = RuleRejection::from_bridge(&error) else {
                     return Err(NativeSourceError(Failure::Bridge(error)));
                 };
@@ -169,7 +149,7 @@ impl NativeGameRuntime {
         let candidate = recovered.prepare_activity_candidate(&next)?;
         #[cfg(test)]
         self.observe_delivery(TestDeliveryStage::CommandCommit, repository, &recovered);
-        repository.commit_player(
+        let committed = repository.commit_player(
             &self.store,
             NativePlayerCommit {
                 authority,
@@ -179,6 +159,29 @@ impl NativeGameRuntime {
                 next: &next,
                 candidate: &candidate,
             },
-        )
+        )?;
+        if matches!(committed, ApiResponse::Success { .. }) {
+            let next_evidence = match recovered.history_evidence() {
+                NativeHistoryEvidence::HistoricalUnqualified => {
+                    NativeHistoryEvidence::HistoricalUnqualified
+                }
+                _ => NativeHistoryEvidence::ActivityTransitionsV1,
+            };
+            if let Ok(next_seq) = recovered
+                .source()
+                .last_event_sequence()
+                .checked_add(&crate::amount::Amount::from(1))
+            {
+                self.checkpoints.record(
+                    original.basis.game_id,
+                    recovered.checkpoint().initial_reference().as_str(),
+                    self.programs.identity().hex(),
+                    next.clone(),
+                    Some((next_evidence, next_seq)),
+                );
+            }
+            self.notify_game(original.basis.game_id, next.basis().revision.get());
+        }
+        Ok(committed)
     }
 }

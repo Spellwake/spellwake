@@ -154,7 +154,7 @@ def main() -> None:
                 listener.bind(('127.0.0.1', 0))
                 port = listener.getsockname()[1]
             api_base = 'http://127.0.0.1:' + str(port)
-            process = realm.start_background([str(Path(realm.environment.get('CARGO_TARGET_DIR', ROOT/'target'))/'debug/application_api')], {
+            process = realm.start_background([str(ROOT / 'target/debug/application_api')], {
                 'SPELLWAKE_SUPABASE_URL': base, 'SPELLWAKE_SUPABASE_PUBLISHABLE_KEY': public,
                 'SPELLWAKE_SUPABASE_SECRET_KEY': secret, 'SPELLWAKE_AUTH_ISSUER': base + '/auth/v1',
                 'SPELLWAKE_FREE_BACK_ID': ids[0], 'SPELLWAKE_FREE_SLEEVE_ID': ids[1], 'SPELLWAKE_FREE_DICE_ID': ids[2],

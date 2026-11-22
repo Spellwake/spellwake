@@ -21,7 +21,7 @@ fn counted_mana_admits_typed_selectors_and_rejects_invalid_or_literal_zero_short
     p.mana.push(ManaAbility {
         id: ManaAbilityId(1),
         output: ManaOutput::Counted {
-            mana_type: ManaType::Green,
+            mana_type: Some(ManaType::Green),
             permanents: PermanentSelector {
                 creature_subtype: Some(v.resolve_label("Elf").unwrap()),
                 controller: ControllerSelector::SourceController,
@@ -284,7 +284,7 @@ fn control_parts_bind_resolution_context_and_reject_foreign_operand_families() {
         json!({"tag":"Control","recipient":"ResolvingController"});
     assert!(codec::decode(wrong_live, &v).is_err());
     let targeted_spell = ExecutableBody::new(
-        BodyTarget::SingleSpell(SpellTargetFilter::AnySpell),
+        BodyTarget::SingleSpell(crate::program::SpellFilter::any()),
         vec![Instruction::CreateContinuousEffect {
             parts: ResolvedPartsSpec(vec![ResolvedPartSpec::Control(
                 ControlRecipient::ResolvingController,
@@ -312,14 +312,20 @@ fn keyword_components_round_trip_and_reject_unknown_duplicate_or_omitted_fields(
         AbilityChange::grant_keywords([Haste, Vigilance]),
         AbilityChange {
             removal: Some(AbilityRemoval::All),
+            granted_exalted: 0,
+            granted_toxic: None,
+            grants_unblockable: false,
+            granted_trigger: None,
+            granted_combat_keywords: vec![],
             granted_keywords: BTreeSet::from([Haste]),
+            suppressed_keywords: BTreeSet::new(),
         },
     ] {
         let program = static_program(&[], &[], vec![StaticPart::Abilities(change)]);
         let encoded = codec::view(&program);
         assert_eq!(codec::decode(encoded.clone(), &v).unwrap(), program);
         for keywords in [
-            json!(["Flying"]),
+            json!(["UnknownKeyword"]),
             json!(["Haste", "Haste"]),
             json!([1]),
             json!([{"Haste":null}]),
@@ -493,6 +499,8 @@ fn permanent(types: &[CardType], pt: Option<PowerToughness>) -> Program {
         BTreeSet::new(),
         BTreeSet::new(),
         ProgramKind::Permanent(PermanentDefinition {
+            entry_tap: None,
+            attachment: None,
             printed_pt: pt.map(Into::into),
             casting_cost: None,
         }),
@@ -507,9 +515,11 @@ fn choice_ability(targetless: bool) -> ActivatedAbility {
         instructions.push(Instruction::Damage { amount: 1.into() });
     }
     instructions.push(Instruction::DrawController {
-        amount: InstructionAmount::ControlledPermanentsOfChosenType {
-            chosen: CreatureTypeSlot::new(0),
-        },
+        amount: crate::program::ValueExpr::count_battlefield(
+            crate::program::ObjectFilter::any()
+                .controlled()
+                .of_chosen_slot(CreatureTypeSlot::new(0)),
+        ),
     });
     ActivatedAbility {
         id: ActivatedAbilityId(1),
@@ -675,12 +685,33 @@ fn static_program(
     value.continuous = Some(StaticContinuousAbility::Battlefield {
         id: StaticAbilityId(1),
         selector: PermanentSelector {
+            requires_untapped: false,
+            sole_controlled_creature: false,
+            token: None,
+            combat_role: None,
+            requires_flying: false,
+            plus_one_counter: false,
+            minimum_plus_one_counters: 0,
+            any_counter: false,
+            source_has_imprinted_creature: false,
+            controlled_creatures_and_typed_tokens: None,
+            exclude_auras: false,
+            artifact_subtype: None,
+            matches_source_entry_type: false,
+            controller_type_threshold: None,
+            source_condition: None,
+            equipped_by_at_least: 0,
+            devotion_below: None,
+            while_controlling_own_commander: false,
+            station_at: None,
+            attached_to_source: false,
             land_subtype: None,
             required_supertypes: BTreeSet::new(),
             forbidden_supertypes: BTreeSet::new(),
             name: crate::characteristics::NameFilter::Any,
             required_types: required.iter().copied().collect(),
             forbidden_types: forbidden.iter().copied().collect(),
+            forbidden_creature_subtype: None,
             creature_subtype: None,
             color: Default::default(),
             controller: ControllerSelector::Any,
@@ -730,4 +761,29 @@ fn cl_adm_duplicate_bucket() {
         Err(DefinitionError::ContinuousEffect)
     );
     // MAP CL-ADM-DUPLICATE-BUCKET assertion 2: no runtime owner initialized.
+}
+
+#[test]
+fn printed_keywords_round_trip_without_changing_unkeyworded_definitions() {
+    use crate::{characteristics::KeywordAbility, test_support::program as codec};
+    let vocabulary = vocabulary();
+    let base = Program::artifact(None, vec![]);
+    let plain = codec::view(&base);
+    assert!(plain.get("printed_keywords").is_none());
+    assert_eq!(codec::decode(plain.clone(), &vocabulary).unwrap(), base);
+    let program = base.with_printed_keywords([KeywordAbility::Flying, KeywordAbility::SplitSecond]);
+    assert_eq!(
+        codec::decode(codec::view(&program), &vocabulary).unwrap(),
+        program
+    );
+    for bad in [
+        json!(null),
+        json!("Flying"),
+        json!(["flying"]),
+        json!(["Flying", "Flying"]),
+    ] {
+        let mut wrong = plain.clone();
+        wrong["printed_keywords"] = bad;
+        assert!(codec::decode(wrong, &vocabulary).is_err());
+    }
 }

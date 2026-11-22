@@ -575,7 +575,7 @@ fn native_first_turn_skips_two_player_draw_and_executes_multiplayer_draw() {
             );
         }
         assert!(next.pending_decision().is_none());
-        assert_eq!(next.execution().window().turn_owner(), A);
+        assert_eq!(next.execution().window().active_player(), A);
     }
     let mut draw = instant(501, B);
     draw.destination = ObjectDestination::LibraryBottom;
@@ -731,7 +731,7 @@ fn mana_survives_passing_and_real_resolution_then_clears_with_damage_at_step_end
     );
     assert_eq!(object(boundary.state(), 99), target);
     assert_eq!(position(boundary.state()).number, 8);
-    assert_eq!(boundary.state().execution().window().turn_owner(), B);
+    assert_eq!(boundary.state().execution().window().active_player(), B);
     let later = accept(
         boundary.state(),
         B,
@@ -778,7 +778,7 @@ fn turn_wrap_rotates_the_canonical_active_seat_in_table_order() {
         );
         let next = candidate.into_state();
         assert_eq!(next.execution().window().participants(), seats);
-        assert_eq!(next.execution().window().turn_owner(), next_active);
+        assert_eq!(next.execution().window().active_player(), next_active);
         assert_eq!(holder(&next), next_active);
         assert_eq!(position(&next).number, 21);
         assert_empty_pools(&next);
@@ -811,7 +811,7 @@ fn resolution_after_turn_wrap_returns_priority_to_the_new_active_player() {
     let resolved = pass_round(cast.state());
     assert!(resolved.turn_transitions().is_empty());
     assert_eq!(position(resolved.state()).step, Step::Upkeep);
-    assert_eq!(resolved.state().execution().window().turn_owner(), B);
+    assert_eq!(resolved.state().execution().window().active_player(), B);
     assert_eq!(holder(resolved.state()), B);
     assert!(
         resolved
@@ -869,7 +869,7 @@ fn next_untap_changes_actual_tapped_objects_by_controller_and_preserves_identity
     }
     let candidate = pass_round(&game);
     let next = candidate.state();
-    assert_eq!(next.execution().window().turn_owner(), B);
+    assert_eq!(next.execution().window().active_player(), B);
     assert_eq!(
         next.execution()
             .window()
@@ -940,7 +940,7 @@ fn prepared_cleanup_runs_its_own_sba_before_exception_priority_then_repeats() {
     assert_eq!(records[1].to.step, Step::Untap);
     assert_eq!(records[1].to.number, 6);
     assert_eq!(records[2].to.step, Step::Upkeep);
-    assert_eq!(repeated.state().execution().window().turn_owner(), B);
+    assert_eq!(repeated.state().execution().window().active_player(), B);
     assert_eq!(holder(repeated.state()), B);
     assert_eq!(object(repeated.state(), 99), dead);
 }
@@ -1014,7 +1014,7 @@ fn excess_hand_cleanup_suspends_before_clearing_existing_damage() {
             .damage,
         3.into()
     );
-    assert_eq!(blocked.execution().window().turn_owner(), A);
+    assert_eq!(blocked.execution().window().active_player(), A);
     assert_empty_pools(blocked);
     assert_eq!(
         blocked
@@ -1147,7 +1147,7 @@ fn pending_mana_choice_prevents_step_closure_until_the_real_reply_completes() {
     );
     let boundary = pass_round(reply.state());
     assert_eq!(position(boundary.state()).number, 7);
-    assert_eq!(boundary.state().execution().window().turn_owner(), B);
+    assert_eq!(boundary.state().execution().window().active_player(), B);
     assert_empty_pools(boundary.state());
 }
 
@@ -1170,7 +1170,7 @@ fn turn_exhaustion_rejects_the_final_pass_without_accepting_step_or_resource_cha
     assert_eq!(first, saved);
     assert_eq!(position(&first).step, Step::End);
     assert_eq!(position(&first).number, u64::MAX);
-    assert_eq!(first.execution().window().turn_owner(), A);
+    assert_eq!(first.execution().window().active_player(), A);
     assert_eq!(balances(&first), balances(&game));
 }
 

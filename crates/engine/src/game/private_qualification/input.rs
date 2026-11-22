@@ -354,8 +354,30 @@ impl Joins {
                 &format!("nonunique discovery join {name}"),
                 |relation| {
                     let actual_related = match relation {
-                        TriggerRelated::LeftGame { .. } => {
-                            return Err("historical qualifier excludes departures".into());
+                        TriggerRelated::GraveyardReturnPaid { .. }
+                        | TriggerRelated::ReflexiveDiscardDamage { .. }
+                        | TriggerRelated::CombatDamageToPlaneswalker { .. }
+                        | TriggerRelated::SubtypeCombatDamage { .. }
+                        | TriggerRelated::AttachedCreatureDamaged { .. }
+                        | TriggerRelated::DamageToOpponent { .. }
+                        | TriggerRelated::DamageReceived { .. }
+                        | TriggerRelated::CombatDamageToPlayer { .. }
+                        | TriggerRelated::ManaSource(_)
+                        | TriggerRelated::AttackGroup { .. }
+                        | TriggerRelated::CardDrawn { .. }
+                        | TriggerRelated::PlayerLost(_)
+                        | TriggerRelated::SagaChapter { .. }
+                        | TriggerRelated::CounterSource(_)
+                        | TriggerRelated::Combatant(_)
+                        | TriggerRelated::DeclaredSubtypeAttackers(_)
+                        | TriggerRelated::AttackedWithTotalPower(_)
+                        | TriggerRelated::AttackedAlone(_) => {
+                            return Err(
+                                "historical qualifier excludes combat keyword triggers".into()
+                            );
+                        }
+                        TriggerRelated::Phased(_) | TriggerRelated::Mutated(_) => {
+                            return Err("historical qualifier excludes phasing triggers".into());
                         }
                         TriggerRelated::LibraryAction(_) => {
                             return Err(
@@ -367,7 +389,17 @@ impl Joins {
                         TriggerRelated::ZoneChange { before, .. }
                         | TriggerRelated::Discard { before, .. } => Some(before.object.id()),
                         TriggerRelated::StatusChange(change) => Some(change.after.id()),
-                        TriggerRelated::Step { .. } | TriggerRelated::LifeChanged(_) => None,
+                        TriggerRelated::AbilityForCopy(_)
+                        | TriggerRelated::SpellCopied(_)
+                        | TriggerRelated::TargetingEntry(_)
+                        | TriggerRelated::TargetedPermanent(_)
+                        | TriggerRelated::DamageSource(_)
+                        | TriggerRelated::StateTriggerSource(_)
+                        | TriggerRelated::FinalSagaChapter { .. }
+                        | TriggerRelated::Step { .. }
+                        | TriggerRelated::LifeChanged(_) => None,
+                        TriggerRelated::MiracleRevealed(object)
+                        | TriggerRelated::LeftGame(object) => Some(*object),
                     };
                     Ok(actual_related == related)
                 },
@@ -473,6 +505,14 @@ pub(super) fn reply(
                 keep: object(&action["keep"])?,
             }
         }
+        "MutateOnTop" => DecisionReply::MutateOnTop(
+            action["on_top"]
+                .as_bool()
+                .ok_or("missing mutation placement")?,
+        ),
+        "ReturnCommanders" => {
+            DecisionReply::ReturnCommanders(items.iter().map(object).collect::<Result<_, _>>()?)
+        }
         "OrderGraveyard" => {
             DecisionReply::OrderGraveyard(items.iter().map(object).collect::<Result<_, _>>()?)
         }
@@ -494,17 +534,35 @@ pub(super) fn reply(
                 })
                 .collect::<Result<_, _>>()?,
         ),
-        "DeclareAttackers" => DecisionReply::DeclareAttackers(
-            items
+        "DeclareAttackers" | "DeclareBandedAttackers" => {
+            let attackers = items
                 .iter()
                 .map(|row| {
                     Ok(AttackDeclaration {
                         attacker: object(&row["attacker"])?,
                         defender: packet::seat(string(row, "defender")?)?,
+                        defending_planeswalker: None,
                     })
                 })
-                .collect::<Result<_, String>>()?,
-        ),
+                .collect::<Result<_, String>>()?;
+            if kind == "DeclareAttackers" {
+                DecisionReply::DeclareAttackers(attackers)
+            } else {
+                let bands = action["bands"]
+                    .as_array()
+                    .ok_or("bands must be an array")?
+                    .iter()
+                    .map(|band| {
+                        band.as_array()
+                            .ok_or("a band must be an array".to_string())?
+                            .iter()
+                            .map(object)
+                            .collect::<Result<Vec<_>, String>>()
+                    })
+                    .collect::<Result<Vec<_>, String>>()?;
+                DecisionReply::DeclareBandedAttackers { attackers, bands }
+            }
+        }
         "DeclareBlockers" => DecisionReply::DeclareBlockers(
             items
                 .iter()
@@ -548,6 +606,7 @@ pub(super) fn command(
         "cast" => {
             let spell = joins.object(&action["source"], fixture, &state.execution)?;
             let payment = ManaPayment {
+                from_lots: Default::default(),
                 spend: rows(action, "payment")?
                     .iter()
                     .map(|row| {

@@ -2,7 +2,7 @@
 //! Prepared phases and literal programs do not certify complete cards or games.
 use spellwake_contracts::RulesInteger;
 use spellwake_engine::combat::CombatRules;
-use spellwake_engine::program::{BodyTarget, ExecutableBody, SpellTargetFilter};
+use spellwake_engine::program::{BodyTarget, ExecutableBody};
 use spellwake_engine::setup::GameSeed;
 use spellwake_engine::{
     actions::TimingError,
@@ -129,6 +129,7 @@ fn cost() -> ManaCost {
 
 fn payment(entries: &[(ManaType, i64)]) -> ManaPayment {
     ManaPayment {
+        from_lots: Default::default(),
         spend: entries
             .iter()
             .map(|&(mana_type, amount)| ManaSpend {
@@ -168,14 +169,14 @@ fn seeds() -> Vec<SeedCard> {
             B,
             Instruction::CounterSpell,
             ManaCost::specific(ManaType::Blue, 2.into()),
-            BodyTarget::SingleSpell(SpellTargetFilter::AnySpell),
+            BodyTarget::SingleSpell(spellwake_engine::program::SpellFilter::any()),
         ),
         spell(
             12,
             A,
             Instruction::CopySpell,
             ManaCost::specific(ManaType::Blue, 2.into()),
-            BodyTarget::SingleSpell(SpellTargetFilter::CopyableInstructionSpell),
+            BodyTarget::SingleSpell(spellwake_engine::program::SpellFilter::copyable_instruction()),
         ),
         spell(
             13,
@@ -201,7 +202,7 @@ fn seeds() -> Vec<SeedCard> {
             B,
             Instruction::CopySpell,
             ManaCost::specific(ManaType::Blue, 2.into()),
-            BodyTarget::SingleSpell(SpellTargetFilter::CopyableInstructionSpell),
+            BodyTarget::SingleSpell(spellwake_engine::program::SpellFilter::copyable_instruction()),
         ),
         creature(
             90,
@@ -1416,7 +1417,7 @@ fn mandatory_combat_or_cleanup_work_blocks_both_permanent_kinds() {
 }
 
 #[test]
-fn terminal_or_departed_player_cannot_cast_a_previously_held_permanent() {
+fn terminal_and_multiplayer_elimination_barriers_precede_permanent_admission() {
     for seats in [vec![A, B], vec![A, B, SeatId(99)]] {
         let mut cards = seeds();
         cards.retain(|seed| seed.card != CardId(98));
@@ -1449,26 +1450,37 @@ fn terminal_or_departed_player_cannot_cast_a_previously_held_permanent() {
             },
             TurnStart {
                 number: 3,
-                step: Step::Upkeep,
+                step: Step::Draw,
             },
         )
         .unwrap();
-        let casts = [1, 2, 5].map(|card| untargeted(initial.state(), card, None));
-        let mut current = initial;
-        for _ in &seats {
-            current = pass(current.state());
-        }
-        assert!(current.permanent_entry().is_none());
-        let game = current.state();
-        for command in casts {
+        assert!(initial.permanent_entry().is_none());
+        let game = initial.state();
+        if seats.len() == 2 {
+            for card in [1, 2, 5] {
+                reject_input(
+                    game,
+                    input(game, A, untargeted(game, card, None)),
+                    GameError::GameEnded,
+                );
+            }
+        } else {
+            assert_eq!(game.outcome(), None);
+            assert!(game.pending_eliminations().is_empty());
+            assert_eq!(game.execution().window().participants(), &[B, SeatId(99)]);
+            for card in [1, 2, 5] {
+                assert!(
+                    game.execution()
+                        .window()
+                        .cards()
+                        .current_identity(CardId(card))
+                        .is_none()
+                );
+            }
             reject_input(
                 game,
-                input(game, A, command),
-                if seats.len() == 2 {
-                    GameError::GameEnded
-                } else {
-                    GameError::UnknownActor
-                },
+                input(game, A, GameCommand::Pass),
+                GameError::UnknownActor,
             );
         }
     }
@@ -1638,9 +1650,56 @@ fn final_pass_only_resolves_targetless_permanent_for_two_through_six_seats() {
     }
 }
 
+#[path = "permanent_casting/cast_copies.rs"]
+mod cast_copies;
 #[path = "support/vocabulary.rs"]
 mod synthetic_vocabulary;
 fn test_vocabulary() -> std::sync::Arc<spellwake_contracts::creature_types::CreatureTypeVocabulary>
 {
     synthetic_vocabulary::for_rules("cr-20260925")
 }
+
+#[path = "permanent_casting/keyword_permissions.rs"]
+mod keyword_permissions;
+
+#[path = "permanent_casting/cycling.rs"]
+mod cycling;
+
+#[path = "permanent_casting/cascade.rs"]
+mod cascade;
+#[path = "permanent_casting/escape.rs"]
+mod escape;
+#[path = "permanent_casting/exile_hand.rs"]
+mod exile_hand;
+#[path = "permanent_casting/keyword_costs.rs"]
+mod keyword_costs;
+#[path = "permanent_casting/madness.rs"]
+mod madness;
+
+#[path = "permanent_casting/attachments.rs"]
+mod attachment_rules;
+
+#[path = "permanent_casting/crew_saddle.rs"]
+mod crew_saddle;
+#[path = "permanent_casting/end_step_cast.rs"]
+mod end_step_cast;
+#[path = "permanent_casting/evoke.rs"]
+mod evoke;
+#[path = "permanent_casting/face_down.rs"]
+mod face_down;
+
+#[path = "permanent_casting/exhaust.rs"]
+mod exhaust;
+
+#[path = "permanent_casting/ninja.rs"]
+mod ninja;
+
+#[path = "permanent_casting/day_night.rs"]
+mod day_night;
+#[path = "permanent_casting/power_up.rs"]
+mod power_up;
+#[path = "permanent_casting/speed.rs"]
+mod speed;
+
+#[path = "permanent_casting/basic_land_search.rs"]
+mod basic_land_search;
