@@ -7,5 +7,4 @@ export default ts.config(
   js.configs.recommended,
   ...ts.configs.recommended,
   prettier,
-  { files: ["packages/ui/src/**/*.{ts,tsx}", "apps/ui-workshop/src/**/*.{ts,tsx}"], languageOptions: { globals: { document: "readonly", window: "readonly", fetch: "readonly", HTMLElement: "readonly", HTMLDivElement: "readonly", HTMLInputElement: "readonly", React: "readonly", console: "readonly" } } },
 );
