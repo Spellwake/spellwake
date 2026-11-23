@@ -2,9 +2,10 @@ import type { MatchActionCommand } from "./match-sources";
 import { targetKey, type CombatTarget } from "./combat-draft";
 
 /**
- * Casting a basic spell from hand, as approved (BC-01 to BC-09): an offered
- * card is started, a spell that needs a target waits for one, and a cost the
- * game pauses for waits for payment. Everything that decides what may be done
+ * Casting a spell from hand, as approved (BC-01 to BC-09, MC-01 to MC-06): an
+ * offered card is started, a modal spell waits for its one mode, a spell that
+ * needs a target waits for one, and a cost the game pauses for waits for
+ * payment. Everything that decides what may be done
  * comes from the game's offers; nothing here reads a card's text or counts
  * mana. Pure, so every step can be tested.
  */
@@ -14,11 +15,28 @@ import { targetKey, type CombatTarget } from "./combat-draft";
  * so only the preview supplies them: a match with no offers shows no playable
  * cards and starts no cast here.
  */
+/** One printed mode of a modal spell, as the game offers it. */
+export interface CastModeOffer {
+  /** The game's zero-based number for this mode, in printed order. */
+  mode: number;
+  /** The mode's own words, which name its outlined paragraph. */
+  label: string;
+  /** What this mode may target, or null for a mode with no target. */
+  targets: readonly CombatTarget[] | null;
+  /** Why the mode cannot be chosen now, such as No legal targets. */
+  unavailableReason?: string;
+}
+
 export interface CastOffer {
   /** The card that may be cast. */
   source: string;
   /** What it may target, or null for a spell with no target. */
   targets: readonly CombatTarget[] | null;
+  /**
+   * A modal spell's modes, of which exactly one is chosen (MC-01 to MC-06).
+   * Each mode carries its own targets; `targets` above is then unused.
+   */
+  modes?: readonly CastModeOffer[];
   /** Its cost as printed, such as `{1}{R}`, for the payment prompt. */
   cost: string;
   /**
@@ -32,8 +50,10 @@ export interface CastOffer {
 
 export interface CastDraft {
   source: string;
-  /** Waiting for a target, or for payment. */
-  stage: "target" | "payment";
+  /** Waiting for a mode, for a target, or for payment. */
+  stage: "mode" | "target" | "payment";
+  /** The chosen mode of a modal spell. */
+  mode?: number;
   target: CombatTarget | null;
 }
 
@@ -52,6 +72,15 @@ export const offerFor = (
 
 /** What is sent for a finished draft. A null payment leaves paying to the game. */
 export function castAction(draft: CastDraft): MatchActionCommand {
+  if (draft.mode !== undefined)
+    return {
+      kind: "cast-with-resources",
+      source: draft.source,
+      target: null,
+      payment: null,
+      resources: [],
+      modes: [{ mode: draft.mode, target: draft.target }],
+    };
   return draft.target
     ? {
         kind: "cast-targeted",
@@ -75,6 +104,12 @@ export function beginCast(
   const offer = offerFor(offers, source);
   if (!offer) return { kind: "ignored" };
   const draft: CastDraft = { source, stage: "target", target: null };
+  if (offer.modes) {
+    // A modal spell with no mode that can be chosen cannot be started.
+    return offer.modes.some((mode) => !mode.unavailableReason)
+      ? { kind: "draft", draft: { ...draft, stage: "mode" } }
+      : { kind: "ignored" };
+  }
   if (offer.targets !== null) {
     // A spell that needs a target and is offered none cannot be started.
     return offer.targets.length > 0
@@ -84,13 +119,46 @@ export function beginCast(
   return settle(offer, draft);
 }
 
+const modeOf = (
+  offer: CastOffer,
+  mode: number | undefined,
+): CastModeOffer | undefined =>
+  offer.modes?.find((entry) => entry.mode === mode);
+/** What a draft may target: its chosen mode's targets, or the spell's own. */
+const targetsOf = (
+  offer: CastOffer,
+  draft: CastDraft,
+): readonly CombatTarget[] =>
+  (offer.modes ? modeOf(offer, draft.mode)?.targets : offer.targets) ?? [];
+
+/**
+ * Choose a modal spell's mode. It goes straight on to that mode's targets, or
+ * to payment when the mode has none: there is no second confirmation.
+ */
+export function chooseCastMode(
+  offers: readonly CastOffer[],
+  draft: CastDraft,
+  mode: number,
+): CastStep {
+  const offer = offerFor(offers, draft.source);
+  const chosen = offer ? modeOf(offer, mode) : undefined;
+  if (!offer || !chosen || draft.stage !== "mode" || chosen.unavailableReason)
+    return { kind: "ignored" };
+  const next: CastDraft = { ...draft, mode, target: null, stage: "target" };
+  if (chosen.targets === null) return settle(offer, next);
+  return chosen.targets.length > 0
+    ? { kind: "draft", draft: next }
+    : { kind: "ignored" };
+}
+
 /** The targets the waiting spell may be given. */
 export function castTargets(
   offers: readonly CastOffer[],
   draft: CastDraft | null,
 ): readonly CombatTarget[] {
   if (!draft || draft.stage !== "target") return [];
-  return offerFor(offers, draft.source)?.targets ?? [];
+  const offer = offerFor(offers, draft.source);
+  return offer ? targetsOf(offer, draft) : [];
 }
 
 /** Choose the waiting spell's target. The last choice sends it unless the game pauses for payment. */
@@ -101,7 +169,7 @@ export function chooseCastTarget(
 ): CastStep {
   const offer = offerFor(offers, draft.source);
   if (!offer || draft.stage !== "target") return { kind: "ignored" };
-  const offered = (offer.targets ?? []).some(
+  const offered = targetsOf(offer, draft).some(
     (entry) => targetKey(entry) === targetKey(target),
   );
   if (!offered) return { kind: "ignored" };
@@ -129,9 +197,19 @@ export function reconcileCast(
   if (!draft) return null;
   const offer = offerFor(offers, draft.source);
   if (!offer) return null;
+  // A chosen mode must still be one the game offers and allows.
+  if (draft.mode !== undefined) {
+    const mode = modeOf(offer, draft.mode);
+    if (!mode || mode.unavailableReason) return null;
+  }
+  if (
+    Boolean(offer.modes) !==
+    (draft.mode !== undefined || draft.stage === "mode")
+  )
+    return null;
   if (!draft.target) return draft;
   const chosen = targetKey(draft.target);
-  return (offer.targets ?? []).some((entry) => targetKey(entry) === chosen)
+  return targetsOf(offer, draft).some((entry) => targetKey(entry) === chosen)
     ? draft
     : null;
 }

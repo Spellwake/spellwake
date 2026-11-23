@@ -20,6 +20,7 @@ const SCENES: readonly PreviewScene[] = [
   "stack-long",
   "stack-waiting",
   "watching",
+  "no-artifacts",
 ];
 
 /**
