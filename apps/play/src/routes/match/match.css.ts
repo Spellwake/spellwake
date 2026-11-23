@@ -157,15 +157,6 @@ export const manaBar = style({
   border: `1px solid ${t.color.edge}`,
 });
 
-export const stackChip = style({
-  padding: "6px 10px",
-  borderRadius: 8,
-  border: `1px solid ${t.color.goldEdge}`,
-  background: t.color.emphasis,
-  color: t.color.ink,
-  fontSize: 14,
-});
-
 export const chatDrawer = style({
   display: "flex",
   flexDirection: "column",
@@ -229,4 +220,76 @@ export const sideDecisions = style({
   flexDirection: "column",
   gap: 10,
   minWidth: 0,
+});
+
+/** Which source's damage is being assigned (DA-04 to DA-06): a chip each, with what it has assigned. */
+export const damageSources = style({
+  display: "flex",
+  flexWrap: "wrap",
+  gap: "8px",
+});
+export const damageChip = style({
+  appearance: "none",
+  flex: "1 1 0",
+  minWidth: 0,
+  display: "flex",
+  alignItems: "center",
+  gap: "8px",
+  minHeight: "38px",
+  padding: "4px 14px 4px 6px",
+  borderRadius: "999px",
+  border: "1px solid #8b877480",
+  background: "linear-gradient(115deg,rgba(25,30,26,.76),rgba(36,40,39,.81))",
+  color: "#fbefd1",
+  font: "17px/1.1 inherit",
+  fontFamily: "inherit",
+  cursor: "pointer",
+  selectors: {
+    '&[aria-pressed="true"]': {
+      background: "linear-gradient(180deg,#f7e4b4,#e7cf9f)",
+      borderColor: "#fff1c9",
+      color: "#1c1a14",
+    },
+    "&:focus-visible": {
+      outline: `3px solid ${t.color.focus}`,
+      outlineOffset: "2px",
+    },
+  },
+  "@media": { "(pointer: coarse)": { minHeight: "44PX" } },
+});
+export const damageName = style({
+  flex: 1,
+  minWidth: 0,
+  overflow: "hidden",
+  textOverflow: "ellipsis",
+  whiteSpace: "nowrap",
+  textAlign: "left",
+});
+export const damageCount = style({
+  flexShrink: 0,
+  fontVariantNumeric: "tabular-nums",
+});
+/** A small window onto the card's picture. */
+export const damageThumb = style({
+  flexShrink: 0,
+  width: "38px",
+  height: "27px",
+  borderRadius: "4px",
+  backgroundColor: "#16181d",
+  backgroundSize: "150% auto",
+  backgroundPosition: "50% 21%",
+  boxShadow: "0 0 0 1px #0008",
+});
+export const damageReadout = style({
+  display: "flex",
+  alignItems: "center",
+  gap: "10px",
+  minHeight: "40px",
+  padding: "4px 18px 4px 8px",
+  borderRadius: "999px",
+  border: "1px solid #8b87745c",
+  background: "linear-gradient(115deg,rgba(25,30,26,.76),rgba(36,40,39,.81))",
+  color: "#fbefd1",
+  fontSize: "17px",
+  lineHeight: 1.15,
 });

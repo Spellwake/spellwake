@@ -112,7 +112,8 @@ export function MatchTable({
   /** A card in hand the viewer may play now. */
   isPlayable?: (object: PlayerObject) => boolean;
   /** Rims for a declaration in progress, by card handle. */
-  marks?: ReadonlyMap<string, "eligible" | "copper" | "ivory"> | undefined;
+  marks?:
+    ReadonlyMap<string, "eligible" | "copper" | "ivory" | "gold"> | undefined;
   /** Height along the lower edge that floating controls cover, in pixels. */
   clearBottom?: number;
   /** A card offered as a choice for the action in progress. */

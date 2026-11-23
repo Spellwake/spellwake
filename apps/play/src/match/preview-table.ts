@@ -394,7 +394,7 @@ const creaturesOf = (snapshot: PlayerSnapshot, seatId: string) =>
   );
 const decision = (
   snapshot: PlayerSnapshot,
-  kind: "declare-attackers" | "declare-blockers",
+  kind: "declare-attackers" | "declare-blockers" | "assign-combat-damage",
   domain: PlayerDecision["domain"],
 ): PlayerDecision => ({
   decision: `decision-${kind}-${snapshot.turn?.number ?? "0"}`,
@@ -448,8 +448,319 @@ export function previewBlockDecision(
   });
 }
 
-/** The preview table part-way through combat, for the development probe. */
-export function previewScene(scene: "attack" | "block"): PlayerSnapshot {
+const powerOf = (object: PlayerObject): number =>
+  Number(object.publicProperties?.power ?? "0") || 0;
+const withPower = (
+  snapshot: PlayerSnapshot,
+  handle: string,
+  power: string,
+): PlayerSnapshot => ({
+  ...snapshot,
+  visibleObjects: snapshot.visibleObjects.map((object) =>
+    object.handle === handle && object.publicProperties
+      ? {
+          ...object,
+          publicProperties: { ...object.publicProperties, power },
+        }
+      : object,
+  ),
+});
+
+/**
+ * One of the viewer's attackers is blocked by two of the defender's creatures,
+ * so the viewer divides its damage between them. Null when the defender has
+ * fewer than two creatures to block with.
+ */
+export function previewDamageDecision(
+  snapshot: PlayerSnapshot,
+  blocked: readonly { attacker: string; defenderSeat: string }[],
+): PlayerDecision | null {
+  const sources = blocked.flatMap(({ attacker, defenderSeat }) => {
+    const source = snapshot.visibleObjects.find(
+      (object) => object.handle === attacker,
+    );
+    const blockers = creaturesOf(snapshot, defenderSeat).slice(0, 2);
+    if (!source || blockers.length < 2 || powerOf(source) === 0) return [];
+    return [
+      {
+        source: attacker,
+        targets: blockers.map((object) => ({
+          kind: "object" as const,
+          handle: object.handle,
+        })),
+        total: String(powerOf(source)),
+      },
+    ];
+  });
+  return sources.length > 0
+    ? decision(snapshot, "assign-combat-damage", {
+        kind: "combat-damage",
+        sources,
+      })
+    : null;
+}
+
+type StackTarget = PlayerSnapshot["stack"][number]["targets"][number];
+/** Put a spell card on the stack, newest last, as the game would report it. */
+function castOnto(
+  snapshot: PlayerSnapshot,
+  name: string,
+  controller: string,
+  target: StackTarget,
+): PlayerSnapshot {
+  const at = snapshot.stack.length + 1;
+  const tag = `${snapshot.throughEventSequence}-${at}`;
+  const handle = `obj-spell-${tag}`;
+  return {
+    ...snapshot,
+    visibleObjects: [
+      ...snapshot.visibleObjects,
+      card(handle, name, controller, "zone-stack"),
+    ],
+    zones: snapshot.zones.map((zone) =>
+      zone.handle === "zone-stack" && zone.visibility === "visible"
+        ? { ...zone, objects: [...zone.objects, handle] }
+        : zone,
+    ),
+    stack: [
+      ...snapshot.stack,
+      {
+        handle: `stack-${tag}`,
+        controllerSeatId: controller,
+        sourceObject: handle,
+        label: name,
+        targets: [target],
+        unavailableTargets: "0",
+      },
+    ],
+  };
+}
+/** A triggered ability of a permanent already on the table. */
+function triggerOnto(
+  snapshot: PlayerSnapshot,
+  source: PlayerObject,
+  effect: string,
+): PlayerSnapshot {
+  return {
+    ...snapshot,
+    stack: [
+      ...snapshot.stack,
+      {
+        handle: `stack-${snapshot.throughEventSequence}-${snapshot.stack.length + 1}`,
+        controllerSeatId: source.controllerSeatId ?? source.ownerSeatId ?? "",
+        sourceObject: source.handle,
+        label: `Triggered ability: ${effect}`,
+        targets: [],
+        unavailableTargets: "0",
+      },
+    ],
+  };
+}
+
+/** Alex's burn spell at one of the viewer's creatures, and Morgan's reply at the viewer. */
+export function previewResponses(snapshot: PlayerSnapshot): PlayerSnapshot {
+  const mine = creaturesOf(snapshot, snapshot.viewerSeatId)[1];
+  const bolt = castOnto(
+    snapshot,
+    "Lightning Bolt",
+    PREVIEW_SEATS[1].seatId,
+    mine
+      ? { kind: "object", handle: mine.handle }
+      : { kind: "seat", seatId: snapshot.viewerSeatId },
+  );
+  return castOnto(bolt, "Shock", PREVIEW_SEATS[2].seatId, {
+    kind: "seat",
+    seatId: snapshot.viewerSeatId,
+  });
+}
+
+const DAMAGE: Record<string, number> = { "Lightning Bolt": 3, Shock: 2 };
+/**
+ * The newest stack item resolves: a burn spell deals its damage and goes to
+ * its owner's graveyard, and a creature dealt lethal damage follows it. This
+ * is the preview's own small script, not the rules engine.
+ */
+export function previewResolveTop(snapshot: PlayerSnapshot): PlayerSnapshot {
+  const top = snapshot.stack.at(-1);
+  if (!top) return snapshot;
+  const spell = snapshot.visibleObjects.find(
+    (object) =>
+      object.handle === top.sourceObject && object.zone === "zone-stack",
+  );
+  const amount =
+    spell?.identity.kind === "known"
+      ? (DAMAGE[spell.identity.characteristics.name] ?? 0)
+      : 0;
+  const target = top.targets[0];
+  const struck =
+    target?.kind === "object"
+      ? snapshot.visibleObjects.find(
+          (object) => object.handle === target.handle,
+        )
+      : undefined;
+  const dies =
+    struck !== undefined &&
+    Number(struck.damageMarked) + amount >=
+      (Number(struck.publicProperties?.toughness ?? "0") || Infinity);
+  const leaving = new Map<string, string>();
+  const graveyardOf = (seatId: string | null) =>
+    `zone-graveyard-s${PREVIEW_SEATS.findIndex((seat) => seat.seatId === seatId) + 1}`;
+  if (spell) leaving.set(spell.handle, graveyardOf(spell.ownerSeatId));
+  if (struck && dies)
+    leaving.set(struck.handle, graveyardOf(struck.ownerSeatId));
+  return {
+    ...snapshot,
+    throughEventSequence: String(Number(snapshot.throughEventSequence) + 1),
+    stack: snapshot.stack.slice(0, -1),
+    players: snapshot.players.map((player) =>
+      target?.kind === "seat" && target.seatId === player.seatId
+        ? { ...player, life: String(Number(player.life) - amount) }
+        : player,
+    ),
+    visibleObjects: snapshot.visibleObjects.map((object) => {
+      const to = leaving.get(object.handle);
+      if (to)
+        return {
+          ...object,
+          zone: to,
+          controllerSeatId: null,
+          tapped: false,
+          damageMarked: "0",
+        };
+      return object === struck
+        ? {
+            ...object,
+            damageMarked: String(Number(object.damageMarked) + amount),
+          }
+        : object;
+    }),
+    zones: snapshot.zones.map((zone) => {
+      if (zone.visibility !== "visible") return zone;
+      const kept = zone.objects.filter((handle) => !leaving.has(handle));
+      const arriving = [...leaving]
+        .filter(([, to]) => to === zone.handle)
+        .map(([handle]) => handle);
+      return kept.length === zone.objects.length && arriving.length === 0
+        ? zone
+        : { ...zone, objects: [...kept, ...arriving] };
+    }),
+  };
+}
+
+export type PreviewScene =
+  | "attack"
+  | "block"
+  | "damage"
+  | "damage-two"
+  | "trample"
+  | "stack"
+  | "stack-long"
+  | "stack-waiting";
+
+/** Combat damage being assigned on the viewer's turn. */
+function damageScene(
+  scene: "damage" | "damage-two" | "trample",
+): PlayerSnapshot {
+  const table = previewSnapshot();
+  const [guide, chieftain] = creaturesOf(table, PREVIEW_VIEWER);
+  const alex = PREVIEW_SEATS[1].seatId;
+  const morgan = PREVIEW_SEATS[2].seatId;
+  if (!guide || !chieftain) return table;
+  // The Chieftain has been pumped, so there is damage worth dividing.
+  const pumped = withPower(
+    table,
+    chieftain.handle,
+    scene === "trample" ? "6" : "4",
+  );
+  const attacking = new Set(
+    scene === "damage-two"
+      ? [chieftain.handle, guide.handle]
+      : [chieftain.handle],
+  );
+  const combat: PlayerSnapshot = {
+    ...pumped,
+    turn: { ...pumped.turn!, phase: "combat", step: "combat-damage" },
+    visibleObjects: pumped.visibleObjects.map((object) =>
+      attacking.has(object.handle) ? { ...object, tapped: true } : object,
+    ),
+  };
+  if (scene === "trample") {
+    const blocker = creaturesOf(combat, alex)[1];
+    if (!blocker) return combat;
+    return {
+      ...combat,
+      decisions: [
+        decision(combat, "assign-combat-damage", {
+          kind: "combat-damage",
+          sources: [
+            {
+              source: chieftain.handle,
+              targets: [
+                { kind: "object", handle: blocker.handle },
+                { kind: "seat", seatId: alex },
+              ],
+              total: "6",
+              trampleLethal: [{ blocker: blocker.handle, amount: "1" }],
+            },
+          ],
+        }),
+      ],
+    };
+  }
+  const offered = previewDamageDecision(
+    combat,
+    scene === "damage-two"
+      ? [
+          { attacker: chieftain.handle, defenderSeat: alex },
+          { attacker: guide.handle, defenderSeat: morgan },
+        ]
+      : [{ attacker: chieftain.handle, defenderSeat: alex }],
+  );
+  return offered ? { ...combat, decisions: [offered] } : combat;
+}
+
+/** Spells waiting to resolve on Alex's main phase. */
+function stackScene(
+  scene: "stack" | "stack-long" | "stack-waiting",
+): PlayerSnapshot {
+  const table = previewSnapshot();
+  const alex = PREVIEW_SEATS[1].seatId;
+  const main: PlayerSnapshot = {
+    ...table,
+    turn: {
+      ...table.turn!,
+      number: "6",
+      activeSeatIds: [alex],
+      prioritySeatIds: [scene === "stack-waiting" ? alex : PREVIEW_VIEWER],
+    },
+  };
+  if (scene !== "stack-long") return previewResponses(main);
+  // A deeper pile: four more replies around the table, and a trigger on top.
+  const sam = PREVIEW_SEATS[3].seatId;
+  let pile = castOnto(main, "Lightning Bolt", alex, {
+    kind: "seat",
+    seatId: PREVIEW_VIEWER,
+  });
+  const replies: [string, string, StackTarget][] = [
+    ["Shock", PREVIEW_SEATS[2].seatId, { kind: "seat", seatId: alex }],
+    ["Lightning Bolt", sam, { kind: "seat", seatId: PREVIEW_SEATS[2].seatId }],
+    ["Shock", PREVIEW_SEATS[4].seatId, { kind: "seat", seatId: sam }],
+    ["Lightning Bolt", PREVIEW_SEATS[5].seatId, { kind: "seat", seatId: alex }],
+  ];
+  for (const [name, controller, target] of replies)
+    pile = castOnto(pile, name, controller, target);
+  const marshal = creaturesOf(pile, sam)[2];
+  return marshal
+    ? triggerOnto(pile, marshal, "Create a 1/1 red Goblin creature token.")
+    : pile;
+}
+
+/** The preview table part-way through a turn, for the development probe. */
+export function previewScene(scene: PreviewScene): PlayerSnapshot {
+  if (scene === "damage" || scene === "damage-two" || scene === "trample")
+    return damageScene(scene);
+  if (scene === "stack" || scene === "stack-long" || scene === "stack-waiting")
+    return stackScene(scene);
   const table = previewSnapshot();
   if (scene === "attack") {
     const combat: PlayerSnapshot = {

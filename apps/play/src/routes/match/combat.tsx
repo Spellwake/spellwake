@@ -1,7 +1,6 @@
 import {
   useCallback,
   useEffect,
-  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -34,10 +33,13 @@ import {
   type BlockDraft,
 } from "../../match/combat-draft";
 import type { ReadyMatch } from "../../match/match-sources";
+import { useAnchors } from "./anchors";
 import * as s from "./match-table.css";
 
 /** How a card is rimmed while a declaration is being made. */
-export type CardMark = "eligible" | "copper" | "ivory";
+export type CardMark = "eligible" | "copper" | "ivory" | "gold";
+/** A player offered as a defender, chosen as one, or marked as a target. */
+export type SeatMark = "offered" | "assigned" | "marked";
 export interface CombatLine {
   /** Anchors named `card:<handle>` or `seat:<seatId>`. */
   from: string;
@@ -47,7 +49,7 @@ export interface CombatLine {
 export interface CombatUi {
   marks: ReadonlyMap<string, CardMark>;
   /** Players offered as, or already chosen as, a defender. */
-  seatMarks: ReadonlyMap<string, "offered" | "assigned">;
+  seatMarks: ReadonlyMap<string, SeatMark>;
   lines: readonly CombatLine[];
   /** True when the click was this declaration's to take. */
   onCard: (object: PlayerObject) => boolean;
@@ -169,7 +171,7 @@ export function useCombat(
             ? "copper"
             : "eligible",
         );
-      const seatMarks = new Map<string, "offered" | "assigned">();
+      const seatMarks = new Map<string, SeatMark>();
       for (const target of targets) {
         if (target.kind === "seat") seatMarks.set(target.seatId, "offered");
         if (target.kind === "object") marks.set(target.handle, "copper");
@@ -374,70 +376,36 @@ export function CombatLines({
   follow: unknown;
 }): ReactElement {
   const root = useRef<SVGSVGElement>(null);
-  const [drawn, setDrawn] = useState<Drawn[]>([]);
   const reduced = useReducedMotion();
-  const wanted = lines
-    .map((line) => `${line.from}>${line.to}>${line.tone}`)
-    .join("|");
-  useLayoutEffect(() => {
-    const svg = root.current;
-    if (!svg) return;
-    let frame = 0;
-    const until = performance.now() + 900;
-    const measure = () => {
-      const origin = svg.getBoundingClientRect();
-      const point = (name: string, end: "from" | "to") => {
-        const node = document.querySelector<HTMLElement>(
-          `[data-anchor="${CSS.escape(name)}"]`,
-        );
-        if (!node) return null;
-        const rect = node.getBoundingClientRect();
-        if (rect.width === 0) return null;
-        // A portrait is met at the foot of its picture; a card at its near edge.
-        if (name.startsWith("seat:"))
-          return {
-            x: rect.left + rect.height / 2 - origin.left,
-            y: rect.bottom + 2 - origin.top,
-          };
-        return {
-          x: rect.left + rect.width / 2 - origin.left,
-          y: (end === "from" ? rect.top + 6 : rect.bottom - 6) - origin.top,
-        };
-      };
-      const next: Drawn[] = [];
-      for (const line of lines) {
-        const from = point(line.from, "from");
-        const to = point(line.to, "to");
-        if (!from || !to) continue;
-        const reach = Math.max(40, Math.abs(from.y - to.y) * 0.5);
-        next.push({
-          id: `${line.from}>${line.to}`,
-          tone: line.tone,
-          d: `M ${from.x.toFixed(1)} ${from.y.toFixed(1)} C ${from.x.toFixed(1)} ${(from.y - reach).toFixed(1)}, ${to.x.toFixed(1)} ${(to.y + reach).toFixed(1)}, ${to.x.toFixed(1)} ${to.y.toFixed(1)}`,
-        });
-      }
-      setDrawn((current) =>
-        current.length === next.length &&
-        current.every(
-          (entry, index) =>
-            entry.id === next[index]!.id &&
-            entry.d === next[index]!.d &&
-            entry.tone === next[index]!.tone,
-        )
-          ? current
-          : next,
-      );
-      // Keep following while the cards travel to a new view.
-      if (performance.now() < until) frame = requestAnimationFrame(measure);
+  const { rects } = useAnchors(
+    root,
+    [...new Set(lines.flatMap((line) => [line.from, line.to]))],
+    follow,
+  );
+  const point = (name: string, end: "from" | "to") => {
+    const rect = rects.get(name);
+    if (!rect) return null;
+    // A portrait is met at the foot of its picture; a card at its near edge.
+    if (name.startsWith("seat:"))
+      return { x: rect.left + rect.height / 2, y: rect.bottom + 2 };
+    return {
+      x: rect.left + rect.width / 2,
+      y: end === "from" ? rect.top + 6 : rect.bottom - 6,
     };
-    measure();
-    window.addEventListener("resize", measure);
-    return () => {
-      cancelAnimationFrame(frame);
-      window.removeEventListener("resize", measure);
-    };
-    // `wanted` stands for the lines; `follow` for anything that moves a card.
-  }, [wanted, follow]);
+  };
+  const drawn: Drawn[] = lines.flatMap((line) => {
+    const from = point(line.from, "from");
+    const to = point(line.to, "to");
+    if (!from || !to) return [];
+    const reach = Math.max(40, Math.abs(from.y - to.y) * 0.5);
+    return [
+      {
+        id: `${line.from}>${line.to}`,
+        tone: line.tone,
+        d: `M ${from.x.toFixed(1)} ${from.y.toFixed(1)} C ${from.x.toFixed(1)} ${(from.y - reach).toFixed(1)}, ${to.x.toFixed(1)} ${(to.y + reach).toFixed(1)}, ${to.x.toFixed(1)} ${to.y.toFixed(1)}`,
+      },
+    ];
+  });
   return (
     <svg ref={root} className={s.lines} aria-hidden="true" focusable="false">
       <defs>
