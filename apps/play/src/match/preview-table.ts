@@ -1,4 +1,5 @@
 import type {
+  PlayerDecision,
   PlayerObject,
   PlayerSnapshot,
 } from "@spellwake/application-contracts";
@@ -380,5 +381,105 @@ export function previewSnapshot(): PlayerSnapshot {
     stack: [],
     decisions: [],
     throughEventSequence: "12",
+  };
+}
+
+const creaturesOf = (snapshot: PlayerSnapshot, seatId: string) =>
+  snapshot.visibleObjects.filter(
+    (object) =>
+      object.zone === "zone-battlefield" &&
+      object.controllerSeatId === seatId &&
+      !object.tapped &&
+      (object.publicProperties?.cardTypes.includes("creature") ?? false),
+  );
+const decision = (
+  snapshot: PlayerSnapshot,
+  kind: "declare-attackers" | "declare-blockers",
+  domain: PlayerDecision["domain"],
+): PlayerDecision => ({
+  decision: `decision-${kind}-${snapshot.turn?.number ?? "0"}`,
+  basis: snapshot.basis,
+  respondingSeatIds: [snapshot.viewerSeatId],
+  visibility: "responding-seat",
+  kind,
+  domain,
+  deadlineAt: null,
+});
+
+/** The viewer's attack: each untapped creature may be sent at any other player. */
+export function previewAttackDecision(
+  snapshot: PlayerSnapshot,
+): PlayerDecision | null {
+  const attackers = creaturesOf(snapshot, snapshot.viewerSeatId);
+  if (attackers.length === 0) return null;
+  const defenders = snapshot.players
+    .filter((player) => player.seatId !== snapshot.viewerSeatId)
+    .map((player) => ({ kind: "seat" as const, seatId: player.seatId }));
+  return decision(snapshot, "declare-attackers", {
+    kind: "attackers",
+    choices: attackers.map((object) => ({
+      attacker: object.handle,
+      defenders,
+    })),
+    required: [],
+  });
+}
+
+/** Another seat's creatures attack the viewer, who may block each with one creature. */
+export function previewBlockDecision(
+  snapshot: PlayerSnapshot,
+  attackerSeat: string,
+): PlayerDecision | null {
+  const attackers = creaturesOf(snapshot, attackerSeat)
+    .slice(0, 2)
+    .map((object) => object.handle);
+  const blockers = creaturesOf(snapshot, snapshot.viewerSeatId);
+  if (attackers.length === 0 || blockers.length === 0) return null;
+  return decision(snapshot, "declare-blockers", {
+    kind: "blockers",
+    defendingSeatId: snapshot.viewerSeatId,
+    choices: blockers.map((object) => ({
+      blocker: object.handle,
+      attackers,
+      minimum: "0",
+      maximum: "1",
+    })),
+    required: [],
+  });
+}
+
+/** The preview table part-way through combat, for the development probe. */
+export function previewScene(scene: "attack" | "block"): PlayerSnapshot {
+  const table = previewSnapshot();
+  if (scene === "attack") {
+    const combat: PlayerSnapshot = {
+      ...table,
+      turn: { ...table.turn!, phase: "combat", step: "declare-attackers" },
+    };
+    const offered = previewAttackDecision(combat);
+    return offered ? { ...combat, decisions: [offered] } : combat;
+  }
+  const attackerSeat = PREVIEW_SEATS[1].seatId;
+  const combat: PlayerSnapshot = {
+    ...table,
+    turn: {
+      ...table.turn!,
+      number: "6",
+      activeSeatIds: [attackerSeat],
+      phase: "combat",
+      step: "declare-blockers",
+    },
+  };
+  const offered = previewBlockDecision(combat, attackerSeat);
+  if (!offered || offered.domain.kind !== "blockers") return combat;
+  const attacking = new Set(
+    offered.domain.choices.flatMap((choice) => choice.attackers),
+  );
+  return {
+    ...combat,
+    visibleObjects: combat.visibleObjects.map((object) =>
+      attacking.has(object.handle) ? { ...object, tapped: true } : object,
+    ),
+    decisions: [offered],
   };
 }

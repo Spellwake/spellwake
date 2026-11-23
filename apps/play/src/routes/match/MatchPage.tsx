@@ -38,7 +38,9 @@ import {
   seatBoard,
   type TableView,
 } from "../../match/table-model";
+import { CombatLines, useCombat } from "./combat";
 import { MatchTable } from "./MatchTable";
+import * as table from "./match-table.css";
 import * as s from "./match.css";
 
 const ICON = designPixels(26);
@@ -639,6 +641,8 @@ function LiveMatch({ source }: { source: ReadyMatch }): ReactElement {
     d.respondingSeatIds.includes(snapshot.viewerSeatId),
   );
 
+  const combat = useCombat(activeDecision ?? null, source);
+
   const phaseInfo = snapshot.turn
     ? PHASE_MAP[snapshot.turn.phase]
     : { phase: "beginning" as MatchPhase, label: "Opening" };
@@ -665,6 +669,7 @@ function LiveMatch({ source }: { source: ReadyMatch }): ReactElement {
     obj: PlayerObject,
     zoneKind: "hand" | "battlefield",
   ) => {
+    if (zoneKind === "battlefield" && combat.ui?.onCard(obj)) return;
     const mine =
       (obj.controllerSeatId ?? obj.ownerSeatId) === snapshot.viewerSeatId;
     if (!mine || !hasPriority || source.commandPending) {
@@ -752,27 +757,34 @@ function LiveMatch({ source }: { source: ReadyMatch }): ReactElement {
           const takingTurn =
             snapshot.turn?.activeSeatIds.includes(player.seatId) ?? false;
           return (
-            <PlayerIdentity
+            <span
               key={player.seatId}
-              presentation="seat"
-              name={name}
-              life={Number(player.life) || 0}
-              actionLabel={
-                player.seatId === snapshot.viewerSeatId
-                  ? "View your board"
-                  : `View ${name}’s board`
-              }
-              onActivate={() =>
-                setView({ kind: "seat", seatId: player.seatId })
-              }
-              takingTurn={takingTurn}
-              viewingOpponent={
-                tableView.kind === "seat" &&
-                tableView.seatId === player.seatId &&
-                player.seatId !== snapshot.viewerSeatId
-              }
-              portrait={<CircleUserRound aria-hidden="true" />}
-            />
+              className={table.seatAnchor}
+              data-anchor={`seat:${player.seatId}`}
+              data-recipient={combat.ui?.seatMarks.get(player.seatId)}
+            >
+              <PlayerIdentity
+                presentation="seat"
+                name={name}
+                life={Number(player.life) || 0}
+                actionLabel={
+                  player.seatId === snapshot.viewerSeatId
+                    ? "View your board"
+                    : `View ${name}’s board`
+                }
+                onActivate={() => {
+                  if (combat.ui?.onSeat(player.seatId)) return;
+                  setView({ kind: "seat", seatId: player.seatId });
+                }}
+                takingTurn={takingTurn}
+                viewingOpponent={
+                  tableView.kind === "seat" &&
+                  tableView.seatId === player.seatId &&
+                  player.seatId !== snapshot.viewerSeatId
+                }
+                portrait={<CircleUserRound aria-hidden="true" />}
+              />
+            </span>
           );
         })}
         trailing={
@@ -803,28 +815,40 @@ function LiveMatch({ source }: { source: ReadyMatch }): ReactElement {
                 ))}
               </div>
             )}
-            <MatchActions
-              primary={
-                hasPriority
-                  ? {
-                      label:
-                        snapshot.stack.length > 0 ? "Resolve" : "Pass priority",
-                      pending: source.commandPending,
-                      onActivate: () =>
-                        void source.sendAction({ kind: "pass" }),
-                    }
-                  : {
-                      label: "Waiting…",
-                      disabled: true,
-                      onActivate: () => undefined,
-                    }
-              }
-              {...(activeDecision
-                ? { status: `Action required: ${activeDecision.kind}` }
-                : hasPriority
-                  ? { status: "You have priority" }
+            {combat.ui ? (
+              <MatchActions
+                primary={combat.ui.primary}
+                {...(combat.ui.secondary
+                  ? { secondary: combat.ui.secondary }
                   : {})}
-            />
+                {...(combat.ui.status ? { status: combat.ui.status } : {})}
+              />
+            ) : (
+              <MatchActions
+                primary={
+                  hasPriority
+                    ? {
+                        label:
+                          snapshot.stack.length > 0
+                            ? "Resolve"
+                            : "Pass priority",
+                        pending: source.commandPending,
+                        onActivate: () =>
+                          void source.sendAction({ kind: "pass" }),
+                      }
+                    : {
+                        label: "Waiting…",
+                        disabled: true,
+                        onActivate: () => undefined,
+                      }
+                }
+                {...(activeDecision
+                  ? { status: `Action required: ${activeDecision.kind}` }
+                  : hasPriority
+                    ? { status: combat.note ?? "You have priority" }
+                    : {})}
+              />
+            )}
             <div className={s.sideDecisions}>
               {snapshot.stack.length > 0 && (
                 <div className={s.decisionRow} aria-label="Spell stack">
@@ -855,7 +879,7 @@ function LiveMatch({ source }: { source: ReadyMatch }): ReactElement {
                   </div>
                 </div>
               )}
-              {activeDecision && (
+              {activeDecision && !combat.ui && (
                 <DecisionPanel
                   key={activeDecision.decision}
                   decision={activeDecision}
@@ -907,6 +931,7 @@ function LiveMatch({ source }: { source: ReadyMatch }): ReactElement {
           view={tableView}
           seatNames={seatNames}
           faceOf={artFor}
+          marks={combat.ui?.marks}
           clearBottom={dock.clearBottom}
           onCard={handleCardAction}
           onPile={(pile, seatId) => {
@@ -920,6 +945,10 @@ function LiveMatch({ source }: { source: ReadyMatch }): ReactElement {
               objects: seatBoard(snapshot, seatId).graveyard,
             });
           }}
+        />
+        <CombatLines
+          lines={combat.ui?.lines ?? []}
+          follow={`${tableView.kind === "seat" ? tableView.seatId : "table"}:${snapshot.throughEventSequence}:${dock.clearBottom}`}
         />
       </ImmersiveFrame>
 

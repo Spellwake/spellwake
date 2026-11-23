@@ -92,7 +92,10 @@ type Case = {
     | "league-profile"
     /** The match: another seat's board, and the whole table. */
     | "match-opponent"
-    | "match-overview";
+    | "match-overview"
+    /** Declaring: an attacker sent at a player, and a blocker linked from the whole table. */
+    | "match-attack"
+    | "match-block";
 };
 
 const viewports: Viewport[] = [
@@ -339,6 +342,35 @@ const cases: Case[] = [
       ...(state ? { state } : {}),
     })),
   ),
+  // Declaring attackers and blockers on the table, on every screen.
+  ...viewports.flatMap((viewport): Case[] => [
+    {
+      viewport,
+      art: "none",
+      decks: "six",
+      path: "/probe/table?state=attack",
+    },
+    {
+      viewport,
+      art: "none",
+      decks: "six",
+      path: "/probe/table?state=attack",
+      state: "match-attack",
+    },
+    {
+      viewport,
+      art: "none",
+      decks: "six",
+      path: "/probe/table?state=block",
+    },
+    {
+      viewport,
+      art: "none",
+      decks: "six",
+      path: "/probe/table?state=block",
+      state: "match-block",
+    },
+  ]),
   // League on every screen, both sections, then its formats and states.
   ...viewports.flatMap((viewport): Case[] =>
     ["/league/season", "/league/standings"].map((path) => ({
@@ -1223,6 +1255,40 @@ async function run(browser: Browser, test: Case): Promise<Finding[]> {
       .getByRole("heading", { name: /Supply (vote|results)/ })
       .waitFor();
     await page.waitForTimeout(900);
+  }
+  if (state === "match-attack") {
+    await page
+      .getByRole("button", { name: "Goblin Guide", exact: true })
+      .click();
+    await page.getByRole("button", { name: "View Alex’s board" }).click();
+    // The assignment must have been made: Attack is offered only then.
+    await page
+      .getByRole("button", { name: "Attack", exact: true })
+      .and(page.locator(":enabled"))
+      .waitFor();
+    await page.waitForTimeout(1100);
+  }
+  if (state === "match-block") {
+    await page.getByRole("button", { name: "View the whole table" }).click();
+    await page.locator('[data-match-table="overview"]').waitFor();
+    await page.waitForTimeout(900);
+    const blocker = page.getByRole("button", {
+      name: "Mogg War Marshal",
+      exact: true,
+    });
+    // On a small screen the whole table is a map, and blocks are made from a board view.
+    if (await blocker.isVisible()) {
+      await blocker.click();
+      await page
+        .getByRole("button", { name: /Alex’s Krenko, Mob Boss/ })
+        .click();
+      // The link must have been made: Block is offered only then.
+      await page
+        .getByRole("button", { name: "Block", exact: true })
+        .and(page.locator(":enabled"))
+        .waitFor();
+    }
+    await page.waitForTimeout(1100);
   }
   if (state === "match-opponent") {
     await page.getByRole("button", { name: "View Alex’s board" }).click();
