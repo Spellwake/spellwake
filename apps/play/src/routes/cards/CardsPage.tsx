@@ -14,7 +14,7 @@ import {
   parseAsStringLiteral,
   useQueryStates,
 } from "nuqs";
-import { AnimatePresence } from "motion/react";
+import { AnimatePresence, motion } from "motion/react";
 import { ChevronDown, Search } from "lucide-react";
 import {
   ActionButton,
@@ -45,7 +45,10 @@ import {
   type Rarity,
   type SortKey,
 } from "../../collection/card-sources";
+import { useArrival } from "../../lib/arrival";
 import { useDeviceClass, useShellLayout } from "../../lib/display-scale";
+import { motionLanguage as m } from "../../lib/motion";
+import { flyToDetail } from "./card-flight";
 import { CardFace, type ArtState } from "./CardFace";
 import { CardFilters } from "./CardFilters";
 import { FilterPanel } from "./FilterPanel";
@@ -255,6 +258,11 @@ export function CardsPage({ source }: { source: CardsSource }): ReactElement {
       : []),
   ];
 
+  // A dense grid takes a shorter beat between tiles than a list of rows.
+  const arrival = useArrival(matches.length > 0, {
+    stagger: m.stagger / 2,
+    most: 14,
+  });
   const failure = ready?.failure ?? null;
   const messages = [
     ...(failure && dismissed !== failure
@@ -347,8 +355,8 @@ export function CardsPage({ source }: { source: CardsSource }): ReactElement {
             tabIndex={-1}
           >
             <ul className={s.grid}>
-              {matches.map(({ card, printing: shown }) => (
-                <li key={card.id}>
+              {matches.map(({ card, printing: shown }, index) => (
+                <motion.li key={card.id} {...arrival.item(index)}>
                   <button
                     type="button"
                     className={s.tile}
@@ -358,9 +366,14 @@ export function CardsPage({ source }: { source: CardsSource }): ReactElement {
                       ? {}
                       : { "aria-pressed": card.id === chosen?.card.id })}
                     aria-label={`${card.name}, ${copiesLabel(card.copies)}, ${printingLabel(shown)}`}
-                    onClick={() => {
-                      void setParams({ card: card.id, printing: null });
-                      if (isCompact) setIsInspecting(true);
+                    onClick={(event) => {
+                      const choose = () => {
+                        void setParams({ card: card.id, printing: null });
+                        if (isCompact) setIsInspecting(true);
+                      };
+                      // Beside the gallery, the chosen card travels into its details.
+                      if (isCompact || card.id === chosen?.card.id) choose();
+                      else flyToDetail(event.currentTarget, choose);
                     }}
                   >
                     <span className={s.tileFace}>
@@ -374,7 +387,7 @@ export function CardsPage({ source }: { source: CardsSource }): ReactElement {
                       <span className={s.printing}>{printingLabel(shown)}</span>
                     </span>
                   </button>
-                </li>
+                </motion.li>
               ))}
             </ul>
             {ready?.isAppending && (
