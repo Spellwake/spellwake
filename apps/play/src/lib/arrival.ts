@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import "./arrival.css";
 import { motionLanguage as m } from "./motion";
 
 /** What a group's arrival is made of. Every value has a default from the motion language. */
@@ -41,6 +42,12 @@ export function useArrival(
   item: (index: number) => ArrivalProps;
   /** When that item starts, in seconds, or null once the arrival is over. */
   delayOf: (index: number) => number | null;
+  /**
+   * For a list whose items are drawn by other components: spread on the list
+   * itself, and its children arrive the same way by style alone, at the
+   * language's own beat.
+   */
+  group: { "data-arriving"?: "" };
 } {
   const {
     distance = m.travel / 2,
@@ -60,6 +67,7 @@ export function useArrival(
     landed ? null : lead + Math.min(index, most) * stagger;
   return {
     delayOf,
+    group: ready && !landed ? { "data-arriving": "" } : {},
     item: (index) => ({
       initial: landed ? false : { opacity: 0, y: distance },
       animate: { opacity: 1, y: 0 },

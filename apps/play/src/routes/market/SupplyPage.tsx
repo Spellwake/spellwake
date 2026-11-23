@@ -22,6 +22,7 @@ import { PackWrapper } from "../packs/PackWrapper";
 import { COIN } from "./ListingDialogs";
 import { BuyPacksDialog } from "./BuyPacksDialog";
 import { VoteDialog } from "./VoteDialog";
+import { useArrival } from "../../lib/arrival";
 import * as s from "./supply.css";
 
 const AVAILABILITIES = Object.keys(AVAILABILITY_LABELS) as Availability[];
@@ -120,6 +121,8 @@ export function SupplyPage({ source }: { source: SupplySource }): ReactElement {
     () => (ready ? matchTiles(ready.tiles, params.q, params.availability) : []),
     [ready, params.q, params.availability],
   );
+
+  const arrival = useArrival(shown.length > 0);
 
   // A purchase in flight or unconfirmed keeps its dialog, even after a reload.
   const purchaseTile = ready?.purchase?.tileId ?? null;
@@ -226,7 +229,7 @@ export function SupplyPage({ source }: { source: SupplySource }): ReactElement {
 
       {shown.length > 0 ? (
         <>
-          <ul className={s.gallery} aria-label="Sets">
+          <ul className={s.gallery} aria-label="Sets" {...arrival.group}>
             {shown.map((tile) => (
               <Tile
                 key={tile.id}
