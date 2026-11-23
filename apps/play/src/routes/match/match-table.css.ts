@@ -241,6 +241,8 @@ export const seatAnchor = style({
       boxShadow: `0 0 0 3PX ${copper}, 0 0 18PX ${copper}99`,
     },
     // A player who may be dealt the damage being assigned, or a spell's target.
+    // A player who is out of the game stays in their seat, muted.
+    "&[data-out]": { opacity: 0.58 },
     '&[data-recipient="marked"]': {
       boxShadow: `0 0 0 2PX ${ivory}, 0 0 14PX ${ivory}66`,
     },

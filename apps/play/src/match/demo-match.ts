@@ -8,6 +8,7 @@ import {
   PREVIEW_VIEWER,
   previewAttackDecision,
   previewBlockDecision,
+  previewConcede,
   previewDamageDecision,
   previewResolveTop,
   previewResponses,
@@ -39,16 +40,24 @@ export function useDemoMatch(
 ): MatchSource {
   const [snapshot, setSnapshot] = useState<PlayerSnapshot>(initial);
   const [commandError, setCommandError] = useState<string | null>(null);
-  const [messages, setMessages] = useState<MatchChatEntry[]>([
-    {
-      id: "demo-chat-1",
-      senderId: OPPONENT_SEAT,
-      senderName: "Alex",
-      body: "Good luck, have fun!",
-      sentAt: new Date().toISOString(),
+  const [messages, setMessages] = useState<MatchChatEntry[]>(() =>
+    (
+      [
+        [1, "Good luck, everyone."],
+        [2, "Good luck!"],
+        [3, "Nice opening."],
+        [4, "Your turn, Alex."],
+        [5, "Ready."],
+      ] as const
+    ).map(([seat, body], index) => ({
+      id: `demo-chat-${index + 1}`,
+      senderId: PREVIEW_SEATS[seat].seatId,
+      senderName: PREVIEW_SEATS[seat].name,
+      body,
+      sentAt: new Date(Date.UTC(2026, 10, 22, 18, index)).toISOString(),
       isMine: false,
-    },
-  ]);
+    })),
+  );
 
   const seatNames = useMemo(
     () =>
@@ -223,9 +232,8 @@ export function useDemoMatch(
             ),
           };
         }
-        if (action.kind === "concede") {
-          onLeave();
-        }
+        // Conceding keeps you at the table to watch.
+        if (action.kind === "concede") return previewConcede(prev);
         return prev;
       });
     },
