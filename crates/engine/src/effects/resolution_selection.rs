@@ -1707,7 +1707,7 @@ impl EffectWindow {
                     ResolutionSelectionOperation::DestroySingle { object },
                 )
             }
-            Instruction::DestroyTarget => {
+            Instruction::DestroyTarget | Instruction::DestroyTargetWithoutRegeneration => {
                 if self.zone_replacement_sources()?.sources.is_empty() {
                     return Ok(false);
                 }
@@ -1764,7 +1764,9 @@ impl EffectWindow {
                     return Err(EffectError::InconsistentProgram);
                 };
                 let source = if matches!(instruction, Instruction::ExileTargetUntilSourceLeaves) {
-                    let StackKind::TriggeredAbility { source } = entry.kind() else {
+                    let (StackKind::TriggeredAbility { source }
+                    | StackKind::ActivatedAbility { source }) = entry.kind()
+                    else {
                         return Err(EffectError::InconsistentProgram);
                     };
                     if self
@@ -2498,6 +2500,7 @@ impl EffectWindow {
             | Instruction::RemoveCreatureCounters { .. }
             | Instruction::UntapControlledLands
             | Instruction::UntapControlledCreatures
+            | Instruction::SetGroupTapped { .. }
             | Instruction::ReturnCardsExiledWithLink(_)
             | Instruction::ChooseAndReturnOwnGraveyardCardsByType
             | Instruction::TargetDamagesItsControllersOtherCreatures
@@ -2511,6 +2514,7 @@ impl EffectWindow {
             | Instruction::RevealTopAndRemoveAttackerIfForest
             | Instruction::DamageCapturedBlocker(_)
             | Instruction::ChangeControlledPlaneswalkers { .. }
+            | Instruction::ChangeGroup { .. }
             | Instruction::ChangeAbilitySource { .. }
             | Instruction::GiveControlOfAbilitySource
             | Instruction::UntapAndControlCreatures
@@ -2522,6 +2526,7 @@ impl EffectWindow {
             | Instruction::RepeatOpponentLifeLoss
             | Instruction::OpponentsLoseAndControllerGains(_)
             | Instruction::AdjustEachOpponentLife { .. }
+            | Instruction::AdjustPlayersLife { .. }
             | Instruction::CreatePreventionShield { .. }
             | Instruction::CreateReflectingShield
             | Instruction::CreateDamageMultiplier { .. }
@@ -2696,6 +2701,7 @@ impl EffectWindow {
             | Instruction::PutChargeCounterOnSource
             | Instruction::PutBlessingCounterOnSource
             | Instruction::PutNamedCounterOnSource { .. }
+            | Instruction::PutCountersOnSubject { .. }
             | Instruction::PutQuestCounterOnSource
             | Instruction::PutStorageCounterOnSource
             | Instruction::AbilitySourceControllerLosesLife(_)
@@ -4099,7 +4105,7 @@ impl EffectWindow {
             }
             (
                 ResolutionSelectionOperation::DestroySingle { object },
-                Instruction::DestroyTarget,
+                Instruction::DestroyTarget | Instruction::DestroyTargetWithoutRegeneration,
             ) if self
                 .instruction_target_at(entry, Some(cursor.instruction))?
                 .choice()

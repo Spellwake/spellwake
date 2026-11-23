@@ -37,7 +37,7 @@ export const playerManaSpendSchema = z.strictObject({
 });
 export const playerRestrictedManaSpendSchema = z.strictObject({
   color: playerManaColorSchema,
-  restriction: z.enum(["planeswalker-spell", "colorless-spell", "commander-spell", "colorless-eldrazi-spell-or-ability", "noncreature-spell", "artifact-spell-or-ability", "creature-spell-of-type", "creature-spell-or-ability-of-type"]),
+  restriction: z.enum(["planeswalker-spell", "colorless-spell", "commander-spell", "colorless-eldrazi-spell-or-ability", "noncreature-spell", "artifact-spell-or-ability", "not-nonartifact-spell", "creature-spell-of-type", "creature-spell-or-ability-of-type"]),
   creatureType: playerEnglishLabelSchema.optional(),
   amount: rulesCountSchema.refine((v) => v !== "0"),
 }).refine((entry) => entry.creatureType === undefined || entry.restriction === "creature-spell-of-type" || entry.restriction === "creature-spell-or-ability-of-type");

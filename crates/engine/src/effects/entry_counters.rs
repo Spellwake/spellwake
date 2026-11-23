@@ -674,7 +674,17 @@ impl EffectWindow {
                     EntryCounterAbility::FixedMinusOne(n) => {
                         placement.minus_one = placement.minus_one.plus(n)
                     }
-                    EntryCounterAbility::DynamicCounter { kind, amount } => {
+                    EntryCounterAbility::DynamicCounter { kind, amount }
+                    | EntryCounterAbility::ConditionalCounter { kind, amount, .. } => {
+                        if let EntryCounterAbility::ConditionalCounter { condition, .. } = ability {
+                            let left =
+                                self.resolve_value_expr_at(controller, &condition.left, None)?;
+                            let right =
+                                self.resolve_value_expr_at(controller, &condition.right, None)?;
+                            if !condition.comparison.evaluate(&left, &right) {
+                                continue;
+                            }
+                        }
                         let resolved = if amount.is_chosen_x() {
                             spell
                                 .and_then(|entry| entry.chosen_x().cloned())

@@ -56,6 +56,8 @@ impl EffectWindow {
         let source = match entry.kind() {
             StackKind::ActivatedAbility { source } => source.id(),
             StackKind::TriggeredAbility { source } => source.id(),
+            StackKind::CardSpell(card) => *card,
+            StackKind::SpellCopy { .. } => return self.advance_instruction(),
             _ => return Err(EffectError::InconsistentProgram),
         };
         self.resolution_cursor_mut()
@@ -63,8 +65,9 @@ impl EffectWindow {
             .results
             .shuffled_source_owner = None;
         let Some(object) = self.window.cards().get(source).filter(|object| {
-            object.zone() == ObjectZone::Battlefield
-                && self.window.cards().phased_out_under(source).is_none()
+            (object.zone() == ObjectZone::Battlefield
+                && self.window.cards().phased_out_under(source).is_none())
+                || object.zone() == ObjectZone::Stack
         }) else {
             return self.advance_instruction();
         };

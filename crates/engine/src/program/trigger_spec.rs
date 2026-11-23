@@ -69,6 +69,8 @@ pub enum DiesTriggerMode {
     DamagedBySource,
     /// Death trigger granted by paying blitz.
     Blitz,
+    /// Permanent put into a graveyard or command zone from the battlefield.
+    OrCommandZone,
 }
 
 /// Player scope for step and spell-cast triggers.
@@ -105,10 +107,22 @@ pub enum AttackTriggerMode {
     AtOpponentOrPlaneswalker,
     /// Controller attacks a player with one or more equipped creatures (cohorts by defending player).
     EquippedAtPlayer,
+    /// A matching creature attacks the ability controller directly (not a planeswalker).
+    AtController,
+    /// A matching creature attacks an opponent of the ability controller directly.
+    AtOpponent,
+    /// A matching creature attacks any player directly.
+    AtPlayer,
+    /// A matching creature attacks a planeswalker.
+    AtPlaneswalker,
+    /// A matching creature attacks the enchanted player.
+    AtEnchantedPlayer,
+    /// At least `u8` matching creatures attack together in a single attack declaration.
+    GroupAtLeast(u8),
 }
 
 /// Block-declaration matching mode.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum BlockTriggerKind {
     BecomesBlocked {
         capture_defender: bool,
@@ -124,6 +138,10 @@ pub enum BlockTriggerKind {
     BlocksOrBlockedByEach {
         required_subtype: Option<CreatureTypeId>,
     },
+    /// Once per blocker matching `ObjectFilter` blocking `subject`.
+    BlockedByMatching(Box<ObjectFilter>),
+    /// Once per attacker matching `ObjectFilter` blocked by `subject`.
+    BlocksMatching(Box<ObjectFilter>),
 }
 
 /// Damage recipient predicate on a `DealsDamage` trigger.
@@ -144,6 +162,12 @@ pub enum DamageTriggerRecipient {
 pub enum CounterTriggerKind {
     /// One or more +1/+1 counters placed on `subject`.
     PlusOnePlaced { by_controller_only: bool },
+    /// One or more counters of `kind` (or any counter if `None`) placed or removed on `subject`.
+    CounterChanged {
+        kind: Option<CounterKind>,
+        added: bool,
+        by_controller_only: bool,
+    },
     /// Last defense counter removed from source battle.
     LastDefenseRemoved,
     /// Lore counter count crossed chapter `u8` on source Saga.
@@ -181,6 +205,8 @@ pub enum PlayerTriggerAction {
     Scried,
     Surveilled,
     ArtifactTappedForMana,
+    /// Any battlefield permanent matching `ObjectFilter` was tapped for mana.
+    PermanentTappedForMana(ObjectFilter),
     SagaFinalChapterResolved,
     /// Player targeted an opponent, anything an opponent controls, or a card in an opponent's graveyard (CR 700.13).
     CommittedCrime,
@@ -336,6 +362,11 @@ pub enum TriggerEvent {
     ReturnedToHand {
         subject: ObjectFilter,
     },
+    /// A card matching `subject` leaves a player's graveyard.
+    LeavesGraveyard {
+        subject: ObjectFilter,
+        player: PlayerRelation,
+    },
     StepBegan {
         step: Step,
         player: TriggerPlayerScope,
@@ -451,6 +482,7 @@ impl TriggerEvent {
             | Self::PutIntoGraveyard { subject, .. }
             | Self::Exiled { subject, .. }
             | Self::ReturnedToHand { subject }
+            | Self::LeavesGraveyard { subject, .. }
             | Self::DealtDamage { subject, .. }
             | Self::Targeted { subject, .. }
             | Self::CountersChanged { subject, .. }
@@ -465,18 +497,24 @@ impl TriggerEvent {
             }
             Self::BlocksOrBlocked { subject, kind } => {
                 subject.rewrite_creature_type(from, to);
-                if let BlockTriggerKind::BlocksOrBlockedByEach {
-                    required_subtype: Some(subtype),
-                } = kind
-                {
-                    word(subtype);
+                match kind {
+                    BlockTriggerKind::BlocksOrBlockedByEach {
+                        required_subtype: Some(subtype),
+                    } => word(subtype),
+                    BlockTriggerKind::BlockedByMatching(other)
+                    | BlockTriggerKind::BlocksMatching(other) => {
+                        other.rewrite_creature_type(from, to);
+                    }
+                    _ => {}
                 }
             }
             Self::StateThreshold(StateThresholdKind::ControlledSubtype { subtype, .. }) => {
                 word(subtype);
             }
             Self::PlayerAction {
-                action: PlayerTriggerAction::Sacrificed(filter),
+                action:
+                    PlayerTriggerAction::Sacrificed(filter)
+                    | PlayerTriggerAction::PermanentTappedForMana(filter),
                 ..
             } => filter.rewrite_creature_type(from, to),
             Self::AnyOf(events) => {
@@ -515,6 +553,7 @@ impl TriggerEvent {
             | Self::PutIntoGraveyard { subject, .. }
             | Self::Exiled { subject, .. }
             | Self::ReturnedToHand { subject }
+            | Self::LeavesGraveyard { subject, .. }
             | Self::DealtDamage { subject, .. }
             | Self::Targeted { subject, .. }
             | Self::CountersChanged { subject, .. }
@@ -530,11 +569,15 @@ impl TriggerEvent {
             }
             Self::BlocksOrBlocked { subject, kind } => {
                 subject.validate_vocabulary(vocabulary)?;
-                if let BlockTriggerKind::BlocksOrBlockedByEach {
-                    required_subtype: Some(subtype),
-                } = *kind
-                {
-                    check(subtype)?;
+                match kind {
+                    BlockTriggerKind::BlocksOrBlockedByEach {
+                        required_subtype: Some(subtype),
+                    } => check(*subtype)?,
+                    BlockTriggerKind::BlockedByMatching(other)
+                    | BlockTriggerKind::BlocksMatching(other) => {
+                        other.validate_vocabulary(vocabulary)?;
+                    }
+                    _ => {}
                 }
                 Ok(())
             }
@@ -542,7 +585,9 @@ impl TriggerEvent {
                 check(*subtype)
             }
             Self::PlayerAction {
-                action: PlayerTriggerAction::Sacrificed(filter),
+                action:
+                    PlayerTriggerAction::Sacrificed(filter)
+                    | PlayerTriggerAction::PermanentTappedForMana(filter),
                 ..
             } => filter.validate_vocabulary(vocabulary),
             Self::AnyOf(events) => {

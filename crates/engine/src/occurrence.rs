@@ -1017,6 +1017,11 @@ pub enum RulesOccurrence {
         source: ObjectId,
         actor: SeatId,
     },
+    PermanentTappedForMana {
+        source: ObjectId,
+        actor: SeatId,
+        appearance: Box<SupportedAppearance>,
+    },
     CardDrawOrdinal {
         player: SeatId,
         number: RulesInteger,

@@ -1901,6 +1901,7 @@ impl EffectWindow {
                     .and_then(|ops| ops.get(*instruction)),
                 Some(
                     Instruction::DestroyGroupWithoutRegeneration(_)
+                        | Instruction::DestroyTargetWithoutRegeneration
                         | Instruction::DestroyCapturedCombatCreature {
                             no_regeneration: true
                         }

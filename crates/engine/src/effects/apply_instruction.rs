@@ -17,7 +17,11 @@ impl EffectWindow {
             .ok_or(EffectError::WrongResolutionFrame)?;
         let bound = self.instruction_target(&entry)?;
         let choice = bound.choice();
-        let target = choice.target;
+        let target = self
+            .resolution_cursor()
+            .and_then(|c| c.results.returned_target_permanent)
+            .map(TargetRef::Object)
+            .unwrap_or(choice.target);
         let before = self.rules_snapshot(None)?;
         enum InstructionCut {
             Ready(RulesOccurrence),
@@ -176,6 +180,7 @@ impl EffectWindow {
             | Instruction::PutChargeCounterOnSource
             | Instruction::PutBlessingCounterOnSource
             | Instruction::PutNamedCounterOnSource { .. }
+            | Instruction::PutCountersOnSubject { .. }
             | Instruction::PutQuestCounterOnSource
             | Instruction::PutStorageCounterOnSource
             | Instruction::AbilitySourceControllerLosesLife(_)
@@ -199,12 +204,14 @@ impl EffectWindow {
             | Instruction::RemoveCreatureCounters { .. }
             | Instruction::UntapControlledLands
             | Instruction::UntapControlledCreatures
+            | Instruction::SetGroupTapped { .. }
             | Instruction::TapAttackersAndSkipNextUntap
             | Instruction::AttachOnEntry { .. }
             | Instruction::ControlledSubtypeDamagesAttacker(_)
             | Instruction::RevealTopAndRemoveAttackerIfForest
             | Instruction::DamageCapturedBlocker(_)
             | Instruction::ChangeControlledPlaneswalkers { .. }
+            | Instruction::ChangeGroup { .. }
             | Instruction::ChangeAbilitySource { .. }
             | Instruction::GiveControlOfAbilitySource
             | Instruction::UntapAndControlCreatures
@@ -216,6 +223,7 @@ impl EffectWindow {
             | Instruction::RepeatOpponentLifeLoss
             | Instruction::OpponentsLoseAndControllerGains(_)
             | Instruction::AdjustEachOpponentLife { .. }
+            | Instruction::AdjustPlayersLife { .. }
             | Instruction::BoostSaddledAttacker { .. }
             | Instruction::SetControlledCreatureSizeToHand
             | Instruction::ModifyGroupByAmount { .. }
@@ -737,10 +745,19 @@ impl EffectWindow {
                     .get(target)
                     .ok_or(EffectError::InconsistentProgram)?
                     .owner();
+                let materialized = parts.materialize_with_eval(
+                    &locals,
+                    entry.controller(),
+                    owner,
+                    |expr| {
+                        self.resolve_value_expr(entry.controller(), expr)
+                            .map_err(|_| crate::characteristics::CharacteristicInvariantError::NoEligibleComponent)
+                    },
+                )?;
                 InstructionCut::Continuous(self.characteristics.add_effect(
                     entry.id(),
                     target,
-                    parts.materialize(&locals, entry.controller(), owner)?,
+                    materialized,
                     duration,
                 )?)
             }
@@ -834,8 +851,14 @@ impl EffectWindow {
                 };
                 let locals = self
                     .resolution_state()
-                    .ok_or(EffectError::WrongResolutionFrame)?;
-                let parts = parts.materialize(locals.locals(), entry.controller(), owner)?;
+                    .ok_or(EffectError::WrongResolutionFrame)?
+                    .locals()
+                    .clone();
+                let parts =
+                    parts.materialize_with_eval(&locals, entry.controller(), owner, |expr| {
+                        self.resolve_value_expr(entry.controller(), expr)
+                            .map_err(|_| crate::characteristics::CharacteristicInvariantError::NoEligibleComponent)
+                    })?;
                 InstructionCut::Continuous(self.characteristics.add_effect(
                     entry.id(),
                     target,
@@ -942,34 +965,63 @@ impl EffectWindow {
                 if !resolved.is_positive() {
                     return Ok(());
                 }
-                let old = self.counters_of_kind(object, kind);
-                let added =
-                    permanent_counters::effect_counter_multiplier(&before.view().evaluated, object)
-                        .times(&resolved);
-                let after = old.plus(&added);
-                self.characteristics
-                    .named_permanent_counters_mut(kind)
-                    .ok_or(EffectError::InconsistentProgram)?
-                    .insert(object, after.clone());
-                if kind.keyword_counter_ability().is_some() {
-                    self.characteristics
-                        .refresh_keyword_counter_grant(entry.id(), object, kind)?;
-                }
-                let occ = if kind == CounterKind::Loyalty {
-                    RulesOccurrence::LoyaltyCountersChanged {
+                if matches!(kind, CounterKind::PlusOne | CounterKind::MinusOne) {
+                    let raw = if kind == CounterKind::PlusOne {
+                        PowerToughnessCounters {
+                            plus_one: resolved,
+                            minus_one: 0.into(),
+                        }
+                    } else {
+                        PowerToughnessCounters {
+                            plus_one: 0.into(),
+                            minus_one: resolved,
+                        }
+                    };
+                    let counters =
+                        self.adjusted_pt_counters(&before.view().evaluated, object, raw, None)?;
+                    let previous = self.characteristics.counters(object);
+                    self.characteristics.place_counters(object, &counters)?;
+                    InstructionCut::Counters {
                         object,
-                        before: old,
-                        after,
+                        before: previous,
+                        added: counters,
+                        after: self.characteristics.counters(object),
                     }
                 } else {
-                    RulesOccurrence::PermanentCounterChanged {
+                    let old = self.counters_of_kind(object, kind);
+                    let added = permanent_counters::effect_counter_multiplier(
+                        &before.view().evaluated,
                         object,
-                        kind,
-                        before: old,
-                        after,
+                    )
+                    .times(&resolved);
+                    let after = old.plus(&added);
+                    self.characteristics
+                        .named_permanent_counters_mut(kind)
+                        .ok_or(EffectError::InconsistentProgram)?
+                        .insert(object, after.clone());
+                    if kind.keyword_counter_ability().is_some() {
+                        self.characteristics.refresh_keyword_counter_grant(
+                            entry.id(),
+                            object,
+                            kind,
+                        )?;
                     }
-                };
-                InstructionCut::Ready(occ)
+                    let occ = if kind == CounterKind::Loyalty {
+                        RulesOccurrence::LoyaltyCountersChanged {
+                            object,
+                            before: old,
+                            after,
+                        }
+                    } else {
+                        RulesOccurrence::PermanentCounterChanged {
+                            object,
+                            kind,
+                            before: old,
+                            after,
+                        }
+                    };
+                    InstructionCut::Ready(occ)
+                }
             }
             Instruction::PutPowerToughnessCounters { counters } => {
                 let TargetRef::Object(target) = target else {
@@ -1007,6 +1059,9 @@ impl EffectWindow {
                 };
                 let previous = movement.before.id();
                 let object = movement.after.id();
+                if let Some(cursor) = self.resolution_cursor_mut() {
+                    cursor.results.returned_target_permanent = Some(object);
+                }
                 self.settled_entry_destinations.remove(&previous);
                 self.stage_resolution_entry_choice(previous, object)?;
                 self.characteristics.register_battlefield_entry(object)?;
@@ -1066,6 +1121,7 @@ impl EffectWindow {
                 return Err(EffectError::InconsistentProgram);
             }
             Instruction::DestroyTarget
+            | Instruction::DestroyTargetWithoutRegeneration
             | Instruction::ExileTarget
             | Instruction::ImprintTargetLand
             | Instruction::ImprintTargetCreature
@@ -1075,7 +1131,9 @@ impl EffectWindow {
             | Instruction::ExileTargetUntilOpponentMonarch
             | Instruction::ReturnToOwnersHand => {
                 let linked_source = if instruction == Instruction::ExileTargetUntilSourceLeaves {
-                    let StackKind::TriggeredAbility { source } = entry.kind() else {
+                    let (StackKind::TriggeredAbility { source }
+                    | StackKind::ActivatedAbility { source }) = entry.kind()
+                    else {
                         return Err(EffectError::InconsistentProgram);
                     };
                     let source = source.id();
@@ -1092,7 +1150,7 @@ impl EffectWindow {
                     None
                 };
                 let (destination, reason) = match instruction {
-                    Instruction::DestroyTarget => {
+                    Instruction::DestroyTarget | Instruction::DestroyTargetWithoutRegeneration => {
                         (ObjectDestination::Graveyard, ZoneReason::Destroyed)
                     }
                     Instruction::ExileTarget
@@ -1132,8 +1190,10 @@ impl EffectWindow {
                     destination,
                 )?;
                 self.window = window;
-                if instruction == Instruction::DestroyTarget
-                    && let crate::stack_window::StackExit::Object(movement) = &exit
+                if matches!(
+                    instruction,
+                    Instruction::DestroyTarget | Instruction::DestroyTargetWithoutRegeneration
+                ) && let crate::stack_window::StackExit::Object(movement) = &exit
                     && matches!(movement.after.zone(), ObjectZone::Graveyard(_))
                 {
                     self.resolution_cursor_mut()
