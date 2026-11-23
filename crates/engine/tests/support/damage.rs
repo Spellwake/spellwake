@@ -42,6 +42,7 @@ pub fn application(game: &GameState, effect: impl Into<DamageEffectId>) -> Damag
         | DamageEffectId::StaticPreventionWithExile(_, _)
         | DamageEffectId::CombatDamageToMill(_, _)
         | DamageEffectId::RemovePlusOneToPreventDamage(_, _)
+        | DamageEffectId::ShieldCounter(_)
         | DamageEffectId::StaticDouble(_)
         | DamageEffectId::DoubleDamageFromEquippedCreature(_)
         | DamageEffectId::DoubleDamageToEquippedCreature(_)

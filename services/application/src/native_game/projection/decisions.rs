@@ -847,6 +847,15 @@ impl Projection<'_, '_> {
                             entry_color_offers: vec![], entry_reveal_offers: vec![],
                         })
                     }
+                    PileChoice::OptionalUpTo { looked, eligible, max } => {
+                        let inspected = looked.iter().map(|&id| self.revealed_library_card_name(id)).collect::<Result<_, _>>()?;
+                        let eligible = eligible.iter().map(|&id| self.option(NativeReference::Object(id), self.revealed_library_card_name(id)?)).collect::<Result<_, _>>()?;
+                        (DecisionKind::LibrarySearch, PlayerDomain::LibrarySearch {
+                            maximum: Some(*max), mode: PlayerSearchMode::Single, required: false,
+                            shared_land_type: false, forest_and_plains: false, inspected, eligible,
+                            entry_color_offers: vec![], entry_reveal_offers: vec![],
+                        })
+                    }
                     PileChoice::OneToHand(ids) | PileChoice::OneToHandRestBottom(ids) | PileChoice::Creature(ids) | PileChoice::Divide(ids) | PileChoice::BottomOrder(ids) | PileChoice::GraveyardOrder(ids) => {
                         let mut options=Vec::with_capacity(ids.len());
                         for &id in ids {
@@ -1187,6 +1196,7 @@ impl Projection<'_, '_> {
                             format!("Prevent all but 1 damage from {name}")
                         },
                         DamageEffectId::RemovePlusOneToPreventDamage(_, _) => "Prevent the damage and remove a +1/+1 counter".into(),
+                        DamageEffectId::ShieldCounter(_) => "Prevent the damage and remove a shield counter".into(),
                         DamageEffectId::CombatDamageToMill(_, _) => "Mill cards instead of taking this combat damage".into(),
                         DamageEffectId::StaticPreventionWithExile(_, _) => "Prevent the damage and exile cards from the library".into(),
                         DamageEffectId::StaticPrevention(_) => "Apply damage prevention".into(),
@@ -1361,6 +1371,7 @@ impl Projection<'_, '_> {
                 spellwake_engine::effects::PileChoice::OneToHand(_) => "Choose one card for your hand. The remaining cards go to your graveyard.".to_owned(),
                 spellwake_engine::effects::PileChoice::Creature(_) => "Choose a revealed creature to put onto the battlefield.".to_owned(),
                 spellwake_engine::effects::PileChoice::OptionalCreatureToBattlefield { .. } => "You may put one eligible creature card onto the battlefield.".to_owned(),
+                spellwake_engine::effects::PileChoice::OptionalUpTo { max, .. } => format!("You may choose up to {max} eligible card(s)."),
                 spellwake_engine::effects::PileChoice::Divide(_) | spellwake_engine::effects::PileChoice::DividePermanents(_) => "Choose cards for pile 1. The remaining cards form pile 2.".to_owned(),
                 spellwake_engine::effects::PileChoice::BottomOrder(_) => "Order the other pile from top to bottom on the bottom of your library.".to_owned(),
                 spellwake_engine::effects::PileChoice::GraveyardOrder(_) => "Order the cards from top to bottom in your graveyard.".to_owned(),

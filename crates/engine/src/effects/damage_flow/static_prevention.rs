@@ -120,6 +120,35 @@ impl EffectWindow {
                 }
             }
         }
+        // CR 122.1c: If a permanent with a shield counter on it would be dealt damage,
+        // prevent that damage and remove a shield counter from it.
+        for component in batch
+            .components()
+            .filter(|c| c.remaining().is_positive() && c.can_prevent_damage())
+        {
+            let target = component.attempt().target;
+            let (DamageRecipient::Creature(id)
+            | DamageRecipient::Planeswalker(id)
+            | DamageRecipient::Battle(id)) = target
+            else {
+                continue;
+            };
+            if evaluated
+                .get(id)
+                .is_some_and(|p| p.zone == ObjectZone::Battlefield)
+                && self.counters_of_kind(id, CounterKind::Shield).is_positive()
+            {
+                let application = DamageApplication {
+                    effect: DamageEffectId::ShieldCounter(id),
+                    scope: DamageScope::Recipient(target),
+                };
+                if !batch.consumed_shields().contains(&application) {
+                    out.entry(application)
+                        .or_default()
+                        .push(component.attempt().id);
+                }
+            }
+        }
         out
     }
 
@@ -226,7 +255,8 @@ impl EffectWindow {
             DamageEffectId::StaticPrevention(source)
             | DamageEffectId::StaticPreventionWithExile(source, _)
             | DamageEffectId::CombatDamageToMill(source, _)
-            | DamageEffectId::RemovePlusOneToPreventDamage(source, _) => source,
+            | DamageEffectId::RemovePlusOneToPreventDamage(source, _)
+            | DamageEffectId::ShieldCounter(source) => source,
             _ => return Err(EffectError::WrongDamageFrame),
         };
         let DamageScope::Recipient(recipient) = application.scope else {
@@ -298,6 +328,14 @@ impl EffectWindow {
                     .prevent_all_with_followup(application, &eligible)?;
                 work.followups
                     .push_back(DamageFollowup::RemovePlusOneCounter(source));
+                allocations
+            }
+            DamageEffectId::ShieldCounter(..) => {
+                let (allocations, _) = work
+                    .batch
+                    .prevent_all_with_followup(application, &eligible)?;
+                work.followups
+                    .push_back(DamageFollowup::RemoveShieldCounter(source));
                 allocations
             }
             _ => work.batch.prevent_all(recipient, eligible)?,

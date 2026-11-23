@@ -22,7 +22,7 @@ mod types;
 mod world;
 
 pub use colors::{Color, ColorFilter, ColorOperation, StaticColorOperand};
-pub(crate) use evaluation::{count_permanents, evaluate};
+pub(crate) use evaluation::{count_permanents, evaluate, selector_matches_permanent};
 pub use static_rules::*;
 pub use types::*;
 
@@ -66,10 +66,23 @@ pub(crate) struct CharacteristicState {
     pub(crate) city_blessing: BTreeSet<crate::priority::SeatId>,
     pub(crate) player_color_protection: BTreeMap<crate::priority::SeatId, BTreeSet<Color>>,
     pub(crate) experience: BTreeMap<crate::priority::SeatId, RulesInteger>,
+    /// Generic non-poison player counters (such as Energy) keyed by counter kind and seat.
+    pub(crate) player_counters:
+        BTreeMap<crate::effects::CounterKind, BTreeMap<crate::priority::SeatId, RulesInteger>>,
     /// Game-wide monarch designation, independent of the permanent that created it.
     pub(crate) monarch: Option<crate::priority::SeatId>,
     pub(crate) lore: BTreeMap<ObjectId, spellwake_contracts::RulesInteger>,
     pub(crate) life_lost_this_turn: BTreeMap<SeatId, RulesInteger>,
+    pub(crate) life_gained_this_turn: BTreeMap<SeatId, RulesInteger>,
+    pub(crate) spells_cast_this_turn: BTreeMap<SeatId, u16>,
+    pub(crate) attacked_this_turn_players: BTreeSet<SeatId>,
+    pub(crate) creatures_entered_this_turn: BTreeMap<SeatId, u16>,
+    pub(crate) permanents_left_battlefield_this_turn: BTreeMap<SeatId, u16>,
+    pub(crate) cards_discarded_this_turn: BTreeMap<SeatId, u16>,
+    pub(crate) permanents_sacrificed_this_turn: BTreeMap<SeatId, u16>,
+    pub(crate) cards_drawn_this_turn_counts: BTreeMap<SeatId, u16>,
+    pub(crate) descended_this_turn: BTreeSet<SeatId>,
+    pub(crate) committed_crime_this_turn: BTreeSet<SeatId>,
     /// Actual damage pairs retained until cleanup when a definition uses that history.
     pub(crate) creature_damage_pairs: Option<BTreeSet<(ObjectId, ObjectId)>>,
     pub(crate) vow_counters: BTreeMap<ObjectId, RulesInteger>,
@@ -85,6 +98,7 @@ pub(crate) struct CharacteristicState {
     pub(crate) chosen_entry_players: BTreeMap<ObjectId, [crate::priority::SeatId; 2]>,
     pub(crate) indestructible_counters: BTreeMap<ObjectId, RulesInteger>,
     indestructible_grants: BTreeMap<ObjectId, ContinuousEffectId>,
+    keyword_counter_grants: BTreeMap<(ObjectId, crate::effects::CounterKind), ContinuousEffectId>,
     pub(crate) page_counters: BTreeMap<ObjectId, RulesInteger>,
     pub(crate) quest_counters: BTreeMap<ObjectId, RulesInteger>,
     pub(crate) verse_counters: BTreeMap<ObjectId, RulesInteger>,
@@ -137,9 +151,20 @@ impl Default for CharacteristicState {
             city_blessing: BTreeSet::new(),
             player_color_protection: BTreeMap::new(),
             experience: BTreeMap::new(),
+            player_counters: BTreeMap::new(),
             monarch: None,
             lore: BTreeMap::new(),
             life_lost_this_turn: BTreeMap::new(),
+            life_gained_this_turn: BTreeMap::new(),
+            spells_cast_this_turn: BTreeMap::new(),
+            attacked_this_turn_players: BTreeSet::new(),
+            creatures_entered_this_turn: BTreeMap::new(),
+            permanents_left_battlefield_this_turn: BTreeMap::new(),
+            cards_discarded_this_turn: BTreeMap::new(),
+            permanents_sacrificed_this_turn: BTreeMap::new(),
+            cards_drawn_this_turn_counts: BTreeMap::new(),
+            descended_this_turn: BTreeSet::new(),
+            committed_crime_this_turn: BTreeSet::new(),
             creature_damage_pairs: None,
             vow_counters: BTreeMap::new(),
             vow_protected_players: BTreeMap::new(),
@@ -153,6 +178,7 @@ impl Default for CharacteristicState {
             chosen_entry_players: BTreeMap::new(),
             indestructible_counters: BTreeMap::new(),
             indestructible_grants: BTreeMap::new(),
+            keyword_counter_grants: BTreeMap::new(),
             page_counters: BTreeMap::new(),
             quest_counters: BTreeMap::new(),
             verse_counters: BTreeMap::new(),
@@ -502,6 +528,47 @@ impl CharacteristicState {
         Ok(())
     }
 
+    pub(crate) fn clear_keyword_counter_grant(
+        &mut self,
+        object: ObjectId,
+        kind: crate::effects::CounterKind,
+    ) {
+        if kind == crate::effects::CounterKind::Indestructible {
+            self.clear_indestructible_counter_grant(object);
+            return;
+        }
+        if let Some(id) = self.keyword_counter_grants.remove(&(object, kind)) {
+            self.resolved.remove(&id);
+        }
+    }
+
+    /// CR 122.1b & CR 613.7d: keyword counters grant their keyword in Layer 6 with a fresh timestamp.
+    pub(crate) fn refresh_keyword_counter_grant(
+        &mut self,
+        entry: StackEntryId,
+        object: ObjectId,
+        kind: crate::effects::CounterKind,
+    ) -> Result<(), CharacteristicsError> {
+        if kind == crate::effects::CounterKind::Indestructible {
+            return self.refresh_indestructible_counter_grant(entry, object);
+        }
+        let Some(keyword) = kind.keyword_counter_ability() else {
+            return Ok(());
+        };
+        let effect = self.add_effect(
+            entry,
+            object,
+            ResolvedParts(vec![ResolvedPart::Abilities(
+                AbilityChange::grant_keywords([keyword]),
+            )]),
+            ResolvedDuration::NoStatedDuration,
+        )?;
+        self.clear_keyword_counter_grant(object, kind);
+        self.keyword_counter_grants
+            .insert((object, kind), effect.id);
+        Ok(())
+    }
+
     pub(crate) fn add_effect(
         &mut self,
         creator: StackEntryId,
@@ -780,6 +847,8 @@ impl CharacteristicState {
             .retain(|object, _| live.contains(object));
         self.indestructible_grants
             .retain(|object, _| live.contains(object));
+        self.keyword_counter_grants
+            .retain(|(object, _), _| live.contains(object));
         self.page_counters.retain(|id, _| live.contains(id));
         self.quest_counters.retain(|id, _| live.contains(id));
         self.verse_counters.retain(|id, _| live.contains(id));

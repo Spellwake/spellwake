@@ -178,6 +178,91 @@ impl EffectWindow {
                     Err(EffectError::InconsistentProgram)
                 }
             }
+            ValueExpr::Add(a, b) => {
+                let lhs = self.resolve_value_expr_at(controller, a, cursor)?;
+                let rhs = self.resolve_value_expr_at(controller, b, cursor)?;
+                Ok(lhs.plus(&rhs))
+            }
+            ValueExpr::Sub(a, b) => {
+                let lhs = self.resolve_value_expr_at(controller, a, cursor)?;
+                let rhs = self.resolve_value_expr_at(controller, b, cursor)?;
+                Ok(lhs.minus(&rhs))
+            }
+            ValueExpr::DomainCount => {
+                let evaluated = self.evaluated_characteristics()?;
+                let mut basic_types = BTreeSet::new();
+                for permanent in evaluated.objects.values() {
+                    if permanent.zone == ObjectZone::Battlefield
+                        && permanent.controller == Some(controller)
+                        && permanent.has_type(CardType::Land)
+                    {
+                        for subtype in &permanent.current_land_subtypes {
+                            if let Some(basic) = subtype.basic() {
+                                basic_types.insert(basic);
+                            }
+                        }
+                    }
+                }
+                Ok(RulesInteger::from_usize(basic_types.len()))
+            }
+            ValueExpr::OpponentsCount => {
+                let opponents = self
+                    .combat_rules
+                    .opponents(self.window.participants(), controller)?;
+                Ok(RulesInteger::from_usize(opponents.len()))
+            }
+            ValueExpr::Devotion(colors) => {
+                let evaluated = self.evaluated_characteristics()?;
+                let mut total: usize = 0;
+                let matches_mana = |mt: crate::mana::ManaType| match mt {
+                    crate::mana::ManaType::White => {
+                        colors.contains(crate::characteristics::Color::White)
+                    }
+                    crate::mana::ManaType::Blue => {
+                        colors.contains(crate::characteristics::Color::Blue)
+                    }
+                    crate::mana::ManaType::Black => {
+                        colors.contains(crate::characteristics::Color::Black)
+                    }
+                    crate::mana::ManaType::Red => {
+                        colors.contains(crate::characteristics::Color::Red)
+                    }
+                    crate::mana::ManaType::Green => {
+                        colors.contains(crate::characteristics::Color::Green)
+                    }
+                    crate::mana::ManaType::Colourless => false,
+                };
+                for permanent in evaluated.objects.values() {
+                    if permanent.zone != ObjectZone::Battlefield
+                        || permanent.controller != Some(controller)
+                    {
+                        continue;
+                    }
+                    let Some(program) = self.copiable_program(permanent.object) else {
+                        continue;
+                    };
+                    let Some(cost) = program.permanent().and_then(|p| p.casting_cost.as_ref())
+                    else {
+                        continue;
+                    };
+                    for (mana_type, count) in &cost.required {
+                        if matches_mana(*mana_type) {
+                            total = total.saturating_add(count.to_usize().unwrap_or(0));
+                        }
+                    }
+                    for hybrid in &program.hybrid_symbols {
+                        let first_match = matches_mana(hybrid.first);
+                        let second_match = matches!(
+                            hybrid.alternative,
+                            crate::mana::HybridAlternative::Mana(mt) if matches_mana(mt)
+                        );
+                        if first_match || second_match {
+                            total = total.saturating_add(1);
+                        }
+                    }
+                }
+                Ok(RulesInteger::from_usize(total))
+            }
             ValueExpr::Conditional {
                 left,
                 comparison,
@@ -220,7 +305,11 @@ impl EffectWindow {
                 match *zone {
                     ValueZone::Battlefield => {
                         if let Some(role) = controller_scope {
-                            let seat = self.resolving_player_at(*role, cursor)?;
+                            let seat = if *role == crate::program::ResolvingPlayer::Controller {
+                                controller
+                            } else {
+                                self.resolving_player_at(*role, cursor)?
+                            };
                             bound_filter = bound_filter.of_player(seat);
                         }
                         let evaluated = self.evaluated_characteristics()?;
@@ -242,7 +331,11 @@ impl EffectWindow {
                         Ok(RulesInteger::from_usize(count))
                     }
                     ValueZone::Graveyard(player_role) => {
-                        let seat = self.resolving_player_at(player_role, cursor)?;
+                        let seat = if player_role == crate::program::ResolvingPlayer::Controller {
+                            controller
+                        } else {
+                            self.resolving_player_at(player_role, cursor)?
+                        };
                         if bound_filter == crate::program::ObjectFilter::any() {
                             return Ok(RulesInteger::from_usize(
                                 self.window.cards().graveyard(seat).len(),
@@ -267,7 +360,11 @@ impl EffectWindow {
                         Ok(RulesInteger::from_usize(count))
                     }
                     ValueZone::Hand(player_role) => {
-                        let seat = self.resolving_player_at(player_role, cursor)?;
+                        let seat = if player_role == crate::program::ResolvingPlayer::Controller {
+                            controller
+                        } else {
+                            self.resolving_player_at(player_role, cursor)?
+                        };
                         if bound_filter == crate::program::ObjectFilter::any() {
                             return Ok(RulesInteger::from_usize(
                                 self.window
@@ -483,6 +580,52 @@ impl EffectWindow {
                     );
                     Ok(raw.max(0.into()))
                 }
+                (
+                    ValueObjectRef::EnteringPermanent,
+                    ObjectStatKind::Power | ObjectStatKind::Toughness | ObjectStatKind::ManaValue,
+                ) => {
+                    let binding = cursor
+                        .and_then(|c| self.execution_bindings(c.entry))
+                        .and_then(|b| b.trigger.as_ref())
+                        .ok_or(EffectError::InconsistentProgram)?;
+                    let [cause] = binding.causes.members() else {
+                        return Err(EffectError::InconsistentProgram);
+                    };
+                    let after = match &cause.related {
+                        crate::occurrence::TriggerRelated::ZoneChange { after, .. }
+                        | crate::occurrence::TriggerRelated::TokenCreated { after, .. } => after,
+                        _ => return Err(EffectError::InconsistentProgram),
+                    };
+                    let id = after.object.id();
+                    if *stat == ObjectStatKind::ManaValue {
+                        return Ok(self
+                            .copiable_program(id)
+                            .map(Program::mana_value)
+                            .unwrap_or_else(|| 0.into()));
+                    }
+                    let evaluated = self.evaluated_characteristics()?;
+                    let raw = evaluated
+                        .get(id)
+                        .and_then(|o| o.power_toughness.as_ref())
+                        .map(|pt| {
+                            if *stat == ObjectStatKind::Power {
+                                pt.derived.power.clone()
+                            } else {
+                                pt.derived.toughness.clone()
+                            }
+                        })
+                        .or_else(|| {
+                            after.current_power_toughness.as_ref().map(|pt| {
+                                if *stat == ObjectStatKind::Power {
+                                    pt.power.clone()
+                                } else {
+                                    pt.toughness.clone()
+                                }
+                            })
+                        })
+                        .unwrap_or_else(|| 0.into());
+                    Ok(raw.max(0.into()))
+                }
                 (ValueObjectRef::DestructionTarget, ObjectStatKind::Toughness) => Ok(cursor
                     .and_then(|c| c.results.destruction_target_toughness.clone())
                     .unwrap_or_else(|| 0.into())
@@ -650,6 +793,10 @@ impl EffectWindow {
                     }
                 }
                 CounterSubjectRef::ControllerExperience => Ok(self.experience_counters(controller)),
+                CounterSubjectRef::ControllerEnergy => {
+                    Ok(self.player_counters_of_kind(controller, CounterKind::Energy))
+                }
+                CounterSubjectRef::ControllerPoison => Ok(self.poison_counters(controller)),
             },
             ValueExpr::AttachedCount(kind) => match kind {
                 AttachedCountKind::EquipmentOnSource
@@ -769,6 +916,94 @@ impl EffectWindow {
                         });
                     Ok(i64::from(creatures.max().is_some_and(|(_, c)| c)).into())
                 }
+                PlayerStatExpr::ControllerIsActivePlayer => {
+                    Ok(i64::from(self.window.active_player() == controller).into())
+                }
+                PlayerStatExpr::OwnGraveyardDistinctCardTypes => {
+                    let evaluated = self.evaluated_characteristics()?;
+                    let mut types = BTreeSet::new();
+                    for card in evaluated
+                        .objects
+                        .values()
+                        .filter(|c| c.zone == ObjectZone::Graveyard(controller))
+                    {
+                        types.extend(card.current_types.iter().copied());
+                    }
+                    Ok(RulesInteger::from_usize(types.len()))
+                }
+                PlayerStatExpr::ControllerLifeLostThisTurn => Ok(self
+                    .characteristics
+                    .life_lost_this_turn
+                    .get(&controller)
+                    .cloned()
+                    .unwrap_or_else(|| 0.into())),
+                PlayerStatExpr::ControllerLifeGainedThisTurn => Ok(self
+                    .characteristics
+                    .life_gained_this_turn
+                    .get(&controller)
+                    .cloned()
+                    .unwrap_or_else(|| 0.into())),
+                PlayerStatExpr::ControllerSpellsCastThisTurn => Ok(i64::from(
+                    self.characteristics
+                        .spells_cast_this_turn
+                        .get(&controller)
+                        .copied()
+                        .unwrap_or(0),
+                )
+                .into()),
+                PlayerStatExpr::ControllerAttackedThisTurn => Ok(i64::from(
+                    self.characteristics
+                        .attacked_this_turn_players
+                        .contains(&controller),
+                )
+                .into()),
+                PlayerStatExpr::ControllerDiscardedThisTurn => Ok(i64::from(
+                    self.characteristics
+                        .cards_discarded_this_turn
+                        .get(&controller)
+                        .copied()
+                        .unwrap_or(0),
+                )
+                .into()),
+                PlayerStatExpr::ControllerSacrificedThisTurn => Ok(i64::from(
+                    self.characteristics
+                        .permanents_sacrificed_this_turn
+                        .get(&controller)
+                        .copied()
+                        .unwrap_or(0),
+                )
+                .into()),
+                PlayerStatExpr::PermanentLeftBattlefieldThisTurn => Ok(i64::from(
+                    self.characteristics
+                        .permanents_left_battlefield_this_turn
+                        .get(&controller)
+                        .copied()
+                        .unwrap_or(0),
+                )
+                .into()),
+                PlayerStatExpr::CreatureEnteredUnderControlThisTurn => Ok(i64::from(
+                    self.characteristics
+                        .creatures_entered_this_turn
+                        .get(&controller)
+                        .copied()
+                        .unwrap_or(0),
+                )
+                .into()),
+                PlayerStatExpr::DescendedThisTurn => Ok(i64::from(
+                    self.characteristics
+                        .descended_this_turn
+                        .contains(&controller),
+                )
+                .into()),
+                PlayerStatExpr::CommittedCrimeThisTurn => Ok(i64::from(
+                    self.characteristics
+                        .committed_crime_this_turn
+                        .contains(&controller),
+                )
+                .into()),
+                PlayerStatExpr::ControllerHasCityBlessing => {
+                    Ok(i64::from(self.characteristics.city_blessing.contains(&controller)).into())
+                }
             },
             ValueExpr::ObjectMatches { subject, filter } => {
                 let (clause_a, _) = filter.clauses();
@@ -832,6 +1067,22 @@ impl EffectWindow {
                         };
                         payload.sacrificed_creature_subtypes.contains(&kind)
                     }
+                    MatchObjectRef::AbilitySource => {
+                        let source_id =
+                            resolve_ability_source().ok_or(EffectError::InconsistentProgram)?;
+                        let evaluated = self.evaluated_characteristics()?;
+                        let excluded = BTreeSet::new();
+                        evaluated.get(source_id).is_some_and(|permanent| {
+                            self.matches_object_filter(
+                                **filter,
+                                permanent,
+                                controller,
+                                Some(source_id),
+                                &excluded,
+                                &evaluated,
+                            )
+                        })
+                    }
                     MatchObjectRef::TargetObject => {
                         let entry = self
                             .window
@@ -845,10 +1096,9 @@ impl EffectWindow {
                         let evaluated = self.evaluated_characteristics()?;
                         let excluded = BTreeSet::new();
                         evaluated.get(object).is_some_and(|permanent| {
-                            permanent.zone == ObjectZone::Battlefield
-                                && self.matches_object_filter(
-                                    **filter, permanent, controller, None, &excluded, &evaluated,
-                                )
+                            self.matches_object_filter(
+                                **filter, permanent, controller, None, &excluded, &evaluated,
+                            )
                         })
                     }
                 };
@@ -1037,6 +1287,21 @@ impl EffectWindow {
                             crate::occurrence::TriggerRelated::CombatDamageToPlayer {
                                 amount,
                                 ..
+                            }
+                            | crate::occurrence::TriggerRelated::DamageToOpponent {
+                                amount, ..
+                            }
+                            | crate::occurrence::TriggerRelated::CombatDamageToPlaneswalker {
+                                amount,
+                                ..
+                            }
+                            | crate::occurrence::TriggerRelated::SubtypeCombatDamage {
+                                amount,
+                                ..
+                            }
+                            | crate::occurrence::TriggerRelated::DamageDealtToPermanent {
+                                amount,
+                                ..
                             } => Ok(amount.clone()),
                             _ => Err(EffectError::InconsistentProgram),
                         },
@@ -1062,6 +1327,12 @@ impl EffectWindow {
                 EventValueKind::LastSacrificeSucceeded => {
                     Ok(i64::from(cursor.is_some_and(|c| c.results.last_sacrifice)).into())
                 }
+                EventValueKind::LastActionSucceeded => {
+                    Ok(i64::from(cursor.is_some_and(|c| c.results.last_action_succeeded)).into())
+                }
+                EventValueKind::LastActionCount => Ok(cursor
+                    .and_then(|c| c.results.last_action_count.clone())
+                    .unwrap_or_else(|| 0.into())),
                 EventValueKind::SelectedGraveyardExileCreatures => {
                     Ok(RulesInteger::from_usize(cursor.map_or(0, |c| {
                         c.results.selected_graveyard_exile_creatures

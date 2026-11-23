@@ -941,6 +941,7 @@ impl Bindings {
                                         | TriggerRelated::SubtypeCombatDamage { .. }
                                         | TriggerRelated::AttachedCreatureDamaged { .. }
                                         | TriggerRelated::DamageToOpponent { .. }
+                                        | TriggerRelated::DamageDealtToPermanent { .. }
                                         | TriggerRelated::ReflexiveDiscardDamage { .. }
                                         | TriggerRelated::DamageReceived { .. }
                                         | TriggerRelated::CombatDamageToPlayer { .. }
@@ -975,6 +976,7 @@ impl Bindings {
                                         | TriggerRelated::Phased(_)
                                         | TriggerRelated::Mutated(_)
                                         | TriggerRelated::MiracleRevealed(_)
+                                        | TriggerRelated::ReflexiveTrigger
                                         | TriggerRelated::LeftGame(_) => false,
                                     }
                                 }

@@ -1,7 +1,7 @@
 //! Unified composable numeric expression used by both effect amounts and branch conditions.
 use super::{
-    AttackTriggerMode, BodyContext, CardTypeMask, CastEntryKind, Comparison, CreatureTypeSlot,
-    DamageTriggerRecipient, DefinitionError, DiesTriggerMode, FlowFacts, ObjectFilter,
+    AttackTriggerMode, BodyContext, CardTypeMask, CastEntryKind, ColorMask, Comparison,
+    CreatureTypeSlot, DefinitionError, DiesTriggerMode, FlowFacts, ObjectFilter,
     PlayerTriggerAction, ResolvingPlayer, TriggerCondition, TriggerEvent, TriggerGrouping,
     TriggerPlayerScope, TriggerSpec,
 };
@@ -43,6 +43,7 @@ pub enum ValueObjectRef {
     TargetObject,
     DyingSource,
     DyingCreature,
+    EnteringPermanent,
     DestructionTarget,
     SacrificedCreature,
     LastSacrificedCreature,
@@ -59,6 +60,8 @@ pub enum CounterSubjectRef {
     TriggerSource,
     DyingSource,
     ControllerExperience,
+    ControllerEnergy,
+    ControllerPoison,
 }
 
 /// Attached permanents counted by [`ValueExpr::AttachedCount`].
@@ -80,11 +83,25 @@ pub enum PlayerStatExpr {
     LargestHandSize,
     ControllerIsMonarch,
     ControlsGreatestCreature,
+    ControllerIsActivePlayer,
+    OwnGraveyardDistinctCardTypes,
+    ControllerLifeLostThisTurn,
+    ControllerLifeGainedThisTurn,
+    ControllerSpellsCastThisTurn,
+    ControllerAttackedThisTurn,
+    ControllerDiscardedThisTurn,
+    ControllerSacrificedThisTurn,
+    PermanentLeftBattlefieldThisTurn,
+    CreatureEnteredUnderControlThisTurn,
+    DescendedThisTurn,
+    CommittedCrimeThisTurn,
+    ControllerHasCityBlessing,
 }
 
 /// Subject tested by [`ValueExpr::ObjectMatches`] (evaluates to `1` if matched, `0` otherwise).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MatchObjectRef {
+    AbilitySource,
     RevealedTop,
     DiscardedCard,
     MovedLibraryCard,
@@ -119,6 +136,8 @@ pub enum EventValueKind {
     DamageReceived,
     CreaturesDiedThisTurn,
     LastSacrificeSucceeded,
+    LastActionSucceeded,
+    LastActionCount,
     SelectedGraveyardExileCreatures,
     SourceAttackedThisTurn,
     TriggerSourceOnBattlefield,
@@ -177,6 +196,16 @@ pub enum ValueExpr {
         divisor: NonZeroU16,
         round_up: bool,
     },
+    /// Sum of two sub-expressions.
+    Add(Box<ValueExpr>, Box<ValueExpr>),
+    /// Difference of two sub-expressions (`left - right`).
+    Sub(Box<ValueExpr>, Box<ValueExpr>),
+    /// CR 305.6: number of distinct basic land types among lands the resolving player controls (0..=5).
+    DomainCount,
+    /// Number of opponents of the resolving player.
+    OpponentsCount,
+    /// CR 700.5: controller's devotion to the specified color mask.
+    Devotion(ColorMask),
     /// Conditional numeric selection (`if left <cmp> right { then_value } else { else_value }`).
     Conditional {
         left: Box<ValueExpr>,
@@ -365,6 +394,43 @@ impl ValueExpr {
         }
     }
 
+    /// True if this expression requires a live or last-known `AbilitySource` binding.
+    #[must_use]
+    pub fn references_ability_source(&self) -> bool {
+        match self {
+            Self::ObjectStat {
+                subject: ValueObjectRef::AbilitySource,
+                ..
+            }
+            | Self::CounterCount {
+                subject: CounterSubjectRef::AbilitySource,
+                ..
+            } => true,
+            Self::Count { filter, .. } | Self::Aggregate { filter, .. } => {
+                filter.excludes_ability_source()
+            }
+            Self::Scale { expr, .. } | Self::DivConst { expr, .. } => {
+                expr.references_ability_source()
+            }
+            Self::Add(a, b) | Self::Sub(a, b) => {
+                a.references_ability_source() || b.references_ability_source()
+            }
+            Self::Conditional {
+                left,
+                right,
+                then_value,
+                else_value,
+                ..
+            } => {
+                left.references_ability_source()
+                    || right.references_ability_source()
+                    || then_value.references_ability_source()
+                    || else_value.references_ability_source()
+            }
+            _ => false,
+        }
+    }
+
     /// True if this expression reads `TargetPlayer` tapped creatures on the battlefield.
     #[must_use]
     pub fn is_target_player_tapped_creatures(&self) -> bool {
@@ -415,6 +481,10 @@ impl ValueExpr {
             Self::Scale { expr, .. } | Self::DivConst { expr, .. } => {
                 expr.rewrite_creature_type(from, to);
             }
+            Self::Add(a, b) | Self::Sub(a, b) => {
+                a.rewrite_creature_type(from, to);
+                b.rewrite_creature_type(from, to);
+            }
             Self::Conditional {
                 left,
                 right,
@@ -430,6 +500,9 @@ impl ValueExpr {
             Self::Literal(_)
             | Self::CountOtherSharingSourceSubtype
             | Self::CountAttackingController
+            | Self::DomainCount
+            | Self::OpponentsCount
+            | Self::Devotion(_)
             | Self::ObjectStat { .. }
             | Self::CounterCount { .. }
             | Self::AttachedCount(_)
@@ -463,6 +536,11 @@ impl ValueExpr {
             Self::DivConst { expr, .. } => {
                 expr.validate_amount(defined_slots, context, facts, vocabulary)
             }
+            Self::Add(a, b) | Self::Sub(a, b) => {
+                a.validate_amount(defined_slots, context, facts, vocabulary)?;
+                b.validate_amount(defined_slots, context, facts, vocabulary)
+            }
+            Self::DomainCount | Self::OpponentsCount | Self::Devotion(_) => Ok(()),
             Self::Conditional {
                 left,
                 right,
@@ -591,6 +669,22 @@ impl ValueExpr {
                         Err(DefinitionError::InvalidInstruction)
                     }
                 }
+                ValueObjectRef::EnteringPermanent => {
+                    if matches!(
+                        context,
+                        BodyContext::TriggerBound {
+                            condition: TriggerSpec {
+                                event: TriggerEvent::Enters { .. },
+                                ..
+                            },
+                            grouping: TriggerGrouping::EachOccurrence,
+                        }
+                    ) {
+                        Ok(())
+                    } else {
+                        Err(DefinitionError::InvalidInstruction)
+                    }
+                }
                 ValueObjectRef::DestructionTarget => {
                     if facts.checked_destruction_target {
                         Ok(())
@@ -706,7 +800,9 @@ impl ValueExpr {
                         Err(DefinitionError::InvalidInstruction)
                     }
                 }
-                CounterSubjectRef::ControllerExperience => Ok(()),
+                CounterSubjectRef::ControllerExperience
+                | CounterSubjectRef::ControllerEnergy
+                | CounterSubjectRef::ControllerPoison => Ok(()),
             },
             Self::AttachedCount(kind) => match kind {
                 AttachedCountKind::EquipmentOnSource
@@ -763,7 +859,20 @@ impl ValueExpr {
                 | PlayerStatExpr::CardsDrawnThisTurn
                 | PlayerStatExpr::LargestHandSize
                 | PlayerStatExpr::ControllerIsMonarch
-                | PlayerStatExpr::ControlsGreatestCreature => Ok(()),
+                | PlayerStatExpr::ControlsGreatestCreature
+                | PlayerStatExpr::ControllerIsActivePlayer
+                | PlayerStatExpr::OwnGraveyardDistinctCardTypes
+                | PlayerStatExpr::ControllerLifeLostThisTurn
+                | PlayerStatExpr::ControllerLifeGainedThisTurn
+                | PlayerStatExpr::ControllerSpellsCastThisTurn
+                | PlayerStatExpr::ControllerAttackedThisTurn
+                | PlayerStatExpr::ControllerDiscardedThisTurn
+                | PlayerStatExpr::ControllerSacrificedThisTurn
+                | PlayerStatExpr::PermanentLeftBattlefieldThisTurn
+                | PlayerStatExpr::CreatureEnteredUnderControlThisTurn
+                | PlayerStatExpr::DescendedThisTurn
+                | PlayerStatExpr::CommittedCrimeThisTurn
+                | PlayerStatExpr::ControllerHasCityBlessing => Ok(()),
             },
             Self::ObjectMatches { filter, .. } => filter
                 .validate_vocabulary(vocabulary)
@@ -890,17 +999,11 @@ impl ValueExpr {
                         context,
                         BodyContext::TriggerBound {
                             condition: TriggerSpec {
-                                event: TriggerEvent::DealsDamage {
-                                    source,
-                                    recipient: DamageTriggerRecipient::AnyPlayer,
-                                    combat_only: true,
-                                },
-                                intervening_if: None,
+                                event: TriggerEvent::DealsDamage { .. },
                                 ..
                             },
                             grouping: TriggerGrouping::EachOccurrence,
-                        } if *source == ObjectFilter::self_object()
-                            || *source == ObjectFilter::creature().controlled()
+                        }
                     ) {
                         Ok(())
                     } else {
@@ -913,13 +1016,13 @@ impl ValueExpr {
                         BodyContext::TriggerBound {
                             condition: TriggerSpec {
                                 event: TriggerEvent::DealtDamage {
-                                    subject,
                                     linked_player: false,
+                                    ..
                                 },
                                 ..
                             },
                             ..
-                        } if *subject == ObjectFilter::self_object()
+                        }
                     ) {
                         Ok(())
                     } else {
@@ -934,6 +1037,8 @@ impl ValueExpr {
                 | EventValueKind::DeclaredAttackersAtController
                 | EventValueKind::CreaturesDiedThisTurn
                 | EventValueKind::LastSacrificeSucceeded
+                | EventValueKind::LastActionSucceeded
+                | EventValueKind::LastActionCount
                 | EventValueKind::SelectedGraveyardExileCreatures
                 | EventValueKind::SourceAttackedThisTurn
                 | EventValueKind::TriggerSourceOnBattlefield => Ok(()),
@@ -989,6 +1094,13 @@ impl ValueExpr {
                             Err(DefinitionError::UnboundTriggerCondition)
                         }
                     }
+                    MatchObjectRef::AbilitySource => {
+                        if vocab_ok && !matches!(context, BodyContext::Unbound) {
+                            Ok(())
+                        } else {
+                            Err(DefinitionError::InvalidInstruction)
+                        }
+                    }
                     MatchObjectRef::DestructionTarget
                     | MatchObjectRef::TargetObject
                     | MatchObjectRef::RevealedTop
@@ -1012,7 +1124,9 @@ impl ValueExpr {
                         Err(DefinitionError::InvalidInstruction)
                     }
                 }
-                CounterSubjectRef::ControllerExperience => Ok(()),
+                CounterSubjectRef::ControllerExperience
+                | CounterSubjectRef::ControllerEnergy
+                | CounterSubjectRef::ControllerPoison => Ok(()),
                 CounterSubjectRef::TriggerSource | CounterSubjectRef::DyingSource => {
                     if matches!(context, BodyContext::TriggerBound { .. }) {
                         Ok(())
@@ -1090,6 +1204,8 @@ impl ValueExpr {
                 | EventValueKind::KickerCount(_)
                 | EventValueKind::CreaturesDiedThisTurn
                 | EventValueKind::LastSacrificeSucceeded
+                | EventValueKind::LastActionSucceeded
+                | EventValueKind::LastActionCount
                 | EventValueKind::SelectedGraveyardExileCreatures
                 | EventValueKind::EnteredKickerX
                 | EventValueKind::PaidCreatureTaps
@@ -1107,6 +1223,11 @@ impl ValueExpr {
             Self::Scale { expr, .. } | Self::DivConst { expr, .. } => {
                 expr.validate_condition(context, vocabulary)
             }
+            Self::Add(a, b) | Self::Sub(a, b) => {
+                a.validate_condition(context, vocabulary)?;
+                b.validate_condition(context, vocabulary)
+            }
+            Self::DomainCount | Self::OpponentsCount | Self::Devotion(_) => Ok(()),
             Self::Conditional {
                 left,
                 right,

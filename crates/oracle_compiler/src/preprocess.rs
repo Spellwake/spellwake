@@ -153,7 +153,26 @@ pub fn strip_reminder(text: &str) -> String {
 #[must_use]
 pub fn normalize_self(text: &str, face_name: &str, type_line: &str) -> String {
     let mut s = if !face_name.is_empty() && text.contains(face_name) {
-        text.replace(face_name, "~")
+        let replaced = text.replace(face_name, "~");
+        if matches!(
+            face_name,
+            "Regenerate"
+                | "Exile"
+                | "Destroy"
+                | "Sacrifice"
+                | "Counter"
+                | "Discard"
+                | "Return"
+                | "Draw"
+                | "Tap"
+                | "Untap"
+                | "Mill"
+        ) && replaced.contains("~ target ")
+        {
+            replaced.replace("~ target ", &format!("{face_name} target "))
+        } else {
+            replaced
+        }
     } else {
         text.to_string()
     };
@@ -172,6 +191,7 @@ pub fn normalize_self(text: &str, face_name: &str, type_line: &str) -> String {
             .split_once(" of ")
             .or_else(|| face_name.split_once(" the "))
             .or_else(|| face_name.split_once(" the,"))
+            .or_else(|| face_name.split_once(" and "))
         {
             let short = short.trim();
             if short.len() >= 3 && s.contains(short) {
@@ -412,7 +432,7 @@ pub fn strip_ability_word(norm: &str) -> (Option<String>, &str) {
         return (None, norm);
     }
     let first = head.chars().next().unwrap_or(' ');
-    if !first.is_ascii_uppercase() {
+    if !first.is_ascii_uppercase() && first != '~' {
         return (None, norm);
     }
     let hlow = head.to_ascii_lowercase();

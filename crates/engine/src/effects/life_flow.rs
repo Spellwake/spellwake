@@ -53,6 +53,18 @@ impl EffectWindow {
             .values()
             .filter(|permanent| permanent.zone == ObjectZone::Battlefield)
         {
+            let forbids_all = source.has_battlefield_rule(|ability| {
+                matches!(
+                    ability,
+                    crate::characteristics::StaticContinuousAbility::Restriction {
+                        rule: crate::characteristics::StaticRestriction::PlayersCannotGainLife,
+                        ..
+                    }
+                )
+            });
+            if forbids_all {
+                prohibited.extend(self.window.participants().iter().copied());
+            }
             let forbids_gain = source
                 .printed_text
                 .continuous

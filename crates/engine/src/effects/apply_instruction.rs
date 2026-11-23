@@ -98,7 +98,8 @@ impl EffectWindow {
             | Instruction::DiscardUpTo { .. }
             | Instruction::SacrificeToContinue { .. }
             | Instruction::SacrificeMatching(_)
-            | Instruction::Discard { .. } => {
+            | Instruction::Discard { .. }
+            | Instruction::DiscardFiltered { .. } => {
                 return Err(EffectError::InconsistentProgram);
             }
             Instruction::OptionalSequence { .. }
@@ -148,6 +149,9 @@ impl EffectWindow {
             | Instruction::ShuffleEachHandAndGraveyard
             | Instruction::EndControllerTurn
             | Instruction::ShuffleOwnLibrary
+            | Instruction::ShufflePlayerLibrary(_)
+            | Instruction::ShuffleTargetIntoLibrary
+            | Instruction::RevealPlayerHand(_)
             | Instruction::ShuffleOwnGraveyardIntoLibrary
             | Instruction::ShuffleTargetGraveyardCards { .. }
             | Instruction::ExileCreaturesAndPlaneswalkersBelowRevealedManaValue
@@ -157,6 +161,8 @@ impl EffectWindow {
             | Instruction::DestroyNonlandsAtSourceChargeCount
             | Instruction::AddCounterAndDischargeOnResolution(_)
             | Instruction::ExileAllGraveyards
+            | Instruction::ExilePlayerGraveyards(_)
+            | Instruction::RemoveCountersFromPermanent { .. }
             | Instruction::ExileDefeatedSiege
             | Instruction::ExileSourceAndGainLife(_)
             | Instruction::ExileAbilitySource
@@ -214,6 +220,10 @@ impl EffectWindow {
             | Instruction::SetControlledCreatureSizeToHand
             | Instruction::ModifyGroupByAmount { .. }
             | Instruction::AddExperienceCounter
+            | Instruction::AddPlayerCounter { .. }
+            | Instruction::ExileTopPlay { .. }
+            | Instruction::LookTopChoose { .. }
+            | Instruction::RevealUntilMatch { .. }
             | Instruction::ControlManaSourceThroughNextTurn
             | Instruction::GrantControllerFlashUntilCleanup
             | Instruction::RequireOpponentsCreaturesBlockThisTurn
@@ -242,6 +252,7 @@ impl EffectWindow {
             | Instruction::TapEnchantedCreature
             | Instruction::RequireCondition(_)
             | Instruction::PayControllerLife(_)
+            | Instruction::PayControllerEnergy(_)
             | Instruction::PutEquipmentFromHandOrGraveyard
             | Instruction::EquipNewToken
             | Instruction::Encore
@@ -307,10 +318,14 @@ impl EffectWindow {
             | Instruction::WeakenDelayedAttacker(_)
             | Instruction::DrawRevealRemoveLoyalty
             | Instruction::CreateReflexiveDiscardDamage
+            | Instruction::ScheduleDelayedStepTrigger { .. }
+            | Instruction::EmitReflexiveTrigger { .. }
             | Instruction::RemoveLoyaltyExileTopForPlay
             | Instruction::DamageDamagedPlayersCreatures
             | Instruction::DamageOpponentsAmount(_)
             | Instruction::DamageRelatedPlayerAmount(_)
+            | Instruction::DamageGroupAmount { .. }
+            | Instruction::DoublePowerToughness { .. }
             | Instruction::Ninjutsu
             | Instruction::Unearth
             | Instruction::FlipCoin { .. }
@@ -918,6 +933,43 @@ impl EffectWindow {
                     before: old,
                     after: new,
                 })
+            }
+            Instruction::PutNamedCounterOnTarget { kind, amount } => {
+                let TargetRef::Object(object) = target else {
+                    return Err(EffectError::InconsistentProgram);
+                };
+                let resolved = self.resolve_value_expr(entry.controller(), &amount)?;
+                if !resolved.is_positive() {
+                    return Ok(());
+                }
+                let old = self.counters_of_kind(object, kind);
+                let added =
+                    permanent_counters::effect_counter_multiplier(&before.view().evaluated, object)
+                        .times(&resolved);
+                let after = old.plus(&added);
+                self.characteristics
+                    .named_permanent_counters_mut(kind)
+                    .ok_or(EffectError::InconsistentProgram)?
+                    .insert(object, after.clone());
+                if kind.keyword_counter_ability().is_some() {
+                    self.characteristics
+                        .refresh_keyword_counter_grant(entry.id(), object, kind)?;
+                }
+                let occ = if kind == CounterKind::Loyalty {
+                    RulesOccurrence::LoyaltyCountersChanged {
+                        object,
+                        before: old,
+                        after,
+                    }
+                } else {
+                    RulesOccurrence::PermanentCounterChanged {
+                        object,
+                        kind,
+                        before: old,
+                        after,
+                    }
+                };
+                InstructionCut::Ready(occ)
             }
             Instruction::PutPowerToughnessCounters { counters } => {
                 let TargetRef::Object(target) = target else {
