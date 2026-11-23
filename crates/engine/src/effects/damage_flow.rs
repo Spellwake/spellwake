@@ -43,6 +43,7 @@ impl DamagePending {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) enum DamageFollowup {
     RemovePlusOneCounter(ObjectId),
+    RemoveShieldCounter(ObjectId),
     LibraryTop {
         player: SeatId,
         amount: RulesInteger,
@@ -197,9 +198,71 @@ impl EffectWindow {
             | DamageGroup::Creatures
             | DamageGroup::CreaturesExcept(_)
             | DamageGroup::CreaturesOfSubtype(_)
-            | DamageGroup::CreaturesWithoutFlying => Vec::new(),
+            | DamageGroup::CreaturesWithoutFlying
+            | DamageGroup::AbilitySource
+            | DamageGroup::Filtered(_) => Vec::new(),
         };
         let mut targets: Vec<_> = players.into_iter().map(DamageRecipient::Player).collect();
+        if group == DamageGroup::AbilitySource {
+            let entry = self
+                .window
+                .resolving()
+                .ok_or(EffectError::WrongResolutionFrame)?;
+            if let StackKind::ActivatedAbility { source } | StackKind::TriggeredAbility { source } =
+                entry.kind()
+                && let Some(o) = self.evaluated_characteristics()?.get(source.id())
+                && o.zone == ObjectZone::Battlefield
+            {
+                if o.is_creature() {
+                    targets.push(DamageRecipient::Creature(o.object));
+                } else if o.has_type(CardType::Planeswalker) {
+                    targets.push(DamageRecipient::Planeswalker(o.object));
+                } else if o.has_type(CardType::Battle) {
+                    targets.push(DamageRecipient::Battle(o.object));
+                }
+            }
+        }
+        if let DamageGroup::Filtered(filter) = group {
+            let entry = self
+                .window
+                .resolving()
+                .ok_or(EffectError::WrongResolutionFrame)?;
+            let ability_source = match entry.kind() {
+                StackKind::ActivatedAbility { source } | StackKind::TriggeredAbility { source } => {
+                    Some(source.id())
+                }
+                _ => None,
+            };
+            let evaluated = self.evaluated_characteristics()?;
+            let excluded = BTreeSet::new();
+            targets.extend(
+                evaluated
+                    .objects
+                    .values()
+                    .filter(|o| {
+                        o.zone == ObjectZone::Battlefield
+                            && self.matches_object_filter(
+                                filter,
+                                o,
+                                controller,
+                                ability_source,
+                                &excluded,
+                                &evaluated,
+                            )
+                    })
+                    .filter_map(|o| {
+                        if o.is_creature() {
+                            Some(DamageRecipient::Creature(o.object))
+                        } else if o.has_type(CardType::Planeswalker) {
+                            Some(DamageRecipient::Planeswalker(o.object))
+                        } else if o.has_type(CardType::Battle) {
+                            Some(DamageRecipient::Battle(o.object))
+                        } else {
+                            None
+                        }
+                    }),
+            );
+        }
         if group == DamageGroup::RelatedPlayerOrTheirPlaneswalker
             && let [DamageRecipient::Player(player)] = targets.as_slice()
         {
@@ -798,6 +861,7 @@ impl EffectWindow {
                                 | Instruction::DamageDamagedPlayersCreatures
                                 | Instruction::DamageOpponentsAmount(_)
                                 | Instruction::DamageRelatedPlayerAmount(_)
+                                | Instruction::DamageGroupAmount { .. }
                                 | Instruction::DivideThreeDamageAmongTargets
                                 | Instruction::DamageOrderedTargets { .. }
                                 | Instruction::DamageFromPower(_)
@@ -1302,7 +1366,8 @@ impl EffectWindow {
                     DamageEffectId::StaticPrevention(_)
                     | DamageEffectId::StaticPreventionWithExile(_, _)
                     | DamageEffectId::CombatDamageToMill(_, _)
-                    | DamageEffectId::RemovePlusOneToPreventDamage(_, _) => {
+                    | DamageEffectId::RemovePlusOneToPreventDamage(_, _)
+                    | DamageEffectId::ShieldCounter(_) => {
                         next.apply_static_prevention(application, &mut append)?
                     }
                     DamageEffectId::StaticHalfPrevention { .. }
@@ -1391,7 +1456,8 @@ impl EffectWindow {
                 DamageEffectId::StaticPrevention(_)
                 | DamageEffectId::StaticPreventionWithExile(_, _)
                 | DamageEffectId::CombatDamageToMill(_, _)
-                | DamageEffectId::RemovePlusOneToPreventDamage(_, _) => {
+                | DamageEffectId::RemovePlusOneToPreventDamage(_, _)
+                | DamageEffectId::ShieldCounter(_) => {
                     self.apply_static_prevention(application, append)?
                 }
                 DamageEffectId::StaticHalfPrevention { .. }
@@ -2011,6 +2077,32 @@ impl EffectWindow {
                         self.emit_from(cause, &before, None, append, |_, _, _| {
                             Ok(vec![RulesOccurrence::PowerToughnessCountersRemoved {
                                 object,
+                                before: previous,
+                                after,
+                            }])
+                        })?;
+                    }
+                    continue;
+                }
+                DamageFollowup::RemoveShieldCounter(object) => {
+                    let previous = self.counters_of_kind(object, CounterKind::Shield);
+                    if previous.is_positive() {
+                        let before = self.rules_snapshot(None)?;
+                        let after = previous.minus(&1.into());
+                        if let Some(map) = self
+                            .characteristics
+                            .named_permanent_counters_mut(CounterKind::Shield)
+                        {
+                            if after.is_positive() {
+                                map.insert(object, after.clone());
+                            } else {
+                                map.remove(&object);
+                            }
+                        }
+                        self.emit_from(cause, &before, None, append, |_, _, _| {
+                            Ok(vec![RulesOccurrence::PermanentCounterChanged {
+                                object,
+                                kind: CounterKind::Shield,
                                 before: previous,
                                 after,
                             }])

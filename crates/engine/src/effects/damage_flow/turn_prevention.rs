@@ -48,6 +48,7 @@ impl EffectWindow {
                             }
                     }
                     TurnPreventionFilter::Combat => batch.kind() == DamageKind::Combat,
+                    TurnPreventionFilter::All => true,
                     TurnPreventionFilter::CombatFromCreaturesWithoutSubtype(first)
                     | TurnPreventionFilter::CombatFromCreaturesWithoutEitherSubtype(first, _) => {
                         let excluded = |types: &BTreeSet<_>| {

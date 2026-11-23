@@ -1191,6 +1191,8 @@ struct CardPlayPermission {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 enum CardPlayDuration {
     ThroughTurn,
+    ThroughNextOwnTurn(SeatId),
+    ThroughNextOwnTurnSkipCurrent(SeatId),
     WhileInZone,
 }
 
@@ -1857,6 +1859,8 @@ struct ResolutionResults {
     power_damage_cohort: Option<(ObjectId, Vec<ObjectId>)>,
     destruction_target_subtypes: BTreeSet<CreatureTypeId>,
     last_sacrifice: bool,
+    last_action_succeeded: bool,
+    last_action_count: Option<RulesInteger>,
     discarded_types: BTreeSet<CardType>,
     moved_library_types: BTreeSet<CardType>,
     milled_mana_values: Vec<RulesInteger>,
@@ -3650,6 +3654,18 @@ impl EffectWindow {
         next.cards_drawn_this_turn.clear();
         next.encore_attack_targets.clear();
         next.characteristics.life_lost_this_turn.clear();
+        next.characteristics.life_gained_this_turn.clear();
+        next.characteristics.spells_cast_this_turn.clear();
+        next.characteristics.attacked_this_turn_players.clear();
+        next.characteristics.creatures_entered_this_turn.clear();
+        next.characteristics
+            .permanents_left_battlefield_this_turn
+            .clear();
+        next.characteristics.cards_discarded_this_turn.clear();
+        next.characteristics.permanents_sacrificed_this_turn.clear();
+        next.characteristics.cards_drawn_this_turn_counts.clear();
+        next.characteristics.descended_this_turn.clear();
+        next.characteristics.committed_crime_this_turn.clear();
         if let Some(pairs) = &mut next.characteristics.creature_damage_pairs {
             pairs.clear();
         }
@@ -3668,8 +3684,24 @@ impl EffectWindow {
         next.free_exiled_cards.clear();
         next.free_exiled_noncreature_spells.clear();
         next.typed_exile_cohorts.clear();
-        next.card_play_permissions
-            .retain(|grant| grant.duration == CardPlayDuration::WhileInZone);
+        let active_player = next.window.active_player();
+        let mut updated_permissions = BTreeSet::new();
+        for mut grant in std::mem::take(&mut next.card_play_permissions) {
+            match grant.duration {
+                CardPlayDuration::WhileInZone => {
+                    updated_permissions.insert(grant);
+                }
+                CardPlayDuration::ThroughNextOwnTurnSkipCurrent(owner) => {
+                    grant.duration = CardPlayDuration::ThroughNextOwnTurn(owner);
+                    updated_permissions.insert(grant);
+                }
+                CardPlayDuration::ThroughNextOwnTurn(owner) if active_player != owner => {
+                    updated_permissions.insert(grant);
+                }
+                CardPlayDuration::ThroughTurn | CardPlayDuration::ThroughNextOwnTurn(_) => {}
+            }
+        }
+        next.card_play_permissions = updated_permissions;
         next.temporary_any_color_exile_cast.clear();
         Ok(next)
     }
@@ -4818,6 +4850,17 @@ impl EffectWindow {
                 next.entry_creature_type_choices
                     .insert(record.after.id(), kind);
             }
+            if let Some(choice @ crate::land::EntryChoice::PayLife(_)) = choice {
+                if !matches!(
+                    next.copiable_program(record.after.id())
+                        .and_then(Program::permanent)
+                        .and_then(|permanent| permanent.entry_tap),
+                    Some(crate::land::EntryTap::UnlessPayLife(_))
+                ) {
+                    return Err(EffectError::InconsistentProgram);
+                }
+                next.entry_choices.insert(record.after.id(), choice);
+            }
             next.characteristics
                 .register_battlefield_entry(record.after.id())?;
             next.apply_entry_counters(
@@ -4923,7 +4966,8 @@ impl EffectWindow {
             | EntryTap::ChooseCreatureType
             | EntryTap::ChooseNonlandCardName
             | EntryTap::SiegeProtector
-            | EntryTap::ChooseTwoPlayers => Vec::new(),
+            | EntryTap::ChooseTwoPlayers
+            | EntryTap::UnlessPayLife(_) => Vec::new(),
             _ => return Ok(None),
         };
         Ok(Some(EntryChoiceFrame {
@@ -4973,6 +5017,19 @@ impl EffectWindow {
                 crate::land::EntryTap::UnlessRevealHandLandType(_, _),
                 crate::land::EntryChoice::Reveal(Some(object)),
             ) => frame.eligible_reveals.contains(&object),
+            (crate::land::EntryTap::UnlessPayLife(_), crate::land::EntryChoice::PayLife(false)) => {
+                true
+            }
+            (
+                crate::land::EntryTap::UnlessPayLife(amount),
+                crate::land::EntryChoice::PayLife(true),
+            ) => {
+                amount > 0
+                    && self
+                        .life
+                        .get(frame.chooser)
+                        .is_some_and(|life| *life >= i64::from(amount).into())
+            }
             _ => false,
         }
     }
@@ -5850,7 +5907,8 @@ impl EffectWindow {
                 | crate::land::EntryChoice::Opponent(_)
                 | crate::land::EntryChoice::Reveal(_)
                 | crate::land::EntryChoice::Chapter(_)
-                | crate::land::EntryChoice::CardName(_)) => {
+                | crate::land::EntryChoice::CardName(_)
+                | crate::land::EntryChoice::PayLife(_)) => {
                     self.entry_choices.insert(new, reveal);
                 }
                 crate::land::EntryChoice::CreatureType(kind) => {
@@ -7006,6 +7064,35 @@ impl EffectWindow {
                 };
                 self.matches_graveyard_card(filter, p)
             }
+            BodyTarget::FilteredAnyGraveyardCard {
+                filter,
+                opponents_only,
+            } => {
+                let TargetRef::Object(id) = target else {
+                    return false;
+                };
+                let Some(card) = self.window.cards().get(id) else {
+                    return false;
+                };
+                let ObjectZone::Graveyard(owner) = card.zone() else {
+                    return false;
+                };
+                if card.card_id().is_none() {
+                    return false;
+                }
+                if opponents_only
+                    && !self
+                        .combat_rules
+                        .opponents(self.window.participants(), controller)
+                        .is_ok_and(|opponents| opponents.contains(&owner))
+                {
+                    return false;
+                }
+                let Some(p) = evaluated.get(id) else {
+                    return false;
+                };
+                self.matches_graveyard_card(filter, p)
+            }
             BodyTarget::SingleOwnGraveyardCard => {
                 matches!(target,TargetRef::Object(id) if self.window.cards().get(id).is_some_and(|o|o.zone()==ObjectZone::Graveyard(controller) && o.card_id().is_some()))
             }
@@ -7021,6 +7108,9 @@ impl EffectWindow {
             BodyTarget::SinglePlayerOrPlaneswalker if matches!(target, TargetRef::Player(_)) => {
                 matches!(target, TargetRef::Player(player) if self.window.participants().contains(&player))
             }
+            BodyTarget::SingleOpponentOrPlaneswalker if matches!(target, TargetRef::Player(_)) => {
+                matches!(target, TargetRef::Player(player) if self.combat_rules.opponents(self.window.participants(), controller).is_ok_and(|opponents| opponents.contains(&player)))
+            }
             BodyTarget::OpponentOrPlaneswalkerThenCreature => match target {
                 TargetRef::Player(player) => self
                     .combat_rules
@@ -7032,7 +7122,9 @@ impl EffectWindow {
                 }),
                 TargetRef::Stack(_) => false,
             },
-            BodyTarget::SinglePlayerOrPlaneswalker | BodyTarget::SinglePlaneswalker => {
+            BodyTarget::SinglePlayerOrPlaneswalker
+            | BodyTarget::SingleOpponentOrPlaneswalker
+            | BodyTarget::SinglePlaneswalker => {
                 matches!(target, TargetRef::Object(id)
                 if self.window.cards().get(id).is_some_and(|card| card.zone() == ObjectZone::Battlefield)
                     && evaluated.get(id).is_some_and(|view| view.has_type(CardType::Planeswalker)))
@@ -7265,7 +7357,8 @@ impl EffectWindow {
             | Instruction::DiscardUpTo { .. }
             | Instruction::SacrificeToContinue { .. }
             | Instruction::SacrificeMatching(_)
-            | Instruction::Discard { .. } => {
+            | Instruction::Discard { .. }
+            | Instruction::DiscardFiltered { .. } => {
                 return Err(EffectError::InconsistentProgram);
             }
             Instruction::AdjustTargetLife { .. } => match target {
@@ -7360,6 +7453,7 @@ impl EffectWindow {
             | Instruction::GrantProtectionChosenColor(_)
             | Instruction::PutIndestructibleCounter
             | Instruction::PutLoyaltyCounter
+            | Instruction::PutNamedCounterOnTarget { .. }
             | Instruction::PutPowerToughnessCounters { .. } => match target {
                 TargetRef::Object(card) => self
                     .window
@@ -7386,6 +7480,10 @@ impl EffectWindow {
             | Instruction::SetControlledCreatureSizeToHand
             | Instruction::ModifyGroupByAmount { .. }
             | Instruction::AddExperienceCounter
+            | Instruction::AddPlayerCounter { .. }
+            | Instruction::ExileTopPlay { .. }
+            | Instruction::LookTopChoose { .. }
+            | Instruction::RevealUntilMatch { .. }
             | Instruction::ControlManaSourceThroughNextTurn
             | Instruction::GrantControllerFlashUntilCleanup
             | Instruction::RequireOpponentsCreaturesBlockThisTurn
@@ -7478,10 +7576,14 @@ impl EffectWindow {
             | Instruction::WeakenDelayedAttacker(_)
             | Instruction::DrawRevealRemoveLoyalty
             | Instruction::CreateReflexiveDiscardDamage
+            | Instruction::ScheduleDelayedStepTrigger { .. }
+            | Instruction::EmitReflexiveTrigger { .. }
             | Instruction::RemoveLoyaltyExileTopForPlay
             | Instruction::DamageDamagedPlayersCreatures
             | Instruction::DamageOpponentsAmount(_)
             | Instruction::DamageRelatedPlayerAmount(_)
+            | Instruction::DamageGroupAmount { .. }
+            | Instruction::DoublePowerToughness { .. }
             | Instruction::Ninjutsu
             | Instruction::Unearth
             | Instruction::FlipCoin { .. }
@@ -7637,6 +7739,9 @@ impl EffectWindow {
             | Instruction::ShuffleEachHandAndGraveyard
             | Instruction::EndControllerTurn
             | Instruction::ShuffleOwnLibrary
+            | Instruction::ShufflePlayerLibrary(_)
+            | Instruction::ShuffleTargetIntoLibrary
+            | Instruction::RevealPlayerHand(_)
             | Instruction::ShuffleOwnGraveyardIntoLibrary
             | Instruction::ShuffleTargetGraveyardCards { .. }
             | Instruction::ExileCreaturesAndPlaneswalkersBelowRevealedManaValue
@@ -7646,6 +7751,9 @@ impl EffectWindow {
             | Instruction::DestroyNonlandsAtSourceChargeCount
             | Instruction::AddCounterAndDischargeOnResolution(_)
             | Instruction::ExileAllGraveyards
+            | Instruction::ExilePlayerGraveyards(_)
+            | Instruction::PayControllerEnergy(_)
+            | Instruction::RemoveCountersFromPermanent { .. }
             | Instruction::ExileDefeatedSiege
             | Instruction::ExileSourceAndGainLife(_)
             | Instruction::ExileAbilitySource

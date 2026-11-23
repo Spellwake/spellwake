@@ -237,6 +237,10 @@ impl SubtypeProtection {
 pub enum KeywordAbility {
     /// CR 702.124h, the unqualified partner ability.
     Partner,
+    /// CR 702.124h, commander pairing with a Background enchantment.
+    ChooseABackground,
+    /// CR 702.124m, commander pairing with a Time Lord Doctor.
+    DoctorsCompanion,
     Bargain,
     /// CR 702.51 allows creatures to help pay a spell's cost.
     Convoke,
@@ -489,12 +493,22 @@ pub enum NameFilter {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum BlockingRestriction {
     CannotAttackOrBlock,
+    CannotAttack,
     CannotBlock,
+    AtMostOneBlocker,
     CanBlockOnlyFlying,
     CannotBlockSubtype(CreatureTypeId),
     CannotBeBlockedByFlying,
     OnlyBlockedByFlyingOrReach,
     CannotBeBlockedBySubtype(CreatureTypeId),
+    CannotBeBlockedByPowerAtMost(u16),
+    CannotBeBlockedByPowerAtLeast(u16),
+    CannotBeBlockedByColor(Color),
+    OnlyBlockedByColor(Color),
+    OnlyBlockedByColorOrArtifact(Color),
+    CannotBeBlockedByTokens,
+    OnlyBlockedByArtifact,
+    CannotBeBlockedByNonArtifact,
     /// Authored static restriction anchored to the source that grants it.
     BlockerPowerAtLeastSource,
     /// The exact source incarnation bound when a static ability applies.
@@ -510,7 +524,27 @@ pub enum BlockingRestriction {
     /// At least one eligible blocker must block this attacker when possible.
     MustBeBlocked,
     CannotBeBlockedIfPowerOrToughnessAtMostOne,
+    /// Blocker cannot block attackers matching this filter (CR 509.1b).
+    CannotBlockMatching(crate::program::ObjectFilter),
+    /// Attacker cannot be blocked by creatures matching this filter (CR 509.1b).
+    CannotBeBlockedByMatching(crate::program::ObjectFilter),
+    /// Attacker can be blocked only by creatures matching this filter (CR 509.1b).
+    OnlyBlockedByMatching(crate::program::ObjectFilter),
+    /// Creature cannot attack unless at least one other creature attacks alongside it (CR 508.1d).
+    CannotAttackAlone,
+    /// Creature cannot block unless at least one other creature blocks alongside it (CR 509.1b).
+    CannotBlockAlone,
+    /// Creature assigns combat damage equal to its toughness rather than its power (CR 510.1a).
+    AssignDamageByToughness,
+    /// Controller may assign this blocked attacker's combat damage as though it weren't blocked.
+    AssignDamageAsThoughUnblocked,
+    /// Creature can block any number of creatures (CR 509.1b).
+    CanBlockAnyNumber,
+    /// Creature can attack as though it didn't have defender (CR 702.3b).
+    CanAttackAsThoughNoDefender,
 }
+// Embeds `Copy` `BlockingRestriction` inline to avoid indirection in small resolved part lists.
+#[allow(clippy::large_enum_variant)]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ResolvedPart {
     /// Captured at resolution, never a live donor lookup. Only the admitted
@@ -556,6 +590,8 @@ impl ResolvedPart {
         }
     }
 }
+// Embeds `Copy` `BlockingRestriction` inline to match `ResolvedPart` without extra boxing.
+#[allow(clippy::large_enum_variant)]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ResolvedPartSpec {
     Control(ControlRecipient),
@@ -602,14 +638,18 @@ pub enum ControllerSelector {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CombatSelector {
     Attacking,
+    Blocking,
+    AttackingOrBlocking,
     OutsideCombat,
 }
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PermanentSelector {
-    /// Require that a recipient be attacking, or neither attacking nor blocking.
+    /// Require that a recipient be attacking, blocking, in combat, or outside combat.
     pub combat_role: Option<CombatSelector>,
     /// Require this permanent to be untapped.
     pub requires_untapped: bool,
+    /// Require this permanent to be tapped.
+    pub requires_tapped: bool,
     /// Require this creature to be the only creature its controller controls.
     pub sole_controlled_creature: bool,
     /// Match token or nontoken permanents by their physical identity.
@@ -617,8 +657,12 @@ pub struct PermanentSelector {
     pub required_supertypes: BTreeSet<Supertype>,
     pub forbidden_supertypes: BTreeSet<Supertype>,
     pub required_types: BTreeSet<CardType>,
+    /// Disjunctive card-type predicate: when nonempty, recipient must have at least one of these types.
+    pub any_types: BTreeSet<CardType>,
     pub forbidden_types: BTreeSet<CardType>,
     pub creature_subtype: Option<CreatureTypeId>,
+    /// Disjunctive creature-subtype predicate: when nonempty, recipient must have at least one of these subtypes.
+    pub any_creature_subtypes: BTreeSet<CreatureTypeId>,
     pub forbidden_creature_subtype: Option<CreatureTypeId>,
     pub land_subtype: Option<LandType>,
     pub color: ColorFilter,
@@ -631,6 +675,8 @@ pub struct PermanentSelector {
     pub while_controlling_own_commander: bool,
     /// Require a +1/+1 counter on this recipient.
     pub plus_one_counter: bool,
+    /// Require a -1/-1 counter on this recipient.
+    pub minus_one_counter: bool,
     /// Require at least this many +1/+1 counters on the recipient.
     pub minimum_plus_one_counters: u16,
     /// Require any currently represented counter on this recipient.
@@ -649,8 +695,26 @@ pub struct PermanentSelector {
     pub source_condition: Option<StaticSourceCondition>,
     /// Require flying when evaluating this selector.
     pub requires_flying: bool,
+    /// Require a specific keyword ability on this recipient.
+    pub required_keyword: Option<KeywordAbility>,
+    /// Forbid a specific keyword ability on this recipient.
+    pub forbidden_keyword: Option<KeywordAbility>,
     /// Minimum number of Equipment currently attached to this recipient.
     pub equipped_by_at_least: u16,
+    /// Require at least one Aura currently attached to this recipient.
+    pub requires_enchanted: bool,
+    /// Optional minimum current power required on this recipient.
+    pub min_power: Option<i64>,
+    /// Optional maximum current power allowed on this recipient.
+    pub max_power: Option<i64>,
+    /// Optional minimum current toughness required on this recipient.
+    pub min_toughness: Option<i64>,
+    /// Optional maximum current toughness allowed on this recipient.
+    pub max_toughness: Option<i64>,
+    /// Optional minimum mana value required on this recipient.
+    pub min_mana_value: Option<u32>,
+    /// Optional maximum mana value allowed on this recipient.
+    pub max_mana_value: Option<u32>,
     /// Restrict recipients while the source controller’s devotion is below the printed threshold.
     pub devotion_below: Option<(Color, u8)>,
     pub station_at: Option<std::num::NonZeroU16>,
@@ -661,13 +725,16 @@ impl Default for PermanentSelector {
         Self {
             combat_role: None,
             requires_untapped: false,
+            requires_tapped: false,
             sole_controlled_creature: false,
             token: None,
             required_supertypes: BTreeSet::new(),
             forbidden_supertypes: BTreeSet::new(),
             required_types: BTreeSet::new(),
+            any_types: BTreeSet::new(),
             forbidden_types: BTreeSet::new(),
             creature_subtype: None,
+            any_creature_subtypes: BTreeSet::new(),
             forbidden_creature_subtype: None,
             land_subtype: None,
             color: ColorFilter::Any,
@@ -675,13 +742,23 @@ impl Default for PermanentSelector {
             controller: ControllerSelector::Any,
             attached_to_source: false,
             requires_flying: false,
+            required_keyword: None,
+            forbidden_keyword: None,
             plus_one_counter: false,
+            minus_one_counter: false,
             minimum_plus_one_counters: 0,
             any_counter: false,
             artifact_subtype: None,
             matches_source_entry_type: false,
             controller_type_threshold: None,
             equipped_by_at_least: 0,
+            requires_enchanted: false,
+            min_power: None,
+            max_power: None,
+            min_toughness: None,
+            max_toughness: None,
+            min_mana_value: None,
+            max_mana_value: None,
             devotion_below: None,
             source_condition: None,
             source_has_imprinted_creature: false,
@@ -696,10 +773,55 @@ impl Default for PermanentSelector {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum StaticSourceCondition {
     ControllerLifeAtMost(u16),
+    ControllerLifeAtLeast(u16),
     ControllerControlsSubtype(CreatureTypeId),
     OpponentControlsSubtype(CreatureTypeId),
     OpponentsTurn,
+    ControllersTurn,
     HasKeyword(KeywordAbility),
+    Delirium,
+    Metalcraft,
+    Threshold,
+    ControlsCardType {
+        kind: CardType,
+        minimum: u16,
+    },
+    GraveyardCountAtLeast {
+        types: crate::program::CardTypeMask,
+        minimum: u16,
+    },
+    HandCountAtMost(u16),
+    HandCountAtLeast(u16),
+    SourceCounterAtLeast {
+        kind: crate::effects::CounterKind,
+        minimum: u16,
+    },
+    SourceIsTapped,
+    SourceIsUntapped,
+    ControllerHasCityBlessing,
+    ControllerGainedLifeThisTurn,
+    ControllerLostLifeThisTurn,
+    OpponentLostLifeThisTurn,
+    ControllerAttackedThisTurn,
+    ControllerCastSpellsThisTurn(u16),
+    ControllerDiscardedThisTurn,
+    ControllerSacrificedThisTurn,
+    PermanentLeftBattlefieldThisTurn,
+    CreatureEnteredUnderControlThisTurn,
+    DescendedThisTurn,
+    CommittedCrimeThisTurn,
+    ControllerDrewCardsThisTurn(u16),
+    ControlsMatching {
+        selector: Box<PermanentSelector>,
+        minimum: u16,
+    },
+    OpponentControlsMatching {
+        selector: Box<PermanentSelector>,
+        minimum: u16,
+    },
+    Not(Box<StaticSourceCondition>),
+    And(Box<StaticSourceCondition>, Box<StaticSourceCondition>),
+    Or(Box<StaticSourceCondition>, Box<StaticSourceCondition>),
 }
 /// Zone scanned by [`NumericExpression::ZoneCount`] during static characteristic evaluation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -951,18 +1073,13 @@ impl PermanentSelector {
         ]
         .into_iter()
         .flatten()
+        .chain(self.any_creature_subtypes.iter().copied())
         .any(|kind| vocabulary.label(kind).is_none())
         {
             return Err(CharacteristicDefinitionError::ForeignCreatureType);
         }
-        match self.source_condition {
-            Some(
-                StaticSourceCondition::ControllerControlsSubtype(kind)
-                | StaticSourceCondition::OpponentControlsSubtype(kind),
-            ) if vocabulary.label(kind).is_none() => {
-                return Err(CharacteristicDefinitionError::ForeignCreatureType);
-            }
-            _ => {}
+        if let Some(cond) = &self.source_condition {
+            validate_static_source_condition(cond, vocabulary)?;
         }
         if self.controlled_creatures_and_typed_tokens.is_some()
             && *self
@@ -975,6 +1092,34 @@ impl PermanentSelector {
             return Err(CharacteristicDefinitionError::ContradictorySelector);
         }
         Ok(())
+    }
+}
+
+fn validate_static_source_condition(
+    cond: &StaticSourceCondition,
+    vocabulary: &CreatureTypeVocabulary,
+) -> Result<(), CharacteristicDefinitionError> {
+    match cond {
+        StaticSourceCondition::ControllerControlsSubtype(kind)
+        | StaticSourceCondition::OpponentControlsSubtype(kind) => {
+            if vocabulary.label(*kind).is_none() {
+                return Err(CharacteristicDefinitionError::ForeignCreatureType);
+            }
+            Ok(())
+        }
+        StaticSourceCondition::ControlsMatching { selector, minimum }
+        | StaticSourceCondition::OpponentControlsMatching { selector, minimum } => {
+            if *minimum == 0 {
+                return Err(CharacteristicDefinitionError::ContradictorySelector);
+            }
+            selector.validate(vocabulary)
+        }
+        StaticSourceCondition::Not(inner) => validate_static_source_condition(inner, vocabulary),
+        StaticSourceCondition::And(a, b) | StaticSourceCondition::Or(a, b) => {
+            validate_static_source_condition(a, vocabulary)?;
+            validate_static_source_condition(b, vocabulary)
+        }
+        _ => Ok(()),
     }
 }
 /// Finite type-changing effects operate on battlefield objects only.
@@ -1453,6 +1598,8 @@ pub struct ObjectCharacteristics {
     pub blessing_counters: RulesInteger,
     /// Positive +1/+1 counter count on this incarnation.
     pub has_plus_one_counter: bool,
+    /// Positive -1/-1 counter count on this incarnation.
+    pub has_minus_one_counter: bool,
     /// Exact +1/+1 counter count on this incarnation.
     pub plus_one_counters: RulesInteger,
     pub has_any_counter: bool,
@@ -1613,6 +1760,23 @@ impl ObjectCharacteristics {
         };
     }
     /// Query a keyword in this exact evaluated world.
+    pub(crate) fn active_battlefield_rules(
+        &self,
+    ) -> impl Iterator<Item = &StaticContinuousAbility> {
+        let on_field = self.zone == ObjectZone::Battlefield;
+        self.printed_text
+            .continuous
+            .iter()
+            .chain(&self.printed_text.additional_battlefield_abilities)
+            .filter(move |ability| {
+                on_field
+                    && (self.abilities.continuous == Some(ability.id())
+                        || self
+                            .abilities
+                            .additional_battlefield_abilities
+                            .contains(&ability.id()))
+            })
+    }
     pub(crate) fn has_battlefield_rule(
         &self,
         matches_rule: impl Fn(&StaticContinuousAbility) -> bool,

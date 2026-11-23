@@ -82,6 +82,7 @@ impl TriggerState {
                         TriggerRelated::CombatDamageToPlaneswalker {
                             planeswalker: id,
                             attempt: damage.attempt,
+                            amount: damage.amount.clone(),
                         },
                     )
                 }

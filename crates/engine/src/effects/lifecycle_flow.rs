@@ -458,20 +458,94 @@ impl EffectWindow {
                 true
             }
         });
-        let additional = evaluated.objects.values()
+        let mut additional: BTreeSet<ObjectId> = evaluated.objects.values()
             .filter(|source| source.controller.is_some_and(|controller| controller != active)
                 && source.has_battlefield_rule(|ability| {
                     matches!(ability, crate::characteristics::StaticContinuousAbility::UntapRule { rule: crate::characteristics::StaticUntapRule::UntapDuringOtherPlayersUntap, .. })
                 }))
             .map(|source| source.object)
             .collect();
+        for source in evaluated.objects.values() {
+            let Some(source_controller) = source.controller else {
+                continue;
+            };
+            if source_controller == active || source.zone != ObjectZone::Battlefield {
+                continue;
+            }
+            for ability in source.active_battlefield_rules() {
+                if let crate::characteristics::StaticContinuousAbility::UntapRule {
+                    rule:
+                        crate::characteristics::StaticUntapRule::UntapMatchingDuringOtherPlayersUntap(
+                            selector,
+                        ),
+                    ..
+                } = ability
+                {
+                    for candidate in evaluated.objects.values() {
+                        if candidate.zone == ObjectZone::Battlefield
+                            && crate::characteristics::selector_matches_permanent(
+                                next.window.cards(),
+                                &evaluated,
+                                source.object,
+                                source_controller,
+                                selector,
+                                candidate.object,
+                                &next.name_rules,
+                            )
+                        {
+                            additional.insert(candidate.object);
+                        }
+                    }
+                }
+            }
+        }
+        // CR 122.1d: If a permanent with a stun counter on it would become untapped,
+        // instead remove a stun counter from it.
+        let mut stun_occurrences = Vec::new();
+        let stun_candidates: Vec<ObjectId> = next
+            .window
+            .cards()
+            .iter()
+            .filter(|object| {
+                (object.controller() == Some(active) || additional.contains(&object.id()))
+                    && object.tapped() == Some(true)
+                    && !excluded.contains(&object.id())
+                    && next
+                        .counters_of_kind(object.id(), CounterKind::Stun)
+                        .is_positive()
+            })
+            .map(GameObject::id)
+            .collect();
+        for id in stun_candidates {
+            excluded.insert(id);
+            let prev = next.counters_of_kind(id, CounterKind::Stun);
+            let after = prev.minus(&1.into());
+            if let Some(map) = next
+                .characteristics
+                .named_permanent_counters_mut(CounterKind::Stun)
+            {
+                if after.is_positive() {
+                    map.insert(id, after.clone());
+                } else {
+                    map.remove(&id);
+                }
+            }
+            stun_occurrences.push(RulesOccurrence::PermanentCounterChanged {
+                object: id,
+                kind: CounterKind::Stun,
+                before: prev,
+                after,
+            });
+        }
         let (window, changes) = next.window.untap_active_with_changes(
             next.window.revision(),
             &excluded,
             &additional,
         )?;
         next.window = window;
-        if !changes.is_empty() {
+        if !changes.is_empty() || !stun_occurrences.is_empty() {
+            let mut occurrences = status_occurrences(changes, StatusReason::UntapTurn);
+            occurrences.extend(stun_occurrences);
             next.emit_from(
                 EventCause::UntapTurn {
                     active: self.window.active_player(),
@@ -479,10 +553,56 @@ impl EffectWindow {
                 &before,
                 turn,
                 &mut append,
-                |_, _, _| Ok(status_occurrences(changes, StatusReason::UntapTurn)),
+                |_, _, _| Ok(occurrences),
             )?;
         }
         Ok(RulesTransition::new(next, (), append))
+    }
+
+    /// CR 122.1d: Untap selected battlefield permanents, replacing each untap of a permanent
+    /// with a stun counter by removing one stun counter instead.
+    pub(super) fn untap_for_effect_with_stun(
+        &mut self,
+        entry: StackEntryId,
+        objects: &[ObjectId],
+    ) -> Result<Vec<RulesOccurrence>, EffectError> {
+        let mut untapping = Vec::with_capacity(objects.len());
+        let mut stun_occurrences = Vec::new();
+        for &id in objects {
+            if self.window.cards().get(id).and_then(GameObject::tapped) == Some(true)
+                && self.counters_of_kind(id, CounterKind::Stun).is_positive()
+            {
+                let prev = self.counters_of_kind(id, CounterKind::Stun);
+                let after = prev.minus(&1.into());
+                if let Some(map) = self
+                    .characteristics
+                    .named_permanent_counters_mut(CounterKind::Stun)
+                {
+                    if after.is_positive() {
+                        map.insert(id, after.clone());
+                    } else {
+                        map.remove(&id);
+                    }
+                }
+                stun_occurrences.push(RulesOccurrence::PermanentCounterChanged {
+                    object: id,
+                    kind: CounterKind::Stun,
+                    before: prev,
+                    after,
+                });
+            } else {
+                untapping.push(id);
+            }
+        }
+        let mut occurrences = if untapping.is_empty() {
+            Vec::new()
+        } else {
+            let (window, changes) = self.window.untap_for_effect(entry, &untapping)?;
+            self.window = window;
+            status_occurrences(changes, StatusReason::Effect)
+        };
+        occurrences.extend(stun_occurrences);
+        Ok(occurrences)
     }
 }
 

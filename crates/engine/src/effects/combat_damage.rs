@@ -133,13 +133,21 @@ impl EffectWindow {
             if chooser != actor || !eligible(source) {
                 continue;
             }
-            let power = evaluated
+            let attacker_view = evaluated
                 .get(source.object())
-                .and_then(|current| current.power_toughness.as_ref())
-                .ok_or(CombatError::InvalidContext)?
-                .derived
-                .power
-                .clone();
+                .ok_or(CombatError::InvalidContext)?;
+            let attacker_pt = attacker_view
+                .power_toughness
+                .as_ref()
+                .ok_or(CombatError::InvalidContext)?;
+            let power = if attacker_view
+                .blocking_restrictions
+                .contains(&crate::characteristics::BlockingRestriction::AssignDamageByToughness)
+            {
+                attacker_pt.derived.toughness.clone()
+            } else {
+                attacker_pt.derived.power.clone()
+            };
             if !power.is_positive() {
                 continue;
             }
@@ -194,11 +202,28 @@ impl EffectWindow {
                             );
                         }
                     }
-                    if trample && defender_present {
+                    let as_though_unblocked = current.blocking_restrictions.contains(
+                        &crate::characteristics::BlockingRestriction::AssignDamageAsThoughUnblocked,
+                    );
+                    if (trample || as_though_unblocked) && defender_present {
                         let required = lethal
                             .values()
                             .fold(RulesInteger::from(0), |sum, amount| sum.plus(amount));
-                        if power > required {
+                        if as_though_unblocked {
+                            lethal.clear();
+                            recipients.push(attacker.defending_planeswalker().map_or(
+                                DamageRecipient::Player(attacker.defender()),
+                                |id| {
+                                    if evaluated.get(id).is_some_and(|view| {
+                                        view.has_type(crate::program::CardType::Battle)
+                                    }) {
+                                        DamageRecipient::Battle(id)
+                                    } else {
+                                        DamageRecipient::Planeswalker(id)
+                                    }
+                                },
+                            ));
+                        } else if power > required {
                             recipients.push(attacker.defending_planeswalker().map_or(
                                 DamageRecipient::Player(attacker.defender()),
                                 |id| {
@@ -258,13 +283,21 @@ impl EffectWindow {
             if recipients.is_empty() {
                 continue;
             }
-            let power = evaluated
+            let blocker_view = evaluated
                 .get(source.object())
-                .and_then(|current| current.power_toughness.as_ref())
-                .ok_or(CombatError::InvalidContext)?
-                .derived
-                .power
-                .clone();
+                .ok_or(CombatError::InvalidContext)?;
+            let blocker_pt = blocker_view
+                .power_toughness
+                .as_ref()
+                .ok_or(CombatError::InvalidContext)?;
+            let power = if blocker_view
+                .blocking_restrictions
+                .contains(&crate::characteristics::BlockingRestriction::AssignDamageByToughness)
+            {
+                blocker_pt.derived.toughness.clone()
+            } else {
+                blocker_pt.derived.power.clone()
+            };
             if power.is_positive() {
                 domains.push(DamageAssignmentDomain::new(
                     source.object(),

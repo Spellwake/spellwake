@@ -1125,7 +1125,11 @@ impl EffectWindow {
             .any(|entry| matches!(entry.kind(), StackKind::ActivatedAbility { source } if source.id() == object)
                 && self.payloads.get(&entry.id()).and_then(StackPayload::instructions).is_some_and(|body| body.iter().any(|op| matches!(op,
                     Instruction::WatchSmallCreatureCombatDraw(_) | Instruction::PhaseOtherPlaneswalkersNextEndStep | Instruction::WeakenOpposingAttackersUntilNextTurn
-                    | Instruction::AbilitySourceControllerLosesLife(_) | Instruction::CreateReflexiveDiscardDamage | Instruction::RegisterTokenLinkedExile
+                    | Instruction::AbilitySourceControllerLosesLife(_)
+                    | Instruction::CreateReflexiveDiscardDamage
+                    | Instruction::ScheduleDelayedStepTrigger { .. }
+                    | Instruction::EmitReflexiveTrigger { .. }
+                    | Instruction::RegisterTokenLinkedExile
                 ) || matches!(op, Instruction::SearchLibrary { filter } if filter.is_haste_and_return()))))
     }
 
@@ -1856,22 +1860,143 @@ impl EffectWindow {
                 );
             }
             match value {
-                RulesOccurrence::ZoneChange(change)
+                RulesOccurrence::ZoneChange(change) => {
                     if change.before.object.zone() == ObjectZone::Battlefield
                         && change.before.is_creature()
-                        && matches!(change.after.object.zone(), ObjectZone::Graveyard(_)) =>
-                {
-                    self.creatures_died_this_turn = self.creatures_died_this_turn.plus(&1.into());
+                        && matches!(change.after.object.zone(), ObjectZone::Graveyard(_))
+                    {
+                        self.creatures_died_this_turn =
+                            self.creatures_died_this_turn.plus(&1.into());
+                    }
+                    if change.after.object.zone() == ObjectZone::Battlefield
+                        && change.before.object.zone() != ObjectZone::Battlefield
+                        && change.after.is_creature()
+                        && let Some(ctrl) = change.after.object.controller()
+                    {
+                        let count = self
+                            .characteristics
+                            .creatures_entered_this_turn
+                            .entry(ctrl)
+                            .or_insert(0);
+                        *count = count.saturating_add(1);
+                    }
+                    if change.before.object.zone() == ObjectZone::Battlefield
+                        && change.after.object.zone() != ObjectZone::Battlefield
+                        && let Some(ctrl) = change.before.object.controller()
+                    {
+                        let count = self
+                            .characteristics
+                            .permanents_left_battlefield_this_turn
+                            .entry(ctrl)
+                            .or_insert(0);
+                        *count = count.saturating_add(1);
+                    }
+                    match change.reason {
+                        crate::occurrence::ZoneReason::Discard { player }
+                        | crate::occurrence::ZoneReason::CycleDiscard { player }
+                        | crate::occurrence::ZoneReason::TransmuteDiscard { player } => {
+                            let count = self
+                                .characteristics
+                                .cards_discarded_this_turn
+                                .entry(player)
+                                .or_insert(0);
+                            *count = count.saturating_add(1);
+                        }
+                        crate::occurrence::ZoneReason::Sacrifice { player } => {
+                            let count = self
+                                .characteristics
+                                .permanents_sacrificed_this_turn
+                                .entry(player)
+                                .or_insert(0);
+                            *count = count.saturating_add(1);
+                        }
+                        crate::occurrence::ZoneReason::SacrificeCost => {
+                            if let Some(ctrl) = change.before.object.controller() {
+                                let count = self
+                                    .characteristics
+                                    .permanents_sacrificed_this_turn
+                                    .entry(ctrl)
+                                    .or_insert(0);
+                                *count = count.saturating_add(1);
+                            }
+                        }
+                        _ => {}
+                    }
+                    if let ObjectZone::Graveyard(owner) = change.after.object.zone()
+                        && change.before.object.card_id().is_some()
+                        && change.before.types.iter().any(|t| {
+                            matches!(
+                                t,
+                                CardType::Artifact
+                                    | CardType::Battle
+                                    | CardType::Creature
+                                    | CardType::Enchantment
+                                    | CardType::Land
+                                    | CardType::Planeswalker
+                            )
+                        })
+                    {
+                        self.characteristics.descended_this_turn.insert(owner);
+                    }
                 }
-                RulesOccurrence::LifeChanged(change)
-                    if change.kind == crate::life::LifeChangeKind::Loss =>
-                {
-                    let lost = self
+                RulesOccurrence::LifeChanged(change) => match change.kind {
+                    crate::life::LifeChangeKind::Loss => {
+                        let lost = self
+                            .characteristics
+                            .life_lost_this_turn
+                            .entry(change.player)
+                            .or_insert_with(|| 0.into());
+                        *lost = lost.plus(&change.amount);
+                    }
+                    crate::life::LifeChangeKind::Gain => {
+                        let gained = self
+                            .characteristics
+                            .life_gained_this_turn
+                            .entry(change.player)
+                            .or_insert_with(|| 0.into());
+                        *gained = gained.plus(&change.amount);
+                    }
+                },
+                RulesOccurrence::CastCompleted(cast) => {
+                    let count = self
                         .characteristics
-                        .life_lost_this_turn
-                        .entry(change.player)
-                        .or_insert_with(|| 0.into());
-                    *lost = lost.plus(&change.amount);
+                        .spells_cast_this_turn
+                        .entry(cast.controller())
+                        .or_insert(0);
+                    *count = count.saturating_add(1);
+                }
+                RulesOccurrence::AttackersDeclared { selected, .. } => {
+                    for attack in selected {
+                        if let Some(ctrl) = before
+                            .evaluated
+                            .get(attack.attacker)
+                            .and_then(|o| o.controller)
+                        {
+                            self.characteristics.attacked_this_turn_players.insert(ctrl);
+                        }
+                    }
+                }
+                RulesOccurrence::CardDrawOrdinal { player, .. } => {
+                    let count = self
+                        .characteristics
+                        .cards_drawn_this_turn_counts
+                        .entry(*player)
+                        .or_insert(0);
+                    *count = count.saturating_add(1);
+                }
+                RulesOccurrence::PermanentTargeted {
+                    object, controller, ..
+                } => {
+                    if before
+                        .evaluated
+                        .get(*object)
+                        .and_then(|o| o.controller)
+                        .is_some_and(|owner| owner != *controller)
+                    {
+                        self.characteristics
+                            .committed_crime_this_turn
+                            .insert(*controller);
+                    }
                 }
                 RulesOccurrence::TokenCreated { creator, .. } => {
                     self.token_creators_this_turn.insert(*creator);

@@ -13,6 +13,8 @@ use crate::{
 pub struct ActivatedAbilityId(pub u64);
 
 /// Printed restriction on activating this particular ability (CR 602.5).
+// Preserves `Copy` semantics for inline `ObjectFilter` without heap allocation.
+#[allow(clippy::large_enum_variant)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ActivationRestriction {
     DuringUpkeep,
@@ -40,6 +42,40 @@ pub enum ActivationRestriction {
     Exhaust,
     /// The same ability of this object may be activated once each turn.
     OnceEachTurn,
+    /// Activate only during your turn.
+    DuringYourTurn,
+    /// Activate only during an opponent's turn.
+    DuringOpponentsTurn,
+    /// Activate only during combat.
+    DuringCombat,
+    /// Activate only as a sorcery and only once each turn.
+    SorceryOnceEachTurn,
+    /// Activate only during your turn and only once each turn.
+    DuringYourTurnOnceEachTurn,
+    /// Activate only if seven or more cards are in your graveyard (Threshold).
+    Threshold,
+    /// Activate only if four or more card types are among cards in your graveyard (Delirium).
+    Delirium,
+    /// Activate only if you control three or more artifacts (Metalcraft).
+    Metalcraft,
+    /// Activate only if this permanent is tapped.
+    SourceIsTapped,
+    /// Activate only if this permanent is untapped.
+    SourceIsUntapped,
+    /// Activate only if your life total is at least this amount.
+    ControllerLifeAtLeast(u16),
+    /// Activate only if your life total is at most this amount.
+    ControllerLifeAtMost(u16),
+    /// Activate only if you control at least `minimum` permanents of `kind`.
+    ControlsCardType {
+        kind: crate::program::CardType,
+        minimum: u8,
+    },
+    /// Activate only if you control at least `minimum` permanents matching `filter`.
+    ControlsMatching {
+        filter: crate::program::ObjectFilter,
+        minimum: u8,
+    },
 }
 
 /// Current-characteristic filter for selected permanent sacrifice costs.
@@ -102,6 +138,8 @@ pub enum TapCostCount {
 }
 
 /// Discard mode for an activated ability's discard cost.
+// Preserves `Copy` semantics on `SourceCost` by storing `ObjectFilter` inline.
+#[allow(clippy::large_enum_variant)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DiscardCostMode {
     /// Discard one selected card from the activator's hand.
@@ -110,15 +148,27 @@ pub enum DiscardCostMode {
     WholeHand,
     /// Discard one card matching the announced target spell's mana value.
     MatchingTargetSpellManaValue,
+    /// Discard `count` cards matching `filter` from the activator's hand.
+    Filtered {
+        filter: crate::program::ObjectFilter,
+        count: std::num::NonZeroU8,
+    },
 }
 
 /// Graveyard-card exile policy for an activated ability cost.
+// Preserves `Copy` semantics on `SourceCost` by storing `ObjectFilter` inline.
+#[allow(clippy::large_enum_variant)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum GraveyardExileCost {
     /// Exile one creature card from the activator's graveyard, optionally paying its mana cost.
     Creature { pay_mana_cost: bool },
     /// Exile any number (X) of cards from the activator's graveyard.
     AnyCountX,
+    /// Exile `count` cards matching `filter` from the activator's graveyard.
+    Filtered {
+        filter: crate::program::ObjectFilter,
+        count: std::num::NonZeroU8,
+    },
 }
 
 /// Hand discard-self keyword action (CR 702.29 / 702.53 / 702.77 / Channel).
@@ -196,6 +246,12 @@ pub enum SourceCost {
     GraveyardSelf { unearth: bool },
     /// Reveal the source in hand (or command zone for commander ninjutsu) and return an unblocked attacker.
     Ninjutsu { from_command: bool },
+    /// Pay energy counters from the activator's energy pool, optionally tapping the source.
+    PayEnergy { amount: u16, tap_source: bool },
+    /// Untap the ability source as a cost (`{Q}`, CR 107.1q).
+    Untap,
+    /// Return the ability source from the battlefield to its owner's hand, optionally tapping first.
+    ReturnSelfToHand { tap_source: bool },
     /// Crew, Saddle, or Station power-contributor cost.
     Power { kind: PowerAbility, minimum: u64 },
 }
@@ -244,6 +300,11 @@ impl SourceCost {
                     tap_source: true,
                     ..
                 }
+                | Self::PayEnergy {
+                    tap_source: true,
+                    ..
+                }
+                | Self::ReturnSelfToHand { tap_source: true }
         )
     }
 
@@ -278,6 +339,7 @@ impl SourceCost {
                     tap_source: true,
                     ..
                 }
+                | Self::ReturnSelfToHand { tap_source: true }
         )
     }
 
@@ -318,6 +380,27 @@ impl SourceCost {
         matches!(self, Self::Exile { .. })
     }
 
+    /// Whether this cost returns the ability source to its owner's hand.
+    #[must_use]
+    pub const fn returns_source_to_hand(self) -> bool {
+        matches!(self, Self::ReturnSelfToHand { .. })
+    }
+
+    /// Whether this cost untaps the ability source (`{Q}`).
+    #[must_use]
+    pub const fn untaps_source(self) -> bool {
+        matches!(self, Self::Untap)
+    }
+
+    /// Energy counters paid as part of this cost, if any.
+    #[must_use]
+    pub const fn energy_cost(self) -> Option<u16> {
+        match self {
+            Self::PayEnergy { amount, .. } => Some(amount),
+            _ => None,
+        }
+    }
+
     /// Whether this cost expects `ActivationOrigin::Contributors`.
     #[must_use]
     pub const fn uses_contributors_origin(self) -> bool {
@@ -346,7 +429,8 @@ impl SourceCost {
                 }
                 | Self::Discard {
                     mode: DiscardCostMode::SelectedOne
-                        | DiscardCostMode::MatchingTargetSpellManaValue,
+                        | DiscardCostMode::MatchingTargetSpellManaValue
+                        | DiscardCostMode::Filtered { .. },
                     ..
                 }
                 | Self::TapPermanents {
@@ -532,6 +616,13 @@ impl SourceCost {
                 kind: PowerAbility::Station,
                 ..
             } => "station",
+            Self::PayEnergy {
+                tap_source: true, ..
+            } => "tap-pay-energy",
+            Self::PayEnergy { .. } => "pay-energy",
+            Self::Untap => "untap",
+            Self::ReturnSelfToHand { tap_source: true } => "tap-return-self",
+            Self::ReturnSelfToHand { tap_source: false } => "return-self",
         }
     }
 }

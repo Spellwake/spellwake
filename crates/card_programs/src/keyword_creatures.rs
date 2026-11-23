@@ -267,6 +267,9 @@ impl Registry {
                                 loyalty_source_verified,
                             )
                         })
+                        .or_else(|| {
+                            oracle_lowering::compile_transforming(card, vocabulary, indicator)
+                        })
                 })
                 .flatten();
             // The existing compilers read the first side as the base price. Preserve all
@@ -288,6 +291,14 @@ impl Registry {
                         vocabulary,
                         loyalty_source_verified,
                     )
+                    .or_else(|| {
+                        oracle_lowering::compile_planeswalker(
+                            compiler_input,
+                            inventory,
+                            vocabulary,
+                            loyalty_source_verified,
+                        )
+                    })
                 })
                 .flatten();
             let meld = (profile == Profile::Current && card.layout == "meld")

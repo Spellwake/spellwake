@@ -1502,7 +1502,8 @@ impl GameState {
                                     | crate::land::EntryChoice::Players(_)
                                     | crate::land::EntryChoice::Chapter(_)
                                     | crate::land::EntryChoice::CreatureType(_)
-                                    | crate::land::EntryChoice::CardName(_) => {
+                                    | crate::land::EntryChoice::CardName(_)
+                                    | crate::land::EntryChoice::PayLife(_) => {
                                         return Err(EffectError::WrongDecisionKind.into());
                                     }
                                 }

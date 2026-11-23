@@ -47,6 +47,7 @@ impl EffectWindow {
             .count();
         let mut minimums = BTreeMap::new();
         let mut require_at_least_one_block = BTreeSet::new();
+        let mut at_most_one_blocker = BTreeSet::new();
         for attack in combat
             .attackers()
             .filter(|attack| attack.defender() == actor)
@@ -72,6 +73,12 @@ impl EffectWindow {
             {
                 minimum = minimum.max(defending_creatures);
             }
+            let max_one = attacker
+                .blocking_restrictions
+                .contains(&BlockingRestriction::AtMostOneBlocker);
+            if max_one {
+                at_most_one_blocker.insert(id);
+            }
             if !attacker.keywords.is_disjoint(&defenders_lands) {
                 continue;
             }
@@ -85,7 +92,7 @@ impl EffectWindow {
                     available.push(blocker.object);
                 }
             }
-            if minimum > 1 && (single_blocker || available.len() < minimum) {
+            if minimum > 1 && (single_blocker || max_one || available.len() < minimum) {
                 continue;
             }
             if minimum > 1 {
@@ -103,6 +110,9 @@ impl EffectWindow {
             }
         }
         let additional = blockers.iter().filter_map(|blocker| {
+            if blocker.blocking_restrictions.contains(&BlockingRestriction::CanBlockAnyNumber) {
+                return (!attackers.is_empty()).then_some((blocker.object, attackers.len()));
+            }
             let granted = blocker.blocking_restrictions.iter()
                 .filter(|rule| **rule == BlockingRestriction::AdditionalBlock).count();
             let monarch = blocker.controller.is_some() && blocker.controller == self.characteristics.monarch
@@ -116,6 +126,7 @@ impl EffectWindow {
             BlockersDecision::new(self.revision, actor, attackers, choices, minimums)
                 .chosen_by(combat.blocking_chooser.unwrap_or(actor))
                 .with_single_blocker(single_blocker)
+                .with_at_most_one_blocker(at_most_one_blocker)
                 .with_additional_blockers(additional)
                 .with_block_requirements(
                     &self.must_block_this_turn,
@@ -187,6 +198,12 @@ fn can_block(
             BlockingRestriction::CannotBlockSubtype(kind) => {
                 attacker.current_creature_subtypes.contains(kind)
             }
+            BlockingRestriction::CannotBlockMatching(filter) => {
+                let excluded = BTreeSet::new();
+                filter.matches_static_characteristics(attacker, &excluded, || {
+                    Some(attacker.defined.mana_value.clone())
+                })
+            }
             _ => false,
         })
     {
@@ -205,6 +222,55 @@ fn can_block(
                     .derived
                     .toughness
                     >= i64::from(*minimum).into() =>
+            {
+                return Ok(false);
+            }
+            BlockingRestriction::CannotBeBlockedByPowerAtMost(maximum)
+                if blocker
+                    .power_toughness
+                    .as_ref()
+                    .ok_or(CombatError::InvalidContext)?
+                    .derived
+                    .power
+                    <= i64::from(*maximum).into() =>
+            {
+                return Ok(false);
+            }
+            BlockingRestriction::CannotBeBlockedByPowerAtLeast(minimum)
+                if blocker
+                    .power_toughness
+                    .as_ref()
+                    .ok_or(CombatError::InvalidContext)?
+                    .derived
+                    .power
+                    >= i64::from(*minimum).into() =>
+            {
+                return Ok(false);
+            }
+            BlockingRestriction::CannotBeBlockedByColor(color)
+                if blocker.current_colors.contains(color) =>
+            {
+                return Ok(false);
+            }
+            BlockingRestriction::OnlyBlockedByColor(color)
+                if !blocker.current_colors.contains(color) =>
+            {
+                return Ok(false);
+            }
+            BlockingRestriction::OnlyBlockedByColorOrArtifact(color)
+                if !blocker.current_colors.contains(color)
+                    && !blocker.has_type(CardType::Artifact) =>
+            {
+                return Ok(false);
+            }
+            BlockingRestriction::CannotBeBlockedByTokens if blocker.is_token => {
+                return Ok(false);
+            }
+            BlockingRestriction::OnlyBlockedByArtifact if !blocker.has_type(CardType::Artifact) => {
+                return Ok(false);
+            }
+            BlockingRestriction::CannotBeBlockedByNonArtifact
+                if !blocker.has_type(CardType::Artifact) =>
             {
                 return Ok(false);
             }
@@ -248,6 +314,22 @@ fn can_block(
                     .as_ref()
                     .ok_or(CombatError::InvalidContext)?;
                 if pt.derived.power <= 1.into() || pt.derived.toughness <= 1.into() {
+                    return Ok(false);
+                }
+            }
+            BlockingRestriction::CannotBeBlockedByMatching(filter) => {
+                let excluded = BTreeSet::new();
+                if filter.matches_static_characteristics(blocker, &excluded, || {
+                    Some(blocker.defined.mana_value.clone())
+                }) {
+                    return Ok(false);
+                }
+            }
+            BlockingRestriction::OnlyBlockedByMatching(filter) => {
+                let excluded = BTreeSet::new();
+                if !filter.matches_static_characteristics(blocker, &excluded, || {
+                    Some(blocker.defined.mana_value.clone())
+                }) {
                     return Ok(false);
                 }
             }

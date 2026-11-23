@@ -1,19 +1,18 @@
 //! Possessed-controller live View composition, with final local and SQL refresh.
 use super::*;
 use crate::{
+    ai_runtime::{PriorityAffordances, probe_priority_affordances},
     controller_possession::{ControllerSecretStore, PossessedController},
     native_game::NativeCastBatchError,
-    player_wire::{
-        PlayerAbilityKind, PlayerAction, PlayerCardType, PlayerCommand, PlayerCommandAck,
-        PlayerSnapshot,
-    },
+    player_wire::{PlayerAction, PlayerCommand, PlayerCommandAck, PlayerSnapshot},
 };
 
-/// Live controller View together with verified basic affordances (own legal land plays
-/// and mana activations) computed on the exact same native scope.
+/// Live controller View together with verified priority affordances (legal land plays,
+/// mana sources, castable spells, and activatable abilities) computed on the exact same scope.
 pub struct NativeControllerSnapshot {
     pub snapshot: Box<PlayerSnapshot>,
     pub basic_actions: Vec<PlayerAction>,
+    pub affordances: PriorityAffordances,
 }
 
 /// Outcome of a controller view read that also returns verified basic affordances.
@@ -21,49 +20,6 @@ pub enum NativeControllerViewOutcome {
     Snapshot(NativeControllerSnapshot),
     Unavailable,
     Stale,
-}
-
-fn probe_basic_actions(scope: &NativeScope<'_>, snapshot: &PlayerSnapshot) -> Vec<PlayerAction> {
-    let mut available = Vec::new();
-    if !snapshot.decisions.is_empty() {
-        return available;
-    }
-    for object in &snapshot.visible_objects {
-        if object.owner_seat_id != snapshot.viewer_seat_id
-            && object.controller_seat_id != Some(snapshot.viewer_seat_id)
-        {
-            continue;
-        }
-        let mut candidates = Vec::new();
-        if object
-            .public_properties
-            .as_ref()
-            .is_some_and(|p| p.card_types.contains(&PlayerCardType::Land))
-        {
-            candidates.push(PlayerAction::PlayLand {
-                source: object.handle.clone(),
-            });
-        }
-        for ability in &object.abilities {
-            if ability.kind == PlayerAbilityKind::Mana {
-                candidates.push(PlayerAction::ActivateMana {
-                    source: object.handle.clone(),
-                    ability: ability.handle.clone(),
-                });
-            }
-        }
-        for action in candidates {
-            let command = PlayerCommand {
-                request_id: Uuid::new_v4(),
-                basis: scope.basis().clone(),
-                action: action.clone(),
-            };
-            if scope.propose(&command).is_ok() {
-                available.push(action);
-            }
-        }
-    }
-    available
 }
 
 impl NativeGameRuntime {
@@ -157,11 +113,12 @@ impl NativeGameRuntime {
                 &metadata,
                 &display,
             )?;
-            let basic_actions = if include_basic_actions {
-                probe_basic_actions(issued.view().scope(), issued.view().snapshot())
+            let affordances = if include_basic_actions {
+                probe_priority_affordances(issued.view().scope(), issued.view().snapshot())
             } else {
-                Vec::new()
+                PriorityAffordances::default()
             };
+            let basic_actions = affordances.basic_actions.clone();
             let snapshot = issued.into_snapshot();
             #[cfg(test)]
             self.observe_delivery(TestDeliveryStage::Refresh, repository, &recovered);
@@ -169,6 +126,7 @@ impl NativeGameRuntime {
                 NativeControllerSnapshot {
                     snapshot: Box::new(snapshot),
                     basic_actions,
+                    affordances,
                 },
             ))
         })();
