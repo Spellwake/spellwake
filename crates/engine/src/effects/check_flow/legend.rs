@@ -10,7 +10,38 @@ impl EffectWindow {
         event: CheckEventId,
     ) -> Result<Vec<StagedLegend>, EffectError> {
         let mut conflicts = Vec::new();
+        let global_legend_exempt = current.objects.values().any(|source| {
+            source.zone == ObjectZone::Battlefield
+                && source.has_battlefield_rule(|rule| {
+                    matches!(
+                        rule,
+                        crate::characteristics::StaticContinuousAbility::Modifier {
+                            rule: crate::characteristics::StaticModifierRule::IgnoreLegendRule,
+                            ..
+                        }
+                    )
+                })
+        });
+        if global_legend_exempt {
+            return Ok(conflicts);
+        }
         for controller in self.window.apnap_players()? {
+            let controller_legend_exempt = current.objects.values().any(|source| {
+                source.zone == ObjectZone::Battlefield
+                    && source.controller == Some(controller)
+                    && source.has_battlefield_rule(|rule| {
+                        matches!(
+                            rule,
+                            crate::characteristics::StaticContinuousAbility::Modifier {
+                                rule: crate::characteristics::StaticModifierRule::IgnoreLegendRuleForController,
+                                ..
+                            }
+                        )
+                    })
+            });
+            if controller_legend_exempt {
+                continue;
+            }
             let mut by_name: BTreeMap<EnglishCardName, BTreeSet<ObjectId>> = BTreeMap::new();
             let exempt_subtypes=current.objects.values().filter(|o|o.zone==ObjectZone::Battlefield && o.controller==Some(controller)).flat_map(|source|
                 source.printed_text.continuous.iter().chain(&source.printed_text.additional_battlefield_abilities).filter_map(move |rule| {

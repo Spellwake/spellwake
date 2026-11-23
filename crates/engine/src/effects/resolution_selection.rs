@@ -192,10 +192,16 @@ pub enum ResolutionSelectionOperation {
     Sacrifice {
         filter: PermanentTypeFilter,
     },
-    SacrificeMatching(crate::program::SacrificeSelection),
+    SacrificeMatching {
+        filter: crate::program::SacrificeSelection,
+        source: Option<ObjectId>,
+    },
     /// The domain and commit both require physical-card origin and exact Hand.
     DiscardUpTo,
     Discard,
+    DiscardFiltered {
+        filter: Box<ObjectFilter>,
+    },
     RandomDiscard {
         object: ObjectId,
     },
@@ -208,7 +214,7 @@ impl ResolutionSelectionOperation {
         matches!(
             self,
             Self::Sacrifice { .. }
-                | Self::SacrificeMatching(_)
+                | Self::SacrificeMatching { .. }
                 | Self::OtherControlledCreature {
                     sacrifice: true,
                     ..
@@ -316,9 +322,11 @@ impl ResolutionSelectionOperation {
             | Self::SacrificeContributor { .. }
             | Self::SacrificeColored
             | Self::Sacrifice { .. }
-            | Self::SacrificeMatching(_) => ResolutionSelectionKind::Sacrifice,
+            | Self::SacrificeMatching { .. } => ResolutionSelectionKind::Sacrifice,
             Self::DiscardUpTo => ResolutionSelectionKind::DiscardUpTo,
-            Self::Discard | Self::RandomDiscard { .. } => ResolutionSelectionKind::Discard,
+            Self::Discard | Self::DiscardFiltered { .. } | Self::RandomDiscard { .. } => {
+                ResolutionSelectionKind::Discard
+            }
             Self::RandomSacrifice { .. } => ResolutionSelectionKind::Sacrifice,
         }
     }
@@ -413,7 +421,7 @@ impl ResolutionSelectionOperation {
             | Self::SacrificeContributor { .. }
             | Self::SacrificeColored
             | Self::Sacrifice { .. }
-            | Self::SacrificeMatching(_)
+            | Self::SacrificeMatching { .. }
             | Self::RandomSacrifice { .. }
             | Self::PayLifeToSaveCreatures { .. } => ResolutionSelectionMove::Sacrifice {
                 player: selected.player,
@@ -423,6 +431,7 @@ impl ResolutionSelectionOperation {
             Self::RevealedHand { .. }
             | Self::DiscardUpTo
             | Self::Discard
+            | Self::DiscardFiltered { .. }
             | Self::RandomDiscard { .. } => ResolutionSelectionMove::FromHand {
                 player: selected.player,
                 object: selected.object,
@@ -486,7 +495,7 @@ impl ResolutionSelectionOperation {
             | Self::SacrificeContributor { .. }
             | Self::SacrificeColored
             | Self::Sacrifice { .. }
-            | Self::SacrificeMatching(_)
+            | Self::SacrificeMatching { .. }
             | Self::RandomSacrifice { .. }
             | Self::PayLifeToSaveCreatures { .. } => ZoneReason::Sacrifice { player },
             Self::RevealedHand {
@@ -499,6 +508,7 @@ impl ResolutionSelectionOperation {
             }
             | Self::DiscardUpTo
             | Self::Discard
+            | Self::DiscardFiltered { .. }
             | Self::RandomDiscard { .. } => ZoneReason::Discard { player },
         })
     }
@@ -1007,7 +1017,7 @@ impl EffectWindow {
             .collect())
     }
 
-    fn selection_players(
+    pub(super) fn selection_players(
         &self,
         players: AffectedPlayers,
         controller: SeatId,
@@ -1105,7 +1115,7 @@ impl EffectWindow {
         issued: Option<&EffectDecision>,
     ) -> bool {
         matches!(&self.pending_work, Some(PendingWork::ResolutionSelection(work))
-            if matches!(work.operation, ResolutionSelectionOperation::Discard | ResolutionSelectionOperation::DiscardUpTo)
+            if matches!(work.operation, ResolutionSelectionOperation::Discard | ResolutionSelectionOperation::DiscardUpTo | ResolutionSelectionOperation::DiscardFiltered { .. })
                 && matches!(work.stage, ResolutionSelectionStage::Choosing { .. }))
             && issued.is_some()
             && self.selection_frame().as_ref() == issued
@@ -1113,6 +1123,62 @@ impl EffectWindow {
 
     /// Discard cohorts use exact owner hands. A vanished hand retires only its own staged choice.
     pub(super) fn refresh_hand_selection_after_departure(&mut self) -> Result<(), EffectError> {
+        let (filter_clone, check_rows) = {
+            let Some(PendingWork::ResolutionSelection(work)) = &self.pending_work else {
+                return Err(EffectError::WrongSelectionFrame);
+            };
+            let ResolutionSelectionStage::Choosing {
+                requirements,
+                next_player,
+                accepted,
+            } = &work.stage
+            else {
+                return Err(EffectError::WrongPhase);
+            };
+            if *next_player != accepted.len() || *next_player > requirements.len() {
+                return Err(EffectError::InconsistentSelectionWork);
+            }
+            let participants = self.window.participants();
+            let rows = requirements
+                .iter()
+                .filter(|r| participants.contains(&r.player))
+                .map(|r| (r.player, r.domain.clone()))
+                .collect::<Vec<_>>();
+            let filter_clone = match &work.operation {
+                ResolutionSelectionOperation::DiscardFiltered { filter } => Some(filter.clone()),
+                _ => None,
+            };
+            (filter_clone, rows)
+        };
+        let evaluated = if filter_clone.is_some() {
+            Some(self.evaluated_characteristics()?)
+        } else {
+            None
+        };
+        let empty_excluded = BTreeSet::new();
+        for (player, domain) in &check_rows {
+            let hand = self
+                .window
+                .cards()
+                .iter()
+                .filter(|object| {
+                    object.card_id().is_some()
+                        && object.zone() == ObjectZone::Hand(*player)
+                        && match (&filter_clone, &evaluated) {
+                            (Some(filter), Some(eval)) => eval.get(object.id()).is_some_and(|v| {
+                                filter.matches_static_characteristics(v, &empty_excluded, || {
+                                    self.copiable_program(object.id()).map(Program::mana_value)
+                                })
+                            }),
+                            _ => true,
+                        }
+                })
+                .map(GameObject::id);
+            if !hand.eq(domain.iter().copied()) {
+                return Err(EffectError::WrongPhase);
+            }
+        }
+        let participants = self.window.participants().to_vec();
         let Some(PendingWork::ResolutionSelection(work)) = &mut self.pending_work else {
             return Err(EffectError::WrongSelectionFrame);
         };
@@ -1124,26 +1190,8 @@ impl EffectWindow {
         else {
             return Err(EffectError::WrongPhase);
         };
-        if *next_player != accepted.len() || *next_player > requirements.len() {
-            return Err(EffectError::InconsistentSelectionWork);
-        }
-        let participants = self.window.participants();
         requirements.retain(|requirement| participants.contains(&requirement.player));
         accepted.retain(|selection| participants.contains(&selection.player));
-        for requirement in requirements.iter() {
-            let hand = self
-                .window
-                .cards()
-                .iter()
-                .filter(|object| {
-                    object.card_id().is_some()
-                        && object.zone() == ObjectZone::Hand(requirement.player)
-                })
-                .map(GameObject::id);
-            if !hand.eq(requirement.domain.iter().copied()) {
-                return Err(EffectError::WrongPhase);
-            }
-        }
         *next_player = accepted.len();
         Ok(())
     }
@@ -2323,11 +2371,21 @@ impl EffectWindow {
                 )
             }
             Instruction::SacrificeMatching(filter) => {
+                let source = match self.window.resolving().map(StackEntry::kind) {
+                    Some(
+                        StackKind::ActivatedAbility { source }
+                        | StackKind::TriggeredAbility { source },
+                    ) => Some(source.id()),
+                    _ => None,
+                };
                 all = ValueExpr::Literal(1.into());
                 (
                     AffectedPlayers::One(ResolvingPlayer::Controller),
                     &all,
-                    ResolutionSelectionOperation::SacrificeMatching(*filter),
+                    ResolutionSelectionOperation::SacrificeMatching {
+                        filter: *filter,
+                        source,
+                    },
                 )
             }
             Instruction::SacrificeToContinue { filter } => {
@@ -2370,6 +2428,17 @@ impl EffectWindow {
             Instruction::Discard { players, amount } => {
                 (*players, amount, ResolutionSelectionOperation::Discard)
             }
+            Instruction::DiscardFiltered {
+                players,
+                amount,
+                filter,
+            } => (
+                *players,
+                amount,
+                ResolutionSelectionOperation::DiscardFiltered {
+                    filter: filter.clone(),
+                },
+            ),
             Instruction::BranchIfFalse { .. }
             | Instruction::Jump { .. }
             | Instruction::OptionalSequence { .. }
@@ -2379,6 +2448,10 @@ impl EffectWindow {
             | Instruction::SetControlledCreatureSizeToHand
             | Instruction::ModifyGroupByAmount { .. }
             | Instruction::AddExperienceCounter
+            | Instruction::AddPlayerCounter { .. }
+            | Instruction::ExileTopPlay { .. }
+            | Instruction::LookTopChoose { .. }
+            | Instruction::RevealUntilMatch { .. }
             | Instruction::ControlManaSourceThroughNextTurn
             | Instruction::GrantControllerFlashUntilCleanup
             | Instruction::RequireOpponentsCreaturesBlockThisTurn
@@ -2515,6 +2588,7 @@ impl EffectWindow {
             | Instruction::TapEnchantedCreature
             | Instruction::RequireCondition(_)
             | Instruction::PayControllerLife(_)
+            | Instruction::PayControllerEnergy(_)
             | Instruction::PutEquipmentFromHandOrGraveyard
             | Instruction::EquipNewToken
             | Instruction::Encore
@@ -2563,10 +2637,14 @@ impl EffectWindow {
             | Instruction::WeakenDelayedAttacker(_)
             | Instruction::DrawRevealRemoveLoyalty
             | Instruction::CreateReflexiveDiscardDamage
+            | Instruction::ScheduleDelayedStepTrigger { .. }
+            | Instruction::EmitReflexiveTrigger { .. }
             | Instruction::RemoveLoyaltyExileTopForPlay
             | Instruction::DamageDamagedPlayersCreatures
             | Instruction::DamageOpponentsAmount(_)
             | Instruction::DamageRelatedPlayerAmount(_)
+            | Instruction::DamageGroupAmount { .. }
+            | Instruction::DoublePowerToughness { .. }
             | Instruction::Ninjutsu
             | Instruction::Unearth
             | Instruction::FlipCoin { .. }
@@ -2646,6 +2724,9 @@ impl EffectWindow {
             | Instruction::ShuffleEachHandAndGraveyard
             | Instruction::EndControllerTurn
             | Instruction::ShuffleOwnLibrary
+            | Instruction::ShufflePlayerLibrary(_)
+            | Instruction::ShuffleTargetIntoLibrary
+            | Instruction::RevealPlayerHand(_)
             | Instruction::ShuffleOwnGraveyardIntoLibrary
             | Instruction::ShuffleTargetGraveyardCards { .. }
             | Instruction::ReturnDelayedGraveyardToHand(_)
@@ -2664,6 +2745,8 @@ impl EffectWindow {
             | Instruction::PutChosenXChargeCounters
             | Instruction::AddCounterAndDischargeOnResolution(_)
             | Instruction::ExileAllGraveyards
+            | Instruction::ExilePlayerGraveyards(_)
+            | Instruction::RemoveCountersFromPermanent { .. }
             | Instruction::ExileTarget
             | Instruction::ReturnToOwnersHand
             | Instruction::ReturnOwnGraveyardCreatureToBattlefield
@@ -2687,6 +2770,7 @@ impl EffectWindow {
             | Instruction::GrantProtectionChosenColor(_)
             | Instruction::PutIndestructibleCounter
             | Instruction::PutLoyaltyCounter
+            | Instruction::PutNamedCounterOnTarget { .. }
             | Instruction::PutPowerToughnessCounters { .. }
             | Instruction::Scry { .. }
             | Instruction::Surveil { .. }
@@ -3111,9 +3195,8 @@ impl EffectWindow {
                             }
                         }
                         if !tapped.is_empty() {
-                            let (window, changes) =
-                                self.window.untap_for_effect(cursor.entry, &tapped)?;
-                            self.window = window;
+                            let occurrences =
+                                self.untap_for_effect_with_stun(cursor.entry, &tapped)?;
                             self.emit_from(
                                 EventCause::Instruction {
                                     entry: cursor.entry,
@@ -3122,12 +3205,7 @@ impl EffectWindow {
                                 &before,
                                 None,
                                 append,
-                                |_, _, _| {
-                                    Ok(occurrence_flow::status_occurrences(
-                                        changes,
-                                        crate::occurrence::StatusReason::Effect,
-                                    ))
-                                },
+                                |_, _, _| Ok(occurrences),
                             )?;
                         }
                         self.pending_work = Some(PendingWork::Resolution(cursor));
@@ -3268,6 +3346,7 @@ impl EffectWindow {
                         operation,
                         ResolutionSelectionOperation::Discard
                             | ResolutionSelectionOperation::DiscardUpTo
+                            | ResolutionSelectionOperation::DiscardFiltered { .. }
                             | ResolutionSelectionOperation::RandomDiscard { .. }
                     ) {
                         cursor.results.discarded_types.clear();
@@ -3331,6 +3410,9 @@ impl EffectWindow {
                     ) {
                         cursor.results.selected_graveyard_exile_creatures = 0;
                     }
+                    cursor.results.last_action_succeeded = !batch.logical.is_empty();
+                    cursor.results.last_action_count =
+                        Some(RulesInteger::from_usize(batch.logical.len()));
                     self.commit_resolution_selection(&mut cursor, &operation, &batch, append)?;
                     cursor.revealed_piles = None;
                     cursor.results.sampled_graveyard_cards = None;
@@ -3358,6 +3440,7 @@ impl EffectWindow {
                         operation,
                         ResolutionSelectionOperation::Discard
                             | ResolutionSelectionOperation::DiscardUpTo
+                            | ResolutionSelectionOperation::DiscardFiltered { .. }
                             | ResolutionSelectionOperation::RandomDiscard { .. }
                     ) {
                         let mut discarded = BTreeMap::new();
@@ -4215,7 +4298,7 @@ impl EffectWindow {
                 },
             ) if filter == actual => *players,
             (
-                ResolutionSelectionOperation::SacrificeMatching(filter),
+                ResolutionSelectionOperation::SacrificeMatching { filter, .. },
                 Instruction::SacrificeMatching(expected),
             ) if filter == expected => AffectedPlayers::One(ResolvingPlayer::Controller),
             (
@@ -4238,6 +4321,14 @@ impl EffectWindow {
             (ResolutionSelectionOperation::Discard, Instruction::Discard { players, .. }) => {
                 *players
             }
+            (
+                ResolutionSelectionOperation::DiscardFiltered { filter },
+                Instruction::DiscardFiltered {
+                    players,
+                    filter: expected,
+                    ..
+                },
+            ) if filter == expected => *players,
             _ => return Err(EffectError::InconsistentSelectionWork),
         };
         let players: BTreeSet<_> = match players {
@@ -4391,7 +4482,7 @@ impl EffectWindow {
             && !batch
                 .replacements
                 .as_ref()
-                .is_some_and(|b| b.regenerations().next().is_some())
+                .is_some_and(|b| b.has_destruction_saves())
         {
             return Ok(());
         }
@@ -4950,11 +5041,11 @@ fn selection_eligible(
                     .get(object.id())
                     .is_some_and(|value| value.controller == Some(player) && value.is_creature())
         }
-        ResolutionSelectionOperation::SacrificeMatching(filter) => {
+        ResolutionSelectionOperation::SacrificeMatching { filter, source } => {
             object.zone() == ObjectZone::Battlefield
-                && evaluated
-                    .get(object.id())
-                    .is_some_and(|value| value.controller == Some(player) && filter.matches(value))
+                && evaluated.get(object.id()).is_some_and(|value| {
+                    value.controller == Some(player) && filter.matches(value, *source)
+                })
         }
         ResolutionSelectionOperation::ExileChosen { filter }
         | ResolutionSelectionOperation::ReturnToHand { filter }
@@ -4978,6 +5069,13 @@ fn selection_eligible(
         }
         ResolutionSelectionOperation::DiscardUpTo | ResolutionSelectionOperation::Discard => {
             object.card_id().is_some() && object.zone() == ObjectZone::Hand(player)
+        }
+        ResolutionSelectionOperation::DiscardFiltered { filter } => {
+            object.card_id().is_some()
+                && object.zone() == ObjectZone::Hand(player)
+                && evaluated.get(object.id()).is_some_and(|view| {
+                    filter.matches_static_characteristics(view, excluded, mana_value)
+                })
         }
     }
 }

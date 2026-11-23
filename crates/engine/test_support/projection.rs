@@ -492,6 +492,9 @@ pub fn reply(value: &DecisionReply) -> Value {
             spellwake_engine::land::EntryChoice::CreatureType(kind) => {
                 json!({"tag":"EntryCreatureType","value":creature_type_id(*kind)})
             }
+            spellwake_engine::land::EntryChoice::PayLife(pay) => {
+                json!({"tag":"EntryPayLife","pay":pay})
+            }
         },
         DecisionReply::TokenAuraChoice(host) => {
             json!({"tag":"TokenAuraChoice","target":target(*host)})
@@ -1873,6 +1876,7 @@ fn related(value: &TriggerRelated) -> Value {
         TriggerRelated::CombatDamageToPlaneswalker {
             planeswalker,
             attempt,
+            ..
         } => {
             json!({"tag":"CombatDamageToPlaneswalker","planeswalker":opaque(planeswalker),"attempt":opaque(attempt)})
         }
@@ -1880,6 +1884,7 @@ fn related(value: &TriggerRelated) -> Value {
             creature,
             player,
             attempt,
+            ..
         } => {
             json!({"tag":"SubtypeCombatDamage","creature":opaque(creature),"player":player.0,"attempt":opaque(attempt)})
         }
@@ -1888,8 +1893,17 @@ fn related(value: &TriggerRelated) -> Value {
         } => {
             json!({"tag":"AttachedCreatureDamaged","creature":opaque(creature),"attempt":opaque(attempt)})
         }
-        TriggerRelated::DamageToOpponent { player, attempt } => {
+        TriggerRelated::DamageToOpponent {
+            player, attempt, ..
+        } => {
             json!({"tag":"DamageToOpponent","player":player.0,"attempt":opaque(attempt)})
+        }
+        TriggerRelated::DamageDealtToPermanent {
+            recipient,
+            attempt,
+            amount,
+        } => {
+            json!({"tag":"DamageDealtToPermanent","recipient":opaque(recipient),"attempt":opaque(attempt),"amount":amount})
         }
         TriggerRelated::GraveyardReturnPaid { mana_value } => {
             json!({"tag":"GraveyardReturnPaid","mana_value":mana_value})
@@ -1989,6 +2003,7 @@ fn related(value: &TriggerRelated) -> Value {
         TriggerRelated::Step { position, active } => {
             json!({"tag":"Step","position":damage_trace::turn_position_view(*position),"active":active.0})
         }
+        TriggerRelated::ReflexiveTrigger => json!({"tag":"ReflexiveTrigger"}),
     }
 }
 fn occurrence_id(value: spellwake_engine::occurrence::OccurrenceId) -> Value {
@@ -2667,6 +2682,13 @@ fn frame_with_cards(value: &RuleFrame, cards: &GameObjects) -> Result<Value, Str
                 PileChoice::OptionalCreatureToBattlefield { looked, eligible } => {
                     json!({"kind":"OptionalCreatureToBattlefield","looked":looked.iter().map(opaque).collect::<Vec<_>>(),"eligible":eligible.iter().map(opaque).collect::<Vec<_>>()})
                 }
+                PileChoice::OptionalUpTo {
+                    looked,
+                    eligible,
+                    max,
+                } => {
+                    json!({"kind":"OptionalUpTo","looked":looked.iter().map(opaque).collect::<Vec<_>>(),"eligible":eligible.iter().map(opaque).collect::<Vec<_>>(),"max":max})
+                }
                 PileChoice::OneToHand(cards) => {
                     json!({"kind":"OneToHand","cards":cards.iter().map(opaque).collect::<Vec<_>>()})
                 }
@@ -3235,6 +3257,12 @@ fn zone_instance(value: spellwake_engine::effects::ZoneEffectInstance) -> Value 
             CreatedZoneEffect::ExileIfDies { entry, instruction } => {
                 ("ExileIfDies", entry, instruction)
             }
+            CreatedZoneEffect::ShieldCounter => {
+                return json!({"source":opaque(value.source),"effect":"ShieldCounter"});
+            }
+            CreatedZoneEffect::FinalityCounter => {
+                return json!({"source":opaque(value.source),"effect":"FinalityCounter"});
+            }
         };
         return json!({"source":opaque(value.source),"effect":kind,"entry":opaque(entry),"instruction":instruction});
     }
@@ -3309,13 +3337,14 @@ pub fn resolution_selection_state(value: ResolutionSelectionState<'_>) -> Value 
         } => {
             json!({"tag":"ExileSingle","object":opaque(object),"source":source.map(opaque),"monarch_controller":monarch_controller.map(|seat|seat.0)})
         }
-        ResolutionSelectionOperation::SacrificeMatching(filter) => match filter {
+        ResolutionSelectionOperation::SacrificeMatching { filter, .. } => match filter {
             spellwake_engine::program::SacrificeSelection::Subtype(kind) => {
                 json!({"tag":"SacrificeMatching","subtype":creature_type_id(*kind)})
             }
             spellwake_engine::program::SacrificeSelection::NontokenCreature => {
                 json!({"tag":"SacrificeMatching","subtype":null})
             }
+            other => json!({"tag":"SacrificeMatching","kind":format!("{other:?}")}),
         },
         ResolutionSelectionOperation::Sacrifice { filter } => json!({
             "tag":"Sacrifice",
@@ -3417,6 +3446,9 @@ pub fn resolution_selection_state(value: ResolutionSelectionState<'_>) -> Value 
             json!({"tag":"RandomSacrifice","object":opaque(object)})
         }
         ResolutionSelectionOperation::Discard => json!({"tag":"Discard"}),
+        ResolutionSelectionOperation::DiscardFiltered { filter } => {
+            json!({"tag":"DiscardFiltered","filter":opaque(filter)})
+        }
     };
     let selected = |rows: &[spellwake_engine::effects::ResolutionAcceptedSelection]| {
         rows.iter().map(|row|json!({"player":row.player.0,"objects":row.objects.iter().map(opaque).collect::<Vec<_>>()})).collect::<Vec<_>>()
@@ -4326,6 +4358,14 @@ pub fn occurrence(value: &RulesOccurrence) -> Value {
         } => {
             json!({"tag":"ExperienceCountersChanged","player":player.0,"before":before,"after":after})
         }
+        RulesOccurrence::PlayerCounterChanged {
+            player,
+            kind,
+            before,
+            after,
+        } => {
+            json!({"tag":"PlayerCounterChanged","player":player.0,"kind":opaque(kind),"before":before,"after":after})
+        }
         RulesOccurrence::PlayerPoisoned {
             player,
             before,
@@ -4384,6 +4424,13 @@ pub fn occurrence(value: &RulesOccurrence) -> Value {
         }
         RulesOccurrence::StepBegan { position, active } => {
             json!({"tag":"StepBegan","position":damage_trace::turn_position_view(*position),"active":active.0})
+        }
+        RulesOccurrence::ReflexiveTrigger {
+            source,
+            controller,
+            body,
+        } => {
+            json!({"tag":"ReflexiveTrigger","source":appearance(source),"controller":controller.0,"body":program::body(body)})
         }
     }
 }

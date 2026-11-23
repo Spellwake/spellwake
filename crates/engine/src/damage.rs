@@ -26,6 +26,8 @@ pub enum DamageEffectId {
     StaticPreventionWithExile(ObjectId, crate::characteristics::StaticAbilityId),
     CombatDamageToMill(ObjectId, crate::characteristics::StaticAbilityId),
     RemovePlusOneToPreventDamage(ObjectId, crate::characteristics::StaticAbilityId),
+    /// CR 122.1c shield counter prevents damage to this permanent and removes a shield counter.
+    ShieldCounter(ObjectId),
     /// Each eligible component is doubled once by this source's effect.
     StaticDouble(ObjectId),
     /// One of two independently ordered replacement effects from an Equipment.
@@ -210,6 +212,8 @@ pub enum TurnPreventionFilter {
         spellwake_contracts::creature_types::CreatureTypeId,
     ),
     Combat,
+    /// Prevent all damage (combat and noncombat) that would be dealt this turn.
+    All,
     CreaturesControlledByOpponents,
 }
 /// Creator provenance survives creator exit and never supplies source matching.

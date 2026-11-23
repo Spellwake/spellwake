@@ -24,6 +24,31 @@ impl EffectWindow {
         self.begin_shuffle(player, false)
     }
 
+    pub(super) fn begin_player_library_shuffle(
+        &mut self,
+        player: ResolvingPlayer,
+    ) -> Result<(), EffectError> {
+        let seat = self.resolving_player(player)?;
+        self.begin_shuffle(seat, false)
+    }
+
+    pub(super) fn begin_target_into_library_shuffle(
+        &mut self,
+        entry: &crate::stack_window::StackEntry,
+    ) -> Result<(), EffectError> {
+        let TargetRef::Object(target) = self.instruction_target(entry)?.choice().target else {
+            return Err(EffectError::InconsistentProgram);
+        };
+        let Some(object) = self.window.cards().get(target).filter(|object| {
+            (object.zone() == ObjectZone::Battlefield
+                && self.window.cards().phased_out_under(target).is_none())
+                || matches!(object.zone(), ObjectZone::Graveyard(_))
+        }) else {
+            return self.advance_instruction();
+        };
+        self.begin_shuffle_with_cards(object.owner(), false, Some(vec![target]), None)
+    }
+
     pub(super) fn begin_ability_source_shuffle(
         &mut self,
         entry: &crate::stack_window::StackEntry,
@@ -115,7 +140,11 @@ impl EffectWindow {
                 })
                 .map(GameObject::id)
                 .collect()
-        } else if continue_reveals || self.current_instruction()? == &Instruction::ShuffleOwnLibrary
+        } else if continue_reveals
+            || matches!(
+                self.current_instruction()?,
+                Instruction::ShuffleOwnLibrary | Instruction::ShufflePlayerLibrary(_)
+            )
         {
             vec![]
         } else {

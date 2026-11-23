@@ -49,6 +49,8 @@ pub enum EntryChoice {
     Reveal(Option<ObjectId>),
     CreatureType(spellwake_contracts::creature_types::CreatureTypeId),
     CardName(CardNameIndex),
+    /// Optional life payment as this permanent enters (`true` = pay life to enter untapped).
+    PayLife(bool),
 }
 
 /// Printed ability replacing the initial untapped status of the entering permanent.
@@ -80,6 +82,8 @@ pub enum EntryTap {
     UnlessTwoOpponents,
     UnlessOpponentLandsEight,
     UnlessPlayerLifeThirteenOrLess,
+    /// Enters tapped unless its controller chooses to pay this much life (e.g. Shocklands).
+    UnlessPayLife(u8),
 }
 
 /// All land subtypes in the retained September 25, 2026 Comprehensive Rules.

@@ -229,17 +229,28 @@ impl EffectWindow {
         operation: &Instruction,
         append: &mut RulesJournal,
     ) -> Result<(), EffectError> {
-        let (StackKind::ActivatedAbility { source } | StackKind::TriggeredAbility { source }) =
-            entry.kind()
-        else {
-            return Err(EffectError::InconsistentProgram);
+        let source = match entry.kind() {
+            StackKind::ActivatedAbility { source } | StackKind::TriggeredAbility { source } => {
+                Some(source.id())
+            }
+            StackKind::CardSpell(_) | StackKind::SpellCopy { .. }
+                if matches!(
+                    operation,
+                    Instruction::PutCountersOnControlledCreatures
+                        | Instruction::PutCountersOnControlledSubtype(_)
+                        | Instruction::PutCountersOnControlledCreaturesAndGrant(_)
+                ) =>
+            {
+                None
+            }
+            _ => return Err(EffectError::InconsistentProgram),
         };
-        let source = source.id();
         let cause = EventCause::Instruction {
             entry: entry.id(),
             instruction,
         };
         if let Instruction::ClearSourceCounters(kind) = operation {
+            let source = source.ok_or(EffectError::InconsistentProgram)?;
             let before = self.rules_snapshot(None)?;
             let Some(removed) = self
                 .characteristics
@@ -259,6 +270,7 @@ impl EffectWindow {
             });
         }
         if let Instruction::PutNamedCounterOnSource { kind, amount } = operation {
+            let source = source.ok_or(EffectError::InconsistentProgram)?;
             let before = self.rules_snapshot(None)?;
             if !before
                 .view()
@@ -277,6 +289,12 @@ impl EffectWindow {
                 .named_permanent_counters_mut(*kind)
                 .ok_or(EffectError::InconsistentProgram)?
                 .insert(source, after.clone());
+            if kind.keyword_counter_ability().is_some()
+                && let EventCause::Instruction { entry, .. } = cause
+            {
+                self.characteristics
+                    .refresh_keyword_counter_grant(entry, source, *kind)?;
+            }
             return self.emit_from(cause, &before, None, append, |_, _, _| {
                 Ok(vec![RulesOccurrence::PermanentCounterChanged {
                     object: source,
@@ -287,6 +305,7 @@ impl EffectWindow {
             });
         }
         if *operation == Instruction::PutBlessingCounterOnSource {
+            let source = source.ok_or(EffectError::InconsistentProgram)?;
             if !self
                 .window
                 .cards()
@@ -312,6 +331,7 @@ impl EffectWindow {
             });
         }
         if *operation == Instruction::PutCreatureAndOtherPlaneswalkerCounters {
+            let source = source.ok_or(EffectError::InconsistentProgram)?;
             let evaluated = self.evaluated_characteristics()?;
             let controlled = evaluated
                 .objects
@@ -342,6 +362,7 @@ impl EffectWindow {
             operation,
             Instruction::PutQuestCounterOnSource | Instruction::PutStorageCounterOnSource
         ) {
+            let source = source.ok_or(EffectError::InconsistentProgram)?;
             if !self
                 .window
                 .cards()
@@ -382,6 +403,7 @@ impl EffectWindow {
             operation,
             Instruction::PutChargeCounterOnSource | Instruction::PutChosenXChargeCounters
         ) {
+            let source = source.ok_or(EffectError::InconsistentProgram)?;
             if !self
                 .window
                 .cards()
@@ -429,7 +451,7 @@ impl EffectWindow {
                     Instruction::PutCountersOnControlledCreatures
                         | Instruction::PutCountersOnControlledSubtype(_)
                         | Instruction::PutCountersOnControlledCreaturesAndGrant(_)
-                ) || o.object != source)
+                ) || Some(o.object) != source)
                     && o.zone == ObjectZone::Battlefield
                     && o.controller == Some(entry.controller())
                     && o.is_creature()

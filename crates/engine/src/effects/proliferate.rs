@@ -28,13 +28,104 @@ pub enum CounterKind {
     Study,
     Eyeball,
     Slime,
+    Oil,
+    Level,
+    Spore,
+    Ki,
+    Soul,
+    Fuse,
+    Depletion,
+    Bounty,
+    Flood,
+    Flame,
+    Hour,
+    Brick,
+    Plague,
+    Doom,
+    Pressure,
+    Feather,
+    Fate,
+    Infection,
+    Ice,
+    Tide,
+    Growth,
+    Divinity,
+    Fungus,
+    Hit,
+    Gold,
+    Blood,
+    Cage,
+    Coin,
+    Credit,
+    Death,
+    Delay,
+    Devotion,
+    Egg,
+    Eon,
+    Fury,
+    Incubation,
+    Knowledge,
+    Luck,
+    Mine,
+    Music,
+    Muster,
+    Net,
+    Omen,
+    Ore,
+    Pain,
+    Petal,
+    Phylactery,
+    Pin,
+    Plot,
+    Prey,
+    Pupa,
+    Shell,
+    Silver,
+    Sleep,
+    Soot,
+    Stash,
+    Strife,
+    Task,
+    Tower,
+    Training,
+    Trap,
+    Treasure,
+    Valor,
+    Velocity,
+    Vitality,
+    Void,
+    Vortex,
+    Wage,
+    Winch,
+    Wind,
+    Wish,
+    /// CR 122.1b keyword counters.
+    Flying,
+    FirstStrike,
+    DoubleStrike,
+    Deathtouch,
+    Haste,
+    Hexproof,
+    Lifelink,
+    Menace,
+    Reach,
+    Shadow,
+    Trample,
+    Vigilance,
+    /// CR 122.1d stun counter (replaces untapping with removing one stun counter).
+    Stun,
+    /// CR 122.1c shield counter (replaces destruction or prevents damage by removing one shield counter).
+    Shield,
+    /// CR 122.1h finality counter (exiles a permanent instead of putting it into a graveyard).
+    Finality,
     Poison,
     Experience,
+    Energy,
 }
 
 impl CounterKind {
     /// The counter kinds representable on battlefield permanents.
-    pub const PERMANENT: [Self; 23] = {
+    pub const PERMANENT: [Self; 109] = {
         use CounterKind::*;
         [
             PlusOne,
@@ -60,11 +151,125 @@ impl CounterKind {
             Study,
             Eyeball,
             Slime,
+            Oil,
+            Level,
+            Spore,
+            Ki,
+            Soul,
+            Fuse,
+            Depletion,
+            Bounty,
+            Flood,
+            Flame,
+            Hour,
+            Brick,
+            Plague,
+            Doom,
+            Pressure,
+            Feather,
+            Fate,
+            Infection,
+            Ice,
+            Tide,
+            Growth,
+            Divinity,
+            Fungus,
+            Hit,
+            Gold,
+            Blood,
+            Cage,
+            Coin,
+            Credit,
+            Death,
+            Delay,
+            Devotion,
+            Egg,
+            Eon,
+            Fury,
+            Incubation,
+            Knowledge,
+            Luck,
+            Mine,
+            Music,
+            Muster,
+            Net,
+            Omen,
+            Ore,
+            Pain,
+            Petal,
+            Phylactery,
+            Pin,
+            Plot,
+            Prey,
+            Pupa,
+            Shell,
+            Silver,
+            Sleep,
+            Soot,
+            Stash,
+            Strife,
+            Task,
+            Tower,
+            Training,
+            Trap,
+            Treasure,
+            Valor,
+            Velocity,
+            Vitality,
+            Void,
+            Vortex,
+            Wage,
+            Winch,
+            Wind,
+            Wish,
+            Flying,
+            FirstStrike,
+            DoubleStrike,
+            Deathtouch,
+            Haste,
+            Hexproof,
+            Lifelink,
+            Menace,
+            Reach,
+            Shadow,
+            Trample,
+            Vigilance,
+            Stun,
+            Shield,
+            Finality,
         ]
     };
 
+    /// Keyword ability granted by a CR 122.1b keyword counter on an object.
+    #[must_use]
+    pub const fn keyword_counter_ability(self) -> Option<crate::characteristics::KeywordAbility> {
+        use crate::characteristics::KeywordAbility;
+        Some(match self {
+            Self::Indestructible => KeywordAbility::Indestructible,
+            Self::Flying => KeywordAbility::Flying,
+            Self::FirstStrike => KeywordAbility::FirstStrike,
+            Self::DoubleStrike => KeywordAbility::DoubleStrike,
+            Self::Deathtouch => KeywordAbility::Deathtouch,
+            Self::Haste => KeywordAbility::Haste,
+            Self::Hexproof => KeywordAbility::Hexproof,
+            Self::Lifelink => KeywordAbility::Lifelink,
+            Self::Menace => KeywordAbility::Menace,
+            Self::Reach => KeywordAbility::Reach,
+            Self::Shadow => KeywordAbility::Shadow,
+            Self::Trample => KeywordAbility::Trample,
+            Self::Vigilance => KeywordAbility::Vigilance,
+            _ => return None,
+        })
+    }
+
+    /// Whether this counter kind is a player counter (CR 122.1).
+    #[must_use]
+    pub const fn is_player_counter(self) -> bool {
+        matches!(self, Self::Poison | Self::Experience | Self::Energy)
+    }
+
     pub(crate) fn is_named(self) -> bool {
-        Self::PERMANENT.contains(&self) && !matches!(self, Self::PlusOne | Self::MinusOne)
+        !self.is_player_counter() && !matches!(self, Self::PlusOne | Self::MinusOne)
     }
 
     pub(crate) fn tracks_linked_values(self) -> bool {
@@ -98,8 +303,95 @@ impl CounterKind {
             "study" => Self::Study,
             "eyeball" => Self::Eyeball,
             "slime" => Self::Slime,
+            "oil" => Self::Oil,
+            "level" => Self::Level,
+            "spore" => Self::Spore,
+            "ki" => Self::Ki,
+            "soul" => Self::Soul,
+            "fuse" => Self::Fuse,
+            "depletion" => Self::Depletion,
+            "bounty" => Self::Bounty,
+            "flood" => Self::Flood,
+            "flame" => Self::Flame,
+            "hour" => Self::Hour,
+            "brick" => Self::Brick,
+            "plague" => Self::Plague,
+            "doom" => Self::Doom,
+            "pressure" => Self::Pressure,
+            "feather" => Self::Feather,
+            "fate" => Self::Fate,
+            "infection" => Self::Infection,
+            "ice" => Self::Ice,
+            "tide" => Self::Tide,
+            "growth" => Self::Growth,
+            "divinity" => Self::Divinity,
+            "fungus" => Self::Fungus,
+            "hit" => Self::Hit,
+            "gold" => Self::Gold,
+            "blood" => Self::Blood,
+            "cage" => Self::Cage,
+            "coin" => Self::Coin,
+            "credit" => Self::Credit,
+            "death" => Self::Death,
+            "delay" => Self::Delay,
+            "devotion" => Self::Devotion,
+            "egg" => Self::Egg,
+            "eon" => Self::Eon,
+            "fury" => Self::Fury,
+            "incubation" => Self::Incubation,
+            "knowledge" => Self::Knowledge,
+            "luck" => Self::Luck,
+            "mine" => Self::Mine,
+            "music" => Self::Music,
+            "muster" => Self::Muster,
+            "net" => Self::Net,
+            "omen" => Self::Omen,
+            "ore" => Self::Ore,
+            "pain" => Self::Pain,
+            "petal" => Self::Petal,
+            "phylactery" => Self::Phylactery,
+            "pin" => Self::Pin,
+            "plot" => Self::Plot,
+            "prey" => Self::Prey,
+            "pupa" => Self::Pupa,
+            "shell" => Self::Shell,
+            "silver" => Self::Silver,
+            "sleep" => Self::Sleep,
+            "soot" => Self::Soot,
+            "stash" => Self::Stash,
+            "strife" => Self::Strife,
+            "task" => Self::Task,
+            "tower" => Self::Tower,
+            "training" => Self::Training,
+            "trap" => Self::Trap,
+            "treasure" => Self::Treasure,
+            "valor" => Self::Valor,
+            "velocity" => Self::Velocity,
+            "vitality" => Self::Vitality,
+            "void" => Self::Void,
+            "vortex" => Self::Vortex,
+            "wage" => Self::Wage,
+            "winch" => Self::Winch,
+            "wind" => Self::Wind,
+            "wish" => Self::Wish,
+            "flying" => Self::Flying,
+            "first strike" => Self::FirstStrike,
+            "double strike" => Self::DoubleStrike,
+            "deathtouch" => Self::Deathtouch,
+            "haste" => Self::Haste,
+            "hexproof" => Self::Hexproof,
+            "lifelink" => Self::Lifelink,
+            "menace" => Self::Menace,
+            "reach" => Self::Reach,
+            "shadow" => Self::Shadow,
+            "trample" => Self::Trample,
+            "vigilance" => Self::Vigilance,
+            "stun" => Self::Stun,
+            "shield" => Self::Shield,
+            "finality" => Self::Finality,
             "poison" => Self::Poison,
             "experience" => Self::Experience,
+            "energy" => Self::Energy,
             _ => return None,
         })
     }
@@ -156,13 +448,12 @@ impl CharacteristicState {
             CounterKind::Time => &mut self.time_counters,
             CounterKind::Fade => &mut self.fade,
             CounterKind::Age => &mut self.age,
-            CounterKind::Study | CounterKind::Eyeball | CounterKind::Slime => {
-                self.named_counters.entry(kind).or_default()
-            }
             CounterKind::PlusOne
             | CounterKind::MinusOne
             | CounterKind::Experience
-            | CounterKind::Poison => return None,
+            | CounterKind::Poison
+            | CounterKind::Energy => return None,
+            _ => self.named_counters.entry(kind).or_default(),
         })
     }
     pub(crate) fn permanent_counter_count(
@@ -189,7 +480,10 @@ impl CharacteristicState {
             CounterKind::Time => &self.time_counters,
             CounterKind::Fade => &self.fade,
             CounterKind::Age => &self.age,
-            CounterKind::Study | CounterKind::Eyeball | CounterKind::Slime => {
+            CounterKind::PlusOne => return self.counters(object).plus_one,
+            CounterKind::MinusOne => return self.counters(object).minus_one,
+            CounterKind::Poison | CounterKind::Experience | CounterKind::Energy => return 0.into(),
+            _ => {
                 return self
                     .named_counters
                     .get(&kind)
@@ -197,9 +491,6 @@ impl CharacteristicState {
                     .cloned()
                     .unwrap_or_else(|| 0.into());
             }
-            CounterKind::PlusOne => return self.counters(object).plus_one,
-            CounterKind::MinusOne => return self.counters(object).minus_one,
-            CounterKind::Poison | CounterKind::Experience => return 0.into(),
         };
         counters.get(&object).cloned().unwrap_or_else(|| 0.into())
     }
@@ -239,6 +530,81 @@ impl EffectWindow {
             .get(&kind)
             .cloned()
             .unwrap_or_else(|| 0.into()))
+    }
+
+    /// Current count of a player counter kind on a player.
+    pub fn player_counters_of_kind(&self, player: SeatId, kind: CounterKind) -> RulesInteger {
+        match kind {
+            CounterKind::Poison => self.poison_counters(player),
+            CounterKind::Experience => self.experience_counters(player),
+            _ => self
+                .characteristics
+                .player_counters
+                .get(&kind)
+                .and_then(|row| row.get(&player))
+                .cloned()
+                .unwrap_or_else(|| 0.into()),
+        }
+    }
+
+    pub(super) fn give_player_counters(
+        &mut self,
+        player: SeatId,
+        kind: CounterKind,
+        amount: &RulesInteger,
+        entry: StackEntryId,
+        source: crate::damage::DamageSourceId,
+        controller: SeatId,
+    ) -> Result<Option<RulesOccurrence>, EffectError> {
+        if !amount.is_positive() {
+            return Ok(None);
+        }
+        match kind {
+            CounterKind::Poison => {
+                let before = self.poison_counters(player);
+                let after = before.plus(amount);
+                self.poison.insert(player, after.clone());
+                Ok(Some(RulesOccurrence::PlayerPoisoned {
+                    player,
+                    before,
+                    after,
+                    contributions: vec![crate::occurrence::PoisonContribution {
+                        origin: crate::occurrence::PoisonOrigin::Effect(entry),
+                        source,
+                        controller,
+                        amount: amount.clone(),
+                    }],
+                }))
+            }
+            CounterKind::Experience => {
+                let before = self.experience_counters(player);
+                let after = before.plus(amount);
+                self.characteristics
+                    .experience
+                    .insert(player, after.clone());
+                Ok(Some(RulesOccurrence::ExperienceCountersChanged {
+                    player,
+                    before,
+                    after,
+                }))
+            }
+            CounterKind::Energy => {
+                let before = self.player_counters_of_kind(player, kind);
+                let after = before.plus(amount);
+                self.characteristics
+                    .player_counters
+                    .entry(kind)
+                    .or_default()
+                    .insert(player, after.clone());
+                Ok(Some(RulesOccurrence::PlayerCounterChanged {
+                    player,
+                    kind,
+                    before,
+                    after,
+                }))
+            }
+            _ => Err(EffectError::InconsistentProgram),
+        }
     }
 
     pub(super) fn give_experience_counter(&mut self, player: SeatId) -> RulesOccurrence {
@@ -296,6 +662,12 @@ impl EffectWindow {
             }
             if self.experience_counters(player).is_positive() {
                 counters.insert(CounterKind::Experience);
+            }
+            if self
+                .player_counters_of_kind(player, CounterKind::Energy)
+                .is_positive()
+            {
+                counters.insert(CounterKind::Energy);
             }
             if !counters.is_empty() {
                 domain.insert(TargetRef::Player(player), counters);
@@ -372,6 +744,21 @@ impl EffectWindow {
                     }
                     if kinds.contains(&CounterKind::Experience) {
                         changes.push(self.give_experience_counter(player));
+                    }
+                    if kinds.contains(&CounterKind::Energy) {
+                        let before = self.player_counters_of_kind(player, CounterKind::Energy);
+                        let after = before.plus(&1.into());
+                        self.characteristics
+                            .player_counters
+                            .entry(CounterKind::Energy)
+                            .or_default()
+                            .insert(player, after.clone());
+                        changes.push(RulesOccurrence::PlayerCounterChanged {
+                            player,
+                            kind: CounterKind::Energy,
+                            before,
+                            after,
+                        });
                     }
                 }
                 TargetRef::Object(object) => {
@@ -477,7 +864,21 @@ impl EffectWindow {
                                 before: old,
                                 after: count.clone(),
                             }),
-                            _ => {}
+                            other => {
+                                changes.push(RulesOccurrence::PermanentCounterChanged {
+                                    object,
+                                    kind: other,
+                                    before: old,
+                                    after: count.clone(),
+                                });
+                                if other.keyword_counter_ability().is_some() {
+                                    self.characteristics.refresh_keyword_counter_grant(
+                                        frame.entry,
+                                        object,
+                                        other,
+                                    )?;
+                                }
+                            }
                         }
                     }
                     if pt != PowerToughnessCounters::default() {

@@ -363,7 +363,8 @@ impl EffectWindow {
                                     crate::program::EffectManaYield::RestrictedChoice {
                                         colors,
                                         ..
-                                    },
+                                    }
+                                    | crate::program::EffectManaYield::Choice { colors, .. },
                                 ) => colors == &bound.colors,
                                 Instruction::GrantProtectionChosenColor(_) => {
                                     bound.colors == mana_domains::colored_mana()
@@ -1084,7 +1085,8 @@ impl EffectWindow {
                 };
                 match choice {
                     crate::land::EntryChoice::Players(_)
-                    | crate::land::EntryChoice::CardName(_) => {
+                    | crate::land::EntryChoice::CardName(_)
+                    | crate::land::EntryChoice::PayLife(_) => {
                         next.resolution_entry_choices.insert(bound.object, choice);
                     }
                     crate::land::EntryChoice::Opponent(_) => {

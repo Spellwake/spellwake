@@ -22,7 +22,7 @@ pub(super) fn player_matches(
 }
 
 fn check_intervening_if(
-    condition: Option<TriggerCondition>,
+    condition: Option<&TriggerCondition>,
     ability: &TriggeredAbility,
     source: &SupportedAppearance,
     controller: SeatId,
@@ -33,7 +33,7 @@ fn check_intervening_if(
     };
     match cond {
         TriggerCondition::Morbid => after.morbid,
-        TriggerCondition::DuringStep(step) => after.step == Some(step),
+        TriggerCondition::DuringStep(step) => after.step == Some(*step),
         TriggerCondition::SourceHasLoyalty => after
             .characteristics
             .loyalty
@@ -42,8 +42,8 @@ fn check_intervening_if(
         TriggerCondition::SourceCounterAtLeast { kind, minimum } => {
             after
                 .characteristics
-                .permanent_counter_count(source.object.id(), kind)
-                >= i64::from(minimum).into()
+                .permanent_counter_count(source.object.id(), *kind)
+                >= i64::from(*minimum).into()
         }
         TriggerCondition::NoOtherControlledCreatures => !after
             .evaluated
@@ -56,7 +56,7 @@ fn check_intervening_if(
             after.characteristics.city_blessing.contains(&controller)
         }
         TriggerCondition::Monarch { opponent } => after.characteristics.monarch.is_some_and(|m| {
-            if opponent {
+            if *opponent {
                 m != controller
             } else {
                 m == controller
@@ -69,12 +69,14 @@ fn check_intervening_if(
             .characteristics
             .loyalty_activators
             .contains(&controller),
-        TriggerCondition::OpponentLostLifeAtLeast(min) => after.opponent_lost_life(controller, min),
+        TriggerCondition::OpponentLostLifeAtLeast(min) => {
+            after.opponent_lost_life(controller, *min)
+        }
         TriggerCondition::PreviousTurnCasts(expected) => {
-            after.previous_turn_casts == Some(expected)
+            after.previous_turn_casts == Some(*expected)
         }
         TriggerCondition::ControlledCreatureCount(count) => {
-            after.evaluated.controlled_creature_count(controller) == usize::from(count)
+            after.evaluated.controlled_creature_count(controller) == usize::from(*count)
         }
         TriggerCondition::ControlledCreaturePowerAtLeast(min) => {
             after.evaluated.objects.values().any(|o| {
@@ -83,11 +85,11 @@ fn check_intervening_if(
                     && o.is_creature()
                     && o.power_toughness
                         .as_ref()
-                        .is_some_and(|pt| pt.derived.power >= i64::from(min).into())
+                        .is_some_and(|pt| pt.derived.power >= i64::from(*min).into())
             })
         }
         TriggerCondition::TotalControlledPowerAtLeast(min) => {
-            after.evaluated.total_creature_power(controller) >= i64::from(min).into()
+            after.evaluated.total_creature_power(controller) >= i64::from(*min).into()
         }
         TriggerCondition::HandSizeBelow(limit) => {
             after
@@ -95,7 +97,7 @@ fn check_intervening_if(
                 .iter()
                 .filter(|o| o.zone() == ObjectZone::Hand(controller))
                 .count()
-                < usize::from(limit)
+                < usize::from(*limit)
         }
         TriggerCondition::ControlsMeldPair => {
             let Some(crate::program::Instruction::ChooseMeldPartner(mate)) =
@@ -112,6 +114,285 @@ fn check_intervening_if(
                         && v.is_creature()
                         && after.name_rules.has_name(&v.current_names, mate)
                 })
+        }
+        TriggerCondition::ControllersTurn => after.window.active_player() == controller,
+        TriggerCondition::OpponentsTurn => after.window.active_player() != controller,
+        TriggerCondition::Delirium => {
+            let mut types = BTreeSet::new();
+            for card in after
+                .evaluated
+                .objects
+                .values()
+                .filter(|c| c.zone == ObjectZone::Graveyard(controller))
+            {
+                types.extend(card.current_types.iter().copied());
+            }
+            types.len() >= 4
+        }
+        TriggerCondition::Metalcraft => {
+            after
+                .evaluated
+                .objects
+                .values()
+                .filter(|o| {
+                    o.zone == ObjectZone::Battlefield
+                        && o.controller == Some(controller)
+                        && o.has_type(CardType::Artifact)
+                })
+                .count()
+                >= 3
+        }
+        TriggerCondition::Threshold => {
+            after
+                .cards
+                .iter()
+                .filter(|o| o.zone() == ObjectZone::Graveyard(controller))
+                .count()
+                >= 7
+        }
+        TriggerCondition::HandSizeAtMost(limit) => {
+            after
+                .cards
+                .iter()
+                .filter(|o| o.zone() == ObjectZone::Hand(controller))
+                .count()
+                <= usize::from(*limit)
+        }
+        TriggerCondition::HandSizeAtLeast(limit) => {
+            after
+                .cards
+                .iter()
+                .filter(|o| o.zone() == ObjectZone::Hand(controller))
+                .count()
+                >= usize::from(*limit)
+        }
+        TriggerCondition::ControllerLifeAtLeast(limit) => after
+            .life
+            .get(controller)
+            .is_some_and(|life| *life >= i64::from(*limit).into()),
+        TriggerCondition::ControllerLifeAtMost(limit) => after
+            .life
+            .get(controller)
+            .is_some_and(|life| *life <= i64::from(*limit).into()),
+        TriggerCondition::ControlsCardType { kind, minimum } => {
+            after
+                .evaluated
+                .objects
+                .values()
+                .filter(|o| {
+                    o.zone == ObjectZone::Battlefield
+                        && o.controller == Some(controller)
+                        && o.has_type(*kind)
+                })
+                .count()
+                >= usize::from(*minimum)
+        }
+        TriggerCondition::ControlsSubtype { kind, minimum } => {
+            after
+                .evaluated
+                .objects
+                .values()
+                .filter(|o| {
+                    o.zone == ObjectZone::Battlefield
+                        && o.controller == Some(controller)
+                        && o.current_creature_subtypes.contains(kind)
+                })
+                .count()
+                >= usize::from(*minimum)
+        }
+        TriggerCondition::GraveyardCardTypeCount { kind, minimum } => {
+            after
+                .evaluated
+                .objects
+                .values()
+                .filter(|o| {
+                    o.zone == ObjectZone::Graveyard(controller)
+                        && kind.is_none_or(|t| o.has_type(t))
+                })
+                .count()
+                >= usize::from(*minimum)
+        }
+        TriggerCondition::SourceIsTapped => source.object.tapped() == Some(true),
+        TriggerCondition::SourceIsUntapped => source.object.tapped() == Some(false),
+        TriggerCondition::SourceIsAttacking => after
+            .combat
+            .is_some_and(|c| c.attacker(source.object.id()).is_some()),
+        TriggerCondition::ControllerGainedLifeThisTurn => after
+            .characteristics
+            .life_gained_this_turn
+            .get(&controller)
+            .is_some_and(RulesInteger::is_positive),
+        TriggerCondition::ControllerLostLifeThisTurn => after
+            .characteristics
+            .life_lost_this_turn
+            .get(&controller)
+            .is_some_and(RulesInteger::is_positive),
+        TriggerCondition::ControllerAttackedThisTurn => after
+            .characteristics
+            .attacked_this_turn_players
+            .contains(&controller),
+        TriggerCondition::ControllerCastSpellsThisTurn(min) => {
+            after
+                .characteristics
+                .spells_cast_this_turn
+                .get(&controller)
+                .copied()
+                .unwrap_or(0)
+                >= *min
+        }
+        TriggerCondition::ControllerDiscardedThisTurn => {
+            after
+                .characteristics
+                .cards_discarded_this_turn
+                .get(&controller)
+                .copied()
+                .unwrap_or(0)
+                >= 1
+        }
+        TriggerCondition::ControllerSacrificedThisTurn => {
+            after
+                .characteristics
+                .permanents_sacrificed_this_turn
+                .get(&controller)
+                .copied()
+                .unwrap_or(0)
+                >= 1
+        }
+        TriggerCondition::PermanentLeftBattlefieldThisTurn => {
+            after
+                .characteristics
+                .permanents_left_battlefield_this_turn
+                .get(&controller)
+                .copied()
+                .unwrap_or(0)
+                >= 1
+        }
+        TriggerCondition::CreatureEnteredUnderControlThisTurn => {
+            after
+                .characteristics
+                .creatures_entered_this_turn
+                .get(&controller)
+                .copied()
+                .unwrap_or(0)
+                >= 1
+        }
+        TriggerCondition::DescendedThisTurn => after
+            .characteristics
+            .descended_this_turn
+            .contains(&controller),
+        TriggerCondition::CommittedCrimeThisTurn => after
+            .characteristics
+            .committed_crime_this_turn
+            .contains(&controller),
+        TriggerCondition::ControllerDrewCardsThisTurn(min) => {
+            after
+                .characteristics
+                .cards_drawn_this_turn_counts
+                .get(&controller)
+                .copied()
+                .unwrap_or(0)
+                >= *min
+        }
+        TriggerCondition::OpponentHasMoreLife => {
+            let Some(own) = after.life.get(controller) else {
+                return false;
+            };
+            after
+                .window
+                .participants()
+                .iter()
+                .any(|&p| p != controller && after.life.get(p).is_some_and(|l| l > own))
+        }
+        TriggerCondition::OpponentControlsMoreCreatures => {
+            let count_creatures = |seat: SeatId| {
+                after
+                    .evaluated
+                    .objects
+                    .values()
+                    .filter(|o| {
+                        o.zone == ObjectZone::Battlefield
+                            && o.controller == Some(seat)
+                            && o.is_creature()
+                    })
+                    .count()
+            };
+            let own = count_creatures(controller);
+            after
+                .window
+                .participants()
+                .iter()
+                .any(|&p| p != controller && count_creatures(p) > own)
+        }
+        TriggerCondition::OpponentHasMoreCardsInHand => {
+            let count_hand = |seat: SeatId| {
+                after
+                    .cards
+                    .iter()
+                    .filter(|o| o.zone() == ObjectZone::Hand(seat))
+                    .count()
+            };
+            let own = count_hand(controller);
+            after
+                .window
+                .participants()
+                .iter()
+                .any(|&p| p != controller && count_hand(p) > own)
+        }
+        TriggerCondition::ControlsMatching { filter, minimum } => {
+            after
+                .evaluated
+                .objects
+                .values()
+                .filter(|o| {
+                    o.zone == ObjectZone::Battlefield
+                        && o.controller == Some(controller)
+                        && matches_evaluated_permanent(*filter, source, controller, o, after)
+                })
+                .count()
+                >= usize::from(*minimum)
+        }
+        TriggerCondition::OpponentControlsMatching { filter, minimum } => {
+            after
+                .evaluated
+                .objects
+                .values()
+                .filter(|o| {
+                    o.zone == ObjectZone::Battlefield
+                        && o.controller.is_some_and(|seat| seat != controller)
+                        && matches_evaluated_permanent(*filter, source, controller, o, after)
+                })
+                .count()
+                >= usize::from(*minimum)
+        }
+        TriggerCondition::SourceMatches(filter) => after
+            .evaluated
+            .get(source.object.id())
+            .is_some_and(|o| matches_evaluated_permanent(**filter, source, controller, o, after)),
+        TriggerCondition::GraveyardMatching { filter, minimum } => {
+            let excluded = BTreeSet::new();
+            after
+                .evaluated
+                .objects
+                .values()
+                .filter(|o| {
+                    o.zone == ObjectZone::Graveyard(controller)
+                        && filter.matches_static_characteristics(o, &excluded, || {
+                            Some(o.defined.mana_value.clone())
+                        })
+                })
+                .count()
+                >= usize::from(*minimum)
+        }
+        TriggerCondition::Not(inner) => {
+            !check_intervening_if(Some(inner), ability, source, controller, after)
+        }
+        TriggerCondition::And(a, b) => {
+            check_intervening_if(Some(a), ability, source, controller, after)
+                && check_intervening_if(Some(b), ability, source, controller, after)
+        }
+        TriggerCondition::Or(a, b) => {
+            check_intervening_if(Some(a), ability, source, controller, after)
+                || check_intervening_if(Some(b), ability, source, controller, after)
         }
     }
 }
@@ -186,7 +467,7 @@ fn matches_evaluated_permanent(
 #[allow(clippy::too_many_arguments)]
 pub(super) fn match_trigger_event(
     event: &TriggerEvent,
-    intervening_if: Option<TriggerCondition>,
+    intervening_if: Option<&TriggerCondition>,
     ability: &TriggeredAbility,
     source: &SupportedAppearance,
     controller: SeatId,
@@ -1164,6 +1445,34 @@ pub(super) fn match_trigger_event(
             cast_origin,
             attached_to_creature,
         } => {
+            let creature_enters_suppressed = after.evaluated.objects.values().any(|permanent| {
+                permanent.zone == ObjectZone::Battlefield
+                    && permanent.has_battlefield_rule(|rule| {
+                        matches!(
+                            rule,
+                            crate::characteristics::StaticContinuousAbility::Restriction {
+                                rule: crate::characteristics::StaticRestriction::SuppressEntersTriggers,
+                                ..
+                            }
+                        )
+                    })
+            });
+            if creature_enters_suppressed {
+                let entering_is_creature = match value {
+                    RulesOccurrence::ZoneChange(change)
+                        if change.after.object.zone() == ObjectZone::Battlefield =>
+                    {
+                        change.after.types.contains(&CardType::Creature)
+                    }
+                    RulesOccurrence::TokenCreated { after: created, .. } => {
+                        created.types.contains(&CardType::Creature)
+                    }
+                    _ => false,
+                };
+                if entering_is_creature {
+                    return Ok(());
+                }
+            }
             if let Some(origin) = cast_origin {
                 if let RulesOccurrence::ZoneChange(change) = value
                     && change.after.object.id() == source.object.id()
@@ -1206,6 +1515,16 @@ pub(super) fn match_trigger_event(
                         }
                         TriggerFromZone::ControllerGraveyard => {
                             change.before.object.zone() == ObjectZone::Graveyard(controller)
+                        }
+                        TriggerFromZone::Hand => {
+                            matches!(change.before.object.zone(), ObjectZone::Hand(_))
+                        }
+                        TriggerFromZone::Exile => change.before.object.zone() == ObjectZone::Exile,
+                        TriggerFromZone::Library => {
+                            matches!(change.before.object.zone(), ObjectZone::Library(_))
+                        }
+                        TriggerFromZone::Battlefield => {
+                            change.before.object.zone() == ObjectZone::Battlefield
                         }
                         TriggerFromZone::Any => true,
                     }
@@ -1264,6 +1583,66 @@ pub(super) fn match_trigger_event(
                 related_player: Some(player),
                 related,
             });
+        }
+        TriggerEvent::Exiled { subject, from_zone } => {
+            if let RulesOccurrence::ZoneChange(change) = value
+                && change.after.object.zone() == ObjectZone::Exile
+                && match from_zone {
+                    TriggerFromZone::Any => true,
+                    TriggerFromZone::Graveyard => {
+                        matches!(change.before.object.zone(), ObjectZone::Graveyard(_))
+                    }
+                    TriggerFromZone::ControllerGraveyard => {
+                        change.before.object.zone() == ObjectZone::Graveyard(controller)
+                    }
+                    TriggerFromZone::Hand => {
+                        matches!(change.before.object.zone(), ObjectZone::Hand(_))
+                    }
+                    TriggerFromZone::Exile => change.before.object.zone() == ObjectZone::Exile,
+                    TriggerFromZone::Library => {
+                        matches!(change.before.object.zone(), ObjectZone::Library(_))
+                    }
+                    TriggerFromZone::Battlefield => {
+                        change.before.object.zone() == ObjectZone::Battlefield
+                    }
+                }
+                && subject.matches_appearance(source, controller, &change.before)
+            {
+                let related_player = change
+                    .before
+                    .object
+                    .controller()
+                    .unwrap_or_else(|| change.before.object.owner());
+                members.push(TriggerCauseMember {
+                    occurrence: occurrence.id,
+                    related_player: Some(related_player),
+                    related: TriggerRelated::ZoneChange {
+                        before: change.before.clone(),
+                        after: change.after.clone(),
+                    },
+                });
+            }
+        }
+        TriggerEvent::ReturnedToHand { subject } => {
+            if let RulesOccurrence::ZoneChange(change) = value
+                && change.before.object.zone() == ObjectZone::Battlefield
+                && matches!(change.after.object.zone(), ObjectZone::Hand(_))
+                && subject.matches_appearance(source, controller, &change.before)
+            {
+                let related_player = change
+                    .before
+                    .object
+                    .controller()
+                    .unwrap_or_else(|| change.before.object.owner());
+                members.push(TriggerCauseMember {
+                    occurrence: occurrence.id,
+                    related_player: Some(related_player),
+                    related: TriggerRelated::ZoneChange {
+                        before: change.before.clone(),
+                        after: change.after.clone(),
+                    },
+                });
+            }
         }
         TriggerEvent::LeavesBattlefield { subject } => match value {
             RulesOccurrence::PermanentLeftGame { before }
@@ -1453,6 +1832,38 @@ pub(super) fn match_trigger_event(
                 ObjectFilter::Clause(c) if matches!(c.subtypes, SubtypeFilter::Has(_))
             );
             match *recipient {
+                DamageTriggerRecipient::Any => match damage.target {
+                    DamageRecipient::Player(player) => {
+                        members.push(TriggerCauseMember {
+                            occurrence: occurrence.id,
+                            related_player: Some(player),
+                            related: TriggerRelated::CombatDamageToPlayer {
+                                source: dealer,
+                                amount: damage.amount.clone(),
+                                player,
+                                attempt: damage.attempt,
+                            },
+                        });
+                    }
+                    DamageRecipient::Creature(id)
+                    | DamageRecipient::Planeswalker(id)
+                    | DamageRecipient::Battle(id) => {
+                        let seat = after
+                            .evaluated
+                            .get(id)
+                            .and_then(|p| p.controller)
+                            .unwrap_or(controller);
+                        members.push(TriggerCauseMember {
+                            occurrence: occurrence.id,
+                            related_player: Some(seat),
+                            related: TriggerRelated::DamageDealtToPermanent {
+                                recipient: id,
+                                attempt: damage.attempt,
+                                amount: damage.amount.clone(),
+                            },
+                        });
+                    }
+                },
                 DamageTriggerRecipient::Controller => {}
                 DamageTriggerRecipient::Opponent => {
                     if let DamageRecipient::Player(player) = damage.target
@@ -1464,6 +1875,7 @@ pub(super) fn match_trigger_event(
                             related: TriggerRelated::DamageToOpponent {
                                 player,
                                 attempt: damage.attempt,
+                                amount: damage.amount.clone(),
                             },
                         });
                     }
@@ -1479,6 +1891,7 @@ pub(super) fn match_trigger_event(
                                 creature: dealer,
                                 player,
                                 attempt: damage.attempt,
+                                amount: damage.amount.clone(),
                             },
                         });
                     }
@@ -1497,7 +1910,7 @@ pub(super) fn match_trigger_event(
                 }
                 DamageTriggerRecipient::AnyPlayer => {
                     if let DamageRecipient::Player(player) = damage.target
-                        && (intervening_if != Some(TriggerCondition::DefendingPlayerHasMoreLands)
+                        && (intervening_if != Some(&TriggerCondition::DefendingPlayerHasMoreLands)
                             || after.land_count(player) > after.land_count(controller))
                     {
                         let related = if is_subtype_filtered {
@@ -1505,6 +1918,7 @@ pub(super) fn match_trigger_event(
                                 creature: dealer,
                                 player,
                                 attempt: damage.attempt,
+                                amount: damage.amount.clone(),
                             }
                         } else {
                             TriggerRelated::CombatDamageToPlayer {
@@ -1549,6 +1963,7 @@ pub(super) fn match_trigger_event(
                                 related: TriggerRelated::CombatDamageToPlaneswalker {
                                     planeswalker: id,
                                     attempt: damage.attempt,
+                                    amount: damage.amount.clone(),
                                 },
                             });
                         }
@@ -1627,6 +2042,28 @@ pub(super) fn match_trigger_event(
                     && change.before.id() == change.after.id()
                     && change.before.tapped() == Some(false)
                     && change.after.tapped() == Some(true)
+                {
+                    let obj = after
+                        .appearance(change.after.id())
+                        .ok_or(TriggerError::InvalidWorld)?;
+                    if subject.matches_appearance(source, controller, &obj) {
+                        members.push(TriggerCauseMember {
+                            occurrence: occurrence.id,
+                            related_player: Some(
+                                obj.object.controller().ok_or(TriggerError::InvalidWorld)?,
+                            ),
+                            related: TriggerRelated::StatusChange(change.clone()),
+                        });
+                    }
+                }
+            }
+            StatusTriggerKind::BecomesUntapped => {
+                if let RulesOccurrence::StatusChange { change, .. } = value
+                    && change.before.zone() == ObjectZone::Battlefield
+                    && change.after.zone() == ObjectZone::Battlefield
+                    && change.before.id() == change.after.id()
+                    && change.before.tapped() == Some(true)
+                    && change.after.tapped() == Some(false)
                 {
                     let obj = after
                         .appearance(change.after.id())
@@ -1855,6 +2292,26 @@ pub(super) fn match_trigger_event(
                             saga: *saga,
                             mana_value: mana_value.clone(),
                         },
+                    });
+                }
+            }
+            PlayerTriggerAction::CommittedCrime => {
+                if let RulesOccurrence::PermanentTargeted {
+                    object,
+                    controller: actor,
+                    ..
+                } = value
+                    && player_matches(*relation, controller, *actor, after)
+                    && after
+                        .evaluated
+                        .get(*object)
+                        .and_then(|o| o.controller)
+                        .is_some_and(|owner| owner != *actor)
+                {
+                    members.push(TriggerCauseMember {
+                        occurrence: occurrence.id,
+                        related_player: Some(*actor),
+                        related: TriggerRelated::ManaSource(*object),
                     });
                 }
             }

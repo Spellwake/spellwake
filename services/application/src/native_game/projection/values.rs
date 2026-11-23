@@ -137,6 +137,8 @@ pub(super) fn keyword(value: spellwake_engine::characteristics::KeywordAbility) 
         KeywordAbility::Changeling => PlayerKeyword::Changeling,
         KeywordAbility::StartYourEngines => PlayerKeyword::StartYourEngines,
         KeywordAbility::Devoid => PlayerKeyword::Devoid,
+        KeywordAbility::ChooseABackground => PlayerKeyword::ChooseABackground,
+        KeywordAbility::DoctorsCompanion => PlayerKeyword::DoctorsCompanion,
     }
 }
 pub(super) fn phase(value: spellwake_engine::turn::Phase) -> PlayerPhase {

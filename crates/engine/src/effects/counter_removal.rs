@@ -152,9 +152,9 @@ impl EffectWindow {
                 if kind == CounterKind::Vow {
                     self.characteristics.vow_protected_players.remove(&object);
                 }
-                if kind == CounterKind::Indestructible {
+                if kind.keyword_counter_ability().is_some() {
                     self.characteristics
-                        .clear_indestructible_counter_grant(object);
+                        .clear_keyword_counter_grant(object, kind);
                 }
             }
             changes.push(match kind {
