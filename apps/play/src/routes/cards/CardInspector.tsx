@@ -35,7 +35,7 @@ export function CardInspector({
     isBack && printing.backUrl ? printing.backUrl : printing.faceUrl;
   return (
     <div className={s.inspectorBody} data-in-dialog={inDialog || undefined}>
-      <div className={s.inspectorFace}>
+      <div className={s.inspectorFace} data-card-landing="">
         <CardFace
           url={shown}
           name={card.name}

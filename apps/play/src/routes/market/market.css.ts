@@ -91,6 +91,12 @@ export const inspectorBody = style({
   minHeight: 0,
   overflowY: "auto",
 });
+/** The chosen listing's details as they settle in; the body inside still scrolls. */
+export const inspectorSettle = style({
+  minHeight: 0,
+  display: "flex",
+  flexDirection: "column",
+});
 export const inspectorPrice = style({
   margin: "22px 0 24px",
   paddingTop: "22px",

@@ -14,7 +14,7 @@ import {
   parseAsStringLiteral,
   useQueryStates,
 } from "nuqs";
-import { AnimatePresence } from "motion/react";
+import { AnimatePresence, motion } from "motion/react";
 import { ChevronDown, Plus } from "lucide-react";
 import {
   ActionButton,
@@ -51,7 +51,9 @@ import {
   type ListingSort,
   type ListingsSource,
 } from "../../market/listing-sources";
+import { useArrival } from "../../lib/arrival";
 import { useDeviceClass, useShellLayout } from "../../lib/display-scale";
+import { motionLanguage as m } from "../../lib/motion";
 import { FilterPanel } from "../cards/FilterPanel";
 import * as cards from "../cards/cards.css";
 import { CreateListingDialog } from "./CreateListingDialog";
@@ -412,6 +414,7 @@ export function ListingsPage({
   ) : null;
 
   const isEmptyMarket = ready !== null && ready.listings.length === 0;
+  const arrival = useArrival(shown.length > 0);
   return (
     <section className={cards.page} aria-label="Listings">
       <div className={cards.main}>
@@ -511,8 +514,12 @@ export function ListingsPage({
             role="region"
             aria-label="Listing rows"
           >
-            {shown.map((listing) => (
-              <div key={listing.id} data-listing={listing.id}>
+            {shown.map((listing, index) => (
+              <motion.div
+                key={listing.id}
+                data-listing={listing.id}
+                {...arrival.item(index)}
+              >
                 <ListingRow
                   item={summaryItem(listing.item, listing.quantity)}
                   seller={listing.seller.name}
@@ -523,7 +530,7 @@ export function ListingsPage({
                     if (isCompact) setIsInspecting(true);
                   }}
                 />
-              </div>
+              </motion.div>
             ))}
             {ready?.isAppending && (
               <p className={cards.appending} role="status">
@@ -577,7 +584,18 @@ export function ListingsPage({
         inert={(isFilterOpen && !isCompact) || undefined}
         data-covered={(isFilterOpen && !isCompact) || undefined}
       >
-        {!isCompact && inspector}
+        {!isCompact && selected && (
+          // Choosing another listing settles its details in; nothing slides out.
+          <motion.div
+            key={selected.id}
+            className={s.inspectorSettle}
+            initial={{ opacity: 0, y: m.travel / 3 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ duration: m.duration.marker, ease: m.ease.arrive }}
+          >
+            {inspector}
+          </motion.div>
+        )}
       </aside>
 
       {isFilterOpen && filters && !isCompact && (

@@ -20,6 +20,7 @@ import { DepartureDialog } from "./DepartureDialog";
 import { ChooseDeckDialog, InviteDialog } from "./LobbyChoosers";
 import { RulesDrawer } from "./RulesDrawer";
 import { SeatRow } from "./SeatRow";
+import { useArrival } from "../../lib/arrival";
 import * as s from "./lobby.css";
 
 const MODEL_URL = `${import.meta.env.BASE_URL}models/deck-box-leather.glb?bend=1`;
@@ -61,6 +62,7 @@ export function LobbyPage({
   const readyCommand = useCommand();
   const notice = useNotice();
   const reduce = useReducedMotion() ?? false;
+  const arrival = useArrival(source.status === "ready");
 
   if (source.status !== "ready")
     return (
@@ -166,7 +168,7 @@ export function LobbyPage({
                 </p>
               );
             })()}
-          <ul className={s.seats}>
+          <ul className={s.seats} {...arrival.group}>
             {lobby.seats.map((seat) => (
               <SeatRow
                 key={seat.id}
