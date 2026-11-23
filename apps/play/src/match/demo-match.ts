@@ -8,6 +8,9 @@ import {
   PREVIEW_VIEWER,
   previewAttackDecision,
   previewBlockDecision,
+  previewDamageDecision,
+  previewResolveTop,
+  previewResponses,
   previewSnapshot,
 } from "./preview-table";
 import type {
@@ -72,6 +75,8 @@ export function useDemoMatch(
       setCommandError(null);
       setSnapshot((prev) => {
         if (action.kind === "pass" && prev.turn) {
+          // With something waiting, a pass lets the newest item resolve.
+          if (prev.stack.length > 0) return previewResolveTop(prev);
           const idx = PHASE_ORDER.findIndex(
             (p) => p.phase === prev.turn?.phase,
           );
@@ -108,6 +113,9 @@ export function useDemoMatch(
               step: next.step,
             },
           };
+          // On Alex's first main phase a burn spell is cast and answered.
+          if (next.phase === "precombat-main" && active === OPPONENT_SEAT)
+            return previewResponses(moved);
           if (next.phase !== "combat") return moved;
           if (active === VIEWER_SEAT) {
             const offered = previewAttackDecision(moved);
@@ -142,7 +150,7 @@ export function useDemoMatch(
           const attacking = new Set(
             response.assignments.map((entry) => entry.attacker),
           );
-          return {
+          const tapped: PlayerSnapshot = {
             ...settled,
             visibleObjects: prev.visibleObjects.map((object) =>
               attacking.has(object.handle)
@@ -150,6 +158,26 @@ export function useDemoMatch(
                 : object,
             ),
           };
+          // The first creature sent at a player is double-blocked where it can be.
+          const first = response.assignments.find(
+            (entry) => entry.defender.kind === "seat",
+          );
+          const offered =
+            first?.defender.kind === "seat"
+              ? previewDamageDecision(tapped, [
+                  {
+                    attacker: first.attacker,
+                    defenderSeat: first.defender.seatId,
+                  },
+                ])
+              : null;
+          return offered
+            ? {
+                ...tapped,
+                turn: { ...tapped.turn!, step: "combat-damage" },
+                decisions: [offered],
+              }
+            : tapped;
         }
         if (action.kind === "play-land") {
           const nextObjs = prev.visibleObjects.map((o) =>

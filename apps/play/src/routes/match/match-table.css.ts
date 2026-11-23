@@ -119,6 +119,10 @@ globalStyle(`${cardButton}[data-mark="copper"] ${face}`, {
 globalStyle(`${cardButton}[data-mark="ivory"] ${face}`, {
   boxShadow: `0 0 0 5PX ${ivory}, 0 0 24PX ${ivory}88, 0 10PX 22PX #0009`,
 });
+/** The source whose damage is being assigned, and the cards it may go to. */
+globalStyle(`${cardButton}[data-mark="gold"] ${face}`, {
+  boxShadow: `0 0 0 5PX ${gold}, 0 0 26PX ${gold}99, 0 10PX 22PX #0009`,
+});
 
 /** A card with no picture: its printed text on a plain frame. */
 export const textCard = style([
@@ -236,5 +240,97 @@ export const seatAnchor = style({
     '&[data-recipient="assigned"]': {
       boxShadow: `0 0 0 3PX ${copper}, 0 0 18PX ${copper}99`,
     },
+    // A player who may be dealt the damage being assigned, or a spell's target.
+    '&[data-recipient="marked"]': {
+      boxShadow: `0 0 0 2PX ${ivory}, 0 0 14PX ${ivory}66`,
+    },
   },
+});
+
+/** Damage controls, beside the cards and portraits they assign to (DA-01 to DA-08). */
+const coarse = "(pointer: coarse)";
+export const pillLayer = style({
+  position: "absolute",
+  inset: 0,
+  pointerEvents: "none",
+});
+export const leader = style({
+  fill: "none",
+  stroke: `${ivory}d9`,
+  strokeWidth: "1.5PX",
+  strokeLinecap: "round",
+});
+export const pill = style({
+  position: "absolute",
+  left: 0,
+  top: 0,
+  display: "grid",
+  gridTemplateColumns: "var(--pill-step) minmax(0, 1fr) var(--pill-step)",
+  alignItems: "center",
+  width: "112PX",
+  height: "38PX",
+  boxSizing: "border-box",
+  borderRadius: "999PX",
+  border: `1.5PX solid ${ivory}`,
+  background: "#232a22f2",
+  boxShadow: "0 6PX 16PX #0009",
+  color: ivory,
+  pointerEvents: "auto",
+  vars: { "--pill-step": "36PX" },
+  "@media": {
+    [coarse]: {
+      width: "136PX",
+      // Its buttons are 44 high inside the border.
+      height: "47PX",
+      vars: { "--pill-step": "44PX" },
+    },
+  },
+});
+export const pillStep = style({
+  appearance: "none",
+  display: "grid",
+  placeItems: "center",
+  width: "100%",
+  height: "100%",
+  padding: 0,
+  border: 0,
+  borderRadius: "999PX",
+  background: "none",
+  color: "inherit",
+  font: `400 22PX/1 ${shellTokens.serif}`,
+  cursor: "pointer",
+  selectors: {
+    "&:disabled": { opacity: 0.34, cursor: "default" },
+    "&:focus-visible": {
+      outline: `2PX solid ${ivory}`,
+      outlineOffset: "-4PX",
+    },
+    "&:not(:disabled):hover": { background: "#ffffff14" },
+  },
+});
+export const pillAmount = style({
+  display: "block",
+  textAlign: "center",
+  font: `400 24PX/1 ${shellTokens.serif}`,
+  fontVariantNumeric: "tabular-nums",
+});
+/** The player's name above a pill that hangs from their portrait. */
+export const pillCaption = style({
+  position: "absolute",
+  left: "50%",
+  bottom: "calc(100% + 4PX)",
+  transform: "translateX(-50%)",
+  font: `14PX/1 ${shellTokens.serif}`,
+  color: ivory,
+  textShadow: "0 1PX 4PX #000c",
+  whiteSpace: "nowrap",
+  pointerEvents: "none",
+});
+
+/** The spell pile, to the right of the table and facing the camera (CP-01 to CP-10). */
+export const pileHost = style({
+  position: "absolute",
+  left: 0,
+  top: 0,
+  transformOrigin: "0 0",
 });

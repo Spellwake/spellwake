@@ -38,7 +38,9 @@ import {
   seatBoard,
   type TableView,
 } from "../../match/table-model";
-import { CombatLines, useCombat } from "./combat";
+import { CombatLines, useCombat, type CombatUi } from "./combat";
+import { DamagePills, DamageSources, useDamage } from "./damage";
+import { MatchStack, useStackReading } from "./stack";
 import { MatchTable } from "./MatchTable";
 import * as table from "./match-table.css";
 import * as s from "./match.css";
@@ -490,29 +492,6 @@ function DecisionPanel({
     );
   }
 
-  if (d.kind === "combat-damage") {
-    const autoAllocations = d.sources.flatMap((src) =>
-      src.targets.length > 0
-        ? [{ source: src.source, target: src.targets[0]!, amount: src.total }]
-        : [],
-    );
-    return (
-      <div className={s.decisionCard} role="region" aria-label="Combat damage">
-        <p className={s.decisionTitle}>Assign combat damage</p>
-        <div className={s.decisionRow}>
-          <ActionButton
-            disabled={pending}
-            onClick={() =>
-              onChoose({ kind: "combat-damage", assignments: autoAllocations })
-            }
-          >
-            Assign lethal / default damage
-          </ActionButton>
-        </div>
-      </div>
-    );
-  }
-
   return (
     <div className={s.decisionCard} role="region" aria-label="Decision">
       <p className={s.decisionTitle}>Pending decision: {decision.kind}</p>
@@ -661,6 +640,18 @@ function LiveMatch({ source }: { source: ReadyMatch }): ReactElement {
           : undefined) ??
         source.faceByName?.get(obj.identity.characteristics.name));
 
+  const damage = useDamage(activeDecision ?? null, source, (handle) => {
+    const object = objectByHandle.get(handle);
+    return {
+      name: object ? objectName(object) : "Card",
+      face: object ? artFor(object) : undefined,
+    };
+  });
+  // What is being declared or assigned on the table, if anything.
+  const declaring: CombatUi | null = combat.ui ?? damage;
+  const reading = useStackReading(snapshot);
+  const follow = `${tableView.kind === "seat" ? tableView.seatId : "table"}:${snapshot.throughEventSequence}:${dock.clearBottom}`;
+
   const inspected = inspectedHandle
     ? (objectByHandle.get(inspectedHandle) ?? null)
     : null;
@@ -669,7 +660,7 @@ function LiveMatch({ source }: { source: ReadyMatch }): ReactElement {
     obj: PlayerObject,
     zoneKind: "hand" | "battlefield",
   ) => {
-    if (zoneKind === "battlefield" && combat.ui?.onCard(obj)) return;
+    if (zoneKind === "battlefield" && declaring?.onCard(obj)) return;
     const mine =
       (obj.controllerSeatId ?? obj.ownerSeatId) === snapshot.viewerSeatId;
     if (!mine || !hasPriority || source.commandPending) {
@@ -761,7 +752,9 @@ function LiveMatch({ source }: { source: ReadyMatch }): ReactElement {
               key={player.seatId}
               className={table.seatAnchor}
               data-anchor={`seat:${player.seatId}`}
-              data-recipient={combat.ui?.seatMarks.get(player.seatId)}
+              data-recipient={(declaring?.seatMarks ?? reading.seatMarks).get(
+                player.seatId,
+              )}
             >
               <PlayerIdentity
                 presentation="seat"
@@ -773,7 +766,7 @@ function LiveMatch({ source }: { source: ReadyMatch }): ReactElement {
                     : `View ${name}’s board`
                 }
                 onActivate={() => {
-                  if (combat.ui?.onSeat(player.seatId)) return;
+                  if (declaring?.onSeat(player.seatId)) return;
                   setView({ kind: "seat", seatId: player.seatId });
                 }}
                 takingTurn={takingTurn}
@@ -815,51 +808,37 @@ function LiveMatch({ source }: { source: ReadyMatch }): ReactElement {
                 ))}
               </div>
             )}
-            {combat.ui ? (
+            {damage && <DamageSources sources={damage.sources} />}
+            {declaring ? (
               <MatchActions
-                primary={combat.ui.primary}
-                {...(combat.ui.secondary
-                  ? { secondary: combat.ui.secondary }
+                primary={declaring.primary}
+                {...(declaring.secondary
+                  ? { secondary: declaring.secondary }
                   : {})}
-                {...(combat.ui.status ? { status: combat.ui.status } : {})}
+                {...(declaring.status ? { status: declaring.status } : {})}
               />
             ) : (
+              // Next passes with nothing waiting; Resolve passes on what is. While
+              // another player acts there is no action to show.
               <MatchActions
-                primary={
-                  hasPriority
-                    ? {
-                        label:
-                          snapshot.stack.length > 0
-                            ? "Resolve"
-                            : "Pass priority",
+                {...(hasPriority
+                  ? {
+                      primary: {
+                        label: snapshot.stack.length > 0 ? "Resolve" : "Next",
                         pending: source.commandPending,
                         onActivate: () =>
                           void source.sendAction({ kind: "pass" }),
-                      }
-                    : {
-                        label: "Waiting…",
-                        disabled: true,
-                        onActivate: () => undefined,
-                      }
-                }
+                      },
+                    }
+                  : {})}
                 {...(activeDecision
                   ? { status: `Action required: ${activeDecision.kind}` }
-                  : hasPriority
-                    ? { status: combat.note ?? "You have priority" }
+                  : hasPriority && combat.note
+                    ? { status: combat.note }
                     : {})}
               />
             )}
             <div className={s.sideDecisions}>
-              {snapshot.stack.length > 0 && (
-                <div className={s.decisionRow} aria-label="Spell stack">
-                  {snapshot.stack.map((entry) => (
-                    <span key={entry.handle} className={s.stackChip}>
-                      {entry.label} (
-                      {seatNames.get(entry.controllerSeatId) ?? "Player"})
-                    </span>
-                  ))}
-                </div>
-              )}
               {source.chooseOpening && (
                 <div className={s.decisionCard}>
                   <p className={s.decisionTitle}>Choose play or draw</p>
@@ -879,7 +858,7 @@ function LiveMatch({ source }: { source: ReadyMatch }): ReactElement {
                   </div>
                 </div>
               )}
-              {activeDecision && !combat.ui && (
+              {activeDecision && !declaring && (
                 <DecisionPanel
                   key={activeDecision.decision}
                   decision={activeDecision}
@@ -931,7 +910,7 @@ function LiveMatch({ source }: { source: ReadyMatch }): ReactElement {
           view={tableView}
           seatNames={seatNames}
           faceOf={artFor}
-          marks={combat.ui?.marks}
+          marks={declaring?.marks ?? reading.marks}
           clearBottom={dock.clearBottom}
           onCard={handleCardAction}
           onPile={(pile, seatId) => {
@@ -946,9 +925,20 @@ function LiveMatch({ source }: { source: ReadyMatch }): ReactElement {
             });
           }}
         />
-        <CombatLines
-          lines={combat.ui?.lines ?? []}
-          follow={`${tableView.kind === "seat" ? tableView.seatId : "table"}:${snapshot.throughEventSequence}:${dock.clearBottom}`}
+        <CombatLines lines={declaring?.lines ?? []} follow={follow} />
+        <DamagePills
+          pills={damage?.pills ?? []}
+          follow={follow}
+          clearBottom={dock.clearBottom}
+        />
+        <MatchStack
+          snapshot={snapshot}
+          seatNames={seatNames}
+          faceOf={artFor}
+          selectedId={reading.selectedId}
+          onSelect={reading.select}
+          follow={follow}
+          clearBottom={dock.clearBottom}
         />
       </ImmersiveFrame>
 
