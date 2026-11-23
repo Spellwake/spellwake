@@ -56,8 +56,9 @@ pub use lifecycle::RecoveredNativeGame;
 pub use opening::{NativeOpeningArtifacts, NativeOpeningSource};
 pub use view::{IssuedNativeHumanView, IssuedNativePlayerView};
 pub use view_runtime::{
-    CommanderWorker, NativeGameRuntime, NativeViewOutcome, ReleaseOpeningWorker,
-    open_commander_game_from_env, open_qualified_game_from_env,
+    CommanderWorker, NativeControllerSnapshot, NativeControllerViewOutcome, NativeGameRuntime,
+    NativeViewOutcome, ReleaseOpeningWorker, open_commander_game_from_env,
+    open_qualified_game_from_env,
 };
 pub(crate) use view_runtime::{
     NativeHistoryRead, NativeReadOutcome, NativeReadRefusal, NativeReplayRead,

@@ -9,6 +9,13 @@ kill_timeout = "30s"
   SPELLWAKE_API_MAX_CONCURRENT_REQUESTS = "256"
   SPELLWAKE_API_MAX_CONCURRENT_STREAMS = "512"
   SPELLWAKE_NATIVE_ARTIFACT_CACHE_BYTES = "67108864"
+  SPELLWAKE_AI_ENABLED = "false"
+  SPELLWAKE_AI_PROVIDER = "chatgpt"
+  SPELLWAKE_AI_CODEX_CLI = "/opt/spellwake-codex/package/vendor/x86_64-unknown-linux-musl/bin/codex"
+  SPELLWAKE_AI_NORMAL_MODEL = "gpt-6-luna"
+  SPELLWAKE_AI_NORMAL_EFFORT = "medium"
+  SPELLWAKE_AI_ADVANCED_MODEL = "gpt-6.1-terra"
+  SPELLWAKE_AI_ADVANCED_EFFORT = "medium"
   RUST_LOG = "spellwake_application=info,application_api=info"
 
 [http_service]

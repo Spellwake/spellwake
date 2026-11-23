@@ -273,6 +273,42 @@ impl ApiConfig {
         self
     }
 
+    /// Build the optional co-located Rust AI runtime supervisor sharing this server's
+    /// `NativeGameRuntime`, when `SPELLWAKE_AI_PROVIDER` or `SPELLWAKE_AI_ENABLED` is set.
+    /// # Errors
+    /// Returns `ActorError::Configuration` if AI runtime is enabled with invalid settings.
+    pub fn build_ai_runtime(
+        &self,
+    ) -> Result<Option<Arc<crate::ai_runtime::AiRuntimeService>>, ActorError> {
+        let provider =
+            crate::ai_runtime::provider_from_env().map_err(|_| ActorError::Configuration)?;
+        let Some(provider) = provider else {
+            return Ok(None);
+        };
+        let (Some(native_views), Some(host_owner)) = (&self.native_views, &self.native_host_owner)
+        else {
+            return Err(ActorError::Configuration);
+        };
+        let runner_label = std::env::var("SPELLWAKE_AI_RUNNER_LABEL")
+            .unwrap_or_else(|_| "spellwake-api-rust-ai-v1".to_owned());
+        let config = crate::ai_runtime::AiRuntimeConfig {
+            supabase_base: self.base.clone(),
+            supabase_secret_key: self.secret_key.clone(),
+            host_owner: host_owner.clone(),
+            runner_label,
+            poll_interval: Duration::from_millis(750),
+        };
+        let registry = Arc::new(crate::ai_runtime::AiControllerRegistry::new(Arc::new(
+            crate::controller_possession::ControllerSecretStore::default(),
+        )));
+        Ok(Some(Arc::new(crate::ai_runtime::AiRuntimeService::new(
+            config,
+            native_views.clone(),
+            registry,
+            provider,
+        ))))
+    }
+
     fn actor(&self) -> Result<ActorClient, ActorError> {
         ActorClient::new(ActorConfig::new(
             &self.base,
@@ -305,11 +341,11 @@ fn configured_limit(name: &str, default: usize) -> usize {
         .unwrap_or(default)
 }
 
-type RateLimitBuckets = HashMap<(String, bool), (f64, Instant)>;
+type RateLimitBuckets = Arc<Mutex<HashMap<(String, bool), (f64, Instant)>>>;
 
 #[derive(Clone)]
 struct RateLimiter {
-    buckets: Arc<Mutex<RateLimitBuckets>>,
+    buckets: RateLimitBuckets,
     general_per_min: f64,
     unauth_per_min: f64,
 }
@@ -815,6 +851,15 @@ fn router_with_state(state: ApiState) -> Router {
         .route(
             "/v1/account/patreon",
             get(ui_surface_routes::patreon_account_status),
+        )
+        .route("/v1/account/ai-quota", get(room_control_routes::ai_quota))
+        .route(
+            "/v1/ai-slots/{slot}/tier",
+            post(room_control_routes::set_tier),
+        )
+        .route(
+            "/v1/ai-slots/{slot}/tier/disposition",
+            post(room_control_routes::set_tier_disposition),
         )
         .route(
             "/v1/billing/portal",

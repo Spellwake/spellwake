@@ -13,7 +13,10 @@ import { useDeviceClass } from "../../lib/display-scale";
 import type { AiDifficulty, LobbySeat } from "../../lobby/lobby-sources";
 import * as s from "./lobby.css";
 
-const DIFFICULTY: Record<AiDifficulty, string> = { easy: "Easy", hard: "Hard" };
+const DIFFICULTY: Record<AiDifficulty, string> = {
+  normal: "Normal",
+  advanced: "Advanced",
+};
 
 /**
  * One seat. Your own row chooses your deck; the host's rows set an empty or
@@ -106,14 +109,14 @@ export function SeatRow({
             {setDifficulty && seat.difficulty ? (
               <span className={s.compact}>
                 <SelectMenu
-                  label="AI difficulty"
+                  label="AI tier"
                   value={seat.difficulty}
                   options={[
-                    { value: "easy", label: "Easy" },
-                    { value: "hard", label: "Hard" },
+                    { value: "normal", label: "Normal" },
+                    { value: "advanced", label: "Advanced" },
                   ]}
                   onValueChange={(value) =>
-                    setDifficulty(value === "hard" ? "hard" : "easy")
+                    setDifficulty(value === "advanced" ? "advanced" : "normal")
                   }
                   disabled={isLocked}
                 />

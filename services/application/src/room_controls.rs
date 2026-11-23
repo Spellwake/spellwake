@@ -51,13 +51,14 @@ pub enum ControlKind {
     Bootstrap,
     Remove,
     Unready,
+    SetTier,
 }
 impl ControlKind {
     /// Validate the operation-specific acknowledgment against its original target and basis.
     pub fn valid_ack(self, target: Uuid, basis: &Amount, ack: &ControlAck) -> bool {
         match (self, ack) {
             (Self::Add, ControlAck::Revision(a)) => !a.resource_id.is_nil() && a.revision > *basis,
-            (Self::Unready, ControlAck::Revision(a)) => {
+            (Self::Unready | Self::SetTier, ControlAck::Revision(a)) => {
                 a.resource_id == target
                     && (a.revision == *basis
                         || basis
@@ -112,6 +113,16 @@ impl ControlKind {
                 Self::Unready => matches!(
                     (k.as_str(), v.as_str()),
                     ("account" | "room" | "ready", "unavailable") | ("revision", "conflict")
+                ),
+                Self::SetTier => matches!(
+                    (k.as_str(), v.as_str()),
+                    ("account", "unavailable")
+                        | ("slot", "stale or unavailable")
+                        | ("revision", "conflict")
+                        | (
+                            "queue",
+                            "cancel the claimed room before changing its roster"
+                        )
                 ),
             })
     }
@@ -179,6 +190,8 @@ pub struct AiSlotStatus {
     #[serde(deserialize_with = "crate::identifiers::uuid")]
     pub slot_id: Uuid,
     pub seat_index: Amount,
+    #[serde(default)]
+    pub ai_tier: crate::ai_runtime::AiTier,
     pub is_sponsor: bool,
     pub is_retired: bool,
     pub stop_pending: bool,
