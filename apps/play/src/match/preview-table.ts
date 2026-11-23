@@ -3,6 +3,7 @@ import type {
   PlayerObject,
   PlayerSnapshot,
 } from "@spellwake/application-contracts";
+import type { CastOffer } from "./cast-draft";
 
 /**
  * The preview match: six seats around one table, each with a small Goblin
@@ -575,6 +576,141 @@ export function previewResponses(snapshot: PlayerSnapshot): PlayerSnapshot {
 }
 
 const DAMAGE: Record<string, number> = { "Lightning Bolt": 3, Shock: 2 };
+
+const kindOf = (object: PlayerObject): Kind | undefined =>
+  object.identity.kind === "known"
+    ? CARDS[object.identity.characteristics.name]?.kind
+    : undefined;
+const costOf = (object: PlayerObject): string =>
+  object.identity.kind === "known"
+    ? (object.identity.characteristics.manaCost ?? "")
+    : "";
+/** A cost's size in mana: every card here costs red and generic mana only. */
+const manaValue = (cost: string): number =>
+  Array.from(cost.matchAll(/\{([^}]+)\}/g)).reduce(
+    (total, match) => total + (Number(match[1]) || 1),
+    0,
+  );
+/** The viewer's untapped Mountains, rightmost first, as an automatic payment would take them. */
+const untappedLands = (snapshot: PlayerSnapshot): string[] =>
+  snapshot.visibleObjects
+    .filter(
+      (object) =>
+        object.zone === "zone-battlefield" &&
+        object.controllerSeatId === snapshot.viewerSeatId &&
+        !object.tapped &&
+        kindOf(object) === "land",
+    )
+    .map((object) => object.handle)
+    .reverse();
+
+/**
+ * What the preview offers to cast, standing in for offers the game does not
+ * send yet: burn at any creature or player whenever the viewer may act, and
+ * creatures on the viewer's own main phase with nothing waiting. A card is
+ * offered only when untapped Mountains cover its cost.
+ */
+export function previewCastOffers(
+  snapshot: PlayerSnapshot,
+  /** With Auto-tap mana off, the preview pauses for payment. */
+  autoTap: boolean,
+): CastOffer[] {
+  const viewer = snapshot.viewerSeatId;
+  const turn = snapshot.turn;
+  if (!turn?.prioritySeatIds.includes(viewer) || snapshot.decisions.length > 0)
+    return [];
+  const lands = untappedLands(snapshot);
+  const ownMain =
+    turn.activeSeatIds.includes(viewer) &&
+    (turn.phase === "precombat-main" || turn.phase === "postcombat-main") &&
+    snapshot.stack.length === 0;
+  const anyTarget = [
+    ...snapshot.visibleObjects
+      .filter(
+        (object) =>
+          object.zone === "zone-battlefield" && kindOf(object) === "creature",
+      )
+      .map((object) => ({ kind: "object" as const, handle: object.handle })),
+    ...snapshot.players
+      .filter((player) => !player.eliminated)
+      .map((player) => ({ kind: "seat" as const, seatId: player.seatId })),
+  ];
+  return snapshot.visibleObjects.flatMap((object): CastOffer[] => {
+    if (object.zone !== "zone-hand-you") return [];
+    const kind = kindOf(object);
+    const cost = costOf(object);
+    const needed = manaValue(cost);
+    const burn = kind === "instant";
+    if (!(burn || (kind === "creature" && ownMain)) || needed > lands.length)
+      return [];
+    return [
+      {
+        source: object.handle,
+        targets: burn ? anyTarget : null,
+        cost,
+        payment: autoTap ? "automatic" : "paused",
+        paySources: lands.slice(0, needed),
+      },
+    ];
+  });
+}
+
+/**
+ * The viewer casts a card from hand: its cost taps Mountains, and the card
+ * moves to the stack with the target it was given.
+ */
+export function previewCast(
+  snapshot: PlayerSnapshot,
+  source: string,
+  target: StackTarget | null,
+): PlayerSnapshot {
+  const spell = snapshot.visibleObjects.find(
+    (object) => object.handle === source && object.zone === "zone-hand-you",
+  );
+  if (!spell || spell.identity.kind !== "known") return snapshot;
+  const paid = new Set(
+    untappedLands(snapshot).slice(0, manaValue(costOf(spell))),
+  );
+  const sequence = String(Number(snapshot.throughEventSequence) + 1);
+  return {
+    ...snapshot,
+    throughEventSequence: sequence,
+    players: snapshot.players.map((player) =>
+      player.seatId === snapshot.viewerSeatId
+        ? { ...player, handCount: String(Number(player.handCount) - 1) }
+        : player,
+    ),
+    visibleObjects: snapshot.visibleObjects.map((object) =>
+      object.handle === source
+        ? { ...object, zone: "zone-stack" }
+        : paid.has(object.handle)
+          ? { ...object, tapped: true }
+          : object,
+    ),
+    zones: snapshot.zones.map((zone) => {
+      if (zone.visibility !== "visible") return zone;
+      if (zone.handle === "zone-hand-you")
+        return {
+          ...zone,
+          objects: zone.objects.filter((handle) => handle !== source),
+        };
+      if (zone.handle === "zone-stack")
+        return { ...zone, objects: [...zone.objects, source] };
+      return zone;
+    }),
+    stack: [
+      ...snapshot.stack,
+      {
+        handle: `stack-${sequence}-${snapshot.stack.length + 1}`,
+        controllerSeatId: snapshot.viewerSeatId,
+        sourceObject: source,
+        label: spell.identity.characteristics.name,
+        targets: target ? [target] : [],
+        unavailableTargets: "0",
+      },
+    ],
+  };
+}
 /**
  * The newest stack item resolves: a burn spell deals its damage and goes to
  * its owner's graveyard, and a creature dealt lethal damage follows it. This
@@ -605,7 +741,13 @@ export function previewResolveTop(snapshot: PlayerSnapshot): PlayerSnapshot {
   const leaving = new Map<string, string>();
   const graveyardOf = (seatId: string | null) =>
     `zone-graveyard-s${PREVIEW_SEATS.findIndex((seat) => seat.seatId === seatId) + 1}`;
-  if (spell) leaving.set(spell.handle, graveyardOf(spell.ownerSeatId));
+  // A creature spell becomes a permanent; any other spell is put away.
+  const enters = spell !== undefined && kindOf(spell) === "creature";
+  if (spell)
+    leaving.set(
+      spell.handle,
+      enters ? "zone-battlefield" : graveyardOf(spell.ownerSeatId),
+    );
   if (struck && dies)
     leaving.set(struck.handle, graveyardOf(struck.ownerSeatId));
   return {
@@ -623,7 +765,8 @@ export function previewResolveTop(snapshot: PlayerSnapshot): PlayerSnapshot {
         return {
           ...object,
           zone: to,
-          controllerSeatId: null,
+          controllerSeatId:
+            to === "zone-battlefield" ? object.ownerSeatId : null,
           tapped: false,
           damageMarked: "0",
         };

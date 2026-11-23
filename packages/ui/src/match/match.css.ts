@@ -207,6 +207,10 @@ globalStyle(`${payment} button`, {
 });
 globalStyle(`${payment} ${secondary}`, { height: 54, fontSize: 32 });
 globalStyle(`${payment} ${primary}`, { height: 49, fontSize: 28 });
+// Both payment actions stay fingertip-sized on a touch screen.
+globalStyle(`${payment} button`, {
+  "@media": { [touch]: { minHeight: TOUCH_TARGET } },
+});
 globalStyle(`${payment} button:disabled`, {
   opacity: 1,
   borderColor: "#a39e88",
