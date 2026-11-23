@@ -537,6 +537,7 @@ fn live_chatgpt_app_server_normal_and_advanced_with_cache_hits() {
         codex_home: None,
         seed_auth_json: None,
         catalog: AiTierCatalog::from_env(),
+        concurrency: 2,
     })
     .expect("app-server provider");
     provider

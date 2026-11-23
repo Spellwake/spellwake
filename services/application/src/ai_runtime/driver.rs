@@ -9,7 +9,8 @@
 //!    single actions or atomic `cast-batch` sequences back into the shared
 //!    `CheckpointCache` (waking human SSE streams immediately).
 use super::{
-    compact::{AiActionPlan, compact_prompt, compact_reply_schema_for_snapshot},
+    affordances::{PriorityAffordances, auto_tap_plan, diagnose_rejection, fallback_command},
+    compact::{AiActionPlan, compact_prompt_with_affordances, compact_reply_schema_for_snapshot},
     lifecycle::{ActiveAiGameRow, ActiveAiSeatRow, AiControllerRegistry, AiLifecycleClient},
     provider::{AiDecisionProvider, AiModelRequest},
     scheduler::{AiScheduler, ScheduleDecision},
@@ -351,6 +352,25 @@ impl AiRuntimeService {
                 continue;
             }
 
+            // Deterministic <1 ms fast-pass: when holding priority with zero legal land plays,
+            // zero castable spells, and zero activatable non-mana abilities, passing is forced.
+            if snapshot.decisions.is_empty() && !view.affordances.has_non_pass_play() {
+                let cmd = PlayerCommand {
+                    request_id: Uuid::new_v4(),
+                    basis: snapshot.basis.clone(),
+                    action: PlayerAction::Pass {},
+                };
+                if let Ok(ApiResponse::Success { .. }) = self.runtime.controller_command(
+                    &repository,
+                    self.registry.secrets(),
+                    &proof,
+                    &self.config.host_owner,
+                    &cmd,
+                ) {
+                    return DriverStep::Progressed;
+                }
+            }
+
             let decision = {
                 let mut map = match state_map.lock() {
                     Ok(m) => m,
@@ -409,7 +429,7 @@ impl AiRuntimeService {
                         &proof,
                         seat,
                         snapshot,
-                        &view.basic_actions,
+                        &view.affordances,
                         &own_recent,
                         &view_req,
                         state_map,
@@ -435,7 +455,7 @@ impl AiRuntimeService {
         proof: &crate::controller_possession::PossessedController,
         seat: &ActiveAiSeatRow,
         snapshot: &PlayerSnapshot,
-        basic_actions: &[PlayerAction],
+        affordances: &PriorityAffordances,
         own_recent: &[String],
         view_req: &PlayerViewRequest,
         state_map: &Mutex<HashMap<Uuid, SeatDriverState>>,
@@ -450,9 +470,12 @@ impl AiRuntimeService {
         let mut feedback: Option<String> = None;
 
         for attempt in 0..MAX_RETRIES_PER_BOUNDARY {
-            let Ok((prompt, codec)) =
-                compact_prompt(snapshot, basic_actions, own_recent, feedback.as_deref())
-            else {
+            let Ok((prompt, codec)) = compact_prompt_with_affordances(
+                snapshot,
+                affordances,
+                own_recent,
+                feedback.as_deref(),
+            ) else {
                 return false;
             };
             let req = AiModelRequest {
@@ -495,12 +518,26 @@ impl AiRuntimeService {
             let expanded = match codec.expand_reply(&response.raw_json, &snapshot.basis) {
                 Ok(exp) => exp,
                 Err(err) => {
+                    tracing::warn!(
+                        game = %snapshot.basis.game_id,
+                        seat = %seat.seat_id,
+                        attempt,
+                        error = %err,
+                        "AI reply codec expansion rejected"
+                    );
                     feedback = Some(format!("previous reply rejected before commit: {err}"));
                     continue;
                 }
             };
 
-            let commit_result = match &expanded.plan {
+            let plan = auto_tap_plan(
+                expanded.plan,
+                snapshot,
+                &affordances.mana_sources,
+                &snapshot.basis,
+            );
+
+            let commit_result = match &plan {
                 AiActionPlan::Single(cmd) => self.runtime.controller_command(
                     repository,
                     self.registry.secrets(),
@@ -530,7 +567,7 @@ impl AiRuntimeService {
                     };
                     if let Ok(mut map) = state_map.lock() {
                         let st = map.entry(seat.seat_id).or_default();
-                        let summary = summarize_plan(&expanded.plan);
+                        let summary = summarize_plan(&plan);
                         st.push_recent(summary);
                         if let Some(post) = post_snap {
                             st.scheduler.record_model_acceptance(
@@ -554,11 +591,40 @@ impl AiRuntimeService {
                     if msg.contains("stale") {
                         return true;
                     }
-                    feedback = Some(format!("native engine rejected action: {msg}"));
+                    tracing::warn!(
+                        game = %snapshot.basis.game_id,
+                        seat = %seat.seat_id,
+                        attempt,
+                        rejection = %msg,
+                        "AI action rejected by native engine"
+                    );
+                    feedback = Some(diagnose_rejection(&plan, affordances, &codec, &msg));
                 }
                 Ok(ApiResponse::Error { .. }) | Err(_) => {
                     return false;
                 }
+            }
+        }
+
+        // Safe fallback so a live human match never hangs if all retries exhaust.
+        if let Some(cmd) = fallback_command(snapshot) {
+            tracing::warn!(
+                game = %snapshot.basis.game_id,
+                seat = %seat.seat_id,
+                "AI retries exhausted; committing safe fallback action"
+            );
+            if let Ok(ApiResponse::Success { .. }) = self.runtime.controller_command(
+                repository,
+                self.registry.secrets(),
+                proof,
+                &self.config.host_owner,
+                &cmd,
+            ) {
+                if let Ok(mut map) = state_map.lock() {
+                    let st = map.entry(seat.seat_id).or_default();
+                    st.scheduler.revoke();
+                }
+                return true;
             }
         }
         false
