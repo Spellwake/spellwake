@@ -96,6 +96,11 @@ fn parts(change: CreatureTypeTextChange, value: &mut ResolvedPartsSpec) {
                 | BlockingRestriction::CannotBeBlockedBySubtype(value),
             ) => word(change, value),
             ResolvedPartSpec::BlockingRestriction(_) => {}
+            ResolvedPartSpec::ModifyPTExpr { power, toughness }
+            | ResolvedPartSpec::SetPTExpr { power, toughness } => {
+                power.rewrite_creature_type(change.from, change.to);
+                toughness.rewrite_creature_type(change.from, change.to);
+            }
             ResolvedPartSpec::Names(_)
             | ResolvedPartSpec::Control(_)
             | ResolvedPartSpec::Color(_)
@@ -166,6 +171,8 @@ fn body(change: CreatureTypeTextChange, value: &mut ExecutableBody) {
             | Instruction::DiscardFiltered { amount, .. }
             | Instruction::AddPlayerCounter { amount, .. }
             | Instruction::PutNamedCounterOnTarget { amount, .. }
+            | Instruction::PutCountersOnSubject { amount, .. }
+            | Instruction::AdjustPlayersLife { amount, .. }
             | Instruction::ExileTopPlay { count: amount, .. }
             | Instruction::LookTopChoose { count: amount, .. }
             | Instruction::Sacrifice { amount, .. }
@@ -199,8 +206,14 @@ fn body(change: CreatureTypeTextChange, value: &mut ExecutableBody) {
             Instruction::MoveGroup { group, .. }
             | Instruction::DestroyGroup(group)
             | Instruction::DestroyGroupWithoutRegeneration(group)
-            | Instruction::PutGroupOnLibraryBottom(group) => {
+            | Instruction::PutGroupOnLibraryBottom(group)
+            | Instruction::SetGroupTapped { filter: group, .. } => {
                 group.rewrite_creature_type(change.from, change.to);
+            }
+            Instruction::PutCountersOnSubject { subject, .. } => {
+                if let crate::program::EffectSubject::Matching(group) = subject.as_mut() {
+                    group.rewrite_creature_type(change.from, change.to);
+                }
             }
             Instruction::BranchIfFalse { condition, .. } => {
                 condition.left.rewrite_creature_type(change.from, change.to);
@@ -255,11 +268,15 @@ fn body(change: CreatureTypeTextChange, value: &mut ExecutableBody) {
                 _ => {}
             },
             Instruction::DamageGroup {
-                group: crate::program::DamageGroup::Filtered(filter),
+                group:
+                    crate::program::DamageGroup::Filtered(filter)
+                    | crate::program::DamageGroup::FilteredAndPlayers { filter, .. },
                 ..
             }
             | Instruction::DamageGroupAmount {
-                group: crate::program::DamageGroup::Filtered(filter),
+                group:
+                    crate::program::DamageGroup::Filtered(filter)
+                    | crate::program::DamageGroup::FilteredAndPlayers { filter, .. },
                 ..
             } => {
                 filter.rewrite_creature_type(change.from, change.to);
@@ -286,6 +303,16 @@ fn body(change: CreatureTypeTextChange, value: &mut ExecutableBody) {
             | Instruction::ControlledSubtypeDamagesAttacker(kind)
             | Instruction::CreateArmyIfAbsent { subtype: kind, .. }
             | Instruction::Amass { subtype: kind, .. } => word(change, kind),
+            Instruction::ChangeGroup {
+                group,
+                parts: value,
+                ..
+            } => {
+                if let crate::program::EffectSubject::Matching(filter) = group.as_mut() {
+                    filter.rewrite_creature_type(change.from, change.to);
+                }
+                parts(change, value);
+            }
             Instruction::ChangeControlledPlaneswalkers { parts: value, .. }
             | Instruction::CreateContinuousEffect { parts: value, .. }
             | Instruction::ChangeAbilitySource { parts: value, .. } => parts(change, value),
@@ -406,6 +433,7 @@ fn body(change: CreatureTypeTextChange, value: &mut ExecutableBody) {
             | Instruction::RepeatOpponentLifeLoss
             | Instruction::OpponentsLoseAndControllerGains(_)
             | Instruction::AdjustEachOpponentLife { .. }
+            | Instruction::AdjustPlayersLife { .. }
             | Instruction::CreatePreventionShield { .. }
             | Instruction::CreateReflectingShield
             | Instruction::CreateDamageMultiplier { .. }
@@ -647,6 +675,7 @@ fn body(change: CreatureTypeTextChange, value: &mut ExecutableBody) {
             | Instruction::RequireTargetAttack
             | Instruction::RemoveTargetFromCombat
             | Instruction::DestroyTarget
+            | Instruction::DestroyTargetWithoutRegeneration
             | Instruction::ReturnToOwnersHand
             | Instruction::ReturnOwnGraveyardCreatureToBattlefield
             | Instruction::ReturnAnyGraveyardCreatureOrPlaneswalker
@@ -784,20 +813,50 @@ fn printed(change: CreatureTypeTextChange, text: &mut PrintedText) {
         rewrite_mana_output(change, &mut ability.output);
     }
     for ability in &mut text.activated {
-        if let crate::activated::SourceCost::TapPermanents {
-            filter: crate::activated::TapCostFilter::Subtype(kind),
-            ..
-        }
-        | crate::activated::SourceCost::SacrificeSelected {
-            filter: crate::activated::SelectedSacrificeFilter::Subtype(kind),
-            ..
-        }
-        | crate::activated::SourceCost::PayLife {
-            sacrifice: Some(crate::activated::SelectedSacrificeFilter::Subtype(kind)),
-            ..
-        } = &mut ability.source_cost
-        {
-            word(change, kind);
+        match &mut ability.source_cost {
+            crate::activated::SourceCost::TapPermanents {
+                filter: crate::activated::TapCostFilter::Subtype(kind),
+                ..
+            }
+            | crate::activated::SourceCost::SacrificeSelected {
+                filter: crate::activated::SelectedSacrificeFilter::Subtype(kind),
+                ..
+            }
+            | crate::activated::SourceCost::PayLife {
+                sacrifice: Some(crate::activated::SelectedSacrificeFilter::Subtype(kind)),
+                ..
+            } => {
+                word(change, kind);
+            }
+            crate::activated::SourceCost::TapPermanents {
+                filter: crate::activated::TapCostFilter::Matching(filter),
+                ..
+            }
+            | crate::activated::SourceCost::SacrificeSelected {
+                filter: crate::activated::SelectedSacrificeFilter::Matching(filter),
+                ..
+            }
+            | crate::activated::SourceCost::PayLife {
+                sacrifice: Some(crate::activated::SelectedSacrificeFilter::Matching(filter)),
+                ..
+            }
+            | crate::activated::SourceCost::Discard {
+                mode: crate::activated::DiscardCostMode::Filtered { filter, .. },
+                ..
+            }
+            | crate::activated::SourceCost::GraveyardDiscard {
+                mode: crate::activated::DiscardCostMode::Filtered { filter, .. },
+            }
+            | crate::activated::SourceCost::ExileGraveyard {
+                filter: crate::activated::GraveyardExileCost::Filtered { filter, .. },
+                ..
+            }
+            | crate::activated::SourceCost::GraveyardExileOther {
+                filter: crate::activated::GraveyardExileCost::Filtered { filter, .. },
+            } => {
+                filter.rewrite_creature_type(change.from, change.to);
+            }
+            _ => {}
         }
         body(change, &mut ability.body);
     }

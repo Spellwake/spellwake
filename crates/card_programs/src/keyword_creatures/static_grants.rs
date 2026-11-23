@@ -268,6 +268,7 @@ pub(super) fn sliver_selected_activation(
         source_cost: SourceCost::Discard {
             mode: spellwake_engine::activated::DiscardCostMode::SelectedOne,
             tap_source: true,
+            sacrifice_source: false,
         },
         body: ExecutableBody::new(
             BodyTarget::None,

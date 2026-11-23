@@ -27,7 +27,8 @@ export interface OriginalCardFaceProps {
   highlights?: readonly {
     id: string;
     region: PrintedRegion;
-    tone: "available" | "selected";
+    /** Cyan for what is asked now, gold for what is chosen, ivory for a choice already made. */
+    tone: "available" | "selected" | "earlier";
   }[];
   children?: ReactNode;
 }

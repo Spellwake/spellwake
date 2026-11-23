@@ -1866,6 +1866,7 @@ struct ResolutionResults {
     milled_mana_values: Vec<RulesInteger>,
     selected_graveyard_exile_creatures: usize,
     last_sacrificed_creature: Option<crate::characteristics::PowerToughness>,
+    returned_target_permanent: Option<ObjectId>,
 }
 /// Points into the owned payload. Tokens never own another mutable program counter.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -2350,7 +2351,7 @@ impl EffectWindow {
                 definition.triggered.iter().any(|trigger|trigger.body.instructions.contains(&Instruction::Myriad) || matches!(trigger.condition.event,crate::program::TriggerEvent::Attacks { mode: crate::program::AttackTriggerMode::OpponentsAtController { minimum: 2 } | crate::program::AttackTriggerMode::FirstThisTurn { highest_life: true }, .. }))
             )).then(BTreeMap::new),
             track_artifact_tapped_for_mana:programs.values().any(|program|entry_counters::definition_or_token_matches(program,|definition|
-                definition.triggered.iter().any(|trigger|matches!(trigger.condition.event,crate::program::TriggerEvent::PlayerAction { action: crate::program::PlayerTriggerAction::ArtifactTappedForMana, .. })))),
+                definition.triggered.iter().any(|trigger|matches!(trigger.condition.event,crate::program::TriggerEvent::PlayerAction { action: crate::program::PlayerTriggerAction::ArtifactTappedForMana | crate::program::PlayerTriggerAction::PermanentTappedForMana(_), .. })))),
             departed_saga_sources: programs.values().any(|program| entry_counters::definition_or_token_matches(program, |definition| {
                 definition.triggered.iter().any(|trigger| matches!(trigger.condition.event, crate::program::TriggerEvent::PlayerAction { action: crate::program::PlayerTriggerAction::SagaFinalChapterResolved, .. }))
             })).then(BTreeMap::new),
@@ -3791,7 +3792,8 @@ impl EffectWindow {
                                 if self.copiable_program(*object).is_some_and(|program| program.flashback.is_some())))
                     }
                     crate::mana::ManaRestriction::NoncreatureSpell => spell_view.is_some_and(|value| !value.has_type(CardType::Creature)),
-                    crate::mana::ManaRestriction::ArtifactSpellOrAbility => spell_view.is_some_and(|value| value.has_type(CardType::Artifact)),
+                    crate::mana::ManaRestriction::ArtifactSpellOrAbility
+                    | crate::mana::ManaRestriction::NotNonartifactSpell => spell_view.is_some_and(|value| value.has_type(CardType::Artifact)),
                     crate::mana::ManaRestriction::CommanderSpell => match spell.kind() {
                         StackKind::CardSpell(object) => self.window.cards().get(*object).is_some_and(|card| card.owner() == actor && card.card_id().is_some_and(|id| self.commanders.contains_key(&id))),
                         _ => false,
@@ -3868,6 +3870,7 @@ impl EffectWindow {
             crate::mana::ManaRestriction::ArtifactSpellOrAbility => {
                 source.has_type(CardType::Artifact)
             }
+            crate::mana::ManaRestriction::NotNonartifactSpell => true,
             crate::mana::ManaRestriction::CreatureSpellOrAbilityOfType(Some(kind)) => {
                 source.is_creature() && source.current_creature_subtypes.contains(&kind)
             }
@@ -6727,6 +6730,11 @@ impl EffectWindow {
                 .cards()
                 .get(id)
                 .is_some_and(|object| object.owner() == controller),
+            ControllerFilter::OwnerOpponent => self.window.cards().get(id).is_some_and(|object| {
+                self.combat_rules
+                    .opponents(self.window.participants(), controller)
+                    .is_ok_and(|opponents| opponents.contains(&object.owner()))
+            }),
             ControllerFilter::RelatedPlayer => false,
             ControllerFilter::Player(seat) => p.controller == Some(seat),
         };
@@ -6796,6 +6804,10 @@ impl EffectWindow {
                             .is_some_and(|b| b.attackers().contains(&id))
                 })
             }),
+            CombatFilter::NotAttacking => !self
+                .combat
+                .as_ref()
+                .is_some_and(|combat| combat.attacker(id).is_some()),
         };
         if !combat_ok {
             return false;
@@ -6903,6 +6915,15 @@ impl EffectWindow {
                 .get(id)
                 .and_then(GameObject::card_id)
                 .is_some_and(|card| self.commanders.contains_key(&card))
+        {
+            return false;
+        }
+        if clause.flags.contains(ObjectFilterFlags::FACE_DOWN)
+            && !self
+                .window
+                .cards()
+                .get(id)
+                .is_some_and(|card| card.face_down().is_some())
         {
             return false;
         }
@@ -7237,6 +7258,7 @@ impl EffectWindow {
                                     entry.controller() == seat
                                 }
                                 crate::program::ControllerFilter::OwnerYou
+                                | crate::program::ControllerFilter::OwnerOpponent
                                 | crate::program::ControllerFilter::RelatedPlayer => false,
                             },
                             crate::program::ObjectFilter::Either(_, _) => true,
@@ -7411,7 +7433,7 @@ impl EffectWindow {
             Instruction::GoadTarget | Instruction::RequireTargetAttack => {
                 matches!(target, TargetRef::Object(id) if evaluated.get(id).is_some_and(|p| p.zone == ObjectZone::Battlefield && p.is_creature()))
             }
-            Instruction::DestroyTarget => {
+            Instruction::DestroyTarget | Instruction::DestroyTargetWithoutRegeneration => {
                 matches!(target, TargetRef::Object(id) if evaluated.get(id).is_some_and(|view| view.zone == ObjectZone::Battlefield && !view.has_keyword(KeywordAbility::Indestructible)))
             }
             Instruction::ExileCreatureAtMostRevealedPower
@@ -7707,6 +7729,7 @@ impl EffectWindow {
             | Instruction::RepeatOpponentLifeLoss
             | Instruction::OpponentsLoseAndControllerGains(_)
             | Instruction::AdjustEachOpponentLife { .. }
+            | Instruction::AdjustPlayersLife { .. }
             | Instruction::RememberPermanentTarget
             | Instruction::ControllerLosesRememberedManaValue
             | Instruction::ExiledTargetControllerGainsPower
@@ -7767,6 +7790,8 @@ impl EffectWindow {
             | Instruction::PutChargeCounterOnSource
             | Instruction::PutBlessingCounterOnSource
             | Instruction::PutNamedCounterOnSource { .. }
+            | Instruction::PutCountersOnSubject { .. }
+            | Instruction::SetGroupTapped { .. }
             | Instruction::PutQuestCounterOnSource
             | Instruction::PutStorageCounterOnSource
             | Instruction::AbilitySourceControllerLosesLife(_)
@@ -7796,6 +7821,7 @@ impl EffectWindow {
             | Instruction::RevealTopAndRemoveAttackerIfForest
             | Instruction::DamageCapturedBlocker(_)
             | Instruction::ChangeControlledPlaneswalkers { .. }
+            | Instruction::ChangeGroup { .. }
             | Instruction::ChangeAbilitySource { .. }
             | Instruction::GiveControlOfAbilitySource
             | Instruction::UntapAndControlCreatures

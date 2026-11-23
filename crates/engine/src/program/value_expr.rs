@@ -18,6 +18,12 @@ pub enum ValueZone {
     Battlefield,
     Graveyard(ResolvingPlayer),
     Hand(ResolvingPlayer),
+    /// All players' graveyards combined.
+    AllGraveyards,
+    /// Exile (either all cards in exile, or cards owned by a specific resolving player).
+    Exile(Option<ResolvingPlayer>),
+    /// Cards in a resolving player's library.
+    Library(ResolvingPlayer),
 }
 
 /// Object statistic read by [`ValueExpr::ObjectStat`] or [`ValueExpr::Aggregate`].
@@ -59,6 +65,7 @@ pub enum CounterSubjectRef {
     AbilitySource,
     TriggerSource,
     DyingSource,
+    TargetObject,
     ControllerExperience,
     ControllerEnergy,
     ControllerPoison,
@@ -96,6 +103,14 @@ pub enum PlayerStatExpr {
     DescendedThisTurn,
     CommittedCrimeThisTurn,
     ControllerHasCityBlessing,
+    /// Current life total of any resolving player.
+    PlayerLife(ResolvingPlayer),
+    /// Number of cards in any resolving player's hand.
+    PlayerHandSize(ResolvingPlayer),
+    /// Number of cards in any resolving player's library.
+    PlayerLibrarySize(ResolvingPlayer),
+    /// Number of cards in any resolving player's graveyard.
+    PlayerGraveyardSize(ResolvingPlayer),
 }
 
 /// Subject tested by [`ValueExpr::ObjectMatches`] (evaluates to `1` if matched, `0` otherwise).
@@ -404,6 +419,10 @@ impl ValueExpr {
             }
             | Self::CounterCount {
                 subject: CounterSubjectRef::AbilitySource,
+                ..
+            }
+            | Self::ObjectMatches {
+                subject: MatchObjectRef::AbilitySource,
                 ..
             } => true,
             Self::Count { filter, .. } | Self::Aggregate { filter, .. } => {
@@ -766,12 +785,19 @@ impl ValueExpr {
             },
             Self::CounterCount { subject, kind } => match subject {
                 CounterSubjectRef::AbilitySource => {
-                    if kind.is_some_and(|k| CounterKind::PERMANENT.contains(&k))
+                    if kind.is_none_or(|k| CounterKind::PERMANENT.contains(&k))
                         && matches!(
                             context,
                             BodyContext::Activated { .. } | BodyContext::TriggerBound { .. }
                         )
                     {
+                        Ok(())
+                    } else {
+                        Err(DefinitionError::InvalidInstruction)
+                    }
+                }
+                CounterSubjectRef::TargetObject => {
+                    if kind.is_none_or(|k| CounterKind::PERMANENT.contains(&k)) {
                         Ok(())
                     } else {
                         Err(DefinitionError::InvalidInstruction)
@@ -873,14 +899,48 @@ impl ValueExpr {
                 | PlayerStatExpr::DescendedThisTurn
                 | PlayerStatExpr::CommittedCrimeThisTurn
                 | PlayerStatExpr::ControllerHasCityBlessing => Ok(()),
+                PlayerStatExpr::PlayerLife(role)
+                | PlayerStatExpr::PlayerHandSize(role)
+                | PlayerStatExpr::PlayerLibrarySize(role)
+                | PlayerStatExpr::PlayerGraveyardSize(role) => {
+                    if matches!(
+                        role,
+                        ResolvingPlayer::Controller
+                            | ResolvingPlayer::TargetPlayer
+                            | ResolvingPlayer::TargetController
+                            | ResolvingPlayer::TargetOwner
+                            | ResolvingPlayer::UniqueRelatedPlayer
+                            | ResolvingPlayer::ActivePlayer
+                            | ResolvingPlayer::EnchantedPlayer
+                            | ResolvingPlayer::DefendingPlayer
+                    ) {
+                        Ok(())
+                    } else {
+                        Err(DefinitionError::UnboundResolvingPlayer)
+                    }
+                }
             },
             Self::ObjectMatches { filter, .. } => filter
                 .validate_vocabulary(vocabulary)
                 .map_err(|_| DefinitionError::InvalidInstruction),
             Self::EventValue(kind) => match kind {
                 EventValueKind::ChosenX => {
-                    if matches!(context, BodyContext::TriggerBound { .. }) {
-                        Err(DefinitionError::InvalidInstruction)
+                    if let BodyContext::TriggerBound {
+                        condition,
+                        grouping,
+                    } = context
+                    {
+                        if grouping == TriggerGrouping::EachOccurrence
+                            && matches!(
+                                &condition.event,
+                                TriggerEvent::Enters { subject, .. }
+                                    if *subject == ObjectFilter::self_object()
+                            )
+                        {
+                            Ok(())
+                        } else {
+                            Err(DefinitionError::InvalidInstruction)
+                        }
                     } else {
                         Ok(())
                     }
@@ -1116,9 +1176,19 @@ impl ValueExpr {
             }
             Self::CounterCount { subject, kind } => match subject {
                 CounterSubjectRef::AbilitySource => {
-                    if kind.is_some_and(|k| CounterKind::PERMANENT.contains(&k))
-                        && matches!(context, BodyContext::Activated { .. })
+                    if kind.is_none_or(|k| CounterKind::PERMANENT.contains(&k))
+                        && matches!(
+                            context,
+                            BodyContext::Activated { .. } | BodyContext::TriggerBound { .. }
+                        )
                     {
+                        Ok(())
+                    } else {
+                        Err(DefinitionError::InvalidInstruction)
+                    }
+                }
+                CounterSubjectRef::TargetObject => {
+                    if kind.is_none_or(|k| CounterKind::PERMANENT.contains(&k)) {
                         Ok(())
                     } else {
                         Err(DefinitionError::InvalidInstruction)

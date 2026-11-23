@@ -84,6 +84,8 @@ interface Place {
   x: number;
   y: number;
   scale: number;
+  /** Placed at the left edge, away from the turn panel and the pile. */
+  apart?: boolean;
 }
 
 /**
@@ -91,10 +93,18 @@ interface Place {
  * players along the right edge when the panel is docked below. It keeps clear
  * of the hand and shrinks before it would leave the table.
  */
-function usePilePlace(
+export function usePilePlace(
   host: RefObject<HTMLDivElement | null>,
   count: number,
   clearBottom: number,
+  /** What is being placed, in the pile's design pixels: the pile's own card when absent. */
+  card: { width: number; height: number } = CARD,
+  /**
+   * Where it goes with no room under the turn panel, as on a phone held
+   * sideways: beside the panel, or at the table's left edge, clear of the
+   * cards. Two things share that edge as its upper and lower parts.
+   */
+  crowded: "beside" | "left" | "left-upper" | "left-lower" = "beside",
 ): Place | null {
   const [place, setPlace] = useState<Place | null>(null);
   useLayoutEffect(() => {
@@ -116,22 +126,41 @@ function usePilePlace(
         // The oldest card peeks above the front one, so the room is shared.
         const room = Math.max(floor - top, 60);
         // On a short screen the pile never takes more than half the height.
-        const tall = CARD.height + peeks * PEEK.y;
+        const tall = card.height + peeks * PEEK.y;
         const scale = Math.max(
           0.42,
           Math.min(most, room / tall, (stage.height * 0.5) / tall),
         );
         return {
           scale,
-          x: right - CARD.width * scale,
+          x: right - card.width * scale,
           y: top + peeks * PEEK.y * scale,
         };
+      };
+      const aside = (top: number): Place => {
+        const column = Math.max(floor - top, 60);
+        const tall = card.height + peeks * PEEK.y;
+        if (crowded === "left-upper") {
+          const scale = Math.min(density, (column * 0.56) / tall);
+          return { scale, x: 12, y: top, apart: true };
+        }
+        if (crowded === "left-lower") {
+          const scale = Math.min(density, (column * 0.4) / tall);
+          return {
+            scale,
+            // Room for the older cards, which show more while offered as targets.
+            x: 12 + (peeks > 0 ? Math.max(peeks * PEEK.x, 50) : 0) * scale,
+            y: floor - card.height * scale,
+            apart: true,
+          };
+        }
+        return { ...fit(top, 0, density), x: 12, apart: true };
       };
       const docked = !side || side.top - stage.top > stage.height * 0.45;
       let next: Place;
       if (docked) {
         // A phone: small, along the right edge under the players.
-        const most = Math.min(density, (stage.width * 0.27) / CARD.width);
+        const most = Math.min(density, (stage.width * 0.27) / card.width);
         next = fit(under + 14, stage.width - 14, most);
       } else {
         const below = fit(
@@ -143,13 +172,16 @@ function usePilePlace(
         next =
           below.scale >= density * 0.8
             ? below
-            : fit(under + 16, side.left - stage.left - 20, density);
+            : crowded === "beside"
+              ? fit(under + 16, side.left - stage.left - 20, density)
+              : aside(under + 12);
       }
       setPlace((current) =>
         current &&
         Math.abs(current.x - next.x) < 0.5 &&
         Math.abs(current.y - next.y) < 0.5 &&
-        Math.abs(current.scale - next.scale) < 0.005
+        Math.abs(current.scale - next.scale) < 0.005 &&
+        current.apart === next.apart
           ? current
           : next,
       );
@@ -165,7 +197,7 @@ function usePilePlace(
       observer.disconnect();
       window.removeEventListener("resize", measure);
     };
-  }, [host, count, clearBottom]);
+  }, [host, count, clearBottom, card.width, card.height, crowded]);
   return place;
 }
 
@@ -181,6 +213,9 @@ export function MatchStack({
   selectedId,
   onSelect,
   pending = null,
+  targets = null,
+  locked = false,
+  aside = false,
   follow,
   clearBottom = 0,
 }: {
@@ -194,6 +229,21 @@ export function MatchStack({
    * it, with a line to its target once one is chosen. It is not on the stack.
    */
   pending?: { object: PlayerObject; target: StackTargetValue | null } | null;
+  /**
+   * While a spell being cast may target a spell here: pressing an offered
+   * item chooses it as that target instead of reading it.
+   */
+  targets?: {
+    ids: ReadonlySet<string>;
+    choose: (handle: string) => void;
+  } | null;
+  /** A cast is being drafted: the pile is not read until it ends. */
+  locked?: boolean;
+  /**
+   * The spell being cast stands on its own face: where there is no room
+   * beside the turn panel, the pile shares the left edge with it.
+   */
+  aside?: boolean;
   /** Changes whenever the cards may have moved. */
   follow: unknown;
   clearBottom?: number;
@@ -215,14 +265,20 @@ export function MatchStack({
     ];
   }, [snapshot.stack, snapshot.viewerSeatId, pending]);
   // A pending spell with its target chosen is read as a matter of course.
-  const reading = pending?.target ? PENDING : selectedId;
+  const reading = pending?.target ? PENDING : locked ? null : selectedId;
   // The pile fades out with what it last held.
   const last = useRef(stack);
   useEffect(() => {
     if (stack.length > 0) last.current = stack;
   }, [stack]);
   const shown = stack.length > 0 ? stack : last.current;
-  const place = usePilePlace(host, shown.length, clearBottom);
+  const place = usePilePlace(
+    host,
+    shown.length,
+    clearBottom,
+    CARD,
+    aside ? "left-lower" : "beside",
+  );
 
   const objects = useMemo(
     () => new Map(snapshot.visibleObjects.map((o) => [o.handle, o] as const)),
@@ -350,9 +406,12 @@ export function MatchStack({
           <CompactSpellStack
             items={items}
             selectedId={reading}
-            // The pending spell is not a stack item to read or put back.
+            offeredIds={targets ? [...targets.ids] : []}
+            // Choosing a target comes before reading; the pending spell is
+            // not a stack item to read or put back.
             onSelect={(id) => {
-              if (!pending && id !== PENDING) onSelect(id);
+              if (id !== null && targets?.ids.has(id)) targets.choose(id);
+              else if (!pending && !locked && id !== PENDING) onSelect(id);
             }}
           />
         </motion.div>

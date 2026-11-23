@@ -21,6 +21,9 @@ pub enum ReasoningEffort {
     #[default]
     Medium,
     High,
+    XHigh,
+    Max,
+    Ultra,
 }
 
 impl ReasoningEffort {
@@ -29,6 +32,9 @@ impl ReasoningEffort {
             Self::Low => "low",
             Self::Medium => "medium",
             Self::High => "high",
+            Self::XHigh => "xhigh",
+            Self::Max => "max",
+            Self::Ultra => "ultra",
         }
     }
 
@@ -37,6 +43,9 @@ impl ReasoningEffort {
             "low" => Some(Self::Low),
             "medium" => Some(Self::Medium),
             "high" => Some(Self::High),
+            "xhigh" | "extra_high" | "extra-high" => Some(Self::XHigh),
+            "max" => Some(Self::Max),
+            "ultra" => Some(Self::Ultra),
             _ => None,
         }
     }
@@ -61,13 +70,13 @@ impl Default for AiTierCatalog {
     fn default() -> Self {
         Self {
             normal: AiTierModelConfig {
-                model: "gpt-6-luna".to_owned(),
+                model: "gpt-6.1-terra".to_owned(),
                 effort: ReasoningEffort::Medium,
                 timeout: Duration::from_secs(45),
             },
             advanced: AiTierModelConfig {
-                model: "gpt-6.1-terra".to_owned(),
-                effort: ReasoningEffort::Medium,
+                model: "gpt-6.2-astra".to_owned(),
+                effort: ReasoningEffort::XHigh,
                 timeout: Duration::from_secs(60),
             },
         }
@@ -76,7 +85,7 @@ impl Default for AiTierCatalog {
 
 impl AiTierCatalog {
     /// Load tier model/effort overrides from environment variables, falling back to
-    /// the verified two-tier defaults (`gpt-6-luna` medium / `gpt-6.1-terra` medium).
+    /// the verified two-tier defaults (`gpt-6.1-terra` medium / `gpt-6.2-astra` xhigh).
     pub fn from_env() -> Self {
         let mut catalog = Self::default();
         if let Ok(model) = std::env::var("SPELLWAKE_AI_NORMAL_MODEL")
@@ -607,5 +616,30 @@ mod tests {
         assert_eq!(usage.cached_input_tokens, 2800);
         assert_eq!(usage.output_tokens, 42);
         assert_eq!(usage.reasoning_tokens, 12);
+    }
+
+    #[test]
+    fn parses_all_reasoning_efforts_and_verified_tier_defaults() {
+        for (raw, expected, canonical) in [
+            ("low", ReasoningEffort::Low, "low"),
+            ("medium", ReasoningEffort::Medium, "medium"),
+            ("high", ReasoningEffort::High, "high"),
+            ("xhigh", ReasoningEffort::XHigh, "xhigh"),
+            ("extra-high", ReasoningEffort::XHigh, "xhigh"),
+            ("extra_high", ReasoningEffort::XHigh, "xhigh"),
+            ("max", ReasoningEffort::Max, "max"),
+            ("ultra", ReasoningEffort::Ultra, "ultra"),
+        ] {
+            let parsed = ReasoningEffort::parse(raw).expect("valid effort");
+            assert_eq!(parsed, expected);
+            assert_eq!(parsed.as_str(), canonical);
+        }
+        assert!(ReasoningEffort::parse("unknown").is_none());
+
+        let defaults = AiTierCatalog::default();
+        assert_eq!(defaults.normal.model, "gpt-6.1-terra");
+        assert_eq!(defaults.normal.effort, ReasoningEffort::Medium);
+        assert_eq!(defaults.advanced.model, "gpt-6.2-astra");
+        assert_eq!(defaults.advanced.effort, ReasoningEffort::XHigh);
     }
 }
