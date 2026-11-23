@@ -5485,6 +5485,7 @@ impl Activated {
                 "DiscardMatchingSpellManaValue" => SourceCost::Discard {
                     mode: DiscardCostMode::MatchingTargetSpellManaValue,
                     tap_source: false,
+                    sacrifice_source: false,
                 },
                 "DiscardSelected"
                     if self.cost_subtype.is_none()
@@ -5494,6 +5495,7 @@ impl Activated {
                     SourceCost::Discard {
                         mode: DiscardCostMode::SelectedOne,
                         tap_source: self.cost_tap_source.ok_or("missing cost tap")?,
+                        sacrifice_source: false,
                     }
                 }
                 _ if self.cost_filter.is_some()
@@ -5524,6 +5526,7 @@ impl Activated {
                 "TapDiscardHand" => SourceCost::Discard {
                     mode: DiscardCostMode::WholeHand,
                     tap_source: true,
+                    sacrifice_source: false,
                 },
                 "TapExileGraveyardX" => SourceCost::ExileGraveyard {
                     filter: GraveyardExileCost::AnyCountX,
@@ -7602,6 +7605,9 @@ fn entry_counters(values: &[spellwake_engine::program::EntryCounterAbility]) -> 
                 DynamicCounter { kind, amount } => {
                     json!({"tag":"DynamicCounter","kind":format!("{kind:?}"),"amount":instruction_amount(amount)})
                 }
+                ConditionalCounter { kind, amount, .. } => {
+                    json!({"tag":"ConditionalCounter","kind":format!("{kind:?}"),"amount":instruction_amount(amount)})
+                }
                 MorbidPlusOne(n) => json!({"tag":"MorbidPlusOne","amount":n}),
                 ControlledAndGraveyardSubtypePlusOne(subtype) => json!({
                     "tag":"ControlledAndGraveyardSubtypePlusOne","subtype":subtype
@@ -8249,12 +8255,15 @@ pub fn decode_for_owner(
         flashback_tap_white_creatures: raw.flashback_tap_white_creatures,
         flashback_life:raw.flashback_life,
         discard_cast_cost:raw.discard_cast_cost,
+        discard_cast_cost_filter: None,
         sacrifice_creature_cast_cost:raw.sacrifice_creature_cast_cost,
+        sacrifice_cast_cost_filter: None,
         tap_creatures_cast_cost:raw.tap_creatures_cast_cost,
         graveyard_creature_exile_cost: raw.graveyard_creature_exile_cost,
         graveyard_exile_x_cost: raw.graveyard_exile_x_cost,
         graveyard_self_cast: None,
         reveal_colorless_creature_cast_cost:raw.reveal_colorless_creature_cast_cost,
+        activation_hybrid_symbols: BTreeMap::new(),
         activation_restrictions: raw
             .activation_restrictions
             .into_iter()
@@ -8562,6 +8571,12 @@ pub fn parts_spec(value: &ResolvedPartsSpec) -> Value {
                 }
                 ResolvedPartSpec::ModifyPT(value) => {
                     json!({"tag":"ModifyPT","power":value.power,"toughness":value.toughness})
+                }
+                ResolvedPartSpec::ModifyPTExpr { power, toughness } => {
+                    json!({"tag":"ModifyPTExpr","power":instruction_amount(power),"toughness":instruction_amount(toughness)})
+                }
+                ResolvedPartSpec::SetPTExpr { power, toughness } => {
+                    json!({"tag":"SetPTExpr","power":instruction_amount(power),"toughness":instruction_amount(toughness)})
                 }
                 ResolvedPartSpec::SwitchPT => json!({"tag":"SwitchPT"}),
                 ResolvedPartSpec::Abilities(value) => ability_part(value),
@@ -9622,6 +9637,7 @@ fn token_creation(creation: &TokenCreation) -> Value {
         TokenRecipients::Controller => "Controller",
         TokenRecipients::EachPlayer => "EachPlayer",
         TokenRecipients::EachOpponent => "EachOpponent",
+        TokenRecipients::Player(_) => "Player",
     };
     let mut row = json!({
         "definition": token_definition(&creation.definition),
@@ -9649,6 +9665,7 @@ pub fn token_definition(value: &TokenDefinition) -> Value {
             json!({"tag":"Default","ordered_subtypes":ordered_subtypes.iter().map(|word|match word {
             TokenSubtype::Creature(value) => json!({"family":"Creature","type":projection::creature_type_id(*value)}),
             TokenSubtype::Artifact(value) => json!({"family":"Artifact","type":value.wire_label()}),
+            TokenSubtype::Enchantment(value) => json!({"family":"Enchantment","type":value.wire_label()}),
             TokenSubtype::Land(value) => json!({"family":"Land","type":value.wire_label()}),
         }).collect::<Vec<_>>()})
         }
@@ -9957,6 +9974,7 @@ pub fn body(value: &ExecutableBody) -> Value {
             Instruction::OpponentsLoseAndControllerGains(amount) => json!({"op":"OpponentsLoseAndControllerGains","amount":instruction_amount(amount)}),
             Instruction::RepeatOpponentLifeLoss => json!({"op":"RepeatOpponentLifeLoss"}),
             Instruction::AdjustEachOpponentLife { adjustment, controller_adjustment } => json!({"op":"AdjustEachOpponentLife","adjustment":life_adjustment(adjustment),"controller_adjustment":controller_adjustment.as_ref().map(life_adjustment)}),
+            Instruction::AdjustPlayersLife { players, gain, amount } => json!({"op":"AdjustPlayersLife","players":format!("{players:?}"),"gain":gain,"amount":instruction_amount(amount)}),
             Instruction::RememberPermanentTarget => json!({"op":"RememberPermanentTarget"}),
             Instruction::ControllerLosesRememberedManaValue => json!({"op":"ControllerLosesRememberedManaValue"}),
             Instruction::ExiledTargetControllerGainsPower => json!({"op":"ExiledTargetControllerGainsPower"}),
@@ -9982,6 +10000,7 @@ pub fn body(value: &ExecutableBody) -> Value {
                     DamageGroup::CreaturesAndPlayers => json!({"op":"DamageGroup","group":"CreaturesAndPlayers","amount":amount}),
                     DamageGroup::AbilitySource => json!({"op":"DamageGroup","group":"AbilitySource","amount":amount}),
                     DamageGroup::Filtered(filter) => json!({"op":"DamageGroup","group":"Filtered","filter":permanent_group_wire(*filter),"amount":amount}),
+                    DamageGroup::FilteredAndPlayers { filter, players } => json!({"op":"DamageGroup","group":"FilteredAndPlayers","filter":permanent_group_wire(*filter),"players":format!("{players:?}"),"amount":amount}),
                 }
             }
             Instruction::DamageGroupAmount { group, amount } => {
@@ -10407,6 +10426,7 @@ pub fn body(value: &ExecutableBody) -> Value {
             Instruction::RevealTopAndRemoveAttackerIfForest => json!({"op":"RevealTopAndRemoveAttackerIfForest"}),
             Instruction::ControlledSubtypeDamagesAttacker(subtype) => json!({"op":"ControlledSubtypeDamagesAttacker","subtype":projection::creature_type_id(*subtype)}),
             Instruction::ChangeControlledPlaneswalkers {parts,duration:value} => json!({"op":"ChangeControlledPlaneswalkers","parts":parts_spec(parts),"duration":duration(*value)}),
+            Instruction::ChangeGroup {group,parts,duration:value} => json!({"op":"ChangeGroup","group":format!("{group:?}"),"parts":parts_spec(parts),"duration":duration(*value)}),
             Instruction::GiveControlOfAbilitySource => json!({"op":"GiveControlOfAbilitySource"}),
             Instruction::ChangeAbilitySource {parts, duration:value} => json!({"op":"ChangeAbilitySource","parts":parts_spec(parts),"duration":duration(*value)}),
             Instruction::UntapAndControlCreatures=>json!({"op":"UntapAndControlCreatures"}),
@@ -10693,6 +10713,15 @@ pub fn body(value: &ExecutableBody) -> Value {
             }
             Instruction::RemoveCountersFromPermanent { target_self, kind, amount } => {
                 json!({"op":"RemoveCountersFromPermanent","target_self":target_self,"kind":kind.map(|k| format!("{k:?}")),"amount":instruction_amount(amount)})
+            }
+            Instruction::PutCountersOnSubject { subject, kind, amount } => {
+                json!({"op":"PutCountersOnSubject","subject":format!("{subject:?}"),"kind":format!("{kind:?}"),"amount":instruction_amount(amount)})
+            }
+            Instruction::SetGroupTapped { filter, tapped } => {
+                json!({"op":"SetGroupTapped","filter":format!("{filter:?}"),"tapped":tapped})
+            }
+            Instruction::DestroyTargetWithoutRegeneration => {
+                json!({"op":"DestroyTargetWithoutRegeneration"})
             }
         })
         .collect::<Vec<_>>();
@@ -11862,6 +11891,9 @@ pub fn condition(value: &TriggerSpec) -> Value {
         (TriggerEvent::ReturnedToHand { subject }, _, _) => {
             json!({"tag":"ReturnedToHand","object":object_relation_label(*subject)})
         }
+        (TriggerEvent::LeavesGraveyard { subject, player }, _, _) => {
+            json!({"tag":"LeavesGraveyard","object":object_relation_label(*subject),"player":format!("{player:?}")})
+        }
         (
             TriggerEvent::CountersChanged {
                 kind: CounterTriggerKind::LastDefenseRemoved,
@@ -12296,11 +12328,11 @@ fn activated(abilities: &[ActivatedAbility]) -> Value {
             }
             SourceCost::Discard { mode: DiscardCostMode::WholeHand, .. } => row["source_cost"] = json!("TapDiscardHand"),
             SourceCost::Discard { mode: DiscardCostMode::MatchingTargetSpellManaValue, .. } => row["source_cost"] = json!("DiscardMatchingSpellManaValue"),
-            SourceCost::Discard { mode: DiscardCostMode::SelectedOne, tap_source } => {
+            SourceCost::Discard { mode: DiscardCostMode::SelectedOne, tap_source, .. } => {
                 row["source_cost"] = json!("DiscardSelected");
                 row["cost_tap_source"] = json!(tap_source);
             }
-            SourceCost::Discard { mode: DiscardCostMode::Filtered { filter, count }, tap_source } => {
+            SourceCost::Discard { mode: DiscardCostMode::Filtered { filter, count }, tap_source, .. } => {
                 row["source_cost"] = json!(format!("DiscardFiltered({count})"));
                 row["cost_filter"] = json!(format!("{filter:?}"));
                 row["cost_tap_source"] = json!(tap_source);
@@ -12321,6 +12353,9 @@ fn activated(abilities: &[ActivatedAbility]) -> Value {
             SourceCost::HandDiscardSelf(HandDiscardKeyword::Channel) => row["source_cost"] = json!("ChannelDiscard"),
             SourceCost::GraveyardSelf { unearth: true } => row["source_cost"] = json!("Unearth"),
             SourceCost::GraveyardSelf { unearth: false } => row["source_cost"] = json!("GraveyardSelf"),
+            SourceCost::GraveyardDiscard { mode } => row["source_cost"] = json!(format!("GraveyardDiscard({mode:?})")),
+            SourceCost::GraveyardExileOther { filter } => row["source_cost"] = json!(format!("GraveyardExileOther({filter:?})")),
+            SourceCost::GraveyardPayLife { amount } => row["source_cost"] = json!(format!("GraveyardPayLife({amount:?})")),
             SourceCost::Ninjutsu { from_command: false } => row["source_cost"] = json!("Ninjutsu"),
             SourceCost::Ninjutsu { from_command: true } => row["source_cost"] = json!("CommanderNinjutsu"),
             SourceCost::Power { kind: PowerAbility::Station, .. } => row["source_cost"] = json!("Station"),
@@ -13198,7 +13233,10 @@ mod tests {
                 ResolvingPlayer::ExiledTargetController
                 | ResolvingPlayer::DestructionTargetController
                 | ResolvingPlayer::TargetController
-                | ResolvingPlayer::TargetOwner => {
+                | ResolvingPlayer::TargetOwner
+                | ResolvingPlayer::ActivePlayer
+                | ResolvingPlayer::EnchantedPlayer
+                | ResolvingPlayer::DefendingPlayer => {
                     unreachable!("role is not in this fixed fixture")
                 }
             };
@@ -13217,7 +13255,10 @@ mod tests {
                 ResolvingPlayer::ExiledTargetController
                 | ResolvingPlayer::DestructionTargetController
                 | ResolvingPlayer::TargetController
-                | ResolvingPlayer::TargetOwner => {
+                | ResolvingPlayer::TargetOwner
+                | ResolvingPlayer::ActivePlayer
+                | ResolvingPlayer::EnchantedPlayer
+                | ResolvingPlayer::DefendingPlayer => {
                     unreachable!("role is not in this fixed fixture")
                 }
             };
@@ -13500,7 +13541,10 @@ mod tests {
                         ResolvingPlayer::ExiledTargetController
                         | ResolvingPlayer::DestructionTargetController
                         | ResolvingPlayer::TargetController
-                        | ResolvingPlayer::TargetOwner,
+                        | ResolvingPlayer::TargetOwner
+                        | ResolvingPlayer::ActivePlayer
+                        | ResolvingPlayer::EnchantedPlayer
+                        | ResolvingPlayer::DefendingPlayer,
                     ) => unreachable!("role is not in this fixed fixture"),
                 };
                 let mut instructions = vec![];

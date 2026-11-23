@@ -11,13 +11,14 @@ COPY services/application/Cargo.toml services/application/Cargo.lock services/ap
 COPY services/application/build_support ./services/application/build_support
 COPY services/application/src ./services/application/src
 ENV CARGO_TARGET_DIR=/target \
-    CARGO_PROFILE_RELEASE_CODEGEN_UNITS=64 \
+    CARGO_PROFILE_RELEASE_CODEGEN_UNITS=8 \
     CARGO_PROFILE_RELEASE_DEBUG=0
 RUN --mount=type=cache,id=spellwake-cargo-reg,target=/usr/local/cargo/registry \
     --mount=type=cache,id=spellwake-cargo-target,target=/target \
-    cargo build --locked --release --manifest-path services/application/Cargo.toml \
+    cargo build -j 1 --locked --release --manifest-path services/application/Cargo.toml \
       --bin application_api \
       --config 'profile.release.opt-level=2' \
+      --config 'profile.release.package."spellwake-oracle-compiler".opt-level=0' \
       --config 'profile.release.package."spellwake-card-programs".opt-level=0' \
   && install -d /release \
   && install -m 755 /target/release/application_api /release/ \

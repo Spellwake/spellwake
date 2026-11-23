@@ -254,9 +254,13 @@ impl EffectWindow {
                         crate::activated::SourceCost::Discard {
                             mode: crate::activated::DiscardCostMode::WholeHand,
                             ..
+                        } | crate::activated::SourceCost::GraveyardDiscard {
+                            mode: crate::activated::DiscardCostMode::WholeHand,
                         } | crate::activated::SourceCost::ExileGraveyard {
                             filter: crate::activated::GraveyardExileCost::AnyCountX,
                             ..
+                        } | crate::activated::SourceCost::GraveyardExileOther {
+                            filter: crate::activated::GraveyardExileCost::AnyCountX,
                         }
                     )
             ) {
@@ -273,6 +277,25 @@ impl EffectWindow {
         {
             activation.resulting_source = movement.after.id();
         }
+        let mut extra_source_sacrifice = None;
+        if let SelectedActivationOwner::Permanent(activation) = &mut work.owner
+            && activation.source_cost.sacrifices_source()
+            && work.action != ZoneActionKind::SacrificeCost
+        {
+            let (win, src_after) = self.window.pay_announced_source_cost(
+                entry,
+                actor,
+                activation.source.id(),
+                crate::activated::SourceCost::Sacrifice,
+                false,
+            )?;
+            self.window = win;
+            activation.resulting_source = src_after.id();
+            extra_source_sacrifice = Some(crate::object_identity::ObjectMovement {
+                before: activation.source.clone(),
+                after: src_after,
+            });
+        }
         let mut append = RulesJournal::default();
         self.emit_from(
             cause,
@@ -280,7 +303,7 @@ impl EffectWindow {
             None,
             &mut append,
             |old, current, controllers| {
-                movements
+                let mut rows = movements
                     .iter()
                     .map(|movement| {
                         let row = zone_occurrence_at(old, current, movement, reason, controllers)?;
@@ -289,7 +312,17 @@ impl EffectWindow {
                             work.batch.used_madness(movement.before.id()),
                         ))
                     })
-                    .collect()
+                    .collect::<Result<Vec<_>, EffectError>>()?;
+                if let Some(movement) = &extra_source_sacrifice {
+                    rows.push(zone_occurrence_at(
+                        old,
+                        current,
+                        movement,
+                        ZoneReason::SacrificeCost,
+                        controllers,
+                    )?);
+                }
+                Ok(rows)
             },
         )?;
         if self.linked_return_work.is_some() {

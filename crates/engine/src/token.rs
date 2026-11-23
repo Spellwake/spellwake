@@ -27,6 +27,8 @@ pub enum TokenRecipients {
     Controller,
     EachPlayer,
     EachOpponent,
+    /// A single resolving participant (such as target player, target opponent, or target permanent's controller).
+    Player(crate::program::ResolvingPlayer),
 }
 
 /// The ordered resolution phases of a multiplayer token offer.
@@ -218,6 +220,7 @@ impl TokenTimestampOrder {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum TokenSubtype {
     Artifact(crate::program::ArtifactSubtype),
+    Enchantment(crate::program::EnchantmentSubtype),
     Creature(CreatureTypeId),
     Land(LandType),
 }
@@ -311,6 +314,13 @@ impl TokenDefinition {
                 )
                 .chain(
                     self.program
+                        .enchantment_subtypes
+                        .iter()
+                        .copied()
+                        .map(TokenSubtype::Enchantment),
+                )
+                .chain(
+                    self.program
                         .land_subtypes
                         .iter()
                         .copied()
@@ -344,6 +354,7 @@ impl TokenDefinition {
                             .ok_or(TokenDefinitionError::ForeignCreatureType),
                         TokenSubtype::Land(value) => Ok(value.rules_label()),
                         TokenSubtype::Artifact(value) => Ok(value.wire_label()),
+                        TokenSubtype::Enchantment(value) => Ok(value.wire_label()),
                     })
                     .collect::<Result<Vec<_>, _>>()?;
                 words.push("Token");

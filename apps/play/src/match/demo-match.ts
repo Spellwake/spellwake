@@ -1,9 +1,10 @@
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useMemo, useRef, useState } from "react";
 import { useAtomValue } from "jotai";
 import type { PlayerSnapshot } from "@spellwake/application-contracts";
 import { useBuilderCatalogue } from "../data/builder-catalogue";
 import {
   catalogueName,
+  PREVIEW_FACES,
   PREVIEW_GAME,
   PREVIEW_SEATS,
   PREVIEW_VIEWER,
@@ -13,9 +14,11 @@ import {
   previewCastOffers,
   previewConcede,
   previewDamageDecision,
+  previewDivisionDecision,
   previewResolveTop,
   previewResponses,
   previewSnapshot,
+  type PreviewDivision,
 } from "./preview-table";
 import { printedModes, type PrintedModes } from "./printed-modes";
 import { matchPreferences, readPreferences } from "./table-panels";
@@ -79,7 +82,10 @@ export function useDemoMatch(
       if (object.identity.kind !== "known") continue;
       const name = object.identity.characteristics.name;
       const found = catalogue?.find(catalogueName(name));
+      const own = PREVIEW_FACES[name];
       if (found) faces.set(name, found.faceUrl);
+      else if (own)
+        faces.set(name, `${import.meta.env.BASE_URL}match-preview/${own.file}`);
     }
     return faces;
   }, [catalogue]);
@@ -90,20 +96,25 @@ export function useDemoMatch(
       if (object.identity.kind !== "known") continue;
       const name = object.identity.characteristics.name;
       const regions = printedModes(
-        catalogue?.find(catalogueName(name))?.printing,
+        catalogue?.find(catalogueName(name))?.printing ??
+          PREVIEW_FACES[name]?.printing,
       );
       if (regions) printed.set(name, regions);
     }
     return printed;
   }, [catalogue]);
 
+  // How each divided spell on the stack was shared out, by its stack item.
+  const divisions = useRef(new Map<string, PreviewDivision>());
   const sendAction = useCallback(
     async (action: MatchActionCommand) => {
       setCommandError(null);
       setSnapshot((prev) => {
         if (action.kind === "pass" && prev.turn) {
           // With something waiting, a pass lets the newest item resolve.
-          if (prev.stack.length > 0) return previewResolveTop(prev);
+          const top = prev.stack.at(-1);
+          if (top)
+            return previewResolveTop(prev, divisions.current.get(top.handle));
           const idx = PHASE_ORDER.findIndex(
             (p) => p.phase === prev.turn?.phase,
           );
@@ -172,6 +183,10 @@ export function useDemoMatch(
             decisions: [],
             throughEventSequence: String(Number(prev.throughEventSequence) + 1),
           };
+          // A divided spell's shares are kept for when it resolves.
+          const divided = prev.stack.at(-1);
+          if (response.kind === "distribution" && divided)
+            divisions.current.set(divided.handle, response.allocations);
           if (response.kind !== "attackers") return settled;
           // Declared attackers tap, as the returned table shows.
           const attacking = new Set(
@@ -207,18 +222,23 @@ export function useDemoMatch(
             : tapped;
         }
         if (action.kind === "cast-targeted")
-          return previewCast(prev, action.source, action.target);
+          return previewCast(prev, action.source, [action.target]);
         if (action.kind === "cast-untargeted")
-          return previewCast(prev, action.source, null);
-        // A modal spell carries its one chosen mode and that mode's target.
+          return previewCast(prev, action.source, []);
+        // A modal spell carries its chosen modes, each with its own target;
+        // a spell with several instructions carries their targets in order.
         if (action.kind === "cast-with-resources") {
-          const chosen = action.modes?.[0];
-          return previewCast(
+          const modes = action.modes ?? [];
+          const cast = previewCast(
             prev,
             action.source,
-            chosen?.target ?? action.target,
-            chosen ? [chosen.mode] : undefined,
+            action.fixedTargets ??
+              modes.flatMap((mode) => (mode.target ? [mode.target] : [])),
+            modes.length > 0 ? modes.map((mode) => mode.mode) : undefined,
           );
+          // A divided spell is cast first, then asked how its amount is shared.
+          const asked = previewDivisionDecision(cast);
+          return asked ? { ...cast, decisions: [asked] } : cast;
         }
         if (action.kind === "play-land") {
           const nextObjs = prev.visibleObjects.map((o) =>

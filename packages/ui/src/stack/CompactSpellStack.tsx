@@ -34,6 +34,8 @@ export interface CompactSpellStackProps {
   items: readonly StackEntry[];
   selectedId: string | null;
   onSelect: (id: string | null) => void;
+  /** Items the host offers as targets now. Pressing one still reports through onSelect. */
+  offeredIds?: readonly string[];
 }
 const width = 178,
   height = 224;
@@ -77,6 +79,7 @@ export function CompactSpellStack({
   items,
   selectedId,
   onSelect,
+  offeredIds,
 }: CompactSpellStackProps) {
   const root = useRef<HTMLDivElement>(null),
     lastWheel = useRef(-Infinity),
@@ -96,7 +99,9 @@ export function CompactSpellStack({
         position: pose(
           paint.length - 1 - i,
           paint.length,
-          Boolean(selected),
+          // Offered as targets, the older card shows as much of itself as
+          // it does beside a card being read, so it can be pressed.
+          Boolean(selected) || Boolean(offeredIds?.length),
           raised,
         ),
         z: i + 1,
@@ -241,6 +246,7 @@ export function CompactSpellStack({
             aria-label={`${title(item)}, ${item.controller}${active && targetName ? ", targeting " + targetName : ""}`}
             data-front={i === items.length - 1 || undefined}
             data-item={item.id}
+            data-offered={offeredIds?.includes(item.id) || undefined}
             className={s.card}
             style={{ zIndex: z }}
             initial={false}

@@ -692,6 +692,33 @@ impl EffectWindow {
                     TargetRef::Player(player) => player,
                 }
             }
+            ResolvingPlayer::ActivePlayer => self.window.active_player(),
+            ResolvingPlayer::EnchantedPlayer => {
+                let src = match entry.kind() {
+                    StackKind::ActivatedAbility { source, .. }
+                    | StackKind::TriggeredAbility { source, .. } => source.id(),
+                    _ => return Err(EffectError::InvalidResolvingPlayer),
+                };
+                match self.attached_to(src) {
+                    Some(TargetRef::Player(seat)) => seat,
+                    _ => return Err(EffectError::InvalidResolvingPlayer),
+                }
+            }
+            ResolvingPlayer::DefendingPlayer => {
+                let combat = self
+                    .combat
+                    .as_ref()
+                    .ok_or(EffectError::InvalidResolvingPlayer)?;
+                let src_opt = match entry.kind() {
+                    StackKind::ActivatedAbility { source, .. }
+                    | StackKind::TriggeredAbility { source, .. } => Some(source.id()),
+                    _ => None,
+                };
+                src_opt
+                    .and_then(|src| combat.attacker(src).map(|a| a.defender()))
+                    .or_else(|| combat.attackers().next().map(|a| a.defender()))
+                    .ok_or(EffectError::InvalidResolvingPlayer)?
+            }
         };
         if !self.window.original_participants().contains(&player) {
             return Err(EffectError::InvalidResolvingPlayer);
@@ -960,7 +987,6 @@ impl EffectWindow {
             | Instruction::TargetDamagesItsControllersOtherCreatures
             | Instruction::OtherCreaturesReturnPowerDamage
             | Instruction::ChooseAndReturnOwnGraveyardCardsByType
-            | Instruction::ReturnOwnGraveyardCardsOfTypeToHand(_)
             | Instruction::ReturnCardsExiledWithLink(_) => Err(EffectError::InconsistentProgram),
             Instruction::ExileOrderedPermanent(position) => {
                 Ok(self.ordered_permanent(*position)?.is_some())
@@ -1062,6 +1088,45 @@ impl EffectWindow {
                 Ok(!requested.is_positive()
                     || RulesInteger::from_usize(matching_count) >= requested)
             }
+            Instruction::EndControllerTurn
+            | Instruction::ChooseNewTargets
+            | Instruction::ReturnOwnGraveyardCardsOfTypeToHand(_) => Ok(true),
+            Instruction::DiscardOneAtRandom(role) => {
+                let player = self.resolving_player_identity_at(*role, None)?;
+                Ok(self.window.cards().iter().any(|card| {
+                    card.zone() == ObjectZone::Hand(player) && card.card_id().is_some()
+                }))
+            }
+            Instruction::FightSourceWithTarget => {
+                let entry = self
+                    .window
+                    .resolving()
+                    .ok_or(EffectError::WrongResolutionFrame)?;
+                let source_ok = matches!(
+                    entry.kind(),
+                    StackKind::TriggeredAbility { source } | StackKind::ActivatedAbility { source }
+                        if self.window.cards().get(source.id()).is_some_and(|card| card.zone() == ObjectZone::Battlefield)
+                );
+                let target_ok = self.instruction_target(entry).is_ok_and(|bound| {
+                    matches!(bound.choice().target, TargetRef::Object(id) if self.window.cards().get(id).is_some_and(|card| card.zone() == ObjectZone::Battlefield))
+                });
+                Ok(source_ok && target_ok)
+            }
+            Instruction::ExileCardsFromGraveyard {
+                player: role,
+                count,
+            } => {
+                let player = self.resolving_player_identity_at(*role, None)?;
+                let matching_count = self
+                    .window
+                    .cards()
+                    .iter()
+                    .filter(|card| {
+                        card.zone() == ObjectZone::Graveyard(player) && card.card_id().is_some()
+                    })
+                    .count();
+                Ok(matching_count >= usize::from(count.get()))
+            }
             Instruction::Sacrifice {
                 players: crate::program::AffectedPlayers::One(role),
                 amount,
@@ -1128,6 +1193,9 @@ impl EffectWindow {
             | Instruction::ExileTopFaceDown
             | Instruction::UntapControlledLands
             | Instruction::UntapControlledCreatures
+            | Instruction::SetGroupTapped { .. }
+            | Instruction::PutCountersOnSubject { .. }
+            | Instruction::ChangeGroup { .. }
             | Instruction::DestroyGroup(_)
             | Instruction::DestroyGroupWithoutRegeneration(_)
             | Instruction::MoveGroup { .. }
@@ -1175,7 +1243,6 @@ impl EffectWindow {
             | Instruction::ReturnControlledPermanents { .. }
             | Instruction::ChooseOtherControlledCreature { .. }
             | Instruction::Sacrifice { .. }
-            | Instruction::DiscardOneAtRandom(_)
             | Instruction::SacrificeRandomUntilLand
             | Instruction::DiscardUpTo { .. }
             | Instruction::SacrificeToContinue { .. }
@@ -1324,7 +1391,6 @@ impl EffectWindow {
             | Instruction::ExileCapturedGraveyardCard
             | Instruction::GrantGraveyardCastAndWatchAbilities
             | Instruction::GainCastCardAbilities { .. }
-            | Instruction::ExileCardsFromGraveyard { .. }
             | Instruction::ExileDefeatedSiege
             | Instruction::ExileSourceAndGainLife(_)
             | Instruction::PutCounterOnRelatedPermanent
@@ -1335,7 +1401,6 @@ impl EffectWindow {
             | Instruction::PutCreatureAndOtherPlaneswalkerCounters
             | Instruction::LinkedPlayerLosesDamageAmount
             | Instruction::RelatedPlayerLosesHalfLife
-            | Instruction::FightSourceWithTarget
             | Instruction::ClearSourceCounters(_)
             | Instruction::RegenerateSource
             | Instruction::RegenerateControlledSubtype(_)
@@ -1355,6 +1420,7 @@ impl EffectWindow {
             | Instruction::RepeatOpponentLifeLoss
             | Instruction::OpponentsLoseAndControllerGains(_)
             | Instruction::AdjustEachOpponentLife { .. }
+            | Instruction::AdjustPlayersLife { .. }
             | Instruction::CreatePreventionShield { .. }
             | Instruction::CreateReflectingShield
             | Instruction::CreateDamageMultiplier { .. }
@@ -1491,6 +1557,7 @@ impl EffectWindow {
             | Instruction::RequireTargetAttack
             | Instruction::RemoveTargetFromCombat
             | Instruction::DestroyTarget
+            | Instruction::DestroyTargetWithoutRegeneration
             | Instruction::ExileTargetWithLink(_)
             | Instruction::ReturnUpToOneRecentGraveyardCard
             | Instruction::ExileUpToTwoGraveyardTargetsGainLife
@@ -1503,7 +1570,6 @@ impl EffectWindow {
             | Instruction::ExileTargetUntilNonlandForFreeCast
             | Instruction::ExileTopRepeatOnPermanentEntry
             | Instruction::ShuffleEachHandAndGraveyard
-            | Instruction::EndControllerTurn
             | Instruction::ShuffleTargetGraveyardCards { .. }
             | Instruction::ExileCreaturesAndPlaneswalkersBelowRevealedManaValue
             | Instruction::CastLinkedSpellMatchingX
@@ -1529,7 +1595,6 @@ impl EffectWindow {
             | Instruction::GainControlOfSpell
             | Instruction::ChangeOnlyTarget
             | Instruction::LoseLifeEqualToTargetSpellManaValue
-            | Instruction::ChooseNewTargets
             | Instruction::CopyAbility
             | Instruction::CopySpell
             | Instruction::CreateContinuousEffect { .. }
@@ -2052,7 +2117,6 @@ impl EffectWindow {
             | Instruction::ExileCapturedGraveyardCard
             | Instruction::GrantGraveyardCastAndWatchAbilities
             | Instruction::GainCastCardAbilities { .. }
-            | Instruction::ExileCardsFromGraveyard { .. }
             | Instruction::ExileDefeatedSiege
             | Instruction::ExileSourceAndGainLife(_)
             | Instruction::ExileAbilitySource
@@ -2066,13 +2130,14 @@ impl EffectWindow {
             | Instruction::PutChargeCounterOnSource
             | Instruction::PutBlessingCounterOnSource
             | Instruction::PutNamedCounterOnSource { .. }
+            | Instruction::PutCountersOnSubject { .. }
+            | Instruction::SetGroupTapped { .. }
             | Instruction::PutQuestCounterOnSource
             | Instruction::PutStorageCounterOnSource
             | Instruction::AbilitySourceControllerLosesLife(_)
             | Instruction::RelatedPlayerLosesLife(_)
             | Instruction::LinkedPlayerLosesDamageAmount
             | Instruction::RelatedPlayerLosesHalfLife
-            | Instruction::FightSourceWithTarget
             | Instruction::ClearSourceCounters(_)
             | Instruction::TransformSource
             | Instruction::TransformSubtype(_)
@@ -2095,6 +2160,7 @@ impl EffectWindow {
             | Instruction::RevealTopAndRemoveAttackerIfForest
             | Instruction::DamageCapturedBlocker(_)
             | Instruction::ChangeControlledPlaneswalkers { .. }
+            | Instruction::ChangeGroup { .. }
             | Instruction::UntapAndControlCreatures
             | Instruction::Proliferate
             | Instruction::DamagePlayersHalfLife
@@ -2104,6 +2170,7 @@ impl EffectWindow {
             | Instruction::RepeatOpponentLifeLoss
             | Instruction::OpponentsLoseAndControllerGains(_)
             | Instruction::AdjustEachOpponentLife { .. }
+            | Instruction::AdjustPlayersLife { .. }
             | Instruction::CreatePreventionShield { .. }
             | Instruction::CreateReflectingShield
             | Instruction::CreateDamageMultiplier { .. }
@@ -2287,7 +2354,6 @@ impl EffectWindow {
             | Instruction::ExileTargetUntilNonlandForFreeCast
             | Instruction::ExileTopRepeatOnPermanentEntry
             | Instruction::ShuffleEachHandAndGraveyard
-            | Instruction::EndControllerTurn
             | Instruction::ShuffleTargetGraveyardCards { .. }
             | Instruction::ExileCreaturesAndPlaneswalkersBelowRevealedManaValue
             | Instruction::CastLinkedSpellMatchingX
@@ -2314,6 +2380,7 @@ impl EffectWindow {
             | Instruction::ChangeOnlyTarget
             | Instruction::LoseLifeEqualToTargetSpellManaValue
             | Instruction::ChooseNewTargets
+            | Instruction::FightSourceWithTarget
             | Instruction::CopyAbility
             | Instruction::CopySpell
             | Instruction::CopyTargetToSource { .. }
@@ -2349,6 +2416,9 @@ impl EffectWindow {
             | Instruction::ExileAllGraveyards
             | Instruction::ExilePlayerGraveyards(_)
             | Instruction::RemoveCountersFromPermanent { .. }
+            | Instruction::DestroyTargetWithoutRegeneration
+            | Instruction::ExileCardsFromGraveyard { .. }
+            | Instruction::EndControllerTurn
             | Instruction::DrawController { .. } => return Ok(false),
         }
         Ok(true)
