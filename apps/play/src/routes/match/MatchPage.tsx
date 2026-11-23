@@ -45,7 +45,13 @@ import {
   type TableView,
 } from "../../match/table-model";
 import { CombatLines, useCombat, type CombatUi } from "./combat";
-import { CastPrompt, ModeChoice, pendingObject, useCasting } from "./casting";
+import {
+  CastPrompt,
+  CastSource,
+  ModeChoice,
+  pendingObject,
+  useCasting,
+} from "./casting";
 import { DamagePills, DamageSources, useDamage } from "./damage";
 import { MatchStack, useStackReading } from "./stack";
 import { ConcedeConfirmation, MatchSettings, TableChat } from "./TablePanels";
@@ -703,6 +709,14 @@ function LiveMatch({ source }: { source: ReadyMatch }): ReactElement {
       const printed = name ? source.printedModesByName?.get(name) : undefined;
       return name && src && printed ? { name, src, printed } : null;
     },
+    (target) =>
+      target.kind === "seat"
+        ? (seatNames.get(target.seatId) ?? "Player")
+        : target.kind === "object"
+          ? ((object) => (object ? objectName(object) : "Card"))(
+              objectByHandle.get(target.handle),
+            )
+          : "Spell",
   );
   // What is being declared, assigned or cast on the table, if anything.
   const declaring: CombatUi | null = combat.ui ?? damage ?? casting.ui;
@@ -879,7 +893,13 @@ function LiveMatch({ source }: { source: ReadyMatch }): ReactElement {
                 <button
                   type="button"
                   className={table.seatTarget}
-                  aria-label={`Target ${player.seatId === snapshot.viewerSeatId ? "yourself" : name}`}
+                  aria-label={`${
+                    casting.pills.some(
+                      (pill) => pill.anchor === `seat:${player.seatId}`,
+                    )
+                      ? "Remove target"
+                      : "Target"
+                  } ${player.seatId === snapshot.viewerSeatId ? "yourself" : name}`}
                   onClick={() => casting.chooseSeat(player.seatId)}
                 />
               )}
@@ -977,7 +997,7 @@ function LiveMatch({ source }: { source: ReadyMatch }): ReactElement {
                   </div>
                 </div>
               )}
-              {activeDecision && !declaring && (
+              {activeDecision && !declaring && !casting.dividing && (
                 <DecisionPanel
                   key={activeDecision.decision}
                   decision={activeDecision}
@@ -1049,7 +1069,9 @@ function LiveMatch({ source }: { source: ReadyMatch }): ReactElement {
         <CombatLines lines={declaring?.lines ?? []} follow={follow} />
         <CastPrompt prompt={casting.prompt} />
         <DamagePills
-          pills={damage?.pills ?? []}
+          pills={damage?.pills ?? casting.pills}
+          // A spell's shares stand above their cards, as approved (DC-02).
+          prefer={damage ? "under" : "over"}
           follow={follow}
           clearBottom={dock.clearBottom}
         />
@@ -1060,6 +1082,19 @@ function LiveMatch({ source }: { source: ReadyMatch }): ReactElement {
           selectedId={reading.selectedId}
           onSelect={reading.select}
           pending={pendingObject(objectByHandle, casting.pending)}
+          targets={
+            casting.stackTargets.size > 0
+              ? { ids: casting.stackTargets, choose: casting.chooseStack }
+              : null
+          }
+          locked={casting.ui !== null}
+          aside={casting.sourceFace !== null}
+          follow={follow}
+          clearBottom={dock.clearBottom}
+        />
+        <CastSource
+          view={casting.sourceFace}
+          stackCount={snapshot.stack.length}
           follow={follow}
           clearBottom={dock.clearBottom}
         />

@@ -36,8 +36,9 @@ const same = (a: Anchors, b: Anchors): boolean => {
 
 /**
  * Follows the elements named by `data-anchor` (`card:<handle>` or
- * `seat:<seatId>`), so a line or a control can be attached to the actual card
- * or portrait wherever the camera puts it. Anything not on screen is absent.
+ * `seat:<seatId>`), and the pile's own items (`stack:<handle>`), so a line or
+ * a control can be attached to the actual card, portrait or spell wherever
+ * the camera puts it. Anything not on screen is absent.
  */
 export function useAnchors(
   root: RefObject<Element | null>,
@@ -59,11 +60,14 @@ export function useAnchors(
       const origin = element.getBoundingClientRect();
       const rects = new Map<string, AnchorRect>();
       for (const name of wanted ? wanted.split("|") : []) {
-        // `frame:<part>` names a part of the screen's own frame instead.
+        // `frame:<part>` names a part of the screen's own frame instead,
+        // and `stack:<handle>` a spell or ability in the pile.
         const node = document.querySelector<HTMLElement>(
           name.startsWith("frame:")
             ? `[data-frame="${CSS.escape(name.slice(6))}"]`
-            : `[data-anchor="${CSS.escape(name)}"]`,
+            : name.startsWith("stack:")
+              ? `[data-match-stack] [data-item="${CSS.escape(name.slice(6))}"]`
+              : `[data-anchor="${CSS.escape(name)}"]`,
         );
         const rect = node?.getBoundingClientRect();
         if (!rect || rect.width === 0) continue;

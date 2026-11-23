@@ -403,6 +403,18 @@ export const castPrompt = style({
       top: "46%",
       fontSize: "22PX",
     },
+    // A divided amount's pills stand above the cards there, so its words
+    // sit higher, between the spell and the pills.
+    ':root[data-shell="compact"][data-orientation="portrait"] &[data-raised]': {
+      top: "37%",
+    },
+  },
+  "@media": {
+    // On a phone held sideways the pills leave no clear place over the
+    // table: the words stand with the actions instead.
+    "(max-height: 480px)": {
+      selectors: { "&[data-raised]": { display: "none" } },
+    },
   },
 });
 globalStyle(`${castPrompt} p`, { margin: 0 });
@@ -418,11 +430,11 @@ export const modeDialog = style({
   border: 0,
   background: "#0b100ccc",
   color: ivory,
-  overflowY: "auto",
+  overflow: "hidden",
   selectors: { "&::backdrop": { background: "transparent" } },
 });
 export const modeScreen = style({
-  minHeight: "100%",
+  height: "100%",
   boxSizing: "border-box",
   display: "flex",
   flexDirection: "column",
@@ -463,8 +475,25 @@ export const modeHeading = style({
   letterSpacing: "0.01em",
   textShadow: "0 2PX 8PX #000c",
   "@media": {
-    "(max-height: 480px)": { fontSize: "26PX", marginTop: "-48PX" },
+    // Beside View Battlefield, and clear of it: the faces start beneath both.
+    "(max-height: 480px)": { fontSize: "26PX", marginTop: "-40PX" },
   },
+});
+/**
+ * The faces. Two rows on a small phone are taller than the screen, so they
+ * scroll here while View Battlefield, Cancel and Next stay in view.
+ */
+export const modeFaces = style({
+  flex: "0 1 auto",
+  alignSelf: "stretch",
+  minHeight: 0,
+  display: "flex",
+  justifyContent: "center",
+  overflowY: "auto",
+  overscrollBehavior: "contain",
+  // Room for a face's shadow inside the scrolling edge.
+  padding: "4PX 0 6PX",
+  margin: "-4PX 0 -6PX",
 });
 export const modeFooter = style({
   display: "flex",
@@ -473,3 +502,51 @@ export const modeFooter = style({
   minWidth: "min(270PX, 80vw)",
 });
 globalStyle(`${modeFooter} > button`, { flex: 1 });
+/** Next, once enough modes are marked: the one gold action (MM-03). */
+export const modeNext = style({});
+globalStyle(`${modeFooter} > button${modeNext}:enabled`, {
+  borderColor: "#fff3c9",
+  background: "linear-gradient(180deg, #f6e7b4, #d8c07a)",
+  color: "#1d1a10",
+  textShadow: "none",
+});
+globalStyle(`${modeFooter} > button${modeNext}:enabled:hover`, {
+  background: "linear-gradient(180deg, #fdf1c6, #e3cc88)",
+});
+
+/**
+ * The spell being cast on its own face, beside the table, and the lines from
+ * its sentences to what was chosen for them (MM-06, MT-02). Nothing here is
+ * pressed: the cards, portraits and pile take every choice.
+ */
+export const sourceLayer = style({
+  position: "absolute",
+  inset: 0,
+  pointerEvents: "none",
+});
+export const sourceFace = style({
+  position: "absolute",
+  left: 0,
+  top: 0,
+  filter: "drop-shadow(0 6PX 14PX #000a)",
+});
+export const sourceLines = style({
+  position: "absolute",
+  inset: 0,
+  width: "100%",
+  height: "100%",
+  overflow: "visible",
+  fill: ivory,
+  filter: "drop-shadow(0 1PX 2PX #000a)",
+});
+globalStyle(`${sourceLines} path`, {
+  fill: "none",
+  stroke: ivory,
+  strokeWidth: 1.75,
+  strokeLinecap: "round",
+});
+export const sourceLineEnd = style({
+  fill: "#1a211b",
+  stroke: ivory,
+  strokeWidth: 2,
+});
