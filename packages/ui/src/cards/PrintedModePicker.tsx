@@ -32,6 +32,8 @@ export interface PrintedModePickerProps {
   choice: ModeChoice;
   faceWidth: number;
   gap: number;
+  /** How many faces stand in a row. All in one row when absent. */
+  columns?: number;
 }
 /** Each copy of the face chooses the mode whose paragraph it outlines. The host owns legality, selection and progression. */
 export function PrintedModePicker({
@@ -40,6 +42,7 @@ export function PrintedModePicker({
   choice,
   faceWidth,
   gap,
+  columns,
 }: PrintedModePickerProps) {
   const prefix = useId();
   const animate = useAllowsControlMotion();
@@ -65,7 +68,19 @@ export function PrintedModePicker({
           ? "Choose one mode"
           : `Choose ${choice.count} modes`
       }
-      style={{ "--face-width": designPixels(faceWidth), gap } as CSSProperties}
+      style={
+        {
+          "--face-width": designPixels(faceWidth),
+          gap,
+          ...(columns && columns < modes.length
+            ? {
+                flexWrap: "wrap",
+                justifyContent: "center",
+                width: `calc(var(--face-width) * ${columns} + ${gap * (columns - 1)}px)`,
+              }
+            : {}),
+        } as CSSProperties
+      }
     >
       {modes.map((mode) => {
         const active = selected.has(mode.id),

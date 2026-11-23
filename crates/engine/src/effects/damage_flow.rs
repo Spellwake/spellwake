@@ -194,6 +194,10 @@ impl EffectWindow {
             }
             DamageGroup::Opponents => self.combat_rules.opponents(participants, controller)?,
             DamageGroup::Players | DamageGroup::CreaturesAndPlayers => participants.to_vec(),
+            DamageGroup::FilteredAndPlayers { players, .. } => {
+                let cursor = self.resolution_cursor();
+                self.selection_players(players, controller, cursor)?
+            }
             DamageGroup::CreaturesAndPlaneswalkers
             | DamageGroup::Creatures
             | DamageGroup::CreaturesExcept(_)
@@ -222,7 +226,9 @@ impl EffectWindow {
                 }
             }
         }
-        if let DamageGroup::Filtered(filter) = group {
+        if let DamageGroup::Filtered(filter) | DamageGroup::FilteredAndPlayers { filter, .. } =
+            group
+        {
             let entry = self
                 .window
                 .resolving()

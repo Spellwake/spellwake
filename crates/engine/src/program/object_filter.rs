@@ -406,6 +406,8 @@ pub enum ControllerFilter {
     NotYou,
     /// Owned by the acting/resolving player.
     OwnerYou,
+    /// Owned by an opponent of the acting/resolving player.
+    OwnerOpponent,
     /// Controlled by the related player captured by a trigger (bound at trigger placement).
     RelatedPlayer,
     /// Controlled by this exact player.
@@ -442,6 +444,8 @@ pub enum PowerFilter {
     AtLeast(i16),
     /// Power is at most `maximum`.
     AtMost(u16),
+    /// Power equals `exact`.
+    Equal(i16),
     /// Power is at most the announced X (bound at activation time).
     AtMostX,
     /// Power is at most the number of creatures controlled by the acting player.
@@ -459,6 +463,8 @@ pub enum ToughnessFilter {
     AtLeast(i16),
     /// Toughness is at most `maximum`.
     AtMost(u16),
+    /// Toughness equals `exact`.
+    Equal(i16),
 }
 
 /// Mana-value predicate on a permanent or card.
@@ -491,6 +497,8 @@ pub enum CombatFilter {
     BlockedBySource,
     /// Blocking or blocked by the ability's source creature.
     BlockingOrBlockedBySource,
+    /// Currently not attacking.
+    NotAttacking,
 }
 
 /// Compact bitflags for less-frequent object predicates.
@@ -513,6 +521,8 @@ impl ObjectFilterFlags {
     pub const ATTACKED_THIS_TURN: Self = Self(1 << 11);
     /// Artifact, legendary, or Saga (CR 700.6).
     pub const HISTORIC: Self = Self(1 << 12);
+    /// Face-down permanent (morph, manifest, cloak, disguise, etc.).
+    pub const FACE_DOWN: Self = Self(1 << 13);
 
     #[must_use]
     pub const fn union(self, other: Self) -> Self {
@@ -1048,6 +1058,10 @@ impl ObjectClause {
                 .power_toughness
                 .as_ref()
                 .is_some_and(|pt| pt.derived.power <= i64::from(max).into()),
+            PowerFilter::Equal(exact) => p
+                .power_toughness
+                .as_ref()
+                .is_some_and(|pt| pt.derived.power == i64::from(exact).into()),
             PowerFilter::PowerOrToughnessAtMost(max) => {
                 p.power_toughness.as_ref().is_some_and(|pt| {
                     pt.derived.power <= i64::from(max).into()
@@ -1070,6 +1084,10 @@ impl ObjectClause {
                 .power_toughness
                 .as_ref()
                 .is_some_and(|pt| pt.derived.toughness <= i64::from(max).into()),
+            ToughnessFilter::Equal(exact) => p
+                .power_toughness
+                .as_ref()
+                .is_some_and(|pt| pt.derived.toughness == i64::from(exact).into()),
         };
         if !toughness_ok {
             return false;
@@ -2097,6 +2115,7 @@ impl ObjectFilter {
                     .controller()
                     .is_some_and(|seat| seat != controller),
                 ControllerFilter::OwnerYou => object.object.owner() == controller,
+                ControllerFilter::OwnerOpponent => object.object.owner() != controller,
                 ControllerFilter::RelatedPlayer => false,
                 ControllerFilter::Player(seat) => object.object.controller() == Some(seat),
             };
@@ -2206,6 +2225,10 @@ impl ObjectFilter {
                     .current_power_toughness
                     .as_ref()
                     .is_some_and(|pt| pt.power <= i64::from(max).into()),
+                PowerFilter::Equal(exact) => object
+                    .current_power_toughness
+                    .as_ref()
+                    .is_some_and(|pt| pt.power == i64::from(exact).into()),
                 PowerFilter::PowerOrToughnessAtMost(max) => {
                     object.current_power_toughness.as_ref().is_some_and(|pt| {
                         pt.power <= i64::from(max).into() || pt.toughness <= i64::from(max).into()
@@ -2226,6 +2249,10 @@ impl ObjectFilter {
                     .current_power_toughness
                     .as_ref()
                     .is_some_and(|pt| pt.toughness <= i64::from(max).into()),
+                ToughnessFilter::Equal(exact) => object
+                    .current_power_toughness
+                    .as_ref()
+                    .is_some_and(|pt| pt.toughness == i64::from(exact).into()),
             }
         }
         match self {

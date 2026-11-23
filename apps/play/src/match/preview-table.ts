@@ -32,6 +32,8 @@ const CARDS: Record<
     kind: Kind;
     stats?: [string, string];
     rules: string;
+    /** Red when absent. */
+    colors?: ("white" | "blue" | "green")[];
   }
 > = {
   Mountain: {
@@ -129,11 +131,55 @@ const CARDS: Record<
     kind: "instant",
     rules: "Shock deals 2 damage to any target.",
   },
+  "Cryptic Command": {
+    type: "Instant",
+    cost: "{1}{U}{U}{U}",
+    kind: "instant",
+    colors: ["blue"],
+    rules:
+      "Choose two —\n• Counter target spell.\n• Return target permanent to its owner’s hand.\n• Tap all creatures your opponents control.\n• Draw a card.",
+  },
+  "Common Bond": {
+    type: "Instant",
+    cost: "{1}{G}{W}",
+    kind: "instant",
+    colors: ["white", "green"],
+    rules:
+      "Put a +1/+1 counter on target creature.\nPut a +1/+1 counter on target creature.",
+  },
+  "Arc Lightning": {
+    type: "Sorcery",
+    cost: "{2}{R}",
+    kind: "sorcery",
+    rules:
+      "Arc Lightning deals 3 damage divided as you choose among one, two, or three targets.",
+  },
   "Krenko’s Command": {
     type: "Sorcery",
     cost: "{1}{R}",
     kind: "sorcery",
     rules: "Create two 1/1 red Goblin creature tokens.",
+  },
+};
+/**
+ * Original faces the match preview brings itself, with their printings: the
+ * deck builder's fixtures do not hold these cards.
+ */
+export const PREVIEW_FACES: Record<
+  string,
+  { file: string; printing: { set: string; number: string } }
+> = {
+  "Cryptic Command": {
+    file: "cryptic-command.jpg",
+    printing: { set: "TRC", number: "435" },
+  },
+  "Common Bond": {
+    file: "common-bond.jpg",
+    printing: { set: "RTR", number: "151" },
+  },
+  "Arc Lightning": {
+    file: "arc-lightning.jpg",
+    printing: { set: "KTK", number: "97" },
   },
 };
 /** The catalogue spells this name with a plain apostrophe. */
@@ -180,7 +226,10 @@ function card(
       ],
       landTypes: name === "Mountain" ? ["Mountain"] : [],
       creatureTypes: facts.kind === "creature" ? ["Goblin"] : [],
-      colors: facts.kind === "land" || facts.kind === "artifact" ? [] : ["red"],
+      colors:
+        facts.kind === "land" || facts.kind === "artifact"
+          ? []
+          : (facts.colors ?? ["red"]),
       keywords: facts.rules.startsWith("Haste") ? ["haste"] : [],
       power: facts.stats?.[0] ?? null,
       toughness: facts.stats?.[1] ?? null,
@@ -257,6 +306,9 @@ const VIEWER_HAND = [
   "Shock",
   "Abrade",
   "Goblin Piledriver",
+  "Cryptic Command",
+  "Common Bond",
+  "Arc Lightning",
 ];
 
 /** The table at the start of the preview. */
@@ -402,7 +454,11 @@ const creaturesOf = (snapshot: PlayerSnapshot, seatId: string) =>
   );
 const decision = (
   snapshot: PlayerSnapshot,
-  kind: "declare-attackers" | "declare-blockers" | "assign-combat-damage",
+  kind:
+    | "declare-attackers"
+    | "declare-blockers"
+    | "assign-combat-damage"
+    | "distribution",
   domain: PlayerDecision["domain"],
 ): PlayerDecision => ({
   decision: `decision-${kind}-${snapshot.turn?.number ?? "0"}`,
@@ -613,9 +669,10 @@ const untappedLands = (snapshot: PlayerSnapshot): string[] =>
 
 /**
  * What the preview offers to cast, standing in for offers the game does not
- * send yet: burn at any creature or player whenever the viewer may act, and
- * creatures on the viewer's own main phase with nothing waiting. A card is
- * offered only when untapped Mountains cover its cost.
+ * send yet: instants whenever the viewer may act, and creatures and sorceries
+ * on the viewer's own main phase with nothing waiting. A card is offered only
+ * when enough untapped lands cover its cost; the preview counts lands and
+ * does not check their colours.
  */
 export function previewCastOffers(
   snapshot: PlayerSnapshot,
@@ -631,59 +688,110 @@ export function previewCastOffers(
     turn.activeSeatIds.includes(viewer) &&
     (turn.phase === "precombat-main" || turn.phase === "postcombat-main") &&
     snapshot.stack.length === 0;
-  const anyTarget = [
-    ...snapshot.visibleObjects
-      .filter(
-        (object) =>
-          object.zone === "zone-battlefield" && kindOf(object) === "creature",
-      )
-      .map((object) => ({ kind: "object" as const, handle: object.handle })),
-    ...snapshot.players
-      .filter((player) => !player.eliminated)
-      .map((player) => ({ kind: "seat" as const, seatId: player.seatId })),
-  ];
+  const onTable = snapshot.visibleObjects.filter(
+    (object) => object.zone === "zone-battlefield",
+  );
+  const handles = (objects: readonly PlayerObject[]) =>
+    objects.map((object) => ({
+      kind: "object" as const,
+      handle: object.handle,
+    }));
   const permanents = (kind: Kind) =>
-    snapshot.visibleObjects
-      .filter(
-        (object) =>
-          object.zone === "zone-battlefield" && kindOf(object) === kind,
-      )
-      .map((object) => ({ kind: "object" as const, handle: object.handle }));
+    handles(onTable.filter((object) => kindOf(object) === kind));
+  const creatures = permanents("creature");
   const artifacts = permanents("artifact");
+  const players = snapshot.players
+    .filter((player) => !player.eliminated)
+    .map((player) => ({ kind: "seat" as const, seatId: player.seatId }));
+  const anyTarget = [...creatures, ...players];
+  // Spells on the stack, newest first, as a spell that counters may target.
+  const spells = snapshot.stack
+    .filter((entry) =>
+      snapshot.visibleObjects.some(
+        (object) =>
+          object.handle === entry.sourceObject && object.zone === "zone-stack",
+      ),
+    )
+    .map((entry) => ({ kind: "stack" as const, handle: entry.handle }))
+    .reverse();
+  const none = (targets: readonly unknown[]) =>
+    targets.length === 0 ? { unavailableReason: "No legal targets" } : {};
+  const shaped = (name: string): Partial<CastOffer> => {
+    if (name === "Abrade")
+      return {
+        modes: [
+          {
+            mode: 0,
+            label: "Abrade deals 3 damage to target creature.",
+            targets: creatures,
+          },
+          {
+            mode: 1,
+            label: "Destroy target artifact.",
+            targets: artifacts,
+            ...none(artifacts),
+          },
+        ],
+      };
+    if (name === "Cryptic Command")
+      return {
+        choose: 2,
+        modes: [
+          {
+            mode: 0,
+            label: "Counter target spell.",
+            ask: "Choose a spell",
+            targets: spells,
+            ...none(spells),
+          },
+          {
+            mode: 1,
+            label: "Return target permanent to its owner’s hand.",
+            ask: "Choose a permanent",
+            targets: handles(onTable),
+          },
+          {
+            mode: 2,
+            label: "Tap all creatures your opponents control.",
+            targets: null,
+          },
+          { mode: 3, label: "Draw a card.", targets: null },
+        ],
+      };
+    if (name === "Common Bond")
+      return {
+        slots: [
+          { ask: "Choose a creature", targets: creatures },
+          { ask: "Choose a creature", targets: creatures },
+        ],
+      };
+    if (name === "Arc Lightning")
+      return {
+        divide: {
+          ask: "Divide 3 damage",
+          total: 3,
+          minimum: 1,
+          most: 3,
+          targets: anyTarget,
+        },
+      };
+    return DAMAGE[name] ? { targets: anyTarget } : {};
+  };
   return snapshot.visibleObjects.flatMap((object): CastOffer[] => {
-    if (object.zone !== "zone-hand-you") return [];
+    if (object.zone !== "zone-hand-you" || object.identity.kind !== "known")
+      return [];
     const kind = kindOf(object);
     const cost = costOf(object);
     const needed = manaValue(cost);
-    const burn = kind === "instant";
-    if (!(burn || (kind === "creature" && ownMain)) || needed > lands.length)
-      return [];
-    const modal =
-      object.identity.kind === "known" &&
-      object.identity.characteristics.name === "Abrade";
+    const timely =
+      kind === "instant" ||
+      ((kind === "creature" || kind === "sorcery") && ownMain);
+    if (!timely || needed > lands.length) return [];
     return [
       {
         source: object.handle,
-        ...(modal
-          ? {
-              modes: [
-                {
-                  mode: 0,
-                  label: "Abrade deals 3 damage to target creature.",
-                  targets: permanents("creature"),
-                },
-                {
-                  mode: 1,
-                  label: "Destroy target artifact.",
-                  targets: artifacts,
-                  ...(artifacts.length === 0
-                    ? { unavailableReason: "No legal targets" }
-                    : {}),
-                },
-              ],
-            }
-          : {}),
-        targets: modal ? null : burn ? anyTarget : null,
+        targets: null,
+        ...shaped(object.identity.characteristics.name),
         cost,
         payment: autoTap ? "automatic" : "paused",
         paySources: lands.slice(0, needed),
@@ -693,13 +801,13 @@ export function previewCastOffers(
 }
 
 /**
- * The viewer casts a card from hand: its cost taps Mountains, and the card
- * moves to the stack with the target it was given.
+ * The viewer casts a card from hand: its cost taps lands, and the card moves
+ * to the stack with the targets it was given, in order.
  */
 export function previewCast(
   snapshot: PlayerSnapshot,
   source: string,
-  target: StackTarget | null,
+  targets: readonly StackTarget[],
   /** A modal spell's chosen modes, by the game's mode numbers. */
   modes?: readonly number[],
 ): PlayerSnapshot {
@@ -744,88 +852,258 @@ export function previewCast(
         controllerSeatId: snapshot.viewerSeatId,
         sourceObject: source,
         label: spell.identity.characteristics.name,
-        targets: target ? [target] : [],
+        targets: [...targets],
         unavailableTargets: "0",
         ...(modes?.length ? { modes: [...modes] } : {}),
       },
     ],
   };
 }
+
+/** A divided spell's targets and what each receives. */
+export type PreviewDivision = readonly {
+  target: StackTarget;
+  amount: string;
+}[];
+
 /**
- * The newest stack item resolves: a burn spell deals its damage and goes to
- * its owner's graveyard, and a creature dealt lethal damage follows it. This
- * is the preview's own small script, not the rules engine.
+ * After a divided spell is cast, the game asks how its amount is shared among
+ * the targets it was given: the preview's stand-in for that question.
  */
-export function previewResolveTop(snapshot: PlayerSnapshot): PlayerSnapshot {
+export function previewDivisionDecision(
+  snapshot: PlayerSnapshot,
+): PlayerDecision | null {
+  const top = snapshot.stack.at(-1);
+  const spell = snapshot.visibleObjects.find(
+    (object) => object.handle === top?.sourceObject,
+  );
+  if (!top || !spell || nameOf(spell) !== "Arc Lightning") return null;
+  return decision(snapshot, "distribution", {
+    kind: "distribution",
+    targets: top.targets,
+    required: "3",
+    minimumPerTarget: "1",
+  });
+}
+
+const nameOf = (object: PlayerObject | undefined): string =>
+  object?.identity.kind === "known" ? object.identity.characteristics.name : "";
+
+/**
+ * The newest stack item resolves, by the preview's own small script and not
+ * the rules engine: burn deals its damage, a divided spell deals each part, a
+ * counter is put on each creature named, and a modal spell does what its
+ * chosen modes say. The spell goes to its owner's graveyard, a creature dealt
+ * lethal damage follows it, and a creature spell stays on the table.
+ */
+export function previewResolveTop(
+  snapshot: PlayerSnapshot,
+  /** How the newest item's amount was divided, where it was. */
+  division?: PreviewDivision,
+): PlayerSnapshot {
   const top = snapshot.stack.at(-1);
   if (!top) return snapshot;
-  const spell = snapshot.visibleObjects.find(
-    (object) =>
-      object.handle === top.sourceObject && object.zone === "zone-stack",
-  );
-  const spellName =
-    spell?.identity.kind === "known" ? spell.identity.characteristics.name : "";
-  // Abrade's second mode destroys an artifact instead of dealing damage.
-  const destroys = spellName === "Abrade" && top.modes?.[0] === 1;
-  const amount =
-    spellName === "Abrade" ? (destroys ? 0 : 3) : (DAMAGE[spellName] ?? 0);
-  const target = top.targets[0];
-  const struck =
-    target?.kind === "object"
-      ? snapshot.visibleObjects.find(
-          (object) => object.handle === target.handle,
-        )
-      : undefined;
-  const dies =
-    struck !== undefined &&
-    (destroys ||
-      Number(struck.damageMarked) + amount >=
-        (Number(struck.publicProperties?.toughness ?? "0") || Infinity));
-  const leaving = new Map<string, string>();
+  const viewer = snapshot.viewerSeatId;
+  const find = (handle: string | null | undefined) =>
+    snapshot.visibleObjects.find((object) => object.handle === handle);
+  const spell = find(top.sourceObject);
+  const onStack = spell?.zone === "zone-stack" ? spell : undefined;
+  const spellName = nameOf(onStack);
+  const modes = new Set(top.modes ?? []);
+
+  const damage = new Map<string, number>();
+  const life = new Map<string, number>();
+  const grown = new Map<string, number>();
+  const destroyed = new Set<string>();
+  const returned = new Set<string>();
+  const countered = new Set<string>();
+  let tapsOpponents = false;
+  let draws = 0;
+  const strike = (target: StackTarget | undefined, amount: number) => {
+    if (target?.kind === "object")
+      damage.set(target.handle, (damage.get(target.handle) ?? 0) + amount);
+    if (target?.kind === "seat")
+      life.set(target.seatId, (life.get(target.seatId) ?? 0) + amount);
+  };
+  const first = top.targets[0];
+  if (spellName === "Abrade") {
+    if (modes.has(1) && first?.kind === "object") destroyed.add(first.handle);
+    else strike(first, 3);
+  } else if (spellName === "Arc Lightning") {
+    for (const part of division ?? []) strike(part.target, Number(part.amount));
+  } else if (spellName === "Common Bond") {
+    for (const target of top.targets)
+      if (target.kind === "object")
+        grown.set(target.handle, (grown.get(target.handle) ?? 0) + 1);
+  } else if (spellName === "Cryptic Command") {
+    // Its targets are in printed order: the spell to counter, then the permanent.
+    for (const target of top.targets) {
+      if (target.kind === "stack" && modes.has(0)) countered.add(target.handle);
+      if (target.kind === "object" && modes.has(1)) returned.add(target.handle);
+    }
+    tapsOpponents = modes.has(2);
+    draws = modes.has(3) ? 1 : 0;
+  } else strike(first, DAMAGE[spellName] ?? 0);
+
+  const seatTag = (seatId: string | null) =>
+    `s${PREVIEW_SEATS.findIndex((seat) => seat.seatId === seatId) + 1}`;
   const graveyardOf = (seatId: string | null) =>
-    `zone-graveyard-s${PREVIEW_SEATS.findIndex((seat) => seat.seatId === seatId) + 1}`;
+    `zone-graveyard-${seatTag(seatId)}`;
+  /** Where each card that moves ends up. Null: a hand the viewer cannot see. */
+  const leaving = new Map<string, string | null>();
   // A creature spell becomes a permanent; any other spell is put away.
-  const enters = spell !== undefined && kindOf(spell) === "creature";
-  if (spell)
+  if (onStack)
     leaving.set(
-      spell.handle,
-      enters ? "zone-battlefield" : graveyardOf(spell.ownerSeatId),
+      onStack.handle,
+      kindOf(onStack) === "creature"
+        ? "zone-battlefield"
+        : graveyardOf(onStack.ownerSeatId),
     );
-  if (struck && dies)
-    leaving.set(struck.handle, graveyardOf(struck.ownerSeatId));
+  for (const entry of snapshot.stack) {
+    if (!countered.has(entry.handle)) continue;
+    const lost = find(entry.sourceObject);
+    if (lost?.zone === "zone-stack")
+      leaving.set(lost.handle, graveyardOf(lost.ownerSeatId));
+  }
+  for (const [handle, amount] of damage) {
+    const struck = find(handle);
+    const toughness =
+      (Number(struck?.publicProperties?.toughness ?? "0") || Infinity) +
+      (grown.get(handle) ?? 0);
+    if (struck && Number(struck.damageMarked) + amount >= toughness)
+      leaving.set(handle, graveyardOf(struck.ownerSeatId));
+  }
+  for (const handle of destroyed)
+    leaving.set(handle, graveyardOf(find(handle)?.ownerSeatId ?? null));
+  for (const handle of returned) {
+    const owner = find(handle)?.ownerSeatId ?? null;
+    leaving.set(handle, owner === viewer ? "zone-hand-you" : null);
+  }
+  const hidden = [...leaving].flatMap(([handle, to]) =>
+    to === null ? [find(handle)?.ownerSeatId ?? ""] : [],
+  );
+  const toHand = (seatId: string) =>
+    hidden.filter((owner) => owner === seatId).length +
+    (seatId === viewer
+      ? [...leaving.values()].filter((to) => to === "zone-hand-you").length +
+        draws
+      : 0);
+  const sequence = String(Number(snapshot.throughEventSequence) + 1);
+  const drawn = Array.from({ length: draws }, (_, at) =>
+    card(`obj-drawn-${sequence}-${at}`, "Mountain", viewer, "zone-hand-you"),
+  );
+  const plus = (value: string | null, by: number) =>
+    value === null ? value : String(Number(value) + by);
+
   return {
     ...snapshot,
-    throughEventSequence: String(Number(snapshot.throughEventSequence) + 1),
-    stack: snapshot.stack.slice(0, -1),
-    players: snapshot.players.map((player) =>
-      target?.kind === "seat" && target.seatId === player.seatId
-        ? { ...player, life: String(Number(player.life) - amount) }
-        : player,
-    ),
-    visibleObjects: snapshot.visibleObjects.map((object) => {
-      const to = leaving.get(object.handle);
-      if (to)
-        return {
-          ...object,
-          zone: to,
-          controllerSeatId:
-            to === "zone-battlefield" ? object.ownerSeatId : null,
-          tapped: false,
-          damageMarked: "0",
-        };
-      return object === struck
-        ? {
-            ...object,
-            damageMarked: String(Number(object.damageMarked) + amount),
-          }
-        : object;
+    throughEventSequence: sequence,
+    stack: snapshot.stack
+      .slice(0, -1)
+      .filter((entry) => !countered.has(entry.handle)),
+    players: snapshot.players.map((player) => {
+      const lost = life.get(player.seatId) ?? 0;
+      const gained = toHand(player.seatId);
+      return lost === 0 && gained === 0
+        ? player
+        : {
+            ...player,
+            life: String(Number(player.life) - lost),
+            handCount: String(Number(player.handCount) + gained),
+            libraryCount:
+              player.seatId === viewer
+                ? String(Number(player.libraryCount) - draws)
+                : player.libraryCount,
+          };
     }),
+    visibleObjects: [
+      ...snapshot.visibleObjects.flatMap((object): PlayerObject[] => {
+        if (leaving.has(object.handle)) {
+          const to = leaving.get(object.handle);
+          if (!to) return [];
+          return [
+            {
+              ...object,
+              zone: to,
+              controllerSeatId:
+                to === "zone-battlefield" ? object.ownerSeatId : null,
+              tapped: false,
+              damageMarked: "0",
+              counters: [],
+            },
+          ];
+        }
+        const more = grown.get(object.handle) ?? 0;
+        const hurt = damage.get(object.handle) ?? 0;
+        const taps =
+          tapsOpponents &&
+          object.zone === "zone-battlefield" &&
+          object.controllerSeatId !== viewer &&
+          kindOf(object) === "creature";
+        if (more === 0 && hurt === 0 && !taps) return [object];
+        const counted =
+          Number(
+            object.counters.find((counter) => counter.name === "+1/+1")
+              ?.count ?? "0",
+          ) + more;
+        return [
+          {
+            ...object,
+            tapped: object.tapped || taps,
+            damageMarked: String(Number(object.damageMarked) + hurt),
+            ...(more > 0
+              ? {
+                  counters: [
+                    ...object.counters.filter(
+                      (counter) => counter.name !== "+1/+1",
+                    ),
+                    { name: "+1/+1", count: String(counted) },
+                  ],
+                  ...(object.publicProperties
+                    ? {
+                        publicProperties: {
+                          ...object.publicProperties,
+                          power: plus(object.publicProperties.power, more),
+                          toughness: plus(
+                            object.publicProperties.toughness,
+                            more,
+                          ),
+                        },
+                      }
+                    : {}),
+                }
+              : {}),
+          },
+        ];
+      }),
+      ...drawn,
+    ],
     zones: snapshot.zones.map((zone) => {
-      if (zone.visibility !== "visible") return zone;
+      if (zone.visibility !== "visible") {
+        const more =
+          zone.zoneType === "hand" && zone.ownerSeatId
+            ? hidden.filter((owner) => owner === zone.ownerSeatId).length
+            : 0;
+        const fewer =
+          zone.zoneType === "library" && zone.ownerSeatId === viewer
+            ? draws
+            : 0;
+        return more === 0 && fewer === 0
+          ? zone
+          : {
+              ...zone,
+              hiddenCount: String(Number(zone.hiddenCount) + more - fewer),
+            };
+      }
       const kept = zone.objects.filter((handle) => !leaving.has(handle));
-      const arriving = [...leaving]
-        .filter(([, to]) => to === zone.handle)
-        .map(([handle]) => handle);
+      const arriving = [
+        ...[...leaving]
+          .filter(([, to]) => to === zone.handle)
+          .map(([handle]) => handle),
+        ...(zone.handle === "zone-hand-you"
+          ? drawn.map((object) => object.handle)
+          : []),
+      ];
       return kept.length === zone.objects.length && arriving.length === 0
         ? zone
         : { ...zone, objects: [...kept, ...arriving] };

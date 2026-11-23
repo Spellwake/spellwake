@@ -1,6 +1,14 @@
-/**
- * Files the app takes from the approved runtime asset package (under
- * `tabletop/` there, beside the logo). Only vector artwork: the Spellwake
- * card back, shown on face-down cards when a pack is opened.
- */
-export const runtimeAssets = ["cards/spellwake-sleeve-midnight.svg"] as const;
+/** Exact tabletop artwork shipped from the pinned runtime asset package. */
+export const runtimeAssets = [
+  "cards/spellwake-sleeve-midnight.svg",
+  "cards/supporter-initiate.svg",
+  "cards/supporter-initiate-mask.svg",
+  "cards/supporter-adept.svg",
+  "cards/supporter-adept-mask.svg",
+  "cards/supporter-mage.svg",
+  "cards/supporter-mage-mask.svg",
+  "cards/supporter-archmage.svg",
+  "cards/supporter-archmage-mask.svg",
+  "cards/supporter-benefactor.svg",
+  "cards/supporter-benefactor-mask.svg",
+] as const;

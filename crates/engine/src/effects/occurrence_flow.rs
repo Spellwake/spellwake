@@ -566,6 +566,7 @@ impl EffectWindow {
             restriction,
         );
         let record_artifact_tap = tap_mana && was_artifact && self.track_artifact_tapped_for_mana;
+        let record_perm_tap = tap_mana && self.track_artifact_tapped_for_mana;
         self.emit_from(
             EventCause::ManaProduced { source, ability },
             &before,
@@ -585,6 +586,13 @@ impl EffectWindow {
                     values.push(RulesOccurrence::ArtifactTappedForMana {
                         source,
                         actor: controller,
+                    });
+                }
+                if record_perm_tap && let Some(appearance) = previous.appearance(source) {
+                    values.push(RulesOccurrence::PermanentTappedForMana {
+                        source,
+                        actor: controller,
+                        appearance: Box::new(appearance),
                     });
                 }
                 Ok(values)

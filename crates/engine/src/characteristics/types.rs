@@ -603,6 +603,16 @@ pub enum ResolvedPartSpec {
     BlockingRestriction(BlockingRestriction),
     SetPT(PowerToughness),
     ModifyPT(PowerToughness),
+    /// Dynamic +P/+T modification evaluated at resolution time (CR 611.2c).
+    ModifyPTExpr {
+        power: Box<crate::program::ValueExpr>,
+        toughness: Box<crate::program::ValueExpr>,
+    },
+    /// Dynamic base P/T setter evaluated at resolution time (CR 611.2c).
+    SetPTExpr {
+        power: Box<crate::program::ValueExpr>,
+        toughness: Box<crate::program::ValueExpr>,
+    },
     SwitchPT,
 }
 impl ResolvedPartSpec {
@@ -613,8 +623,8 @@ impl ResolvedPartSpec {
             Self::Type(_) => CharacteristicBucket::Type,
             Self::Color(_) => CharacteristicBucket::Color,
             Self::Abilities(_) | Self::BlockingRestriction(_) => CharacteristicBucket::Abilities,
-            Self::SetPT(_) => CharacteristicBucket::SetPT,
-            Self::ModifyPT(_) => CharacteristicBucket::ModifyPT,
+            Self::SetPT(_) | Self::SetPTExpr { .. } => CharacteristicBucket::SetPT,
+            Self::ModifyPT(_) | Self::ModifyPTExpr { .. } => CharacteristicBucket::ModifyPT,
             Self::SwitchPT => CharacteristicBucket::SwitchPT,
         }
     }
@@ -1242,6 +1252,24 @@ impl ResolvedPartsSpec {
         resolving_controller: SeatId,
         target_owner: SeatId,
     ) -> Result<ResolvedParts, CharacteristicInvariantError> {
+        self.materialize_with_eval(values, resolving_controller, target_owner, |_| {
+            Err(CharacteristicInvariantError::NoEligibleComponent)
+        })
+    }
+    /// Materialize cursor locals and dynamic value expressions at resolution time (CR 611.2c).
+    ///
+    /// # Errors
+    /// Returns an invariant error when a required local or dynamic expression cannot be resolved.
+    pub fn materialize_with_eval<F>(
+        &self,
+        values: &BTreeMap<CreatureTypeSlot, CreatureTypeId>,
+        resolving_controller: SeatId,
+        target_owner: SeatId,
+        mut eval: F,
+    ) -> Result<ResolvedParts, CharacteristicInvariantError>
+    where
+        F: FnMut(&crate::program::ValueExpr) -> Result<RulesInteger, CharacteristicInvariantError>,
+    {
         self.0
             .iter()
             .map(|part| {
@@ -1279,6 +1307,18 @@ impl ResolvedPartsSpec {
                         ResolvedPart::BlockingRestriction(value.clone())
                     }
                     ResolvedPartSpec::ModifyPT(pair) => ResolvedPart::ModifyPT(pair.clone()),
+                    ResolvedPartSpec::ModifyPTExpr { power, toughness } => {
+                        ResolvedPart::ModifyPT(PowerToughness {
+                            power: eval(power)?,
+                            toughness: eval(toughness)?,
+                        })
+                    }
+                    ResolvedPartSpec::SetPTExpr { power, toughness } => {
+                        ResolvedPart::SetPT(PowerToughness {
+                            power: eval(power)?,
+                            toughness: eval(toughness)?,
+                        })
+                    }
                     ResolvedPartSpec::SwitchPT => ResolvedPart::SwitchPT,
                 })
             })
@@ -1498,6 +1538,8 @@ pub struct PrintedText {
     pub face_up_abilities: Vec<crate::face_down::FaceUpAbility>,
     pub activation_restrictions:
         std::collections::BTreeMap<ActivatedAbilityId, crate::activated::ActivationRestriction>,
+    pub activation_hybrid_symbols:
+        std::collections::BTreeMap<ActivatedAbilityId, Vec<crate::mana::HybridSymbol>>,
     /// Printed loyalty costs for surviving activated abilities.
     pub loyalty_costs: std::collections::BTreeMap<ActivatedAbilityId, i32>,
     /// Activated loyalty costs whose value is announced as X.
@@ -1522,11 +1564,15 @@ pub struct PrintedText {
     pub flashback_life: u16,
     /// This spell requires discarding one other card as an additional cost.
     pub discard_cast_cost: bool,
+    /// Optional filter restricting the card discarded for `discard_cast_cost`.
+    pub discard_cast_cost_filter: Option<crate::program::ObjectFilter>,
     pub graveyard_creature_exile_cost: u8,
     pub graveyard_exile_x_cost: bool,
     pub graveyard_self_cast: Option<crate::program::GraveyardSelfCast>,
-    /// Casting this spell requires sacrificing one creature the caster controls.
+    /// Casting this spell requires sacrificing one permanent (creature by default) the caster controls.
     pub sacrifice_creature_cast_cost: bool,
+    /// Optional filter restricting the permanent sacrificed for `sacrifice_creature_cast_cost`.
+    pub sacrifice_cast_cost_filter: Option<crate::program::ObjectFilter>,
     pub tap_creatures_cast_cost: bool,
     /// Reveal a colorless creature card in hand as an additional casting cost.
     pub reveal_colorless_creature_cast_cost: bool,
@@ -1544,6 +1590,7 @@ impl PrintedText {
     pub(super) fn from_program(program: &Program) -> Self {
         Self {
             activation_restrictions: program.activation_restrictions.clone(),
+            activation_hybrid_symbols: program.activation_hybrid_symbols.clone(),
             loyalty_costs: program.loyalty_costs.clone(),
             variable_loyalty_costs: program.variable_loyalty_costs.clone(),
             face_up_abilities: program.face_up_abilities.clone(),
@@ -1561,10 +1608,12 @@ impl PrintedText {
             flashback_tap_white_creatures: program.flashback_tap_white_creatures,
             flashback_life: program.flashback_life,
             discard_cast_cost: program.discard_cast_cost,
+            discard_cast_cost_filter: program.discard_cast_cost_filter,
             graveyard_creature_exile_cost: program.graveyard_creature_exile_cost,
             graveyard_exile_x_cost: program.graveyard_exile_x_cost,
             graveyard_self_cast: program.graveyard_self_cast,
             sacrifice_creature_cast_cost: program.sacrifice_creature_cast_cost,
+            sacrifice_cast_cost_filter: program.sacrifice_cast_cost_filter,
             tap_creatures_cast_cost: program.tap_creatures_cast_cost,
             reveal_colorless_creature_cast_cost: program.reveal_colorless_creature_cast_cost,
             conditional_cost: program.conditional_cost.clone(),

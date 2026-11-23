@@ -47,6 +47,11 @@ export const mark = style({
       borderColor: "#efb724",
       boxShadow: "0 0 3px #eeb52e90",
     },
+    '&[data-tone="earlier"]': {
+      background: "rgb(255 247 228 / 12%)",
+      borderColor: "#fff7e4",
+      boxShadow: "0 0 3px #fff7e480",
+    },
     '&[data-tone="muted"]': {
       background: "rgb(73 75 77 / 6%)",
       borderColor: "#737a82b5",

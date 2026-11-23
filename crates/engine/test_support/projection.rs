@@ -4432,6 +4432,13 @@ pub fn occurrence(value: &RulesOccurrence) -> Value {
         } => {
             json!({"tag":"ReflexiveTrigger","source":appearance(source),"controller":controller.0,"body":program::body(body)})
         }
+        RulesOccurrence::PermanentTappedForMana {
+            source,
+            actor,
+            appearance: app,
+        } => {
+            json!({"tag":"PermanentTappedForMana","source":opaque(source),"actor":actor.0,"appearance":appearance(app)})
+        }
     }
 }
 /// Common exact placement fields for journals and pending executor snapshots.

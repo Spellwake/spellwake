@@ -28,7 +28,7 @@ describe("the preview table", () => {
     expect(board.lands).toHaveLength(4);
     expect(board.others).toHaveLength(1);
     expect(board.graveyard).toHaveLength(1);
-    expect(board.hand).toHaveLength(7);
+    expect(board.hand).toHaveLength(10);
     // Another seat's hand is counted, never shown.
     const other = seatBoard(snapshot, alex);
     expect(other.hand).toHaveLength(0);
@@ -57,7 +57,7 @@ describe("laying out the table", () => {
       new Set([you]),
     );
     const hand = layout.placements.filter((p) => p.zone === "hand");
-    expect(hand).toHaveLength(7);
+    expect(hand).toHaveLength(10);
     expect(hand.every((p) => p.kind === "card")).toBe(true);
     // Lands lie nearer the player than creatures do.
     const y = (kind: string) =>

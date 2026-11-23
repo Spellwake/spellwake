@@ -394,6 +394,7 @@ pub(super) fn parse(
         Some("Discard your hand") if tap => SourceCost::Discard {
             mode: DiscardCostMode::WholeHand,
             tap_source: true,
+            sacrifice_source: false,
         },
         Some("Exile X cards from your graveyard") if tap => SourceCost::ExileGraveyard {
             filter: GraveyardExileCost::AnyCountX,
@@ -522,10 +523,12 @@ pub(super) fn parse(
         Some("Discard a card with mana value X") if !tap => SourceCost::Discard {
             mode: DiscardCostMode::MatchingTargetSpellManaValue,
             tap_source: false,
+            sacrifice_source: false,
         },
         Some("Discard a card") => SourceCost::Discard {
             mode: DiscardCostMode::SelectedOne,
             tap_source: tap,
+            sacrifice_source: false,
         },
         Some(action) if action.strip_prefix("Exile ").is_some_and(source_reference) => {
             SourceCost::Exile {
