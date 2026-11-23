@@ -647,6 +647,59 @@ export function previewResolveTop(snapshot: PlayerSnapshot): PlayerSnapshot {
   };
 }
 
+/**
+ * The viewer concedes and stays to watch: their cards leave the table, they
+ * are out of the game, and a turn that was theirs passes to Alex.
+ */
+export function previewConcede(snapshot: PlayerSnapshot): PlayerSnapshot {
+  const viewer = snapshot.viewerSeatId;
+  const gone = new Set(
+    snapshot.visibleObjects
+      .filter((object) => object.ownerSeatId === viewer)
+      .map((object) => object.handle),
+  );
+  const next = PREVIEW_SEATS[1].seatId;
+  const others = (seats: readonly string[]) => {
+    const kept = seats.filter((seat) => seat !== viewer);
+    return kept.length > 0 ? kept : [next];
+  };
+  return {
+    ...snapshot,
+    throughEventSequence: String(Number(snapshot.throughEventSequence) + 1),
+    players: snapshot.players.map((player) =>
+      player.seatId === viewer
+        ? {
+            ...player,
+            eliminated: true,
+            handCount: "0",
+            libraryCount: "0",
+            manaPool: [],
+          }
+        : player,
+    ),
+    turn: snapshot.turn && {
+      ...snapshot.turn,
+      activeSeatIds: others(snapshot.turn.activeSeatIds),
+      prioritySeatIds: others(snapshot.turn.prioritySeatIds),
+    },
+    visibleObjects: snapshot.visibleObjects.filter(
+      (object) => !gone.has(object.handle),
+    ),
+    zones: snapshot.zones.map((zone) =>
+      zone.visibility === "visible"
+        ? {
+            ...zone,
+            objects: zone.objects.filter((handle) => !gone.has(handle)),
+          }
+        : zone.ownerSeatId === viewer
+          ? { ...zone, hiddenCount: "0" }
+          : zone,
+    ),
+    stack: snapshot.stack.filter((entry) => entry.controllerSeatId !== viewer),
+    decisions: [],
+  };
+}
+
 export type PreviewScene =
   | "attack"
   | "block"
@@ -655,7 +708,8 @@ export type PreviewScene =
   | "trample"
   | "stack"
   | "stack-long"
-  | "stack-waiting";
+  | "stack-waiting"
+  | "watching";
 
 /** Combat damage being assigned on the viewer's turn. */
 function damageScene(
@@ -761,6 +815,7 @@ export function previewScene(scene: PreviewScene): PlayerSnapshot {
     return damageScene(scene);
   if (scene === "stack" || scene === "stack-long" || scene === "stack-waiting")
     return stackScene(scene);
+  if (scene === "watching") return previewConcede(previewSnapshot());
   const table = previewSnapshot();
   if (scene === "attack") {
     const combat: PlayerSnapshot = {

@@ -142,7 +142,8 @@ export const hudPlayers = style({
   position: "absolute",
   zIndex: 2,
   top: safe("top", "10px"),
-  left: "190px",
+  // Clear of the three corner controls: settings, table chat and the table view.
+  left: "220px",
   right: "110px",
   display: "flex",
   gap: "14px",
@@ -165,7 +166,7 @@ export const hudPlayers = style({
       right: 0,
     },
     // On its side, a phone gives the right edge to the turn panel, so seats stop short of it.
-    [compactLandscape]: { left: "150px", right: "436px" },
+    [compactLandscape]: { left: "206px", right: "436px" },
   },
 });
 /** Turn state and the actions the match offers. */
