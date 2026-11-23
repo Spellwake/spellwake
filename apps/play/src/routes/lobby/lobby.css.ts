@@ -99,6 +99,9 @@ export const count = style({
   fontSize: "25px",
   color: champagne,
 });
+export const quotaLine = style({
+  margin: "0 0 12px 18px",
+});
 export const seats = style({
   display: "flex",
   flexDirection: "column",

@@ -138,14 +138,15 @@ pub use projection::{
 pub use source_reader::{
     CommanderWorker, IssuedNativeCursor, IssuedNativeHumanView, IssuedNativePlayerView,
     NativeActivityFactSource, NativeArchiveScan, NativeControllerAccess,
-    NativeControllerAccessOutcome, NativeGameRuntime, NativeGameSource,
-    NativeHistoricalObservation, NativeHistoryEvidence, NativeHostInputKind,
-    NativeHostOriginalFields, NativeHostOwner, NativeHumanAccess, NativeHumanAccessOutcome,
-    NativeHumanCommit, NativeHumanHistory, NativeHumanPresentation, NativeOpeningArtifacts,
-    NativeOpeningOriginalFields, NativeOpeningSource, NativePresentationOutcome, NativeSourceError,
-    NativeSourceRepository, NativeSystemAck, NativeSystemDisposition, NativeSystemOriginal,
-    NativeTransitionSources, NativeViewOutcome, RecoveredNativeGame, ReleaseOpeningWorker,
-    open_commander_game_from_env, open_qualified_game_from_env,
+    NativeControllerAccessOutcome, NativeControllerSnapshot, NativeControllerViewOutcome,
+    NativeGameRuntime, NativeGameSource, NativeHistoricalObservation, NativeHistoryEvidence,
+    NativeHostInputKind, NativeHostOriginalFields, NativeHostOwner, NativeHumanAccess,
+    NativeHumanAccessOutcome, NativeHumanCommit, NativeHumanHistory, NativeHumanPresentation,
+    NativeOpeningArtifacts, NativeOpeningOriginalFields, NativeOpeningSource,
+    NativePresentationOutcome, NativeSourceError, NativeSourceRepository, NativeSystemAck,
+    NativeSystemDisposition, NativeSystemOriginal, NativeTransitionSources, NativeViewOutcome,
+    RecoveredNativeGame, ReleaseOpeningWorker, open_commander_game_from_env,
+    open_qualified_game_from_env,
 };
 
 /// One accepted application seat mapped to its actual local native participant.

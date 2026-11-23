@@ -1,9 +1,13 @@
 /** Human pregame lifecycle intent/status, without provider/source authority. */
 import { z } from "zod";
-import { amountSchema, identifierSchema } from "./primitives.ts";
+import { amountSchema, identifierSchema, instantSchema } from "./primitives.ts";
 import { roomConfigurationAckSchema } from "./rooms.ts";
 import { validProgressionPage } from "./progression.ts";
 import { makeCommandDispositionSchema } from "./command-protocol.ts";
+
+export const aiTierSchema = z.enum(["normal", "advanced"]);
+export type AiTier = z.infer<typeof aiTierSchema>;
+
 export const revisionRequestSchema = z.strictObject({
   requestId: identifierSchema,
   expectedRevision: amountSchema,
@@ -11,6 +15,10 @@ export const revisionRequestSchema = z.strictObject({
 export const bootstrapRequestSchema = revisionRequestSchema.extend({
   deckRevisionId: identifierSchema.nullable(),
 });
+export const setAiTierRequestSchema = revisionRequestSchema.extend({
+  tier: aiTierSchema,
+});
+export type SetAiTierRequest = z.infer<typeof setAiTierRequestSchema>;
 export const bootstrapAckSchema = z.strictObject({
   resourceId: identifierSchema,
   epoch: z.literal("1"),
@@ -46,6 +54,14 @@ export const unreadyErrorsSchema = z.union([
   z.strictObject({ ready: z.literal("unavailable") }),
   z.strictObject({ revision: z.literal("conflict") }),
 ]);
+export const setAiTierErrorsSchema = z.union([
+  z.strictObject({ account: z.literal("unavailable") }),
+  z.strictObject({ slot: z.literal("stale or unavailable") }),
+  z.strictObject({ revision: z.literal("conflict") }),
+  z.strictObject({
+    queue: z.literal("cancel the claimed room before changing its roster"),
+  }),
+]);
 export const addAiDispositionSchema = makeCommandDispositionSchema(
   addAiErrorsSchema,
   roomConfigurationAckSchema,
@@ -62,6 +78,22 @@ export const unreadyDispositionSchema = makeCommandDispositionSchema(
   unreadyErrorsSchema,
   roomConfigurationAckSchema,
 );
+export const setAiTierDispositionSchema = makeCommandDispositionSchema(
+  setAiTierErrorsSchema,
+  roomConfigurationAckSchema,
+);
+
+export const aiQuotaStatusSchema = z.strictObject({
+  accountId: identifierSchema,
+  tierName: z.string().min(1).max(64),
+  displayUnlimited: z.boolean(),
+  dailyLimit: z.number().int().nonnegative().nullable(),
+  usedToday: z.number().int().nonnegative(),
+  remainingToday: z.number().int().nonnegative().nullable(),
+  normalUnlimited: z.literal(true),
+  resetsAt: instantSchema,
+});
+export type AiQuotaStatus = z.infer<typeof aiQuotaStatusSchema>;
 export function validControlAck(
   kind: "add" | "bootstrap" | "remove" | "unready",
   target: string,
@@ -103,6 +135,7 @@ export const aiSlotStatusSchema = z
   .strictObject({
     slotId: identifierSchema,
     seatIndex: amountSchema.refine((s) => BigInt(s) <= 9223372036854775807n),
+    aiTier: aiTierSchema.optional().default("normal"),
     isSponsor: z.boolean(),
     isRetired: z.boolean(),
     stopPending: z.boolean(),

@@ -1,8 +1,74 @@
 //! Possessed-controller live View composition, with final local and SQL refresh.
 use super::*;
-use crate::controller_possession::{ControllerSecretStore, PossessedController};
+use crate::{
+    controller_possession::{ControllerSecretStore, PossessedController},
+    native_game::NativeCastBatchError,
+    player_wire::{
+        PlayerAbilityKind, PlayerAction, PlayerCardType, PlayerCommand, PlayerCommandAck,
+        PlayerSnapshot,
+    },
+};
+
+/// Live controller View together with verified basic affordances (own legal land plays
+/// and mana activations) computed on the exact same native scope.
+pub struct NativeControllerSnapshot {
+    pub snapshot: Box<PlayerSnapshot>,
+    pub basic_actions: Vec<PlayerAction>,
+}
+
+/// Outcome of a controller view read that also returns verified basic affordances.
+pub enum NativeControllerViewOutcome {
+    Snapshot(NativeControllerSnapshot),
+    Unavailable,
+    Stale,
+}
+
+fn probe_basic_actions(scope: &NativeScope<'_>, snapshot: &PlayerSnapshot) -> Vec<PlayerAction> {
+    let mut available = Vec::new();
+    if !snapshot.decisions.is_empty() {
+        return available;
+    }
+    for object in &snapshot.visible_objects {
+        if object.owner_seat_id != snapshot.viewer_seat_id
+            && object.controller_seat_id != Some(snapshot.viewer_seat_id)
+        {
+            continue;
+        }
+        let mut candidates = Vec::new();
+        if object
+            .public_properties
+            .as_ref()
+            .is_some_and(|p| p.card_types.contains(&PlayerCardType::Land))
+        {
+            candidates.push(PlayerAction::PlayLand {
+                source: object.handle.clone(),
+            });
+        }
+        for ability in &object.abilities {
+            if ability.kind == PlayerAbilityKind::Mana {
+                candidates.push(PlayerAction::ActivateMana {
+                    source: object.handle.clone(),
+                    ability: ability.handle.clone(),
+                });
+            }
+        }
+        for action in candidates {
+            let command = PlayerCommand {
+                request_id: Uuid::new_v4(),
+                basis: scope.basis().clone(),
+                action: action.clone(),
+            };
+            if scope.propose(&command).is_ok() {
+                available.push(action);
+            }
+        }
+    }
+    available
+}
+
 impl NativeGameRuntime {
-    /// Compose a seat-filtered live player View using actual local possession.
+    /// Compose a seat-filtered live player View using actual local possession and the
+    /// shared verified checkpoint cache.
     /// Current SQL authority/source are refreshed after all recovery, issuance
     /// and projection work, including error paths. No full replay is authorized.
     /// # Errors
@@ -15,6 +81,38 @@ impl NativeGameRuntime {
         proof: &PossessedController,
         request: &PlayerViewRequest,
     ) -> Result<NativeViewOutcome, NativeSourceError> {
+        match self.controller_view_inner(repository, secrets, proof, request, false)? {
+            NativeControllerViewOutcome::Snapshot(view) => {
+                Ok(NativeViewOutcome::Snapshot(view.snapshot))
+            }
+            NativeControllerViewOutcome::Unavailable => Ok(NativeViewOutcome::Unavailable),
+            NativeControllerViewOutcome::Stale => Ok(NativeViewOutcome::Stale),
+        }
+    }
+
+    /// Compose a seat-filtered live player View along with verified own basic land and
+    /// mana affordances for AI decision-making.
+    /// # Errors
+    /// Returns safe source/runtime/artifact errors only while authority and source
+    /// still agree.
+    pub fn controller_view_with_actions(
+        &self,
+        repository: &NativeSourceRepository,
+        secrets: &ControllerSecretStore,
+        proof: &PossessedController,
+        request: &PlayerViewRequest,
+    ) -> Result<NativeControllerViewOutcome, NativeSourceError> {
+        self.controller_view_inner(repository, secrets, proof, request, true)
+    }
+
+    fn controller_view_inner(
+        &self,
+        repository: &NativeSourceRepository,
+        secrets: &ControllerSecretStore,
+        proof: &PossessedController,
+        request: &PlayerViewRequest,
+        include_basic_actions: bool,
+    ) -> Result<NativeControllerViewOutcome, NativeSourceError> {
         request.validate().map_err(|_| invalid())?;
         let access = match repository.controller_access(
             secrets,
@@ -24,21 +122,22 @@ impl NativeGameRuntime {
         )? {
             NativeControllerAccessOutcome::Granted(access) => access,
             NativeControllerAccessOutcome::Unavailable => {
-                return Ok(NativeViewOutcome::Unavailable);
+                return Ok(NativeControllerViewOutcome::Unavailable);
             }
         };
         let composed = (|| {
-            let Some(recovered) = repository.recover(
+            let Some(recovered) = repository.recover_cached(
                 request.game_id,
                 &self.store,
                 &self.programs,
                 self.recovery.clone(),
+                &self.checkpoints,
             )?
             else {
-                return Ok(NativeViewOutcome::Unavailable);
+                return Ok(NativeControllerViewOutcome::Unavailable);
             };
             if !access.matches_source(&recovered) {
-                return Ok(NativeViewOutcome::Stale);
+                return Ok(NativeControllerViewOutcome::Stale);
             }
             let provenance = recovered.checkpoint().provenance().ok_or_else(invalid)?;
             let display = NativeImmutableDisplay::new(&self.programs, provenance)
@@ -58,18 +157,30 @@ impl NativeGameRuntime {
                 &metadata,
                 &display,
             )?;
+            let basic_actions = if include_basic_actions {
+                probe_basic_actions(issued.view().scope(), issued.view().snapshot())
+            } else {
+                Vec::new()
+            };
             let snapshot = issued.into_snapshot();
             #[cfg(test)]
             self.observe_delivery(TestDeliveryStage::Refresh, repository, &recovered);
-            Ok(NativeViewOutcome::Snapshot(Box::new(snapshot)))
+            Ok(NativeControllerViewOutcome::Snapshot(
+                NativeControllerSnapshot {
+                    snapshot: Box::new(snapshot),
+                    basic_actions,
+                },
+            ))
         })();
         match repository.controller_access(secrets, proof, request.game_id, request.context_id)? {
-            NativeControllerAccessOutcome::Unavailable => Ok(NativeViewOutcome::Unavailable),
+            NativeControllerAccessOutcome::Unavailable => {
+                Ok(NativeControllerViewOutcome::Unavailable)
+            }
             NativeControllerAccessOutcome::Granted(current)
                 if !access.same_delivery_source(&current)
                     && !access.same_except_publication(&current) =>
             {
-                Ok(NativeViewOutcome::Stale)
+                Ok(NativeControllerViewOutcome::Stale)
             }
             NativeControllerAccessOutcome::Granted(_) => composed,
         }
@@ -90,8 +201,8 @@ impl NativeGameRuntime {
         secrets: &ControllerSecretStore,
         proof: &PossessedController,
         owner: &NativeHostOwner,
-        original: &crate::player_wire::PlayerCommand,
-    ) -> Result<ApiResponse<crate::player_wire::PlayerCommandAck>, NativeSourceError> {
+        original: &PlayerCommand,
+    ) -> Result<ApiResponse<PlayerCommandAck>, NativeSourceError> {
         if let Some(response) = repository.controller_original(secrets, proof, original)? {
             return Ok(response);
         }
@@ -117,5 +228,125 @@ impl NativeGameRuntime {
             owner,
             original,
         )
+    }
+
+    /// Atomically pre-validate a mana-and-cast batch (0..=8 mana activations followed by
+    /// one cast) against the current owned checkpoint before committing each validated step.
+    /// If any step in the batch is illegal, zero mana activations are committed.
+    /// # Errors
+    /// Returns safe source/runtime failures. Rule/batch rejections return `ApiResponse::Fail`.
+    pub fn controller_cast_batch(
+        &self,
+        repository: &NativeSourceRepository,
+        secrets: &ControllerSecretStore,
+        proof: &PossessedController,
+        owner: &NativeHostOwner,
+        originals: &[PlayerCommand],
+    ) -> Result<ApiResponse<PlayerCommandAck>, NativeSourceError> {
+        let Some(first) = originals.first() else {
+            return Ok(ApiResponse::Fail {
+                data: std::collections::BTreeMap::from([(
+                    "batch".to_owned(),
+                    "invalid mana-and-cast batch".to_owned(),
+                )]),
+            });
+        };
+        let access = match repository.controller_access(
+            secrets,
+            proof,
+            first.basis.game_id,
+            first.basis.context_id,
+        )? {
+            NativeControllerAccessOutcome::Granted(access) => access,
+            NativeControllerAccessOutcome::Unavailable => {
+                return Ok(ApiResponse::Fail {
+                    data: std::collections::BTreeMap::from([(
+                        "actor".to_owned(),
+                        "unavailable".to_owned(),
+                    )]),
+                });
+            }
+        };
+        let Some(recovered) = repository.recover_owned_history_cached(
+            first.basis.game_id,
+            &self.store,
+            &self.programs,
+            self.recovery.clone(),
+            owner,
+            &self.checkpoints,
+        )?
+        else {
+            return Ok(ApiResponse::Fail {
+                data: std::collections::BTreeMap::from([(
+                    "game".to_owned(),
+                    "unavailable".to_owned(),
+                )]),
+            });
+        };
+        if !access.matches_source(&recovered) {
+            return Ok(ApiResponse::Fail {
+                data: std::collections::BTreeMap::from([("basis".to_owned(), "stale".to_owned())]),
+            });
+        }
+        let provenance = recovered.checkpoint().provenance().ok_or_else(invalid)?;
+        let display = NativeImmutableDisplay::new(&self.programs, provenance)
+            .map_err(|error| NativeSourceError(Failure::Initial(error)))?;
+        let metadata = NativeProjectionMetadata {
+            through_event_sequence: recovered.source().last_event_sequence().clone(),
+            deadline_at: None,
+            disclosure: NativeDisclosure::LiveParticipant,
+        };
+        let issued = repository.issue_controller_view(
+            &self.store,
+            &access,
+            proof,
+            &recovered,
+            &metadata,
+            &display,
+        )?;
+        // Atomic pre-validation: if any mana tap or the final cast fails, commit nothing.
+        if let Err(error) = issued.view().scope().prepare_cast_batch(originals) {
+            let detail = match &error {
+                NativeCastBatchError::InvalidShape => "invalid mana-and-cast batch".to_owned(),
+                NativeCastBatchError::Boundary { step } => {
+                    format!("batch step {step} crosses a required player boundary")
+                }
+                NativeCastBatchError::Bridge { step, .. } => {
+                    format!("batch step {step} was rejected by game rules")
+                }
+                NativeCastBatchError::Codec { step, .. } => {
+                    format!("batch step {step} could not be recorded")
+                }
+                NativeCastBatchError::ReplayMismatch { step } => {
+                    format!("batch step {step} failed reconstruction")
+                }
+            };
+            return Ok(ApiResponse::Fail {
+                data: std::collections::BTreeMap::from([("batch".to_owned(), detail)]),
+            });
+        }
+
+        // All steps validated cleanly on the exact current state; commit them sequentially
+        // with freshly updated bases while holding the verified checkpoint cache warm.
+        let mut basis = first.basis.clone();
+        let mut last_ack: Option<ApiResponse<PlayerCommandAck>> = None;
+        for step_cmd in originals {
+            let mut command = step_cmd.clone();
+            command.basis = basis.clone();
+            let resp = self.controller_command(repository, secrets, proof, owner, &command)?;
+            match &resp {
+                ApiResponse::Success { data } => {
+                    basis = data.basis.clone();
+                    last_ack = Some(resp);
+                }
+                ApiResponse::Fail { .. } | ApiResponse::Error { .. } => return Ok(resp),
+            }
+        }
+        Ok(last_ack.unwrap_or_else(|| ApiResponse::Fail {
+            data: std::collections::BTreeMap::from([(
+                "batch".to_owned(),
+                "empty cast batch".to_owned(),
+            )]),
+        }))
     }
 }

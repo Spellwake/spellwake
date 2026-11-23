@@ -27,6 +27,8 @@ export type MatchSource =
       snapshot: PlayerSnapshot;
       seatNames: ReadonlyMap<string, string>;
       artByPrintingId: ReadonlyMap<string, string>;
+      /** Card pictures by card name, for a table whose cards have no printing. */
+      faceByName?: ReadonlyMap<string, string>;
       connectionState: MatchConnectionState;
       commandPending: boolean;
       commandError: string | null;
