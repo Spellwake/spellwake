@@ -19,6 +19,9 @@ import type { CardMark, SeatMark } from "./combat";
 import * as s from "./match-table.css";
 
 type WireEntry = PlayerSnapshot["stack"][number];
+type StackTargetValue = WireEntry["targets"][number];
+/** The pile's name for a spell that is being cast and is not yet on the stack. */
+const PENDING = "cast:pending";
 
 /** The pile's own card size, which every pose inside it is measured in. */
 const CARD = { width: 178, height: 224 };
@@ -177,6 +180,7 @@ export function MatchStack({
   faceOf,
   selectedId,
   onSelect,
+  pending = null,
   follow,
   clearBottom = 0,
 }: {
@@ -185,13 +189,33 @@ export function MatchStack({
   faceOf: (object: PlayerObject) => string | undefined;
   selectedId: string | null;
   onSelect: (id: string | null) => void;
+  /**
+   * A spell being cast: shown in front of the pile until the game accepts
+   * it, with a line to its target once one is chosen. It is not on the stack.
+   */
+  pending?: { object: PlayerObject; target: StackTargetValue | null } | null;
   /** Changes whenever the cards may have moved. */
   follow: unknown;
   clearBottom?: number;
 }): ReactElement {
   const host = useRef<HTMLDivElement>(null);
   const reduced = useReducedMotion();
-  const stack = snapshot.stack;
+  const stack = useMemo((): readonly WireEntry[] => {
+    if (!pending) return snapshot.stack;
+    return [
+      ...snapshot.stack,
+      {
+        handle: PENDING,
+        controllerSeatId: snapshot.viewerSeatId,
+        sourceObject: pending.object.handle,
+        label: nameOf(pending.object) ?? "Spell",
+        targets: pending.target ? [pending.target] : [],
+        unavailableTargets: "0",
+      },
+    ];
+  }, [snapshot.stack, snapshot.viewerSeatId, pending]);
+  // A pending spell with its target chosen is read as a matter of course.
+  const reading = pending?.target ? PENDING : selectedId;
   // The pile fades out with what it last held.
   const last = useRef(stack);
   useEffect(() => {
@@ -209,7 +233,7 @@ export function MatchStack({
     stackZone?.visibility === "visible" ? stackZone.objects : [],
   );
 
-  const selected = shown.find((entry) => entry.handle === selectedId);
+  const selected = shown.find((entry) => entry.handle === reading);
   const target = selected?.targets[0];
   const anchorName =
     target?.kind === "seat"
@@ -260,7 +284,7 @@ export function MatchStack({
     const name = nameOf(source);
     const first = entry.targets[0];
     const targeted: StackEntry["target"] =
-      entry.handle !== selectedId || !first
+      entry.handle !== reading || !first
         ? undefined
         : first.kind === "stack"
           ? { kind: "item", id: first.handle }
@@ -272,7 +296,8 @@ export function MatchStack({
       ...(targeted ? { target: targeted } : {}),
     };
     const isSpell =
-      entry.sourceObject !== null && spells.has(entry.sourceObject);
+      entry.handle === PENDING ||
+      (entry.sourceObject !== null && spells.has(entry.sourceObject));
     if (isSpell && face && name)
       return {
         ...base,
@@ -324,8 +349,11 @@ export function MatchStack({
         >
           <CompactSpellStack
             items={items}
-            selectedId={selectedId}
-            onSelect={onSelect}
+            selectedId={reading}
+            // The pending spell is not a stack item to read or put back.
+            onSelect={(id) => {
+              if (!pending && id !== PENDING) onSelect(id);
+            }}
           />
         </motion.div>
       )}
