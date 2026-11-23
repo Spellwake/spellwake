@@ -106,7 +106,7 @@ export const rankUses: ControlUse[] = [
     id: "rank-identity",
     name: "Rank identity and progress",
     description:
-      "Season rows include rating and tier progress. Standings and public profiles use the compact tier identity beside a separate rating column.",
+      "Season rows include rating and tier progress. Standings and public profiles use the compact tier identity beside a separate rating column. A host whose rows arrive in turn may time each bar's first fill to its row; later changes keep the control's own quick beat.",
     approvedCount: 10,
     screens: [...seasonViews, "ST-01:rank", "PP-01:rank"],
   },

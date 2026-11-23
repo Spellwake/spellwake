@@ -39,6 +39,7 @@ import {
   SidePill,
   TitleTrail,
 } from "./PredictionParts";
+import { useArrival } from "../../lib/arrival";
 import * as s from "./predictions.css";
 
 const TABS = ["explore", "mine"] as const;
@@ -340,6 +341,7 @@ function Explore({
     () => matchPredictions(explore.items, query),
     [explore.items, query],
   );
+  const arrival = useArrival(shown.length > 0);
   // A search covers every prediction, so the rest are read while one is active.
   useEffect(() => {
     if (query.trim() && explore.hasMore && !explore.isAppending)
@@ -362,7 +364,7 @@ function Explore({
     );
   return (
     <>
-      <ul className={s.board} aria-label="Predictions">
+      <ul className={s.board} aria-label="Predictions" {...arrival.group}>
         {shown.map((prediction) => (
           <QuestionCard
             key={prediction.id}
@@ -397,6 +399,7 @@ function Mine({
 }): ReactElement {
   const { bets, created } = source.mine;
   const searching = query.trim().length > 0;
+  const arrival = useArrival(true);
   const content = (
     group: Group,
     render: (items: Prediction[]) => ReactElement,
@@ -435,7 +438,7 @@ function Mine({
         {content(
           bets,
           (items) => (
-            <ul className={s.bets}>
+            <ul className={s.bets} {...arrival.group}>
               {items.map((prediction) => (
                 <BetCard
                   key={prediction.id}
@@ -468,7 +471,7 @@ function Mine({
         {content(
           created,
           (items) => (
-            <ul className={s.createdRows}>
+            <ul className={s.createdRows} {...arrival.group}>
               {items.map((prediction) => (
                 <CreatedRow
                   key={prediction.id}
