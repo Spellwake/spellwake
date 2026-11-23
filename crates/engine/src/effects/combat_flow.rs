@@ -467,11 +467,17 @@ impl EffectWindow {
                     && evaluated.get(card.id()).is_some_and(|current| {
                         current.is_creature()
                             && !current.has_type(CardType::Battle)
-                            && !current.has_keyword(KeywordAbility::Defender)
+                            && (!current.has_keyword(KeywordAbility::Defender)
+                                || current.blocking_restrictions.contains(
+                                    &crate::characteristics::BlockingRestriction::CanAttackAsThoughNoDefender,
+                                ))
                             && self.blessing_allows_combat(current, actor)
                             && self.soulbond_allows_combat(current, &evaluated)
                             && !current.blocking_restrictions.contains(
                                 &crate::characteristics::BlockingRestriction::CannotAttackOrBlock,
+                            )
+                            && !current.blocking_restrictions.contains(
+                                &crate::characteristics::BlockingRestriction::CannotAttack,
                             )
                             && (card.has_continuous_control_since_turn_start() == Some(true)
                                 || current.has_keyword(KeywordAbility::Haste))
@@ -1230,6 +1236,17 @@ impl EffectWindow {
                     }
                 }
                 bound.validate_defender_caps(&selected)?;
+                if selected.len() == 1
+                    && self
+                        .current_characteristics(selected[0].attacker)?
+                        .is_some_and(|view| {
+                            view.blocking_restrictions.contains(
+                                &crate::characteristics::BlockingRestriction::CannotAttackAlone,
+                            )
+                        })
+                {
+                    return Err(CombatError::IllegalAttacker.into());
+                }
                 if bound.single_attacker()
                     && (selected.len() > 1
                         || (selected.is_empty() && !bound.required_attacks().is_empty()))
@@ -1339,6 +1356,20 @@ impl EffectWindow {
                     return Err(CombatError::WrongFrame.into());
                 }
                 bound.validate(&selected)?;
+                let distinct_blockers: BTreeSet<ObjectId> =
+                    selected.iter().map(|b| b.blocker).collect();
+                if distinct_blockers.len() == 1
+                    && let Some(&sole_blocker) = distinct_blockers.iter().next()
+                    && self
+                        .current_characteristics(sole_blocker)?
+                        .is_some_and(|view| {
+                            view.blocking_restrictions.contains(
+                                &crate::characteristics::BlockingRestriction::CannotBlockAlone,
+                            )
+                        })
+                {
+                    return Err(CombatError::IllegalBlocker.into());
+                }
                 selected.sort_unstable_by_key(|b| b.blocker);
                 let participants = selected
                     .iter()

@@ -293,9 +293,11 @@ pub fn damage_effect_view(effect: DamageEffectId) -> EffectIdentityView {
                 ability: ability.0,
             }
         }
-        DamageEffectId::StaticPrevention(source) => EffectIdentityView::StaticPrevention {
-            source: format!("{source:?}"),
-        },
+        DamageEffectId::StaticPrevention(source) | DamageEffectId::ShieldCounter(source) => {
+            EffectIdentityView::StaticPrevention {
+                source: format!("{source:?}"),
+            }
+        }
         DamageEffectId::ProtectionSubtype(quality) => EffectIdentityView::ProtectionSubtype {
             subtype: quality.subtype.ordinal(),
             creatures_only: quality.creatures_only,

@@ -25,6 +25,10 @@ pub enum CreatedZoneEffect {
         entry: StackEntryId,
         instruction: usize,
     },
+    /// CR 122.1c shield counter replaces destruction with removing a shield counter.
+    ShieldCounter,
+    /// CR 122.1h finality counter replaces moving from battlefield to graveyard with exile.
+    FinalityCounter,
 }
 /// Actual source incarnation plus its copiable definition-local identity.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -499,6 +503,20 @@ impl ZoneReplacementBatch {
     pub(super) fn regenerated(&self, object: ObjectId) -> bool {
         self.regenerations().any(|(id, _, _)| id == object)
     }
+    pub(super) fn shield_counter_saves(&self) -> impl Iterator<Item = ObjectId> + '_ {
+        self.applied.iter().flat_map(|(event, effects)| {
+            effects.iter().filter_map(move |effect| {
+                matches!(effect.created, Some(CreatedZoneEffect::ShieldCounter))
+                    .then_some(event.before())
+            })
+        })
+    }
+    pub(super) fn saved_from_destruction(&self, object: ObjectId) -> bool {
+        self.regenerated(object) || self.shield_counter_saves().any(|id| id == object)
+    }
+    pub(super) fn has_destruction_saves(&self) -> bool {
+        self.regenerations().next().is_some() || self.shield_counter_saves().next().is_some()
+    }
     pub(super) fn entry_controller(&self, object: ObjectId) -> Option<SeatId> {
         self.selected_controllers
             .iter()
@@ -728,12 +746,12 @@ impl ZoneReplacementBatch {
         let Some(source) = self.sources.get(&application.effect) else {
             return false;
         };
-        if candidate.entry_prohibited || self.regenerated(candidate.before.id()) {
+        if candidate.entry_prohibited || self.saved_from_destruction(candidate.before.id()) {
             return false;
         }
         if matches!(
             source.instance.created,
-            Some(CreatedZoneEffect::Regenerate { .. })
+            Some(CreatedZoneEffect::Regenerate { .. } | CreatedZoneEffect::ShieldCounter)
         ) {
             let destroyed = match candidate.reason {
                 ZoneReason::Destroyed => true,
@@ -746,7 +764,11 @@ impl ZoneReplacementBatch {
                 }),
                 _ => false,
             };
-            if self.regeneration_prohibited || !destroyed {
+            let prohibited = matches!(
+                source.instance.created,
+                Some(CreatedZoneEffect::Regenerate { .. })
+            ) && self.regeneration_prohibited;
+            if prohibited || !destroyed {
                 return false;
             }
         }
@@ -1269,6 +1291,67 @@ impl EffectWindow {
                     );
                 }
             }
+            if self
+                .counters_of_kind(before.id(), CounterKind::Shield)
+                .is_positive()
+            {
+                let instance = ZoneEffectInstance {
+                    source: before.id(),
+                    ability: ZoneReplacementAbilityId(0),
+                    unearth: false,
+                    madness: false,
+                    created: Some(CreatedZoneEffect::ShieldCounter),
+                };
+                let definition = ZoneReplacementAbility {
+                    id: instance.ability,
+                    actions: ZoneActionPredicate::OneOf(BTreeSet::from([
+                        ZoneActionKind::StateBased,
+                        ZoneActionKind::EffectDestroy,
+                    ])),
+                    destination: PublicZoneDestination::Graveyard,
+                    replace_with: PublicZoneDestination::Battlefield,
+                    objects: ZoneObjectKind::Either,
+                    subject: ZoneReplacementSubject::SourceSelf,
+                    choice: ZoneReplacementChoice::Mandatory,
+                };
+                sources.insert(
+                    instance,
+                    ZoneReplacementSource {
+                        instance,
+                        before: before.clone(),
+                        definition,
+                    },
+                );
+            }
+            if self
+                .counters_of_kind(before.id(), CounterKind::Finality)
+                .is_positive()
+            {
+                let instance = ZoneEffectInstance {
+                    source: before.id(),
+                    ability: ZoneReplacementAbilityId(0),
+                    unearth: false,
+                    madness: false,
+                    created: Some(CreatedZoneEffect::FinalityCounter),
+                };
+                let definition = ZoneReplacementAbility {
+                    id: instance.ability,
+                    actions: ZoneActionPredicate::Any,
+                    objects: ZoneObjectKind::Either,
+                    subject: ZoneReplacementSubject::SourceSelf,
+                    destination: PublicZoneDestination::Graveyard,
+                    replace_with: PublicZoneDestination::Exile,
+                    choice: ZoneReplacementChoice::Mandatory,
+                };
+                sources.insert(
+                    instance,
+                    ZoneReplacementSource {
+                        instance,
+                        before: before.clone(),
+                        definition,
+                    },
+                );
+            }
             if before.is_unearthed() || before.has_corpse_return() {
                 let instance = ZoneEffectInstance {
                     source: before.id(),
@@ -1389,7 +1472,7 @@ impl EffectWindow {
             | ResolutionSelectionOperation::SacrificeContributor { .. }
             | ResolutionSelectionOperation::SacrificeColored
             | ResolutionSelectionOperation::Sacrifice { .. }
-            | ResolutionSelectionOperation::SacrificeMatching(_)
+            | ResolutionSelectionOperation::SacrificeMatching { .. }
             | ResolutionSelectionOperation::RandomSacrifice { .. }
             | ResolutionSelectionOperation::PayLifeToSaveCreatures { .. } => {
                 ZoneActionKind::EffectSacrifice
@@ -1408,6 +1491,7 @@ impl EffectWindow {
             }
             | ResolutionSelectionOperation::DiscardUpTo
             | ResolutionSelectionOperation::Discard
+            | ResolutionSelectionOperation::DiscardFiltered { .. }
             | ResolutionSelectionOperation::RandomDiscard { .. } => ZoneActionKind::EffectDiscard,
             ResolutionSelectionOperation::OtherControlledCreature {
                 sacrifice: false, ..
@@ -1995,7 +2079,7 @@ impl EffectWindow {
                 _ => false,
             };
             if order_destination
-                && !replacements.is_some_and(|b| b.regenerated(id))
+                && !replacements.is_some_and(|b| b.saved_from_destruction(id))
                 && object.card_id().is_some()
             {
                 owners
@@ -2035,7 +2119,7 @@ impl EffectWindow {
             .copied()
             .filter(|id| {
                 !replacements.is_some_and(|batch| {
-                    batch.regenerated(*id)
+                    batch.saved_from_destruction(*id)
                         || (batch.destination(*id) == Ok(PublicZoneDestination::Command)
                             && self
                                 .window

@@ -473,6 +473,10 @@ impl EffectWindow {
             | Instruction::SetControlledCreatureSizeToHand
             | Instruction::ModifyGroupByAmount { .. }
             | Instruction::AddExperienceCounter
+            | Instruction::AddPlayerCounter { .. }
+            | Instruction::ExileTopPlay { .. }
+            | Instruction::LookTopChoose { .. }
+            | Instruction::RevealUntilMatch { .. }
             | Instruction::ControlManaSourceThroughNextTurn
             | Instruction::GrantControllerFlashUntilCleanup
             | Instruction::RequireOpponentsCreaturesBlockThisTurn
@@ -588,6 +592,7 @@ impl EffectWindow {
             | Instruction::TapEnchantedCreature
             | Instruction::RequireCondition(_)
             | Instruction::PayControllerLife(_)
+            | Instruction::PayControllerEnergy(_)
             | Instruction::PutEquipmentFromHandOrGraveyard
             | Instruction::EquipNewToken
             | Instruction::Encore
@@ -652,10 +657,14 @@ impl EffectWindow {
             | Instruction::WeakenDelayedAttacker(_)
             | Instruction::DrawRevealRemoveLoyalty
             | Instruction::CreateReflexiveDiscardDamage
+            | Instruction::ScheduleDelayedStepTrigger { .. }
+            | Instruction::EmitReflexiveTrigger { .. }
             | Instruction::RemoveLoyaltyExileTopForPlay
             | Instruction::DamageDamagedPlayersCreatures
             | Instruction::DamageOpponentsAmount(_)
             | Instruction::DamageRelatedPlayerAmount(_)
+            | Instruction::DamageGroupAmount { .. }
+            | Instruction::DoublePowerToughness { .. }
             | Instruction::Ninjutsu
             | Instruction::Unearth
             | Instruction::FlipCoin { .. }
@@ -718,6 +727,9 @@ impl EffectWindow {
             | Instruction::ShuffleEachHandAndGraveyard
             | Instruction::EndControllerTurn
             | Instruction::ShuffleOwnLibrary
+            | Instruction::ShufflePlayerLibrary(_)
+            | Instruction::ShuffleTargetIntoLibrary
+            | Instruction::RevealPlayerHand(_)
             | Instruction::ShuffleOwnGraveyardIntoLibrary
             | Instruction::ShuffleTargetGraveyardCards { .. }
             | Instruction::ExileCreaturesAndPlaneswalkersBelowRevealedManaValue
@@ -727,6 +739,8 @@ impl EffectWindow {
             | Instruction::DestroyNonlandsAtSourceChargeCount
             | Instruction::AddCounterAndDischargeOnResolution(_)
             | Instruction::ExileAllGraveyards
+            | Instruction::ExilePlayerGraveyards(_)
+            | Instruction::RemoveCountersFromPermanent { .. }
             | Instruction::ExileCreatureAtMostRevealedPower
             | Instruction::ExileTarget
             | Instruction::ImprintTargetLand
@@ -756,6 +770,7 @@ impl EffectWindow {
             | Instruction::GrantProtectionChosenColor(_)
             | Instruction::PutIndestructibleCounter
             | Instruction::PutLoyaltyCounter
+            | Instruction::PutNamedCounterOnTarget { .. }
             | Instruction::PutPowerToughnessCounters { .. }
             | Instruction::ReturnChosenXGraveyardCreatures
             | Instruction::ReturnGraveyardTargetsTapped(_)
@@ -872,7 +887,8 @@ impl EffectWindow {
             | Instruction::DiscardUpTo { .. }
             | Instruction::SacrificeToContinue { .. }
             | Instruction::SacrificeMatching(_)
-            | Instruction::Discard { .. } => return Ok(false),
+            | Instruction::Discard { .. }
+            | Instruction::DiscardFiltered { .. } => return Ok(false),
         };
         let controller = self
             .window
@@ -1397,6 +1413,9 @@ impl EffectWindow {
             .collect::<Result<Vec<_>, EffectError>>()?;
         self.window = window;
         if work.kind == LibraryActionKind::Mill {
+            work.cursor.results.last_action_count =
+                Some(RulesInteger::from_usize(public_zone_moves.len()));
+            work.cursor.results.last_action_succeeded = !public_zone_moves.is_empty();
             work.cursor.results.milled_mana_values = public_zone_moves
                 .iter()
                 .map(|movement| {

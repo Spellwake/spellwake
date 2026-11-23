@@ -219,6 +219,12 @@ impl EffectWindow {
                 SearchCardMatcher::AnyOfNames(names) => names
                     .iter()
                     .any(|name| self.name_rules.has_name(&current.current_names, name)),
+                SearchCardMatcher::Filtered(obj_filter) => {
+                    let excluded = BTreeSet::new();
+                    obj_filter.matches_static_characteristics(current, &excluded, || {
+                        self.copiable_program(id).map(Program::mana_value)
+                    })
+                }
             };
             let mv_match = match &search.mana_value {
                 None => true,
@@ -440,6 +446,12 @@ impl EffectWindow {
         }
         let (destination, reason) = if bound.search_exile_owner().is_some() {
             (ObjectDestination::Exile, ZoneReason::SearchToExile)
+        } else if matches!(
+            self.current_instruction()?,
+            Instruction::SearchLibrary { filter }
+                if filter.destination == SearchDestination::Graveyard
+        ) {
+            (ObjectDestination::Graveyard, ZoneReason::SearchToGraveyard)
         } else {
             (ObjectDestination::Hand, ZoneReason::SearchToHand)
         };
@@ -642,6 +654,12 @@ impl EffectWindow {
         }
         let destination = if bound.is_exile_batch_search() {
             ObjectDestination::Exile
+        } else if matches!(
+            self.current_instruction()?,
+            Instruction::SearchLibrary { filter }
+                if filter.destination == SearchDestination::Graveyard
+        ) {
+            ObjectDestination::Graveyard
         } else {
             ObjectDestination::Hand
         };
@@ -749,7 +767,12 @@ impl EffectWindow {
             .collect();
         self.search_entry_colors(&entering, colors)?;
         self.search_entry_reveals(bound, &entering, reveals)?;
-        let graveyard_search = bound.is_hand_graveyard_search();
+        let graveyard_search = bound.is_hand_graveyard_search()
+            || matches!(
+                self.current_instruction()?,
+                Instruction::SearchLibrary { filter }
+                    if filter.destination == SearchDestination::Graveyard
+            );
         let exile_search = matches!(
             self.current_instruction()?,
             Instruction::SearchLibrary { filter } if filter.is_exile_destination()

@@ -97,7 +97,8 @@ impl TryFrom<spellwake_engine::effects::CounterKind> for crate::player_wire::Pla
             Native::Study => Self::Study,
             Native::Eyeball => Self::Eyeball,
             Native::Slime => Self::Slime,
-            Native::Poison | Native::Experience => {
+            // Counters without a public PlayerCounterKind wire mapping fail closed.
+            _ => {
                 return Err(NativeBridgeError::WrongReferenceKind);
             }
         })

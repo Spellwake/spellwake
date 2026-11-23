@@ -33,6 +33,13 @@ use std::collections::{BTreeMap, BTreeSet};
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub struct StackEntryId(u64);
 
+impl StackEntryId {
+    /// Synthetic creator id for non-stack permanent entry replacement effects (e.g. lands entering with keyword counters).
+    pub(crate) const fn entry_replacement_creator() -> Self {
+        Self(0)
+    }
+}
+
 /// Minimal source evidence only, not a complete ability program or last-known state.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum StackKind {
@@ -1573,6 +1580,30 @@ impl StackWindow {
                 .cards
                 .apply_zone_move(self.cards.revision(), source, destination)?
                 .require_moved()?);
+        }
+        if cost.returns_source_to_hand() {
+            if cost.taps_source() {
+                if card.tapped() != Some(false) {
+                    return Err(StackWindowError::SourceTapped);
+                }
+                let tapped = self.cards.set_tapped(self.cards.revision(), source, true)?;
+                return Ok(tapped
+                    .next
+                    .apply_zone_move(tapped.next.revision(), source, ObjectDestination::Hand)?
+                    .require_moved()?);
+            }
+            return Ok(self
+                .cards
+                .apply_zone_move(self.cards.revision(), source, ObjectDestination::Hand)?
+                .require_moved()?);
+        }
+        if cost.untaps_source() {
+            if card.tapped() != Some(true) {
+                return Err(StackWindowError::SourceTapped);
+            }
+            return Ok(self
+                .cards
+                .set_tapped(self.cards.revision(), source, false)?);
         }
         if cost.taps_source() && !matches!(cost, SourceCost::TapPermanents { .. }) {
             if card.tapped() != Some(false) {

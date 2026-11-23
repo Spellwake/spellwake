@@ -16,6 +16,7 @@ kill_timeout = "30s"
   SPELLWAKE_AI_NORMAL_EFFORT = "medium"
   SPELLWAKE_AI_ADVANCED_MODEL = "gpt-6.1-terra"
   SPELLWAKE_AI_ADVANCED_EFFORT = "medium"
+  SPELLWAKE_AI_CONCURRENCY = "2"
   RUST_LOG = "spellwake_application=info,application_api=info"
 
 [http_service]

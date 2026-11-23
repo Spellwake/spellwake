@@ -716,7 +716,8 @@ impl EffectWindow {
                 | crate::land::EntryTap::ChooseCreatureType
                 | crate::land::EntryTap::ChooseNonlandCardName
                 | crate::land::EntryTap::SiegeProtector
-                | crate::land::EntryTap::ChooseTwoPlayers => Vec::new(),
+                | crate::land::EntryTap::ChooseTwoPlayers
+                | crate::land::EntryTap::UnlessPayLife(_) => Vec::new(),
                 crate::land::EntryTap::UnlessRevealHandLandType(a, b) => {
                     let evaluated = self.evaluated_characteristics()?;
                     self.window
@@ -804,6 +805,16 @@ impl EffectWindow {
                 crate::land::EntryTap::UnlessRevealHandLandType(_, _),
                 crate::land::EntryChoice::Reveal(Some(id)),
             ) if frame.eligible_reveals.contains(&id) => {}
+            (crate::land::EntryTap::UnlessPayLife(_), crate::land::EntryChoice::PayLife(false)) => {
+            }
+            (
+                crate::land::EntryTap::UnlessPayLife(amount),
+                crate::land::EntryChoice::PayLife(true),
+            ) if amount > 0
+                && self
+                    .life
+                    .get(actor)
+                    .is_some_and(|life| *life >= i64::from(amount).into()) => {}
             _ => return Err(EffectError::IllegalTarget),
         }
         let mut next = self.clone();
@@ -1146,7 +1157,8 @@ impl EffectWindow {
                 | crate::land::EntryChoice::Opponent(_)
                 | crate::land::EntryChoice::Reveal(_)
                 | crate::land::EntryChoice::Chapter(_)
-                | crate::land::EntryChoice::CardName(_)) => {
+                | crate::land::EntryChoice::CardName(_)
+                | crate::land::EntryChoice::PayLife(_)) => {
                     self.entry_choices.insert(id, reveal);
                 }
                 crate::land::EntryChoice::CreatureType(kind) => {

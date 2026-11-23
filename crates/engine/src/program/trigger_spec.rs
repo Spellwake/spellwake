@@ -34,13 +34,17 @@ impl TriggerZone {
     }
 }
 
-/// Origin zone required for an enters-the-battlefield trigger.
+/// Origin zone required for a zone-change trigger.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum TriggerFromZone {
     #[default]
     Any,
     Graveyard,
     ControllerGraveyard,
+    Hand,
+    Exile,
+    Library,
+    Battlefield,
 }
 
 /// Cast-origin requirement on an entering permanent trigger.
@@ -125,6 +129,8 @@ pub enum BlockTriggerKind {
 /// Damage recipient predicate on a `DealsDamage` trigger.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DamageTriggerRecipient {
+    /// Any damage recipient (player, creature, planeswalker, or battle).
+    Any,
     AnyPlayer,
     Opponent,
     Controller,
@@ -165,19 +171,26 @@ pub enum StateThresholdKind {
 pub enum PlayerTriggerAction {
     Sacrificed(ObjectFilter),
     Discarded,
-    Cycled { self_only: bool },
+    Cycled {
+        self_only: bool,
+    },
     TokenCreated,
-    DrewCard { nth_each_turn: Option<NonZeroU16> },
+    DrewCard {
+        nth_each_turn: Option<NonZeroU16>,
+    },
     Scried,
     Surveilled,
     ArtifactTappedForMana,
     SagaFinalChapterResolved,
+    /// Player targeted an opponent, anything an opponent controls, or a card in an opponent's graveyard (CR 700.13).
+    CommittedCrime,
 }
 
 /// Status or physical-transition trigger on a permanent.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum StatusTriggerKind {
     BecomesTapped,
+    BecomesUntapped,
     TurnsFaceUp,
     Transforms,
     Phased { out: bool },
@@ -205,19 +218,24 @@ pub enum PlanarTriggerEvent {
 }
 
 /// Intervening-if or trigger-time condition attached to a [`TriggerSpec`].
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TriggerCondition {
     Morbid,
     DuringStep(Step),
     SourceHasLoyalty,
-    SourceCounterAtLeast { kind: CounterKind, minimum: u8 },
+    SourceCounterAtLeast {
+        kind: CounterKind,
+        minimum: u8,
+    },
     NoOtherControlledCreatures,
     DefendingPlayerHasMoreLands,
     UnrenownedSource,
     SourceSaddled,
     SourceDidNotAttackThisTurn,
     ControllerHasCityBlessing,
-    Monarch { opponent: bool },
+    Monarch {
+        opponent: bool,
+    },
     ControlsOwnCommander,
     OpponentHasMoreLands,
     ControlsGreatestArtifact,
@@ -229,6 +247,62 @@ pub enum TriggerCondition {
     TotalControlledPowerAtLeast(u16),
     HandSizeBelow(u8),
     ControlsMeldPair,
+    ControllersTurn,
+    OpponentsTurn,
+    Delirium,
+    Metalcraft,
+    Threshold,
+    HandSizeAtMost(u8),
+    HandSizeAtLeast(u8),
+    ControllerLifeAtLeast(u16),
+    ControllerLifeAtMost(u16),
+    ControlsCardType {
+        kind: super::CardType,
+        minimum: u8,
+    },
+    ControlsSubtype {
+        kind: CreatureTypeId,
+        minimum: u8,
+    },
+    GraveyardCardTypeCount {
+        kind: Option<super::CardType>,
+        minimum: u8,
+    },
+    SourceIsTapped,
+    SourceIsUntapped,
+    SourceIsAttacking,
+    ControllerGainedLifeThisTurn,
+    ControllerLostLifeThisTurn,
+    ControllerAttackedThisTurn,
+    ControllerCastSpellsThisTurn(u16),
+    ControllerDiscardedThisTurn,
+    ControllerSacrificedThisTurn,
+    PermanentLeftBattlefieldThisTurn,
+    CreatureEnteredUnderControlThisTurn,
+    DescendedThisTurn,
+    CommittedCrimeThisTurn,
+    ControllerDrewCardsThisTurn(u16),
+    OpponentHasMoreLife,
+    OpponentControlsMoreCreatures,
+    OpponentHasMoreCardsInHand,
+    ControlsMatching {
+        filter: ObjectFilter,
+        minimum: u8,
+    },
+    OpponentControlsMatching {
+        filter: ObjectFilter,
+        minimum: u8,
+    },
+    /// The trigger source permanent matches `filter` on the battlefield.
+    SourceMatches(Box<ObjectFilter>),
+    /// Controller's graveyard contains at least `minimum` cards matching `filter`.
+    GraveyardMatching {
+        filter: Box<ObjectFilter>,
+        minimum: u8,
+    },
+    Not(Box<TriggerCondition>),
+    And(Box<TriggerCondition>, Box<TriggerCondition>),
+    Or(Box<TriggerCondition>, Box<TriggerCondition>),
 }
 
 /// Core orthogonal trigger event replacing the flat 135-variant `OrdinaryCondition` enum.
@@ -252,6 +326,15 @@ pub enum TriggerEvent {
         player: PlayerRelation,
         from_library: bool,
         own_turn_only: bool,
+    },
+    /// An object matching `subject` is put into exile (optionally restricted to `from_zone`).
+    Exiled {
+        subject: ObjectFilter,
+        from_zone: TriggerFromZone,
+    },
+    /// A permanent matching `subject` is returned to a player's hand from the battlefield.
+    ReturnedToHand {
+        subject: ObjectFilter,
     },
     StepBegan {
         step: Step,
@@ -324,7 +407,14 @@ impl TriggerEvent {
     #[must_use]
     pub fn is_lookback(&self) -> bool {
         match self {
-            Self::LeavesBattlefield { .. } | Self::Dies { .. } | Self::PlayerLosesGame(_) => true,
+            Self::LeavesBattlefield { .. }
+            | Self::Dies { .. }
+            | Self::ReturnedToHand { .. }
+            | Self::Exiled {
+                from_zone: TriggerFromZone::Battlefield,
+                ..
+            }
+            | Self::PlayerLosesGame(_) => true,
             Self::StatusChanged {
                 kind: StatusTriggerKind::Phased { out: true },
                 ..
@@ -359,6 +449,8 @@ impl TriggerEvent {
             | Self::LeavesBattlefield { subject }
             | Self::Dies { subject, .. }
             | Self::PutIntoGraveyard { subject, .. }
+            | Self::Exiled { subject, .. }
+            | Self::ReturnedToHand { subject }
             | Self::DealtDamage { subject, .. }
             | Self::Targeted { subject, .. }
             | Self::CountersChanged { subject, .. }
@@ -421,6 +513,8 @@ impl TriggerEvent {
             | Self::LeavesBattlefield { subject }
             | Self::Dies { subject, .. }
             | Self::PutIntoGraveyard { subject, .. }
+            | Self::Exiled { subject, .. }
+            | Self::ReturnedToHand { subject }
             | Self::DealtDamage { subject, .. }
             | Self::Targeted { subject, .. }
             | Self::CountersChanged { subject, .. }
@@ -501,7 +595,7 @@ impl TriggerSpec {
 
     /// Attach an intervening-if or trigger-time condition.
     #[must_use]
-    pub const fn only_if(mut self, condition: TriggerCondition) -> Self {
+    pub fn only_if(mut self, condition: TriggerCondition) -> Self {
         self.intervening_if = Some(condition);
         self
     }

@@ -188,6 +188,9 @@ pub struct PlayerCommanderView {
 pub enum PlayerSpellSubtype {
     Arcane,
     Adventure,
+    Lesson,
+    Trap,
+    Omen,
 }
 /// Independently public effective values. No free name/oracle/identity field.
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]

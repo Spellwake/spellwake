@@ -147,6 +147,11 @@ pub(crate) fn evaluate(
                 counts
                     .get(&physical_id)
                     .is_some_and(RulesInteger::is_positive)
+            })
+            || world.state.named_counters.values().any(|counts| {
+                counts
+                    .get(&physical_id)
+                    .is_some_and(RulesInteger::is_positive)
             });
         let mut object = ObjectCharacteristics {
             paired_with: world.state.paired_creatures.get(&physical_id).copied(),
@@ -183,6 +188,7 @@ pub(crate) fn evaluate(
                 .combat
                 .is_some_and(|c| c.blocker(physical.id()).is_some()),
             has_plus_one_counter: pt_counters.plus_one.is_positive(),
+            has_minus_one_counter: pt_counters.minus_one.is_positive(),
             plus_one_counters: pt_counters.plus_one.clone(),
             has_any_counter,
             blessing_counters: world
@@ -891,9 +897,12 @@ fn select_affected(
                     .is_none_or(|kind| object.current_artifact_subtypes.contains(&kind))
                 && selector.combat_role.is_none_or(|role| match role {
                     CombatSelector::Attacking => object.attacking,
+                    CombatSelector::Blocking => object.blocking,
+                    CombatSelector::AttackingOrBlocking => object.attacking || object.blocking,
                     CombatSelector::OutsideCombat => !object.attacking && !object.blocking,
                 })
                 && (!selector.requires_untapped || object.tapped == Some(false))
+                && (!selector.requires_tapped || object.tapped == Some(true))
                 && creature_counts.as_ref().is_none_or(|counts| {
                     object.is_creature()
                         && object
@@ -902,11 +911,56 @@ fn select_affected(
                             == Some(&1)
                 })
                 && (!selector.plus_one_counter || object.has_plus_one_counter)
+                && (!selector.minus_one_counter || object.has_minus_one_counter)
                 && (selector.minimum_plus_one_counters == 0
                     || object.plus_one_counters
                         >= i64::from(selector.minimum_plus_one_counters).into())
                 && (!selector.requires_flying || object.has_keyword(KeywordAbility::Flying))
+                && selector
+                    .required_keyword
+                    .is_none_or(|kw| object.has_keyword(kw))
+                && selector
+                    .forbidden_keyword
+                    .is_none_or(|kw| !object.has_keyword(kw))
                 && (!selector.any_counter || object.has_any_counter)
+                && (selector.min_power.is_none_or(|min| {
+                    object
+                        .power_toughness
+                        .as_ref()
+                        .is_some_and(|pt| pt.derived.power >= min.into())
+                }))
+                && (selector.max_power.is_none_or(|max| {
+                    object
+                        .power_toughness
+                        .as_ref()
+                        .is_some_and(|pt| pt.derived.power <= max.into())
+                }))
+                && (selector.min_toughness.is_none_or(|min| {
+                    object
+                        .power_toughness
+                        .as_ref()
+                        .is_some_and(|pt| pt.derived.toughness >= min.into())
+                }))
+                && (selector.max_toughness.is_none_or(|max| {
+                    object
+                        .power_toughness
+                        .as_ref()
+                        .is_some_and(|pt| pt.derived.toughness <= max.into())
+                }))
+                && selector
+                    .min_mana_value
+                    .is_none_or(|min| object.defined.mana_value >= i64::from(min).into())
+                && selector
+                    .max_mana_value
+                    .is_none_or(|max| object.defined.mana_value <= i64::from(max).into())
+                && (!selector.requires_enchanted
+                    || battlefield
+                        .iter()
+                        .filter_map(|aid| objects.get(aid))
+                        .any(|aura| {
+                            aura.attached_to == Some(crate::targets::TargetRef::Object(*id))
+                                && aura.has_type(CardType::Enchantment)
+                        }))
                 && (selector.equipped_by_at_least == 0
                     || battlefield
                         .iter()
@@ -939,6 +993,8 @@ fn select_affected(
                     .required_types
                     .iter()
                     .all(|kind| object.has_type(*kind))
+                && (selector.any_types.is_empty()
+                    || selector.any_types.iter().any(|kind| object.has_type(*kind)))
                 && selector
                     .forbidden_types
                     .iter()
@@ -946,6 +1002,10 @@ fn select_affected(
                 && selector
                     .creature_subtype
                     .is_none_or(|kind| object.current_creature_subtypes.contains(&kind))
+                && (selector.any_creature_subtypes.is_empty()
+                    || !selector
+                        .any_creature_subtypes
+                        .is_disjoint(&object.current_creature_subtypes))
                 && selector
                     .forbidden_creature_subtype
                     .is_none_or(|kind| !object.current_creature_subtypes.contains(&kind))
@@ -993,6 +1053,217 @@ fn select_affected(
         })
         .collect()
 }
+fn static_source_condition_met(
+    condition: &StaticSourceCondition,
+    world: CharacteristicWorld<'_>,
+    source: ObjectId,
+    controller: SeatId,
+    objects: &BTreeMap<ObjectId, ObjectCharacteristics>,
+    battlefield: &BTreeSet<ObjectId>,
+) -> bool {
+    use StaticSourceCondition::*;
+    match condition {
+        ControllerLifeAtMost(limit) => world
+            .life
+            .and_then(|life| life.get(controller))
+            .is_some_and(|life| *life <= i64::from(*limit).into()),
+        ControllerLifeAtLeast(limit) => world
+            .life
+            .and_then(|life| life.get(controller))
+            .is_some_and(|life| *life >= i64::from(*limit).into()),
+        ControllerControlsSubtype(kind) | OpponentControlsSubtype(kind) => {
+            let opponents = matches!(condition, OpponentControlsSubtype(_));
+            battlefield
+                .iter()
+                .filter_map(|id| objects.get(id))
+                .any(|card| {
+                    card.controller
+                        .is_some_and(|owner| (owner != controller) == opponents)
+                        && card.current_creature_subtypes.contains(kind)
+                })
+        }
+        OpponentsTurn => world.active_player != controller,
+        ControllersTurn => world.active_player == controller,
+        HasKeyword(keyword) => objects[&source].has_keyword(*keyword),
+        Delirium => {
+            let mut types = BTreeSet::new();
+            for card in objects
+                .values()
+                .filter(|c| c.zone == ObjectZone::Graveyard(controller))
+            {
+                types.extend(card.current_types.iter().copied());
+            }
+            types.len() >= 4
+        }
+        Metalcraft => {
+            battlefield
+                .iter()
+                .filter_map(|id| objects.get(id))
+                .filter(|c| c.controller == Some(controller) && c.has_type(CardType::Artifact))
+                .count()
+                >= 3
+        }
+        Threshold => {
+            objects
+                .values()
+                .filter(|c| c.zone == ObjectZone::Graveyard(controller))
+                .count()
+                >= 7
+        }
+        ControlsCardType { kind, minimum } => {
+            battlefield
+                .iter()
+                .filter_map(|id| objects.get(id))
+                .filter(|c| c.controller == Some(controller) && c.has_type(*kind))
+                .count()
+                >= usize::from(*minimum)
+        }
+        GraveyardCountAtLeast { types, minimum } => {
+            objects
+                .values()
+                .filter(|c| {
+                    c.zone == ObjectZone::Graveyard(controller)
+                        && types.matches_any(&c.current_types)
+                })
+                .count()
+                >= usize::from(*minimum)
+        }
+        HandCountAtMost(limit) => {
+            objects
+                .values()
+                .filter(|c| c.zone == ObjectZone::Hand(controller))
+                .count()
+                <= usize::from(*limit)
+        }
+        HandCountAtLeast(limit) => {
+            objects
+                .values()
+                .filter(|c| c.zone == ObjectZone::Hand(controller))
+                .count()
+                >= usize::from(*limit)
+        }
+        SourceCounterAtLeast { kind, minimum } => {
+            world.state.permanent_counter_count(source, *kind) >= i64::from(*minimum).into()
+        }
+        SourceIsTapped => objects.get(&source).is_some_and(|o| o.tapped == Some(true)),
+        SourceIsUntapped => objects
+            .get(&source)
+            .is_some_and(|o| o.tapped == Some(false)),
+        ControllerHasCityBlessing => world.state.city_blessing.contains(&controller),
+        ControllerGainedLifeThisTurn => world
+            .state
+            .life_gained_this_turn
+            .get(&controller)
+            .is_some_and(RulesInteger::is_positive),
+        ControllerLostLifeThisTurn => world
+            .state
+            .life_lost_this_turn
+            .get(&controller)
+            .is_some_and(RulesInteger::is_positive),
+        OpponentLostLifeThisTurn => world
+            .state
+            .life_lost_this_turn
+            .iter()
+            .any(|(&seat, amount)| seat != controller && amount.is_positive()),
+        ControllerAttackedThisTurn => world.state.attacked_this_turn_players.contains(&controller),
+        ControllerCastSpellsThisTurn(min) => {
+            world
+                .state
+                .spells_cast_this_turn
+                .get(&controller)
+                .copied()
+                .unwrap_or(0)
+                >= *min
+        }
+        ControllerDiscardedThisTurn => {
+            world
+                .state
+                .cards_discarded_this_turn
+                .get(&controller)
+                .copied()
+                .unwrap_or(0)
+                >= 1
+        }
+        ControllerSacrificedThisTurn => {
+            world
+                .state
+                .permanents_sacrificed_this_turn
+                .get(&controller)
+                .copied()
+                .unwrap_or(0)
+                >= 1
+        }
+        PermanentLeftBattlefieldThisTurn => {
+            world
+                .state
+                .permanents_left_battlefield_this_turn
+                .get(&controller)
+                .copied()
+                .unwrap_or(0)
+                >= 1
+        }
+        CreatureEnteredUnderControlThisTurn => {
+            world
+                .state
+                .creatures_entered_this_turn
+                .get(&controller)
+                .copied()
+                .unwrap_or(0)
+                >= 1
+        }
+        DescendedThisTurn => world.state.descended_this_turn.contains(&controller),
+        CommittedCrimeThisTurn => world.state.committed_crime_this_turn.contains(&controller),
+        ControllerDrewCardsThisTurn(min) => {
+            world
+                .state
+                .cards_drawn_this_turn_counts
+                .get(&controller)
+                .copied()
+                .unwrap_or(0)
+                >= *min
+        }
+        ControlsMatching { selector, minimum } => {
+            let mut sel = selector.as_ref().clone();
+            if sel.controller == ControllerSelector::Any {
+                sel.controller = ControllerSelector::SourceController;
+            }
+            count_matching(
+                &sel,
+                source,
+                controller,
+                objects,
+                battlefield,
+                world.name_rules,
+            ) >= i64::from(*minimum).into()
+        }
+        OpponentControlsMatching { selector, minimum } => {
+            let mut sel = selector.as_ref().clone();
+            if sel.controller == ControllerSelector::Any {
+                sel.controller = ControllerSelector::Opponents;
+            }
+            count_matching(
+                &sel,
+                source,
+                controller,
+                objects,
+                battlefield,
+                world.name_rules,
+            ) >= i64::from(*minimum).into()
+        }
+        Not(inner) => {
+            !static_source_condition_met(inner, world, source, controller, objects, battlefield)
+        }
+        And(a, b) => {
+            static_source_condition_met(a, world, source, controller, objects, battlefield)
+                && static_source_condition_met(b, world, source, controller, objects, battlefield)
+        }
+        Or(a, b) => {
+            static_source_condition_met(a, world, source, controller, objects, battlefield)
+                || static_source_condition_met(b, world, source, controller, objects, battlefield)
+        }
+    }
+}
+
 fn devotion(
     color: Color,
     controller: SeatId,
@@ -1214,6 +1485,31 @@ pub(crate) fn count_permanents(
         name_rules,
     )
 }
+/// Whether a battlefield `selector` hosted by `source` (`controller`) matches `candidate`.
+pub(crate) fn selector_matches_permanent(
+    cards: &GameObjects,
+    evaluated: &EvaluatedCharacteristics,
+    source: ObjectId,
+    controller: SeatId,
+    selector: &PermanentSelector,
+    candidate: ObjectId,
+    name_rules: &NameRules,
+) -> bool {
+    let battlefield = cards
+        .iter()
+        .filter(|card| card.zone() == ObjectZone::Battlefield)
+        .map(|card| card.id())
+        .collect();
+    select_affected(
+        selector,
+        source,
+        controller,
+        &evaluated.objects,
+        &battlefield,
+        name_rules,
+    )
+    .contains(&candidate)
+}
 fn last_imprinted_creature(
     source: ObjectId,
     objects: &BTreeMap<ObjectId, ObjectCharacteristics>,
@@ -1363,26 +1659,14 @@ fn generate(
             let affected = match bindings.get(&instance.key) {
                 Some(PassBinding::Processed(affected)) => affected.clone(),
                 _ if selector.source_condition.as_ref().is_some_and(|condition| {
-                    use StaticSourceCondition::*;
-                    match condition {
-                        ControllerLifeAtMost(limit) => world
-                            .life
-                            .and_then(|life| life.get(controller))
-                            .is_none_or(|life| *life > i64::from(*limit).into()),
-                        ControllerControlsSubtype(kind) | OpponentControlsSubtype(kind) => {
-                            let opponents = matches!(condition, OpponentControlsSubtype(_));
-                            !battlefield
-                                .iter()
-                                .filter_map(|id| objects.get(id))
-                                .any(|card| {
-                                    card.controller
-                                        .is_some_and(|owner| (owner != controller) == opponents)
-                                        && card.current_creature_subtypes.contains(kind)
-                                })
-                        }
-                        OpponentsTurn => world.active_player == controller,
-                        HasKeyword(keyword) => !objects[&source].has_keyword(*keyword),
-                    }
+                    !static_source_condition_met(
+                        condition,
+                        world,
+                        source,
+                        controller,
+                        objects,
+                        battlefield,
+                    )
                 }) =>
                 {
                     BTreeSet::new()

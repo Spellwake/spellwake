@@ -90,7 +90,10 @@ impl NativeScope<'_> {
             let valid = if step + 1 == originals.len() {
                 matches!(
                     original.action,
-                    PlayerAction::CastUntargeted { .. } | PlayerAction::CastTargeted { .. }
+                    PlayerAction::CastUntargeted { .. }
+                        | PlayerAction::CastTargeted { .. }
+                        | PlayerAction::ActivateAbility { .. }
+                        | PlayerAction::ActivateUntargetedAbility { .. }
                 )
             } else {
                 matches!(original.action, PlayerAction::ActivateMana { .. })
@@ -121,6 +124,26 @@ impl NativeScope<'_> {
                 PlayerAction::CastUntargeted { source, .. } => handles.push(source),
                 PlayerAction::CastTargeted { source, target, .. } => {
                     handles.push(source);
+                    match target {
+                        crate::player_wire::PlayerTarget::Object { handle }
+                        | crate::player_wire::PlayerTarget::Stack { handle } => {
+                            handles.push(handle)
+                        }
+                        crate::player_wire::PlayerTarget::Seat { .. } => {}
+                    }
+                }
+                PlayerAction::ActivateUntargetedAbility {
+                    source, ability, ..
+                } => {
+                    handles.extend([source, ability]);
+                }
+                PlayerAction::ActivateAbility {
+                    source,
+                    ability,
+                    target,
+                    ..
+                } => {
+                    handles.extend([source, ability]);
                     match target {
                         crate::player_wire::PlayerTarget::Object { handle }
                         | crate::player_wire::PlayerTarget::Stack { handle } => {
@@ -166,6 +189,131 @@ impl NativeScope<'_> {
             state = prepared.into_parts().3.into_state();
         }
         Ok(PreparedNativeCastBatch { state, records })
+    }
+
+    /// Lightweight read-only probe: apply `taps` once on a cloned state (without
+    /// journal encoding or replay verification) and return the indices of every
+    /// action in `candidates` accepted by the native rules engine.
+    pub fn probe_cast_candidates(
+        &self,
+        taps: &[PlayerAction],
+        candidates: &[PlayerAction],
+    ) -> Vec<usize> {
+        if candidates.is_empty() || taps.len() > 8 {
+            return Vec::new();
+        }
+        let mut state = self.source.clone();
+        for tap in taps {
+            let mut binding = self.binding.clone();
+            binding.basis = state.basis().clone();
+            binding.public_basis.revision = state.basis().revision.into();
+            let Ok(mut scope) = NativeScope::new(&state, binding) else {
+                return Vec::new();
+            };
+            let PlayerAction::ActivateMana { source, ability } = tap else {
+                return Vec::new();
+            };
+            for handle in [source, ability] {
+                let Ok(reference) = self.reference(handle) else {
+                    return Vec::new();
+                };
+                if scope.validate_reference(reference).is_err() {
+                    return Vec::new();
+                }
+                if !scope
+                    .references
+                    .iter()
+                    .any(|(existing, _)| existing == handle)
+                {
+                    scope.references.push((handle.clone(), reference));
+                }
+            }
+            let cmd = PlayerCommand {
+                request_id: uuid::Uuid::new_v4(),
+                basis: scope.basis().clone(),
+                action: tap.clone(),
+            };
+            let Ok(prepared) = scope.propose(&cmd) else {
+                return Vec::new();
+            };
+            state = prepared.into_parts().3.into_state();
+        }
+
+        let mut binding = self.binding.clone();
+        binding.basis = state.basis().clone();
+        binding.public_basis.revision = state.basis().revision.into();
+        let Ok(mut scope) = NativeScope::new(&state, binding) else {
+            return Vec::new();
+        };
+
+        let mut accepted = Vec::new();
+        for (idx, candidate) in candidates.iter().enumerate() {
+            let mut handles = Vec::new();
+            match candidate {
+                PlayerAction::CastUntargeted { source, .. } => handles.push(source),
+                PlayerAction::CastTargeted { source, target, .. } => {
+                    handles.push(source);
+                    match target {
+                        crate::player_wire::PlayerTarget::Object { handle }
+                        | crate::player_wire::PlayerTarget::Stack { handle } => {
+                            handles.push(handle);
+                        }
+                        crate::player_wire::PlayerTarget::Seat { .. } => {}
+                    }
+                }
+                PlayerAction::ActivateUntargetedAbility {
+                    source, ability, ..
+                } => {
+                    handles.extend([source, ability]);
+                }
+                PlayerAction::ActivateAbility {
+                    source,
+                    ability,
+                    target,
+                    ..
+                } => {
+                    handles.extend([source, ability]);
+                    match target {
+                        crate::player_wire::PlayerTarget::Object { handle }
+                        | crate::player_wire::PlayerTarget::Stack { handle } => {
+                            handles.push(handle);
+                        }
+                        crate::player_wire::PlayerTarget::Seat { .. } => {}
+                    }
+                }
+                _ => continue,
+            }
+            let mut refs_ok = true;
+            for handle in handles {
+                let Ok(reference) = self.reference(handle) else {
+                    refs_ok = false;
+                    break;
+                };
+                if scope.validate_reference(reference).is_err() {
+                    refs_ok = false;
+                    break;
+                }
+                if !scope
+                    .references
+                    .iter()
+                    .any(|(existing, _)| existing == handle)
+                {
+                    scope.references.push((handle.clone(), reference));
+                }
+            }
+            if !refs_ok {
+                continue;
+            }
+            let cmd = PlayerCommand {
+                request_id: uuid::Uuid::new_v4(),
+                basis: scope.basis().clone(),
+                action: candidate.clone(),
+            };
+            if scope.propose(&cmd).is_ok() {
+                accepted.push(idx);
+            }
+        }
+        accepted
     }
 }
 

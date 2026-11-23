@@ -76,6 +76,9 @@ impl EffectWindow {
                             | Instruction::ReturnRandomGraveyardCards { .. }
                             | Instruction::FlipCoin { .. }
                             | Instruction::ShuffleOwnLibrary
+                            | Instruction::ShufflePlayerLibrary(_)
+                            | Instruction::ShuffleTargetIntoLibrary
+                            | Instruction::RevealPlayerHand(_)
                             | Instruction::ShuffleAbilitySourceIntoLibrary
                             | Instruction::ShuffleOwnGraveyardIntoLibrary
                             | Instruction::ShuffleTargetGraveyardCards { .. }
