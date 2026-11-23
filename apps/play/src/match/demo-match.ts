@@ -1,4 +1,5 @@
 import { useCallback, useMemo, useState } from "react";
+import { useAtomValue } from "jotai";
 import type { PlayerSnapshot } from "@spellwake/application-contracts";
 import { useBuilderCatalogue } from "../data/builder-catalogue";
 import {
@@ -8,12 +9,15 @@ import {
   PREVIEW_VIEWER,
   previewAttackDecision,
   previewBlockDecision,
+  previewCast,
+  previewCastOffers,
   previewConcede,
   previewDamageDecision,
   previewResolveTop,
   previewResponses,
   previewSnapshot,
 } from "./preview-table";
+import { matchPreferences, readPreferences } from "./table-panels";
 import type {
   MatchActionCommand,
   MatchChatEntry,
@@ -188,6 +192,10 @@ export function useDemoMatch(
               }
             : tapped;
         }
+        if (action.kind === "cast-targeted")
+          return previewCast(prev, action.source, action.target);
+        if (action.kind === "cast-untargeted")
+          return previewCast(prev, action.source, null);
         if (action.kind === "play-land") {
           const nextObjs = prev.visibleObjects.map((o) =>
             o.handle === action.source ? { ...o, zone: "zone-battlefield" } : o,
@@ -240,6 +248,14 @@ export function useDemoMatch(
     [onLeave],
   );
 
+  // The preview stands in for cast offers the game does not send yet. With
+  // Auto-tap mana off it pauses for payment, as a manual game would.
+  const { autoTap } = readPreferences(useAtomValue(matchPreferences));
+  const castOffers = useMemo(
+    () => previewCastOffers(snapshot, autoTap),
+    [snapshot, autoTap],
+  );
+
   return {
     status: "ready",
     matchId: "demo-match",
@@ -248,6 +264,7 @@ export function useDemoMatch(
     seatNames,
     artByPrintingId: new Map(),
     faceByName,
+    castOffers,
     connectionState: "live",
     commandPending: false,
     commandError,

@@ -37,9 +37,9 @@ import { useAnchors } from "./anchors";
 import * as s from "./match-table.css";
 
 /** How a card is rimmed while a declaration is being made. */
-export type CardMark = "eligible" | "copper" | "ivory" | "gold";
-/** A player offered as a defender, chosen as one, or marked as a target. */
-export type SeatMark = "offered" | "assigned" | "marked";
+export type CardMark = "eligible" | "copper" | "ivory" | "gold" | "teal";
+/** A player offered as a defender, chosen as one, marked as a target, or offered as a spell's target. */
+export type SeatMark = "offered" | "assigned" | "marked" | "target";
 export interface CombatLine {
   /** Anchors named `card:<handle>` or `seat:<seatId>`. */
   from: string;
@@ -56,6 +56,8 @@ export interface CombatUi {
   onSeat: (seatId: string) => boolean;
   primary: MatchAction;
   secondary: MatchAction | null;
+  /** Payment puts the way out first and the paying action after it. */
+  layout?: "turn" | "payment";
   status: string | null;
 }
 
