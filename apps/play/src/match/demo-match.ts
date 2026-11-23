@@ -17,6 +17,7 @@ import {
   previewResponses,
   previewSnapshot,
 } from "./preview-table";
+import { printedModes, type PrintedModes } from "./printed-modes";
 import { matchPreferences, readPreferences } from "./table-panels";
 import type {
   MatchActionCommand,
@@ -81,6 +82,19 @@ export function useDemoMatch(
       if (found) faces.set(name, found.faceUrl);
     }
     return faces;
+  }, [catalogue]);
+
+  const printedModesByName = useMemo(() => {
+    const printed = new Map<string, PrintedModes>();
+    for (const object of previewSnapshot().visibleObjects) {
+      if (object.identity.kind !== "known") continue;
+      const name = object.identity.characteristics.name;
+      const regions = printedModes(
+        catalogue?.find(catalogueName(name))?.printing,
+      );
+      if (regions) printed.set(name, regions);
+    }
+    return printed;
   }, [catalogue]);
 
   const sendAction = useCallback(
@@ -196,6 +210,16 @@ export function useDemoMatch(
           return previewCast(prev, action.source, action.target);
         if (action.kind === "cast-untargeted")
           return previewCast(prev, action.source, null);
+        // A modal spell carries its one chosen mode and that mode's target.
+        if (action.kind === "cast-with-resources") {
+          const chosen = action.modes?.[0];
+          return previewCast(
+            prev,
+            action.source,
+            chosen?.target ?? action.target,
+            chosen ? [chosen.mode] : undefined,
+          );
+        }
         if (action.kind === "play-land") {
           const nextObjs = prev.visibleObjects.map((o) =>
             o.handle === action.source ? { ...o, zone: "zone-battlefield" } : o,
@@ -264,6 +288,7 @@ export function useDemoMatch(
     seatNames,
     artByPrintingId: new Map(),
     faceByName,
+    printedModesByName,
     castOffers,
     connectionState: "live",
     commandPending: false,

@@ -116,6 +116,13 @@ const CARDS: Record<
     kind: "instant",
     rules: "Lightning Bolt deals 3 damage to any target.",
   },
+  Abrade: {
+    type: "Instant",
+    cost: "{1}{R}",
+    kind: "instant",
+    rules:
+      "Choose one —\n• Abrade deals 3 damage to target creature.\n• Destroy target artifact.",
+  },
   Shock: {
     type: "Instant",
     cost: "{R}",
@@ -248,7 +255,7 @@ const VIEWER_HAND = [
   "Krenko, Mob Boss",
   "Goblin Matron",
   "Shock",
-  "Krenko’s Command",
+  "Abrade",
   "Goblin Piledriver",
 ];
 
@@ -635,6 +642,14 @@ export function previewCastOffers(
       .filter((player) => !player.eliminated)
       .map((player) => ({ kind: "seat" as const, seatId: player.seatId })),
   ];
+  const permanents = (kind: Kind) =>
+    snapshot.visibleObjects
+      .filter(
+        (object) =>
+          object.zone === "zone-battlefield" && kindOf(object) === kind,
+      )
+      .map((object) => ({ kind: "object" as const, handle: object.handle }));
+  const artifacts = permanents("artifact");
   return snapshot.visibleObjects.flatMap((object): CastOffer[] => {
     if (object.zone !== "zone-hand-you") return [];
     const kind = kindOf(object);
@@ -643,10 +658,32 @@ export function previewCastOffers(
     const burn = kind === "instant";
     if (!(burn || (kind === "creature" && ownMain)) || needed > lands.length)
       return [];
+    const modal =
+      object.identity.kind === "known" &&
+      object.identity.characteristics.name === "Abrade";
     return [
       {
         source: object.handle,
-        targets: burn ? anyTarget : null,
+        ...(modal
+          ? {
+              modes: [
+                {
+                  mode: 0,
+                  label: "Abrade deals 3 damage to target creature.",
+                  targets: permanents("creature"),
+                },
+                {
+                  mode: 1,
+                  label: "Destroy target artifact.",
+                  targets: artifacts,
+                  ...(artifacts.length === 0
+                    ? { unavailableReason: "No legal targets" }
+                    : {}),
+                },
+              ],
+            }
+          : {}),
+        targets: modal ? null : burn ? anyTarget : null,
         cost,
         payment: autoTap ? "automatic" : "paused",
         paySources: lands.slice(0, needed),
@@ -663,6 +700,8 @@ export function previewCast(
   snapshot: PlayerSnapshot,
   source: string,
   target: StackTarget | null,
+  /** A modal spell's chosen modes, by the game's mode numbers. */
+  modes?: readonly number[],
 ): PlayerSnapshot {
   const spell = snapshot.visibleObjects.find(
     (object) => object.handle === source && object.zone === "zone-hand-you",
@@ -707,6 +746,7 @@ export function previewCast(
         label: spell.identity.characteristics.name,
         targets: target ? [target] : [],
         unavailableTargets: "0",
+        ...(modes?.length ? { modes: [...modes] } : {}),
       },
     ],
   };
@@ -723,10 +763,12 @@ export function previewResolveTop(snapshot: PlayerSnapshot): PlayerSnapshot {
     (object) =>
       object.handle === top.sourceObject && object.zone === "zone-stack",
   );
+  const spellName =
+    spell?.identity.kind === "known" ? spell.identity.characteristics.name : "";
+  // Abrade's second mode destroys an artifact instead of dealing damage.
+  const destroys = spellName === "Abrade" && top.modes?.[0] === 1;
   const amount =
-    spell?.identity.kind === "known"
-      ? (DAMAGE[spell.identity.characteristics.name] ?? 0)
-      : 0;
+    spellName === "Abrade" ? (destroys ? 0 : 3) : (DAMAGE[spellName] ?? 0);
   const target = top.targets[0];
   const struck =
     target?.kind === "object"
@@ -736,8 +778,9 @@ export function previewResolveTop(snapshot: PlayerSnapshot): PlayerSnapshot {
       : undefined;
   const dies =
     struck !== undefined &&
-    Number(struck.damageMarked) + amount >=
-      (Number(struck.publicProperties?.toughness ?? "0") || Infinity);
+    (destroys ||
+      Number(struck.damageMarked) + amount >=
+        (Number(struck.publicProperties?.toughness ?? "0") || Infinity));
   const leaving = new Map<string, string>();
   const graveyardOf = (seatId: string | null) =>
     `zone-graveyard-s${PREVIEW_SEATS.findIndex((seat) => seat.seatId === seatId) + 1}`;
@@ -852,7 +895,8 @@ export type PreviewScene =
   | "stack"
   | "stack-long"
   | "stack-waiting"
-  | "watching";
+  | "watching"
+  | "no-artifacts";
 
 /** Combat damage being assigned on the viewer's turn. */
 function damageScene(
@@ -959,6 +1003,32 @@ export function previewScene(scene: PreviewScene): PlayerSnapshot {
   if (scene === "stack" || scene === "stack-long" || scene === "stack-waiting")
     return stackScene(scene);
   if (scene === "watching") return previewConcede(previewSnapshot());
+  if (scene === "no-artifacts") {
+    // No artifact is on the table, so a spell that destroys one has no target.
+    const table = previewSnapshot();
+    const gone = new Set(
+      table.visibleObjects
+        .filter(
+          (object) =>
+            object.zone === "zone-battlefield" && kindOf(object) === "artifact",
+        )
+        .map((object) => object.handle),
+    );
+    return {
+      ...table,
+      visibleObjects: table.visibleObjects.filter(
+        (object) => !gone.has(object.handle),
+      ),
+      zones: table.zones.map((zone) =>
+        zone.visibility === "visible"
+          ? {
+              ...zone,
+              objects: zone.objects.filter((handle) => !gone.has(handle)),
+            }
+          : zone,
+      ),
+    };
+  }
   const table = previewSnapshot();
   if (scene === "attack") {
     const combat: PlayerSnapshot = {
