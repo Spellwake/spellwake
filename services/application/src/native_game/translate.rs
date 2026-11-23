@@ -119,6 +119,9 @@ fn restricted_payment(
                     crate::player_wire::PlayerManaRestriction::ArtifactSpellOrAbility => {
                         spellwake_engine::mana::ManaRestriction::ArtifactSpellOrAbility
                     }
+                    crate::player_wire::PlayerManaRestriction::NotNonartifactSpell => {
+                        spellwake_engine::mana::ManaRestriction::NotNonartifactSpell
+                    }
                     crate::player_wire::PlayerManaRestriction::CreatureSpell => {
                         spellwake_engine::mana::ManaRestriction::CreatureSpell
                     }

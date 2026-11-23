@@ -369,7 +369,25 @@ impl EffectWindow {
                 && subject.controller == Some(actor)
                 && physical.tapped() == Some(false);
             let symbol = match resource {
-                CastResource::SacrificeForSpell(_) | CastResource::FlashbackSacrifice(_) => {
+                CastResource::SacrificeForSpell(_) => {
+                    let matches_target =
+                        if let Some(filter) = spell.printed_text.sacrifice_cast_cost_filter {
+                            let excluded = BTreeSet::new();
+                            self.matches_object_filter(
+                                filter, subject, actor, None, &excluded, evaluated,
+                            )
+                        } else {
+                            subject.is_creature()
+                        };
+                    if subject.zone != ObjectZone::Battlefield
+                        || subject.controller != Some(actor)
+                        || !matches_target
+                    {
+                        return Err(EffectError::InvalidCastResource);
+                    }
+                    continue;
+                }
+                CastResource::FlashbackSacrifice(_) => {
                     if subject.zone != ObjectZone::Battlefield
                         || subject.controller != Some(actor)
                         || !subject.is_creature()
@@ -461,7 +479,15 @@ impl EffectWindow {
                 | CastResource::Retrace(_)
                 | CastResource::JumpStart(_) => {
                     let legal = match resource {
-                        CastResource::DiscardForSpell(_) => spell.printed_text.discard_cast_cost,
+                        CastResource::DiscardForSpell(_) => {
+                            spell.printed_text.discard_cast_cost
+                                && spell.printed_text.discard_cast_cost_filter.is_none_or(|f| {
+                                    let excluded = BTreeSet::new();
+                                    f.matches_static_characteristics(subject, &excluded, || {
+                                        self.copiable_program(id).map(Program::mana_value)
+                                    })
+                                })
+                        }
                         CastResource::Retrace(_) => {
                             spell.has_keyword(KeywordAbility::Retrace)
                                 && subject.has_type(CardType::Land)

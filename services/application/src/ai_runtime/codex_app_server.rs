@@ -27,10 +27,10 @@ use std::{
     fs,
     io::{BufRead, BufReader, Read, Write},
     path::{Path, PathBuf},
-    process::{Child, ChildStdin, ChildStdout, Command, Stdio},
-    sync::Mutex,
+    process::{Child, ChildStdin, Command, Stdio},
+    sync::{Mutex, mpsc},
     thread,
-    time::Instant,
+    time::{Duration, Instant},
 };
 use uuid::Uuid;
 
@@ -44,6 +44,9 @@ const MAX_TURNS_PER_THREAD: u32 = 18;
 
 /// Bound retained seat thread handles in long-lived server processes.
 const MAX_TRACKED_SEAT_THREADS: usize = 256;
+
+/// Maximum wall-clock wait for `initialize` and `account/read` on worker startup.
+const STARTUP_TIMEOUT: Duration = Duration::from_secs(20);
 
 /// Configuration for the persistent ChatGPT-login `codex app-server` provider.
 #[derive(Clone)]
@@ -186,6 +189,7 @@ impl AiDecisionProvider for CodexAppServerProvider {
             let Some(session) = guard.as_mut() else {
                 return Err(AiProviderError::Transport("app-server unavailable".into()));
             };
+            let deadline = Instant::now() + tier_cfg.timeout;
             session.run_decision(
                 seat_key,
                 &tier_cfg.model,
@@ -193,6 +197,7 @@ impl AiDecisionProvider for CodexAppServerProvider {
                 turn_input,
                 &request.schema,
                 &self.fixed_cwd,
+                deadline,
             )
         };
 
@@ -219,12 +224,58 @@ struct SeatThread {
     turns_used: u32,
 }
 
+enum StdoutEvent {
+    Frame(Value),
+    Eof,
+    Error(AiProviderError),
+}
+
 struct AppServerSession {
     child: Child,
     stdin: ChildStdin,
-    stdout: BufReader<ChildStdout>,
+    stdout_rx: mpsc::Receiver<StdoutEvent>,
     next_id: u64,
     threads: HashMap<(Uuid, Uuid, AiTier), SeatThread>,
+}
+
+fn spawn_stdout_reader(stdout: impl Read + Send + 'static) -> mpsc::Receiver<StdoutEvent> {
+    let (tx, rx) = mpsc::channel();
+    let _ = thread::Builder::new()
+        .name("spellwake-codex-stdout".into())
+        .spawn(move || {
+            let mut reader = BufReader::new(stdout);
+            let mut line = String::new();
+            loop {
+                line.clear();
+                match reader.read_line(&mut line) {
+                    Ok(0) => {
+                        let _ = tx.send(StdoutEvent::Eof);
+                        break;
+                    }
+                    Ok(_) => {
+                        if line.trim().is_empty() {
+                            continue;
+                        }
+                        let event = match serde_json::from_str::<Value>(&line) {
+                            Ok(frame) => StdoutEvent::Frame(frame),
+                            Err(_) => StdoutEvent::Error(AiProviderError::MalformedResponse(
+                                "invalid JSON-RPC frame",
+                            )),
+                        };
+                        if tx.send(event).is_err() {
+                            break;
+                        }
+                    }
+                    Err(e) => {
+                        let _ = tx.send(StdoutEvent::Error(AiProviderError::Transport(format!(
+                            "app-server read failed: {e}"
+                        ))));
+                        break;
+                    }
+                }
+            }
+        });
+    rx
 }
 
 impl AppServerSession {
@@ -278,21 +329,27 @@ impl AppServerSession {
         let mut session = Self {
             child,
             stdin,
-            stdout: BufReader::new(stdout),
+            stdout_rx: spawn_stdout_reader(stdout),
             next_id: 0,
             threads: HashMap::new(),
         };
 
-        session.request(
+        let startup_deadline = Instant::now() + STARTUP_TIMEOUT;
+        session.request_until(
             "initialize",
             json!({
                 "clientInfo": { "name": "spellwake-ai-runtime", "version": "1.0.0" },
                 "capabilities": { "experimentalApi": true },
             }),
+            startup_deadline,
         )?;
         session.notify("initialized", None)?;
 
-        let account = session.request("account/read", json!({ "refreshToken": false }))?;
+        let account = session.request_until(
+            "account/read",
+            json!({ "refreshToken": false }),
+            startup_deadline,
+        )?;
         let account_type = account
             .get("account")
             .and_then(|a| a.get("type"))
@@ -323,33 +380,21 @@ impl AppServerSession {
         self.send_json(&frame)
     }
 
-    fn read_frame(&mut self) -> Result<Value, AiProviderError> {
-        let mut line = String::new();
-        loop {
-            line.clear();
-            let n = self
-                .stdout
-                .read_line(&mut line)
-                .map_err(|e| AiProviderError::Transport(format!("app-server read failed: {e}")))?;
-            if n == 0 {
-                return Err(AiProviderError::Transport(
-                    "app-server closed stdout".into(),
-                ));
-            }
-            if line.trim().is_empty() {
-                continue;
-            }
-            return serde_json::from_str(&line)
-                .map_err(|_| AiProviderError::MalformedResponse("invalid JSON-RPC frame"));
-        }
+    fn read_frame_until(&mut self, deadline: Instant) -> Result<Value, AiProviderError> {
+        read_stdout_event_until(&self.stdout_rx, deadline)
     }
 
-    fn request(&mut self, method: &str, params: Value) -> Result<Value, AiProviderError> {
+    fn request_until(
+        &mut self,
+        method: &str,
+        params: Value,
+        deadline: Instant,
+    ) -> Result<Value, AiProviderError> {
         self.next_id += 1;
         let id = self.next_id;
         self.send_json(&json!({ "id": id, "method": method, "params": params }))?;
         loop {
-            let frame = self.read_frame()?;
+            let frame = self.read_frame_until(deadline)?;
             let is_response = frame.get("id").and_then(Value::as_u64) == Some(id)
                 && frame.get("method").is_none();
             if is_response {
@@ -381,6 +426,7 @@ impl AppServerSession {
         seat_key: (Uuid, Uuid, AiTier),
         model: &str,
         cwd: &Path,
+        deadline: Instant,
     ) -> Result<String, AiProviderError> {
         if let Some(existing) = self.threads.get(&seat_key)
             && existing.turns_used < MAX_TURNS_PER_THREAD
@@ -390,7 +436,7 @@ impl AppServerSession {
         if self.threads.len() >= MAX_TRACKED_SEAT_THREADS {
             self.threads.clear();
         }
-        let result = self.request(
+        let result = self.request_until(
             "thread/start",
             json!({
                 "cwd": cwd.to_string_lossy(),
@@ -411,6 +457,7 @@ impl AppServerSession {
                     }
                 }
             }),
+            deadline,
         )?;
         let thread_id = result
             .get("thread")
@@ -431,6 +478,10 @@ impl AppServerSession {
         Ok(thread_id)
     }
 
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "internal turn dispatch keeps explicit call parameters without allocating a wrapper struct"
+    )]
     fn run_decision(
         &mut self,
         seat_key: (Uuid, Uuid, AiTier),
@@ -439,9 +490,10 @@ impl AppServerSession {
         turn_input: &str,
         schema: &Value,
         cwd: &Path,
+        deadline: Instant,
     ) -> Result<(String, AiUsage), AiProviderError> {
-        let thread_id = self.ensure_seat_thread(seat_key, model, cwd)?;
-        let turn_res = self.request(
+        let thread_id = self.ensure_seat_thread(seat_key, model, cwd, deadline)?;
+        let turn_res = self.request_until(
             "turn/start",
             json!({
                 "threadId": thread_id,
@@ -451,6 +503,7 @@ impl AppServerSession {
                 "outputSchema": schema,
                 "input": [{ "type": "text", "text": turn_input }],
             }),
+            deadline,
         )?;
         let turn_id = turn_res
             .get("turn")
@@ -466,7 +519,7 @@ impl AppServerSession {
         let mut usage = AiUsage::default();
 
         loop {
-            let frame = self.read_frame()?;
+            let frame = self.read_frame_until(deadline)?;
             // Reject any server-initiated tool/approval requests immediately.
             if let Some(req_id) = frame.get("id")
                 && frame.get("method").is_some()
@@ -538,6 +591,27 @@ impl Drop for AppServerSession {
     fn drop(&mut self) {
         let _ = self.child.kill();
         let _ = self.child.wait();
+    }
+}
+
+fn read_stdout_event_until(
+    rx: &mpsc::Receiver<StdoutEvent>,
+    deadline: Instant,
+) -> Result<Value, AiProviderError> {
+    let remaining = deadline.saturating_duration_since(Instant::now());
+    if remaining.is_zero() {
+        return Err(AiProviderError::Timeout);
+    }
+    match rx.recv_timeout(remaining) {
+        Ok(StdoutEvent::Frame(frame)) => Ok(frame),
+        Ok(StdoutEvent::Eof) => Err(AiProviderError::Transport(
+            "app-server closed stdout".into(),
+        )),
+        Ok(StdoutEvent::Error(err)) => Err(err),
+        Err(mpsc::RecvTimeoutError::Timeout) => Err(AiProviderError::Timeout),
+        Err(mpsc::RecvTimeoutError::Disconnected) => Err(AiProviderError::Transport(
+            "app-server stdout reader disconnected".into(),
+        )),
     }
 }
 
@@ -689,5 +763,14 @@ mod tests {
             strip_static_guide(&full),
             "STATE:\n{\"boundary\":\"priority\"}"
         );
+    }
+
+    #[test]
+    fn read_stdout_event_times_out_when_worker_stalls() {
+        let (_tx, rx) = mpsc::channel::<StdoutEvent>();
+        let err = read_stdout_event_until(&rx, Instant::now() + Duration::from_millis(25))
+            .expect_err("stalled stdout must time out");
+        assert!(matches!(err, AiProviderError::Timeout));
+        assert!(err.is_retryable());
     }
 }

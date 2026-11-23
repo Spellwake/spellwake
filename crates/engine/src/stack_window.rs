@@ -1551,7 +1551,9 @@ impl StackWindow {
             SourceCost::Power { .. }
                 | SourceCost::SacrificeSelected { .. }
                 | SourceCost::Discard { .. }
+                | SourceCost::GraveyardDiscard { .. }
                 | SourceCost::ExileGraveyard { .. }
+                | SourceCost::GraveyardExileOther { .. }
                 | SourceCost::Mill { .. }
                 | SourceCost::PayLife {
                     sacrifice: Some(_),

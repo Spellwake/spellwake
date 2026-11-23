@@ -173,21 +173,22 @@ impl EffectWindow {
                             .ok_or(EffectError::InconsistentProgram)?
                             .controller,
                     )
+                } else if let TokenRecipients::Player(role) = creation.recipients {
+                    Some(self.resolving_player(role)?)
                 } else {
                     None
                 };
-            for creator in self
-                .window
-                .participants()
-                .iter()
-                .copied()
-                .filter(|seat| match creation.recipients {
-                    TokenRecipients::CombatDamageSourceController
-                    | TokenRecipients::RememberedTargetController
-                    | TokenRecipients::ExiledTargetController => Some(*seat) == prior_controller,
-                    TokenRecipients::Controller => *seat == controller,
-                    TokenRecipients::EachPlayer => true,
-                    TokenRecipients::EachOpponent => *seat != controller,
+            for creator in
+                self.window.participants().iter().copied().filter(|seat| {
+                    match creation.recipients {
+                        TokenRecipients::CombatDamageSourceController
+                        | TokenRecipients::RememberedTargetController
+                        | TokenRecipients::ExiledTargetController
+                        | TokenRecipients::Player(_) => Some(*seat) == prior_controller,
+                        TokenRecipients::Controller => *seat == controller,
+                        TokenRecipients::EachPlayer => true,
+                        TokenRecipients::EachOpponent => *seat != controller,
+                    }
                 })
             {
                 groups.push((creator, count, definition.clone(), creation.enters_tapped));

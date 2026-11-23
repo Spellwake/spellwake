@@ -43,7 +43,7 @@ pub struct ResolutionCondition {
     pub right: ValueExpr,
 }
 impl ResolutionCondition {
-    pub(super) fn validate(
+    pub(crate) fn validate(
         &self,
         context: BodyContext<'_>,
         vocabulary: &spellwake_contracts::creature_types::CreatureTypeVocabulary,
@@ -72,6 +72,7 @@ pub(super) struct FlowFacts {
     pub definitely_checked_top: bool,
     pub definitely_sacrificed: bool,
     pub definitely_selected_graveyard_exile: bool,
+    pub returned_graveyard_target: bool,
 }
 impl FlowFacts {
     pub fn merge_into(&self, destination: &mut Option<Self>) {
@@ -94,6 +95,7 @@ impl FlowFacts {
             previous.definitely_selected_graveyard_exile &=
                 self.definitely_selected_graveyard_exile;
             previous.definitely_exiled_milled &= self.definitely_exiled_milled;
+            previous.returned_graveyard_target &= self.returned_graveyard_target;
         } else {
             *destination = Some(self.clone());
         }
