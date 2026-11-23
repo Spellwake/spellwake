@@ -453,10 +453,18 @@ impl EffectWindow {
         self.check_opponents_turn_restriction(actor, &current, None)?;
         if self.spells_cast_by_player.contains_key(&actor)
             && current.objects.values().any(|object| {
-                object.attached_to == Some(TargetRef::Player(actor))
+                object.has_battlefield_rule(|rule| {
+                    matches!(
+                        rule,
+                        crate::characteristics::StaticContinuousAbility::Restriction {
+                            rule: crate::characteristics::StaticRestriction::OneSpellPerTurn,
+                            ..
+                        }
+                    )
+                }) || (object.attached_to == Some(TargetRef::Player(actor))
                     && object.has_battlefield_rule(|rule| {
                         matches!(rule, crate::characteristics::StaticContinuousAbility::Restriction { rule: crate::characteristics::StaticRestriction::EnchantedPlayerCastLimit, .. })
-                    })
+                    }))
             })
         {
             return Err(EffectError::SpellCastLimitReached);
@@ -1257,6 +1265,11 @@ impl EffectWindow {
                 *existing = existing.plus(amount);
             }
         }
+        let aura_or_equipment = (enchant.is_some()
+            && current_spell.has_type(CardType::Enchantment))
+            || (current_spell.has_type(CardType::Artifact)
+                && program.permanent().and_then(|p| p.attachment)
+                    == Some(crate::attachment::AttachmentKind::Equipment));
         for permanent in current
             .objects
             .values()
@@ -1268,19 +1281,47 @@ impl EffectWindow {
                 .iter()
                 .chain(&permanent.printed_text.additional_battlefield_abilities)
             {
-                if let crate::characteristics::StaticContinuousAbility::CostModifier {
-                    id,
-                    modifier:
-                        crate::characteristics::SpellCostModifier::IncreaseExceptType { exempt, amount },
-                } = rule
-                    && (permanent.abilities.continuous == Some(*id)
+                let active_rule = |id: &crate::characteristics::StaticAbilityId| {
+                    permanent.abilities.continuous == Some(*id)
                         || permanent
                             .abilities
                             .additional_battlefield_abilities
-                            .contains(id))
-                    && !current_spell.has_type(*exempt)
-                {
-                    cost.generic = cost.generic.plus(&i64::from(amount.get()).into());
+                            .contains(id)
+                };
+                match rule {
+                    crate::characteristics::StaticContinuousAbility::CostModifier {
+                        id,
+                        modifier:
+                            crate::characteristics::SpellCostModifier::IncreaseExceptType {
+                                exempt,
+                                amount,
+                            },
+                    } if active_rule(id) && !current_spell.has_type(*exempt) => {
+                        cost.generic = cost.generic.plus(&i64::from(amount.get()).into());
+                    }
+                    crate::characteristics::StaticContinuousAbility::CostModifier {
+                        id,
+                        modifier:
+                            crate::characteristics::SpellCostModifier::Increase {
+                                any_player,
+                                opponents_only,
+                                matching,
+                                amount,
+                            },
+                    } if active_rule(id)
+                        && (*any_player
+                            || (*opponents_only
+                                && permanent.controller.is_some_and(|c| c != actor))
+                            || (!*opponents_only && permanent.controller == Some(actor)))
+                        && matching.matches_characteristics(
+                            current_spell,
+                            aura_or_equipment,
+                            permanent.entry_creature_type,
+                        ) =>
+                    {
+                        cost.generic = cost.generic.plus(&i64::from(amount.get()).into());
+                    }
+                    _ => {}
                 }
             }
         }
@@ -1332,6 +1373,33 @@ impl EffectWindow {
                         0.into()
                     }
                 }
+                crate::program::CastReduction::CountZone {
+                    zone,
+                    filter,
+                    per_card,
+                } => self
+                    .resolve_value_expr_at(
+                        actor,
+                        &crate::program::ValueExpr::Count {
+                            zone: *zone,
+                            filter: filter.clone(),
+                            controller_scope: None,
+                        },
+                        None,
+                    )?
+                    .times(&i64::from(*per_card).into()),
+                crate::program::CastReduction::Conditional {
+                    condition,
+                    discount,
+                } => {
+                    let lhs = self.resolve_value_expr_at(actor, &condition.left, None)?;
+                    let rhs = self.resolve_value_expr_at(actor, &condition.right, None)?;
+                    if condition.comparison.evaluate(&lhs, &rhs) {
+                        i64::from(*discount).into()
+                    } else {
+                        0.into()
+                    }
+                }
                 crate::program::CastReduction::Undaunted => RulesInteger::from_usize(
                     self.window
                         .participants()
@@ -1342,11 +1410,6 @@ impl EffectWindow {
             };
             cost.generic = cost.generic.minus(&discount).max(0.into());
         }
-        let aura_or_equipment = (enchant.is_some()
-            && current_spell.has_type(CardType::Enchantment))
-            || (current_spell.has_type(CardType::Artifact)
-                && program.permanent().and_then(|p| p.attachment)
-                    == Some(crate::attachment::AttachmentKind::Equipment));
         let printed_value = if source.face_down().is_some() {
             0.into()
         } else {
@@ -1388,26 +1451,40 @@ impl EffectWindow {
             if permanent.zone != ObjectZone::Battlefield {
                 continue;
             }
-            if let Some(StaticContinuousAbility::CostModifier {
-                id,
-                modifier:
-                    SpellCostModifier::Discount {
-                        any_player: true,
-                        matching,
-                        amount: SpellDiscount::Fixed(amount),
-                    },
-            }) = &permanent.printed_text.continuous
-                && permanent.abilities.continuous == Some(*id)
-                && matching.matches_characteristics(
-                    current_spell,
-                    aura_or_equipment,
-                    permanent.entry_creature_type,
-                )
+            for rule in permanent
+                .printed_text
+                .continuous
+                .iter()
+                .chain(&permanent.printed_text.additional_battlefield_abilities)
             {
-                cost.generic = cost
-                    .generic
-                    .minus(&i64::from(amount.get()).into())
-                    .max(0.into());
+                let active_rule = |id: &crate::characteristics::StaticAbilityId| {
+                    permanent.abilities.continuous == Some(*id)
+                        || permanent
+                            .abilities
+                            .additional_battlefield_abilities
+                            .contains(id)
+                };
+                if let StaticContinuousAbility::CostModifier {
+                    id,
+                    modifier:
+                        SpellCostModifier::Discount {
+                            any_player: true,
+                            matching,
+                            amount: SpellDiscount::Fixed(amount),
+                        },
+                } = rule
+                    && active_rule(id)
+                    && matching.matches_characteristics(
+                        current_spell,
+                        aura_or_equipment,
+                        permanent.entry_creature_type,
+                    )
+                {
+                    cost.generic = cost
+                        .generic
+                        .minus(&i64::from(amount.get()).into())
+                        .max(0.into());
+                }
             }
             if permanent.controller != Some(actor) {
                 continue;
@@ -1420,50 +1497,66 @@ impl EffectWindow {
                     amount.is_positive()
                 });
             }
-            let discount = match permanent.printed_text.continuous.as_ref() {
-                Some(StaticContinuousAbility::CostModifier {
-                    id,
-                    modifier:
-                        SpellCostModifier::Discount {
-                            any_player: false,
-                            matching,
-                            amount,
-                        },
-                }) if permanent.abilities.continuous == Some(*id)
-                    && matching.matches_characteristics(
-                        current_spell,
-                        aura_or_equipment,
-                        permanent.entry_creature_type,
-                    ) =>
-                {
-                    match amount {
-                        SpellDiscount::SourcePlusOneCounters => {
-                            self.counters_of_kind(permanent.object, CounterKind::PlusOne)
+            for rule in permanent
+                .printed_text
+                .continuous
+                .iter()
+                .chain(&permanent.printed_text.additional_battlefield_abilities)
+            {
+                let active_rule = |id: &crate::characteristics::StaticAbilityId| {
+                    permanent.abilities.continuous == Some(*id)
+                        || permanent
+                            .abilities
+                            .additional_battlefield_abilities
+                            .contains(id)
+                };
+                let discount = match rule {
+                    StaticContinuousAbility::CostModifier {
+                        id,
+                        modifier:
+                            SpellCostModifier::Discount {
+                                any_player: false,
+                                matching,
+                                amount,
+                            },
+                    } if active_rule(id)
+                        && matching.matches_characteristics(
+                            current_spell,
+                            aura_or_equipment,
+                            permanent.entry_creature_type,
+                        ) =>
+                    {
+                        match amount {
+                            SpellDiscount::SourcePlusOneCounters => {
+                                self.counters_of_kind(permanent.object, CounterKind::PlusOne)
+                            }
+                            SpellDiscount::PerExperienceCounter(value) => self
+                                .experience_counters(actor)
+                                .times(&i64::from(value.get()).into()),
+                            SpellDiscount::Fixed(value) => {
+                                RulesInteger::from(i64::from(value.get()))
+                            }
+                            SpellDiscount::ControlledCreaturesWithPlusOneCounters => self
+                                .counted_cast_discount(
+                                crate::program::CastCostCount::ControlledCreaturesWithPlusOneCounters,
+                                spell,
+                                actor,
+                                &current,
+                            ),
                         }
-                        SpellDiscount::PerExperienceCounter(value) => self
-                            .experience_counters(actor)
-                            .times(&i64::from(value.get()).into()),
-                        SpellDiscount::Fixed(value) => RulesInteger::from(i64::from(value.get())),
-                        SpellDiscount::ControlledCreaturesWithPlusOneCounters => self
-                            .counted_cast_discount(
-                            crate::program::CastCostCount::ControlledCreaturesWithPlusOneCounters,
-                            spell,
-                            actor,
-                            &current,
-                        ),
                     }
-                }
-                Some(StaticContinuousAbility::CostModifier {
-                    id,
-                    modifier: SpellCostModifier::HighManaValueProtected { minimum, reduction },
-                }) if permanent.abilities.continuous == Some(*id)
-                    && printed_value >= i64::from(minimum.get()).into() =>
-                {
-                    i64::from(reduction.get()).into()
-                }
-                _ => continue,
-            };
-            cost.generic = cost.generic.minus(&discount).max(0.into());
+                    StaticContinuousAbility::CostModifier {
+                        id,
+                        modifier: SpellCostModifier::HighManaValueProtected { minimum, reduction },
+                    } if active_rule(id)
+                        && printed_value >= i64::from(minimum.get()).into() =>
+                    {
+                        i64::from(reduction.get()).into()
+                    }
+                    _ => continue,
+                };
+                cost.generic = cost.generic.minus(&discount).max(0.into());
+            }
         }
         let mut unpaid_mana = cost.clone();
         self.allocate_cast_resources(

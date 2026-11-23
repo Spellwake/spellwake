@@ -243,6 +243,8 @@ impl TryFrom<String> for PlayerCardType {
 pub enum PlayerKeyword {
     Haste,
     Partner,
+    ChooseABackground,
+    DoctorsCompanion,
     Bargain,
     Banding,
     BandsWithOtherLegendaryCreatures,
@@ -344,6 +346,8 @@ impl TryFrom<String> for PlayerKeyword {
             "haste" => Ok(Self::Haste),
             "bargain" => Ok(Self::Bargain),
             "partner" => Ok(Self::Partner),
+            "choose-a-background" => Ok(Self::ChooseABackground),
+            "doctors-companion" => Ok(Self::DoctorsCompanion),
             "bands-with-other-legendary-creatures" => Ok(Self::BandsWithOtherLegendaryCreatures),
             "bands-with-other-creatures-named-wolves-of-the-hunt" => {
                 Ok(Self::BandsWithOtherCreaturesNamedWolvesOfTheHunt)

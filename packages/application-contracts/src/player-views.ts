@@ -100,6 +100,8 @@ export const playerAbilityViewSchema = z.strictObject({
 export const playerKeywordSchema = z.enum([
   "haste",
   "partner",
+  "choose-a-background",
+  "doctors-companion",
   "bargain",
   "banding",
   "bands-with-other-legendary-creatures",
@@ -274,7 +276,7 @@ export const playerPublicPropertiesSchema = z.strictObject({
     .array(playerLandTypeSchema)
     .max(17)
     .refine((xs) => uniquePlayerValues(xs, (x) => x)),
-  spellTypes: z.array(z.enum(["Arcane","Adventure"])).max(2).refine(xs=>new Set(xs).size===xs.length).optional(),
+  spellTypes: z.array(z.enum(["Arcane","Adventure","Lesson","Trap","Omen"])).max(5).refine(xs=>new Set(xs).size===xs.length).optional(),
   enchantmentTypes: z.array(z.literal("Saga")).max(1).optional(),
   planeswalkerTypes: z.array(z.enum(["Ajani", "Calix", "Chandra", "Daretti", "Elspeth", "Freyalise", "Gideon", "Guff", "Jace", "Nahiri", "Narset", "Nixilis", "Teferi", "Teyo", "Ugin", "Vronos"]))
     .max(16).refine((xs) => uniquePlayerValues(xs, (x) => x)).optional(),

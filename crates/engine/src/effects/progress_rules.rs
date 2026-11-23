@@ -1785,15 +1785,22 @@ impl EffectWindow {
                 | Instruction::ExileRelatedTopForCastThisTurn
                 | Instruction::ExileRelatedTopForPlay
                 | Instruction::ExileTopForPlay { .. }
+                | Instruction::ExileTopPlay { .. }
         ) {
-            let count = if let Instruction::ExileTopForEachSpellType(count)
-            | Instruction::ExileTopFreeNoncreatureSpells(count) = instruction
-            {
-                usize::from(count)
-            } else {
-                1
+            let count = match &instruction {
+                Instruction::ExileTopForEachSpellType(count)
+                | Instruction::ExileTopFreeNoncreatureSpells(count) => usize::from(*count),
+                Instruction::ExileTopPlay { count, .. } => self
+                    .resolve_value_expr(entry.controller(), count)?
+                    .max(0.into())
+                    .min(RulesInteger::from_usize(
+                        self.window.cards().library(entry.controller()).len(),
+                    ))
+                    .to_usize()
+                    .ok_or(EffectError::InconsistentProgram)?,
+                _ => 1,
             };
-            if !self.begin_exile_top_for_play(entry, index, count)? {
+            if count == 0 || !self.begin_exile_top_for_play(entry, index, count)? {
                 self.advance_instruction()?;
             }
             return Ok(StepOutcome::Continue);
@@ -1889,8 +1896,7 @@ impl EffectWindow {
                 .map(|object| object.object)
                 .collect::<Vec<_>>();
             if !lands.is_empty() {
-                let (window, changes) = self.window.untap_for_effect(entry.id(), &lands)?;
-                self.window = window;
+                let occurrences = self.untap_for_effect_with_stun(entry.id(), &lands)?;
                 self.emit_from(
                     crate::occurrence::EventCause::Instruction {
                         entry: entry.id(),
@@ -1899,12 +1905,7 @@ impl EffectWindow {
                     &before,
                     None,
                     ctx.append,
-                    |_, _, _| {
-                        Ok(occurrence_flow::status_occurrences(
-                            changes,
-                            crate::occurrence::StatusReason::Effect,
-                        ))
-                    },
+                    |_, _, _| Ok(occurrences),
                 )?;
             }
             self.advance_instruction()?;
@@ -2409,6 +2410,78 @@ impl EffectWindow {
             self.advance_instruction()?;
             return Ok(StepOutcome::Continue);
         }
+        if let Instruction::ScheduleDelayedStepTrigger {
+            step,
+            own_step_only,
+            body,
+        } = instruction
+        {
+            let snapshot = self.rules_snapshot(None)?;
+            let source_id = match entry.kind() {
+                StackKind::CardSpell(id) => *id,
+                StackKind::ActivatedAbility { source } | StackKind::TriggeredAbility { source } => {
+                    source.id()
+                }
+                _ => return Err(EffectError::InconsistentProgram),
+            };
+            let appearance = snapshot
+                .view()
+                .appearance(source_id)
+                .or_else(|| self.departed_reflexive_sources.get(&source_id).cloned())
+                .or_else(|| {
+                    self.execution_bindings(entry.id())
+                        .and_then(|b| b.trigger.as_ref())
+                        .map(|t| t.source.clone())
+                })
+                .ok_or(EffectError::InconsistentProgram)?;
+            self.triggers.delay_step_body(
+                appearance,
+                entry.controller(),
+                step,
+                own_step_only,
+                body,
+            );
+            self.advance_instruction()?;
+            return Ok(StepOutcome::Continue);
+        }
+        if let Instruction::EmitReflexiveTrigger { body } = instruction {
+            let snapshot = self.rules_snapshot(None)?;
+            let source_id = match entry.kind() {
+                StackKind::CardSpell(id) => *id,
+                StackKind::ActivatedAbility { source } | StackKind::TriggeredAbility { source } => {
+                    source.id()
+                }
+                _ => return Err(EffectError::InconsistentProgram),
+            };
+            let appearance = snapshot
+                .view()
+                .appearance(source_id)
+                .or_else(|| self.departed_reflexive_sources.get(&source_id).cloned())
+                .or_else(|| {
+                    self.execution_bindings(entry.id())
+                        .and_then(|b| b.trigger.as_ref())
+                        .map(|t| t.source.clone())
+                })
+                .ok_or(EffectError::InconsistentProgram)?;
+            self.emit_from(
+                crate::occurrence::EventCause::Instruction {
+                    entry: entry.id(),
+                    instruction: index,
+                },
+                &snapshot,
+                None,
+                ctx.append,
+                |_, _, _| {
+                    Ok(vec![crate::occurrence::RulesOccurrence::ReflexiveTrigger {
+                        source: Box::new(appearance.clone()),
+                        controller: entry.controller(),
+                        body: body.clone(),
+                    }])
+                },
+            )?;
+            self.advance_instruction()?;
+            return Ok(StepOutcome::Continue);
+        }
         if instruction == Instruction::CreateReflexiveDiscardDamage {
             let amount = self
                 .resolution_cursor_mut()
@@ -2460,6 +2533,8 @@ impl EffectWindow {
             Instruction::LookTopOneRestGraveyard { .. }
                 | Instruction::RevealTopHandRestGraveyard { .. }
                 | Instruction::LookTopOneRestBottom { .. }
+                | Instruction::LookTopChoose { .. }
+                | Instruction::RevealUntilMatch { .. }
                 | Instruction::LookTopCreatureSharingAttachedSubtype { .. }
                 | Instruction::RevealTopCreaturesAndLandsRestBottom { .. }
                 | Instruction::RevealHandAndBottomPiles
@@ -2838,8 +2913,7 @@ impl EffectWindow {
                 )?;
                 if self.window.cards().get(host).and_then(GameObject::tapped) == Some(true) {
                     let before = self.rules_snapshot(None)?;
-                    let (window, changes) = self.window.untap_for_effect(entry.id(), &[host])?;
-                    self.window = window;
+                    let occurrences = self.untap_for_effect_with_stun(entry.id(), &[host])?;
                     self.emit_from(
                         crate::occurrence::EventCause::Instruction {
                             entry: entry.id(),
@@ -2848,12 +2922,7 @@ impl EffectWindow {
                         &before,
                         None,
                         ctx.append,
-                        |_, _, _| {
-                            Ok(occurrence_flow::status_occurrences(
-                                changes,
-                                crate::occurrence::StatusReason::Effect,
-                            ))
-                        },
+                        |_, _, _| Ok(occurrences),
                     )?;
                 }
             }
@@ -3146,6 +3215,35 @@ impl EffectWindow {
                     self.advance_instruction()?;
                     return Ok(StepOutcome::Continue);
                 }
+                EffectManaYield::Choice { colors, amount } => {
+                    let resolved = self.resolve_value_expr(entry.controller(), amount)?;
+                    if !resolved.is_positive() {
+                        self.advance_instruction()?;
+                        return Ok(StepOutcome::Continue);
+                    }
+                    let color = self
+                        .resolution_cursor()
+                        .and_then(|cursor| cursor.chosen_effect_color);
+                    let Some(color) = color else {
+                        let frame =
+                            EffectDecision::ResolutionManaColor(ResolutionManaColorChoice {
+                                revision: self.revision,
+                                entry: entry.id(),
+                                instruction: index,
+                                chooser: entry.controller(),
+                                colors: colors.clone(),
+                                split: None,
+                            });
+                        return Ok(StepOutcome::Pending(frame));
+                    };
+                    if !colors.contains(&color) {
+                        return Err(EffectError::InconsistentProgram);
+                    }
+                    self.resolution_cursor_mut()
+                        .ok_or(EffectError::WrongResolutionFrame)?
+                        .chosen_effect_color = None;
+                    [(color, resolved)].into()
+                }
                 EffectManaYield::CombatDamageUntilCleanup(kind) => {
                     let damage = self.resolve_value_expr(
                         entry.controller(),
@@ -3407,6 +3505,49 @@ impl EffectWindow {
             self.begin_graveyard_shuffle()?;
             return Ok(StepOutcome::Continue);
         }
+        if let Instruction::ShufflePlayerLibrary(player) = instruction {
+            self.begin_player_library_shuffle(player)?;
+            return Ok(StepOutcome::Continue);
+        }
+        if instruction == Instruction::ShuffleTargetIntoLibrary {
+            self.begin_target_into_library_shuffle(entry)?;
+            return Ok(StepOutcome::Continue);
+        }
+        if let Instruction::RevealPlayerHand(player) = instruction {
+            let seat = self.resolving_player(player)?;
+            let cards: Vec<GameObject> = self
+                .window
+                .cards()
+                .iter()
+                .filter(|obj| obj.zone() == ObjectZone::Hand(seat))
+                .cloned()
+                .collect();
+            if !cards.is_empty() {
+                let before = self.rules_snapshot(None)?;
+                self.emit_from(
+                    crate::occurrence::EventCause::Instruction {
+                        entry: entry.id(),
+                        instruction: index,
+                    },
+                    &before,
+                    None,
+                    ctx.append,
+                    |_, _, _| {
+                        Ok(cards
+                            .iter()
+                            .cloned()
+                            .map(
+                                |object| crate::occurrence::RulesOccurrence::HandCardRevealed {
+                                    object,
+                                },
+                            )
+                            .collect())
+                    },
+                )?;
+            }
+            self.advance_instruction()?;
+            return Ok(StepOutcome::Continue);
+        }
         if instruction == Instruction::GrantGraveyardCastAndWatchAbilities {
             let StackKind::ActivatedAbility { source } = entry.kind() else {
                 return Err(EffectError::InconsistentProgram);
@@ -3520,6 +3661,147 @@ impl EffectWindow {
         }
         if instruction == Instruction::ExileAllGraveyards {
             self.begin_graveyard_exile()?;
+            return Ok(StepOutcome::Continue);
+        }
+        if let Instruction::ExilePlayerGraveyards(players) = instruction {
+            let seats =
+                self.selection_players(players, entry.controller(), self.resolution_cursor())?;
+            self.begin_players_graveyard_exile(&seats)?;
+            return Ok(StepOutcome::Continue);
+        }
+        if let Instruction::RemoveCountersFromPermanent {
+            target_self,
+            kind,
+            ref amount,
+        } = instruction
+        {
+            let resolved = self.resolve_value_expr(entry.controller(), amount)?;
+            let target_id = if target_self {
+                match entry.kind() {
+                    StackKind::ActivatedAbility { source }
+                    | StackKind::TriggeredAbility { source } => Some(source.id()),
+                    _ => None,
+                }
+            } else if let Ok(target) = self.instruction_target(entry) {
+                match target.choice().target {
+                    TargetRef::Object(id) => Some(id),
+                    TargetRef::Player(_) | TargetRef::Stack(_) => None,
+                }
+            } else {
+                None
+            };
+            if resolved.is_positive()
+                && let Some(object) = target_id
+                && self
+                    .window
+                    .cards()
+                    .get(object)
+                    .is_some_and(|c| c.zone() == ObjectZone::Battlefield)
+            {
+                let chosen_kind = kind.or_else(|| {
+                    CounterKind::PERMANENT
+                        .into_iter()
+                        .find(|ck| self.counters_of_kind(object, *ck).is_positive())
+                });
+                if let Some(ck) = chosen_kind {
+                    let current_count = self.counters_of_kind(object, ck);
+                    let to_remove = if resolved < current_count {
+                        resolved
+                    } else {
+                        current_count.clone()
+                    };
+                    if to_remove.is_positive() {
+                        let before_snapshot = self.rules_snapshot(None)?;
+                        match ck {
+                            CounterKind::PlusOne | CounterKind::MinusOne => {
+                                let before = self.characteristics.counters(object);
+                                let delta = crate::characteristics::PowerToughnessCounters {
+                                    plus_one: if ck == CounterKind::PlusOne {
+                                        to_remove.clone()
+                                    } else {
+                                        0.into()
+                                    },
+                                    minus_one: if ck == CounterKind::MinusOne {
+                                        to_remove.clone()
+                                    } else {
+                                        0.into()
+                                    },
+                                };
+                                let after = self
+                                    .characteristics
+                                    .take_power_toughness_counters(object, &delta)
+                                    .map_err(|_| EffectError::InconsistentProgram)?;
+                                self.emit_from(
+                                    crate::occurrence::EventCause::Instruction {
+                                        entry: entry.id(),
+                                        instruction: index,
+                                    },
+                                    &before_snapshot,
+                                    None,
+                                    ctx.append,
+                                    |_, _, _| {
+                                        Ok(vec![
+                                            crate::occurrence::RulesOccurrence::PermanentCounterChanged {
+                                                object,
+                                                kind: ck,
+                                                before: if ck == CounterKind::PlusOne {
+                                                    before.plus_one.clone()
+                                                } else {
+                                                    before.minus_one.clone()
+                                                },
+                                                after: if ck == CounterKind::PlusOne {
+                                                    after.plus_one.clone()
+                                                } else {
+                                                    after.minus_one.clone()
+                                                },
+                                            },
+                                        ])
+                                    },
+                                )?;
+                            }
+                            other => {
+                                let after = current_count.minus(&to_remove);
+                                if let Some(map) =
+                                    self.characteristics.named_permanent_counters_mut(other)
+                                {
+                                    if after.is_positive() {
+                                        map.insert(object, after.clone());
+                                    } else {
+                                        map.remove(&object);
+                                        if other.keyword_counter_ability().is_some() {
+                                            self.characteristics
+                                                .clear_keyword_counter_grant(object, other);
+                                        }
+                                    }
+                                    self.emit_from(
+                                        crate::occurrence::EventCause::Instruction {
+                                            entry: entry.id(),
+                                            instruction: index,
+                                        },
+                                        &before_snapshot,
+                                        None,
+                                        ctx.append,
+                                        |_, _, _| {
+                                            Ok(vec![
+                                                crate::occurrence::RulesOccurrence::PermanentCounterChanged {
+                                                    object,
+                                                    kind: other,
+                                                    before: current_count.clone(),
+                                                    after: after.clone(),
+                                                },
+                                            ])
+                                        },
+                                    )?;
+                                }
+                            }
+                        }
+                        if let Some(cursor) = self.resolution_cursor_mut() {
+                            cursor.results.last_action_succeeded = true;
+                        }
+                    }
+                }
+            }
+            self.advance_instruction()?;
             return Ok(StepOutcome::Continue);
         }
         if instruction == Instruction::Ninjutsu {
@@ -3831,16 +4113,11 @@ impl EffectWindow {
                 self.window.cards().get(*id).and_then(GameObject::tapped) == Some(true)
             });
             let before = self.rules_snapshot(None)?;
-            let (window, changes) = self.window.untap_for_effect(entry.id(), &attackers)?;
-            self.window = window;
+            let mut values = self.untap_for_effect_with_stun(entry.id(), &attackers)?;
             self.additional_combats = self
                 .additional_combats
                 .checked_add(1)
                 .ok_or(EffectError::InconsistentProgram)?;
-            let mut values = occurrence_flow::status_occurrences(
-                changes,
-                crate::occurrence::StatusReason::Effect,
-            );
             values.push(crate::occurrence::RulesOccurrence::AdditionalCombatCreated);
             self.emit_from(
                 crate::occurrence::EventCause::Instruction {
@@ -4531,6 +4808,70 @@ impl EffectWindow {
                 amount: resolved,
             };
         }
+        if let Instruction::DamageGroupAmount { group, ref amount } = instruction {
+            let resolved = self.resolve_value_expr(entry.controller(), amount)?;
+            if !resolved.is_positive() {
+                self.advance_instruction()?;
+                return Ok(StepOutcome::Continue);
+            }
+            instruction = Instruction::DamageGroup {
+                group,
+                amount: resolved,
+            };
+        }
+        if let Instruction::DoublePowerToughness {
+            target_self,
+            power,
+            toughness,
+            duration,
+        } = instruction
+        {
+            let target_id = if target_self {
+                match entry.kind() {
+                    StackKind::ActivatedAbility { source }
+                    | StackKind::TriggeredAbility { source } => Some(source.id()),
+                    _ => None,
+                }
+            } else if let Ok(target) = self.instruction_target(entry) {
+                match target.choice().target {
+                    TargetRef::Object(id) => Some(id),
+                    TargetRef::Player(_) | TargetRef::Stack(_) => None,
+                }
+            } else {
+                None
+            };
+            if let Some(object) = target_id
+                && let Some(pt) = self
+                    .evaluated_characteristics()?
+                    .get(object)
+                    .filter(|o| o.zone == ObjectZone::Battlefield)
+                    .and_then(|o| o.power_toughness.clone())
+            {
+                let dp = if power { pt.derived.power } else { 0.into() };
+                let dt = if toughness {
+                    pt.derived.toughness
+                } else {
+                    0.into()
+                };
+                self.modify_objects_for_duration(
+                    entry,
+                    index,
+                    [object].into(),
+                    crate::characteristics::ResolvedParts(vec![
+                        crate::characteristics::ResolvedPart::ModifyPT(
+                            crate::characteristics::PowerToughness {
+                                power: dp,
+                                toughness: dt,
+                            },
+                        ),
+                    ]),
+                    duration,
+                    ctx.append,
+                )?;
+            }
+            self.advance_instruction()?;
+            return Ok(StepOutcome::Continue);
+        }
         if let Instruction::AddCounterAndDischargeOnResolution(ordinal) = instruction {
             let StackKind::ActivatedAbility { source } = entry.kind() else {
                 return Err(EffectError::InconsistentProgram);
@@ -4772,12 +5113,17 @@ impl EffectWindow {
                 == Some(!tap)
             {
                 let old = self.rules_snapshot(None)?;
-                let (updated, changes) = if tap {
-                    self.window.tap_for_effect(entry.id(), &[source.id()])?
+                let occurrences = if tap {
+                    let (updated, changes) =
+                        self.window.tap_for_effect(entry.id(), &[source.id()])?;
+                    self.window = updated;
+                    occurrence_flow::status_occurrences(
+                        changes,
+                        crate::occurrence::StatusReason::Effect,
+                    )
                 } else {
-                    self.window.untap_for_effect(entry.id(), &[source.id()])?
+                    self.untap_for_effect_with_stun(entry.id(), &[source.id()])?
                 };
-                self.window = updated;
                 self.emit_from(
                     crate::occurrence::EventCause::Instruction {
                         entry: entry.id(),
@@ -4786,12 +5132,7 @@ impl EffectWindow {
                     &old,
                     None,
                     ctx.append,
-                    |_, _, _| {
-                        Ok(occurrence_flow::status_occurrences(
-                            changes,
-                            crate::occurrence::StatusReason::Effect,
-                        ))
-                    },
+                    |_, _, _| Ok(occurrences),
                 )?;
             }
             self.advance_instruction()?;
@@ -5105,12 +5446,16 @@ impl EffectWindow {
                 .collect::<Vec<_>>();
             if !changing.is_empty() {
                 let before = self.rules_snapshot(None)?;
-                let (window, changes) = if tap {
-                    self.window.tap_for_effect(entry.id(), &changing)?
+                let occurrences = if tap {
+                    let (window, changes) = self.window.tap_for_effect(entry.id(), &changing)?;
+                    self.window = window;
+                    occurrence_flow::status_occurrences(
+                        changes,
+                        crate::occurrence::StatusReason::Effect,
+                    )
                 } else {
-                    self.window.untap_for_effect(entry.id(), &changing)?
+                    self.untap_for_effect_with_stun(entry.id(), &changing)?
                 };
-                self.window = window;
                 self.emit_from(
                     crate::occurrence::EventCause::Instruction {
                         entry: entry.id(),
@@ -5119,12 +5464,7 @@ impl EffectWindow {
                     &before,
                     None,
                     ctx.append,
-                    |_, _, _| {
-                        Ok(occurrence_flow::status_occurrences(
-                            changes,
-                            crate::occurrence::StatusReason::Effect,
-                        ))
-                    },
+                    |_, _, _| Ok(occurrences),
                 )?;
             }
             self.advance_instruction()?;
@@ -5141,20 +5481,22 @@ impl EffectWindow {
                     // The optional no-op covers either declining or choosing its current status.
                     if let Some(object) = selected.first().copied() {
                         let before = self.rules_snapshot(None)?;
-                        let (window, changes) =
+                        let occurrences =
                             if self.window.cards().get(object).and_then(GameObject::tapped)
                                 == Some(true)
                             {
-                                self.window.untap_for_effect(entry.id(), &[object])?
+                                self.untap_for_effect_with_stun(entry.id(), &[object])?
                             } else {
-                                self.window.tap_for_effect(entry.id(), &[object])?
+                                let (window, changes) =
+                                    self.window.tap_for_effect(entry.id(), &[object])?;
+                                self.window = window;
+                                occurrence_flow::status_occurrences(
+                                    changes,
+                                    crate::occurrence::StatusReason::Effect,
+                                )
                             };
-                        self.window = window;
                         self.emit_from(cause, &before, None, ctx.append, |_, _, _| {
-                            Ok(occurrence_flow::status_occurrences(
-                                changes,
-                                crate::occurrence::StatusReason::Effect,
-                            ))
+                            Ok(occurrences)
                         })?;
                     }
                 }
@@ -5174,17 +5516,19 @@ impl EffectWindow {
                         .collect::<Vec<_>>();
                     if !changing.is_empty() {
                         let before = self.rules_snapshot(None)?;
-                        let (window, changes) = if tap {
-                            self.window.tap_for_effect(entry.id(), &changing)?
-                        } else {
-                            self.window.untap_for_effect(entry.id(), &changing)?
-                        };
-                        self.window = window;
-                        self.emit_from(cause, &before, None, ctx.append, |_, _, _| {
-                            Ok(occurrence_flow::status_occurrences(
+                        let occurrences = if tap {
+                            let (window, changes) =
+                                self.window.tap_for_effect(entry.id(), &changing)?;
+                            self.window = window;
+                            occurrence_flow::status_occurrences(
                                 changes,
                                 crate::occurrence::StatusReason::Effect,
-                            ))
+                            )
+                        } else {
+                            self.untap_for_effect_with_stun(entry.id(), &changing)?
+                        };
+                        self.emit_from(cause, &before, None, ctx.append, |_, _, _| {
+                            Ok(occurrences)
                         })?;
                     }
                 }
@@ -5288,6 +5632,61 @@ impl EffectWindow {
                 ctx.append,
                 |_, _, _| Ok(vec![value]),
             )?;
+            self.advance_instruction()?;
+            return Ok(StepOutcome::Continue);
+        }
+        if let Instruction::AddPlayerCounter {
+            players,
+            kind,
+            amount,
+        } = instruction
+        {
+            let resolved = self.resolve_value_expr(entry.controller(), &amount)?;
+            let cursor_snapshot = self.resolution_cursor().cloned();
+            let recipients =
+                self.selection_players(players, entry.controller(), cursor_snapshot.as_ref())?;
+            let source_id = match entry.kind() {
+                StackKind::CardSpell(id) => crate::damage::DamageSourceId::Object(*id),
+                StackKind::ActivatedAbility { source } | StackKind::TriggeredAbility { source } => {
+                    crate::damage::DamageSourceId::Object(source.id())
+                }
+                StackKind::Emblem { emblem, .. } => crate::damage::DamageSourceId::Emblem(*emblem),
+                StackKind::SpellCopy { .. }
+                | StackKind::Speed
+                | StackKind::Monarch
+                | StackKind::DelayedCopy { .. } => {
+                    crate::damage::DamageSourceId::SpellCopy(entry.id())
+                }
+            };
+            let before = self.rules_snapshot(None)?;
+            let mut occurrences = Vec::new();
+            for player in recipients {
+                if let Some(occ) = self.give_player_counters(
+                    player,
+                    kind,
+                    &resolved,
+                    entry.id(),
+                    source_id,
+                    entry.controller(),
+                )? {
+                    occurrences.push(occ);
+                }
+            }
+            if !occurrences.is_empty() {
+                self.emit_from(
+                    crate::occurrence::EventCause::Instruction {
+                        entry: entry.id(),
+                        instruction: index,
+                    },
+                    &before,
+                    None,
+                    ctx.append,
+                    |_, _, _| Ok(occurrences),
+                )?;
+            }
+            if let Some(cursor) = self.resolution_cursor_mut() {
+                cursor.results.last_action_succeeded = resolved.is_positive();
+            }
             self.advance_instruction()?;
             return Ok(StepOutcome::Continue);
         }
@@ -5578,6 +5977,54 @@ impl EffectWindow {
                 None,
                 ctx.append,
             )?;
+            if let Some(cursor) = self.resolution_cursor_mut() {
+                cursor.results.last_action_succeeded = true;
+            }
+            self.advance_instruction()?;
+            return Ok(StepOutcome::Continue);
+        }
+        if let Instruction::PayControllerEnergy(n) = instruction {
+            let actor = entry.controller();
+            let before = self.player_counters_of_kind(actor, CounterKind::Energy);
+            let cost = RulesInteger::from(i64::from(n));
+            if before >= cost {
+                let after = before.minus(&cost);
+                let before_snapshot = self.rules_snapshot(None)?;
+                let map = self
+                    .characteristics
+                    .player_counters
+                    .entry(CounterKind::Energy)
+                    .or_default();
+                if after.is_positive() {
+                    map.insert(actor, after.clone());
+                } else {
+                    map.remove(&actor);
+                }
+                self.emit_from(
+                    crate::occurrence::EventCause::Instruction {
+                        entry: entry.id(),
+                        instruction: index,
+                    },
+                    &before_snapshot,
+                    None,
+                    ctx.append,
+                    |_, _, _| {
+                        Ok(vec![
+                            crate::occurrence::RulesOccurrence::PlayerCounterChanged {
+                                player: actor,
+                                kind: CounterKind::Energy,
+                                before: before.clone(),
+                                after: after.clone(),
+                            },
+                        ])
+                    },
+                )?;
+                if let Some(cursor) = self.resolution_cursor_mut() {
+                    cursor.results.last_action_succeeded = true;
+                }
+            } else if let Some(cursor) = self.resolution_cursor_mut() {
+                cursor.results.last_action_succeeded = false;
+            }
             self.advance_instruction()?;
             return Ok(StepOutcome::Continue);
         }

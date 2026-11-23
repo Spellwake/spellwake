@@ -277,6 +277,8 @@ native!(ExecutableBody, self, {
         | spellwake_engine::program::BodyTarget::AnyGraveyardCard
         | spellwake_engine::program::BodyTarget::AnyGraveyardCreatureOrPlaneswalker
         | spellwake_engine::program::BodyTarget::FilteredOwnGraveyardCard(_)
+        | spellwake_engine::program::BodyTarget::FilteredAnyGraveyardCard { .. }
+        | spellwake_engine::program::BodyTarget::SingleOpponentOrPlaneswalker
         | spellwake_engine::program::BodyTarget::SingleSpell(_)
             if !matches!(self.target, spellwake_engine::program::BodyTarget::SingleSpell(f)
                 if f != spellwake_engine::program::SpellFilter::creature()
@@ -526,6 +528,8 @@ native!(ExecutableBody, self, {
         | Instruction::WeakenDelayedAttacker(_)
         | Instruction::DrawRevealRemoveLoyalty
         | Instruction::CreateReflexiveDiscardDamage
+        | Instruction::ScheduleDelayedStepTrigger { .. }
+        | Instruction::EmitReflexiveTrigger { .. }
         | Instruction::RemoveLoyaltyExileTopForPlay
         | Instruction::DamageDamagedPlayersCreatures
         | Instruction::DamageOpponentsAmount(_)
@@ -737,6 +741,20 @@ native!(ExecutableBody, self, {
         | Instruction::CopySpell
         | Instruction::CopyTargetToSource { .. }
         | Instruction::PutPowerToughnessCounters { .. }
+        | Instruction::PutNamedCounterOnTarget { .. }
+        | Instruction::AddPlayerCounter { .. }
+        | Instruction::DiscardFiltered { .. }
+        | Instruction::ExileTopPlay { .. }
+        | Instruction::LookTopChoose { .. }
+        | Instruction::RevealUntilMatch { .. }
+        | Instruction::ShufflePlayerLibrary(_)
+        | Instruction::ShuffleTargetIntoLibrary
+        | Instruction::RevealPlayerHand(_)
+        | Instruction::ExilePlayerGraveyards(_)
+        | Instruction::PayControllerEnergy(_)
+        | Instruction::RemoveCountersFromPermanent { .. }
+        | Instruction::DamageGroupAmount { .. }
+        | Instruction::DoublePowerToughness { .. }
         | Instruction::DrawController { .. } => Ok(()),
     })
 });
@@ -1211,7 +1229,9 @@ native!(TriggerCauseSet, self, {
             }
             TriggerRelated::LifeChanged(_)
             | TriggerRelated::MiracleRevealed(_)
-            | TriggerRelated::Step { .. } => Ok(()),
+            | TriggerRelated::Step { .. }
+            | TriggerRelated::DamageDealtToPermanent { .. }
+            | TriggerRelated::ReflexiveTrigger => Ok(()),
         })
 });
 native!(WaitingInstance, self, {
@@ -1990,7 +2010,9 @@ native!(RulesOccurrence, self, {
         | RulesOccurrence::BlockersDeclared { .. }
         | RulesOccurrence::CombatDamageAssigned(_)
         | RulesOccurrence::CombatEnded { .. }
-        | RulesOccurrence::StepBegan { .. } => Ok(()),
+        | RulesOccurrence::PlayerCounterChanged { .. }
+        | RulesOccurrence::StepBegan { .. }
+        | RulesOccurrence::ReflexiveTrigger { .. } => Ok(()),
     }
 });
 

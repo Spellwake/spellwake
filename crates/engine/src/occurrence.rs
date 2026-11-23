@@ -435,6 +435,8 @@ pub enum TriggerRelated {
     ReflexiveDiscardDamage {
         amount: RulesInteger,
     },
+    /// A generalized CR 603.12 reflexive trigger generated during resolution.
+    ReflexiveTrigger,
     CardDrawn {
         player: SeatId,
     },
@@ -451,6 +453,7 @@ pub enum TriggerRelated {
         creature: ObjectId,
         player: SeatId,
         attempt: DamageAttemptId,
+        amount: RulesInteger,
     },
     AttachedCreatureDamaged {
         creature: ObjectId,
@@ -460,6 +463,12 @@ pub enum TriggerRelated {
     DamageToOpponent {
         player: SeatId,
         attempt: DamageAttemptId,
+        amount: RulesInteger,
+    },
+    DamageDealtToPermanent {
+        recipient: ObjectId,
+        attempt: DamageAttemptId,
+        amount: RulesInteger,
     },
     DamageReceived {
         attempt: DamageAttemptId,
@@ -487,6 +496,7 @@ pub enum TriggerRelated {
     CombatDamageToPlaneswalker {
         planeswalker: ObjectId,
         attempt: DamageAttemptId,
+        amount: RulesInteger,
     },
     CombatDamageToPlayer {
         source: ObjectId,
@@ -542,6 +552,7 @@ pub enum PoisonOrigin {
     Infect(DamageAttemptId),
     Toxic(DamageAttemptId),
     Poisonous(StackEntryId),
+    Effect(StackEntryId),
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum EntryCompletion {
@@ -754,6 +765,12 @@ pub enum RulesOccurrence {
         source: Box<SupportedAppearance>,
         controller: SeatId,
         amount: RulesInteger,
+    },
+    /// A generalized CR 603.12 reflexive trigger created during ability/spell resolution.
+    ReflexiveTrigger {
+        source: Box<SupportedAppearance>,
+        controller: SeatId,
+        body: Box<ExecutableBody>,
     },
     CommanderTypeManaSpent {
         source: Box<SupportedAppearance>,
@@ -1183,6 +1200,12 @@ pub enum RulesOccurrence {
     },
     ExperienceCountersChanged {
         player: SeatId,
+        before: RulesInteger,
+        after: RulesInteger,
+    },
+    PlayerCounterChanged {
+        player: SeatId,
+        kind: crate::effects::CounterKind,
         before: RulesInteger,
         after: RulesInteger,
     },
@@ -1913,6 +1936,12 @@ enum DelayedStepAction {
     PhaseOut(Vec<ObjectId>),
     Unearth(ObjectId),
     Rebound(ObjectId),
+    /// Generalized CR 603.7 delayed step trigger executing an authored body.
+    ExecuteBody {
+        step: crate::turn::Step,
+        own_step_only: bool,
+        body: Box<ExecutableBody>,
+    },
 }
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct DelayedStepTrigger {
@@ -2472,6 +2501,24 @@ impl TriggerState {
             action: DelayedStepAction::Rebound(object),
         });
     }
+    pub(crate) fn delay_step_body(
+        &mut self,
+        source: SupportedAppearance,
+        controller: SeatId,
+        step: crate::turn::Step,
+        own_step_only: bool,
+        body: Box<ExecutableBody>,
+    ) {
+        self.delayed_steps.push(DelayedStepTrigger {
+            source,
+            controller,
+            action: DelayedStepAction::ExecuteBody {
+                step,
+                own_step_only,
+                body,
+            },
+        });
+    }
     pub(crate) fn counters(&self) -> (u64, u64, u64) {
         (self.next_event, self.next_instance, self.next_wave)
     }
@@ -2906,7 +2953,7 @@ impl TriggerState {
             for occurrence in &event.occurrences {
                 match_trigger_event(
                     &ability.condition.event,
-                    ability.condition.intervening_if,
+                    ability.condition.intervening_if.as_ref(),
                     &ability,
                     &source,
                     controller,
@@ -3220,6 +3267,39 @@ impl TriggerState {
                 self.waiting.insert(instance.id, instance.clone());
                 discoveries.push(RulesRecord::TriggerDiscovered(Box::new(instance)));
             }
+            if let RulesOccurrence::ReflexiveTrigger {
+                source,
+                controller,
+                body,
+            } = &occurrence.value
+            {
+                let causes = TriggerCauseSet::new(
+                    id,
+                    TriggerCauseKey::Occurrence(occurrence.id),
+                    vec![TriggerCauseMember {
+                        occurrence: occurrence.id,
+                        related_player: Some(*controller),
+                        related: TriggerRelated::ReflexiveTrigger,
+                    }],
+                )?;
+                let mut instance_body = body.as_ref().clone();
+                instance_body.target = instance_body.target.with_ability_source(source.object.id());
+                let instance = WaitingInstance {
+                    id: TriggerInstanceId(self.next_instance),
+                    definition: TriggeredAbilityId(0),
+                    granting_effect: None,
+                    causes,
+                    source: source.as_ref().clone(),
+                    controller: *controller,
+                    body: instance_body,
+                };
+                self.next_instance = self
+                    .next_instance
+                    .checked_add(1)
+                    .ok_or(TriggerError::InstanceIdentityExhausted)?;
+                self.waiting.insert(instance.id, instance.clone());
+                discoveries.push(RulesRecord::TriggerDiscovered(Box::new(instance)));
+            }
             if let RulesOccurrence::ReflexiveDiscardDamage {
                 source,
                 controller,
@@ -3385,6 +3465,14 @@ impl TriggerState {
                         DelayedStepAction::Rebound(_) => {
                             position.step == Step::Upkeep && *active == delay.controller
                         }
+                        DelayedStepAction::ExecuteBody {
+                            step,
+                            own_step_only,
+                            ..
+                        } => {
+                            position.step == *step
+                                && (!*own_step_only || *active == delay.controller)
+                        }
                     })
                     .collect::<Vec<_>>();
                 let copies = self
@@ -3412,69 +3500,77 @@ impl TriggerState {
                     action,
                 } in ready
                 {
-                    let instructions = match action {
-                        DelayedStepAction::Exile { objects, .. } => {
-                            vec![Instruction::ExileDelayedObjects(objects)]
-                        }
-                        DelayedStepAction::Sacrifice { objects, .. } => {
-                            vec![Instruction::SacrificeDelayedObjects(objects)]
-                        }
-                        DelayedStepAction::Cast { object, kind } => {
-                            vec![Instruction::EndStepCast {
-                                kind,
-                                permanent: object,
-                                turn: position.number,
-                            }]
-                        }
-                        DelayedStepAction::ReturnExiledWithCounters(objects) => {
-                            vec![Instruction::ReturnDelayedExileWithCounters(objects)]
-                        }
-                        DelayedStepAction::PhaseOut(objects) => {
-                            vec![Instruction::PhaseOutObjects(objects)]
-                        }
-                        DelayedStepAction::ReturnGraveyardToHand(object) => {
-                            vec![Instruction::ReturnDelayedGraveyardToHand(object)]
-                        }
-                        DelayedStepAction::ReturnPermanentToHand(object) => {
-                            vec![Instruction::ReturnDelayedPermanentToHand(object)]
-                        }
-                        DelayedStepAction::ReturnFromExile(object) => {
-                            vec![Instruction::ReturnDelayedExile(object)]
-                        }
-                        DelayedStepAction::Unearth(object) => {
-                            vec![Instruction::ExileUnearthed(object)]
-                        }
-                        DelayedStepAction::Rebound(object) => {
-                            vec![Instruction::ReboundCast(object)]
-                        }
-                        DelayedStepAction::ReturnFromGraveyardTransformed(object) => {
-                            vec![Instruction::ReturnDelayedGraveyardCardTransformed(object)]
-                        }
-                        DelayedStepAction::ReturnFromGraveyard {
-                            object,
-                            while_source_remains: true,
-                        } => {
-                            if !after
-                                .cards
-                                .get(source.object.id())
-                                .is_some_and(|card| card.zone() == ObjectZone::Battlefield)
-                            {
-                                continue;
+                    let delayed_body = if let DelayedStepAction::ExecuteBody { body, .. } = action {
+                        let mut b = *body;
+                        b.target = b.target.with_ability_source(source.object.id());
+                        b
+                    } else {
+                        let instructions = match action {
+                            DelayedStepAction::Exile { objects, .. } => {
+                                vec![Instruction::ExileDelayedObjects(objects)]
                             }
-                            vec![
-                                Instruction::RequireCondition(
-                                    crate::program::InterveningCondition::ReturnSourceOnBattlefield,
-                                ),
-                                Instruction::OptionalEffect {
-                                    chooser: crate::program::ResolvingPlayer::Controller,
-                                },
-                                Instruction::ReturnDelayedGraveyardCard(object),
-                            ]
-                        }
-                        DelayedStepAction::ReturnFromGraveyard {
-                            object,
-                            while_source_remains: false,
-                        } => vec![Instruction::ReturnDelayedGraveyardCard(object)],
+                            DelayedStepAction::Sacrifice { objects, .. } => {
+                                vec![Instruction::SacrificeDelayedObjects(objects)]
+                            }
+                            DelayedStepAction::Cast { object, kind } => {
+                                vec![Instruction::EndStepCast {
+                                    kind,
+                                    permanent: object,
+                                    turn: position.number,
+                                }]
+                            }
+                            DelayedStepAction::ReturnExiledWithCounters(objects) => {
+                                vec![Instruction::ReturnDelayedExileWithCounters(objects)]
+                            }
+                            DelayedStepAction::PhaseOut(objects) => {
+                                vec![Instruction::PhaseOutObjects(objects)]
+                            }
+                            DelayedStepAction::ReturnGraveyardToHand(object) => {
+                                vec![Instruction::ReturnDelayedGraveyardToHand(object)]
+                            }
+                            DelayedStepAction::ReturnPermanentToHand(object) => {
+                                vec![Instruction::ReturnDelayedPermanentToHand(object)]
+                            }
+                            DelayedStepAction::ReturnFromExile(object) => {
+                                vec![Instruction::ReturnDelayedExile(object)]
+                            }
+                            DelayedStepAction::Unearth(object) => {
+                                vec![Instruction::ExileUnearthed(object)]
+                            }
+                            DelayedStepAction::Rebound(object) => {
+                                vec![Instruction::ReboundCast(object)]
+                            }
+                            DelayedStepAction::ReturnFromGraveyardTransformed(object) => {
+                                vec![Instruction::ReturnDelayedGraveyardCardTransformed(object)]
+                            }
+                            DelayedStepAction::ReturnFromGraveyard {
+                                object,
+                                while_source_remains: true,
+                            } => {
+                                if !after
+                                    .cards
+                                    .get(source.object.id())
+                                    .is_some_and(|card| card.zone() == ObjectZone::Battlefield)
+                                {
+                                    continue;
+                                }
+                                vec![
+                                    Instruction::RequireCondition(
+                                        crate::program::InterveningCondition::ReturnSourceOnBattlefield,
+                                    ),
+                                    Instruction::OptionalEffect {
+                                        chooser: crate::program::ResolvingPlayer::Controller,
+                                    },
+                                    Instruction::ReturnDelayedGraveyardCard(object),
+                                ]
+                            }
+                            DelayedStepAction::ReturnFromGraveyard {
+                                object,
+                                while_source_remains: false,
+                            } => vec![Instruction::ReturnDelayedGraveyardCard(object)],
+                            DelayedStepAction::ExecuteBody { .. } => unreachable!(),
+                        };
+                        ExecutableBody::new(crate::program::BodyTarget::None, instructions)
                     };
                     let causes = TriggerCauseSet::new(
                         id,
@@ -3495,7 +3591,7 @@ impl TriggerState {
                         causes,
                         source,
                         controller,
-                        body: ExecutableBody::new(crate::program::BodyTarget::None, instructions),
+                        body: delayed_body,
                     };
                     self.next_instance = self
                         .next_instance

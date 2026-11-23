@@ -1406,6 +1406,9 @@ impl Projection<'_, '_> {
                     spellwake_engine::program::SpellSubtype::Adventure => {
                         PlayerSpellSubtype::Adventure
                     }
+                    spellwake_engine::program::SpellSubtype::Lesson => PlayerSpellSubtype::Lesson,
+                    spellwake_engine::program::SpellSubtype::Trap => PlayerSpellSubtype::Trap,
+                    spellwake_engine::program::SpellSubtype::Omen => PlayerSpellSubtype::Omen,
                 })
                 .collect(),
             colors: current.current_colors.iter().copied().map(color).collect(),

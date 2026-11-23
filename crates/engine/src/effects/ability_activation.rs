@@ -276,6 +276,51 @@ impl EffectWindow {
                     && (permanent.abilities.continuous == Some(effect.id()) || permanent.abilities.additional_battlefield_abilities.contains(&effect.id()))
             })
         }) { return Err(EffectError::ActivationConditionNotMet); }
+        if evaluated.objects.values().any(|permanent| {
+            if permanent.zone != ObjectZone::Battlefield {
+                return false;
+            }
+            let Some(perm_ctrl) = permanent.controller else {
+                return false;
+            };
+            permanent
+                .printed_text
+                .continuous
+                .iter()
+                .chain(&permanent.printed_text.additional_battlefield_abilities)
+                .any(|effect| {
+                    let active = permanent.abilities.continuous == Some(effect.id())
+                        || permanent
+                            .abilities
+                            .additional_battlefield_abilities
+                            .contains(&effect.id());
+                    if !active {
+                        return false;
+                    }
+                    if let crate::characteristics::StaticContinuousAbility::Restriction {
+                        rule:
+                            crate::characteristics::StaticRestriction::PreventMatchingActivations(
+                                selector,
+                            ),
+                        ..
+                    } = effect
+                    {
+                        crate::characteristics::selector_matches_permanent(
+                            self.window.cards(),
+                            &evaluated,
+                            permanent.object,
+                            perm_ctrl,
+                            selector,
+                            source,
+                            &self.name_rules,
+                        )
+                    } else {
+                        false
+                    }
+                })
+        }) {
+            return Err(EffectError::ActivationConditionNotMet);
+        }
         let mut uses_extra_loyalty = false;
         if let Some(cost) = loyalty_cost {
             let instant_timing = self.characteristics.emblems.values().any(|emblem| {
@@ -440,6 +485,131 @@ impl EffectWindow {
             }
             Some(crate::activated::ActivationRestriction::Sorcery) => {
                 validate_main_phase(&self.window, turn, actor)?
+            }
+            Some(crate::activated::ActivationRestriction::SorceryOnceEachTurn) => {
+                if self.activated_this_turn.contains(&exhausted_id) {
+                    return Err(EffectError::ActivationConditionNotMet);
+                }
+                validate_main_phase(&self.window, turn, actor)?;
+            }
+            Some(crate::activated::ActivationRestriction::DuringYourTurn)
+                if self.window.active_player() != actor =>
+            {
+                return Err(TimingError::NotActivePlayer.into());
+            }
+            Some(crate::activated::ActivationRestriction::DuringYourTurnOnceEachTurn) => {
+                if self.window.active_player() != actor {
+                    return Err(TimingError::NotActivePlayer.into());
+                }
+                if self.activated_this_turn.contains(&exhausted_id) {
+                    return Err(EffectError::ActivationConditionNotMet);
+                }
+            }
+            Some(crate::activated::ActivationRestriction::DuringOpponentsTurn)
+                if self.window.active_player() == actor =>
+            {
+                return Err(EffectError::ActivationConditionNotMet);
+            }
+            Some(crate::activated::ActivationRestriction::DuringCombat)
+                if !turn
+                    .map(|t| t.position().step)
+                    .or(self.current_step)
+                    .is_some_and(|s| s.phase() == crate::turn::Phase::Combat) =>
+            {
+                return Err(EffectError::ActivationConditionNotMet);
+            }
+            Some(crate::activated::ActivationRestriction::Threshold)
+                if self
+                    .window
+                    .cards()
+                    .iter()
+                    .filter(|c| c.zone() == ObjectZone::Graveyard(actor))
+                    .count()
+                    < 7 =>
+            {
+                return Err(EffectError::ActivationConditionNotMet);
+            }
+            Some(crate::activated::ActivationRestriction::Delirium) => {
+                let mut types = BTreeSet::new();
+                for c in evaluated
+                    .objects
+                    .values()
+                    .filter(|o| o.zone == ObjectZone::Graveyard(actor))
+                {
+                    types.extend(c.current_types.iter().copied());
+                }
+                if types.len() < 4 {
+                    return Err(EffectError::ActivationConditionNotMet);
+                }
+            }
+            Some(crate::activated::ActivationRestriction::Metalcraft)
+                if controlled()
+                    .filter(|p| p.has_type(CardType::Artifact))
+                    .count()
+                    < 3 =>
+            {
+                return Err(EffectError::ActivationConditionNotMet);
+            }
+            Some(crate::activated::ActivationRestriction::SourceIsTapped)
+                if card.tapped() != Some(true) =>
+            {
+                return Err(EffectError::ActivationConditionNotMet);
+            }
+            Some(crate::activated::ActivationRestriction::SourceIsUntapped)
+                if card.tapped() != Some(false) =>
+            {
+                return Err(EffectError::ActivationConditionNotMet);
+            }
+            Some(crate::activated::ActivationRestriction::ControllerLifeAtLeast(min))
+                if !self
+                    .life
+                    .get(actor)
+                    .is_some_and(|life| *life >= i64::from(min).into()) =>
+            {
+                return Err(EffectError::ActivationConditionNotMet);
+            }
+            Some(crate::activated::ActivationRestriction::ControllerLifeAtMost(max))
+                if !self
+                    .life
+                    .get(actor)
+                    .is_some_and(|life| *life <= i64::from(max).into()) =>
+            {
+                return Err(EffectError::ActivationConditionNotMet);
+            }
+            Some(crate::activated::ActivationRestriction::ControlsCardType { kind, minimum })
+                if controlled().filter(|p| p.has_type(kind)).count() < usize::from(minimum) =>
+            {
+                return Err(EffectError::ActivationConditionNotMet);
+            }
+            Some(crate::activated::ActivationRestriction::ControlsMatching { filter, minimum })
+                if {
+                    let empty = BTreeSet::new();
+                    controlled()
+                        .filter(|p| {
+                            let same = p.object == source;
+                            let (c1, c2) = filter.clauses();
+                            let src_ok = |c: crate::program::ObjectClause| match c.source_relation {
+                                crate::program::SourceRelation::Any => true,
+                                crate::program::SourceRelation::SelfObject => same,
+                                crate::program::SourceRelation::OtherThanAbilitySource
+                                | crate::program::SourceRelation::OtherThanTriggerSource => !same,
+                                _ => false,
+                            };
+                            (src_ok(c1) || c2.is_some_and(src_ok))
+                                && filter.matches_static_characteristics(p, &empty, || {
+                                    self.window
+                                        .cards()
+                                        .get(p.object)
+                                        .and_then(GameObject::card_id)
+                                        .and_then(|cid| self.programs.get(&cid))
+                                        .map(Program::mana_value)
+                                })
+                        })
+                        .count()
+                        < usize::from(minimum)
+                } =>
+            {
+                return Err(EffectError::ActivationConditionNotMet);
             }
             Some(
                 crate::activated::ActivationRestriction::Exhaust
@@ -635,6 +805,33 @@ impl EffectWindow {
                                 return Err(EffectError::InvalidCastResource);
                             }
                         }
+                        SourceCost::ExileGraveyard {
+                            filter: GraveyardExileCost::Filtered { filter, count },
+                            ..
+                        } => {
+                            let excluded = BTreeSet::new();
+                            if objects.len() != usize::from(count.get())
+                                || objects.iter().any(|object| {
+                                    evaluated.get(*object).is_none_or(|card| {
+                                        card.zone != ObjectZone::Graveyard(actor)
+                                            || !self.matches_object_filter(
+                                                filter,
+                                                card,
+                                                actor,
+                                                Some(source),
+                                                &excluded,
+                                                &evaluated,
+                                            )
+                                    }) || self
+                                        .window
+                                        .cards()
+                                        .get(*object)
+                                        .is_none_or(|card| card.card_id().is_none())
+                                })
+                            {
+                                return Err(EffectError::InvalidCastResource);
+                            }
+                        }
                         SourceCost::PayLife {
                             amount: LifeCostAmount::Fixed(life),
                             sacrifice: Some(filter),
@@ -676,6 +873,33 @@ impl EffectWindow {
                                 || self.window.cards().get(objects[0]).is_none_or(|object| {
                                     object.zone() != ObjectZone::Hand(actor)
                                         || object.card_id().is_none()
+                                })
+                            {
+                                return Err(EffectError::InvalidCastResource);
+                            }
+                        }
+                        SourceCost::Discard {
+                            mode: DiscardCostMode::Filtered { filter, count },
+                            ..
+                        } => {
+                            let excluded = BTreeSet::new();
+                            if objects.len() != usize::from(count.get())
+                                || objects.iter().any(|object| {
+                                    evaluated.get(*object).is_none_or(|card| {
+                                        card.zone != ObjectZone::Hand(actor)
+                                            || !self.matches_object_filter(
+                                                filter,
+                                                card,
+                                                actor,
+                                                Some(source),
+                                                &excluded,
+                                                &evaluated,
+                                            )
+                                    }) || self
+                                        .window
+                                        .cards()
+                                        .get(*object)
+                                        .is_none_or(|card| card.card_id().is_none())
                                 })
                             {
                                 return Err(EffectError::InvalidCastResource);
@@ -795,8 +1019,14 @@ impl EffectWindow {
             None
         };
         self.validate_attach_activation(&selected.body, source, actor, turn, target, &evaluated)?;
-        if selected.source_cost.taps_source() {
+        if selected.source_cost.taps_source() || selected.source_cost.untaps_source() {
             Self::validate_creature_tap_history(card, current)?;
+        }
+        if let Some(energy_cost) = selected.source_cost.energy_cost() {
+            let available = self.player_counters_of_kind(actor, CounterKind::Energy);
+            if available < i64::from(energy_cost).into() {
+                return Err(EffectError::InvalidCastResource);
+            }
         }
         self.check_split_second(&evaluated)?;
         if selected.body.target == same_name_ability_target()
@@ -970,7 +1200,14 @@ impl EffectWindow {
         let mut next = self.clone();
         next.revision = revision;
         next.window = announced;
-        if restriction == Some(crate::activated::ActivationRestriction::OnceEachTurn) {
+        if matches!(
+            restriction,
+            Some(
+                crate::activated::ActivationRestriction::OnceEachTurn
+                    | crate::activated::ActivationRestriction::SorceryOnceEachTurn
+                    | crate::activated::ActivationRestriction::DuringYourTurnOnceEachTurn
+            )
+        ) {
             next.activated_this_turn.insert(exhausted_id.clone());
         }
         if matches!(
@@ -1089,6 +1326,39 @@ impl EffectWindow {
                 crate::occurrence::EventCause::ActivatedAbilityCost { entry, ability },
                 turn,
                 &mut append,
+            )?;
+            cost_before = next.rules_snapshot(None)?;
+        }
+        if let Some(energy_cost) = selected.source_cost.energy_cost()
+            && energy_cost > 0
+        {
+            let before = next.player_counters_of_kind(actor, CounterKind::Energy);
+            let after = before.minus(&i64::from(energy_cost).into());
+            let map = next
+                .characteristics
+                .player_counters
+                .entry(CounterKind::Energy)
+                .or_default();
+            if after.is_positive() {
+                map.insert(actor, after.clone());
+            } else {
+                map.remove(&actor);
+            }
+            next.emit_from(
+                crate::occurrence::EventCause::ActivatedAbilityCost { entry, ability },
+                &cost_before,
+                None,
+                &mut append,
+                |_, _, _| {
+                    Ok(vec![
+                        crate::occurrence::RulesOccurrence::PlayerCounterChanged {
+                            player: actor,
+                            kind: CounterKind::Energy,
+                            before: before.clone(),
+                            after: after.clone(),
+                        },
+                    ])
+                },
             )?;
             cost_before = next.rules_snapshot(None)?;
         }
@@ -1489,6 +1759,8 @@ impl EffectWindow {
                     tap_source: false,
                     from_graveyard: selected.source_cost.is_from_graveyard(),
                 }
+            } else if selected.source_cost.returns_source_to_hand() {
+                SourceCost::ReturnSelfToHand { tap_source: false }
             } else {
                 selected.source_cost
             };
@@ -1610,7 +1882,21 @@ impl EffectWindow {
                         madness,
                     )]);
                 }
-                if cost.taps_source() {
+                if cost.returns_source_to_hand() {
+                    return Ok(vec![zone_occurrence_at(
+                        previous,
+                        current,
+                        &crate::object_identity::ObjectMovement {
+                            before: tapped_source
+                                .clone()
+                                .unwrap_or_else(|| activation.source.clone()),
+                            after: source_after.clone(),
+                        },
+                        crate::occurrence::ZoneReason::ReturnToOwnersHand,
+                        controllers,
+                    )?]);
+                }
+                if cost.taps_source() || cost.untaps_source() {
                     let mut out = vec![crate::occurrence::RulesOccurrence::StatusChange {
                         change: crate::object_identity::ObjectStatusChange {
                             before: activation.source.clone(),

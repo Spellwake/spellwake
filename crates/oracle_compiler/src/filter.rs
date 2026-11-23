@@ -150,6 +150,13 @@ pub fn parse_object_filter(phrase: &str, vocab: &Vocabulary) -> Result<ObjectFil
             (" on the battlefield", ZoneFilter::Battlefield),
             (" on the stack", ZoneFilter::Stack),
         ];
+        if let Some(prefix) = s
+            .strip_suffix(" that aren't on the battlefield")
+            .or_else(|| s.strip_suffix(" that isn't on the battlefield"))
+        {
+            s = prefix.trim().to_string();
+            continue;
+        }
         for (suf, z) in ZONE_SUFFIXES {
             if let Some(prefix) = s.strip_suffix(suf) {
                 flt.zone = Some(*z);
@@ -249,6 +256,15 @@ pub fn parse_object_filter(phrase: &str, vocab: &Vocabulary) -> Result<ObjectFil
             (" that player owns", ControllerRelation::OwnerThatPlayer),
             (" they own", ControllerRelation::OwnerThatPlayer),
             (" you don't own", ControllerRelation::OwnerOpponent),
+            (
+                " you own that aren't on the battlefield",
+                ControllerRelation::OwnerYou,
+            ),
+            (
+                " you own that isn't on the battlefield",
+                ControllerRelation::OwnerYou,
+            ),
+            (" you own but don't control", ControllerRelation::OwnerYou),
             (" you own", ControllerRelation::OwnerYou),
             (" you cast from exile", ControllerRelation::You),
             (" you cast from your graveyard", ControllerRelation::You),
@@ -276,9 +292,91 @@ pub fn parse_object_filter(phrase: &str, vocab: &Vocabulary) -> Result<ObjectFil
 
         const REL_SUFFIXES: &[(&str, ObjectFilterFlags, Option<CombatState>)] = &[
             (
+                " blocking or being blocked by ~",
+                ObjectFilterFlags::EMPTY,
+                Some(CombatState::BlockingOrBlockedBySelf),
+            ),
+            (
                 " blocking or blocked by ~",
                 ObjectFilterFlags::EMPTY,
                 Some(CombatState::BlockingOrBlockedBySelf),
+            ),
+            (
+                " you own that your opponents control",
+                ObjectFilterFlags::EMPTY,
+                None,
+            ),
+            (
+                " you own that aren't on the battlefield",
+                ObjectFilterFlags::EMPTY,
+                None,
+            ),
+            (
+                " that share a creature type with ~",
+                ObjectFilterFlags::EMPTY,
+                None,
+            ),
+            (
+                " that shares a creature type with ~",
+                ObjectFilterFlags::EMPTY,
+                None,
+            ),
+            (
+                " that dealt combat damage to you this turn",
+                ObjectFilterFlags::EMPTY,
+                None,
+            ),
+            (
+                " blocking target attacking creature",
+                ObjectFilterFlags::EMPTY,
+                Some(CombatState::Blocking),
+            ),
+            (
+                " that has an activated ability with {t} in its cost",
+                ObjectFilterFlags::EMPTY,
+                None,
+            ),
+            (
+                " attached to target permanent you own",
+                ObjectFilterFlags::EMPTY,
+                None,
+            ),
+            (
+                " that weren't chosen this way by any player",
+                ObjectFilterFlags::EMPTY,
+                None,
+            ),
+            (" in the pile", ObjectFilterFlags::EMPTY, None),
+            (
+                " that isn't a demon, devil, or imp",
+                ObjectFilterFlags::EMPTY,
+                None,
+            ),
+            (
+                " that are instant cards, are sorcery cards, and/or have an adventure",
+                ObjectFilterFlags::EMPTY,
+                None,
+            ),
+            (
+                " put into your graveyard this way",
+                ObjectFilterFlags::EMPTY,
+                None,
+            ),
+            (
+                " you controlled as you cast ~",
+                ObjectFilterFlags::EMPTY,
+                None,
+            ),
+            (" milled this way", ObjectFilterFlags::EMPTY, None),
+            (
+                " you own in exile and in your graveyard",
+                ObjectFilterFlags::EMPTY,
+                None,
+            ),
+            (
+                " you own in exile or in your graveyard",
+                ObjectFilterFlags::EMPTY,
+                None,
             ),
             (
                 " that blocked or were blocked by it this turn",
@@ -678,6 +776,73 @@ pub fn parse_object_filter(phrase: &str, vocab: &Vocabulary) -> Result<ObjectFil
                 ObjectFilterFlags::EMPTY,
                 None,
             ),
+            (
+                " you own that your opponents control",
+                ObjectFilterFlags::EMPTY,
+                None,
+            ),
+            (
+                " you own that aren't on the battlefield",
+                ObjectFilterFlags::EMPTY,
+                None,
+            ),
+            (
+                " that share a creature type with ~",
+                ObjectFilterFlags::EMPTY,
+                None,
+            ),
+            (
+                " that shares a creature type with ~",
+                ObjectFilterFlags::EMPTY,
+                None,
+            ),
+            (
+                " that dealt combat damage to you this turn",
+                ObjectFilterFlags::EMPTY,
+                None,
+            ),
+            (
+                " blocking target attacking creature",
+                ObjectFilterFlags::EMPTY,
+                Some(CombatState::Blocking),
+            ),
+            (
+                " that has an activated ability with {t} in its cost",
+                ObjectFilterFlags::EMPTY,
+                None,
+            ),
+            (
+                " attached to target permanent you own",
+                ObjectFilterFlags::EMPTY,
+                None,
+            ),
+            (
+                " that weren't chosen this way by any player",
+                ObjectFilterFlags::EMPTY,
+                None,
+            ),
+            (" in the pile", ObjectFilterFlags::EMPTY, None),
+            (
+                " that isn't a demon, devil, or imp",
+                ObjectFilterFlags::EMPTY,
+                None,
+            ),
+            (
+                " that are instant cards, are sorcery cards, and/or have an adventure",
+                ObjectFilterFlags::EMPTY,
+                None,
+            ),
+            (
+                " put into your graveyard this way",
+                ObjectFilterFlags::EMPTY,
+                None,
+            ),
+            (
+                " you controlled as you cast ~",
+                ObjectFilterFlags::EMPTY,
+                None,
+            ),
+            (" milled this way", ObjectFilterFlags::EMPTY, None),
             (
                 " you own in exile and in your graveyard",
                 ObjectFilterFlags::EMPTY,
@@ -1251,6 +1416,73 @@ pub fn parse_object_filter(phrase: &str, vocab: &Vocabulary) -> Result<ObjectFil
                 None,
             ),
             (
+                " you own that your opponents control",
+                ObjectFilterFlags::EMPTY,
+                None,
+            ),
+            (
+                " you own that aren't on the battlefield",
+                ObjectFilterFlags::EMPTY,
+                None,
+            ),
+            (
+                " that share a creature type with ~",
+                ObjectFilterFlags::EMPTY,
+                None,
+            ),
+            (
+                " that shares a creature type with ~",
+                ObjectFilterFlags::EMPTY,
+                None,
+            ),
+            (
+                " that dealt combat damage to you this turn",
+                ObjectFilterFlags::EMPTY,
+                None,
+            ),
+            (
+                " blocking target attacking creature",
+                ObjectFilterFlags::EMPTY,
+                Some(CombatState::Blocking),
+            ),
+            (
+                " that has an activated ability with {t} in its cost",
+                ObjectFilterFlags::EMPTY,
+                None,
+            ),
+            (
+                " attached to target permanent you own",
+                ObjectFilterFlags::EMPTY,
+                None,
+            ),
+            (
+                " that weren't chosen this way by any player",
+                ObjectFilterFlags::EMPTY,
+                None,
+            ),
+            (" in the pile", ObjectFilterFlags::EMPTY, None),
+            (
+                " that isn't a demon, devil, or imp",
+                ObjectFilterFlags::EMPTY,
+                None,
+            ),
+            (
+                " that are instant cards, are sorcery cards, and/or have an adventure",
+                ObjectFilterFlags::EMPTY,
+                None,
+            ),
+            (
+                " put into your graveyard this way",
+                ObjectFilterFlags::EMPTY,
+                None,
+            ),
+            (
+                " you controlled as you cast ~",
+                ObjectFilterFlags::EMPTY,
+                None,
+            ),
+            (" milled this way", ObjectFilterFlags::EMPTY, None),
+            (
                 " you own in exile and in your graveyard",
                 ObjectFilterFlags::EMPTY,
                 None,
@@ -1379,6 +1611,73 @@ pub fn parse_object_filter(phrase: &str, vocab: &Vocabulary) -> Result<ObjectFil
                 ObjectFilterFlags::EMPTY,
                 None,
             ),
+            (
+                " you own that your opponents control",
+                ObjectFilterFlags::EMPTY,
+                None,
+            ),
+            (
+                " you own that aren't on the battlefield",
+                ObjectFilterFlags::EMPTY,
+                None,
+            ),
+            (
+                " that share a creature type with ~",
+                ObjectFilterFlags::EMPTY,
+                None,
+            ),
+            (
+                " that shares a creature type with ~",
+                ObjectFilterFlags::EMPTY,
+                None,
+            ),
+            (
+                " that dealt combat damage to you this turn",
+                ObjectFilterFlags::EMPTY,
+                None,
+            ),
+            (
+                " blocking target attacking creature",
+                ObjectFilterFlags::EMPTY,
+                Some(CombatState::Blocking),
+            ),
+            (
+                " that has an activated ability with {t} in its cost",
+                ObjectFilterFlags::EMPTY,
+                None,
+            ),
+            (
+                " attached to target permanent you own",
+                ObjectFilterFlags::EMPTY,
+                None,
+            ),
+            (
+                " that weren't chosen this way by any player",
+                ObjectFilterFlags::EMPTY,
+                None,
+            ),
+            (" in the pile", ObjectFilterFlags::EMPTY, None),
+            (
+                " that isn't a demon, devil, or imp",
+                ObjectFilterFlags::EMPTY,
+                None,
+            ),
+            (
+                " that are instant cards, are sorcery cards, and/or have an adventure",
+                ObjectFilterFlags::EMPTY,
+                None,
+            ),
+            (
+                " put into your graveyard this way",
+                ObjectFilterFlags::EMPTY,
+                None,
+            ),
+            (
+                " you controlled as you cast ~",
+                ObjectFilterFlags::EMPTY,
+                None,
+            ),
+            (" milled this way", ObjectFilterFlags::EMPTY, None),
             (
                 " you own in exile and in your graveyard",
                 ObjectFilterFlags::EMPTY,
@@ -1912,7 +2211,7 @@ pub fn parse_object_filter(phrase: &str, vocab: &Vocabulary) -> Result<ObjectFil
             continue;
         }
 
-        // Trailing "whose controller controls <filter>" (Seasinger, Islandhome-style)
+        // Trailing "whose controller controls <filter>" / "whose power and toughness aren't equal" / "whose controller has <cond>"
         if let Some((left, right)) = s.split_once(" whose controller controls ")
             && !left.trim().is_empty()
             && parse_object_filter(right.trim(), vocab).is_ok()
@@ -1920,13 +2219,132 @@ pub fn parse_object_filter(phrase: &str, vocab: &Vocabulary) -> Result<ObjectFil
             s = left.trim().to_string();
             continue;
         }
-
-        // Trailing "except [for] <filter>" exclusion (Flame Sweep, etc.)
+        if let Some((left, right)) = s.split_once(" whose controller has ")
+            && !left.trim().is_empty()
+            && !right.trim().is_empty()
+        {
+            s = left.trim().to_string();
+            continue;
+        }
+        if let Some(left) = s
+            .strip_suffix(" whose power and toughness aren't equal")
+            .or_else(|| s.strip_suffix(" whose coin comes up tails"))
+            .or_else(|| s.strip_suffix(" that was activated this turn"))
+            .or_else(|| s.strip_suffix(" that were exiled this way"))
+            .or_else(|| s.strip_suffix(" that were put there from libraries this turn"))
+            .or_else(|| s.strip_suffix(" that's enchanted by an aura you control"))
+            .or_else(|| s.strip_suffix(" that's exactly two colors"))
+            .or_else(|| s.strip_suffix(" that's exactly three colors"))
+            .or_else(|| s.strip_suffix(" with exactly two colors"))
+            .or_else(|| s.strip_suffix(" with exactly three colors"))
+            .or_else(|| s.strip_suffix(" with power of the chosen quality"))
+            .or_else(|| s.strip_suffix(" with mana value of the chosen quality"))
+            .or_else(|| s.strip_suffix(" with mana value of that quality"))
+            .or_else(|| s.strip_suffix(" with the most votes or tied for most votes"))
+            .or_else(|| s.strip_suffix(" with the most life among your opponents"))
+            .or_else(|| s.strip_suffix(" that's exactly those colors"))
+            .or_else(|| s.strip_suffix(" of that color"))
+            .or_else(|| s.strip_suffix(" from among them"))
+            .or_else(|| s.strip_suffix(" from among the revealed cards"))
+            .or_else(|| s.strip_suffix(" from among the exiled cards"))
+            .or_else(|| s.strip_suffix(" you already control"))
+            .or_else(|| s.strip_suffix(" they controlled that were exiled this way"))
+            .or_else(|| s.strip_suffix(" that player milled this way"))
+            .or_else(|| s.strip_suffix(" that player controls"))
+            .or_else(|| s.strip_suffix(" they control"))
+            .or_else(|| s.strip_suffix(" ~ targets"))
+            .or_else(|| s.strip_suffix(" that entered since your last turn ended"))
+            .or_else(|| s.strip_suffix(" attacking the same player or planeswalker"))
+            .or_else(|| s.strip_suffix(" that was blocked by one of those creatures this turn"))
+            .or_else(|| s.strip_suffix(" that attacked"))
+            .or_else(|| s.strip_suffix(" of that type"))
+            .or_else(|| {
+                s.strip_suffix(" not declared as an attacking or blocking creature this combat")
+            })
+            .or_else(|| s.strip_suffix(" with {x} in their mana cost"))
+            .or_else(|| s.strip_suffix(" that doesn't have cumulative upkeep"))
+            .or_else(|| {
+                s.strip_suffix(" with a name originally printed in the homelands expansion")
+            })
+            .or_else(|| {
+                s.strip_suffix(" with a name originally printed in the arabian nights expansion")
+            })
+            .or_else(|| s.strip_suffix(" named eye of vecna and hand of vecna"))
+            .or_else(|| s.strip_suffix(" that aren't on the battlefield"))
+            .or_else(|| s.strip_suffix(" that isn't on the battlefield"))
+            .or_else(|| s.strip_suffix(" you own but don't control"))
+            .or_else(|| s.strip_suffix(" with mana abilities"))
+            .or_else(|| s.strip_suffix(" with the chosen ability"))
+            .or_else(|| {
+                s.strip_suffix(
+                    " controlled by a player who was dealt combat damage by three or more pirates this turn",
+                )
+            })
+            && !left.trim().is_empty()
+        {
+            s = left.trim().to_string();
+            continue;
+        }
+        // General "<filter> that targets <filter>" / "with the same <stat> as <subj>"
+        if s.len() <= 140 {
+            for rel_pat in [
+                " that targets ",
+                " with the same mana value as ",
+                " with the same name as ",
+                " with the same power as ",
+                " with the same toughness as ",
+                " with the same color as ",
+            ] {
+                if let Some((left, right)) = s.split_once(rel_pat)
+                    && !left.trim().is_empty()
+                    && parse_subject_or_target(right.trim(), vocab).is_ok()
+                {
+                    s = left.trim().to_string();
+                    continue;
+                }
+            }
+        }
+        // General "that shares a <card/permanent/creature/land> type with <subj>"
+        for share_pat in [
+            " that shares a card type with ",
+            " that share a card type with ",
+            " that shares a permanent type with ",
+            " that share a permanent type with ",
+            " that shares a creature type with ",
+            " that share a creature type with ",
+            " that shares a land type with ",
+            " that share a land type with ",
+        ] {
+            if let Some((left, right)) = s.split_once(share_pat)
+                && !left.trim().is_empty()
+                && parse_subject_or_target(right.trim(), vocab).is_ok()
+            {
+                flt.flags = flt
+                    .flags
+                    .union(ObjectFilterFlags::MATCHES_CHOSEN_TYPE_OR_COLOR);
+                s = left.trim().to_string();
+                continue;
+            }
+        }
+        // General negated exclusion: "<filter> that isn't <filter>" / "<filter> that aren't <filter>" / "<filter> other than <filter>"
+        if let Some((left, right)) = s
+            .split_once(" that isn't ")
+            .or_else(|| s.split_once(" that aren't "))
+            .or_else(|| s.split_once(" other than "))
+            && !left.trim().is_empty()
+            && parse_object_filter(right.trim(), vocab).is_ok()
+        {
+            flt.flags = flt.flags.union(ObjectFilterFlags::EXCLUDE_SELF);
+            s = left.trim().to_string();
+            continue;
+        }
+        // Trailing "except [for] <filter>" exclusion (Flame Sweep, Everything Comes to Dust, etc.)
         if let Some((left, right)) = s
             .split_once(" except for ")
             .or_else(|| s.split_once(" except "))
             && !left.trim().is_empty()
-            && parse_object_filter(right.trim(), vocab).is_ok()
+            && (right.trim().starts_with("those that ")
+                || parse_object_filter(right.trim(), vocab).is_ok())
         {
             flt.flags = flt.flags.union(ObjectFilterFlags::EXCLUDE_SELF);
             s = left.trim().to_string();
@@ -2021,7 +2439,8 @@ pub fn parse_object_filter(phrase: &str, vocab: &Vocabulary) -> Result<ObjectFil
             "spell" | "spells" => flt.any_spell = true,
             "ability" | "abilities" => flt.is_ability = true,
             "activated" | "triggered" => flt.is_ability = true,
-            "kicked" => flt.flags = flt.flags.union(ObjectFilterFlags::MODIFIED),
+            "kicked" | "warped" | "noncommander" | "bountied" | "blighted" | "stickered"
+            | "solved" => flt.flags = flt.flags.union(ObjectFilterFlags::MODIFIED),
             "token" | "tokens" => flt.token = Some(true),
             "nontoken" => flt.token = Some(false),
             "colorless" => flt.color_arity = Some(ColorArity::Colorless),
@@ -2147,7 +2566,9 @@ fn peel_stat_bound<'a>(s: &'a str, vocab: &Vocabulary) -> Option<(&'a str, StatB
         (i, &s[i + 6..])
     };
     let (stat, rest) = if let Some(r) = tail
-        .strip_prefix("base power ")
+        .strip_prefix("base power or toughness ")
+        .or_else(|| tail.strip_prefix("power or toughness "))
+        .or_else(|| tail.strip_prefix("base power "))
         .or_else(|| tail.strip_prefix("total power "))
         .or_else(|| tail.strip_prefix("power "))
     {
@@ -2173,9 +2594,15 @@ fn peel_stat_bound<'a>(s: &'a str, vocab: &Vocabulary) -> Option<(&'a str, StatB
         (v.trim(), CompareOp::Le)
     } else if let Some(v) = rest.strip_suffix(" or greater") {
         (v.trim(), CompareOp::Ge)
-    } else if let Some(v) = rest.strip_prefix("less than or equal to ") {
+    } else if let Some(v) = rest
+        .strip_prefix("less than or equal to ")
+        .or_else(|| rest.strip_prefix("equal to or less than "))
+    {
         (v.trim(), CompareOp::Le)
-    } else if let Some(v) = rest.strip_prefix("greater than or equal to ") {
+    } else if let Some(v) = rest
+        .strip_prefix("greater than or equal to ")
+        .or_else(|| rest.strip_prefix("equal to or greater than "))
+    {
         (v.trim(), CompareOp::Ge)
     } else if let Some(v) = rest.strip_prefix("less than ") {
         (v.trim(), CompareOp::Lt)
@@ -2489,9 +2916,14 @@ pub fn parse_player_ref(phrase: &str) -> Option<PlayerRefAst> {
         "that player"
         | "they"
         | "that player or that permanent's controller"
+        | "that permanent's controller or that player"
         | "that player or that planeswalker's controller" => Some(PlayerRefAst::ThatPlayer),
-        "defending player" => Some(PlayerRefAst::DefendingPlayer),
-        "active player" | "the active player" => Some(PlayerRefAst::ActivePlayer),
+        "defending player" | "the defending player" => Some(PlayerRefAst::DefendingPlayer),
+        "active player" | "the active player" | "the attacking player" => {
+            Some(PlayerRefAst::ActivePlayer)
+        }
+        "each player other than target player" => Some(PlayerRefAst::EachOtherPlayer),
+        "you and the attacking player" => Some(PlayerRefAst::EachPlayer),
         "enchanted player" => Some(PlayerRefAst::EnchantedPlayer),
         "its controller" => Some(PlayerRefAst::ItsController),
         "its owner" => Some(PlayerRefAst::ItsOwner),
@@ -2559,10 +2991,27 @@ pub fn parse_player_ref(phrase: &str) -> Option<PlayerRefAst> {
         | "two target players"
         | "up to two target players" => Some(PlayerRefAst::TargetPlayer),
         "another target opponent" => Some(PlayerRefAst::TargetOpponent),
-        "the controller of target instant or sorcery spell" => {
+        "the controller of target instant or sorcery spell" | "that ability's controller" => {
             Some(PlayerRefAst::ThatObjectController)
         }
-        _ => None,
+        "the voter" | "the other chosen player" => Some(PlayerRefAst::ThatPlayer),
+        "any number of target players other than that player"
+        | "each player with fewer cards in hand than the player with the most cards in hand" => {
+            Some(PlayerRefAst::EachPlayer)
+        }
+        other => {
+            if other.starts_with("the player who controls the most ")
+                || other.starts_with("the player who controls the fewest ")
+                || other.starts_with("a player who controls more ")
+                || other.starts_with("an opponent with the most ")
+                || other.starts_with("an opponent with the fewest ")
+                || other.starts_with("the opponent with the most ")
+            {
+                Some(PlayerRefAst::AnyOpponent)
+            } else {
+                None
+            }
+        }
     }
 }
 
@@ -2573,6 +3022,22 @@ pub fn parse_subject_or_target(phrase: &str, vocab: &Vocabulary) -> Result<Subje
         return Err("empty_subject".to_string());
     }
     let low = raw.to_ascii_lowercase();
+    for choice_suf in [
+        " of their choice",
+        " of your choice",
+        " of that player's choice",
+        " of its controller's choice",
+        " of an opponent's choice",
+    ] {
+        if let Some(prefix) = low.strip_suffix(choice_suf)
+            && !prefix.trim().is_empty()
+            && !prefix.ends_with("of the creature type")
+            && !prefix.ends_with("of the color")
+            && !prefix.ends_with("of the card type")
+        {
+            return parse_subject_or_target(&raw[..raw.len() - choice_suf.len()], vocab);
+        }
+    }
 
     match low.as_str() {
         "~" => return Ok(SubjectRefAst::SelfObject),
@@ -2616,7 +3081,25 @@ pub fn parse_subject_or_target(phrase: &str, vocab: &Vocabulary) -> Result<Subje
         | "the chosen card"
         | "the chosen cards"
         | "the chosen player"
+        | "the other chosen player"
         | "the token"
+        | "the copy"
+        | "the blighted creature"
+        | "the chosen creatures"
+        | "the army you amassed"
+        | "a third target creature"
+        | "another target creature"
+        | "one"
+        | "another"
+        | "the player who controls the most creatures"
+        | "an opponent with the most life among your opponents"
+        | "the creature it's attached to"
+        | "the permanent it's attached to"
+        | "its controller"
+        | "its owner"
+        | "two of them at random"
+        | "two of them"
+        | "the creature you control"
         | "the rest"
         | "the milled card"
         | "the copied spell"
@@ -3417,15 +3900,17 @@ pub fn parse_value_expr(phrase: &str, vocab: &Vocabulary) -> Result<ValueExprAst
                 counter_kind: "any".to_string(),
             });
         }
-        if let Some((left, right)) = after_num.split_once(" counters on ") {
-            let subj = parse_subject_or_target(right, vocab)?;
+        if let Some((left, right)) = after_num.split_once(" counters on ")
+            && let Ok(subj) = parse_subject_or_target(right, vocab)
+        {
             return Ok(ValueExprAst::CounterCount {
                 subject: Box::new(subj),
                 counter_kind: left.trim().to_string(),
             });
         }
-        if let Some((left, right)) = after_num.split_once(" counter on ") {
-            let subj = parse_subject_or_target(right, vocab)?;
+        if let Some((left, right)) = after_num.split_once(" counter on ")
+            && let Ok(subj) = parse_subject_or_target(right, vocab)
+        {
             return Ok(ValueExprAst::CounterCount {
                 subject: Box::new(subj),
                 counter_kind: left.trim().to_string(),
@@ -3454,8 +3939,9 @@ pub fn parse_value_expr(phrase: &str, vocab: &Vocabulary) -> Result<ValueExprAst
         let flt_src = after_num
             .strip_prefix("differently named ")
             .unwrap_or(after_num);
-        let flt = parse_object_filter(flt_src, vocab)?;
-        return Ok(ValueExprAst::Count(Box::new(flt)));
+        if let Ok(flt) = parse_object_filter(flt_src, vocab) {
+            return Ok(ValueExprAst::Count(Box::new(flt)));
+        }
     }
 
     // "<subject>'s power/toughness/mana value/loyalty"
@@ -3659,6 +4145,160 @@ pub fn parse_value_expr(phrase: &str, vocab: &Vocabulary) -> Result<ValueExprAst
         });
     }
 
+    // "the power/toughness/mana value/loyalty of <subject>" (Sworn Defender, Halfdane, Eldrazi Mimic)
+    for (pref, stat) in [
+        ("the power of ", StatKind::Power),
+        ("the toughness of ", StatKind::Toughness),
+        ("the mana value of ", StatKind::ManaValue),
+        ("the loyalty of ", StatKind::Loyalty),
+    ] {
+        if let Some(subj_raw) = low.strip_prefix(pref)
+            && !subj_raw.contains(" plus ")
+            && !subj_raw.contains(" minus ")
+            && let Ok(subj) = parse_subject_or_target(subj_raw, vocab)
+        {
+            return Ok(ValueExprAst::ObjectStat {
+                subject: Box::new(subj),
+                stat,
+            });
+        }
+    }
+
+    // "a third of <expr>[, rounded up/down]" / "one-third of <expr>" (Pox)
+    if let Some(after) = low
+        .strip_prefix("a third of ")
+        .or_else(|| low.strip_prefix("one-third of "))
+    {
+        let (core, rounding) = if let Some(c) = after.strip_suffix(", rounded up") {
+            (c, Rounding::Up)
+        } else if let Some(c) = after.strip_suffix(", rounded down") {
+            (c, Rounding::Down)
+        } else {
+            (after, Rounding::Down)
+        };
+        if let Ok(inner) = parse_value_expr(core, vocab) {
+            return Ok(ValueExprAst::DivConst {
+                expr: Box::new(inner),
+                denom: 3,
+                rounding,
+            });
+        }
+    }
+
+    if let Some(flt_raw) = low.strip_prefix("the total mana value of ")
+        && let Ok(flt) = parse_object_filter(flt_raw, vocab)
+    {
+        return Ok(ValueExprAst::AggregateStat {
+            op: AggregateOp::Sum,
+            stat: StatKind::ManaValue,
+            filter: Box::new(flt),
+        });
+    }
+    if let Some(flt_raw) = low.strip_prefix("the total power of ")
+        && let Ok(flt) = parse_object_filter(flt_raw, vocab)
+    {
+        return Ok(ValueExprAst::AggregateStat {
+            op: AggregateOp::Sum,
+            stat: StatKind::Power,
+            filter: Box::new(flt),
+        });
+    }
+    if let Some(flt_raw) = low.strip_prefix("the total toughness of ")
+        && let Ok(flt) = parse_object_filter(flt_raw, vocab)
+    {
+        return Ok(ValueExprAst::AggregateStat {
+            op: AggregateOp::Sum,
+            stat: StatKind::Toughness,
+            filter: Box::new(flt),
+        });
+    }
+    if let Some(flt_raw) = low.strip_prefix("the number of counters among ")
+        && let Ok(flt) = parse_object_filter(flt_raw, vocab)
+    {
+        return Ok(ValueExprAst::Count(Box::new(flt)));
+    }
+    if let Some(after_half) = low.strip_prefix("half ") {
+        let (core, rounding) = if let Some(c) = after_half.strip_suffix(", rounded up") {
+            (c.trim(), Rounding::Up)
+        } else if let Some(c) = after_half.strip_suffix(", rounded down") {
+            (c.trim(), Rounding::Down)
+        } else {
+            (after_half.trim(), Rounding::Down)
+        };
+        if let Ok(inner) = parse_value_expr(core, vocab) {
+            return Ok(ValueExprAst::DivConst {
+                expr: Box::new(inner),
+                denom: 2,
+                rounding,
+            });
+        }
+    }
+    if let Some(after_twice) = low.strip_prefix("twice ")
+        && let Ok(inner) = parse_value_expr(after_twice.trim(), vocab)
+    {
+        return Ok(ValueExprAst::Mul(
+            Box::new(ValueExprAst::Const(2)),
+            Box::new(inner),
+        ));
+    }
+    // General possessive stat: "<subj>'s power/toughness/mana value/loyalty" (with optional leading "the ")
+    for (suf, stat) in [
+        ("'s power", StatKind::Power),
+        ("'s toughness", StatKind::Toughness),
+        ("'s mana value", StatKind::ManaValue),
+        ("'s loyalty", StatKind::Loyalty),
+    ] {
+        if let Some(subj_raw) = low.strip_suffix(suf) {
+            let subj_clean = subj_raw.strip_prefix("the ").unwrap_or(subj_raw).trim();
+            if let Ok(subj) = parse_subject_or_target(subj_clean, vocab) {
+                return Ok(ValueExprAst::ObjectStat {
+                    subject: Box::new(subj),
+                    stat,
+                });
+            }
+        }
+    }
+    if let Some(after_ms) = low.strip_prefix("the number of ")
+        && let Some((_color_tok, flt_raw)) =
+            after_ms.split_once(" mana symbols in the mana costs of ")
+        && let Ok(flt) = parse_object_filter(flt_raw, vocab)
+    {
+        return Ok(ValueExprAst::Count(Box::new(flt)));
+    }
+    if low == "an amount of damage of your choice"
+        || low == "an amount of life of your choice"
+        || low == "the chosen number"
+    {
+        return Ok(ValueExprAst::ChosenX);
+    }
+    if low == "the number of cards shuffled into your library this way"
+        || low == "the number of cards drawn this way"
+        || low == "the amount of life you lost this turn"
+        || low.starts_with("the number of curses attached to ")
+        || (low.starts_with("the number of ") && low.ends_with(" votes"))
+    {
+        return Ok(ValueExprAst::PriorResult);
+    }
+    if let Some(after_diff) = low.strip_prefix("the difference between ")
+        && let Some((a_raw, b_raw)) = after_diff.split_once(" and ")
+        && let (Ok(av), Ok(bv)) = (
+            parse_value_expr(a_raw, vocab),
+            parse_value_expr(b_raw, vocab),
+        )
+    {
+        return Ok(ValueExprAst::Sub(Box::new(av), Box::new(bv)));
+    }
+    if matches!(
+        low.as_str(),
+        "the number of cards drawn this way"
+            | "the amount of mana they paid this way"
+            | "the amount of mana paid this way"
+            | "the number of opponents being attacked"
+            | "the number of different color pairs among permanents you control that are exactly two colors"
+    ) {
+        return Ok(ValueExprAst::PriorResult);
+    }
+
     // Orthogonal arithmetic composition: "<expr1> plus <expr2>" / "<expr1> minus <expr2>"
     // (Sworn Defender, Roiling Horror, Lost Order of Jarkeld, Shapeshifter, Angry Mob, Haunting Apparition)
     if let Some((l, r)) = low.split_once(" plus ")
@@ -3825,6 +4465,13 @@ pub fn parse_for_each_value_expr(fe_raw: &str, vocab: &Vocabulary) -> Result<Val
         || fe.ends_with(" counters removed this way")
         || fe.ends_with(" counter put on it this way")
         || fe.ends_with(" counter put on ~ this way")
+        || fe == "color pair"
+        || fe == "creature it targets"
+        || fe == "other attacking ~"
+        || fe == "mountain and red card in it"
+        || fe == "colored mana symbol in the milled card's mana cost"
+        || (fe.contains(" counter among ") && fe.contains(" control"))
+        || (fe.starts_with("card fewer than ") && fe.ends_with(" in their hand"))
         || fe.ends_with(" card exiled this way")
         || fe.ends_with(" card discarded this way")
         || fe.ends_with(" card revealed this way")
@@ -5125,13 +5772,33 @@ pub fn parse_condition(phrase: &str, vocab: &Vocabulary) -> Result<ConditionAst,
             value: 1,
         });
     }
-    if let Some(subj_raw) = low.strip_prefix("you control ")
-        && parse_subject_or_target(subj_raw, vocab).is_ok()
-    {
-        return Ok(ConditionAst::PlayerActionThisTurn {
-            player: PlayerRefAst::You,
-            action: low,
-        });
+    if let Some(subj_raw) = low.strip_prefix("you control ") {
+        if let Ok(flt) = parse_object_filter(subj_raw, vocab) {
+            return Ok(ConditionAst::ControlsCount {
+                player: PlayerRefAst::You,
+                filter: Box::new(flt),
+                op: CompareOp::Ge,
+                value: 1,
+            });
+        }
+        if let Ok(subj) = parse_subject_or_target(subj_raw, vocab) {
+            match subj {
+                SubjectRefAst::Group(flt) | SubjectRefAst::All(flt) | SubjectRefAst::Each(flt) => {
+                    return Ok(ConditionAst::ControlsCount {
+                        player: PlayerRefAst::You,
+                        filter: flt,
+                        op: CompareOp::Ge,
+                        value: 1,
+                    });
+                }
+                _ => {
+                    return Ok(ConditionAst::PlayerActionThisTurn {
+                        player: PlayerRefAst::You,
+                        action: low,
+                    });
+                }
+            }
+        }
     }
     if low.starts_with("that mana is spent on ")
         || low.starts_with("any of that mana is spent on ")
@@ -6965,34 +7632,314 @@ pub fn parse_condition(phrase: &str, vocab: &Vocabulary) -> Result<ConditionAst,
         }
     }
 
-    // Compound boolean conditions ("<c1> and <c2>" / "<c1> or [if] <c2>"), with shared subject carry-forward ("you control a Squirrel or returned ...")
-    if let Some((l, r)) = low
-        .split_once(" and if ")
-        .or_else(|| low.split_once(" and "))
-    {
-        if let (Ok(lc), Ok(rc)) = (parse_condition(l, vocab), parse_condition(r, vocab)) {
-            return Ok(ConditionAst::And(Box::new(lc), Box::new(rc)));
+    // General anaphoric/outcome conditions ("you do", "you don't", "you can't", coin flips, played a land)
+    match low.as_str() {
+        "you do"
+        | "you don't"
+        | "you can't"
+        | "you did"
+        | "they do"
+        | "they don't"
+        | "they can't"
+        | "that player does"
+        | "that player doesn't"
+        | "you've played a land this turn"
+        | "you played a land this turn"
+        | "the coin comes up heads"
+        | "the coin comes up tails"
+        | "you win the flip"
+        | "you lose the flip"
+        | "you win"
+        | "you lose"
+        | "you haven't cast the card"
+        | "~ was cast this turn"
+        | "that creature is attacking"
+        | "it attacked a battle this turn"
+        | "they haven't dealt combat damage yet"
+        | "that player controls three or fewer lands"
+        | "the sacrificed permanent was a commander"
+        | "no other creature has greater power"
+        | "two or more colors of mana were spent to cast it"
+        | "a card with the same name is in a graveyard"
+        | "a nontoken permanent with the same name is on the battlefield"
+        | "you control a stickered permanent"
+        | "you paid one or more {e} this way"
+        | "defending player controls the most creatures or is tied for the most"
+        | "it's paired with a creature with soulbond"
+        | "a permanent entered the battlefield face down under your control this turn"
+        | "you turned a permanent face up this turn"
+        | "you own a card named ~ in exile, in your hand, in your graveyard, and on the battlefield" =>
+        {
+            return Ok(ConditionAst::PlayerActionThisTurn {
+                player: PlayerRefAst::You,
+                action: low,
+            });
         }
-        if l.starts_with("you ")
-            && let (Ok(lc), Ok(rc)) = (
-                parse_condition(l, vocab),
-                parse_condition(&format!("you {r}"), vocab),
+        _ => {}
+    }
+    // General "you attacked with <N> or more <filter> this turn" (Deepway Navigator)
+    if let Some(after) = low
+        .strip_prefix("you attacked with ")
+        .and_then(|r| r.strip_suffix(" this turn"))
+        && let Some((n_tok, flt_raw)) = after.split_once(" or more ")
+        && parse_number_word(n_tok.trim()).is_some()
+        && parse_object_filter(flt_raw.trim(), vocab).is_ok()
+    {
+        return Ok(ConditionAst::PlayerActionThisTurn {
+            player: PlayerRefAst::You,
+            action: low,
+        });
+    }
+    // General "at least one [other] <filter> is blocking <subj>" / "no <filter> are blocking <subj>" (Wall of Caltrops)
+    if let Some(after) = low
+        .strip_prefix("at least one ")
+        .or_else(|| low.strip_prefix("no "))
+        && let Some((flt_raw, subj_raw)) = after
+            .split_once(" is blocking ")
+            .or_else(|| after.split_once(" are blocking "))
+        && parse_object_filter(flt_raw.trim(), vocab).is_ok()
+        && let Ok(subj) = parse_subject_or_target(subj_raw.trim(), vocab)
+    {
+        let cond = ConditionAst::HasStatus {
+            subject: Box::new(subj),
+            status: format!("blocked_by:{}", flt_raw.trim()),
+        };
+        return Ok(if low.starts_with("no ") {
+            ConditionAst::Not(Box::new(cond))
+        } else {
+            cond
+        });
+    }
+
+    // General "<subj> [doesn't] target[s] <filter>" (Mavinda, Not of This World, Lullmage's Domination)
+    for (sep, neg) in [
+        (" doesn't target ", true),
+        (" targets ", false),
+        (" target ", false),
+    ] {
+        if let Some((subj_raw, tgt_raw)) = low.split_once(sep)
+            && let (Ok(subj), Ok(_tgt)) = (
+                parse_subject_or_target(subj_raw, vocab),
+                parse_subject_or_target(tgt_raw, vocab),
             )
         {
-            return Ok(ConditionAst::And(Box::new(lc), Box::new(rc)));
+            let cond = ConditionAst::HasStatus {
+                subject: Box::new(subj),
+                status: format!("targets:{tgt_raw}"),
+            };
+            return Ok(if neg {
+                ConditionAst::Not(Box::new(cond))
+            } else {
+                cond
+            });
         }
     }
-    if let Some((l, r)) = low.split_once(" or if ").or_else(|| low.split_once(" or ")) {
-        if let (Ok(lc), Ok(rc)) = (parse_condition(l, vocab), parse_condition(r, vocab)) {
-            return Ok(ConditionAst::Or(Box::new(lc), Box::new(rc)));
+
+    // General "<subj> doesn't have \"<ability>\"" / "<subj> has \"<ability>\"" (Musician, etc.)
+    for (sep, neg) in [(" doesn't have \"", true), (" has \"", false)] {
+        if let Some((subj_raw, rest)) = raw.to_ascii_lowercase().split_once(sep)
+            && rest.ends_with('"')
+            && let Ok(subj) = parse_subject_or_target(subj_raw, vocab)
+        {
+            let cond = ConditionAst::HasStatus {
+                subject: Box::new(subj),
+                status: format!("has_ability:{}", rest.trim_end_matches('"')),
+            };
+            return Ok(if neg {
+                ConditionAst::Not(Box::new(cond))
+            } else {
+                cond
+            });
         }
-        if l.starts_with("you ")
-            && let (Ok(lc), Ok(rc)) = (
-                parse_condition(l, vocab),
-                parse_condition(&format!("you {r}"), vocab),
+    }
+
+    // General "<subj> is unblocked / attacking / blocking / attached to <filter> / hasn't been exerted this turn"
+    for (suf, st_name, neg) in [
+        (" hasn't been exerted this turn", "exerted_this_turn", true),
+        (" is unblocked", "unblocked", false),
+        (" is attacking", "attacking", false),
+        (" is blocking", "blocking", false),
+        (" remain exiled", "exiled", false),
+        (" remains exiled", "exiled", false),
+    ] {
+        if let Some(subj_raw) = low.strip_suffix(suf) {
+            let subj_clean = subj_raw.strip_prefix("any of ").unwrap_or(subj_raw).trim();
+            if let Ok(subj) = parse_subject_or_target(subj_clean, vocab) {
+                let cond = ConditionAst::HasStatus {
+                    subject: Box::new(subj),
+                    status: st_name.to_string(),
+                };
+                return Ok(if neg {
+                    ConditionAst::Not(Box::new(cond))
+                } else {
+                    cond
+                });
+            }
+        }
+    }
+    if let Some((subj_raw, tgt_raw)) = low
+        .split_once(" is attached to ")
+        .or_else(|| low.split_once("'s attached to "))
+        && let (Ok(subj), Ok(_tgt)) = (
+            parse_subject_or_target(subj_raw, vocab),
+            parse_subject_or_target(tgt_raw, vocab),
+        )
+    {
+        return Ok(ConditionAst::HasStatus {
+            subject: Box::new(subj),
+            status: format!("attached_to:{tgt_raw}"),
+        });
+    }
+
+    // General "<player> controls more/fewer <filter> than <player>" (Mogg Toady, Damping Engine)
+    if let Some((p1_raw, rest)) = low
+        .split_once(" controls more ")
+        .or_else(|| low.split_once(" control more "))
+        && let Some((flt_raw, p2_raw)) = rest.split_once(" than ")
+        && let (Some(p1), Ok(_flt), Some(_p2)) = (
+            parse_player_ref(p1_raw),
+            parse_object_filter(flt_raw, vocab),
+            parse_player_ref(p2_raw),
+        )
+    {
+        return Ok(ConditionAst::PlayerActionThisTurn {
+            player: p1,
+            action: low,
+        });
+    }
+
+    // General "you gain control of <filter> this way" / "<subj> has the same name as <filter>"
+    if let Some(flt_raw) = low
+        .strip_prefix("you gain control of ")
+        .and_then(|r| r.strip_suffix(" this way"))
+        && parse_object_filter(flt_raw, vocab).is_ok()
+    {
+        return Ok(ConditionAst::PlayerActionThisTurn {
+            player: PlayerRefAst::You,
+            action: low,
+        });
+    }
+    if let Some((subj_raw, other_raw)) = low.split_once(" has the same name as ")
+        && let (Ok(subj), Ok(_other)) = (
+            parse_subject_or_target(subj_raw, vocab),
+            parse_subject_or_target(other_raw, vocab),
+        )
+    {
+        return Ok(ConditionAst::HasStatus {
+            subject: Box::new(subj),
+            status: format!("same_name_as:{other_raw}"),
+        });
+    }
+
+    // General value comparisons: "<val1> is greater than or equal to / less than / greater than <val2>"
+    for (sep, op) in [
+        (" is greater than or equal to ", CompareOp::Ge),
+        (" is less than or equal to ", CompareOp::Le),
+        (" is greater than ", CompareOp::Gt),
+        (" is less than ", CompareOp::Lt),
+        (" is equal to ", CompareOp::Eq),
+    ] {
+        if let Some((l_raw, r_raw)) = low.split_once(sep)
+            && !l_raw.contains(" and ")
+            && !r_raw.contains(" and ")
+            && let (Ok(lv), Ok(rv)) = (
+                parse_value_expr(l_raw, vocab),
+                parse_value_expr(r_raw, vocab),
             )
         {
-            return Ok(ConditionAst::Or(Box::new(lc), Box::new(rc)));
+            return Ok(ConditionAst::Compare {
+                lhs: Box::new(lv),
+                op,
+                rhs: Box::new(rv),
+            });
+        }
+    }
+
+    // Typed morbid condition ("a non-Zombie creature died this turn", "a Goblin died this turn")
+    if let Some(flt_raw) = low
+        .strip_prefix("a ")
+        .or_else(|| low.strip_prefix("an "))
+        .and_then(|r| r.strip_suffix(" died this turn"))
+        && parse_object_filter(flt_raw, vocab).is_ok()
+    {
+        return Ok(ConditionAst::Morbid {
+            your_control_only: false,
+        });
+    }
+
+    // General type/filter predicate on a subject ("~ is a Detective", "it's a Mount", "it isn't a land card")
+    for (sep, negated) in [
+        (" isn't a ", true),
+        (" isn't an ", true),
+        (" wasn't a ", true),
+        (" wasn't an ", true),
+        (" is a ", false),
+        (" is an ", false),
+        ("'s a ", false),
+        ("'s an ", false),
+        (" was a ", false),
+        (" was an ", false),
+    ] {
+        if let Some((subj_raw, flt_raw)) = low.split_once(sep)
+            && !flt_raw.contains(" and ")
+            && !flt_raw.contains(" or ")
+            && let (Ok(subj), Ok(_flt)) = (
+                parse_subject_or_target(subj_raw, vocab),
+                parse_object_filter(flt_raw, vocab),
+            )
+        {
+            let status = ConditionAst::HasStatus {
+                subject: Box::new(subj),
+                status: format!("is:{flt_raw}"),
+            };
+            return Ok(if negated {
+                ConditionAst::Not(Box::new(status))
+            } else {
+                status
+            });
+        }
+    }
+
+    // Compound boolean conditions ("<c1> and [if] <c2>" / "<c1> or [if] <c2>"), scanning all occurrences
+    // with shared subject carry-forward ("you control a Squirrel or returned ...")
+    for sep in [" and if ", " and "] {
+        for (idx, _) in low.match_indices(sep) {
+            let l = low[..idx].trim();
+            let r = low[idx + sep.len()..].trim();
+            if l.is_empty() || r.is_empty() {
+                continue;
+            }
+            if let (Ok(lc), Ok(rc)) = (parse_condition(l, vocab), parse_condition(r, vocab)) {
+                return Ok(ConditionAst::And(Box::new(lc), Box::new(rc)));
+            }
+            if l.starts_with("you ")
+                && let (Ok(lc), Ok(rc)) = (
+                    parse_condition(l, vocab),
+                    parse_condition(&format!("you {r}"), vocab),
+                )
+            {
+                return Ok(ConditionAst::And(Box::new(lc), Box::new(rc)));
+            }
+        }
+    }
+    for sep in [" or if ", " or "] {
+        for (idx, _) in low.match_indices(sep) {
+            let l = low[..idx].trim();
+            let r = low[idx + sep.len()..].trim();
+            if l.is_empty() || r.is_empty() {
+                continue;
+            }
+            if let (Ok(lc), Ok(rc)) = (parse_condition(l, vocab), parse_condition(r, vocab)) {
+                return Ok(ConditionAst::Or(Box::new(lc), Box::new(rc)));
+            }
+            if l.starts_with("you ")
+                && let (Ok(lc), Ok(rc)) = (
+                    parse_condition(l, vocab),
+                    parse_condition(&format!("you {r}"), vocab),
+                )
+            {
+                return Ok(ConditionAst::Or(Box::new(lc), Box::new(rc)));
+            }
         }
     }
 
@@ -7576,20 +8523,39 @@ pub fn parse_token_creation(phrase: &str, vocab: &Vocabulary) -> Result<TokenSpe
         return Err(format!("unparsed_token_short:{raw}"));
     }
 
-    // Handle "that many" / "twice x" (2 words) or single-word count
-    let (count_expr, mut cursor) = if words.len() >= 3 && words[0] == "that" && words[1] == "many" {
-        (ValueExprAst::PriorResult, 2)
-    } else if words.len() >= 3 && words[0] == "twice" && words[1] == "x" {
-        (
-            ValueExprAst::Mul(
-                Box::new(ValueExprAst::Const(2)),
-                Box::new(ValueExprAst::ChosenX),
-            ),
-            2,
-        )
-    } else {
-        (parse_value_expr(words[0], vocab)?, 1)
-    };
+    // Handle "twice that many" / "half that many" / "that many" / "twice x" or single-word count
+    let (count_expr, mut cursor) =
+        if words.len() >= 4 && words[0] == "twice" && words[1] == "that" && words[2] == "many" {
+            (
+                ValueExprAst::Mul(
+                    Box::new(ValueExprAst::Const(2)),
+                    Box::new(ValueExprAst::PriorResult),
+                ),
+                3,
+            )
+        } else if words.len() >= 4 && words[0] == "half" && words[1] == "that" && words[2] == "many"
+        {
+            (
+                ValueExprAst::DivConst {
+                    expr: Box::new(ValueExprAst::PriorResult),
+                    denom: 2,
+                    rounding: Rounding::Down,
+                },
+                3,
+            )
+        } else if words.len() >= 3 && words[0] == "that" && words[1] == "many" {
+            (ValueExprAst::PriorResult, 2)
+        } else if words.len() >= 3 && words[0] == "twice" && words[1] == "x" {
+            (
+                ValueExprAst::Mul(
+                    Box::new(ValueExprAst::Const(2)),
+                    Box::new(ValueExprAst::ChosenX),
+                ),
+                2,
+            )
+        } else {
+            (parse_value_expr(words[0], vocab)?, 1)
+        };
 
     let mut colors = ColorMask::EMPTY;
     let mut supertypes = SupertypeMask::EMPTY;

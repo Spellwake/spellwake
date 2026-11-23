@@ -411,6 +411,7 @@ fn observe(
             | DamageEffectId::StaticPreventionWithExile(_, _)
             | DamageEffectId::CombatDamageToMill(_, _)
             | DamageEffectId::RemovePlusOneToPreventDamage(_, _)
+            | DamageEffectId::ShieldCounter(_)
             | DamageEffectId::StaticDouble(_)
             | DamageEffectId::DoubleDamageFromEquippedCreature(_)
             | DamageEffectId::DoubleDamageToEquippedCreature(_)
