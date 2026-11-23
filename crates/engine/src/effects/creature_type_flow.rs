@@ -392,6 +392,84 @@ impl EffectWindow {
                             .count();
                         Ok(RulesInteger::from_usize(count))
                     }
+                    ValueZone::AllGraveyards => {
+                        let evaluated = self.evaluated_characteristics()?;
+                        let count = evaluated
+                            .objects
+                            .values()
+                            .filter(|card| {
+                                matches!(card.zone, ObjectZone::Graveyard(_))
+                                    && self.matches_object_filter(
+                                        bound_filter,
+                                        card,
+                                        controller,
+                                        ability_source,
+                                        &excluded,
+                                        &evaluated,
+                                    )
+                            })
+                            .count();
+                        Ok(RulesInteger::from_usize(count))
+                    }
+                    ValueZone::Exile(owner_role) => {
+                        let req_owner = match owner_role {
+                            None => None,
+                            Some(crate::program::ResolvingPlayer::Controller) => Some(controller),
+                            Some(role) => Some(self.resolving_player_at(role, cursor)?),
+                        };
+                        let evaluated = self.evaluated_characteristics()?;
+                        let count = evaluated
+                            .objects
+                            .values()
+                            .filter(|card| {
+                                card.zone == ObjectZone::Exile
+                                    && req_owner.is_none_or(|seat| {
+                                        self.window
+                                            .cards()
+                                            .get(card.object)
+                                            .is_some_and(|obj| obj.owner() == seat)
+                                    })
+                                    && self.matches_object_filter(
+                                        bound_filter,
+                                        card,
+                                        controller,
+                                        ability_source,
+                                        &excluded,
+                                        &evaluated,
+                                    )
+                            })
+                            .count();
+                        Ok(RulesInteger::from_usize(count))
+                    }
+                    ValueZone::Library(player_role) => {
+                        let seat = if player_role == crate::program::ResolvingPlayer::Controller {
+                            controller
+                        } else {
+                            self.resolving_player_at(player_role, cursor)?
+                        };
+                        if bound_filter == crate::program::ObjectFilter::any() {
+                            return Ok(RulesInteger::from_usize(
+                                self.window.cards().library(seat).len(),
+                            ));
+                        }
+                        let evaluated = self.evaluated_characteristics()?;
+                        let count = evaluated
+                            .objects
+                            .values()
+                            .filter(|card| {
+                                card.zone == ObjectZone::Library(seat)
+                                    && self.matches_object_filter(
+                                        bound_filter,
+                                        card,
+                                        controller,
+                                        ability_source,
+                                        &excluded,
+                                        &evaluated,
+                                    )
+                            })
+                            .count();
+                        Ok(RulesInteger::from_usize(count))
+                    }
                 }
             }
             ValueExpr::CountOtherSharingSourceSubtype => {
@@ -726,12 +804,35 @@ impl EffectWindow {
             },
             ValueExpr::CounterCount { subject, kind } => match subject {
                 CounterSubjectRef::AbilitySource => {
-                    let kind = (*kind).ok_or(EffectError::InconsistentProgram)?;
                     let entry = self
                         .window
                         .resolving()
                         .ok_or(EffectError::WrongResolutionFrame)?;
-                    self.source_counter_value_at_resolution(entry, kind)
+                    match kind {
+                        Some(k) => self.source_counter_value_at_resolution(entry, *k),
+                        None => {
+                            let source_id = match entry.kind() {
+                                StackKind::ActivatedAbility { source }
+                                | StackKind::TriggeredAbility { source } => source.id(),
+                                _ => return Err(EffectError::InconsistentProgram),
+                            };
+                            Ok(self.characteristics.total_permanent_counters(source_id))
+                        }
+                    }
+                }
+                CounterSubjectRef::TargetObject => {
+                    let entry = self
+                        .window
+                        .resolving()
+                        .ok_or(EffectError::WrongResolutionFrame)?;
+                    let TargetRef::Object(id) = self.instruction_target(entry)?.choice().target
+                    else {
+                        return Err(EffectError::InconsistentProgram);
+                    };
+                    Ok(match kind {
+                        Some(k) => self.counters_of_kind(id, *k),
+                        None => self.characteristics.total_permanent_counters(id),
+                    })
                 }
                 CounterSubjectRef::TriggerSource => {
                     let trigger = cursor
@@ -856,6 +957,55 @@ impl EffectWindow {
                     .get(controller)
                     .cloned()
                     .ok_or(EffectError::InconsistentProgram),
+                PlayerStatExpr::PlayerLife(role) => {
+                    let seat = if *role == crate::program::ResolvingPlayer::Controller {
+                        controller
+                    } else {
+                        self.resolving_player_at(*role, cursor)?
+                    };
+                    self.life
+                        .get(seat)
+                        .cloned()
+                        .ok_or(EffectError::InconsistentProgram)
+                }
+                PlayerStatExpr::PlayerHandSize(role) => {
+                    let seat = if *role == crate::program::ResolvingPlayer::Controller {
+                        controller
+                    } else {
+                        self.resolving_player_at(*role, cursor)?
+                    };
+                    Ok(RulesInteger::from_usize(
+                        self.window
+                            .cards()
+                            .iter()
+                            .filter(|o| o.zone() == ObjectZone::Hand(seat))
+                            .count(),
+                    ))
+                }
+                PlayerStatExpr::PlayerLibrarySize(role) => {
+                    let seat = if *role == crate::program::ResolvingPlayer::Controller {
+                        controller
+                    } else {
+                        self.resolving_player_at(*role, cursor)?
+                    };
+                    Ok(RulesInteger::from_usize(
+                        self.window.cards().library(seat).len(),
+                    ))
+                }
+                PlayerStatExpr::PlayerGraveyardSize(role) => {
+                    let seat = if *role == crate::program::ResolvingPlayer::Controller {
+                        controller
+                    } else {
+                        self.resolving_player_at(*role, cursor)?
+                    };
+                    Ok(RulesInteger::from_usize(
+                        self.window
+                            .cards()
+                            .iter()
+                            .filter(|o| o.zone() == ObjectZone::Graveyard(seat))
+                            .count(),
+                    ))
+                }
                 PlayerStatExpr::ControllerLifeAboveStarting => {
                     let starting = self
                         .life
@@ -1111,7 +1261,19 @@ impl EffectWindow {
                         .resolving()
                         .filter(|entry| cursor.is_none_or(|c| c.entry == entry.id()))
                         .ok_or(EffectError::InconsistentProgram)?;
-                    Ok(entry.chosen_x().cloned().unwrap_or_else(|| 0.into()))
+                    if let Some(x) = entry.chosen_x() {
+                        return Ok(x.clone());
+                    }
+                    if let Some(binding) = cursor
+                        .and_then(|c| self.execution_bindings(c.entry))
+                        .and_then(|b| b.trigger.as_ref())
+                        && let [member] = binding.causes.members()
+                        && let crate::occurrence::TriggerRelated::ZoneChange { before, .. } =
+                            &member.related
+                    {
+                        return Ok(before.spell_x.clone().unwrap_or_else(|| 0.into()));
+                    }
+                    Ok(0.into())
                 }
                 EventValueKind::EnteredKickerX => {
                     let binding = cursor

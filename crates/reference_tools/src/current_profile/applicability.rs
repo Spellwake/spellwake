@@ -293,6 +293,7 @@ native!(ExecutableBody, self, {
         Instruction::CopyAbility
         | Instruction::CounterSpellToExile
         | Instruction::UntapControlledCreatures
+        | Instruction::SetGroupTapped { .. }
         | Instruction::TapAttackersAndSkipNextUntap
         | Instruction::FightSourceWithTarget
         | Instruction::ClearSourceCounters(_)
@@ -400,6 +401,7 @@ native!(ExecutableBody, self, {
         | Instruction::PutChargeCounterOnSource
         | Instruction::PutBlessingCounterOnSource
         | Instruction::PutNamedCounterOnSource { .. }
+        | Instruction::PutCountersOnSubject { .. }
         | Instruction::PutQuestCounterOnSource
         | Instruction::PutStorageCounterOnSource
         | Instruction::AbilitySourceControllerLosesLife(_)
@@ -582,6 +584,7 @@ native!(ExecutableBody, self, {
         | Instruction::RepeatOpponentLifeLoss
         | Instruction::OpponentsLoseAndControllerGains(_)
         | Instruction::AdjustEachOpponentLife { .. }
+        | Instruction::AdjustPlayersLife { .. }
         | Instruction::GainControlOfSpell
         | Instruction::ChangeOnlyTarget
         | Instruction::LoseLifeEqualToTargetSpellManaValue
@@ -610,6 +613,7 @@ native!(ExecutableBody, self, {
         | Instruction::RevealTopAndRemoveAttackerIfForest
         | Instruction::DamageCapturedBlocker(_)
         | Instruction::ChangeControlledPlaneswalkers { .. }
+        | Instruction::ChangeGroup { .. }
         | Instruction::ChangeAbilitySource { .. }
         | Instruction::GiveControlOfAbilitySource
         | Instruction::UntapAndControlCreatures
@@ -625,6 +629,7 @@ native!(ExecutableBody, self, {
         | Instruction::Unattach
         | Instruction::Attach(_)
         | Instruction::DestroyTarget
+        | Instruction::DestroyTargetWithoutRegeneration
         | Instruction::ReturnOwnGraveyardCreatureToBattlefield
         | Instruction::ReturnAnyGraveyardCreatureBlackSubtype(_)
         | Instruction::ReturnAnyGraveyardCreatureOrPlaneswalker
@@ -1995,6 +2000,7 @@ native!(RulesOccurrence, self, {
         | RulesOccurrence::ManaDebited { .. }
         | RulesOccurrence::ManaExpired { .. }
         | RulesOccurrence::ArtifactTappedForMana { .. }
+        | RulesOccurrence::PermanentTappedForMana { .. }
         | RulesOccurrence::ManaPoolEmptied { .. }
         | RulesOccurrence::WorldTenureChanged(_)
         | RulesOccurrence::CopyMoved { .. }

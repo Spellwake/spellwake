@@ -997,7 +997,7 @@ pub(super) fn compile(
                 activated::{CounterCostDelta, DiscardCostMode},
                 effects::CounterKind,
             };
-            let study = activation(fixed_cost("{1}")?, SourceCost::Discard { mode: DiscardCostMode::SelectedOne, tap_source: true }, NoTarget,
+            let study = activation(fixed_cost("{1}")?, SourceCost::Discard { mode: DiscardCostMode::SelectedOne, tap_source: true, sacrifice_source: false }, NoTarget,
                 vec![PutNamedCounterOnSource { kind: CounterKind::Study, amount: 1 }]);
             let mut raise = activation(ManaCost::free(), SourceCost::Counter {
                 kind: CounterKind::Study,

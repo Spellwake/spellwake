@@ -239,6 +239,7 @@ impl EffectWindow {
                     Instruction::PutCountersOnControlledCreatures
                         | Instruction::PutCountersOnControlledSubtype(_)
                         | Instruction::PutCountersOnControlledCreaturesAndGrant(_)
+                        | Instruction::PutCountersOnSubject { .. }
                 ) =>
             {
                 None
@@ -268,6 +269,101 @@ impl EffectWindow {
                     after: 0.into(),
                 }])
             });
+        }
+        if let Instruction::PutCountersOnSubject {
+            subject,
+            kind,
+            amount,
+        } = operation
+        {
+            let resolved = self.resolve_value_expr(entry.controller(), amount)?;
+            if !resolved.is_positive() {
+                return Ok(());
+            }
+            let targets = self.effect_group(entry, *subject.as_ref())?;
+            if targets.is_empty() {
+                return Ok(());
+            }
+            let before = self.rules_snapshot(None)?;
+            if matches!(kind, CounterKind::PlusOne | CounterKind::MinusOne) {
+                let raw = if *kind == CounterKind::PlusOne {
+                    PowerToughnessCounters {
+                        plus_one: resolved,
+                        minus_one: 0.into(),
+                    }
+                } else {
+                    PowerToughnessCounters {
+                        plus_one: 0.into(),
+                        minus_one: resolved,
+                    }
+                };
+                let mut records = Vec::with_capacity(targets.len());
+                for object in targets {
+                    let added = self.adjusted_pt_counters(
+                        &before.view().evaluated,
+                        object,
+                        raw.clone(),
+                        None,
+                    )?;
+                    let previous = self.characteristics.counters(object);
+                    self.characteristics.place_counters(object, &added)?;
+                    let after = self.characteristics.counters(object);
+                    records.push((object, previous, added, after));
+                }
+                return self.emit_from(cause, &before, None, append, |old, new, _| {
+                    records
+                        .into_iter()
+                        .map(|(object, prev, added, after)| {
+                            Ok(RulesOccurrence::CountersPlaced {
+                                object,
+                                before_appearance: Box::new(
+                                    old.appearance(object)
+                                        .ok_or(EffectError::InconsistentProgram)?,
+                                ),
+                                after_appearance: Box::new(
+                                    new.appearance(object)
+                                        .ok_or(EffectError::InconsistentProgram)?,
+                                ),
+                                before: prev,
+                                added,
+                                after,
+                            })
+                        })
+                        .collect()
+                });
+            }
+            let mut occurrences = Vec::with_capacity(targets.len());
+            for object in targets {
+                let old = self.counters_of_kind(object, *kind);
+                let added =
+                    effect_counter_multiplier(&before.view().evaluated, object).times(&resolved);
+                let after = old.plus(&added);
+                self.characteristics
+                    .named_permanent_counters_mut(*kind)
+                    .ok_or(EffectError::InconsistentProgram)?
+                    .insert(object, after.clone());
+                if kind.keyword_counter_ability().is_some()
+                    && let EventCause::Instruction { entry: eid, .. } = cause
+                {
+                    self.characteristics
+                        .refresh_keyword_counter_grant(eid, object, *kind)?;
+                }
+                occurrences.push(if *kind == CounterKind::Loyalty {
+                    RulesOccurrence::LoyaltyCountersChanged {
+                        object,
+                        before: old,
+                        after,
+                    }
+                } else {
+                    RulesOccurrence::PermanentCounterChanged {
+                        object,
+                        kind: *kind,
+                        before: old,
+                        after,
+                    }
+                });
+            }
+            return self.emit_from(cause, &before, None, append, |_, _, _| Ok(occurrences));
         }
         if let Instruction::PutNamedCounterOnSource { kind, amount } = operation {
             let source = source.ok_or(EffectError::InconsistentProgram)?;

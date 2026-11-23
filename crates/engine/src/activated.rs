@@ -13,9 +13,8 @@ use crate::{
 pub struct ActivatedAbilityId(pub u64);
 
 /// Printed restriction on activating this particular ability (CR 602.5).
-// Preserves `Copy` semantics for inline `ObjectFilter` without heap allocation.
 #[allow(clippy::large_enum_variant)]
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ActivationRestriction {
     DuringUpkeep,
     /// Each player can activate this battlefield ability and pays its mana cost.
@@ -76,9 +75,102 @@ pub enum ActivationRestriction {
         filter: crate::program::ObjectFilter,
         minimum: u8,
     },
+    /// Activate only if the ability source itself matches `filter` (e.g., Vehicle is a creature).
+    SourceMatches(crate::program::ObjectFilter),
+    /// Activate only if an arbitrary resolution condition evaluates true at activation time.
+    Condition(Box<crate::program::ResolutionCondition>),
+    /// Activate only if every sub-restriction is satisfied.
+    All(Vec<ActivationRestriction>),
+}
+
+impl ActivationRestriction {
+    /// Whether this restriction imposes a once-per-turn activation cap.
+    #[must_use]
+    pub fn has_once_each_turn(&self) -> bool {
+        match self {
+            Self::OnceEachTurn | Self::SorceryOnceEachTurn | Self::DuringYourTurnOnceEachTurn => {
+                true
+            }
+            Self::All(items) => items.iter().any(Self::has_once_each_turn),
+            _ => false,
+        }
+    }
+
+    /// Whether this restriction imposes a once-per-game / exhaust activation cap.
+    #[must_use]
+    pub fn has_exhaust(&self) -> bool {
+        match self {
+            Self::Exhaust | Self::PowerUp => true,
+            Self::All(items) => items.iter().any(Self::has_exhaust),
+            _ => false,
+        }
+    }
+
+    /// Whether any player may activate this ability.
+    #[must_use]
+    pub fn is_any_player(&self) -> bool {
+        match self {
+            Self::AnyPlayer => true,
+            Self::All(items) => items.iter().any(Self::is_any_player),
+            _ => false,
+        }
+    }
+
+    /// Whether this restriction includes the Power-Up activation discount/cap.
+    #[must_use]
+    pub fn has_power_up(&self) -> bool {
+        match self {
+            Self::PowerUp => true,
+            Self::All(items) => items.iter().any(Self::has_power_up),
+            _ => false,
+        }
+    }
+
+    /// Whether this restriction includes the legendary creatures/planeswalkers activation discount.
+    #[must_use]
+    pub fn has_legendary_discount(&self) -> bool {
+        match self {
+            Self::DiscountLegendaryCreaturesAndPlaneswalkers => true,
+            Self::All(items) => items.iter().any(Self::has_legendary_discount),
+            _ => false,
+        }
+    }
+
+    /// Validate vocabulary references and unbound condition operands.
+    pub(crate) fn validate(
+        &self,
+        vocabulary: &spellwake_contracts::creature_types::CreatureTypeVocabulary,
+    ) -> Result<(), crate::program::DefinitionError> {
+        match self {
+            Self::ControlsSubtypeCount { kind, .. } => {
+                if vocabulary.label(*kind).is_none() {
+                    return Err(crate::program::DefinitionError::ForeignCreatureType);
+                }
+                Ok(())
+            }
+            Self::ControlsMatching { filter, .. } | Self::SourceMatches(filter) => {
+                filter.validate_vocabulary(vocabulary)
+            }
+            Self::Condition(cond) => {
+                cond.validate(crate::program::BodyContext::Unbound, vocabulary)
+            }
+            Self::All(items) => {
+                if items.is_empty() {
+                    return Err(crate::program::DefinitionError::InvalidInstruction);
+                }
+                for item in items {
+                    item.validate(vocabulary)?;
+                }
+                Ok(())
+            }
+            _ => Ok(()),
+        }
+    }
 }
 
 /// Current-characteristic filter for selected permanent sacrifice costs.
+// Preserves `Copy` semantics on `SourceCost` by storing `ObjectFilter` inline.
+#[allow(clippy::large_enum_variant)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SelectedSacrificeFilter {
     Artifact,
@@ -93,6 +185,8 @@ pub enum SelectedSacrificeFilter {
     GrantingPermanent,
     /// A permanent with the selected creature subtype, including kindred permanents.
     Subtype(spellwake_contracts::creature_types::CreatureTypeId),
+    /// Any controlled battlefield permanent matching `ObjectFilter`.
+    Matching(crate::program::ObjectFilter),
 }
 
 /// Life amount paid as part of an activation cost.
@@ -116,6 +210,8 @@ pub enum CounterCostDelta {
 }
 
 /// Permanent filter for tap-permanent activation costs.
+// Preserves `Copy` semantics on `SourceCost` by storing `ObjectFilter` inline.
+#[allow(clippy::large_enum_variant)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TapCostFilter {
     /// A controlled untapped creature.
@@ -126,6 +222,8 @@ pub enum TapCostFilter {
     Legendary,
     /// A controlled untapped permanent with the specified creature subtype.
     Subtype(spellwake_contracts::creature_types::CreatureTypeId),
+    /// Any controlled untapped battlefield permanent matching `ObjectFilter`.
+    Matching(crate::program::ObjectFilter),
 }
 
 /// Number of permanents tapped by a tap-permanent activation cost.
@@ -225,10 +323,11 @@ pub enum SourceCost {
         tap_source: bool,
         from_graveyard: bool,
     },
-    /// Discard cards from the activator's hand, optionally tapping the source.
+    /// Discard cards from the activator's hand, optionally tapping and/or sacrificing the source.
     Discard {
         mode: DiscardCostMode,
         tap_source: bool,
+        sacrifice_source: bool,
     },
     /// Exile cards from the activator's graveyard, optionally tapping the source.
     ExileGraveyard {
@@ -244,6 +343,12 @@ pub enum SourceCost {
     HandDiscardSelf(HandDiscardKeyword),
     /// Activate this ability while its source is in its owner's graveyard (optionally Unearth).
     GraveyardSelf { unearth: bool },
+    /// Activate from graveyard by discarding cards from hand (e.g., Haunted Dead).
+    GraveyardDiscard { mode: DiscardCostMode },
+    /// Activate from graveyard by exiling other cards from your graveyard (e.g., Postmortem Professor).
+    GraveyardExileOther { filter: GraveyardExileCost },
+    /// Activate from graveyard by paying life.
+    GraveyardPayLife { amount: LifeCostAmount },
     /// Reveal the source in hand (or command zone for commander ninjutsu) and return an unblocked attacker.
     Ninjutsu { from_command: bool },
     /// Pay energy counters from the activator's energy pool, optionally tapping the source.
@@ -349,6 +454,9 @@ impl SourceCost {
         matches!(
             self,
             Self::GraveyardSelf { .. }
+                | Self::GraveyardDiscard { .. }
+                | Self::GraveyardExileOther { .. }
+                | Self::GraveyardPayLife { .. }
                 | Self::Exile {
                     from_graveyard: true,
                     ..
@@ -368,6 +476,10 @@ impl SourceCost {
             Self::Sacrifice
                 | Self::TapSacrifice
                 | Self::Counter {
+                    sacrifice_source: true,
+                    ..
+                }
+                | Self::Discard {
                     sacrifice_source: true,
                     ..
                 }
@@ -423,6 +535,7 @@ impl SourceCost {
             self,
             Self::SacrificeSelected { .. }
                 | Self::ExileGraveyard { .. }
+                | Self::GraveyardExileOther { .. }
                 | Self::PayLife {
                     sacrifice: Some(_),
                     ..
@@ -432,6 +545,11 @@ impl SourceCost {
                         | DiscardCostMode::MatchingTargetSpellManaValue
                         | DiscardCostMode::Filtered { .. },
                     ..
+                }
+                | Self::GraveyardDiscard {
+                    mode: DiscardCostMode::SelectedOne
+                        | DiscardCostMode::MatchingTargetSpellManaValue
+                        | DiscardCostMode::Filtered { .. },
                 }
                 | Self::TapPermanents {
                     tap_source: true,
@@ -600,6 +718,9 @@ impl SourceCost {
             Self::HandDiscardSelf(HandDiscardKeyword::Channel) => "channel-discard",
             Self::GraveyardSelf { unearth: true } => "unearth",
             Self::GraveyardSelf { unearth: false } => "graveyard-self",
+            Self::GraveyardDiscard { .. } => "graveyard-discard",
+            Self::GraveyardExileOther { .. } => "graveyard-exile-other",
+            Self::GraveyardPayLife { .. } => "graveyard-pay-life",
             Self::Ninjutsu {
                 from_command: false,
             } => "ninjutsu",

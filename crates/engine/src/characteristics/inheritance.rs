@@ -123,7 +123,7 @@ impl ObjectCharacteristics {
             };
         }
         ActivationTerms {
-            restriction: self.printed_text.activation_restrictions.get(&id).copied(),
+            restriction: self.printed_text.activation_restrictions.get(&id).cloned(),
             loyalty: self.printed_text.loyalty_costs.get(&id).copied(),
             variable_loyalty: self.printed_text.variable_loyalty_costs.contains(&id),
             origin: ActivationOriginPath::direct(id, None),

@@ -234,7 +234,9 @@ impl Program {
                 ability.id.0,
             )?);
             if let Some(limit) = lower.activation_restrictions.get(&ability.id) {
-                result.activation_restrictions.insert(added.id, *limit);
+                result
+                    .activation_restrictions
+                    .insert(added.id, limit.clone());
             }
             if let Some(cost) = lower.loyalty_costs.get(&ability.id) {
                 result.loyalty_costs.insert(added.id, *cost);

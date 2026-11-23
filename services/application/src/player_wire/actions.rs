@@ -100,6 +100,7 @@ pub enum PlayerManaRestriction {
     NoncreatureSpell,
     SpellWithFlashbackFromGraveyard,
     ArtifactSpellOrAbility,
+    NotNonartifactSpell,
     CreatureSpell,
     CreatureSpellOfType,
     CreatureSpellOfTypeUncounterable,

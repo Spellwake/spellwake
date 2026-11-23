@@ -235,6 +235,8 @@ impl EffectWindow {
             | Instruction::PutChargeCounterOnSource
             | Instruction::PutBlessingCounterOnSource
             | Instruction::PutNamedCounterOnSource { .. }
+            | Instruction::PutCountersOnSubject { .. }
+            | Instruction::SetGroupTapped { .. }
             | Instruction::PutQuestCounterOnSource
             | Instruction::PutStorageCounterOnSource
             | Instruction::AbilitySourceControllerLosesLife(_)
@@ -265,6 +267,7 @@ impl EffectWindow {
             | Instruction::RevealTopAndRemoveAttackerIfForest
             | Instruction::DamageCapturedBlocker(_)
             | Instruction::ChangeControlledPlaneswalkers { .. }
+            | Instruction::ChangeGroup { .. }
             | Instruction::ChangeAbilitySource { .. }
             | Instruction::GiveControlOfAbilitySource
             | Instruction::UntapAndControlCreatures
@@ -276,6 +279,7 @@ impl EffectWindow {
             | Instruction::RepeatOpponentLifeLoss
             | Instruction::OpponentsLoseAndControllerGains(_)
             | Instruction::AdjustEachOpponentLife { .. }
+            | Instruction::AdjustPlayersLife { .. }
             | Instruction::CreatePreventionShield { .. }
             | Instruction::CreateReflectingShield
             | Instruction::CreateDamageMultiplier { .. }
@@ -470,6 +474,7 @@ impl EffectWindow {
             | Instruction::RequireTargetAttack
             | Instruction::RemoveTargetFromCombat
             | Instruction::DestroyTarget
+            | Instruction::DestroyTargetWithoutRegeneration
             | Instruction::ReturnUpToOneRecentGraveyardCard
             | Instruction::ExileUpToTwoGraveyardTargetsGainLife
             | Instruction::ReturnTargetGraveyardCreatureToHand

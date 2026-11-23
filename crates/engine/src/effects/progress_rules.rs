@@ -1667,7 +1667,10 @@ impl EffectWindow {
             self.advance_instruction()?;
             return Ok(StepOutcome::Continue);
         }
-        if instruction == Instruction::DestroyTarget {
+        if matches!(
+            instruction,
+            Instruction::DestroyTarget | Instruction::DestroyTargetWithoutRegeneration
+        ) {
             let TargetRef::Object(target) = self.instruction_target(entry)?.choice().target else {
                 return Err(EffectError::InconsistentProgram);
             };
@@ -2010,27 +2013,46 @@ impl EffectWindow {
             self.advance_instruction()?;
             return Ok(StepOutcome::Continue);
         }
-        if let Instruction::ChangeControlledPlaneswalkers { parts, duration } = &instruction {
+        if let Instruction::ChangeControlledPlaneswalkers { parts, duration }
+        | Instruction::ChangeGroup {
+            parts, duration, ..
+        } = &instruction
+        {
             let before = self.rules_snapshot(None)?;
-            let affected: BTreeSet<_> = before
-                .view()
-                .evaluated
-                .objects
-                .values()
-                .filter(|value| {
-                    value.zone == ObjectZone::Battlefield
-                        && value.has_type(CardType::Planeswalker)
-                        && value.controller == Some(entry.controller())
-                })
-                .map(|value| value.object)
-                .collect();
+            let affected: BTreeSet<_> = match &instruction {
+                Instruction::ChangeGroup { group, .. } => self
+                    .effect_group(entry, *group.as_ref())?
+                    .into_iter()
+                    .collect(),
+                _ => before
+                    .view()
+                    .evaluated
+                    .objects
+                    .values()
+                    .filter(|value| {
+                        value.zone == ObjectZone::Battlefield
+                            && value.has_type(CardType::Planeswalker)
+                            && value.controller == Some(entry.controller())
+                    })
+                    .map(|value| value.object)
+                    .collect(),
+            };
             if !affected.is_empty() {
                 let locals = self
                     .resolution_state()
                     .ok_or(EffectError::WrongResolutionFrame)?
-                    .locals();
-                let materialized =
-                    parts.materialize(locals, entry.controller(), entry.controller())?;
+                    .locals()
+                    .clone();
+                let materialized = parts.materialize_with_eval(
+                    &locals,
+                    entry.controller(),
+                    entry.controller(),
+                    |expr| {
+                        self.resolve_value_expr(entry.controller(), expr).map_err(|_| {
+                            crate::characteristics::CharacteristicInvariantError::NoEligibleComponent
+                        })
+                    },
+                )?;
                 let effect = self.characteristics.add_effect_for_objects(
                     entry.id(),
                     affected,
@@ -2082,10 +2104,20 @@ impl EffectWindow {
                 let locals = self
                     .resolution_state()
                     .ok_or(EffectError::WrongResolutionFrame)?
-                    .locals();
+                    .locals()
+                    .clone();
                 let (materialized, duration) = match &instruction {
                     Instruction::ChangeAbilitySource { parts, duration } => (
-                        parts.materialize(locals, entry.controller(), source.owner())?,
+                        parts.materialize_with_eval(
+                            &locals,
+                            entry.controller(),
+                            source.owner(),
+                            |expr| {
+                                self.resolve_value_expr(entry.controller(), expr).map_err(|_| {
+                                    crate::characteristics::CharacteristicInvariantError::NoEligibleComponent
+                                })
+                            },
+                        )?,
                         *duration,
                     ),
                     Instruction::GiveControlOfAbilitySource => {
@@ -4517,6 +4549,28 @@ impl EffectWindow {
             self.advance_instruction()?;
             return Ok(StepOutcome::Continue);
         }
+        if let Instruction::AdjustPlayersLife {
+            players,
+            gain,
+            amount,
+        } = &instruction
+        {
+            let resolved = self.resolve_value_expr(entry.controller(), amount)?;
+            if resolved.is_positive() {
+                let adj = if *gain {
+                    crate::life::LifeAdjustment::Gain(resolved)
+                } else {
+                    crate::life::LifeAdjustment::Lose(resolved)
+                };
+                let cursor = self.resolution_cursor();
+                let seats = self.selection_players(*players, entry.controller(), cursor)?;
+                let adjustments: BTreeMap<_, _> =
+                    seats.into_iter().map(|p| (p, adj.clone())).collect();
+                self.adjust_players_at_cut(entry.id(), index, adjustments, ctx.append)?;
+            }
+            self.advance_instruction()?;
+            return Ok(StepOutcome::Continue);
+        }
         if let Instruction::AdjustEachOpponentLife {
             adjustment,
             controller_adjustment,
@@ -5328,9 +5382,18 @@ impl EffectWindow {
                 let locals = self
                     .resolution_state()
                     .ok_or(EffectError::WrongResolutionFrame)?
-                    .locals();
-                let materialized =
-                    parts.materialize(locals, entry.controller(), entry.controller())?;
+                    .locals()
+                    .clone();
+                let materialized = parts.materialize_with_eval(
+                    &locals,
+                    entry.controller(),
+                    entry.controller(),
+                    |expr| {
+                        self.resolve_value_expr(entry.controller(), expr).map_err(|_| {
+                            crate::characteristics::CharacteristicInvariantError::NoEligibleComponent
+                        })
+                    },
+                )?;
                 let before = self.rules_snapshot(None)?;
                 let effect = self.characteristics.add_effect_for_objects(
                     entry.id(),
@@ -5420,17 +5483,29 @@ impl EffectWindow {
     ) -> Result<StepOutcome, EffectError> {
         if matches!(
             instruction,
-            Instruction::UntapControlledCreatures | Instruction::TapAttackersAndSkipNextUntap
+            Instruction::UntapControlledCreatures
+                | Instruction::TapAttackersAndSkipNextUntap
+                | Instruction::SetGroupTapped { .. }
         ) {
             use crate::program::{EffectSubject, ObjectFilter};
-            let tap = instruction == Instruction::TapAttackersAndSkipNextUntap;
-            let group = EffectSubject::Matching(if tap {
-                ObjectFilter::creature().attacking()
-            } else {
-                ObjectFilter::creature().controlled()
-            });
+            let (tap, skip_untap, group) = match &instruction {
+                Instruction::TapAttackersAndSkipNextUntap => (
+                    true,
+                    true,
+                    EffectSubject::Matching(ObjectFilter::creature().attacking()),
+                ),
+                Instruction::UntapControlledCreatures => (
+                    false,
+                    false,
+                    EffectSubject::Matching(ObjectFilter::creature().controlled()),
+                ),
+                Instruction::SetGroupTapped { filter, tapped } => {
+                    (*tapped, false, EffectSubject::Matching(*filter.as_ref()))
+                }
+                _ => return Err(EffectError::InconsistentProgram),
+            };
             let affected = self.effect_group(entry, group)?;
-            if tap {
+            if skip_untap {
                 self.skip_next_controller_untap
                     .extend(affected.iter().copied());
             }
@@ -5581,7 +5656,16 @@ impl EffectWindow {
                             .get(target)
                             .ok_or(EffectError::InconsistentProgram)?
                             .owner();
-                        let materialized = parts.materialize(&locals, entry.controller(), owner)?;
+                        let materialized = parts.materialize_with_eval(
+                            &locals,
+                            entry.controller(),
+                            owner,
+                            |expr| {
+                                self.resolve_value_expr(entry.controller(), expr).map_err(|_| {
+                                    crate::characteristics::CharacteristicInvariantError::NoEligibleComponent
+                                })
+                            },
+                        )?;
                         let before = self.rules_snapshot(None)?;
                         let effect = self.characteristics.add_effect_for_objects(
                             entry.id(),
@@ -5839,6 +5923,7 @@ impl EffectWindow {
                 | Instruction::PutChargeCounterOnSource
                 | Instruction::PutBlessingCounterOnSource
                 | Instruction::PutNamedCounterOnSource { .. }
+                | Instruction::PutCountersOnSubject { .. }
                 | Instruction::PutQuestCounterOnSource
                 | Instruction::PutStorageCounterOnSource
         ) {

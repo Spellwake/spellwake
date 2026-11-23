@@ -93,6 +93,17 @@ impl EffectWindow {
                                     .contains(&crate::land::LandType::Desert)
                         }
                         SelectedSacrificeFilter::GrantingPermanent => false,
+                        SelectedSacrificeFilter::Matching(obj_filter) => {
+                            let empty = BTreeSet::new();
+                            self.matches_object_filter(
+                                obj_filter,
+                                candidate,
+                                actor,
+                                Some(source),
+                                &empty,
+                                &evaluated,
+                            )
+                        }
                     })
             };
         let matches_tap_filter =
@@ -114,6 +125,17 @@ impl EffectWindow {
                                 .contains(&crate::program::Supertype::Legendary),
                             TapCostFilter::Subtype(kind) => {
                                 candidate.current_creature_subtypes.contains(&kind)
+                            }
+                            TapCostFilter::Matching(obj_filter) => {
+                                let empty = BTreeSet::new();
+                                self.matches_object_filter(
+                                    obj_filter,
+                                    candidate,
+                                    actor,
+                                    Some(source),
+                                    &empty,
+                                    &evaluated,
+                                )
                             }
                         }
                 })
@@ -164,6 +186,8 @@ impl EffectWindow {
             SourceCost::Discard {
                 mode: DiscardCostMode::WholeHand,
                 ..
+            } | SourceCost::GraveyardDiscard {
+                mode: DiscardCostMode::WholeHand,
             }
         ) {
             match origin {
@@ -216,6 +240,8 @@ impl EffectWindow {
             SourceCost::ExileGraveyard {
                 filter: GraveyardExileCost::AnyCountX,
                 ..
+            } | SourceCost::GraveyardExileOther {
+                filter: GraveyardExileCost::AnyCountX,
             }
         ) {
             let ActivationOrigin::SelectedCost { objects, .. } = &origin else {
@@ -389,235 +415,16 @@ impl EffectWindow {
             ability,
             terms.origin.clone(),
         );
-        use crate::activated::ActivationRestriction;
-        let controlled = || {
-            evaluated
-                .objects
-                .values()
-                .filter(|p| p.zone == ObjectZone::Battlefield && p.controller == Some(actor))
-        };
-        match restriction {
-            Some(ActivationRestriction::HasCityBlessing) if !self.has_city_blessing(actor) => {
-                return Err(EffectError::ActivationConditionNotMet);
-            }
-            Some(ActivationRestriction::CreatedTokenThisTurn)
-                if !self.token_creators_this_turn.contains(&actor) =>
-            {
-                return Err(EffectError::ActivationConditionNotMet);
-            }
-            Some(ActivationRestriction::CreatureDiedThisTurn)
-                if !self.creatures_died_this_turn.is_positive() =>
-            {
-                return Err(EffectError::ActivationConditionNotMet);
-            }
-            Some(ActivationRestriction::EmptyHand)
-                if self
-                    .window
-                    .cards()
-                    .iter()
-                    .any(|card| card.zone() == ObjectZone::Hand(actor)) =>
-            {
-                return Err(EffectError::ActivationConditionNotMet);
-            }
-            Some(ActivationRestriction::ControlsCreaturePowerFourOrGreater)
-                if !controlled().any(|p| {
-                    p.is_creature()
-                        && p.power_toughness
-                            .as_ref()
-                            .is_some_and(|pt| pt.derived.power >= 4.into())
-                }) =>
-            {
-                return Err(EffectError::ActivationConditionNotMet);
-            }
-            Some(ActivationRestriction::ControlsSubtypeCount { kind, minimum })
-                if controlled()
-                    .filter(|permanent| permanent.current_creature_subtypes.contains(&kind))
-                    .take(usize::from(minimum.get()))
-                    .count()
-                    < usize::from(minimum.get()) =>
-            {
-                return Err(EffectError::ActivationConditionNotMet);
-            }
-            Some(ActivationRestriction::ControlsThreeLandsWithSameName) => {
-                let mut counts = BTreeMap::new();
-                let legal = controlled()
-                    .filter(|p| p.has_type(CardType::Land))
-                    .any(|p| {
-                        self.name_rules
-                            .comparison_forms(&p.current_names)
-                            .into_iter()
-                            .any(|name| {
-                                let count = counts.entry(name).or_insert(0usize);
-                                *count += 1;
-                                *count >= 3
-                            })
-                    });
-                if !legal {
-                    return Err(EffectError::ActivationConditionNotMet);
-                }
-            }
-            Some(crate::activated::ActivationRestriction::DuringUpkeep)
-                if turn.map(|t| t.position().step).or(self.current_step)
-                    != Some(crate::turn::Step::Upkeep) =>
-            {
-                return Err(EffectError::ActivationConditionNotMet);
-            }
-            Some(crate::activated::ActivationRestriction::OwnTurnBeforeAttackers) => {
-                let turn = turn.ok_or(TimingError::TurnRequired)?;
-                if self.window.active_player() != actor {
-                    return Err(TimingError::NotActivePlayer.into());
-                }
-                if !matches!(
-                    turn.position().step,
-                    crate::turn::Step::Untap
-                        | crate::turn::Step::Upkeep
-                        | crate::turn::Step::Draw
-                        | crate::turn::Step::PrecombatMain
-                        | crate::turn::Step::BeginningCombat
-                ) {
-                    return Err(TimingError::BeforeAttackersRequired.into());
-                }
-            }
-            Some(crate::activated::ActivationRestriction::OnceEachTurn)
-                if self.activated_this_turn.contains(&exhausted_id) =>
-            {
-                return Err(EffectError::ActivationConditionNotMet);
-            }
-            Some(crate::activated::ActivationRestriction::Sorcery) => {
-                validate_main_phase(&self.window, turn, actor)?
-            }
-            Some(crate::activated::ActivationRestriction::SorceryOnceEachTurn) => {
-                if self.activated_this_turn.contains(&exhausted_id) {
-                    return Err(EffectError::ActivationConditionNotMet);
-                }
-                validate_main_phase(&self.window, turn, actor)?;
-            }
-            Some(crate::activated::ActivationRestriction::DuringYourTurn)
-                if self.window.active_player() != actor =>
-            {
-                return Err(TimingError::NotActivePlayer.into());
-            }
-            Some(crate::activated::ActivationRestriction::DuringYourTurnOnceEachTurn) => {
-                if self.window.active_player() != actor {
-                    return Err(TimingError::NotActivePlayer.into());
-                }
-                if self.activated_this_turn.contains(&exhausted_id) {
-                    return Err(EffectError::ActivationConditionNotMet);
-                }
-            }
-            Some(crate::activated::ActivationRestriction::DuringOpponentsTurn)
-                if self.window.active_player() == actor =>
-            {
-                return Err(EffectError::ActivationConditionNotMet);
-            }
-            Some(crate::activated::ActivationRestriction::DuringCombat)
-                if !turn
-                    .map(|t| t.position().step)
-                    .or(self.current_step)
-                    .is_some_and(|s| s.phase() == crate::turn::Phase::Combat) =>
-            {
-                return Err(EffectError::ActivationConditionNotMet);
-            }
-            Some(crate::activated::ActivationRestriction::Threshold)
-                if self
-                    .window
-                    .cards()
-                    .iter()
-                    .filter(|c| c.zone() == ObjectZone::Graveyard(actor))
-                    .count()
-                    < 7 =>
-            {
-                return Err(EffectError::ActivationConditionNotMet);
-            }
-            Some(crate::activated::ActivationRestriction::Delirium) => {
-                let mut types = BTreeSet::new();
-                for c in evaluated
-                    .objects
-                    .values()
-                    .filter(|o| o.zone == ObjectZone::Graveyard(actor))
-                {
-                    types.extend(c.current_types.iter().copied());
-                }
-                if types.len() < 4 {
-                    return Err(EffectError::ActivationConditionNotMet);
-                }
-            }
-            Some(crate::activated::ActivationRestriction::Metalcraft)
-                if controlled()
-                    .filter(|p| p.has_type(CardType::Artifact))
-                    .count()
-                    < 3 =>
-            {
-                return Err(EffectError::ActivationConditionNotMet);
-            }
-            Some(crate::activated::ActivationRestriction::SourceIsTapped)
-                if card.tapped() != Some(true) =>
-            {
-                return Err(EffectError::ActivationConditionNotMet);
-            }
-            Some(crate::activated::ActivationRestriction::SourceIsUntapped)
-                if card.tapped() != Some(false) =>
-            {
-                return Err(EffectError::ActivationConditionNotMet);
-            }
-            Some(crate::activated::ActivationRestriction::ControllerLifeAtLeast(min))
-                if !self
-                    .life
-                    .get(actor)
-                    .is_some_and(|life| *life >= i64::from(min).into()) =>
-            {
-                return Err(EffectError::ActivationConditionNotMet);
-            }
-            Some(crate::activated::ActivationRestriction::ControllerLifeAtMost(max))
-                if !self
-                    .life
-                    .get(actor)
-                    .is_some_and(|life| *life <= i64::from(max).into()) =>
-            {
-                return Err(EffectError::ActivationConditionNotMet);
-            }
-            Some(crate::activated::ActivationRestriction::ControlsCardType { kind, minimum })
-                if controlled().filter(|p| p.has_type(kind)).count() < usize::from(minimum) =>
-            {
-                return Err(EffectError::ActivationConditionNotMet);
-            }
-            Some(crate::activated::ActivationRestriction::ControlsMatching { filter, minimum })
-                if {
-                    let empty = BTreeSet::new();
-                    controlled()
-                        .filter(|p| {
-                            let same = p.object == source;
-                            let (c1, c2) = filter.clauses();
-                            let src_ok = |c: crate::program::ObjectClause| match c.source_relation {
-                                crate::program::SourceRelation::Any => true,
-                                crate::program::SourceRelation::SelfObject => same,
-                                crate::program::SourceRelation::OtherThanAbilitySource
-                                | crate::program::SourceRelation::OtherThanTriggerSource => !same,
-                                _ => false,
-                            };
-                            (src_ok(c1) || c2.is_some_and(src_ok))
-                                && filter.matches_static_characteristics(p, &empty, || {
-                                    self.window
-                                        .cards()
-                                        .get(p.object)
-                                        .and_then(GameObject::card_id)
-                                        .and_then(|cid| self.programs.get(&cid))
-                                        .map(Program::mana_value)
-                                })
-                        })
-                        .count()
-                        < usize::from(minimum)
-                } =>
-            {
-                return Err(EffectError::ActivationConditionNotMet);
-            }
-            Some(
-                crate::activated::ActivationRestriction::Exhaust
-                | crate::activated::ActivationRestriction::PowerUp,
-            ) if self.characteristics.exhausted.contains(&exhausted_id) => {
-                return Err(EffectError::AlreadyExhausted);
-            }
-            _ => {}
+        if let Some(ref res) = restriction {
+            self.check_activation_restriction(
+                res,
+                actor,
+                source,
+                card,
+                &evaluated,
+                turn,
+                &exhausted_id,
+            )?;
         }
         let returned_attacker = if selected.source_cost.is_ninjutsu() {
             if !selected.source_cost.can_activate_ninjutsu(card, actor) {
@@ -709,7 +516,11 @@ impl EffectWindow {
                 _ => return Err(EffectError::UnknownActivatedAbility),
             }
         } else if returned_attacker.is_none() {
-            if restriction != Some(ActivationRestriction::AnyPlayer)
+            if selected.source_cost.is_from_graveyard() {
+                if card.zone() != ObjectZone::Graveyard(actor) {
+                    return Err(EffectError::NotAbilitySource);
+                }
+            } else if !restriction.as_ref().is_some_and(|r| r.is_any_player())
                 || card.zone() != ObjectZone::Battlefield
             {
                 Self::validate_current_source(actor, card)?;
@@ -777,6 +588,9 @@ impl EffectWindow {
                         SourceCost::ExileGraveyard {
                             filter: GraveyardExileCost::AnyCountX,
                             ..
+                        }
+                        | SourceCost::GraveyardExileOther {
+                            filter: GraveyardExileCost::AnyCountX,
                         } => {
                             if objects.iter().any(|id| {
                                 self.window.cards().get(*id).is_none_or(|card| {
@@ -790,6 +604,9 @@ impl EffectWindow {
                         SourceCost::ExileGraveyard {
                             filter: GraveyardExileCost::Creature { .. },
                             ..
+                        }
+                        | SourceCost::GraveyardExileOther {
+                            filter: GraveyardExileCost::Creature { .. },
                         } => {
                             let [object] = objects.as_slice() else {
                                 return Err(EffectError::InvalidCastResource);
@@ -808,6 +625,9 @@ impl EffectWindow {
                         SourceCost::ExileGraveyard {
                             filter: GraveyardExileCost::Filtered { filter, count },
                             ..
+                        }
+                        | SourceCost::GraveyardExileOther {
+                            filter: GraveyardExileCost::Filtered { filter, count },
                         } => {
                             let excluded = BTreeSet::new();
                             if objects.len() != usize::from(count.get())
@@ -851,6 +671,9 @@ impl EffectWindow {
                         SourceCost::Discard {
                             mode: DiscardCostMode::WholeHand,
                             ..
+                        }
+                        | SourceCost::GraveyardDiscard {
+                            mode: DiscardCostMode::WholeHand,
                         } => {
                             let hand = self
                                 .window
@@ -868,6 +691,11 @@ impl EffectWindow {
                                 DiscardCostMode::SelectedOne
                                 | DiscardCostMode::MatchingTargetSpellManaValue,
                             ..
+                        }
+                        | SourceCost::GraveyardDiscard {
+                            mode:
+                                DiscardCostMode::SelectedOne
+                                | DiscardCostMode::MatchingTargetSpellManaValue,
                         } => {
                             if objects.len() != 1
                                 || self.window.cards().get(objects[0]).is_none_or(|object| {
@@ -881,6 +709,9 @@ impl EffectWindow {
                         SourceCost::Discard {
                             mode: DiscardCostMode::Filtered { filter, count },
                             ..
+                        }
+                        | SourceCost::GraveyardDiscard {
+                            mode: DiscardCostMode::Filtered { filter, count },
                         } => {
                             let excluded = BTreeSet::new();
                             if objects.len() != usize::from(count.get())
@@ -995,6 +826,8 @@ impl EffectWindow {
             SourceCost::Discard {
                 mode: DiscardCostMode::MatchingTargetSpellManaValue,
                 ..
+            } | SourceCost::GraveyardDiscard {
+                mode: DiscardCostMode::MatchingTargetSpellManaValue,
             }
         ) {
             let ActivationOrigin::SelectedCost {
@@ -1058,15 +891,18 @@ impl EffectWindow {
             );
             cost
         } else if restriction
-            == Some(
-                crate::activated::ActivationRestriction::DiscountLegendaryCreaturesAndPlaneswalkers,
-            )
+            .as_ref()
+            .is_some_and(|r| r.has_legendary_discount())
         {
             let mut price = selected.mana_cost.clone();
-            let count = controlled()
+            let count = evaluated
+                .objects
+                .values()
                 .filter(|p| {
-                    p.current_supertypes
-                        .contains(&crate::program::Supertype::Legendary)
+                    p.zone == ObjectZone::Battlefield
+                        && p.controller == Some(actor)
+                        && p.current_supertypes
+                            .contains(&crate::program::Supertype::Legendary)
                         && (p.is_creature() || p.has_type(CardType::Planeswalker))
                 })
                 .count();
@@ -1075,7 +911,7 @@ impl EffectWindow {
                 .minus(&RulesInteger::from_usize(count))
                 .max(0.into());
             price
-        } else if restriction == Some(crate::activated::ActivationRestriction::PowerUp) {
+        } else if restriction.as_ref().is_some_and(|r| r.has_power_up()) {
             self.power_up_mana_cost(source, &selected.mana_cost)
         } else {
             selected.mana_cost.clone()
@@ -1096,6 +932,10 @@ impl EffectWindow {
                     pay_mana_cost: true
                 },
                 ..
+            } | SourceCost::GraveyardExileOther {
+                filter: GraveyardExileCost::Creature {
+                    pay_mana_cost: true
+                },
             }
         ) {
             let ActivationOrigin::SelectedCost { objects, .. } = &origin else {
@@ -1113,6 +953,26 @@ impl EffectWindow {
                 .ok_or(EffectError::InvalidCastResource)?;
             price
                 .hybrid_prices(&definition.hybrid_symbols)
+                .into_iter()
+                .find_map(|(mana, life)| {
+                    if life.is_positive()
+                        && (evaluated.life_and_creature_costs_prohibited()
+                            || self.life.get(actor).is_none_or(|total| total < &life))
+                    {
+                        return None;
+                    }
+                    let spend = pay(&mana).ok()?;
+                    Some((mana, spend, life.is_positive().then_some(life)))
+                })
+                .ok_or(EffectError::InvalidCastResource)?
+        } else if let Some(hybrids) = current
+            .printed_text
+            .activation_hybrid_symbols
+            .get(&selected.id)
+            .filter(|h| !h.is_empty())
+        {
+            quoted
+                .hybrid_prices(hybrids)
                 .into_iter()
                 .find_map(|(mana, life)| {
                     if life.is_positive()
@@ -1200,23 +1060,10 @@ impl EffectWindow {
         let mut next = self.clone();
         next.revision = revision;
         next.window = announced;
-        if matches!(
-            restriction,
-            Some(
-                crate::activated::ActivationRestriction::OnceEachTurn
-                    | crate::activated::ActivationRestriction::SorceryOnceEachTurn
-                    | crate::activated::ActivationRestriction::DuringYourTurnOnceEachTurn
-            )
-        ) {
+        if restriction.as_ref().is_some_and(|r| r.has_once_each_turn()) {
             next.activated_this_turn.insert(exhausted_id.clone());
         }
-        if matches!(
-            restriction,
-            Some(
-                crate::activated::ActivationRestriction::Exhaust
-                    | crate::activated::ActivationRestriction::PowerUp
-            )
-        ) {
+        if restriction.as_ref().is_some_and(|r| r.has_exhaust()) {
             next.characteristics.exhausted.insert(exhausted_id);
         }
         let (mut body, fixed_segments) = match fixed_activation {
@@ -1309,10 +1156,16 @@ impl EffectWindow {
             SourceCost::PayLife {
                 amount: LifeCostAmount::Fixed(life),
                 ..
+            }
+            | SourceCost::GraveyardPayLife {
+                amount: LifeCostAmount::Fixed(life),
             } => Some(RulesInteger::from(i64::from(life))),
             SourceCost::PayLife {
                 amount: LifeCostAmount::CommanderColors,
                 ..
+            }
+            | SourceCost::GraveyardPayLife {
+                amount: LifeCostAmount::CommanderColors,
             } => Some(RulesInteger::from_usize(
                 next.commander_mana_colors(actor)?.len(),
             )),
@@ -1596,11 +1449,11 @@ impl EffectWindow {
                     crate::program::ZoneActionKind::MillCost,
                     crate::occurrence::ZoneReason::Mill { player: actor },
                 ),
-                SourceCost::Discard { .. } => (
+                SourceCost::Discard { .. } | SourceCost::GraveyardDiscard { .. } => (
                     crate::program::ZoneActionKind::DiscardCost,
                     crate::occurrence::ZoneReason::Discard { player: actor },
                 ),
-                SourceCost::ExileGraveyard { .. } => (
+                SourceCost::ExileGraveyard { .. } | SourceCost::GraveyardExileOther { .. } => (
                     crate::program::ZoneActionKind::ExileCost,
                     crate::occurrence::ZoneReason::ExileCost,
                 ),
@@ -1828,7 +1681,9 @@ impl EffectWindow {
                     cost,
                     SourceCost::SacrificeSelected { .. }
                         | SourceCost::Discard { .. }
+                        | SourceCost::GraveyardDiscard { .. }
                         | SourceCost::ExileGraveyard { .. }
+                        | SourceCost::GraveyardExileOther { .. }
                         | SourceCost::Mill { .. }
                         | SourceCost::PayLife {
                             sacrifice: Some(_),
@@ -1961,5 +1816,279 @@ impl EffectWindow {
             },
             append,
         ))
+    }
+
+    // Recursive helper forwards activation context references rather than cloning into a wrapper struct.
+    #[allow(clippy::too_many_arguments)]
+    fn check_activation_restriction(
+        &self,
+        restriction: &crate::activated::ActivationRestriction,
+        actor: SeatId,
+        source: ObjectId,
+        card: &GameObject,
+        evaluated: &crate::characteristics::EvaluatedCharacteristics,
+        turn: Option<&TurnScheduler>,
+        exhausted_id: &(
+            ObjectId,
+            Option<crate::characteristics::CharacteristicTimestamp>,
+            ActivatedAbilityId,
+            crate::characteristics::ActivationOriginPath,
+        ),
+    ) -> Result<(), EffectError> {
+        use crate::activated::ActivationRestriction;
+        let controlled = || {
+            evaluated
+                .objects
+                .values()
+                .filter(|p| p.zone == ObjectZone::Battlefield && p.controller == Some(actor))
+        };
+        match restriction {
+            ActivationRestriction::HasCityBlessing if !self.has_city_blessing(actor) => {
+                return Err(EffectError::ActivationConditionNotMet);
+            }
+            ActivationRestriction::CreatedTokenThisTurn
+                if !self.token_creators_this_turn.contains(&actor) =>
+            {
+                return Err(EffectError::ActivationConditionNotMet);
+            }
+            ActivationRestriction::CreatureDiedThisTurn
+                if !self.creatures_died_this_turn.is_positive() =>
+            {
+                return Err(EffectError::ActivationConditionNotMet);
+            }
+            ActivationRestriction::EmptyHand
+                if self
+                    .window
+                    .cards()
+                    .iter()
+                    .any(|c| c.zone() == ObjectZone::Hand(actor)) =>
+            {
+                return Err(EffectError::ActivationConditionNotMet);
+            }
+            ActivationRestriction::ControlsCreaturePowerFourOrGreater
+                if !controlled().any(|p| {
+                    p.is_creature()
+                        && p.power_toughness
+                            .as_ref()
+                            .is_some_and(|pt| pt.derived.power >= 4.into())
+                }) =>
+            {
+                return Err(EffectError::ActivationConditionNotMet);
+            }
+            ActivationRestriction::ControlsSubtypeCount { kind, minimum }
+                if controlled()
+                    .filter(|permanent| permanent.current_creature_subtypes.contains(kind))
+                    .take(usize::from(minimum.get()))
+                    .count()
+                    < usize::from(minimum.get()) =>
+            {
+                return Err(EffectError::ActivationConditionNotMet);
+            }
+            ActivationRestriction::ControlsThreeLandsWithSameName => {
+                let mut counts = BTreeMap::new();
+                let legal = controlled()
+                    .filter(|p| p.has_type(CardType::Land))
+                    .any(|p| {
+                        self.name_rules
+                            .comparison_forms(&p.current_names)
+                            .into_iter()
+                            .any(|name| {
+                                let count = counts.entry(name).or_insert(0usize);
+                                *count += 1;
+                                *count >= 3
+                            })
+                    });
+                if !legal {
+                    return Err(EffectError::ActivationConditionNotMet);
+                }
+            }
+            ActivationRestriction::DuringUpkeep
+                if turn.map(|t| t.position().step).or(self.current_step)
+                    != Some(crate::turn::Step::Upkeep) =>
+            {
+                return Err(EffectError::ActivationConditionNotMet);
+            }
+            ActivationRestriction::OwnTurnBeforeAttackers => {
+                let turn = turn.ok_or(TimingError::TurnRequired)?;
+                if self.window.active_player() != actor {
+                    return Err(TimingError::NotActivePlayer.into());
+                }
+                if !matches!(
+                    turn.position().step,
+                    crate::turn::Step::Untap
+                        | crate::turn::Step::Upkeep
+                        | crate::turn::Step::Draw
+                        | crate::turn::Step::PrecombatMain
+                        | crate::turn::Step::BeginningCombat
+                ) {
+                    return Err(TimingError::BeforeAttackersRequired.into());
+                }
+            }
+            ActivationRestriction::OnceEachTurn
+                if self.activated_this_turn.contains(exhausted_id) =>
+            {
+                return Err(EffectError::ActivationConditionNotMet);
+            }
+            ActivationRestriction::Sorcery => validate_main_phase(&self.window, turn, actor)?,
+            ActivationRestriction::SorceryOnceEachTurn => {
+                if self.activated_this_turn.contains(exhausted_id) {
+                    return Err(EffectError::ActivationConditionNotMet);
+                }
+                validate_main_phase(&self.window, turn, actor)?;
+            }
+            ActivationRestriction::DuringYourTurn if self.window.active_player() != actor => {
+                return Err(TimingError::NotActivePlayer.into());
+            }
+            ActivationRestriction::DuringYourTurnOnceEachTurn => {
+                if self.window.active_player() != actor {
+                    return Err(TimingError::NotActivePlayer.into());
+                }
+                if self.activated_this_turn.contains(exhausted_id) {
+                    return Err(EffectError::ActivationConditionNotMet);
+                }
+            }
+            ActivationRestriction::DuringOpponentsTurn if self.window.active_player() == actor => {
+                return Err(EffectError::ActivationConditionNotMet);
+            }
+            ActivationRestriction::DuringCombat
+                if !turn
+                    .map(|t| t.position().step)
+                    .or(self.current_step)
+                    .is_some_and(|s| s.phase() == crate::turn::Phase::Combat) =>
+            {
+                return Err(EffectError::ActivationConditionNotMet);
+            }
+            ActivationRestriction::Threshold
+                if self
+                    .window
+                    .cards()
+                    .iter()
+                    .filter(|c| c.zone() == ObjectZone::Graveyard(actor))
+                    .count()
+                    < 7 =>
+            {
+                return Err(EffectError::ActivationConditionNotMet);
+            }
+            ActivationRestriction::Delirium => {
+                let mut types = BTreeSet::new();
+                for c in evaluated
+                    .objects
+                    .values()
+                    .filter(|o| o.zone == ObjectZone::Graveyard(actor))
+                {
+                    types.extend(c.current_types.iter().copied());
+                }
+                if types.len() < 4 {
+                    return Err(EffectError::ActivationConditionNotMet);
+                }
+            }
+            ActivationRestriction::Metalcraft
+                if controlled()
+                    .filter(|p| p.has_type(CardType::Artifact))
+                    .count()
+                    < 3 =>
+            {
+                return Err(EffectError::ActivationConditionNotMet);
+            }
+            ActivationRestriction::SourceIsTapped if card.tapped() != Some(true) => {
+                return Err(EffectError::ActivationConditionNotMet);
+            }
+            ActivationRestriction::SourceIsUntapped if card.tapped() != Some(false) => {
+                return Err(EffectError::ActivationConditionNotMet);
+            }
+            ActivationRestriction::ControllerLifeAtLeast(min)
+                if !self
+                    .life
+                    .get(actor)
+                    .is_some_and(|life| *life >= i64::from(*min).into()) =>
+            {
+                return Err(EffectError::ActivationConditionNotMet);
+            }
+            ActivationRestriction::ControllerLifeAtMost(max)
+                if !self
+                    .life
+                    .get(actor)
+                    .is_some_and(|life| *life <= i64::from(*max).into()) =>
+            {
+                return Err(EffectError::ActivationConditionNotMet);
+            }
+            ActivationRestriction::ControlsCardType { kind, minimum }
+                if controlled().filter(|p| p.has_type(*kind)).count() < usize::from(*minimum) =>
+            {
+                return Err(EffectError::ActivationConditionNotMet);
+            }
+            ActivationRestriction::ControlsMatching { filter, minimum }
+                if {
+                    let empty = BTreeSet::new();
+                    controlled()
+                        .filter(|p| {
+                            let same = p.object == source;
+                            let (c1, c2) = filter.clauses();
+                            let src_ok = |c: crate::program::ObjectClause| match c.source_relation {
+                                crate::program::SourceRelation::Any => true,
+                                crate::program::SourceRelation::SelfObject => same,
+                                crate::program::SourceRelation::OtherThanAbilitySource
+                                | crate::program::SourceRelation::OtherThanTriggerSource => !same,
+                                _ => false,
+                            };
+                            (src_ok(c1) || c2.is_some_and(src_ok))
+                                && filter.matches_static_characteristics(p, &empty, || {
+                                    self.window
+                                        .cards()
+                                        .get(p.object)
+                                        .and_then(GameObject::card_id)
+                                        .and_then(|cid| self.programs.get(&cid))
+                                        .map(Program::mana_value)
+                                })
+                        })
+                        .count()
+                        < usize::from(*minimum)
+                } =>
+            {
+                return Err(EffectError::ActivationConditionNotMet);
+            }
+            ActivationRestriction::Exhaust | ActivationRestriction::PowerUp
+                if self.characteristics.exhausted.contains(exhausted_id) =>
+            {
+                return Err(EffectError::AlreadyExhausted);
+            }
+            ActivationRestriction::SourceMatches(filter) => {
+                let empty = BTreeSet::new();
+                if evaluated.get(source).is_none_or(|permanent| {
+                    !self.matches_object_filter(
+                        *filter,
+                        permanent,
+                        actor,
+                        Some(source),
+                        &empty,
+                        evaluated,
+                    )
+                }) {
+                    return Err(EffectError::ActivationConditionNotMet);
+                }
+            }
+            ActivationRestriction::Condition(cond) => {
+                let left = self.resolve_value_expr_at(actor, &cond.left, None)?;
+                let right = self.resolve_value_expr_at(actor, &cond.right, None)?;
+                if !cond.comparison.evaluate(&left, &right) {
+                    return Err(EffectError::ActivationConditionNotMet);
+                }
+            }
+            ActivationRestriction::All(items) => {
+                for item in items {
+                    self.check_activation_restriction(
+                        item,
+                        actor,
+                        source,
+                        card,
+                        evaluated,
+                        turn,
+                        exhausted_id,
+                    )?;
+                }
+            }
+            _ => {}
+        }
+        Ok(())
     }
 }

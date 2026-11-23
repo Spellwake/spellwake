@@ -305,6 +305,8 @@ pub enum ManaRestriction {
     NoncreatureSpell,
     SpellWithFlashbackFromGraveyard,
     ArtifactSpellOrAbility,
+    /// CR 111.10h (Powerstone): cannot be spent to cast a nonartifact spell.
+    NotNonartifactSpell,
     CreatureSpell,
     CreatureSpellOfType(Option<spellwake_contracts::creature_types::CreatureTypeId>),
     /// The exact creature spell this mana pays for cannot be countered.
