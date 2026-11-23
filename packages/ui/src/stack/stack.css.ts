@@ -17,6 +17,12 @@ export const card = style({
       outline: "2px solid #ffedac",
       boxShadow: "0 0 7px 2px #ffd87588,0 2px 6px #0c120b",
     },
+    // A spell offered as a target carries the same cyan rim as an offered card.
+    "&[data-offered]": {
+      outline: "2px solid #26e2de",
+      boxShadow: "0 0 7px 2px #35dfdb85,0 2px 6px #0c120b",
+      cursor: "pointer",
+    },
   },
   "@media": {
     [standardMotion]: { transition: `box-shadow ${feedbackTransition}` },
