@@ -19,6 +19,7 @@ const SCENES: readonly PreviewScene[] = [
   "stack",
   "stack-long",
   "stack-waiting",
+  "watching",
 ];
 
 /**
@@ -32,5 +33,13 @@ export function MatchTableProbe(): ReactElement {
   const source = useDemoMatch(noop, () =>
     scene ? previewScene(scene) : previewSnapshot(),
   );
-  return <MatchPage source={source} />;
+  // `?chat=refused` makes the table refuse every message, to show that line.
+  const shown =
+    source.status === "ready" && params.get("chat") === "refused"
+      ? {
+          ...source,
+          chat: { ...source.chat, send: () => Promise.resolve(false) },
+        }
+      : source;
+  return <MatchPage source={shown} />;
 }

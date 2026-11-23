@@ -128,19 +128,30 @@ export const stepButton = style({
     "&:disabled": { opacity: 0.5, cursor: "default" },
   },
 });
+/**
+ * The switch's pressable area. It is a label, so the whole of it toggles: the
+ * drawn switch keeps its size while the area meets the minimum target, which
+ * is larger for a fingertip.
+ */
 export const switchBox = style({
   position: "relative",
   display: "inline-flex",
+  alignItems: "center",
   flexShrink: 0,
   width: p.switchWidth,
   height: p.switchHeight,
+  minHeight: "24PX",
+  cursor: "pointer",
+  "@media": {
+    "(pointer: coarse)": { minWidth: "44PX", minHeight: "44PX" },
+  },
 });
 export const toggle = style({
   appearance: "none",
   WebkitAppearance: "none",
   boxSizing: "border-box",
   width: "100%",
-  height: "100%",
+  height: p.switchHeight,
   margin: 0,
   borderRadius: p.pill,
   border: `${p.thin} solid ${p.offEdge}`,
