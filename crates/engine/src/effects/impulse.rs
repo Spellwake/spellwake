@@ -555,6 +555,20 @@ impl EffectWindow {
             } else {
                 None
             };
+            let exile_top_play = match self
+                .payloads
+                .get(&entry.id())
+                .and_then(StackPayload::instructions)
+                .and_then(|ops| ops.get(work.cursor.instruction))
+            {
+                Some(Instruction::ExileTopPlay {
+                    duration,
+                    cast_only,
+                    free,
+                    ..
+                }) => Some((*duration, *cast_only, *free)),
+                _ => None,
+            };
             let until_nonland = self
                 .payloads
                 .get(&entry.id())
@@ -567,7 +581,40 @@ impl EffectWindow {
                     if per_type {
                         continue;
                     }
-                    if until_nonland {
+                    if let Some((duration, cast_only, free)) = exile_top_play {
+                        if cast_only
+                            && self
+                                .copiable_program(movement.after.id())
+                                .is_some_and(|program| program.has_type(CardType::Land))
+                        {
+                            continue;
+                        }
+                        let mapped_duration = match duration {
+                            crate::program::ImpulsePlayDuration::ThisTurn => {
+                                CardPlayDuration::ThroughTurn
+                            }
+                            crate::program::ImpulsePlayDuration::UntilEndOfNextTurn => {
+                                if self.window.active_player() == player {
+                                    CardPlayDuration::ThroughNextOwnTurnSkipCurrent(player)
+                                } else {
+                                    CardPlayDuration::ThroughNextOwnTurn(player)
+                                }
+                            }
+                            crate::program::ImpulsePlayDuration::WhileExiled => {
+                                CardPlayDuration::WhileInZone
+                            }
+                        };
+                        self.card_play_permissions.insert(CardPlayPermission {
+                            zone: CardPlayZone::Exile,
+                            object: permission.0,
+                            player,
+                            duration: mapped_duration,
+                            any_color: false,
+                        });
+                        if free {
+                            self.free_exiled_cards.insert(permission);
+                        }
+                    } else if until_nonland {
                         if self
                             .copiable_program(movement.after.id())
                             .is_some_and(|program| !program.has_type(CardType::Land))

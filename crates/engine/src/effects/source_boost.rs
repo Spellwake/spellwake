@@ -165,13 +165,9 @@ impl EffectWindow {
             instruction: index,
         };
         if !tapped.is_empty() {
-            let (window, changes) = self.window.untap_for_effect(entry.id(), &tapped)?;
-            self.window = window;
+            let occurrences = self.untap_for_effect_with_stun(entry.id(), &tapped)?;
             self.emit_from(cause.clone(), &before, None, append, |_, _, _| {
-                Ok(occurrence_flow::status_occurrences(
-                    changes,
-                    crate::occurrence::StatusReason::Effect,
-                ))
+                Ok(occurrences)
             })?;
         }
         let before = self.rules_snapshot(None)?;

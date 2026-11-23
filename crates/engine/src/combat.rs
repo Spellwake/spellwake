@@ -358,6 +358,7 @@ pub struct BlockersDecision {
     attackers: Vec<ObjectId>,
     restricted_targets: BTreeMap<ObjectId, Vec<ObjectId>>,
     block_minimums: BTreeMap<ObjectId, usize>,
+    at_most_one_blocker: BTreeSet<ObjectId>,
     additional_blockers: BTreeMap<ObjectId, usize>,
     block_requirements: BTreeMap<ObjectId, usize>,
     blocked_attacker_requirements: BTreeMap<ObjectId, usize>,
@@ -385,6 +386,7 @@ impl BlockersDecision {
             attackers,
             restricted_targets,
             block_minimums,
+            at_most_one_blocker: BTreeSet::new(),
             additional_blockers: BTreeMap::new(),
             block_requirements: BTreeMap::new(),
             blocked_attacker_requirements: BTreeMap::new(),
@@ -407,6 +409,10 @@ impl BlockersDecision {
     }
     pub(crate) fn with_single_blocker(mut self, single: bool) -> Self {
         self.single_blocker = single;
+        self
+    }
+    pub(crate) fn with_at_most_one_blocker(mut self, attackers: BTreeSet<ObjectId>) -> Self {
+        self.at_most_one_blocker = attackers;
         self
     }
     pub(crate) fn with_additional_blockers(mut self, blockers: BTreeMap<ObjectId, usize>) -> Self {
@@ -510,6 +516,13 @@ impl BlockersDecision {
             .block_minimums
             .iter()
             .any(|(target, min)| counts.get(target).is_some_and(|count| count < min))
+        {
+            return Err(CombatError::IllegalBlockTarget);
+        }
+        if self
+            .at_most_one_blocker
+            .iter()
+            .any(|target| counts.get(target).is_some_and(|count| *count > 1))
         {
             return Err(CombatError::IllegalBlockTarget);
         }

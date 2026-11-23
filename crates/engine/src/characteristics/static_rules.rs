@@ -52,6 +52,13 @@ pub enum SpellCostModifier {
     },
     /// Increase spell costs by `amount` except for spells with card type `exempt`.
     IncreaseExceptType { exempt: CardType, amount: NonZeroU8 },
+    /// Increase generic cost of qualifying spells (for all players, only opponents, or only controller).
+    Increase {
+        any_player: bool,
+        opponents_only: bool,
+        matching: SpellFilter,
+        amount: NonZeroU8,
+    },
     /// Reduce cost of other spells of `subtype` from battlefield or command zone (eminence).
     SubtypeDiscountFromCommandOrBattlefield {
         subtype: CreatureTypeId,
@@ -146,9 +153,11 @@ pub enum StaticDrawRule {
 }
 
 /// Static untap-step modification rule.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum StaticUntapRule {
     UntapDuringOtherPlayersUntap,
+    /// Untap all permanents matching `selector` during each other player's untap step (Seedborn Muse).
+    UntapMatchingDuringOtherPlayersUntap(Box<PermanentSelector>),
     EnchantedCreatureUntapsOnlyForMonarch,
     EnchantedCreatureSkipsUntap,
     SourceSkipsUntap,
@@ -166,27 +175,44 @@ pub enum StaticRestriction {
     ProhibitLifeAndCreatureCosts,
     ProhibitOpponentsCausingSacrifice,
     OpponentsCannotGainLife,
+    PlayersCannotGainLife,
+    OthersEnterTapped(Box<PermanentSelector>),
+    PreventMatchingActivations(Box<PermanentSelector>),
     RestrictOpponentsDuringOwnTurn,
     EnchantedPlayerCastLimit,
     ProhibitCastingChosenName(Arc<NonlandCardNames>),
     RestrictGraveyardAndLibrary,
     CombatRequiresCityBlessing,
     ControllerHasHexproof,
+    /// Each player can't cast more than one spell each turn (CR 101.2 / Rule of Law).
+    OneSpellPerTurn,
+    /// Creatures entering the battlefield don't cause abilities to trigger (Torpor Orb).
+    SuppressEntersTriggers,
 }
 
 /// Static battlefield replacement, doubling, mana retention, or structural modifier.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum StaticModifierRule {
     DoubleCreatedTokens,
     DoublePlacedCounters,
     AdditionalSelfPlusOneCounter,
     OtherCreaturesEnterWithSourceCounters,
+    /// Matching permanents enter with `count` additional `kind` counters (Good-Fortune Unicorn, Grumgully).
+    OthersEnterWithCounters {
+        selector: Box<PermanentSelector>,
+        kind: crate::effects::CounterKind,
+        count: u8,
+    },
     ExtraEntryLoyalty,
     TwiceLoyaltyPerTurn,
     AdditionalCreatureDeathTrigger,
     EnterControlledCreaturesAsEnchantedCopy,
     EnterControlledCreaturesAsSourceCopy,
     IgnoreLegendForSubtype(CreatureTypeId),
+    /// The "legend rule" doesn't apply to permanents any player controls (Mirror Gallery).
+    IgnoreLegendRule,
+    /// The "legend rule" doesn't apply to permanents this permanent's controller controls.
+    IgnoreLegendRuleForController,
     RetainMana(ManaType),
     Ascend,
     AdditionalBlockWhileMonarch,
@@ -318,35 +344,58 @@ impl StaticContinuousAbility {
         matches!(
             self,
             Self::Battlefield { .. }
-                | Self::CostModifier {
-                    modifier: SpellCostModifier::ChosenTypeOneLessOfEachColor
-                        | SpellCostModifier::IncreaseExceptType { .. },
-                    ..
-                }
+                | Self::CostModifier { .. }
                 | Self::CastPermission {
-                    permission: CastPermissionRule::SubtypeSpellsHaveReplicate(_)
+                    permission: CastPermissionRule::Flash { .. }
+                        | CastPermissionRule::GraveyardCreatureCast
+                        | CastPermissionRule::SubtypeSpellsHaveReplicate(_)
                         | CastPermissionRule::GraveyardSubtypeEncore(_)
                         | CastPermissionRule::SeeLibraryTop { .. }
-                        | CastPermissionRule::PlayLibraryTop(_),
+                        | CastPermissionRule::PlayLibraryTop(_)
+                        | CastPermissionRule::AdditionalLandPlays(_)
+                        | CastPermissionRule::ControllerSpellsCannotBeCountered(_),
                     ..
                 }
                 | Self::DamageRule {
                     rule: StaticDamageRule::PreventHalfIncoming,
                     ..
                 }
+                | Self::DrawRule {
+                    rule: StaticDrawRule::NoMaximumHandSize
+                        | StaticDrawRule::OpponentsAtMostOne
+                        | StaticDrawRule::SkipControllerDrawStep,
+                    ..
+                }
+                | Self::UntapRule { .. }
                 | Self::Restriction {
                     rule: StaticRestriction::CombatRequiresCityBlessing
                         | StaticRestriction::PreventLoyaltyActivations
                         | StaticRestriction::PreventArtifactActivations
                         | StaticRestriction::PreventControlledTransform { .. }
                         | StaticRestriction::ProhibitLifeAndCreatureCosts
-                        | StaticRestriction::ProhibitOpponentsCausingSacrifice,
+                        | StaticRestriction::ProhibitOpponentsCausingSacrifice
+                        | StaticRestriction::OpponentsCannotGainLife
+                        | StaticRestriction::PlayersCannotGainLife
+                        | StaticRestriction::OthersEnterTapped(_)
+                        | StaticRestriction::PreventMatchingActivations(_)
+                        | StaticRestriction::RestrictOpponentsDuringOwnTurn
+                        | StaticRestriction::RestrictGraveyardAndLibrary
+                        | StaticRestriction::ControllerHasHexproof
+                        | StaticRestriction::OneSpellPerTurn
+                        | StaticRestriction::SuppressEntersTriggers,
                     ..
                 }
                 | Self::Modifier {
                     rule: StaticModifierRule::IgnoreLegendForSubtype(_)
+                        | StaticModifierRule::IgnoreLegendRule
+                        | StaticModifierRule::IgnoreLegendRuleForController
                         | StaticModifierRule::Ascend
-                        | StaticModifierRule::DoublePlacedCounters,
+                        | StaticModifierRule::DoublePlacedCounters
+                        | StaticModifierRule::DoubleCreatedTokens
+                        | StaticModifierRule::AdditionalSelfPlusOneCounter
+                        | StaticModifierRule::OtherCreaturesEnterWithSourceCounters
+                        | StaticModifierRule::OthersEnterWithCounters { .. }
+                        | StaticModifierRule::ExtraEntryLoyalty,
                     ..
                 }
         )
@@ -405,7 +454,8 @@ impl StaticContinuousAbility {
     ) -> Result<(), CharacteristicDefinitionError> {
         let (selector, parts) = match self {
             Self::CostModifier { modifier, .. } => match modifier {
-                SpellCostModifier::Discount { matching, .. } => {
+                SpellCostModifier::Discount { matching, .. }
+                | SpellCostModifier::Increase { matching, .. } => {
                     return matching
                         .validate_vocabulary(vocabulary)
                         .map_err(|_| CharacteristicDefinitionError::ForeignCreatureType);
@@ -449,7 +499,13 @@ impl StaticContinuousAbility {
                 }
                 return Ok(());
             }
-            Self::DrawRule { .. } | Self::UntapRule { .. } | Self::CommandZoneActive { .. } => {
+            Self::DrawRule { .. } | Self::CommandZoneActive { .. } => {
+                return Ok(());
+            }
+            Self::UntapRule { rule, .. } => {
+                if let StaticUntapRule::UntapMatchingDuringOtherPlayersUntap(selector) = rule {
+                    return selector.validate(vocabulary);
+                }
                 return Ok(());
             }
             Self::Restriction { rule, .. } => match rule {
@@ -465,11 +521,28 @@ impl StaticContinuousAbility {
                     }
                     return Ok(());
                 }
+                StaticRestriction::OthersEnterTapped(selector)
+                | StaticRestriction::PreventMatchingActivations(selector) => {
+                    return selector.validate(vocabulary);
+                }
                 _ => return Ok(()),
             },
             Self::Modifier { rule, .. } => {
-                if let StaticModifierRule::IgnoreLegendForSubtype(subtype) = rule {
-                    validate_subtypes(&BTreeSet::from([*subtype]), vocabulary)?;
+                match rule {
+                    StaticModifierRule::IgnoreLegendForSubtype(subtype) => {
+                        validate_subtypes(&BTreeSet::from([*subtype]), vocabulary)?;
+                    }
+                    StaticModifierRule::OthersEnterWithCounters {
+                        selector,
+                        kind,
+                        count,
+                    } => {
+                        if *count == 0 || !crate::effects::CounterKind::PERMANENT.contains(kind) {
+                            return Err(CharacteristicDefinitionError::EmptyParts);
+                        }
+                        selector.validate(vocabulary)?;
+                    }
+                    _ => {}
                 }
                 return Ok(());
             }
@@ -546,6 +619,15 @@ impl StaticContinuousAbility {
                 ) => {
                     validate_subtypes(&BTreeSet::from([*kind]), vocabulary)?;
                 }
+                StaticPart::BlockingRestriction(
+                    BlockingRestriction::CannotBlockMatching(filter)
+                    | BlockingRestriction::CannotBeBlockedByMatching(filter)
+                    | BlockingRestriction::OnlyBlockedByMatching(filter),
+                ) => {
+                    filter
+                        .validate_vocabulary(vocabulary)
+                        .map_err(|_| CharacteristicDefinitionError::ForeignCreatureType)?;
+                }
                 StaticPart::GrantActivated(ability) => {
                     let is_grantor_sac = matches!(
                         ability.source_cost,
@@ -560,21 +642,32 @@ impl StaticContinuousAbility {
                         || !ability.mana_cost.valid()
                         || !matches!(
                             ability.source_cost,
-                            crate::activated::SourceCost::PayLife {
-                                tap_source: false,
-                                ..
-                            } | crate::activated::SourceCost::None
+                            crate::activated::SourceCost::PayLife { .. }
+                                | crate::activated::SourceCost::None
                                 | crate::activated::SourceCost::Tap
                                 | crate::activated::SourceCost::Sacrifice
+                                | crate::activated::SourceCost::TapSacrifice
+                                | crate::activated::SourceCost::Untap
+                                | crate::activated::SourceCost::PayEnergy { .. }
+                                | crate::activated::SourceCost::ReturnSelfToHand { .. }
+                                | crate::activated::SourceCost::Exile {
+                                    from_graveyard: false,
+                                    ..
+                                }
+                                | crate::activated::SourceCost::GenericX { .. }
+                                | crate::activated::SourceCost::TapPermanents { .. }
+                                | crate::activated::SourceCost::Counter { .. }
                                 | crate::activated::SourceCost::SacrificeSelected {
                                     count: 1..,
                                     from_graveyard: false,
                                     ..
                                 }
                                 | crate::activated::SourceCost::Discard {
-                                    mode: crate::activated::DiscardCostMode::SelectedOne,
+                                    mode: crate::activated::DiscardCostMode::SelectedOne
+                                        | crate::activated::DiscardCostMode::Filtered { .. },
                                     ..
                                 }
+                                | crate::activated::SourceCost::ExileGraveyard { .. }
                         )
                     {
                         return Err(CharacteristicDefinitionError::InvalidKeywordGrant);
@@ -587,9 +680,46 @@ impl StaticContinuousAbility {
                     {
                         return Err(CharacteristicDefinitionError::InvalidKeywordGrant);
                     }
+                    let body_context = match ability.source_cost {
+                        crate::activated::SourceCost::Counter { kind, .. }
+                            if !crate::effects::CounterKind::PERMANENT.contains(&kind) =>
+                        {
+                            return Err(CharacteristicDefinitionError::InvalidKeywordGrant);
+                        }
+                        crate::activated::SourceCost::Counter {
+                            delta:
+                                crate::activated::CounterCostDelta::Remove(_)
+                                | crate::activated::CounterCostDelta::RemoveAll,
+                            ..
+                        } => crate::program::BodyContext::Activated {
+                            named_counter_cost: true,
+                        },
+                        crate::activated::SourceCost::SacrificeSelected {
+                            filter:
+                                crate::activated::SelectedSacrificeFilter::Creature
+                                | crate::activated::SelectedSacrificeFilter::OtherCreature,
+                            count: 1,
+                            from_graveyard: false,
+                            ..
+                        }
+                        | crate::activated::SourceCost::PayLife {
+                            sacrifice:
+                                Some(
+                                    crate::activated::SelectedSacrificeFilter::Creature
+                                    | crate::activated::SelectedSacrificeFilter::OtherCreature,
+                                ),
+                            ..
+                        } => crate::program::BodyContext::SacrificedCreature,
+                        crate::activated::SourceCost::SacrificeSelected {
+                            count: 1,
+                            from_graveyard: false,
+                            ..
+                        } => crate::program::BodyContext::SacrificedPermanent,
+                        _ => crate::program::BodyContext::ACTIVATED,
+                    };
                     ability
                         .body
-                        .validate(vocabulary)
+                        .validate_in(vocabulary, body_context)
                         .map_err(|_| CharacteristicDefinitionError::InvalidKeywordGrant)?;
                 }
                 StaticPart::GrantTrigger(ability) => {

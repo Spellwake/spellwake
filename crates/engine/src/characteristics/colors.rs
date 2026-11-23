@@ -14,6 +14,18 @@ pub enum Color {
 impl Color {
     pub const ALL: [Self; 5] = [Self::White, Self::Blue, Self::Black, Self::Red, Self::Green];
 
+    /// Single-bit mask position for this color.
+    #[must_use]
+    pub const fn bit(self) -> u8 {
+        match self {
+            Self::White => 1 << 0,
+            Self::Blue => 1 << 1,
+            Self::Black => 1 << 2,
+            Self::Red => 1 << 3,
+            Self::Green => 1 << 4,
+        }
+    }
+
     /// Color contributed by one represented mana symbol. Colorless mana
     /// contributes no color; generic cost quantities are not mana symbols.
     pub(crate) fn from_mana(value: ManaType) -> Option<Self> {
@@ -27,16 +39,21 @@ impl Color {
         }
     }
 }
-/// Color qualification for one permanent selector. Compound predicates and
-/// resolution-local color choices have not entered this authored language.
+/// Color qualification for one permanent selector.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum ColorFilter {
     #[default]
     Any,
     Has(Color),
+    /// Match objects that have at least one color in this 5-bit mask (`Color::bit`).
+    AnyOf(u8),
     /// Match objects that do not have this color.
     Lacks(Color),
+    /// Match objects that have none of the colors in this 5-bit mask (`Color::bit`).
+    LacksAll(u8),
     Colorless,
+    /// Match objects with at least one color.
+    Colored,
     Monocolored,
     Multicolored,
 }
@@ -45,8 +62,11 @@ impl ColorFilter {
         match self {
             Self::Any => true,
             Self::Has(color) => colors.contains(&color),
+            Self::AnyOf(mask) => colors.iter().any(|c| (c.bit() & mask) != 0),
             Self::Lacks(color) => !colors.contains(&color),
+            Self::LacksAll(mask) => colors.iter().all(|c| (c.bit() & mask) == 0),
             Self::Colorless => colors.is_empty(),
+            Self::Colored => !colors.is_empty(),
             Self::Monocolored => colors.len() == 1,
             Self::Multicolored => colors.len() >= 2,
         }

@@ -60,6 +60,7 @@ fn selector(change: CreatureTypeTextChange, value: &mut PermanentSelector) {
     {
         word(change, subtype);
     }
+    words(change, &mut value.any_creature_subtypes);
 }
 fn numeric(change: CreatureTypeTextChange, value: &mut NumericExpression) {
     match value {
@@ -115,7 +116,8 @@ fn body(change: CreatureTypeTextChange, value: &mut ExecutableBody) {
         }
     }
     if let crate::program::BodyTarget::FilteredPermanent(filter)
-    | crate::program::BodyTarget::FilteredOwnGraveyardCard(filter) = &mut value.target
+    | crate::program::BodyTarget::FilteredOwnGraveyardCard(filter)
+    | crate::program::BodyTarget::FilteredAnyGraveyardCard { filter, .. } = &mut value.target
     {
         filter.rewrite_creature_type(change.from, change.to);
     }
@@ -149,15 +151,23 @@ fn body(change: CreatureTypeTextChange, value: &mut ExecutableBody) {
             | Instruction::DrawEachPlayer { amount }
             | Instruction::AddMana(
                 crate::program::EffectManaYield::Counted { amount, .. }
-                | crate::program::EffectManaYield::Split { amount, .. },
+                | crate::program::EffectManaYield::Split { amount, .. }
+                | crate::program::EffectManaYield::Choice { amount, .. },
             )
+            | Instruction::RemoveCountersFromPermanent { amount, .. }
             | Instruction::DamageOpponentsAmount(amount)
             | Instruction::DamageRelatedPlayerAmount(amount)
+            | Instruction::DamageGroupAmount { amount, .. }
             | Instruction::OpponentsLoseAndControllerGains(amount)
             | Instruction::ExileFromHandOrBattlefield(amount)
             | Instruction::ReturnControlledPermanents { amount, .. }
             | Instruction::ExileChosenPermanents { amount, .. }
             | Instruction::Discard { amount, .. }
+            | Instruction::DiscardFiltered { amount, .. }
+            | Instruction::AddPlayerCounter { amount, .. }
+            | Instruction::PutNamedCounterOnTarget { amount, .. }
+            | Instruction::ExileTopPlay { count: amount, .. }
+            | Instruction::LookTopChoose { count: amount, .. }
             | Instruction::Sacrifice { amount, .. }
             | Instruction::ModifyGroupByAmount { amount, .. }
             | Instruction::AnimateTargetAsCountedCreature { amount, .. }
@@ -175,6 +185,17 @@ fn body(change: CreatureTypeTextChange, value: &mut ExecutableBody) {
             _ => {}
         }
         match instruction {
+            Instruction::DiscardFiltered { filter, .. } => {
+                filter.rewrite_creature_type(change.from, change.to);
+            }
+            Instruction::LookTopChoose {
+                filter: Some(filter),
+                ..
+            }
+            | Instruction::RevealUntilMatch { filter, .. } => {
+                filter.rewrite_creature_type(change.from, change.to);
+            }
+            Instruction::LookTopChoose { filter: None, .. } | Instruction::ExileTopPlay { .. } => {}
             Instruction::MoveGroup { group, .. }
             | Instruction::DestroyGroup(group)
             | Instruction::DestroyGroupWithoutRegeneration(group)
@@ -224,12 +245,24 @@ fn body(change: CreatureTypeTextChange, value: &mut ExecutableBody) {
             Instruction::OrderArtifactCreatureLandSacrifices
             | Instruction::ChooseTypeThenDestroyUnchosen
             | Instruction::ChooseCreatureTypeForPlayer { .. } => {}
-            Instruction::SearchLibrary { filter } => {
-                if let crate::program::SearchCardMatcher::CreatureSubtype(kind) =
-                    &mut filter.matcher
-                {
+            Instruction::SearchLibrary { filter } => match &mut filter.matcher {
+                crate::program::SearchCardMatcher::CreatureSubtype(kind) => {
                     word(change, kind);
                 }
+                crate::program::SearchCardMatcher::Filtered(obj_filter) => {
+                    obj_filter.rewrite_creature_type(change.from, change.to);
+                }
+                _ => {}
+            },
+            Instruction::DamageGroup {
+                group: crate::program::DamageGroup::Filtered(filter),
+                ..
+            }
+            | Instruction::DamageGroupAmount {
+                group: crate::program::DamageGroup::Filtered(filter),
+                ..
+            } => {
+                filter.rewrite_creature_type(change.from, change.to);
             }
             Instruction::ModifyGroupByAmount { group, .. }
             | Instruction::ModifyGroupUntilEndOfTurn { group, .. }
@@ -328,6 +361,7 @@ fn body(change: CreatureTypeTextChange, value: &mut ExecutableBody) {
                 | crate::damage::TurnPreventionFilter::CombatFromCreaturesOtherThanTarget
                 | crate::damage::TurnPreventionFilter::CombatToControlledCreatures
                 | crate::damage::TurnPreventionFilter::Combat
+                | crate::damage::TurnPreventionFilter::All
                 | crate::damage::TurnPreventionFilter::CreaturesControlledByOpponents,
             )
             | Instruction::ExileDefeatedSiege
@@ -506,10 +540,14 @@ fn body(change: CreatureTypeTextChange, value: &mut ExecutableBody) {
             | Instruction::WeakenDelayedAttacker(_)
             | Instruction::DrawRevealRemoveLoyalty
             | Instruction::CreateReflexiveDiscardDamage
+            | Instruction::ScheduleDelayedStepTrigger { .. }
+            | Instruction::EmitReflexiveTrigger { .. }
             | Instruction::RemoveLoyaltyExileTopForPlay
             | Instruction::DamageDamagedPlayersCreatures
             | Instruction::DamageOpponentsAmount(_)
             | Instruction::DamageRelatedPlayerAmount(_)
+            | Instruction::DamageGroupAmount { .. }
+            | Instruction::DoublePowerToughness { .. }
             | Instruction::Ninjutsu
             | Instruction::Unearth
             | Instruction::FlipCoin { .. }
@@ -575,6 +613,9 @@ fn body(change: CreatureTypeTextChange, value: &mut ExecutableBody) {
             | Instruction::ShuffleEachHandAndGraveyard
             | Instruction::EndControllerTurn
             | Instruction::ShuffleOwnLibrary
+            | Instruction::ShufflePlayerLibrary(_)
+            | Instruction::ShuffleTargetIntoLibrary
+            | Instruction::RevealPlayerHand(_)
             | Instruction::ShuffleOwnGraveyardIntoLibrary
             | Instruction::ShuffleTargetGraveyardCards { .. }
             | Instruction::ExileCreaturesAndPlaneswalkersBelowRevealedManaValue
@@ -584,6 +625,9 @@ fn body(change: CreatureTypeTextChange, value: &mut ExecutableBody) {
             | Instruction::DestroyNonlandsAtSourceChargeCount
             | Instruction::AddCounterAndDischargeOnResolution(_)
             | Instruction::ExileAllGraveyards
+            | Instruction::ExilePlayerGraveyards(_)
+            | Instruction::PayControllerEnergy(_)
+            | Instruction::RemoveCountersFromPermanent { .. }
             | Instruction::ExileCreatureAtMostRevealedPower
             | Instruction::ExileTarget
             | Instruction::ImprintTargetLand
@@ -619,6 +663,7 @@ fn body(change: CreatureTypeTextChange, value: &mut ExecutableBody) {
             | Instruction::GrantProtectionChosenColor(_)
             | Instruction::PutIndestructibleCounter
             | Instruction::PutLoyaltyCounter
+            | Instruction::PutNamedCounterOnTarget { .. }
             | Instruction::PutPowerToughnessCounters { .. }
             | Instruction::Scry { .. }
             | Instruction::Surveil { .. }
@@ -632,6 +677,7 @@ fn body(change: CreatureTypeTextChange, value: &mut ExecutableBody) {
             | Instruction::DrawEachPlayer { .. }
             | Instruction::DrawPlayersControllingName(_)
             | Instruction::AddExperienceCounter
+            | Instruction::AddPlayerCounter { .. }
             | Instruction::ControlManaSourceThroughNextTurn
             | Instruction::GrantControllerFlashUntilCleanup
             | Instruction::RequireOpponentsCreaturesBlockThisTurn
@@ -684,8 +730,20 @@ fn printed(change: CreatureTypeTextChange, text: &mut PrintedText) {
         body(change, unbracketed);
     }
     for reduction in &mut text.cast_reductions {
-        if let crate::program::CastReduction::Affinity(quality) = reduction {
-            selector(change, quality);
+        match reduction {
+            crate::program::CastReduction::Affinity(quality) => {
+                selector(change, quality);
+            }
+            crate::program::CastReduction::CountZone { filter, .. } => {
+                filter.rewrite_creature_type(change.from, change.to);
+            }
+            crate::program::CastReduction::Conditional { condition, .. } => {
+                condition.left.rewrite_creature_type(change.from, change.to);
+                condition
+                    .right
+                    .rewrite_creature_type(change.from, change.to);
+            }
+            _ => {}
         }
     }
     for ability in text

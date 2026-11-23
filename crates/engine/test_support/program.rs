@@ -1562,6 +1562,8 @@ enum ResolvingPlayerWire {
     UniqueRelatedPlayer,
     TargetSpellController,
     TargetPlayer,
+    TargetController,
+    TargetOwner,
     ExiledTargetController,
     DestructionTargetController,
 }
@@ -1577,6 +1579,8 @@ impl TryFrom<String> for ResolvingPlayerWire {
             "UniqueRelatedPlayer" => Ok(Self::UniqueRelatedPlayer),
             "TargetSpellController" => Ok(Self::TargetSpellController),
             "TargetPlayer" => Ok(Self::TargetPlayer),
+            "TargetController" => Ok(Self::TargetController),
+            "TargetOwner" => Ok(Self::TargetOwner),
             "DestructionTargetController" => Ok(Self::DestructionTargetController),
             "ExiledTargetController" => Ok(Self::ExiledTargetController),
             _ => Err(format!("unknown resolving player {value}")),
@@ -1593,6 +1597,8 @@ impl From<ResolvingPlayerWire> for ResolvingPlayer {
             ResolvingPlayerWire::UniqueRelatedPlayer => Self::UniqueRelatedPlayer,
             ResolvingPlayerWire::TargetSpellController => Self::TargetSpellController,
             ResolvingPlayerWire::TargetPlayer => Self::TargetPlayer,
+            ResolvingPlayerWire::TargetController => Self::TargetController,
+            ResolvingPlayerWire::TargetOwner => Self::TargetOwner,
             ResolvingPlayerWire::DestructionTargetController => Self::DestructionTargetController,
             ResolvingPlayerWire::ExiledTargetController => Self::ExiledTargetController,
         }
@@ -2572,9 +2578,52 @@ fn blocking_restriction(value: &BlockingRestriction) -> Value {
             json!({"tag":"AllDefendingCreaturesMustBlock"})
         }
         BlockingRestriction::CannotAttackOrBlock => json!({"tag":"CannotAttackOrBlock"}),
+        BlockingRestriction::CannotAttack => json!({"tag":"CannotAttack"}),
         BlockingRestriction::CannotBlock => json!({"tag":"CannotBlock"}),
+        BlockingRestriction::AtMostOneBlocker => json!({"tag":"AtMostOneBlocker"}),
+        BlockingRestriction::CannotBeBlockedByPowerAtMost(maximum) => {
+            json!({"tag":"CannotBeBlockedByPowerAtMost","maximum":maximum})
+        }
+        BlockingRestriction::CannotBeBlockedByPowerAtLeast(minimum) => {
+            json!({"tag":"CannotBeBlockedByPowerAtLeast","minimum":minimum})
+        }
+        BlockingRestriction::CannotBeBlockedByColor(color) => {
+            json!({"tag":"CannotBeBlockedByColor","color":format!("{color:?}")})
+        }
+        BlockingRestriction::OnlyBlockedByColor(color) => {
+            json!({"tag":"OnlyBlockedByColor","color":format!("{color:?}")})
+        }
+        BlockingRestriction::OnlyBlockedByColorOrArtifact(color) => {
+            json!({"tag":"OnlyBlockedByColorOrArtifact","color":format!("{color:?}")})
+        }
+        BlockingRestriction::CannotBeBlockedByTokens => json!({"tag":"CannotBeBlockedByTokens"}),
+        BlockingRestriction::OnlyBlockedByArtifact => json!({"tag":"OnlyBlockedByArtifact"}),
+        BlockingRestriction::CannotBeBlockedByNonArtifact => {
+            json!({"tag":"CannotBeBlockedByNonArtifact"})
+        }
         BlockingRestriction::CannotBeBlockedIfPowerOrToughnessAtMostOne => {
             json!({"tag":"CannotBeBlockedIfPowerOrToughnessAtMostOne"})
+        }
+        BlockingRestriction::CannotBlockMatching(filter) => {
+            json!({"tag":"CannotBlockMatching","filter":format!("{filter:?}")})
+        }
+        BlockingRestriction::CannotBeBlockedByMatching(filter) => {
+            json!({"tag":"CannotBeBlockedByMatching","filter":format!("{filter:?}")})
+        }
+        BlockingRestriction::OnlyBlockedByMatching(filter) => {
+            json!({"tag":"OnlyBlockedByMatching","filter":format!("{filter:?}")})
+        }
+        BlockingRestriction::CannotAttackAlone => json!({"tag":"CannotAttackAlone"}),
+        BlockingRestriction::CannotBlockAlone => json!({"tag":"CannotBlockAlone"}),
+        BlockingRestriction::AssignDamageByToughness => {
+            json!({"tag":"AssignDamageByToughness"})
+        }
+        BlockingRestriction::AssignDamageAsThoughUnblocked => {
+            json!({"tag":"AssignDamageAsThoughUnblocked"})
+        }
+        BlockingRestriction::CanBlockAnyNumber => json!({"tag":"CanBlockAnyNumber"}),
+        BlockingRestriction::CanAttackAsThoughNoDefender => {
+            json!({"tag":"CanAttackAsThoughNoDefender"})
         }
     };
     json!({"tag":"BlockingRestriction", "restriction":restriction})
@@ -3193,6 +3242,7 @@ impl Selector {
     fn native(self, vocabulary: &CreatureTypeVocabulary) -> Result<PermanentSelector, String> {
         Ok(PermanentSelector {
             token: self.token,
+            min_power: None,
             land_subtype: self
                 .land_subtype
                 .map(|label| {
@@ -3265,6 +3315,7 @@ impl Selector {
                 .controlled_creatures_and_typed_tokens
                 .map(|value| creature_types::id(value, vocabulary))
                 .transpose()?,
+            ..PermanentSelector::default()
         })
     }
 }
@@ -7507,6 +7558,8 @@ fn cast_reductions(values: &[spellwake_engine::program::CastReduction]) -> Value
                     json!({"tag":"Affinity","selector":selector(quality)}),
                 CastReduction::StackTargetThreatensCreature {minimum_power,discount} => json!({"tag":"StackTargetThreatensCreature","minimum_power":minimum_power,"discount":discount}),
                 CastReduction::Undaunted => json!({"tag":"Undaunted"}),
+                CastReduction::CountZone { zone, filter, per_card } => json!({"tag":"CountZone","zone":format!("{zone:?}"),"filter":format!("{filter:?}"),"per_card":per_card}),
+                CastReduction::Conditional { condition, discount } => json!({"tag":"Conditional","condition":format!("{condition:?}"),"discount":discount}),
             })
             .collect::<Vec<_>>()
     )
@@ -7541,7 +7594,14 @@ fn entry_counters(values: &[spellwake_engine::program::EntryCounterAbility]) -> 
                 ChargePerKicker(index) => json!({"tag":"ChargePerKicker","index":index}),
                 FixedLoyalty(n) => json!({"tag":"FixedLoyalty","amount":n}),
                 FixedCharge(n) => json!({"tag":"FixedCharge","amount":n}),
+                FixedNamed { kind, amount } => {
+                    json!({"tag":"FixedNamed","kind":format!("{kind:?}"),"amount":amount})
+                }
                 FixedPlusOne(n) => json!({"tag":"FixedPlusOne","amount":n}),
+                FixedMinusOne(n) => json!({"tag":"FixedMinusOne","amount":n}),
+                DynamicCounter { kind, amount } => {
+                    json!({"tag":"DynamicCounter","kind":format!("{kind:?}"),"amount":instruction_amount(amount)})
+                }
                 MorbidPlusOne(n) => json!({"tag":"MorbidPlusOne","amount":n}),
                 ControlledAndGraveyardSubtypePlusOne(subtype) => json!({
                     "tag":"ControlledAndGraveyardSubtypePlusOne","subtype":subtype
@@ -8404,8 +8464,11 @@ fn color_filter(value: ColorFilter) -> Value {
     match value {
         ColorFilter::Any => json!({"tag":"Any"}),
         ColorFilter::Lacks(color) => json!({"tag":"Lacks","color":format!("{color:?}")}),
+        ColorFilter::LacksAll(mask) => json!({"tag":"LacksAll","mask":mask}),
         ColorFilter::Has(color) => json!({"tag":"Has","color":format!("{color:?}")}),
+        ColorFilter::AnyOf(mask) => json!({"tag":"AnyOf","mask":mask}),
         ColorFilter::Colorless => json!({"tag":"Colorless"}),
+        ColorFilter::Colored => json!({"tag":"Colored"}),
         ColorFilter::Monocolored => json!({"tag":"Monocolored"}),
         ColorFilter::Multicolored => json!({"tag":"Multicolored"}),
     }
@@ -8927,6 +8990,14 @@ pub fn static_ability(value: &StaticContinuousAbility) -> Value {
                 SpellCostModifier::HighManaValueProtected { minimum, reduction } => {
                     json!({"tag":"HighManaValueSpellsProtected","id":id.0,"minimum":minimum,"reduction":reduction})
                 }
+                SpellCostModifier::Increase {
+                    any_player,
+                    opponents_only,
+                    matching,
+                    amount,
+                } => {
+                    json!({"tag":"IncreaseSpellCost","id":id.0,"any_player":any_player,"opponents_only":opponents_only,"matching":format!("{matching:?}"),"amount":amount})
+                }
             };
         }
         StaticContinuousAbility::DamageRule { id, rule } => {
@@ -9000,6 +9071,9 @@ pub fn static_ability(value: &StaticContinuousAbility) -> Value {
                     json!({"tag":"EnchantedCreatureSkipsUntap","id":id.0})
                 }
                 StaticUntapRule::SourceSkipsUntap => json!({"tag":"SourceSkipsUntap","id":id.0}),
+                StaticUntapRule::UntapMatchingDuringOtherPlayersUntap(selector) => {
+                    json!({"tag":"UntapMatchingDuringOtherPlayersUntap","id":id.0,"selector":format!("{selector:?}")})
+                }
             };
         }
         StaticContinuousAbility::Restriction { id, rule } => {
@@ -9040,6 +9114,21 @@ pub fn static_ability(value: &StaticContinuousAbility) -> Value {
                 StaticRestriction::ControllerHasHexproof => {
                     json!({"tag":"ControllerHasHexproof","id":id.0})
                 }
+                StaticRestriction::PlayersCannotGainLife => {
+                    json!({"tag":"PlayersCannotGainLife","id":id.0})
+                }
+                StaticRestriction::OthersEnterTapped(selector) => {
+                    json!({"tag":"OthersEnterTapped","id":id.0,"selector":format!("{selector:?}")})
+                }
+                StaticRestriction::PreventMatchingActivations(selector) => {
+                    json!({"tag":"PreventMatchingActivations","id":id.0,"selector":format!("{selector:?}")})
+                }
+                StaticRestriction::OneSpellPerTurn => {
+                    json!({"tag":"OneSpellPerTurn","id":id.0})
+                }
+                StaticRestriction::SuppressEntersTriggers => {
+                    json!({"tag":"SuppressEntersTriggers","id":id.0})
+                }
             };
         }
         StaticContinuousAbility::Modifier { id, rule } => {
@@ -9055,6 +9144,13 @@ pub fn static_ability(value: &StaticContinuousAbility) -> Value {
                 }
                 StaticModifierRule::OtherCreaturesEnterWithSourceCounters => {
                     json!({"tag":"OtherCreaturesEnterWithSourceCounters","id":id.0})
+                }
+                StaticModifierRule::OthersEnterWithCounters {
+                    selector,
+                    kind,
+                    count,
+                } => {
+                    json!({"tag":"OthersEnterWithCounters","id":id.0,"selector":format!("{selector:?}"),"kind":format!("{kind:?}"),"count":count})
                 }
                 StaticModifierRule::ExtraEntryLoyalty => {
                     json!({"tag":"ExtraEntryLoyalty","id":id.0})
@@ -9073,6 +9169,12 @@ pub fn static_ability(value: &StaticContinuousAbility) -> Value {
                 }
                 StaticModifierRule::IgnoreLegendForSubtype(subtype) => {
                     json!({"tag":"IgnoreLegendForSubtype","id":id.0,"subtype":projection::creature_type_id(*subtype)})
+                }
+                StaticModifierRule::IgnoreLegendRule => {
+                    json!({"tag":"IgnoreLegendRule","id":id.0})
+                }
+                StaticModifierRule::IgnoreLegendRuleForController => {
+                    json!({"tag":"IgnoreLegendRuleForController","id":id.0})
                 }
                 StaticModifierRule::RetainMana(kind) => {
                     json!({"tag":"RetainMana","id":id.0,"kind":format!("{kind:?}")})
@@ -9373,6 +9475,15 @@ pub fn instruction_amount(value: &ValueExpr) -> Value {
             }
             _ => json!({"tag":"DivConst","expr":instruction_amount(expr),"divisor":divisor.get()}),
         },
+        ValueExpr::Add(a, b) => {
+            json!({"tag":"Add","left":instruction_amount(a),"right":instruction_amount(b)})
+        }
+        ValueExpr::Sub(a, b) => {
+            json!({"tag":"Sub","left":instruction_amount(a),"right":instruction_amount(b)})
+        }
+        ValueExpr::DomainCount => json!({"tag":"DomainCount"}),
+        ValueExpr::OpponentsCount => json!({"tag":"OpponentsCount"}),
+        ValueExpr::Devotion(colors) => json!({"tag":"Devotion","colors":format!("{colors:?}")}),
         ValueExpr::Conditional {
             left,
             comparison: Comparison::GreaterOrEqual,
@@ -9596,6 +9707,18 @@ pub fn resolution_condition(value: &ResolutionCondition) -> Value {
             ValueExpr::PlayerStat(PlayerStatExpr::ControllerIsMonarch) => {
                 json!({"tag":"ControllerIsMonarch"})
             }
+            ValueExpr::PlayerStat(PlayerStatExpr::ControllerIsActivePlayer) => {
+                json!({"tag":"ControllerIsActivePlayer"})
+            }
+            ValueExpr::PlayerStat(PlayerStatExpr::OwnGraveyardDistinctCardTypes) => {
+                json!({"tag":"OwnGraveyardDistinctCardTypes"})
+            }
+            ValueExpr::PlayerStat(PlayerStatExpr::ControllerLifeLostThisTurn) => {
+                json!({"tag":"ControllerLifeLostThisTurn"})
+            }
+            ValueExpr::PlayerStat(other) => {
+                json!({"tag":"PlayerStat","kind":format!("{other:?}")})
+            }
             ValueExpr::CounterCount {
                 subject: CounterSubjectRef::AbilitySource,
                 kind: Some(kind),
@@ -9741,6 +9864,12 @@ pub fn body(value: &ExecutableBody) -> Value {
                 json!({"tag":"FilteredOwnGraveyardCard","filter":graveyard_filter_label(filter)})
             }
         }
+        BodyTarget::FilteredAnyGraveyardCard {
+            filter,
+            opponents_only,
+        } => {
+            json!({"tag":"FilteredAnyGraveyardCard","filter":permanent_group_wire(filter),"opponents_only":opponents_only})
+        }
         BodyTarget::SinglePermanent => json!({"tag":"SinglePermanent"}),
         BodyTarget::SingleCreature => json!({"tag":"SingleCreature"}),
         BodyTarget::SingleOpponent => json!({"tag":"SingleOpponent"}),
@@ -9748,6 +9877,9 @@ pub fn body(value: &ExecutableBody) -> Value {
         BodyTarget::SingleOwnGraveyardCard => json!({"tag":"SingleOwnGraveyardCard"}),
         BodyTarget::SingleCreatureOrPlayer => json!({"tag":"SingleCreatureOrPlayer"}),
         BodyTarget::SinglePlayerOrPlaneswalker => json!({"tag":"SinglePlayerOrPlaneswalker"}),
+        BodyTarget::SingleOpponentOrPlaneswalker => {
+            json!({"tag":"SingleOpponentOrPlaneswalker"})
+        }
         BodyTarget::OpponentOrPlaneswalkerThenCreature => {
             json!({"tag":"OpponentOrPlaneswalkerThenCreature"})
         }
@@ -9848,7 +9980,15 @@ pub fn body(value: &ExecutableBody) -> Value {
                     DamageGroup::Creatures => json!({"op":"DamageGroup","group":"Creatures","amount":amount}),
                     DamageGroup::Players => json!({"op":"DamageGroup","group":"Players","amount":amount}),
                     DamageGroup::CreaturesAndPlayers => json!({"op":"DamageGroup","group":"CreaturesAndPlayers","amount":amount}),
+                    DamageGroup::AbilitySource => json!({"op":"DamageGroup","group":"AbilitySource","amount":amount}),
+                    DamageGroup::Filtered(filter) => json!({"op":"DamageGroup","group":"Filtered","filter":permanent_group_wire(*filter),"amount":amount}),
                 }
+            }
+            Instruction::DamageGroupAmount { group, amount } => {
+                json!({"op":"DamageGroupAmount","group":format!("{group:?}"),"amount":instruction_amount(amount)})
+            }
+            Instruction::DoublePowerToughness { target_self, power, toughness, duration: dur } => {
+                json!({"op":"DoublePowerToughness","target_self":target_self,"power":power,"toughness":toughness,"duration":duration(*dur)})
             }
             Instruction::AdditionalCombat {untap}=>match untap {
                 spellwake_engine::program::CombatUntapGroup::ControlledCreatures=>json!({"op":"ExtraCombatControlled"}),
@@ -9903,6 +10043,7 @@ pub fn body(value: &ExecutableBody) -> Value {
                 spellwake_engine::program::EffectManaYield::CombatDamageUntilCleanup(kind) => json!({"op":"AddCombatDamageManaUntilCleanup","kind":format!("{kind:?}")}),
                 spellwake_engine::program::EffectManaYield::Counted { kind, amount } => json!({"op":"AddCountedMana","kind":format!("{kind:?}"),"amount":instruction_amount(amount)}),
                 spellwake_engine::program::EffectManaYield::Split { first, second, amount } => json!({"op":"AddSplitMana","first":format!("{first:?}"),"second":format!("{second:?}"),"amount":instruction_amount(amount)}),
+                spellwake_engine::program::EffectManaYield::Choice { colors, amount } => json!({"op":"AddManaChoice","colors":colors.iter().map(|color|format!("{color:?}")).collect::<Vec<_>>(),"amount":instruction_amount(amount)}),
             },
             Instruction::RequireCondition(cond) => match cond {
                 spellwake_engine::program::InterveningCondition::ReturnSourceOnBattlefield => json!({"op":"RequireReturnSourceOnBattlefield"}),
@@ -9990,6 +10131,7 @@ pub fn body(value: &ExecutableBody) -> Value {
             Instruction::SacrificeMatching(filter) => match filter {
                 spellwake_engine::program::SacrificeSelection::Subtype(kind) => json!({"op":"SacrificeMatching","subtype":projection::creature_type_id(*kind)}),
                 spellwake_engine::program::SacrificeSelection::NontokenCreature => json!({"op":"SacrificeMatching","subtype":null}),
+                other => json!({"op":"SacrificeMatching","kind":format!("{other:?}")}),
             },
             Instruction::SacrificeToContinue {filter} => json!({"op":"SacrificeToContinue","filter":permanent_type_filter(filter)}),
             Instruction::Discard { players, amount } => json!({"op":"Discard","players":affected_players(*players),"amount":instruction_amount(amount)}),
@@ -10058,6 +10200,10 @@ pub fn body(value: &ExecutableBody) -> Value {
                         "tag":"AnyOfNames",
                         "names": names.iter().map(|n| n.as_str()).collect::<Vec<_>>()
                     }),
+                    SearchCardMatcher::Filtered(obj_filter) => json!({
+                        "tag":"Filtered",
+                        "filter": permanent_group_wire(**obj_filter)
+                    }),
                 };
                 let mana_value = filter.mana_value.as_ref().map(|mv| match mv {
                     SearchManaValue::Exact(value) => json!({"tag":"Exact","value":value}),
@@ -10112,6 +10258,7 @@ pub fn body(value: &ExecutableBody) -> Value {
                         "tag":"Exile",
                         "link": format!("{link:?}")
                     }),
+                    SearchDestination::Graveyard => json!({"tag":"Graveyard"}),
                 };
                 let source = match filter.source {
                     SearchSource::OwnLibrary => "OwnLibrary".to_owned(),
@@ -10408,6 +10555,13 @@ pub fn body(value: &ExecutableBody) -> Value {
             Instruction::ExileAllGraveyards => json!({"op":"ExileAllGraveyards"}),
             Instruction::ReturnOwnedCommandersToHand => json!({"op":"ReturnOwnedCommandersToHand"}),
             Instruction::ShuffleOwnLibrary => json!({"op":"ShuffleOwnLibrary"}),
+            Instruction::ShufflePlayerLibrary(player) => {
+                json!({"op":"ShufflePlayerLibrary","player":format!("{player:?}")})
+            }
+            Instruction::ShuffleTargetIntoLibrary => json!({"op":"ShuffleTargetIntoLibrary"}),
+            Instruction::RevealPlayerHand(player) => {
+                json!({"op":"RevealPlayerHand","player":format!("{player:?}")})
+            }
             Instruction::ExileTargetUntilNonlandForFreeCast => json!({"op":"ExileTargetUntilNonlandForFreeCast"}),
             Instruction::OfferOpponentsDamage => json!({"op":"OfferOpponentsDamage"}),
             Instruction::ExileTopRepeatOnPermanentEntry => json!({"op":"ExileTopRepeatOnPermanentEntry"}),
@@ -10496,12 +10650,49 @@ pub fn body(value: &ExecutableBody) -> Value {
             }
             Instruction::PutIndestructibleCounter => json!({"op":"PutIndestructibleCounter"}),
             Instruction::PutLoyaltyCounter => json!({"op":"PutLoyaltyCounter"}),
+            Instruction::PutNamedCounterOnTarget { kind, amount } => {
+                json!({"op":"PutNamedCounterOnTarget","kind":format!("{kind:?}"),"amount":instruction_amount(amount)})
+            }
+            Instruction::AddPlayerCounter { players, kind, amount } => {
+                json!({"op":"AddPlayerCounter","players":affected_players(*players),"kind":format!("{kind:?}"),"amount":instruction_amount(amount)})
+            }
+            Instruction::DiscardFiltered { players, amount, filter } => {
+                json!({"op":"DiscardFiltered","players":affected_players(*players),"amount":instruction_amount(amount),"filter":format!("{filter:?}")})
+            }
+            Instruction::ExileTopPlay { count, duration, cast_only, free } => {
+                json!({"op":"ExileTopPlay","count":instruction_amount(count),"duration":format!("{duration:?}"),"cast_only":cast_only,"free":free})
+            }
+            Instruction::LookTopChoose { count, filter, reveal, to_battlefield, enters_tapped, take_all_matching, max_picks, rest_to_graveyard, rest_to_exile } => {
+                json!({"op":"LookTopChoose","count":instruction_amount(count),"filter":filter.as_ref().map(|f| format!("{f:?}")),"reveal":reveal,"to_battlefield":to_battlefield,"enters_tapped":enters_tapped,"take_all_matching":take_all_matching,"max_picks":max_picks,"rest_to_graveyard":rest_to_graveyard,"rest_to_exile":rest_to_exile})
+            }
+            Instruction::RevealUntilMatch { filter, to_battlefield, enters_tapped, keep_all_revealed, rest_to_graveyard, rest_to_exile, rest_to_bottom } => {
+                json!({"op":"RevealUntilMatch","filter":format!("{filter:?}"),"to_battlefield":to_battlefield,"enters_tapped":enters_tapped,"keep_all_revealed":keep_all_revealed,"rest_to_graveyard":rest_to_graveyard,"rest_to_exile":rest_to_exile,"rest_to_bottom":rest_to_bottom})
+            }
             Instruction::GrantProtectionChosenColor(spellwake_engine::program::ProtectionRecipients::TargetPermanent) =>
                 json!({"op":"GrantProtectionChosenColor"}),
             Instruction::GrantProtectionChosenColor(spellwake_engine::program::ProtectionRecipients::ControllerAndPermanents) =>
                 json!({"op":"GrantProtectionChosenColor","for_controller_and_permanents":true}),
             Instruction::PutPowerToughnessCounters { counters: value } => {
                 json!({"op":"PutPowerToughnessCounters","counters":counters(value)})
+            }
+            Instruction::ScheduleDelayedStepTrigger {
+                step,
+                own_step_only,
+                body: delayed,
+            } => {
+                json!({"op":"ScheduleDelayedStepTrigger","step":format!("{step:?}"),"own_step_only":own_step_only,"body":body(delayed)})
+            }
+            Instruction::EmitReflexiveTrigger { body: reflexive } => {
+                json!({"op":"EmitReflexiveTrigger","body":body(reflexive)})
+            }
+            Instruction::ExilePlayerGraveyards(players) => {
+                json!({"op":"ExilePlayerGraveyards","players":format!("{players:?}")})
+            }
+            Instruction::PayControllerEnergy(amount) => {
+                json!({"op":"PayControllerEnergy","amount":amount})
+            }
+            Instruction::RemoveCountersFromPermanent { target_self, kind, amount } => {
+                json!({"op":"RemoveCountersFromPermanent","target_self":target_self,"kind":kind.map(|k| format!("{k:?}")),"amount":instruction_amount(amount)})
             }
         })
         .collect::<Vec<_>>();
@@ -10515,7 +10706,7 @@ pub fn body(value: &ExecutableBody) -> Value {
     result
 }
 pub fn condition(value: &TriggerSpec) -> Value {
-    match (&value.event, value.zone, value.intervening_if) {
+    match (&value.event, value.zone, value.intervening_if.as_ref()) {
         (
             TriggerEvent::PlayerAction {
                 player,
@@ -11665,6 +11856,12 @@ pub fn condition(value: &TriggerSpec) -> Value {
         (TriggerEvent::LeavesBattlefield { subject }, _, _) => {
             json!({"tag":"LeavesBattlefield","object":object_relation_label(*subject)})
         }
+        (TriggerEvent::Exiled { subject, from_zone }, _, _) => {
+            json!({"tag":"Exiled","object":object_relation_label(*subject),"from_zone":format!("{from_zone:?}")})
+        }
+        (TriggerEvent::ReturnedToHand { subject }, _, _) => {
+            json!({"tag":"ReturnedToHand","object":object_relation_label(*subject)})
+        }
         (
             TriggerEvent::CountersChanged {
                 kind: CounterTriggerKind::LastDefenseRemoved,
@@ -12103,10 +12300,20 @@ fn activated(abilities: &[ActivatedAbility]) -> Value {
                 row["source_cost"] = json!("DiscardSelected");
                 row["cost_tap_source"] = json!(tap_source);
             }
+            SourceCost::Discard { mode: DiscardCostMode::Filtered { filter, count }, tap_source } => {
+                row["source_cost"] = json!(format!("DiscardFiltered({count})"));
+                row["cost_filter"] = json!(format!("{filter:?}"));
+                row["cost_tap_source"] = json!(tap_source);
+            }
             SourceCost::ExileGraveyard { filter: GraveyardExileCost::AnyCountX, .. } => row["source_cost"] = json!("TapExileGraveyardX"),
             SourceCost::ExileGraveyard { filter: GraveyardExileCost::Creature { pay_mana_cost: true }, .. } => row["source_cost"] = json!("ExileSelectedGraveyardCreatureAndPayItsManaCost"),
             SourceCost::ExileGraveyard { filter: GraveyardExileCost::Creature { pay_mana_cost: false }, tap_source: true } => row["source_cost"] = json!("TapExileSelectedGraveyardCreature"),
             SourceCost::ExileGraveyard { filter: GraveyardExileCost::Creature { pay_mana_cost: false }, tap_source: false } => row["source_cost"] = json!("ExileSelectedGraveyardCreature"),
+            SourceCost::ExileGraveyard { filter: GraveyardExileCost::Filtered { filter, count }, tap_source } => {
+                row["source_cost"] = json!(format!("ExileGraveyardFiltered({count})"));
+                row["cost_filter"] = json!(format!("{filter:?}"));
+                row["cost_tap_source"] = json!(tap_source);
+            }
             SourceCost::Mill { .. } => row["source_cost"] = json!("TapMillOne"),
             SourceCost::HandDiscardSelf(HandDiscardKeyword::Cycling) => row["source_cost"] = json!("CycleDiscard"),
             SourceCost::HandDiscardSelf(HandDiscardKeyword::Transmute) => row["source_cost"] = json!("TransmuteDiscard"),
@@ -12119,6 +12326,15 @@ fn activated(abilities: &[ActivatedAbility]) -> Value {
             SourceCost::Power { kind: PowerAbility::Station, .. } => row["source_cost"] = json!("Station"),
             SourceCost::Power { kind: PowerAbility::Crew, minimum } => row["source_cost"] = json!(format!("Crew({minimum})")),
             SourceCost::Power { kind: PowerAbility::Saddle, minimum } => row["source_cost"] = json!(format!("Saddle({minimum})")),
+            SourceCost::PayEnergy { amount, tap_source } => {
+                row["source_cost"] = json!(format!("PayEnergy({amount})"));
+                row["cost_tap_source"] = json!(tap_source);
+            }
+            SourceCost::Untap => row["source_cost"] = json!("Untap"),
+            SourceCost::ReturnSelfToHand { tap_source } => {
+                row["source_cost"] = json!("ReturnSelfToHand");
+                row["cost_tap_source"] = json!(tap_source);
+            }
         }
         row
     }).collect::<Vec<_>>())
@@ -12980,7 +13196,9 @@ mod tests {
                 | ResolvingPlayer::Controller
                 | ResolvingPlayer::UniqueRelatedPlayer => BodyTarget::None,
                 ResolvingPlayer::ExiledTargetController
-                | ResolvingPlayer::DestructionTargetController => {
+                | ResolvingPlayer::DestructionTargetController
+                | ResolvingPlayer::TargetController
+                | ResolvingPlayer::TargetOwner => {
                     unreachable!("role is not in this fixed fixture")
                 }
             };
@@ -12997,7 +13215,9 @@ mod tests {
                     adjustment: LifeAdjustment::Gain(1.into()),
                 },
                 ResolvingPlayer::ExiledTargetController
-                | ResolvingPlayer::DestructionTargetController => {
+                | ResolvingPlayer::DestructionTargetController
+                | ResolvingPlayer::TargetController
+                | ResolvingPlayer::TargetOwner => {
                     unreachable!("role is not in this fixed fixture")
                 }
             };
@@ -13278,7 +13498,9 @@ mod tests {
                     | AffectedPlayers::EachOpponent => BodyTarget::None,
                     AffectedPlayers::One(
                         ResolvingPlayer::ExiledTargetController
-                        | ResolvingPlayer::DestructionTargetController,
+                        | ResolvingPlayer::DestructionTargetController
+                        | ResolvingPlayer::TargetController
+                        | ResolvingPlayer::TargetOwner,
                     ) => unreachable!("role is not in this fixed fixture"),
                 };
                 let mut instructions = vec![];
@@ -13609,9 +13831,12 @@ mod tests {
             allowed
         );
 
-        let mut discard_two = discard_one;
-        discard_two["amount"]["value"] = json!("2");
-        for instruction in [selection_instruction("Sacrifice"), discard_two] {
+        // Multi-player selection effects remain rejected inside OptionalEffect.
+        let mut each_discard = discard_one;
+        each_discard["players"] = json!({"tag":"EachPlayer"});
+        let mut each_sacrifice = selection_instruction("Sacrifice");
+        each_sacrifice["players"] = json!({"tag":"EachPlayer"});
+        for instruction in [each_sacrifice, each_discard] {
             let raw = optional_payment_definition(json!([chooser.clone(), instruction]));
             let decoded = decode_for_owner(raw.clone(), &vocabulary).unwrap();
             assert_eq!(

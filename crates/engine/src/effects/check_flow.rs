@@ -1961,7 +1961,11 @@ impl EffectWindow {
                         .dead
                         .keys()
                         .copied()
-                        .filter(|id| !moves.replacements().is_some_and(|b| b.regenerated(*id)))
+                        .filter(|id| {
+                            !moves
+                                .replacements()
+                                .is_some_and(|b| b.saved_from_destruction(*id))
+                        })
                         .collect();
                     if logical.len() != expected.len()
                         || application.len() != expected.len()

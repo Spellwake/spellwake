@@ -13,6 +13,9 @@ pub(super) struct EntryCopyPool {
     programs: BTreeMap<ObjectId, Arc<Program>>,
     graves: Vec<ObjectId>,
     creatures: Vec<ObjectId>,
+    controlled_creatures: BTreeMap<SeatId, Vec<ObjectId>>,
+    artifacts: Vec<ObjectId>,
+    enchantments: Vec<ObjectId>,
     controlled: BTreeMap<SeatId, Vec<ObjectId>>,
     battlefield_replacements: BTreeMap<SeatId, Vec<(ObjectId, ObjectId)>>,
     token_replacements: BTreeMap<SeatId, Vec<(ObjectId, ObjectId)>>,
@@ -60,16 +63,31 @@ impl EntryCopyPool {
                     pool.graves.push(object.id())
                 }
                 ObjectZone::Battlefield
-                    if card.is_creature() || card.has_type(CardType::Planeswalker) =>
+                    if card.is_creature()
+                        || card.has_type(CardType::Planeswalker)
+                        || card.has_type(CardType::Artifact)
+                        || card.has_type(CardType::Enchantment) =>
                 {
                     let controller = card.controller.ok_or(EffectError::InconsistentProgram)?;
                     if card.is_creature() {
                         pool.creatures.push(object.id());
+                        pool.controlled_creatures
+                            .entry(controller)
+                            .or_default()
+                            .push(object.id());
                     }
-                    pool.controlled
-                        .entry(controller)
-                        .or_default()
-                        .push(object.id());
+                    if card.has_type(CardType::Artifact) {
+                        pool.artifacts.push(object.id());
+                    }
+                    if card.has_type(CardType::Enchantment) {
+                        pool.enchantments.push(object.id());
+                    }
+                    if card.is_creature() || card.has_type(CardType::Planeswalker) {
+                        pool.controlled
+                            .entry(controller)
+                            .or_default()
+                            .push(object.id());
+                    }
                 }
                 _ => continue,
             }
@@ -130,7 +148,14 @@ impl EntryCopyPool {
     pub(super) fn domain(&self, rule: &EntryCopyRule, controller: SeatId) -> &[ObjectId] {
         match rule {
             EntryCopyRule::GraveyardCreature => &self.graves,
-            EntryCopyRule::BattlefieldCreatureWithAbility(_) => &self.creatures,
+            EntryCopyRule::BattlefieldCreature
+            | EntryCopyRule::BattlefieldCreatureWithAbility(_) => &self.creatures,
+            EntryCopyRule::ControlledCreature => self
+                .controlled_creatures
+                .get(&controller)
+                .map_or(&[], Vec::as_slice),
+            EntryCopyRule::BattlefieldArtifact => &self.artifacts,
+            EntryCopyRule::BattlefieldEnchantment => &self.enchantments,
             EntryCopyRule::ControlledCreatureOrPlaneswalker => {
                 self.controlled.get(&controller).map_or(&[], Vec::as_slice)
             }

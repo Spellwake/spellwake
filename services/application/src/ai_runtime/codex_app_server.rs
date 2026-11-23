@@ -52,11 +52,15 @@ pub struct CodexAppServerConfig {
     pub codex_home: Option<PathBuf>,
     pub seed_auth_json: Option<String>,
     pub catalog: AiTierCatalog,
+    /// Number of lazily-spawned sharded `codex app-server` worker slots (`1..=4`).
+    /// Each `(game_id, seat_id, tier)` hashes deterministically to one slot so
+    /// per-seat prompt caches stay warm while concurrent matches run in parallel.
+    pub concurrency: usize,
 }
 
 impl CodexAppServerConfig {
     /// Resolve executable path, optional private `CODEX_HOME`, optional
-    /// `SPELLWAKE_AI_CHATGPT_AUTH_JSON` seed, and tier model catalog from env.
+    /// `SPELLWAKE_AI_CHATGPT_AUTH_JSON` seed, tier model catalog, and concurrency from env.
     /// # Errors
     /// Returns `AiProviderError::Configuration` if no Codex executable is found.
     pub fn from_env(catalog: AiTierCatalog) -> Result<Self, AiProviderError> {
@@ -80,22 +84,28 @@ impl CodexAppServerConfig {
             .ok()
             .map(|v| v.trim().to_owned())
             .filter(|v| !v.is_empty());
+        let concurrency = std::env::var("SPELLWAKE_AI_CONCURRENCY")
+            .ok()
+            .and_then(|v| v.trim().parse::<usize>().ok())
+            .unwrap_or(2)
+            .clamp(1, 4);
         Ok(Self {
             cli_path,
             codex_home,
             seed_auth_json,
             catalog,
+            concurrency,
         })
     }
 }
 
-/// Persistent Rust client over one `codex app-server --listen stdio://` child.
+/// Persistent Rust client over a sharded pool of `codex app-server --listen stdio://` children.
 pub struct CodexAppServerProvider {
     cli_path: PathBuf,
     fixed_cwd: PathBuf,
     codex_home: Option<PathBuf>,
     catalog: AiTierCatalog,
-    session: Mutex<Option<AppServerSession>>,
+    sessions: Vec<Mutex<Option<AppServerSession>>>,
 }
 
 impl CodexAppServerProvider {
@@ -113,23 +123,32 @@ impl CodexAppServerProvider {
             .map_err(|_| AiProviderError::Configuration("failed to create Codex working dir"))?;
 
         let codex_home = prepare_codex_home(config.codex_home, config.seed_auth_json.as_deref())?;
+        let slot_count = config.concurrency.clamp(1, 4);
+        let sessions = (0..slot_count).map(|_| Mutex::new(None)).collect();
 
         Ok(Self {
             cli_path: config.cli_path,
             fixed_cwd,
             codex_home,
             catalog: config.catalog,
-            session: Mutex::new(None),
+            sessions,
         })
     }
 
-    /// Verify live ChatGPT login readiness eagerly by booting the session and
+    fn slot_index(&self, game_id: Uuid, seat_id: Uuid, tier: AiTier) -> usize {
+        if self.sessions.len() <= 1 {
+            return 0;
+        }
+        let mixed = game_id.as_u128() ^ seat_id.as_u128().rotate_left(17) ^ (tier as u128);
+        usize::try_from(mixed % (self.sessions.len() as u128)).unwrap_or(0)
+    }
+
+    /// Verify live ChatGPT login readiness eagerly by booting slot 0 and
     /// confirming `account.type == "chatgpt"`.
     /// # Errors
     /// Returns an error if the app-server fails to start or is not logged in via ChatGPT.
     pub fn verify_chatgpt_login(&self) -> Result<(), AiProviderError> {
-        let mut guard = self
-            .session
+        let mut guard = self.sessions[0]
             .lock()
             .map_err(|_| AiProviderError::Transport("app-server mutex poisoned".into()))?;
         if guard.is_none() {
@@ -147,8 +166,8 @@ impl AiDecisionProvider for CodexAppServerProvider {
     fn decide(&self, request: &AiModelRequest) -> Result<AiModelResponse, AiProviderError> {
         let tier_cfg = self.catalog.for_tier(request.tier);
         let started = Instant::now();
-        let mut guard = self
-            .session
+        let slot = self.slot_index(request.game_id, request.seat_id, request.tier);
+        let mut guard = self.sessions[slot]
             .lock()
             .map_err(|_| AiProviderError::Transport("app-server mutex poisoned".into()))?;
 

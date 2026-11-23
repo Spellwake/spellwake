@@ -5,7 +5,7 @@
 //! deduplicates card definitions, orders static instructions first for provider
 //! prompt caching, and expands compact LLM replies fail-closed into validated
 //! native `PlayerCommand` values.
-use super::scheduler::WakeCondition;
+use super::{affordances::PriorityAffordances, scheduler::WakeCondition};
 use crate::player_wire::{PlayerAction, PlayerBasis, PlayerCommand, PlayerSnapshot};
 use serde_json::{Map, Value, json};
 use std::{
@@ -18,7 +18,7 @@ use uuid::Uuid;
 /// Static compact action guide placed at the start of every AI prompt so provider
 /// prefix caching matches across turns and games.
 pub const COMPACT_ACTION_GUIDE: &str = "\
-You are playing Magic: The Gathering on Spellwake's native rules engine.\n\
+You are a strong Magic: The Gathering player competing on Spellwake's native rules engine.\n\
 Return one JSON object matching the output schema: {\"action\": ..., \"delegate_pass\": bool, \"wake\": [...], \"max_skips\": int}.\n\
 \n\
 HANDLE GRAMMAR (use ONLY short handles from this snapshot):\n\
@@ -30,26 +30,38 @@ HANDLE GRAMMAR (use ONLY short handles from this snapshot):\n\
 BOUNDARY RULE (CRITICAL):\n\
 - Check \"boundary\" FIRST.\n\
 - If \"boundary\" is \"required_decision\" (\"decisions\" is non-empty), you MUST return {\"kind\": \"choose\", \"decision\": \"d1\", \"response\": ...}.\n\
-- If \"boundary\" is \"priority\" (\"decisions\" is empty), NEVER return \"choose\". Return \"pass\", \"play-land\", \"activate-mana\", \"cast-untargeted\", \"cast-targeted\", or \"cast-batch\".\n\
+- If \"boundary\" is \"priority\" (\"decisions\" is empty), NEVER return \"choose\". Return \"pass\", \"play-land\", \"cast-untargeted\", \"cast-targeted\", \"activate-ability\", \"activate-untargeted-ability\", \"activate-mana\", or \"cast-batch\".\n\
+\n\
+LEGAL AFFORDANCES & AUTO-TAP:\n\
+- \"can_play_lands\" lists every land in hand you can play right now.\n\
+- \"can_cast\" lists every spell in hand verified legal to cast right now, with its \"name\", \"action\", and exact legal \"targets\" handle list (for targeted spells).\n\
+- NEVER cast a card NOT in \"can_cast\", NEVER pick a target handle NOT in that spell's \"targets\" list, and NEVER play a land NOT in \"can_play_lands\".\n\
+- AUTO-TAP: For \"cast-untargeted\" and \"cast-targeted\", pass \"payment\": null and the runtime automatically taps optimal lands (preferring lands over mana creatures) and pays exact mana! Use explicit \"cast-batch\" only if you need specific land tapping.\n\
 \n\
 ACTION EXAMPLES:\n\
 - Pass: {\"kind\":\"pass\"}\n\
-- Play land (ONLY from \"can_play_lands\"): {\"kind\":\"play-land\",\"source\":\"h1\"}\n\
-- Tap mana (ONLY from \"can_tap_for_mana\"): {\"kind\":\"activate-mana\",\"source\":\"b1\",\"ability\":\"m1\"}\n\
-- Cast with mana in one atomic batch:\n\
-  {\"kind\":\"cast-batch\",\"mana\":[{\"kind\":\"activate-mana\",\"source\":\"b1\",\"ability\":\"m1\"}],\"cast\":{\"kind\":\"cast-untargeted\",\"source\":\"h2\",\"payment\":{\"spend\":[{\"color\":\"green\",\"amount\":\"1\"}]}}}\n\
-- Targeted cast (creature/permanent target or seat target):\n\
-  \"target\":{\"kind\":\"object\",\"handle\":\"e1\"}  or  \"target\":{\"kind\":\"seat\",\"seatId\":\"opp\"}  or  \"target\":{\"kind\":\"stack\",\"handle\":\"st1\"}\n\
+- Play land: {\"kind\":\"play-land\",\"source\":\"h1\"}\n\
+- Cast untargeted spell (creature/sorcery): {\"kind\":\"cast-untargeted\",\"source\":\"h2\",\"payment\":null}\n\
+- Cast targeted spell on creature (pump/removal/aura): {\"kind\":\"cast-targeted\",\"source\":\"h1\",\"target\":\"e1\",\"payment\":null}\n\
+- Cast targeted spell on opponent (burn): {\"kind\":\"cast-targeted\",\"source\":\"h1\",\"target\":\"opp\",\"payment\":null}\n\
+- Cast counterspell on stack: {\"kind\":\"cast-targeted\",\"source\":\"h1\",\"target\":\"st1\",\"payment\":null}\n\
 - Choose option (mulligan/optional): {\"kind\":\"choose\",\"decision\":\"d1\",\"response\":{\"kind\":\"option\",\"option\":\"opt1\"}}\n\
 - Choose objects (bottom/discard/sacrifice): {\"kind\":\"choose\",\"decision\":\"d1\",\"response\":{\"kind\":\"objects\",\"objects\":[\"h1\"]}}\n\
-- Declare attackers: {\"kind\":\"choose\",\"decision\":\"d1\",\"response\":{\"kind\":\"attackers\",\"assignments\":[{\"attacker\":\"b3\",\"defender\":{\"kind\":\"seat\",\"seatId\":\"opp\"}}]}}\n\
-- Declare blockers: {\"kind\":\"choose\",\"decision\":\"d1\",\"response\":{\"kind\":\"blockers\",\"assignments\":[{\"blocker\":\"b4\",\"attackers\":[\"e2\"]}]}}\n\
-- Assign combat damage: {\"kind\":\"choose\",\"decision\":\"d1\",\"response\":{\"kind\":\"combat-damage\",\"assignments\":[{\"source\":\"b3\",\"target\":{\"kind\":\"object\",\"handle\":\"e2\"},\"amount\":\"2\"}]}}\n\
+- Declare attackers (ONLY creatures listed in decisions[0].domain): {\"kind\":\"choose\",\"decision\":\"d1\",\"response\":{\"kind\":\"attackers\",\"assignments\":[{\"attacker\":\"b3\",\"defender\":\"opp\"}]}}\n\
+- Declare blockers (ONLY creatures listed in decisions[0].domain): {\"kind\":\"choose\",\"decision\":\"d1\",\"response\":{\"kind\":\"blockers\",\"assignments\":[{\"blocker\":\"b4\",\"attackers\":[\"e2\"]}]}}\n\
+- Assign combat damage: {\"kind\":\"choose\",\"decision\":\"d1\",\"response\":{\"kind\":\"combat-damage\",\"assignments\":[{\"source\":\"b3\",\"target\":\"e2\",\"amount\":\"2\"}]}}\n\
 \n\
-MAIN-PHASE PRIORITY & DELEGATION RULE:\n\
-- When taking a setup play during your main phase (such as \"play-land\" or a first \"cast-batch\") and you still have another affordable spell or play you want to make in the SAME main phase, set \"delegate_pass\": false so you keep priority.\n\
-- When you have NO remaining affordable plays in the current phase (for example, Turn 1 land play with no 1-mana plays, or passing with nothing to cast), set \"delegate_pass\": true with appropriate \"wake\" triggers (e.g. [\"own_main\",\"opponent_action\",\"stack_changed\",\"board_changed\"]) and \"max_skips\": 8.\n\
-- Check \"can_play_lands\" before playing a land (empty means you cannot play a land now). Check exact mana colors in \"can_tap_for_mana\" and \"mana_pool\" before casting.";
+MTG STRATEGY RUBRIC:\n\
+1. LETHAL FIRST: Before attacking or passing, calculate if unblocked/flying/trample combat damage + burn spells in hand deal lethal to \"opp\". Always take guaranteed lethal.\n\
+2. MANA & CURVE: Hit your land drop every turn. Spend mana efficiently to develop board presence early (Turn 1 mana dork/1-drop, Turn 2 threat, etc.).\n\
+3. COMBAT MATH: Attack whenever creatures push free damage or force favorable trades. Respect Flying, Reach, First Strike, Deathtouch, Lifelink, Vigilance, Trample, and opponent's open mana (combat tricks/removal). Do NOT throw creatures into larger blockers unless forcing lethal or backing them up with pump/burn.\n\
+4. BLOCKING: Block to prevent lethal, win trades, or double-block a big threat profitably. Protect key value creatures (mana dorks, flyers) when your life total is healthy.\n\
+5. TIMING & SEQUENCING: Cast non-haste creatures in postcombat-main unless they affect this combat (Haste, Prowess, anthem, blocker removal). Hold instant-speed removal/burn/pump until combat (after attackers/blockers) or opponent's end step unless clearing a blocker now or preventing a trigger.\n\
+6. MULLIGANS: Keep balanced 2-4 land hands with early action. Mulligan 0-land, 6-7 land, or unplayable hands. When bottoming cards, keep lands + cheapest curve.\n\
+\n\
+PRIORITY DELEGATION:\n\
+- If you are taking a play in your main phase and STILL plan to cast another spell this main phase, set \"delegate_pass\": false.\n\
+- Otherwise set \"delegate_pass\": true with \"max_skips\": 8 and \"wake\": [\"own_main\",\"stack_changed\",\"board_changed\"] (add \"combat\" only if holding an instant combat trick/removal).";
 
 /// Errors produced when compacting a snapshot or expanding an AI reply.
 #[derive(Debug)]
@@ -181,6 +193,18 @@ impl HandleCodec {
     ) -> Result<Value, CompactError> {
         match val {
             Value::String(s) => {
+                if matches!(key_hint, Some("target" | "defender")) {
+                    let native = self.resolve(s)?;
+                    return Ok(
+                        if s == "you" || s.starts_with("opp") || !native.starts_with("n1.") {
+                            json!({ "kind": "seat", "seatId": native })
+                        } else if s.starts_with("st") {
+                            json!({ "kind": "stack", "handle": native })
+                        } else {
+                            json!({ "kind": "object", "handle": native })
+                        },
+                    );
+                }
                 let is_handle_field = matches!(
                     key_hint,
                     Some(
@@ -354,6 +378,25 @@ pub fn compact_prompt(
     own_recent: &[String],
     feedback: Option<&str>,
 ) -> Result<(String, HandleCodec), CompactError> {
+    let aff = PriorityAffordances {
+        basic_actions: basic_actions.to_vec(),
+        ..Default::default()
+    };
+    compact_prompt_with_affordances(snapshot, &aff, own_recent, feedback)
+}
+
+/// Compile a seat-filtered `PlayerSnapshot` and full verified `PriorityAffordances`
+/// (`can_play_lands`, `can_tap_for_mana`, `can_cast`, `can_activate`, `mana_available`)
+/// into a static-first `compact_v1` prompt string and its lossless `HandleCodec`.
+/// # Errors
+/// Returns `CompactError::SerializeSnapshot` if serialization fails.
+pub fn compact_prompt_with_affordances(
+    snapshot: &PlayerSnapshot,
+    affordances: &PriorityAffordances,
+    own_recent: &[String],
+    feedback: Option<&str>,
+) -> Result<(String, HandleCodec), CompactError> {
+    let basic_actions = &affordances.basic_actions;
     let raw = serde_json::to_value(snapshot).map_err(CompactError::SerializeSnapshot)?;
     let mut codec = HandleCodec::default();
 
@@ -691,6 +734,79 @@ pub fn compact_prompt(
         "required_decision"
     };
 
+    let can_cast: Vec<Value> = if !affordances.castable_spells.is_empty() {
+        affordances
+            .castable_spells
+            .iter()
+            .filter_map(|sp| {
+                let short = codec.short_of(sp.source.as_str())?;
+                let card_name = obj_names
+                    .get(sp.source.as_str())
+                    .map(String::as_str)
+                    .unwrap_or("");
+                if sp.untargeted && sp.legal_targets.is_empty() {
+                    Some(json!({
+                        "source": short,
+                        "name": card_name,
+                        "action": "cast-untargeted"
+                    }))
+                } else {
+                    let targets: Vec<Value> = sp
+                        .legal_targets
+                        .iter()
+                        .filter_map(|t| match t {
+                            crate::player_wire::PlayerTarget::Seat { seat_id } => codec
+                                .short_of(&seat_id.to_string())
+                                .map(|s| Value::String(s.to_owned())),
+                            crate::player_wire::PlayerTarget::Object { handle } => codec
+                                .short_of(handle.as_str())
+                                .map(|s| Value::String(s.to_owned())),
+                            crate::player_wire::PlayerTarget::Stack { handle } => codec
+                                .short_of(handle.as_str())
+                                .map(|s| Value::String(s.to_owned())),
+                        })
+                        .collect();
+                    let action_kind = if sp.untargeted {
+                        "cast-untargeted_or_cast-targeted"
+                    } else {
+                        "cast-targeted"
+                    };
+                    Some(json!({
+                        "source": short,
+                        "name": card_name,
+                        "action": action_kind,
+                        "targets": targets
+                    }))
+                }
+            })
+            .collect()
+    } else {
+        affordances
+            .castable_hand
+            .iter()
+            .filter_map(|h| {
+                codec
+                    .short_of(h.as_str())
+                    .map(|s| Value::String(s.to_owned()))
+            })
+            .collect()
+    };
+    let can_activate: Vec<Value> = affordances
+        .activatable_abilities
+        .iter()
+        .filter_map(|(src, ab)| {
+            Some(json!({
+                "source": codec.short_of(src.as_str())?,
+                "ability": codec.short_of(ab.as_str())?,
+            }))
+        })
+        .collect();
+    let mana_available: Map<String, Value> = affordances
+        .available_mana_counts(snapshot)
+        .into_iter()
+        .map(|(k, v)| (k.to_owned(), Value::from(v)))
+        .collect();
+
     let mut state = Map::new();
     state.insert("boundary".into(), Value::String(boundary.into()));
     state.insert(
@@ -699,8 +815,15 @@ pub fn compact_prompt(
     );
     state.insert("players".into(), Value::Array(players));
     state.insert("mana_pool".into(), mana_pool);
+    if !mana_available.is_empty() {
+        state.insert("mana_available".into(), Value::Object(mana_available));
+    }
     state.insert("decisions".into(), Value::Array(decisions));
     state.insert("can_play_lands".into(), Value::Array(can_play_lands));
+    state.insert("can_cast".into(), Value::Array(can_cast));
+    if !can_activate.is_empty() {
+        state.insert("can_activate".into(), Value::Array(can_activate));
+    }
     state.insert("can_tap_for_mana".into(), Value::Array(can_tap_for_mana));
     state.insert("hand".into(), Value::Array(hand));
     state.insert("your_board".into(), Value::Array(your_board));
@@ -735,16 +858,38 @@ pub fn compact_prompt(
     Ok((prompt, codec))
 }
 
-/// Select the boundary-locked strict JSON schema for `snapshot`.
+/// Select the boundary-locked (and decision-kind-locked) strict JSON schema for `snapshot`.
 ///
-/// Uses two static schemas (`required_decision` -> `choose` only; `priority` ->
-/// priority actions only) so structured decoding makes boundary mismatches
-/// impossible while keeping schema prefixes static for provider prompt caching.
+/// Locks `required_decision` replies to the exact decision domain kind (`attackers`,
+/// `blockers`, `option`, `objects`, `ordering`, `combat-damage`, etc.) so models cannot
+/// emit mismatched decision response shapes (for example `option` or `ordering` during
+/// `declare-attackers`).
 pub fn compact_reply_schema_for_snapshot(snapshot: &PlayerSnapshot) -> Value {
-    if snapshot.decisions.is_empty() {
-        compact_priority_reply_schema()
-    } else {
-        compact_decision_reply_schema()
+    let Some(first_decision) = snapshot.decisions.first() else {
+        return compact_priority_reply_schema();
+    };
+    let domain_kind = serde_json::to_value(first_decision).ok().and_then(|v| {
+        v.get("domain")
+            .and_then(|d| d.get("kind"))
+            .and_then(Value::as_str)
+            .map(str::to_owned)
+    });
+    match domain_kind.as_deref() {
+        Some("options" | "option") => build_compact_reply_schema(SchemaMode::DecisionOption),
+        Some("objects") => build_compact_reply_schema(SchemaMode::DecisionObjects),
+        Some("ordering") => build_compact_reply_schema(SchemaMode::DecisionOrdering),
+        Some("number") => build_compact_reply_schema(SchemaMode::DecisionNumber),
+        Some("target") => build_compact_reply_schema(SchemaMode::DecisionTarget),
+        Some("legend") => build_compact_reply_schema(SchemaMode::DecisionLegend),
+        Some("payment" | "optional-payment") => {
+            build_compact_reply_schema(SchemaMode::DecisionPayment)
+        }
+        Some("prevention") => build_compact_reply_schema(SchemaMode::DecisionPrevention),
+        Some("distribution") => build_compact_reply_schema(SchemaMode::DecisionDistribution),
+        Some("attackers") => build_compact_reply_schema(SchemaMode::DecisionAttackers),
+        Some("blockers") => build_compact_reply_schema(SchemaMode::DecisionBlockers),
+        Some("combat-damage") => build_compact_reply_schema(SchemaMode::DecisionCombatDamage),
+        _ => compact_decision_reply_schema(),
     }
 }
 
@@ -767,6 +912,18 @@ pub fn compact_reply_json_schema() -> Value {
 enum SchemaMode {
     All,
     DecisionOnly,
+    DecisionOption,
+    DecisionObjects,
+    DecisionOrdering,
+    DecisionNumber,
+    DecisionTarget,
+    DecisionLegend,
+    DecisionPayment,
+    DecisionPrevention,
+    DecisionDistribution,
+    DecisionAttackers,
+    DecisionBlockers,
+    DecisionCombatDamage,
     PriorityOnly,
 }
 
@@ -794,13 +951,10 @@ fn build_compact_reply_schema(mode: SchemaMode) -> Value {
     let s = || json!({ "type": "string" });
     let arr = |items: Value, max: u64| json!({ "type": "array", "items": items, "maxItems": max });
 
-    let target = json!({
-        "anyOf": [
-            variant("seat", vec![("seatId", s())]),
-            variant("object", vec![("handle", s())]),
-            variant("stack", vec![("handle", s())]),
-        ]
-    });
+    // Plain compact target handle string ("opp", "you", "e1", "b2", "st1").
+    // Avoiding nested `anyOf` here prevents structured-output decoders from getting
+    // trapped in the first union branch (`seat`) when targeting creatures or stack spells.
+    let target = s();
     let payment = strict_obj(vec![(
         "spend",
         arr(
@@ -818,24 +972,86 @@ fn build_compact_reply_schema(mode: SchemaMode) -> Value {
         ),
     )]);
     let opt_payment = json!({ "anyOf": [payment.clone(), { "type": "null" }] });
-    let choice = json!({
+
+    let choice_option = variant("option", vec![("option", s())]);
+    let choice_objects = variant("objects", vec![("objects", arr(s(), 1000))]);
+    let choice_ordering = variant("ordering", vec![("ordered", arr(s(), 1000))]);
+    let choice_number = variant("number", vec![("value", s())]);
+    let choice_target = variant("target", vec![("target", target.clone())]);
+    let choice_legend = variant("legend", vec![("conflict", s()), ("keep", s())]);
+    let choice_pay = variant("pay", vec![("payment", payment)]);
+    let choice_decline = variant("decline", vec![]);
+    let choice_prevention = variant(
+        "prevention",
+        vec![(
+            "allocations",
+            arr(strict_obj(vec![("attempt", s()), ("amount", s())]), 1000),
+        )],
+    );
+    let choice_distribution = variant(
+        "distribution",
+        vec![(
+            "allocations",
+            arr(
+                strict_obj(vec![("target", target.clone()), ("amount", s())]),
+                1000,
+            ),
+        )],
+    );
+    let choice_attackers = variant(
+        "attackers",
+        vec![(
+            "assignments",
+            arr(
+                strict_obj(vec![("attacker", s()), ("defender", target.clone())]),
+                1000,
+            ),
+        )],
+    );
+    let choice_blockers = variant(
+        "blockers",
+        vec![(
+            "assignments",
+            arr(
+                strict_obj(vec![("blocker", s()), ("attackers", arr(s(), 1000))]),
+                1000,
+            ),
+        )],
+    );
+    let choice_combat_damage = variant(
+        "combat-damage",
+        vec![(
+            "assignments",
+            arr(
+                strict_obj(vec![
+                    ("source", s()),
+                    ("target", target.clone()),
+                    ("amount", s()),
+                ]),
+                1000,
+            ),
+        )],
+    );
+
+    let choice_all = json!({
         "anyOf": [
-            variant("option", vec![("option", s())]),
-            variant("objects", vec![("objects", arr(s(), 1000))]),
-            variant("ordering", vec![("ordered", arr(s(), 1000))]),
-            variant("number", vec![("value", s())]),
-            variant("target", vec![("target", target.clone())]),
-            variant("legend", vec![("conflict", s()), ("keep", s())]),
-            variant("pay", vec![("payment", payment)]),
-            variant("decline", vec![]),
-            variant("prevention", vec![("allocations", arr(strict_obj(vec![("attempt", s()), ("amount", s())]), 1000))]),
-            variant("distribution", vec![("allocations", arr(strict_obj(vec![("target", target.clone()), ("amount", s())]), 1000))]),
-            variant("attackers", vec![("assignments", arr(strict_obj(vec![("attacker", s()), ("defender", target.clone())]), 1000))]),
-            variant("blockers", vec![("assignments", arr(strict_obj(vec![("blocker", s()), ("attackers", arr(s(), 1000))]), 1000))]),
-            variant("combat-damage", vec![("assignments", arr(strict_obj(vec![("source", s()), ("target", target.clone()), ("amount", s())]), 1000))]),
+            choice_option.clone(),
+            choice_objects.clone(),
+            choice_ordering.clone(),
+            choice_number.clone(),
+            choice_target.clone(),
+            choice_legend.clone(),
+            choice_pay.clone(),
+            choice_decline.clone(),
+            choice_prevention.clone(),
+            choice_distribution.clone(),
+            choice_attackers.clone(),
+            choice_blockers.clone(),
+            choice_combat_damage.clone(),
         ]
     });
-    let choose_variant = variant("choose", vec![("decision", s()), ("response", choice)]);
+    let choose_with = |resp: Value| variant("choose", vec![("decision", s()), ("response", resp)]);
+    let choose_variant = choose_with(choice_all);
     let mana = variant("activate-mana", vec![("source", s()), ("ability", s())]);
     let cast_untargeted = variant(
         "cast-untargeted",
@@ -878,6 +1094,20 @@ fn build_compact_reply_schema(mode: SchemaMode) -> Value {
     ];
     let action = match mode {
         SchemaMode::DecisionOnly => choose_variant,
+        SchemaMode::DecisionOption => choose_with(choice_option),
+        SchemaMode::DecisionObjects => choose_with(choice_objects),
+        SchemaMode::DecisionOrdering => choose_with(choice_ordering),
+        SchemaMode::DecisionNumber => choose_with(choice_number),
+        SchemaMode::DecisionTarget => choose_with(choice_target),
+        SchemaMode::DecisionLegend => choose_with(choice_legend),
+        SchemaMode::DecisionPayment => {
+            choose_with(json!({ "anyOf": [choice_pay, choice_decline] }))
+        }
+        SchemaMode::DecisionPrevention => choose_with(choice_prevention),
+        SchemaMode::DecisionDistribution => choose_with(choice_distribution),
+        SchemaMode::DecisionAttackers => choose_with(choice_attackers),
+        SchemaMode::DecisionBlockers => choose_with(choice_blockers),
+        SchemaMode::DecisionCombatDamage => choose_with(choice_combat_damage),
         SchemaMode::PriorityOnly => json!({ "anyOf": priority_variants }),
         SchemaMode::All => {
             let mut all = priority_variants;
@@ -975,5 +1205,39 @@ mod tests {
             codec.expand_reply(&bad_reply, &sample_basis()),
             Err(CompactError::UnknownHandle(h)) if h == "h99"
         ));
+    }
+
+    #[test]
+    fn expands_plain_string_target_handles_to_seat_object_and_stack() {
+        let mut codec = HandleCodec::default();
+        let h_spell = format!("n1.{}", Uuid::from_u128(301));
+        let h_creature = format!("n1.{}", Uuid::from_u128(302));
+        let h_stack = format!("n1.{}", Uuid::from_u128(303));
+        let seat_opp = Uuid::from_u128(304).to_string();
+        assert_eq!(codec.alias(&h_spell, "h"), "h1");
+        assert_eq!(codec.alias(&h_creature, "e"), "e1");
+        assert_eq!(codec.alias(&h_stack, "st"), "st1");
+        codec.bind_exact(&seat_opp, "opp");
+
+        for (target_str, expected_kind) in [("opp", "seat"), ("e1", "object"), ("st1", "stack")] {
+            let reply = json!({
+                "action": {
+                    "kind": "cast-targeted",
+                    "source": "h1",
+                    "target": target_str,
+                    "payment": null
+                },
+                "delegate_pass": false,
+                "wake": [],
+                "max_skips": 0
+            })
+            .to_string();
+            let expanded = codec.expand_reply(&reply, &sample_basis()).expect("valid");
+            let AiActionPlan::Single(cmd) = expanded.plan else {
+                panic!("expected single cast");
+            };
+            let serialized = serde_json::to_value(&cmd.action).unwrap();
+            assert_eq!(serialized["target"]["kind"], expected_kind);
+        }
     }
 }

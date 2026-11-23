@@ -117,6 +117,29 @@ impl EffectWindow {
                 removed_from_combat: in_combat,
             });
         }
+        // CR 122.1c: Destruction replaced by removing a shield counter.
+        for object in batch.shield_counter_saves() {
+            let previous = self.counters_of_kind(object, CounterKind::Shield);
+            if previous.is_positive() {
+                let after = previous.minus(&1.into());
+                if let Some(map) = self
+                    .characteristics
+                    .named_permanent_counters_mut(CounterKind::Shield)
+                {
+                    if after.is_positive() {
+                        map.insert(object, after.clone());
+                    } else {
+                        map.remove(&object);
+                    }
+                }
+                occurrences.push(RulesOccurrence::PermanentCounterChanged {
+                    object,
+                    kind: CounterKind::Shield,
+                    before: previous,
+                    after,
+                });
+            }
+        }
         Ok(occurrences)
     }
 }
