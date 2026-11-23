@@ -41,7 +41,7 @@ export function CardFace({
       ? `${url}${url.includes("?") ? "&" : "?"}try=${attempt}`
       : url;
   return (
-    <span className={s.face}>
+    <span className={s.face} data-card-face="">
       {source && state !== "failed" && (
         <img
           key={source}
