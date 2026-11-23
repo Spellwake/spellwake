@@ -110,7 +110,8 @@ export const immersive = style({
   flex: 1,
   minWidth: 0,
   minHeight: 0,
-  overflow: "hidden",
+  // Clipped, not hidden, so focus on a control near an edge cannot scroll the scene.
+  overflow: "clip",
   isolation: "isolate",
   fontFamily: shellTokens.serif,
 });

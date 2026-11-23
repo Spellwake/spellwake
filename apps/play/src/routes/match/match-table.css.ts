@@ -18,11 +18,13 @@ const grain = `url("data:image/svg+xml;utf8,${encodeURIComponent(
 const ivory = "#f4ead2";
 const gold = "#e7cf9f";
 const copper = "#ee9a63";
+const teal = "#7fe9e0";
 
 export const stage = style({
   position: "absolute",
   inset: 0,
-  overflow: "hidden",
+  // Clipped, not hidden: focusing a held card must never scroll the table.
+  overflow: "clip",
   background: `${grain}, ${felt}`,
   userSelect: "none",
 });
@@ -78,6 +80,16 @@ export const cardButton = style({
     [standardMotion]: {
       transition: "transform 220ms cubic-bezier(0.22, 1, 0.36, 1)",
     },
+    // Only a pointer that hovers lifts a card: on a touch screen the lift
+    // would stay after a tap.
+    "(hover: hover)": {
+      selectors: {
+        '&[data-zone="hand"]:hover': {
+          transform: "translateY(-34%) scale(1.12)",
+        },
+        '&[data-zone="battlefield"]:hover': { transform: "translateY(-3%)" },
+      },
+    },
   },
   selectors: {
     "&:focus-visible": {
@@ -85,10 +97,9 @@ export const cardButton = style({
       outlineOffset: "4PX",
     },
     // A held card rises out of the fan to be read.
-    '&[data-zone="hand"]:hover, &[data-zone="hand"]:focus-visible': {
+    '&[data-zone="hand"]:focus-visible': {
       transform: "translateY(-34%) scale(1.12)",
     },
-    '&[data-zone="battlefield"]:hover': { transform: "translateY(-3%)" },
     "&:disabled": { cursor: "default" },
   },
 });
@@ -105,8 +116,13 @@ export const face = style({
 globalStyle(`${cardButton}[data-offered="true"] ${face}`, {
   boxShadow: `0 0 0 4PX #7fe9e0, 0 0 26PX #7fe9e0aa, 0 10PX 22PX #0009`,
 });
+/** A card the game offers to cast: a teal rim, as the approved hand shows (BC-01). */
 globalStyle(`${cardButton}[data-playable="true"] ${face}`, {
-  boxShadow: `0 0 0 3PX ${gold}cc, 0 0 22PX ${gold}77, 0 10PX 22PX #0009`,
+  boxShadow: `0 0 0 3PX ${teal}, 0 0 18PX ${teal}77, 0 10PX 22PX #0009`,
+});
+/** A card a waiting spell may target (BC-02). */
+globalStyle(`${cardButton}[data-mark="teal"] ${face}`, {
+  boxShadow: `0 0 0 4PX ${teal}, 0 0 24PX ${teal}aa, 0 10PX 22PX #0009`,
 });
 
 /** While a declaration is made: a quiet rim for what may be chosen, copper for an attack, ivory for a block. */
@@ -231,6 +247,7 @@ export const lineHead = style({
 });
 /** A player offered as a defender, or chosen as one. */
 export const seatAnchor = style({
+  position: "relative",
   display: "inline-flex",
   borderRadius: "999PX",
   selectors: {
@@ -336,3 +353,56 @@ export const pileHost = style({
   top: 0,
   transformOrigin: "0 0",
 });
+
+/**
+ * While a spell waits for its target, a player is chosen by their portrait:
+ * this button covers the picture, and the rest of the chip still moves the
+ * camera.
+ */
+export const seatTarget = style({
+  appearance: "none",
+  position: "absolute",
+  left: 0,
+  top: 0,
+  bottom: 0,
+  aspectRatio: "1",
+  minWidth: "44PX",
+  padding: 0,
+  border: 0,
+  borderRadius: "999PX",
+  background: `${teal}22`,
+  boxShadow: `inset 0 0 0 2PX ${teal}`,
+  cursor: "pointer",
+  selectors: {
+    "&:hover": { background: `${teal}44` },
+    "&:focus-visible": {
+      outline: `3PX solid ${ivory}`,
+      outlineOffset: "2PX",
+    },
+  },
+});
+
+/** What a cast waits for, named over the table (BC-02, BC-04). */
+export const castPrompt = style({
+  position: "absolute",
+  left: 0,
+  right: 0,
+  top: "24%",
+  display: "flex",
+  justifyContent: "center",
+  pointerEvents: "none",
+  color: ivory,
+  font: `26PX/1.2 ${shellTokens.serif}`,
+  letterSpacing: "0.02em",
+  textShadow: "0 1PX 6PX #000c",
+  whiteSpace: "nowrap",
+  selectors: {
+    // Upright on a phone the pending spell stands at the upper right, so the
+    // prompt sits beneath it.
+    ':root[data-shell="compact"][data-orientation="portrait"] &': {
+      top: "46%",
+      fontSize: "22PX",
+    },
+  },
+});
+globalStyle(`${castPrompt} p`, { margin: 0 });

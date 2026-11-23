@@ -115,7 +115,13 @@ type Case = {
     | "match-chat-refused"
     | "match-settings"
     | "match-concede"
-    | "match-watch-chat";
+    | "match-watch-chat"
+    /** Casting: waiting for a target, a player targeted, a paused payment, and a creature. */
+    | "match-cast-target"
+    | "match-cast-player"
+    | "match-cast-pay"
+    | "match-cast-paid"
+    | "match-cast-creature";
 };
 
 const viewports: Viewport[] = [
@@ -433,6 +439,24 @@ const cases: Case[] = [
       decks: "six",
       path,
       ...(state ? { state } : {}),
+    })),
+  ),
+  // Casting from hand, on every screen.
+  ...viewports.flatMap((viewport): Case[] =>
+    (
+      [
+        ["/probe/table", "match-cast-target"],
+        ["/probe/table", "match-cast-player"],
+        ["/probe/table?pay=paused", "match-cast-pay"],
+        ["/probe/table?pay=paused", "match-cast-paid"],
+        ["/probe/table", "match-cast-creature"],
+      ] as const
+    ).map(([path, state]) => ({
+      viewport,
+      art: "none",
+      decks: "six",
+      path,
+      state,
     })),
   ),
   // League on every screen, both sections, then its formats and states.
@@ -1513,6 +1537,108 @@ async function run(browser: Browser, test: Case): Promise<Finding[]> {
     await chat.getByText("Chat is read-only.").waitFor();
     await expect(chat.getByRole("textbox")).toHaveCount(0);
     await page.waitForTimeout(500);
+  }
+  if (
+    state === "match-cast-target" ||
+    state === "match-cast-player" ||
+    state === "match-cast-pay" ||
+    state === "match-cast-paid" ||
+    state === "match-cast-creature"
+  ) {
+    // A second press on an offered card casts it. A held card is fanned, tilted
+    // and half below the edge, so the press goes where the card itself shows.
+    const cast = async (name: string) => {
+      const card = page.getByRole("button", {
+        name: `${name}, in your hand`,
+        exact: true,
+      });
+      const point = await card.evaluate((node) => {
+        const box = node.getBoundingClientRect();
+        for (let row = 1; row < 12; row += 1)
+          for (let column = 1; column < 12; column += 1) {
+            const x = box.left + (box.width * column) / 12;
+            const y = box.top + (box.height * row) / 12;
+            if (
+              y > window.innerHeight - 6 ||
+              x < 4 ||
+              x > window.innerWidth - 4
+            )
+              continue;
+            const hit = document.elementFromPoint(x, y);
+            if (hit && node.contains(hit)) return { x, y };
+          }
+        return null;
+      });
+      if (!point) throw new Error(`${name} shows no part that can be pressed.`);
+      await page.mouse.dblclick(point.x, point.y);
+    };
+    const prompt = page.locator('[data-cast-prompt="target"]');
+    const pile = (count: number) =>
+      page.locator(`[data-match-stack="${count}"]`);
+    const resolveAction = page.getByRole("button", {
+      name: "Resolve",
+      exact: true,
+    });
+    if (state === "match-cast-creature") {
+      // No target and no pause: the cast is sent at once.
+      await cast("Goblin Piledriver");
+      await pile(1).waitFor();
+      await expect(prompt).toHaveCount(0);
+      await resolveAction.click();
+      await page.locator("[data-match-stack]").waitFor({ state: "detached" });
+      // Resolved, it is a permanent on your board.
+      await page
+        .getByRole("button", { name: "Goblin Piledriver", exact: true })
+        .or(page.getByRole("img", { name: "Goblin Piledriver", exact: true }))
+        .waitFor();
+    } else {
+      const paying = state === "match-cast-pay" || state === "match-cast-paid";
+      await cast(paying ? "Shock" : "Lightning Bolt");
+      await prompt.waitFor();
+      // The pending spell stands beside the table; it is not on the stack.
+      await pile(1).waitFor();
+      await expect(resolveAction).toHaveCount(0);
+      if (state === "match-cast-target") {
+        // Cancel puts everything back, and the card may be started again.
+        await page.getByRole("button", { name: "Cancel", exact: true }).click();
+        await prompt.waitFor({ state: "detached" });
+        await page.getByRole("button", { name: "Next", exact: true }).waitFor();
+        await cast("Lightning Bolt");
+        await prompt.waitFor();
+      }
+      if (state === "match-cast-player") {
+        // The portrait chooses the player, and the last choice sends the cast.
+        await page.getByRole("button", { name: "Target Alex" }).click();
+        await prompt.waitFor({ state: "detached" });
+        await resolveAction.waitFor();
+        await expect(
+          page.getByRole("button", {
+            name: "Lightning Bolt, in your hand",
+            exact: true,
+          }),
+        ).toHaveCount(0);
+      }
+      if (paying) {
+        // One of your own creatures is the target; then the game waits for payment.
+        await page
+          .getByRole("button", { name: "Goblin Guide", exact: true })
+          .click();
+        const pay = page.locator('[data-cast-prompt="payment"]');
+        await pay.waitFor();
+        await expect(resolveAction).toHaveCount(0);
+        const autoPay = page.getByRole("button", {
+          name: "Auto Pay",
+          exact: true,
+        });
+        await autoPay.and(page.locator(":enabled")).waitFor();
+        if (state === "match-cast-paid") {
+          await autoPay.click();
+          await pay.waitFor({ state: "detached" });
+          await resolveAction.waitFor();
+        }
+      }
+    }
+    await page.waitForTimeout(700);
   }
   if (state === "match-stack-read") {
     await page.getByRole("option", { name: /^Shock, Morgan/ }).click();
