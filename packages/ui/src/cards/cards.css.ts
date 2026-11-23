@@ -1,4 +1,4 @@
-import { style } from "@vanilla-extract/css";
+import { globalStyle, style } from "@vanilla-extract/css";
 import { standardMotion, feedbackTransition } from "../control-motion";
 export const face = style({
   display: "block",
@@ -65,6 +65,31 @@ export const mark = style({
       transition: `border-color ${feedbackTransition},background-color ${feedbackTransition},box-shadow ${feedbackTransition}`,
     },
   },
+});
+/** The pressable area for one mode: the whole of its copy of the face. */
+export const modeHit = style({
+  position: "absolute",
+  inset: 0,
+  display: "block",
+  padding: 0,
+  margin: 0,
+  border: 0,
+  borderRadius: "4% / 3%",
+  background: "transparent",
+  appearance: "none",
+  cursor: "pointer",
+  selectors: {
+    "&:disabled": { cursor: "default" },
+    "&:focus-visible": { outline: "none" },
+  },
+});
+globalStyle(`${modeHit}:focus-visible > ${mark}`, {
+  outline: "2px solid #fff5c9",
+  outlineOffset: 2,
+});
+globalStyle(`${modeHit}:hover:not(:disabled) > ${mark}`, {
+  boxShadow: "0 0 0 1px currentColor,0 0 6px #fff6",
+  color: "#dffcf4",
 });
 export const tick = style({
   position: "absolute",

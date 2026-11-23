@@ -121,7 +121,12 @@ type Case = {
     | "match-cast-player"
     | "match-cast-pay"
     | "match-cast-paid"
-    | "match-cast-creature";
+    | "match-cast-creature"
+    /** A modal spell: its modes, one with no legal target, a look at the table, and a mode cast. */
+    | "match-mode-choice"
+    | "match-mode-unavailable"
+    | "match-mode-peek"
+    | "match-mode-cast";
 };
 
 const viewports: Viewport[] = [
@@ -136,6 +141,31 @@ const viewports: Viewport[] = [
   { name: "desktop-large", width: 1920, height: 1080, touch: false },
   { name: "ultrawide", width: 2560, height: 1080, touch: false },
 ];
+/**
+ * A second press on an offered hand card casts it. A held card is fanned,
+ * tilted and half below the edge, so the press goes where the card shows.
+ */
+async function pressHandCard(page: Page, name: string): Promise<void> {
+  const card = page.getByRole("button", {
+    name: `${name}, in your hand`,
+    exact: true,
+  });
+  const point = await card.evaluate((node) => {
+    const box = node.getBoundingClientRect();
+    for (let row = 1; row < 12; row += 1)
+      for (let column = 1; column < 12; column += 1) {
+        const x = box.left + (box.width * column) / 12;
+        const y = box.top + (box.height * row) / 12;
+        if (y > window.innerHeight - 6 || x < 4 || x > window.innerWidth - 4)
+          continue;
+        const hit = document.elementFromPoint(x, y);
+        if (hit && node.contains(hit)) return { x, y };
+      }
+    return null;
+  });
+  if (!point) throw new Error(`${name} shows no part that can be pressed.`);
+  await page.mouse.dblclick(point.x, point.y);
+}
 const expectText = (locator: Locator, text: string): Promise<void> =>
   expect(locator).toHaveText(text);
 const named = (name: string): Viewport => {
@@ -450,6 +480,23 @@ const cases: Case[] = [
         ["/probe/table?pay=paused", "match-cast-pay"],
         ["/probe/table?pay=paused", "match-cast-paid"],
         ["/probe/table", "match-cast-creature"],
+      ] as const
+    ).map(([path, state]) => ({
+      viewport,
+      art: "none",
+      decks: "six",
+      path,
+      state,
+    })),
+  ),
+  // Choosing a modal spell's mode, on every screen.
+  ...viewports.flatMap((viewport): Case[] =>
+    (
+      [
+        ["/probe/table", "match-mode-choice"],
+        ["/probe/table?state=no-artifacts", "match-mode-unavailable"],
+        ["/probe/table", "match-mode-peek"],
+        ["/probe/table", "match-mode-cast"],
       ] as const
     ).map(([path, state]) => ({
       viewport,
@@ -1545,33 +1592,7 @@ async function run(browser: Browser, test: Case): Promise<Finding[]> {
     state === "match-cast-paid" ||
     state === "match-cast-creature"
   ) {
-    // A second press on an offered card casts it. A held card is fanned, tilted
-    // and half below the edge, so the press goes where the card itself shows.
-    const cast = async (name: string) => {
-      const card = page.getByRole("button", {
-        name: `${name}, in your hand`,
-        exact: true,
-      });
-      const point = await card.evaluate((node) => {
-        const box = node.getBoundingClientRect();
-        for (let row = 1; row < 12; row += 1)
-          for (let column = 1; column < 12; column += 1) {
-            const x = box.left + (box.width * column) / 12;
-            const y = box.top + (box.height * row) / 12;
-            if (
-              y > window.innerHeight - 6 ||
-              x < 4 ||
-              x > window.innerWidth - 4
-            )
-              continue;
-            const hit = document.elementFromPoint(x, y);
-            if (hit && node.contains(hit)) return { x, y };
-          }
-        return null;
-      });
-      if (!point) throw new Error(`${name} shows no part that can be pressed.`);
-      await page.mouse.dblclick(point.x, point.y);
-    };
+    const cast = (name: string) => pressHandCard(page, name);
     const prompt = page.locator('[data-cast-prompt="target"]');
     const pile = (count: number) =>
       page.locator(`[data-match-stack="${count}"]`);
@@ -1637,6 +1658,64 @@ async function run(browser: Browser, test: Case): Promise<Finding[]> {
           await resolveAction.waitFor();
         }
       }
+    }
+    await page.waitForTimeout(700);
+  }
+  if (
+    state === "match-mode-choice" ||
+    state === "match-mode-unavailable" ||
+    state === "match-mode-peek" ||
+    state === "match-mode-cast"
+  ) {
+    await pressHandCard(page, "Abrade");
+    const choice = page.getByRole("dialog", { name: "Choose one" });
+    await choice.waitFor();
+    const damage = choice.getByRole("button", {
+      name: "Abrade deals 3 damage to target creature.",
+    });
+    const destroy = choice.getByRole("button", {
+      name: "Destroy target artifact.",
+    });
+    await damage.and(page.locator(":enabled")).waitFor();
+    const next = page.getByRole("button", { name: "Next", exact: true });
+    if (state === "match-mode-choice")
+      await destroy.and(page.locator(":enabled")).waitFor();
+    if (state === "match-mode-unavailable") {
+      // With no artifact on the table, that mode says so and cannot be chosen.
+      await destroy.and(page.locator(":disabled")).waitFor();
+      await choice.getByText("No legal targets").waitFor();
+    }
+    if (state === "match-mode-peek") {
+      await choice.getByRole("button", { name: "View Battlefield" }).click();
+      await choice.waitFor({ state: "hidden" });
+      // Looking is not acting: there is no turn action while the choice waits.
+      await expect(next).toHaveCount(0);
+      await page.getByRole("button", { name: "Return to choice" }).click();
+      await damage.waitFor();
+      await choice.getByRole("button", { name: "View Battlefield" }).click();
+      await page.getByRole("button", { name: "Cancel", exact: true }).click();
+      await next.waitFor();
+      await pressHandCard(page, "Abrade");
+      await choice.getByRole("button", { name: "View Battlefield" }).click();
+      await page.getByRole("button", { name: "Return to choice" }).waitFor();
+    }
+    if (state === "match-mode-cast") {
+      // The mode goes straight on to its own targets: artifacts only.
+      await destroy.click();
+      await choice.waitFor({ state: "hidden" });
+      await page.locator('[data-cast-prompt="target"]').waitFor();
+      await expect(page.getByRole("button", { name: /^Target / })).toHaveCount(
+        0,
+      );
+      await page
+        .getByRole("button", { name: "Aether Vial", exact: true })
+        .click();
+      await page.getByRole("button", { name: "Resolve", exact: true }).click();
+      await page.locator("[data-match-stack]").waitFor({ state: "detached" });
+      // Destroyed: your Aether Vial has left the table.
+      await expect(
+        page.getByRole("button", { name: "Aether Vial", exact: true }),
+      ).toHaveCount(0);
     }
     await page.waitForTimeout(700);
   }
