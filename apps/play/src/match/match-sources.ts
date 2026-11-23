@@ -4,6 +4,7 @@ import type {
 } from "@spellwake/application-contracts";
 import type { SourceGap } from "../decks/deck-sources";
 import type { CastOffer } from "./cast-draft";
+import type { PrintedModes } from "./printed-modes";
 
 export type MatchActionCommand = PlayerCommand["action"];
 
@@ -30,6 +31,8 @@ export type MatchSource =
       artByPrintingId: ReadonlyMap<string, string>;
       /** Card pictures by card name, for a table whose cards have no printing. */
       faceByName?: ReadonlyMap<string, string>;
+      /** Where a modal card's modes are printed, by card name, for a table whose cards have no printing. */
+      printedModesByName?: ReadonlyMap<string, PrintedModes>;
       /**
        * The cards the game offers to cast now. Absent where the game does not
        * say, which is every live match until the player view carries offers.
