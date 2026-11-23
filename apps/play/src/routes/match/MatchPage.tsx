@@ -1,10 +1,17 @@
-import { useEffect, useMemo, useState, type ReactElement } from "react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useState,
+  type ReactElement,
+} from "react";
 import {
   Circle,
   CircleUserRound,
   Grip,
   LogOut,
   MessageCircle,
+  Settings,
   Sparkles,
   Swords,
 } from "lucide-react";
@@ -16,8 +23,6 @@ import type {
 } from "@spellwake/application-contracts";
 import {
   ActionButton,
-  ChatComposer,
-  ChatMessage,
   ConfirmationDialog,
   designPixels,
   Dialog,
@@ -41,6 +46,8 @@ import {
 import { CombatLines, useCombat, type CombatUi } from "./combat";
 import { DamagePills, DamageSources, useDamage } from "./damage";
 import { MatchStack, useStackReading } from "./stack";
+import { ConcedeConfirmation, MatchSettings, TableChat } from "./TablePanels";
+import { hasUnseen } from "../../match/table-panels";
 import { MatchTable } from "./MatchTable";
 import * as table from "./match-table.css";
 import * as s from "./match.css";
@@ -576,6 +583,13 @@ function LiveMatch({ source }: { source: ReadyMatch }): ReactElement {
   } | null>(null);
   const [chatOpen, setChatOpen] = useState(false);
   const [chatDraft, setChatDraft] = useState("");
+  // The newest table message this player has actually had on screen.
+  const [chatSeen, setChatSeen] = useState<string | null>(null);
+  const seeChat = useCallback((id: string) => setChatSeen(id), []);
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [conceding, setConceding] = useState<
+    "closed" | "asking" | "sending" | "failed"
+  >("closed");
   const [leaveOpen, setLeaveOpen] = useState(false);
 
   const objectByHandle = useMemo(
@@ -611,8 +625,37 @@ function LiveMatch({ source }: { source: ReadyMatch }): ReactElement {
     (p) => p.seatId === snapshot.viewerSeatId,
   );
 
+  // Out of the game, a player stays at the table and watches.
+  const watching = viewerPlayer?.eliminated ?? false;
+  const { commandPending, commandError, dismissCommandError } = source;
+  useEffect(() => {
+    if (conceding !== "sending" || commandPending) return;
+    if (watching) setConceding("closed");
+    else if (commandError) {
+      // The confirmation says so itself, in place.
+      dismissCommandError();
+      setConceding("failed");
+    }
+  }, [conceding, commandPending, commandError, watching, dismissCommandError]);
+  const shownNames = useMemo(
+    () =>
+      new Map(
+        snapshot.players.map((player) => {
+          const name = seatNames.get(player.seatId) ?? "Player";
+          return [
+            player.seatId,
+            player.eliminated
+              ? `${name} · ${player.seatId === snapshot.viewerSeatId ? "Conceded" : "Out"}`
+              : name,
+          ] as const;
+        }),
+      ),
+    [snapshot.players, snapshot.viewerSeatId, seatNames],
+  );
+
   const hasPriority =
-    snapshot.turn?.prioritySeatIds.includes(snapshot.viewerSeatId) ?? false;
+    !watching &&
+    (snapshot.turn?.prioritySeatIds.includes(snapshot.viewerSeatId) ?? false);
   const isViewerTurn =
     snapshot.turn?.activeSeatIds.includes(snapshot.viewerSeatId) ?? false;
 
@@ -690,6 +733,9 @@ function LiveMatch({ source }: { source: ReadyMatch }): ReactElement {
     }
   };
 
+  // The dot clears only once the newest message has been on screen.
+  const unreadChat = !chatOpen && hasUnseen(source.chat.messages, chatSeen);
+
   return (
     <>
       <ImmersiveFrame
@@ -697,6 +743,34 @@ function LiveMatch({ source }: { source: ReadyMatch }): ReactElement {
         trayHeight={dock.trayHeight}
         leading={
           <>
+            <button
+              type="button"
+              className={frame.hudButton}
+              aria-label="Settings"
+              onClick={() => {
+                // Settings take the screen; the chat keeps its draft and place.
+                setChatOpen(false);
+                setSettingsOpen(true);
+              }}
+            >
+              <Settings size={ICON} aria-hidden="true" />
+            </button>
+            <span className={s.chatButton}>
+              <button
+                type="button"
+                className={frame.hudButton}
+                aria-label={
+                  unreadChat ? "Table chat, unread messages" : "Table chat"
+                }
+                aria-expanded={chatOpen}
+                onClick={() => setChatOpen((current) => !current)}
+              >
+                <MessageCircle size={ICON} aria-hidden="true" />
+              </button>
+              {unreadChat && (
+                <span className={s.unreadDot} aria-hidden="true" />
+              )}
+            </span>
             <button
               type="button"
               className={frame.hudButton}
@@ -724,27 +798,11 @@ function LiveMatch({ source }: { source: ReadyMatch }): ReactElement {
                 <Grip size={ICON} aria-hidden="true" />
               )}
             </button>
-            <button
-              type="button"
-              className={frame.hudButton}
-              aria-label="Table chat"
-              onClick={() => setChatOpen(true)}
-            >
-              <MessageCircle size={ICON} aria-hidden="true" />
-            </button>
-            {source.connectionState !== "live" && (
-              <span className={s.statusBadge} role="status">
-                {source.connectionState === "reconnecting"
-                  ? "Reconnecting…"
-                  : source.connectionState === "ended"
-                    ? "Ended"
-                    : "Connecting…"}
-              </span>
-            )}
           </>
         }
         players={snapshot.players.map((player) => {
           const name = seatNames.get(player.seatId) ?? "Player";
+          const out = player.eliminated;
           const takingTurn =
             snapshot.turn?.activeSeatIds.includes(player.seatId) ?? false;
           return (
@@ -752,14 +810,15 @@ function LiveMatch({ source }: { source: ReadyMatch }): ReactElement {
               key={player.seatId}
               className={table.seatAnchor}
               data-anchor={`seat:${player.seatId}`}
+              data-out={out || undefined}
               data-recipient={(declaring?.seatMarks ?? reading.seatMarks).get(
                 player.seatId,
               )}
             >
               <PlayerIdentity
                 presentation="seat"
-                name={name}
-                life={Number(player.life) || 0}
+                name={shownNames.get(player.seatId) ?? name}
+                {...(out ? {} : { life: Number(player.life) || 0 })}
                 actionLabel={
                   player.seatId === snapshot.viewerSeatId
                     ? "View your board"
@@ -785,7 +844,8 @@ function LiveMatch({ source }: { source: ReadyMatch }): ReactElement {
             type="button"
             className={frame.hudButton}
             aria-label="Leave table"
-            onClick={() => setLeaveOpen(true)}
+            // A player who is out has nothing left to concede.
+            onClick={() => (watching ? source.onLeave() : setLeaveOpen(true))}
           >
             <LogOut size={ICON} aria-hidden="true" />
           </button>
@@ -797,6 +857,15 @@ function LiveMatch({ source }: { source: ReadyMatch }): ReactElement {
               phase={phaseInfo.phase}
               phaseLabel={phaseInfo.label}
             />
+            {source.connectionState !== "live" && (
+              <span className={s.statusBadge} role="status">
+                {source.connectionState === "reconnecting"
+                  ? "Reconnecting…"
+                  : source.connectionState === "ended"
+                    ? "Ended"
+                    : "Connecting…"}
+              </span>
+            )}
             {viewerPlayer && viewerPlayer.manaPool.length > 0 && (
               <div className={s.manaBar} aria-label="Mana pool">
                 <Sparkles size={14} aria-hidden="true" />
@@ -809,7 +878,9 @@ function LiveMatch({ source }: { source: ReadyMatch }): ReactElement {
               </div>
             )}
             {damage && <DamageSources sources={damage.sources} />}
-            {declaring ? (
+            {watching ? (
+              <p className={s.watching}>Watching</p>
+            ) : declaring ? (
               <MatchActions
                 primary={declaring.primary}
                 {...(declaring.secondary
@@ -908,7 +979,7 @@ function LiveMatch({ source }: { source: ReadyMatch }): ReactElement {
         <MatchTable
           snapshot={snapshot}
           view={tableView}
-          seatNames={seatNames}
+          seatNames={shownNames}
           faceOf={artFor}
           marks={declaring?.marks ?? reading.marks}
           clearBottom={dock.clearBottom}
@@ -940,7 +1011,44 @@ function LiveMatch({ source }: { source: ReadyMatch }): ReactElement {
           follow={follow}
           clearBottom={dock.clearBottom}
         />
+        <TableChat
+          open={chatOpen}
+          messages={source.chat.messages}
+          send={source.chat.send}
+          watching={watching}
+          draft={chatDraft}
+          setDraft={setChatDraft}
+          onSeen={seeChat}
+          onClose={() => setChatOpen(false)}
+        />
       </ImmersiveFrame>
+
+      <MatchSettings
+        open={settingsOpen}
+        onClose={() => setSettingsOpen(false)}
+        onConcede={
+          watching
+            ? undefined
+            : () => {
+                setSettingsOpen(false);
+                setConceding("asking");
+              }
+        }
+      />
+      <ConcedeConfirmation
+        open={conceding !== "closed"}
+        pending={conceding === "sending"}
+        failed={conceding === "failed"}
+        onCancel={() => {
+          // Back to the settings it came from, with every choice kept.
+          setConceding("closed");
+          setSettingsOpen(true);
+        }}
+        onConfirm={() => {
+          setConceding("sending");
+          void source.sendAction({ kind: "concede" });
+        }}
+      />
 
       {/* Card Inspector & Cast / Activate Dialog */}
       <Dialog
@@ -1070,47 +1178,6 @@ function LiveMatch({ source }: { source: ReadyMatch }): ReactElement {
               ))}
             </div>
           ))}
-      </Dialog>
-
-      {/* Match Chat Dialog */}
-      <Dialog
-        open={chatOpen}
-        onClose={() => setChatOpen(false)}
-        title="Table chat"
-      >
-        <div className={s.chatDrawer}>
-          <div className={s.chatList}>
-            {source.chat.messages.length === 0 ? (
-              <EmptyState
-                title="No messages yet"
-                description="Chat with players at this table."
-              />
-            ) : (
-              source.chat.messages.map((msg) => (
-                <ChatMessage
-                  key={msg.id}
-                  surface="table"
-                  author={msg.senderName}
-                  body={msg.body}
-                />
-              ))
-            )}
-          </div>
-          {source.chat.send && (
-            <ChatComposer
-              surface="table"
-              mode="editable"
-              value={chatDraft}
-              maxCharacters={500}
-              onChange={setChatDraft}
-              onSend={(draft) => {
-                setChatDraft("");
-                void source.chat.send?.(draft);
-              }}
-              placeholder="Send a table message…"
-            />
-          )}
-        </div>
       </Dialog>
 
       {/* Leave / Concede confirmation */}

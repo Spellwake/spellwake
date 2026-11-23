@@ -1,4 +1,4 @@
-import { style } from "@vanilla-extract/css";
+import { globalStyle, style } from "@vanilla-extract/css";
 import { controlTokens as t } from "@spellwake/ui/tokens";
 
 export const boardRow = style({
@@ -157,23 +157,6 @@ export const manaBar = style({
   border: `1px solid ${t.color.edge}`,
 });
 
-export const chatDrawer = style({
-  display: "flex",
-  flexDirection: "column",
-  gap: 12,
-  minHeight: 320,
-  maxHeight: "65vh",
-});
-
-export const chatList = style({
-  flex: 1,
-  overflowY: "auto",
-  display: "flex",
-  flexDirection: "column",
-  gap: 8,
-  paddingRight: 4,
-});
-
 export const inspectorBody = style({
   display: "grid",
   gridTemplateColumns: "minmax(180px, 240px) 1fr",
@@ -292,4 +275,159 @@ export const damageReadout = style({
   color: "#fbefd1",
   fontSize: "17px",
   lineHeight: 1.15,
+});
+
+const portraitPhone =
+  ':root[data-shell="compact"][data-orientation="portrait"] &';
+const landscapePhone =
+  ':root[data-shell="compact"][data-orientation="landscape"] &';
+const coarse = "(pointer: coarse)";
+
+/** Table chat (CM-02 to CM-05, CM-11): a floating panel under the corner controls. */
+export const chatPanel = style({
+  position: "absolute",
+  zIndex: 1,
+  top: "88px",
+  left: "22px",
+  width: "412px",
+  maxWidth: "calc(100% - 44px)",
+  boxSizing: "border-box",
+  padding: "15px 19px",
+  borderRadius: "16px",
+  border: "1.5px solid #c9b690",
+  background: "linear-gradient(120deg, #262824f7, #1d211df8)",
+  boxShadow: "0 7px 18px #10160fc9",
+  color: "#f4ecde",
+  fontSize: "19px",
+  selectors: {
+    // Upright, the players take the row under the corner controls.
+    [portraitPhone]: {
+      top: "166px",
+      left: "16px",
+      right: "16px",
+      width: "auto",
+    },
+    [landscapePhone]: { top: "78px", left: "16px", width: "360px" },
+  },
+});
+export const panelHeader = style({
+  display: "flex",
+  justifyContent: "space-between",
+  alignItems: "center",
+  paddingBottom: "8px",
+  marginBottom: "9px",
+  borderBottom: "1px solid #78786a87",
+  font: "25px Baskerville, Georgia, serif",
+});
+export const panelClose = style({
+  appearance: "none",
+  display: "grid",
+  placeItems: "center",
+  border: 0,
+  padding: "2px",
+  background: "transparent",
+  color: "inherit",
+  cursor: "pointer",
+  borderRadius: "6px",
+  selectors: {
+    "&:focus-visible": {
+      outline: `2px solid ${t.color.focus}`,
+      outlineOffset: "2px",
+    },
+  },
+  "@media": { [coarse]: { minWidth: "44PX", minHeight: "44PX" } },
+});
+export const chatLog = style({
+  height: "228px",
+  maxHeight: "34vh",
+  overflowY: "auto",
+  overscrollBehavior: "contain",
+  display: "flex",
+  flexDirection: "column",
+  gap: "9px",
+  padding: "3px 2px 12px",
+  selectors: {
+    "&:focus-visible": {
+      outline: `2px solid ${t.color.focus}`,
+      outlineOffset: "2px",
+    },
+    [landscapePhone]: { height: "96px" },
+  },
+});
+// Read-only, the panel is only as tall as a few lines (CM-11).
+globalStyle(`${chatPanel}[data-table-chat="watching"] ${chatLog}`, {
+  height: "112px",
+});
+export const chatQuiet = style({ margin: "auto", fontStyle: "italic" });
+export const chatRefused = style({ margin: "0 0 7px", color: "#e8d6a8" });
+/** The table-chat button, which carries a quiet dot while something is unread. */
+export const chatButton = style({
+  position: "relative",
+  display: "inline-flex",
+});
+export const unreadDot = style({
+  position: "absolute",
+  top: "7px",
+  right: "7px",
+  width: "11px",
+  height: "11px",
+  borderRadius: "50%",
+  background: "#f3d58a",
+  boxShadow: "0 0 0 2px #1d211d",
+  pointerEvents: "none",
+});
+
+/** Match settings (CM-06, CM-07, CM-10A). */
+export const settings = style({
+  display: "flex",
+  flexDirection: "column",
+  fontSize: "20px",
+});
+export const setting = style({
+  display: "flex",
+  alignItems: "center",
+  justifyContent: "space-between",
+  gap: "20px",
+  minHeight: "55px",
+});
+export const settingName = style({
+  display: "flex",
+  alignItems: "center",
+  gap: "18px",
+});
+export const settingControl = style({ width: "52%", minWidth: "120px" });
+export const settingRule = style({
+  borderTop: "1px solid #69695d99",
+  padding: "12px 0",
+  marginTop: "12px",
+});
+export const concedeEntry = style({
+  appearance: "none",
+  alignSelf: "stretch",
+  textAlign: "left",
+  border: 0,
+  borderTop: "1px solid #69695d99",
+  background: "none",
+  padding: "16px 0 0",
+  font: "inherit",
+  color: "#ed766b",
+  cursor: "pointer",
+  selectors: {
+    "&:focus-visible": {
+      outline: `2px solid ${t.color.focus}`,
+      outlineOffset: "4px",
+    },
+  },
+  "@media": { [coarse]: { minHeight: "44PX", minWidth: "44PX" } },
+});
+export const concedeFailed = style({ margin: "0 0 4px", color: "#f0b9ae" });
+/** A player who conceded stays at the table without any action. */
+export const watching = style({
+  alignSelf: "stretch",
+  margin: 0,
+  textAlign: "center",
+  fontStyle: "italic",
+  fontSize: "20px",
+  color: "#e9dfc6",
+  textShadow: "0 1px 4px #000a",
 });
