@@ -67,6 +67,7 @@ pub struct StateSummary {
     pub active_seat_ids: Vec<Uuid>,
     pub stack_sig: Vec<String>,
     pub board_sig: Vec<String>,
+    pub has_creatures: bool,
     pub hand_sig: Vec<String>,
     pub life_sig: BTreeMap<Uuid, String>,
     pub through_event_sequence: String,
@@ -105,6 +106,7 @@ impl StateSummary {
             .collect();
 
         let mut board_sig = Vec::new();
+        let mut has_creatures = false;
         let mut hand_sig = Vec::new();
         for obj in &snapshot.visible_objects {
             let name = match &obj.identity {
@@ -116,6 +118,12 @@ impl StateSummary {
             let zone_kind = zone_kinds.get(obj.zone.as_str()).copied();
             match zone_kind {
                 Some(PlayerZoneKind::Battlefield) => {
+                    if obj.public_properties.as_ref().is_some_and(|p| {
+                        p.card_types
+                            .contains(&crate::player_wire::PlayerCardType::Creature)
+                    }) {
+                        has_creatures = true;
+                    }
                     let pt = obj.public_properties.as_ref().map(|p| {
                         let pw = p.power.clone().map(String::from).unwrap_or_default();
                         let tg = p.toughness.clone().map(String::from).unwrap_or_default();
@@ -152,6 +160,7 @@ impl StateSummary {
             active_seat_ids,
             stack_sig,
             board_sig,
+            has_creatures,
             hand_sig,
             life_sig,
             through_event_sequence: snapshot.through_event_sequence.to_string(),
@@ -204,28 +213,44 @@ impl AiScheduler {
             return ScheduleDecision::CallModel(WakeReason::NoGrant);
         };
         let current = StateSummary::from_snapshot(snapshot);
-        if current.turn_number != grant.turn_number {
-            return ScheduleDecision::CallModel(WakeReason::TurnChanged);
-        }
         if grant.used_skips >= grant.max_skips {
             return ScheduleDecision::CallModel(WakeReason::SkipCapReached);
         }
+        // Allow delegation to skip empty upkeep/draw windows at the start of a new turn
+        // when the stack is empty; wake immediately once main/combat/stack/board/life changes.
+        let in_empty_beginning = current.phase == "\"beginning\"" && current.stack_sig.is_empty();
+        if current.turn_number != grant.turn_number && !in_empty_beginning {
+            return ScheduleDecision::CallModel(WakeReason::TurnChanged);
+        }
+        // Defer non-stack wakes during own empty upkeep/draw until own precombat main.
+        if in_empty_beginning && current.active_seat_ids.contains(&snapshot.viewer_seat_id) {
+            return ScheduleDecision::DelegatePass;
+        }
         for &cond in &grant.wake {
             let triggered = match cond {
-                WakeCondition::StackChanged => current.stack_sig != grant.baseline.stack_sig,
+                WakeCondition::StackChanged => {
+                    !current.stack_sig.is_empty() && current.stack_sig != grant.baseline.stack_sig
+                }
                 WakeCondition::BoardChanged => current.board_sig != grant.baseline.board_sig,
                 WakeCondition::HandChanged => current.hand_sig != grant.baseline.hand_sig,
                 WakeCondition::LifeChanged => current.life_sig != grant.baseline.life_sig,
                 WakeCondition::OpponentAction => {
-                    current.through_event_sequence != grant.baseline.through_event_sequence
-                        || current.stack_sig != grant.baseline.stack_sig
+                    // Only wake when an opponent actually altered meaningful game state
+                    // (stack, board, or life). Empty phase/step transitions advance
+                    // `through_event_sequence` and must NOT falsely wake pass delegation.
+                    (!current.stack_sig.is_empty() && current.stack_sig != grant.baseline.stack_sig)
+                        || current.board_sig != grant.baseline.board_sig
+                        || current.life_sig != grant.baseline.life_sig
                 }
                 WakeCondition::OwnMain => {
                     current.is_own_main(snapshot.viewer_seat_id)
                         && (current.phase != grant.baseline.phase
-                            || current.step != grant.baseline.step)
+                            || current.step != grant.baseline.step
+                            || current.turn_number != grant.turn_number)
                 }
-                WakeCondition::Combat => current.is_combat() && !grant.baseline.is_combat(),
+                WakeCondition::Combat => {
+                    current.is_combat() && !grant.baseline.is_combat() && current.has_creatures
+                }
             };
             if triggered {
                 return ScheduleDecision::CallModel(WakeReason::ConditionTriggered(cond));
@@ -276,6 +301,7 @@ mod tests {
             active_seat_ids: vec![Uuid::from_u128(1)],
             stack_sig: stack.iter().map(|s| (*s).to_owned()).collect(),
             board_sig: vec![],
+            has_creatures: false,
             hand_sig: vec![],
             life_sig: BTreeMap::from([(Uuid::from_u128(1), "20".into())]),
             through_event_sequence: seq.into(),

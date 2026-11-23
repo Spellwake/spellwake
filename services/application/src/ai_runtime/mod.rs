@@ -3,6 +3,7 @@
 //! scheduled pass delegation, atomic `cast-batch` execution, and pluggable
 //! LLM providers (persistent ChatGPT-login Codex app-server, direct OpenAI
 //! Responses API, and one-shot Codex CLI).
+pub mod affordances;
 pub mod codex_app_server;
 pub mod compact;
 pub mod driver;
@@ -11,6 +12,10 @@ pub mod provider;
 pub mod quota;
 pub mod scheduler;
 
+pub use affordances::{
+    CastableSpell, ManaSourceInfo, ParsedManaCost, PriorityAffordances, auto_tap_plan,
+    diagnose_rejection, fallback_command, probe_priority_affordances,
+};
 pub use codex_app_server::{CodexAppServerConfig, CodexAppServerProvider, HOSTED_CODEX_EXECUTABLE};
 pub use driver::{AiRuntimeConfig, AiRuntimeService};
 pub use lifecycle::AiControllerRegistry;
