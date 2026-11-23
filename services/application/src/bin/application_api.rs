@@ -1,6 +1,7 @@
 //! Application API entry point.
 use spellwake_application::api::{ApiConfig, router};
 use std::net::SocketAddr;
+use tokio::sync::watch;
 use tracing_subscriber::{EnvFilter, fmt};
 
 fn main() -> Result<(), &'static str> {
@@ -13,6 +14,9 @@ fn main() -> Result<(), &'static str> {
         .init();
 
     let config = ApiConfig::from_env().map_err(|_| "application API configuration is invalid")?;
+    let ai_runtime = config
+        .build_ai_runtime()
+        .map_err(|_| "application AI runtime configuration is invalid")?;
     let bind: SocketAddr = std::env::var("SPELLWAKE_API_BIND")
         .unwrap_or_else(|_| "127.0.0.1:58080".into())
         .parse()
@@ -29,8 +33,10 @@ fn main() -> Result<(), &'static str> {
         let listener = tokio::net::TcpListener::bind(bind)
             .await
             .map_err(|_| "application API bind failed")?;
+        let (ai_shutdown_tx, ai_shutdown_rx) = watch::channel(false);
+        let ai_handle = ai_runtime.map(|svc| tokio::spawn(svc.run_supervisor(ai_shutdown_rx)));
         tracing::info!(bind = %bind, code = "ready", "application_api listening");
-        axum::serve(
+        let serve_result = axum::serve(
             listener,
             app.clone()
                 .into_make_service_with_connect_info::<SocketAddr>(),
@@ -43,8 +49,12 @@ fn main() -> Result<(), &'static str> {
             }
             #[cfg(not(unix))]
             let _ = tokio::signal::ctrl_c().await;
+            let _ = ai_shutdown_tx.send(true);
         })
-        .await
-        .map_err(|_| "application API server failed")
+        .await;
+        if let Some(handle) = ai_handle {
+            let _ = handle.await;
+        }
+        serve_result.map_err(|_| "application API server failed")
     })
 }

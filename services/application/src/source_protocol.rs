@@ -8,6 +8,7 @@ use uuid::Uuid;
 
 /// Source references retain original text; SQL measures ASCII-space-trimmed characters.
 /// This private evidence text intentionally has neither Debug nor Serialize.
+#[derive(Clone)]
 pub struct SourceProof(String);
 /// Safe envelope rejection without supplied evidence text.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

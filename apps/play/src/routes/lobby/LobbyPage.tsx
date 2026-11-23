@@ -148,6 +148,24 @@ export function LobbyPage({
               </ActionButton>
             )}
           </div>
+          {lobby.aiQuota &&
+            lobby.seats.some((seat) => seat.kind === "ai") && (() => {
+              const q = lobby.aiQuota;
+              const overLimit =
+                q.requiredAdvanced > 0 &&
+                q.remainingToday !== null &&
+                q.requiredAdvanced > q.remainingToday;
+              const label = q.displayUnlimited
+                ? q.remainingToday === 0
+                  ? "Advanced AI limit reached · Resets 00:00 UTC"
+                  : "Advanced AI: Unlimited"
+                : `Advanced AI: ${q.remainingToday ?? 0}/${q.dailyLimit ?? 0} remaining today · Resets 00:00 UTC`;
+              return (
+                <p className={`${overLimit ? s.warning : s.passive} ${s.quotaLine}`}>
+                  {label}
+                </p>
+              );
+            })()}
           <ul className={s.seats}>
             {lobby.seats.map((seat) => (
               <SeatRow
