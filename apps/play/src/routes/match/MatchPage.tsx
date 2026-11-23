@@ -2,6 +2,7 @@ import {
   useCallback,
   useEffect,
   useMemo,
+  useRef,
   useState,
   type ReactElement,
 } from "react";
@@ -44,6 +45,7 @@ import {
   type TableView,
 } from "../../match/table-model";
 import { CombatLines, useCombat, type CombatUi } from "./combat";
+import { CastPrompt, pendingObject, useCasting } from "./casting";
 import { DamagePills, DamageSources, useDamage } from "./damage";
 import { MatchStack, useStackReading } from "./stack";
 import { ConcedeConfirmation, MatchSettings, TableChat } from "./TablePanels";
@@ -690,8 +692,21 @@ function LiveMatch({ source }: { source: ReadyMatch }): ReactElement {
       face: object ? artFor(object) : undefined,
     };
   });
-  // What is being declared or assigned on the table, if anything.
-  const declaring: CombatUi | null = combat.ui ?? damage;
+  // A spell is cast only while nothing else is asked and the player may act.
+  const casting = useCasting(
+    source,
+    hasPriority && !activeDecision && !source.chooseOpening,
+  );
+  // What is being declared, assigned or cast on the table, if anything.
+  const declaring: CombatUi | null = combat.ui ?? damage ?? casting.ui;
+  // A second press on an offered hand card casts it; a single press reads it.
+  const handPress = useRef<{ handle: string; timer: number } | null>(null);
+  useEffect(
+    () => () => {
+      if (handPress.current) window.clearTimeout(handPress.current.timer);
+    },
+    [],
+  );
   const reading = useStackReading(snapshot);
   const follow = `${tableView.kind === "seat" ? tableView.seatId : "table"}:${snapshot.throughEventSequence}:${dock.clearBottom}`;
 
@@ -704,6 +719,23 @@ function LiveMatch({ source }: { source: ReadyMatch }): ReactElement {
     zoneKind: "hand" | "battlefield",
   ) => {
     if (zoneKind === "battlefield" && declaring?.onCard(obj)) return;
+    if (zoneKind === "hand" && casting.playable.has(obj.handle)) {
+      const earlier = handPress.current;
+      if (earlier) window.clearTimeout(earlier.timer);
+      if (earlier?.handle === obj.handle) {
+        handPress.current = null;
+        casting.begin(obj.handle);
+        return;
+      }
+      handPress.current = {
+        handle: obj.handle,
+        timer: window.setTimeout(() => {
+          handPress.current = null;
+          setInspectedHandle(obj.handle);
+        }, 280),
+      };
+      return;
+    }
     const mine =
       (obj.controllerSeatId ?? obj.ownerSeatId) === snapshot.viewerSeatId;
     if (!mine || !hasPriority || source.commandPending) {
@@ -836,6 +868,14 @@ function LiveMatch({ source }: { source: ReadyMatch }): ReactElement {
                 }
                 portrait={<CircleUserRound aria-hidden="true" />}
               />
+              {casting.targetSeats.has(player.seatId) && (
+                <button
+                  type="button"
+                  className={table.seatTarget}
+                  aria-label={`Target ${player.seatId === snapshot.viewerSeatId ? "yourself" : name}`}
+                  onClick={() => casting.chooseSeat(player.seatId)}
+                />
+              )}
             </span>
           );
         })}
@@ -887,6 +927,7 @@ function LiveMatch({ source }: { source: ReadyMatch }): ReactElement {
                   ? { secondary: declaring.secondary }
                   : {})}
                 {...(declaring.status ? { status: declaring.status } : {})}
+                {...(declaring.layout ? { layout: declaring.layout } : {})}
               />
             ) : (
               // Next passes with nothing waiting; Resolve passes on what is. While
@@ -982,6 +1023,8 @@ function LiveMatch({ source }: { source: ReadyMatch }): ReactElement {
           seatNames={shownNames}
           faceOf={artFor}
           marks={declaring?.marks ?? reading.marks}
+          isPlayable={(object) => casting.playable.has(object.handle)}
+          handTucked={casting.prompt !== null}
           clearBottom={dock.clearBottom}
           onCard={handleCardAction}
           onPile={(pile, seatId) => {
@@ -997,6 +1040,7 @@ function LiveMatch({ source }: { source: ReadyMatch }): ReactElement {
           }}
         />
         <CombatLines lines={declaring?.lines ?? []} follow={follow} />
+        <CastPrompt prompt={casting.prompt} />
         <DamagePills
           pills={damage?.pills ?? []}
           follow={follow}
@@ -1008,6 +1052,7 @@ function LiveMatch({ source }: { source: ReadyMatch }): ReactElement {
           faceOf={artFor}
           selectedId={reading.selectedId}
           onSelect={reading.select}
+          pending={pendingObject(objectByHandle, casting.pending)}
           follow={follow}
           clearBottom={dock.clearBottom}
         />
@@ -1098,19 +1143,28 @@ function LiveMatch({ source }: { source: ReadyMatch }): ReactElement {
                         Play land
                       </ActionButton>
                     ) : (
-                      <ActionButton
-                        disabled={source.commandPending}
-                        onClick={() => {
-                          void source.sendAction({
-                            kind: "cast-untargeted",
-                            source: inspected.handle,
-                            payment: null,
-                          });
-                          setInspectedHandle(null);
-                        }}
-                      >
-                        Cast spell
-                      </ActionButton>
+                      // Where the game offers casts, only an offered card
+                      // may be cast, through the same steps as on the table.
+                      (source.castOffers === undefined ||
+                        casting.playable.has(inspected.handle)) && (
+                        <ActionButton
+                          disabled={source.commandPending}
+                          onClick={() => {
+                            if (source.castOffers === undefined)
+                              void source.sendAction({
+                                kind: "cast-untargeted",
+                                source: inspected.handle,
+                                payment: null,
+                              });
+                            else casting.begin(inspected.handle);
+                            setInspectedHandle(null);
+                          }}
+                        >
+                          {source.castOffers === undefined
+                            ? "Cast spell"
+                            : "Cast"}
+                        </ActionButton>
+                      )
                     ))}
                   {inspected.abilities.map((ab) => (
                     <ActionButton
