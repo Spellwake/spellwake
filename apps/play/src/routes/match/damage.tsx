@@ -219,10 +219,13 @@ function spread(centres: number[], pitch: number, low: number, high: number) {
  */
 export function DamagePills({
   pills,
+  prefer = "under",
   follow,
   clearBottom = 0,
 }: {
   pills: readonly DamagePill[];
+  /** Whether a card's pill hangs beneath it or stands above it, where there is room. */
+  prefer?: "under" | "over";
   follow: unknown;
   clearBottom?: number;
 }): ReactElement {
@@ -247,9 +250,10 @@ export function DamagePills({
     const centre = rect.left + rect.width / 2;
     const under = rect.bottom + drop + (pill.caption ? 16 : 0);
     const over = rect.top - drop - pillHeight;
-    if (pill.caption || under + pillHeight <= floor)
+    const fitsUnder = under + pillHeight <= floor;
+    if (pill.caption || (fitsUnder && (prefer === "under" || over < ceiling)))
       return [{ pill, centre, top: under, from: rect.bottom, below: true }];
-    // With no room beneath its card, a pill sits above it instead.
+    // With no room on the side it prefers, a pill takes the other.
     if (over >= ceiling)
       return [{ pill, centre, top: over, from: rect.top, below: false }];
     // With no room either way, it sits as low as the table allows.

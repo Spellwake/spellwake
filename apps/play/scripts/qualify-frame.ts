@@ -126,7 +126,21 @@ type Case = {
     | "match-mode-choice"
     | "match-mode-unavailable"
     | "match-mode-peek"
-    | "match-mode-cast";
+    | "match-mode-cast"
+    /** A spell that asks for two modes: marking them, and each way it goes on. */
+    | "match-two-modes"
+    | "match-two-modes-quiet"
+    | "match-two-modes-cast"
+    /** Two instructions with a target each: the second, going back, and the cast. */
+    | "match-two-targets"
+    | "match-two-targets-back"
+    /** A spell on the stack, then a permanent. */
+    | "match-mixed-targets"
+    | "match-mixed-cast"
+    /** A divided amount: three targets, adjusting and removing, and the cast. */
+    | "match-divide"
+    | "match-divide-adjust"
+    | "match-divide-cast";
 };
 
 const viewports: Viewport[] = [
@@ -480,6 +494,29 @@ const cases: Case[] = [
         ["/probe/table?pay=paused", "match-cast-pay"],
         ["/probe/table?pay=paused", "match-cast-paid"],
         ["/probe/table", "match-cast-creature"],
+      ] as const
+    ).map(([path, state]) => ({
+      viewport,
+      art: "none",
+      decks: "six",
+      path,
+      state,
+    })),
+  ),
+  // Two modes, two targets, a spell and a permanent, and a divided amount, on every screen.
+  ...viewports.flatMap((viewport): Case[] =>
+    (
+      [
+        ["/probe/table", "match-two-modes"],
+        ["/probe/table", "match-two-modes-quiet"],
+        ["/probe/table", "match-two-modes-cast"],
+        ["/probe/table", "match-two-targets"],
+        ["/probe/table", "match-two-targets-back"],
+        ["/probe/table?state=stack", "match-mixed-targets"],
+        ["/probe/table?state=stack", "match-mixed-cast"],
+        ["/probe/table", "match-divide"],
+        ["/probe/table", "match-divide-adjust"],
+        ["/probe/table", "match-divide-cast"],
       ] as const
     ).map(([path, state]) => ({
       viewport,
@@ -1716,6 +1753,219 @@ async function run(browser: Browser, test: Case): Promise<Finding[]> {
       await expect(
         page.getByRole("button", { name: "Aether Vial", exact: true }),
       ).toHaveCount(0);
+    }
+    await page.waitForTimeout(700);
+  }
+  if (
+    state === "match-two-modes" ||
+    state === "match-two-modes-quiet" ||
+    state === "match-two-modes-cast" ||
+    state === "match-mixed-targets" ||
+    state === "match-mixed-cast"
+  ) {
+    await pressHandCard(page, "Cryptic Command");
+    const choice = page.getByRole("dialog", { name: "Choose two" });
+    await choice.waitFor();
+    const mode = (name: string) => choice.getByRole("button", { name });
+    const counter = mode("Counter target spell.");
+    const giveBack = mode("Return target permanent to its owner’s hand.");
+    const tap = mode("Tap all creatures your opponents control.");
+    const draw = mode("Draw a card.");
+    const next = choice.getByRole("button", { name: "Next", exact: true });
+    const prompt = page.locator('[data-cast-prompt="target"]');
+    const face = page.locator('[data-cast-source="Cryptic Command"]');
+    const resolveAction = page.getByRole("button", {
+      name: "Resolve",
+      exact: true,
+    });
+    await expect(next).toBeDisabled();
+    const mixed =
+      state === "match-mixed-targets" || state === "match-mixed-cast";
+    if (!mixed) {
+      // Nothing is on the stack, so there is no spell to counter.
+      await expect(counter).toBeDisabled();
+      await choice.getByText("No legal targets").waitFor();
+    }
+    if (state === "match-two-modes") {
+      await giveBack.click();
+      await expect(giveBack).toHaveAttribute("aria-pressed", "true");
+      await expect(next).toBeDisabled();
+      await draw.click();
+      await expect(next).toBeEnabled();
+      // With two marked, a third cannot be added until one is removed.
+      await expect(tap).toBeDisabled();
+      await draw.click();
+      await expect(draw).toHaveAttribute("aria-pressed", "false");
+      await expect(next).toBeDisabled();
+      await tap.click();
+      await expect(next).toBeEnabled();
+    }
+    if (state === "match-two-modes-quiet") {
+      // Neither mode has a target: Next casts, with no other confirmation.
+      await tap.click();
+      await draw.click();
+      await next.click();
+      await choice.waitFor({ state: "hidden" });
+      await expect(prompt).toHaveCount(0);
+      await resolveAction.waitFor();
+    }
+    if (state === "match-two-modes-cast") {
+      await giveBack.click();
+      await draw.click();
+      await next.click();
+      await choice.waitFor({ state: "hidden" });
+      await expectText(prompt, "Choose a permanent");
+      // The spell stands on its own face with both chosen modes outlined.
+      await face.waitFor();
+      await expect(face.locator('[data-tone="selected"]')).toHaveCount(2);
+      await expect(page.getByRole("button", { name: "Back" })).toHaveCount(0);
+      await page
+        .getByRole("button", { name: "Aether Vial", exact: true })
+        .click();
+      await resolveAction.click();
+      await page.locator("[data-match-stack]").waitFor({ state: "detached" });
+      // Returned: the Vial is back in your hand.
+      await page
+        .getByRole("button", { name: "Aether Vial, in your hand", exact: true })
+        .waitFor();
+    }
+    if (mixed) {
+      await counter.click();
+      await giveBack.click();
+      await next.click();
+      await choice.waitFor({ state: "hidden" });
+      // The spell is asked for first, and chosen on the pile itself.
+      await expectText(prompt, "Choose a spell · 1/2");
+      const offered = page.locator("[data-match-stack] [data-offered]");
+      await expect(offered).toHaveCount(2);
+      await expect(page.getByRole("button", { name: "Back" })).toHaveCount(0);
+      await page.getByRole("option", { name: /^Shock, Morgan/ }).click();
+      await expectText(prompt, "Choose a permanent · 2/2");
+      await expect(offered).toHaveCount(0);
+      await page.locator("[data-cast-link]").waitFor();
+      await expect(face.locator('[data-tone="earlier"]')).toHaveCount(1);
+      await expect(face.locator('[data-tone="available"]')).toHaveCount(1);
+      if (state === "match-mixed-cast") {
+        // Back keeps the old spell until another replaces it.
+        await page.getByRole("button", { name: "Back", exact: true }).click();
+        await expectText(prompt, "Choose a spell · 1/2");
+        await expect(page.locator("[data-cast-link]")).toHaveCount(1);
+        // The older spell is pressed on the strip of it that shows.
+        const older = page.getByRole("option", {
+          name: /^Lightning Bolt, Alex/,
+        });
+        const strip = await older.boundingBox();
+        if (!strip) throw new Error("The older spell is not shown.");
+        await older.click({
+          position: { x: strip.width * 0.12, y: strip.height * 0.5 },
+        });
+        await expectText(prompt, "Choose a permanent · 2/2");
+        await page
+          .getByRole("button", { name: "Aether Vial", exact: true })
+          .click();
+        // Accepted, it is the newest of three; resolved, it takes the Bolt with it.
+        await page.locator('[data-match-stack="3"]').waitFor();
+        await resolveAction.click();
+        await page.locator('[data-match-stack="1"]').waitFor();
+        await page.getByRole("option", { name: /^Shock, Morgan/ }).waitFor();
+      }
+    }
+    await page.waitForTimeout(700);
+  }
+  if (state === "match-two-targets" || state === "match-two-targets-back") {
+    await pressHandCard(page, "Common Bond");
+    const prompt = page.locator('[data-cast-prompt="target"]');
+    const face = page.locator('[data-cast-source="Common Bond"]');
+    const back = page.getByRole("button", { name: "Back", exact: true });
+    const creature = (name: string) =>
+      page.getByRole("button", { name, exact: true });
+    await expectText(prompt, "Choose a creature · 1/2");
+    await face.waitFor();
+    await expect(face.locator('[data-tone="available"]')).toHaveCount(1);
+    // The first has nothing before it: Cancel is the way out.
+    await expect(back).toHaveCount(0);
+    await creature("Goblin Guide").click();
+    await expectText(prompt, "Choose a creature · 2/2");
+    await page.locator("[data-cast-link]").waitFor();
+    await expect(face.locator('[data-tone="earlier"]')).toHaveCount(1);
+    await back.waitFor();
+    if (state === "match-two-targets-back") {
+      await back.click();
+      await expectText(prompt, "Choose a creature · 1/2");
+      // The old choice keeps its line until another replaces it.
+      await expect(page.locator("[data-cast-link]")).toHaveCount(1);
+      await expect(back).toHaveCount(0);
+      await creature("Goblin Chieftain").click();
+      await expectText(prompt, "Choose a creature · 2/2");
+      // The same creature may be named twice; the second choice casts.
+      await creature("Goblin Chieftain").click();
+      await prompt.waitFor({ state: "detached" });
+      await page.getByRole("button", { name: "Resolve", exact: true }).click();
+      await page.locator("[data-match-stack]").waitFor({ state: "detached" });
+    }
+    await page.waitForTimeout(700);
+  }
+  if (
+    state === "match-divide" ||
+    state === "match-divide-adjust" ||
+    state === "match-divide-cast"
+  ) {
+    await pressHandCard(page, "Arc Lightning");
+    const prompt = page.locator('[data-cast-prompt="target"]');
+    const confirm = page.getByRole("button", { name: "Confirm", exact: true });
+    const creature = (name: string) =>
+      page.getByRole("button", { name, exact: true });
+    const amount = (name: string) =>
+      page
+        .getByRole("group", { name: `Damage to ${name}`, exact: true })
+        .getByRole("status");
+    await expectText(prompt, "Divide 3 damage · 0/3");
+    await page.locator('[data-cast-source="Arc Lightning"]').waitFor();
+    await expect(confirm).toBeDisabled();
+    // The first target takes everything; the next takes one from it.
+    await creature("Goblin Guide").click();
+    await expectText(amount("Goblin Guide"), "3");
+    await expectText(prompt, "Divide 3 damage · 3/3");
+    if (state === "match-divide") {
+      await creature("Goblin Chieftain").click();
+      await expectText(amount("Goblin Guide"), "2");
+      await expectText(amount("Goblin Chieftain"), "1");
+      await page.getByRole("button", { name: "Target Alex" }).click();
+      await expectText(amount("Goblin Guide"), "1");
+      await expectText(amount("Alex"), "1");
+      // Three is the most: nobody else is offered.
+      await expect(page.getByRole("button", { name: /^Target / })).toHaveCount(
+        0,
+      );
+      await expect(confirm).toBeEnabled();
+    }
+    if (state === "match-divide-adjust") {
+      await creature("Goblin Chieftain").click();
+      await page
+        .getByRole("button", { name: "More damage to Goblin Chieftain" })
+        .click();
+      await expectText(amount("Goblin Guide"), "1");
+      await expectText(amount("Goblin Chieftain"), "2");
+      await page
+        .getByRole("button", { name: "Less damage to Goblin Chieftain" })
+        .click();
+      await expectText(prompt, "Divide 3 damage · 2/3");
+      await expect(confirm).toBeDisabled();
+      // Pressing a chosen target removes it and leaves the other as it was.
+      await creature("Goblin Guide").click();
+      await expect(amount("Goblin Guide")).toHaveCount(0);
+      await expectText(amount("Goblin Chieftain"), "1");
+      await expectText(prompt, "Divide 3 damage · 1/3");
+    }
+    if (state === "match-divide-cast") {
+      await page.getByRole("button", { name: "Target Alex" }).click();
+      await expectText(amount("Alex"), "1");
+      await confirm.click();
+      await prompt.waitFor({ state: "detached" });
+      await page.getByRole("button", { name: "Resolve", exact: true }).click();
+      await page.locator("[data-match-stack]").waitFor({ state: "detached" });
+      // Two of the three went to the Guide, which dies.
+      await expect(creature("Goblin Guide")).toHaveCount(0);
     }
     await page.waitForTimeout(700);
   }

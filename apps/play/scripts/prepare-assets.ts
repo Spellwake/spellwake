@@ -148,6 +148,22 @@ await Promise.all(
 await cp(resolve(fixtureRoot, "assets/mana"), resolve(builderOutput, "mana"), {
   recursive: true,
 });
+// Match preview: three original faces from the approved in-game design
+// package, for the preview's two-mode, two-target and divided spells. Like the
+// deck builder's fixtures they are never part of a release build.
+const matchFaces = resolve(
+  workspace,
+  ".impeccable/review/open-play/in-game/arena-reference",
+);
+await mkdir(resolve(output, "match-preview"), { recursive: true });
+await Promise.all(
+  ["cryptic-command", "common-bond", "arc-lightning"].map((name) =>
+    copyFile(
+      resolve(matchFaces, `${name}-existing-card.jpg`),
+      resolve(output, "match-preview", `${name}.jpg`),
+    ),
+  ),
+);
 // Official set symbols, as Scryfall serves them, for the pack wrappers.
 await cp(resolve(assetRoot, "set-symbols"), resolve(output, "sets"), {
   recursive: true,
