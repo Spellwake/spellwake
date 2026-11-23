@@ -1,53 +1,6 @@
 import { style } from "@vanilla-extract/css";
 import { controlTokens as t } from "@spellwake/ui/tokens";
 
-export const tableSurface = style({
-  position: "relative",
-  width: "100%",
-  height: "100%",
-  display: "flex",
-  flexDirection: "column",
-  justifyContent: "space-between",
-  paddingTop: 84,
-  paddingBottom: 210,
-  paddingLeft: 24,
-  paddingRight: 368,
-  boxSizing: "border-box",
-  gap: 12,
-  overflow: "hidden",
-  "@media": {
-    "(max-width: 960px)": {
-      paddingTop: 136,
-      paddingRight: 20,
-      paddingLeft: 20,
-      paddingBottom: 376,
-    },
-  },
-});
-
-export const boardHalf = style({
-  flex: 1,
-  minHeight: 0,
-  display: "flex",
-  flexDirection: "column",
-  justifyContent: "center",
-  gap: 8,
-  padding: "10px 14px",
-  borderRadius: t.size.radius,
-  background: `color-mix(in srgb, ${t.color.surface} 62%, transparent)`,
-  border: `1px solid color-mix(in srgb, ${t.color.edge} 48%, transparent)`,
-  overflow: "auto",
-});
-
-export const boardHeader = style({
-  display: "flex",
-  alignItems: "center",
-  justifyContent: "space-between",
-  gap: 12,
-  fontSize: t.font.hint,
-  color: t.color.muted,
-});
-
 export const boardRow = style({
   display: "flex",
   flexWrap: "wrap",
@@ -142,18 +95,6 @@ export const cardMeta = style({
   borderRadius: 4,
 });
 
-export const handTray = style({
-  display: "flex",
-  alignItems: "flex-end",
-  justifyContent: "center",
-  gap: 10,
-  width: "100%",
-  height: "100%",
-  padding: "6px 16px 10px",
-  boxSizing: "border-box",
-  overflowX: "auto",
-});
-
 export const zoneCluster = style({
   display: "flex",
   alignItems: "center",
@@ -175,14 +116,6 @@ export const zonePill = style({
       borderColor: t.color.goldEdge,
     },
   },
-});
-
-export const centerStrip = style({
-  display: "flex",
-  alignItems: "center",
-  justifyContent: "space-between",
-  gap: 12,
-  flexWrap: "wrap",
 });
 
 export const decisionCard = style({
@@ -222,15 +155,6 @@ export const manaBar = style({
   borderRadius: 999,
   background: t.color.surface,
   border: `1px solid ${t.color.edge}`,
-});
-
-export const stackChip = style({
-  padding: "6px 10px",
-  borderRadius: 8,
-  border: `1px solid ${t.color.goldEdge}`,
-  background: t.color.emphasis,
-  color: t.color.ink,
-  fontSize: 14,
 });
 
 export const chatDrawer = style({
@@ -288,4 +212,84 @@ export const statusBadge = style({
   fontSize: 13,
   lineHeight: 1.2,
   whiteSpace: "nowrap",
+});
+
+/** The stack, an opening choice and a pending decision, under the actions. */
+export const sideDecisions = style({
+  display: "flex",
+  flexDirection: "column",
+  gap: 10,
+  minWidth: 0,
+});
+
+/** Which source's damage is being assigned (DA-04 to DA-06): a chip each, with what it has assigned. */
+export const damageSources = style({
+  display: "flex",
+  flexWrap: "wrap",
+  gap: "8px",
+});
+export const damageChip = style({
+  appearance: "none",
+  flex: "1 1 0",
+  minWidth: 0,
+  display: "flex",
+  alignItems: "center",
+  gap: "8px",
+  minHeight: "38px",
+  padding: "4px 14px 4px 6px",
+  borderRadius: "999px",
+  border: "1px solid #8b877480",
+  background: "linear-gradient(115deg,rgba(25,30,26,.76),rgba(36,40,39,.81))",
+  color: "#fbefd1",
+  font: "17px/1.1 inherit",
+  fontFamily: "inherit",
+  cursor: "pointer",
+  selectors: {
+    '&[aria-pressed="true"]': {
+      background: "linear-gradient(180deg,#f7e4b4,#e7cf9f)",
+      borderColor: "#fff1c9",
+      color: "#1c1a14",
+    },
+    "&:focus-visible": {
+      outline: `3px solid ${t.color.focus}`,
+      outlineOffset: "2px",
+    },
+  },
+  "@media": { "(pointer: coarse)": { minHeight: "44PX" } },
+});
+export const damageName = style({
+  flex: 1,
+  minWidth: 0,
+  overflow: "hidden",
+  textOverflow: "ellipsis",
+  whiteSpace: "nowrap",
+  textAlign: "left",
+});
+export const damageCount = style({
+  flexShrink: 0,
+  fontVariantNumeric: "tabular-nums",
+});
+/** A small window onto the card's picture. */
+export const damageThumb = style({
+  flexShrink: 0,
+  width: "38px",
+  height: "27px",
+  borderRadius: "4px",
+  backgroundColor: "#16181d",
+  backgroundSize: "150% auto",
+  backgroundPosition: "50% 21%",
+  boxShadow: "0 0 0 1px #0008",
+});
+export const damageReadout = style({
+  display: "flex",
+  alignItems: "center",
+  gap: "10px",
+  minHeight: "40px",
+  padding: "4px 18px 4px 8px",
+  borderRadius: "999px",
+  border: "1px solid #8b87745c",
+  background: "linear-gradient(115deg,rgba(25,30,26,.76),rgba(36,40,39,.81))",
+  color: "#fbefd1",
+  fontSize: "17px",
+  lineHeight: 1.15,
 });

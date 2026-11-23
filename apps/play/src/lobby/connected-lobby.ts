@@ -22,6 +22,9 @@ import {
   roomConfigurationAckSchema,
   roomConfigurationDispositionSchema,
   roomConfigurationErrorsSchema,
+  setAiTierDispositionSchema,
+  setAiTierErrorsSchema,
+  setAiTierRequestSchema,
   unreadyDispositionSchema,
   unreadyErrorsSchema,
   addAiDispositionSchema,
@@ -80,6 +83,8 @@ const profileName = (key: string): string =>
     .join(" ");
 /** Why a refused action was refused, said briefly. */
 function refusal(errors: Errors): string {
+  if ("aiQuota" in errors)
+    return "You’ve used all your Advanced AI games for today.";
   if ("revision" in errors) return "The lobby changed. Try again.";
   if ("deck" in errors || "decks" in errors)
     return "Choose a deck for this format.";
@@ -202,6 +207,38 @@ export function useConnectedLobby(
         signal,
       );
       if (result.status !== "success") throw new Error("Rules unavailable.");
+      return result.data;
+    },
+  });
+  const hasAiSeats = (detail.data?.slots.items ?? []).some(
+    (slot) => slot.controllerKind === "ai",
+  );
+  const aiStatus = useQuery({
+    queryKey: ["room-ai", owner?.accountId, roomId, room?.revision],
+    enabled: !!owner && !!services && !!roomId && hasAiSeats,
+    refetchInterval: POLL_MS,
+    retry: READ_ATTEMPTS - 1,
+    queryFn: async ({ signal }) => {
+      if (!owner || !services || !roomId) throw new Error("No room.");
+      const result = await services.api.roomAiStatus(
+        await bearer(),
+        owner.accountId,
+        roomId,
+        signal,
+      );
+      if (result.status !== "success") return null;
+      return result.data;
+    },
+  });
+  const aiQuotaQuery = useQuery({
+    queryKey: ["ai-quota", owner?.accountId],
+    enabled: !!owner && !!services && isHost,
+    staleTime: 30_000,
+    retry: READ_ATTEMPTS - 1,
+    queryFn: async ({ signal }) => {
+      if (!owner || !services) throw new Error("Sign in to play.");
+      const result = await services.api.aiQuota(await bearer(), signal);
+      if (result.status !== "success") return null;
       return result.data;
     },
   });
@@ -464,6 +501,9 @@ export function useConnectedLobby(
   const roomFormat = formatNames.get(room.formatId) ?? "This format";
   const profile = profiles.data?.find((p) => p.id === room.profileId) ?? null;
   const seatCount = Number(room.targetSeatCount ?? slots.length);
+  const aiTierBySlot = new Map(
+    (aiStatus.data?.items ?? []).map((item) => [item.slotId, item.aiTier]),
+  );
   const seats: LobbySeat[] = slots.map((slot) => {
     if (slot.controllerKind === "ai")
       return {
@@ -475,7 +515,7 @@ export function useConnectedLobby(
         isReady: slot.ready,
         deck: "random",
         needsNewDeck: false,
-        difficulty: null,
+        difficulty: aiTierBySlot.get(slot.id) ?? "normal",
       };
     const isYou = slot.accountId === owner?.accountId;
     const own = isYou
@@ -651,7 +691,41 @@ export function useConnectedLobby(
           return settle(outcome);
         }
       : null,
-    setDifficulty: null,
+    setDifficulty: isHost
+      ? async (seatId, tier) => {
+          const outcome = await act("set_ai_tier", seatId, {
+            commandSchema: setAiTierRequestSchema,
+            ackSchema: roomConfigurationAckSchema,
+            errorsSchema: setAiTierErrorsSchema,
+            dispositionSchema: setAiTierDispositionSchema,
+            build: () => ({
+              requestId: crypto.randomUUID(),
+              expectedRevision: room.revision,
+              tier,
+            }),
+            send: (token, command) => api().setAiTier(token, seatId, command),
+            lookup: (token, command) =>
+              api().setAiTierDisposition(token, seatId, command),
+          });
+          if (outcome.state === "accepted" && owner) {
+            await queries.invalidateQueries({
+              queryKey: ["room-ai", owner.accountId, roomId],
+            });
+          }
+          return settle(outcome);
+        }
+      : null,
+    aiQuota: aiQuotaQuery.data
+      ? {
+          displayUnlimited: aiQuotaQuery.data.displayUnlimited,
+          dailyLimit: aiQuotaQuery.data.dailyLimit,
+          remainingToday: aiQuotaQuery.data.remainingToday,
+          requiredAdvanced: seats.filter(
+            (seat) => seat.kind === "ai" && seat.difficulty === "advanced",
+          ).length,
+          resetsAt: aiQuotaQuery.data.resetsAt,
+        }
+      : null,
     setAiDeck: null,
     rulesChoices:
       isHost && configuration.data && profiles.data

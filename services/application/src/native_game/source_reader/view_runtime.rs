@@ -10,6 +10,7 @@ mod commands;
 pub use commander_opening::{CommanderWorker, ReleaseOpeningWorker, open_commander_game_from_env};
 mod config;
 mod controller;
+pub use controller::{NativeControllerSnapshot, NativeControllerViewOutcome};
 mod history;
 mod qualified_opening;
 pub use qualified_opening::open_qualified_game_from_env;

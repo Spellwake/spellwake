@@ -28,7 +28,13 @@ FROM registry.fly.io/spellwake-api@sha256:82454d59587cd41fda8af998c264a6c04eabaa
 
 FROM debian:bookworm-slim@sha256:c67e92c8099ba22853ab4cfda7cfb494d253d6012ca82dee98ba8976772af018
 RUN apt-get update \
-  && apt-get install -y --no-install-recommends ca-certificates \
+  && apt-get install -y --no-install-recommends ca-certificates curl \
+  && curl -fsSL "https://registry.npmjs.org/@openai/codex/-/codex-0.171.0-linux-x64.tgz" -o /tmp/codex.tgz \
+  && echo "97ae8d664420764d82de96dc7d42c3cf8db2114079f3531503a23e638dd6a78388a84cbbdc709d999d064e37801d8db272e1f8374d1df55b0baf04f58f1b214f  /tmp/codex.tgz" | sha512sum -c - \
+  && mkdir -p /opt/spellwake-codex \
+  && tar -xzf /tmp/codex.tgz -C /opt/spellwake-codex \
+  && rm -f /tmp/codex.tgz \
+  && apt-get purge -y --auto-remove curl \
   && rm -rf /var/lib/apt/lists/*
 COPY --from=build /release /opt/spellwake
 COPY --from=runtime-assets --chown=65532:65532 /opt/spellwake/runtime /opt/spellwake/runtime

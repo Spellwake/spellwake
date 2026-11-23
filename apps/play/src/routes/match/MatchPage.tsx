@@ -1,6 +1,8 @@
-import { useMemo, useState, type ReactElement } from "react";
+import { useEffect, useMemo, useState, type ReactElement } from "react";
 import {
+  Circle,
   CircleUserRound,
+  Grip,
   LogOut,
   MessageCircle,
   Sparkles,
@@ -30,8 +32,17 @@ import {
 } from "@spellwake/ui";
 import { ImmersiveFrame } from "../../components/shell/ImmersiveFrame";
 import * as frame from "../../components/shell/frames.css";
-import { useOrientation, useShellLayout } from "../../lib/display-scale";
 import type { MatchSource, ReadyMatch } from "../../match/match-sources";
+import {
+  handShownHeight,
+  seatBoard,
+  type TableView,
+} from "../../match/table-model";
+import { CombatLines, useCombat, type CombatUi } from "./combat";
+import { DamagePills, DamageSources, useDamage } from "./damage";
+import { MatchStack, useStackReading } from "./stack";
+import { MatchTable } from "./MatchTable";
+import * as table from "./match-table.css";
 import * as s from "./match.css";
 
 const ICON = designPixels(26);
@@ -481,29 +492,6 @@ function DecisionPanel({
     );
   }
 
-  if (d.kind === "combat-damage") {
-    const autoAllocations = d.sources.flatMap((src) =>
-      src.targets.length > 0
-        ? [{ source: src.source, target: src.targets[0]!, amount: src.total }]
-        : [],
-    );
-    return (
-      <div className={s.decisionCard} role="region" aria-label="Combat damage">
-        <p className={s.decisionTitle}>Assign combat damage</p>
-        <div className={s.decisionRow}>
-          <ActionButton
-            disabled={pending}
-            onClick={() =>
-              onChoose({ kind: "combat-damage", assignments: autoAllocations })
-            }
-          >
-            Assign lethal / default damage
-          </ActionButton>
-        </div>
-      </div>
-    );
-  }
-
   return (
     <div className={s.decisionCard} role="region" aria-label="Decision">
       <p className={s.decisionTitle}>Pending decision: {decision.kind}</p>
@@ -519,22 +507,67 @@ function DecisionPanel({
   );
 }
 
-function LiveMatch({ source }: { source: ReadyMatch }): ReactElement {
-  const { snapshot, seatNames, artByPrintingId } = source;
-  const isShort =
-    useShellLayout() === "compact" && useOrientation() === "landscape";
+/**
+ * Where the turn panel docks along the lower edge (an upright phone or
+ * tablet), the hand shows beneath it and the board stays above it. Measured
+ * from the frame, so the table follows the shell's own layout.
+ */
+function useLowerDock(): { trayHeight: number; clearBottom: number } {
+  const [dock, setDock] = useState({ trayHeight: 0, clearBottom: 0 });
+  useEffect(() => {
+    const measure = () => {
+      const panel = document.querySelector('[data-frame="hud-side"]');
+      const stage = { width: window.innerWidth, height: window.innerHeight };
+      const top = panel?.getBoundingClientRect().top ?? 0;
+      const docked = !!panel && top > stage.height * 0.45;
+      const rootSize = parseFloat(
+        getComputedStyle(document.documentElement).fontSize,
+      );
+      const next = docked
+        ? {
+            // The frame reserves its tray in design pixels.
+            trayHeight: (handShownHeight(stage) * 16) / rootSize,
+            clearBottom: stage.height - top + 10,
+          }
+        : { trayHeight: 0, clearBottom: 0 };
+      setDock((current) =>
+        Math.abs(current.trayHeight - next.trayHeight) < 1 &&
+        Math.abs(current.clearBottom - next.clearBottom) < 1
+          ? current
+          : next,
+      );
+    };
+    measure();
+    const panel = document.querySelector('[data-frame="hud-side"]');
+    const observer = new ResizeObserver(measure);
+    if (panel) observer.observe(panel);
+    window.addEventListener("resize", measure);
+    return () => {
+      observer.disconnect();
+      window.removeEventListener("resize", measure);
+    };
+  }, []);
+  return dock;
+}
 
-  const opponents = useMemo(
-    () => snapshot.players.filter((p) => p.seatId !== snapshot.viewerSeatId),
-    [snapshot.players, snapshot.viewerSeatId],
-  );
-  const [viewedOpponentId, setViewedOpponentId] = useState<string | null>(
-    opponents[0]?.seatId ?? null,
-  );
-  const activeOpponent =
-    opponents.find((p) => p.seatId === viewedOpponentId) ??
-    opponents[0] ??
-    null;
+function LiveMatch({ source }: { source: ReadyMatch }): ReactElement {
+  const dock = useLowerDock();
+  const { snapshot, seatNames, artByPrintingId } = source;
+
+  const [view, setView] = useState<TableView>({
+    kind: "seat",
+    seatId: snapshot.viewerSeatId,
+  });
+  // A seat that has left the game cannot stay the camera's subject.
+  const viewedSeat =
+    view.kind === "seat" &&
+    snapshot.players.some((player) => player.seatId === view.seatId)
+      ? view.seatId
+      : null;
+  const tableView: TableView =
+    view.kind === "overview"
+      ? view
+      : { kind: "seat", seatId: viewedSeat ?? snapshot.viewerSeatId };
 
   const [inspectedHandle, setInspectedHandle] = useState<string | null>(null);
   const [pileView, setPileView] = useState<{
@@ -561,11 +594,8 @@ function LiveMatch({ source }: { source: ReadyMatch }): ReactElement {
       command: find("command", null),
       viewerHand: find("hand", snapshot.viewerSeatId),
       viewerGraveyard: find("graveyard", snapshot.viewerSeatId),
-      oppGraveyard: activeOpponent
-        ? find("graveyard", activeOpponent.seatId)
-        : undefined,
     };
-  }, [snapshot.zones, snapshot.viewerSeatId, activeOpponent]);
+  }, [snapshot.zones, snapshot.viewerSeatId]);
 
   const objectsIn = (zone: typeof zoneByType.battlefield): PlayerObject[] => {
     if (!zone || zone.visibility === "hidden") return [];
@@ -574,31 +604,6 @@ function LiveMatch({ source }: { source: ReadyMatch }): ReactElement {
       .filter((o): o is PlayerObject => Boolean(o));
   };
 
-  const battlefieldObjects = objectsIn(zoneByType.battlefield);
-  const viewerBattlefield = battlefieldObjects.filter(
-    (o) => (o.controllerSeatId ?? o.ownerSeatId) === snapshot.viewerSeatId,
-  );
-  const oppBattlefield = activeOpponent
-    ? battlefieldObjects.filter(
-        (o) => (o.controllerSeatId ?? o.ownerSeatId) === activeOpponent.seatId,
-      )
-    : [];
-
-  const viewerLands = viewerBattlefield.filter((o) =>
-    o.publicProperties?.cardTypes.includes("land"),
-  );
-  const viewerNonLands = viewerBattlefield.filter(
-    (o) => !o.publicProperties?.cardTypes.includes("land"),
-  );
-  const oppLands = oppBattlefield.filter((o) =>
-    o.publicProperties?.cardTypes.includes("land"),
-  );
-  const oppNonLands = oppBattlefield.filter(
-    (o) => !o.publicProperties?.cardTypes.includes("land"),
-  );
-
-  const viewerHand = objectsIn(zoneByType.viewerHand);
-  const viewerGraveyard = objectsIn(zoneByType.viewerGraveyard);
   const exileObjects = objectsIn(zoneByType.exile);
   const commandObjects = objectsIn(zoneByType.command);
 
@@ -615,6 +620,8 @@ function LiveMatch({ source }: { source: ReadyMatch }): ReactElement {
     d.respondingSeatIds.includes(snapshot.viewerSeatId),
   );
 
+  const combat = useCombat(activeDecision ?? null, source);
+
   const phaseInfo = snapshot.turn
     ? PHASE_MAP[snapshot.turn.phase]
     : { phase: "beginning" as MatchPhase, label: "Opening" };
@@ -626,9 +633,24 @@ function LiveMatch({ source }: { source: ReadyMatch }): ReactElement {
     : "Preparing game";
 
   const artFor = (obj: PlayerObject): string | undefined =>
-    obj.identity.kind === "known" && obj.identity.printingId
-      ? artByPrintingId.get(obj.identity.printingId)
-      : undefined;
+    obj.identity.kind !== "known"
+      ? undefined
+      : ((obj.identity.printingId
+          ? artByPrintingId.get(obj.identity.printingId)
+          : undefined) ??
+        source.faceByName?.get(obj.identity.characteristics.name));
+
+  const damage = useDamage(activeDecision ?? null, source, (handle) => {
+    const object = objectByHandle.get(handle);
+    return {
+      name: object ? objectName(object) : "Card",
+      face: object ? artFor(object) : undefined,
+    };
+  });
+  // What is being declared or assigned on the table, if anything.
+  const declaring: CombatUi | null = combat.ui ?? damage;
+  const reading = useStackReading(snapshot);
+  const follow = `${tableView.kind === "seat" ? tableView.seatId : "table"}:${snapshot.throughEventSequence}:${dock.clearBottom}`;
 
   const inspected = inspectedHandle
     ? (objectByHandle.get(inspectedHandle) ?? null)
@@ -638,7 +660,10 @@ function LiveMatch({ source }: { source: ReadyMatch }): ReactElement {
     obj: PlayerObject,
     zoneKind: "hand" | "battlefield",
   ) => {
-    if (!hasPriority || source.commandPending) {
+    if (zoneKind === "battlefield" && declaring?.onCard(obj)) return;
+    const mine =
+      (obj.controllerSeatId ?? obj.ownerSeatId) === snapshot.viewerSeatId;
+    if (!mine || !hasPriority || source.commandPending) {
       setInspectedHandle(obj.handle);
       return;
     }
@@ -669,9 +694,36 @@ function LiveMatch({ source }: { source: ReadyMatch }): ReactElement {
     <>
       <ImmersiveFrame
         playersLabel="Players"
-        trayHeight={isShort ? 136 : 186}
+        trayHeight={dock.trayHeight}
         leading={
           <>
+            <button
+              type="button"
+              className={frame.hudButton}
+              aria-label={
+                tableView.kind === "overview"
+                  ? "Return to your board"
+                  : "View the whole table"
+              }
+              aria-pressed={tableView.kind === "overview"}
+              onClick={() =>
+                setView(
+                  tableView.kind === "overview"
+                    ? { kind: "seat", seatId: snapshot.viewerSeatId }
+                    : { kind: "overview" },
+                )
+              }
+            >
+              {tableView.kind === "overview" ? (
+                <Circle
+                  size={designPixels(11)}
+                  fill="currentColor"
+                  aria-hidden="true"
+                />
+              ) : (
+                <Grip size={ICON} aria-hidden="true" />
+              )}
+            </button>
             <button
               type="button"
               className={frame.hudButton}
@@ -680,15 +732,15 @@ function LiveMatch({ source }: { source: ReadyMatch }): ReactElement {
             >
               <MessageCircle size={ICON} aria-hidden="true" />
             </button>
-            <span className={s.statusBadge}>
-              {source.connectionState === "live"
-                ? "Live"
-                : source.connectionState === "reconnecting"
+            {source.connectionState !== "live" && (
+              <span className={s.statusBadge} role="status">
+                {source.connectionState === "reconnecting"
                   ? "Reconnecting…"
                   : source.connectionState === "ended"
                     ? "Ended"
                     : "Connecting…"}
-            </span>
+              </span>
+            )}
           </>
         }
         players={snapshot.players.map((player) => {
@@ -696,20 +748,36 @@ function LiveMatch({ source }: { source: ReadyMatch }): ReactElement {
           const takingTurn =
             snapshot.turn?.activeSeatIds.includes(player.seatId) ?? false;
           return (
-            <PlayerIdentity
+            <span
               key={player.seatId}
-              presentation="seat"
-              name={name}
-              life={Number(player.life) || 0}
-              actionLabel={`View ${name}`}
-              onActivate={() => {
-                if (player.seatId !== snapshot.viewerSeatId) {
-                  setViewedOpponentId(player.seatId);
+              className={table.seatAnchor}
+              data-anchor={`seat:${player.seatId}`}
+              data-recipient={(declaring?.seatMarks ?? reading.seatMarks).get(
+                player.seatId,
+              )}
+            >
+              <PlayerIdentity
+                presentation="seat"
+                name={name}
+                life={Number(player.life) || 0}
+                actionLabel={
+                  player.seatId === snapshot.viewerSeatId
+                    ? "View your board"
+                    : `View ${name}’s board`
                 }
-              }}
-              takingTurn={takingTurn}
-              portrait={<CircleUserRound aria-hidden="true" />}
-            />
+                onActivate={() => {
+                  if (declaring?.onSeat(player.seatId)) return;
+                  setView({ kind: "seat", seatId: player.seatId });
+                }}
+                takingTurn={takingTurn}
+                viewingOpponent={
+                  tableView.kind === "seat" &&
+                  tableView.seatId === player.seatId &&
+                  player.seatId !== snapshot.viewerSeatId
+                }
+                portrait={<CircleUserRound aria-hidden="true" />}
+              />
+            </span>
           );
         })}
         trailing={
@@ -740,198 +808,138 @@ function LiveMatch({ source }: { source: ReadyMatch }): ReactElement {
                 ))}
               </div>
             )}
-            <MatchActions
-              primary={
-                hasPriority
-                  ? {
-                      label:
-                        snapshot.stack.length > 0 ? "Resolve" : "Pass priority",
-                      pending: source.commandPending,
-                      onActivate: () =>
-                        void source.sendAction({ kind: "pass" }),
-                    }
-                  : {
-                      label: "Waiting…",
-                      disabled: true,
-                      onActivate: () => undefined,
-                    }
-              }
-              {...(activeDecision
-                ? { status: `Action required: ${activeDecision.kind}` }
-                : hasPriority
-                  ? { status: "You have priority" }
+            {damage && <DamageSources sources={damage.sources} />}
+            {declaring ? (
+              <MatchActions
+                primary={declaring.primary}
+                {...(declaring.secondary
+                  ? { secondary: declaring.secondary }
                   : {})}
-            />
+                {...(declaring.status ? { status: declaring.status } : {})}
+              />
+            ) : (
+              // Next passes with nothing waiting; Resolve passes on what is. While
+              // another player acts there is no action to show.
+              <MatchActions
+                {...(hasPriority
+                  ? {
+                      primary: {
+                        label: snapshot.stack.length > 0 ? "Resolve" : "Next",
+                        pending: source.commandPending,
+                        onActivate: () =>
+                          void source.sendAction({ kind: "pass" }),
+                      },
+                    }
+                  : {})}
+                {...(activeDecision
+                  ? { status: `Action required: ${activeDecision.kind}` }
+                  : hasPriority && combat.note
+                    ? { status: combat.note }
+                    : {})}
+              />
+            )}
+            <div className={s.sideDecisions}>
+              {source.chooseOpening && (
+                <div className={s.decisionCard}>
+                  <p className={s.decisionTitle}>Choose play or draw</p>
+                  <div className={s.decisionRow}>
+                    <ActionButton
+                      disabled={source.commandPending}
+                      onClick={() => void source.chooseOpening?.(true)}
+                    >
+                      Play first
+                    </ActionButton>
+                    <ActionButton
+                      disabled={source.commandPending}
+                      onClick={() => void source.chooseOpening?.(false)}
+                    >
+                      Draw first
+                    </ActionButton>
+                  </div>
+                </div>
+              )}
+              {activeDecision && !declaring && (
+                <DecisionPanel
+                  key={activeDecision.decision}
+                  decision={activeDecision}
+                  objects={objectByHandle}
+                  seatNames={seatNames}
+                  pending={source.commandPending}
+                  onChoose={(response) =>
+                    void source.sendAction({
+                      kind: "choose",
+                      decision: activeDecision.decision,
+                      response,
+                    })
+                  }
+                />
+              )}
+            </div>
+
+            {(exileObjects.length > 0 || commandObjects.length > 0) && (
+              <div className={s.zoneCluster}>
+                {exileObjects.length > 0 && (
+                  <button
+                    type="button"
+                    className={s.zonePill}
+                    onClick={() =>
+                      setPileView({ title: "Exile", objects: exileObjects })
+                    }
+                  >
+                    Exile ({exileObjects.length})
+                  </button>
+                )}
+                {commandObjects.length > 0 && (
+                  <button
+                    type="button"
+                    className={s.zonePill}
+                    onClick={() =>
+                      setPileView({ title: "Command", objects: commandObjects })
+                    }
+                  >
+                    Command ({commandObjects.length})
+                  </button>
+                )}
+              </div>
+            )}
           </>
         }
-        tray={
-          <div className={s.handTray} aria-label="Your hand and zones">
-            <div className={s.zoneCluster}>
-              <button
-                type="button"
-                className={s.zonePill}
-                onClick={() =>
-                  setPileView({ title: "Graveyard", objects: viewerGraveyard })
-                }
-              >
-                GY ({viewerGraveyard.length})
-              </button>
-              <button
-                type="button"
-                className={s.zonePill}
-                onClick={() =>
-                  setPileView({ title: "Exile", objects: exileObjects })
-                }
-              >
-                Exile ({exileObjects.length})
-              </button>
-              {commandObjects.length > 0 && (
-                <button
-                  type="button"
-                  className={s.zonePill}
-                  onClick={() =>
-                    setPileView({ title: "Command", objects: commandObjects })
-                  }
-                >
-                  Cmd ({commandObjects.length})
-                </button>
-              )}
-              <span className={s.zonePill} aria-label="Library count">
-                Lib ({viewerPlayer?.libraryCount ?? "0"})
-              </span>
-            </div>
-            {viewerHand.map((card) => (
-              <CardTile
-                key={card.handle}
-                object={card}
-                artUrl={artFor(card)}
-                playable={hasPriority}
-                selected={inspectedHandle === card.handle}
-                onClick={() => handleCardAction(card, "hand")}
-              />
-            ))}
-          </div>
-        }
       >
-        <div className={s.tableSurface}>
-          {/* Opponent battlefield */}
-          <section className={s.boardHalf} aria-label="Opponent battlefield">
-            <div className={s.boardHeader}>
-              <span>
-                {activeOpponent
-                  ? (seatNames.get(activeOpponent.seatId) ?? "Opponent")
-                  : "Opponent"}
-              </span>
-              {activeOpponent && (
-                <span>
-                  Hand {activeOpponent.handCount} · Library{" "}
-                  {activeOpponent.libraryCount}
-                </span>
-              )}
-            </div>
-            <div className={s.boardRow}>
-              {oppLands.map((obj) => (
-                <CardTile
-                  key={obj.handle}
-                  object={obj}
-                  artUrl={artFor(obj)}
-                  selected={inspectedHandle === obj.handle}
-                  onClick={() => setInspectedHandle(obj.handle)}
-                />
-              ))}
-            </div>
-            <div className={s.boardRow}>
-              {oppNonLands.map((obj) => (
-                <CardTile
-                  key={obj.handle}
-                  object={obj}
-                  artUrl={artFor(obj)}
-                  selected={inspectedHandle === obj.handle}
-                  onClick={() => setInspectedHandle(obj.handle)}
-                />
-              ))}
-            </div>
-          </section>
-
-          {/* Center strip: Stack, opening choice, or pending engine decision */}
-          <div className={s.centerStrip}>
-            {snapshot.stack.length > 0 && (
-              <div className={s.decisionRow} aria-label="Spell stack">
-                {snapshot.stack.map((entry) => (
-                  <span key={entry.handle} className={s.stackChip}>
-                    {entry.label} (
-                    {seatNames.get(entry.controllerSeatId) ?? "Player"})
-                  </span>
-                ))}
-              </div>
-            )}
-            {source.chooseOpening && (
-              <div className={s.decisionCard}>
-                <p className={s.decisionTitle}>Choose play or draw</p>
-                <div className={s.decisionRow}>
-                  <ActionButton
-                    disabled={source.commandPending}
-                    onClick={() => void source.chooseOpening?.(true)}
-                  >
-                    Play first
-                  </ActionButton>
-                  <ActionButton
-                    disabled={source.commandPending}
-                    onClick={() => void source.chooseOpening?.(false)}
-                  >
-                    Draw first
-                  </ActionButton>
-                </div>
-              </div>
-            )}
-            {activeDecision && (
-              <DecisionPanel
-                key={activeDecision.decision}
-                decision={activeDecision}
-                objects={objectByHandle}
-                seatNames={seatNames}
-                pending={source.commandPending}
-                onChoose={(response) =>
-                  void source.sendAction({
-                    kind: "choose",
-                    decision: activeDecision.decision,
-                    response,
-                  })
-                }
-              />
-            )}
-          </div>
-
-          {/* Viewer battlefield */}
-          <section className={s.boardHalf} aria-label="Your battlefield">
-            <div className={s.boardRow}>
-              {viewerNonLands.map((obj) => (
-                <CardTile
-                  key={obj.handle}
-                  object={obj}
-                  artUrl={artFor(obj)}
-                  playable={
-                    hasPriority && obj.abilities.length > 0 && !obj.tapped
-                  }
-                  selected={inspectedHandle === obj.handle}
-                  onClick={() => handleCardAction(obj, "battlefield")}
-                />
-              ))}
-            </div>
-            <div className={s.boardRow}>
-              {viewerLands.map((obj) => (
-                <CardTile
-                  key={obj.handle}
-                  object={obj}
-                  artUrl={artFor(obj)}
-                  playable={hasPriority && !obj.tapped}
-                  selected={inspectedHandle === obj.handle}
-                  onClick={() => handleCardAction(obj, "battlefield")}
-                />
-              ))}
-            </div>
-          </section>
-        </div>
+        <MatchTable
+          snapshot={snapshot}
+          view={tableView}
+          seatNames={seatNames}
+          faceOf={artFor}
+          marks={declaring?.marks ?? reading.marks}
+          clearBottom={dock.clearBottom}
+          onCard={handleCardAction}
+          onPile={(pile, seatId) => {
+            if (pile !== "graveyard") return;
+            const owner =
+              seatId === snapshot.viewerSeatId
+                ? "Your"
+                : `${seatNames.get(seatId) ?? "Player"}’s`;
+            setPileView({
+              title: `${owner} graveyard`,
+              objects: seatBoard(snapshot, seatId).graveyard,
+            });
+          }}
+        />
+        <CombatLines lines={declaring?.lines ?? []} follow={follow} />
+        <DamagePills
+          pills={damage?.pills ?? []}
+          follow={follow}
+          clearBottom={dock.clearBottom}
+        />
+        <MatchStack
+          snapshot={snapshot}
+          seatNames={seatNames}
+          faceOf={artFor}
+          selectedId={reading.selectedId}
+          onSelect={reading.select}
+          follow={follow}
+          clearBottom={dock.clearBottom}
+        />
       </ImmersiveFrame>
 
       {/* Card Inspector & Cast / Activate Dialog */}

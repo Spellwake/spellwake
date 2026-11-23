@@ -2,6 +2,7 @@
 use super::*;
 /// Server owner identity used to select owned native history. Not serializable,
 /// not player authority, and not a lease acquisition or fencing operation.
+#[derive(Clone)]
 pub struct NativeHostOwner(SourceProof);
 impl NativeHostOwner {
     /// Validate the existing SQL owner grammar without rewriting its identity.
