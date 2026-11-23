@@ -406,3 +406,70 @@ export const castPrompt = style({
   },
 });
 globalStyle(`${castPrompt} p`, { margin: 0 });
+
+/** Choosing a mode on the original card (MC-01, MC-02): over the dimmed table. */
+export const modeDialog = style({
+  width: "100vw",
+  height: "100dvh",
+  maxWidth: "none",
+  maxHeight: "none",
+  margin: 0,
+  padding: 0,
+  border: 0,
+  background: "#0b100ccc",
+  color: ivory,
+  overflowY: "auto",
+  selectors: { "&::backdrop": { background: "transparent" } },
+});
+export const modeScreen = style({
+  minHeight: "100%",
+  boxSizing: "border-box",
+  display: "flex",
+  flexDirection: "column",
+  alignItems: "center",
+  gap: "22PX",
+  padding: "18PX 20PX 28PX",
+  "@media": {
+    // A phone on its side: everything draws closer so Cancel stays in view.
+    "(max-height: 480px)": { gap: "8PX", padding: "8PX 16PX 10PX" },
+  },
+});
+export const modeTop = style({
+  alignSelf: "stretch",
+  display: "flex",
+  justifyContent: "flex-end",
+});
+export const modePeek = style({
+  appearance: "none",
+  minHeight: "44PX",
+  padding: "6PX 24PX",
+  borderRadius: "999PX",
+  border: `1.5PX solid ${ivory}`,
+  background: "#161c17e6",
+  color: ivory,
+  font: `22PX/1.1 ${shellTokens.serif}`,
+  cursor: "pointer",
+  selectors: {
+    "&:hover": { background: "#232b24" },
+    "&:focus-visible": {
+      outline: `3PX solid ${t.color.focus}`,
+      outlineOffset: "3PX",
+    },
+  },
+});
+export const modeHeading = style({
+  margin: 0,
+  font: `600 44PX/1.1 ${shellTokens.serif}`,
+  letterSpacing: "0.01em",
+  textShadow: "0 2PX 8PX #000c",
+  "@media": {
+    "(max-height: 480px)": { fontSize: "26PX", marginTop: "-48PX" },
+  },
+});
+export const modeFooter = style({
+  display: "flex",
+  justifyContent: "center",
+  gap: "16PX",
+  minWidth: "min(270PX, 80vw)",
+});
+globalStyle(`${modeFooter} > button`, { flex: 1 });

@@ -33,7 +33,7 @@ export interface PrintedModePickerProps {
   faceWidth: number;
   gap: number;
 }
-/** Only the outlined original paragraph accepts input. The host owns legality, selection and progression. */
+/** Each copy of the face chooses the mode whose paragraph it outlines. The host owns legality, selection and progression. */
 export function PrintedModePicker({
   image,
   modes,
@@ -74,42 +74,44 @@ export function PrintedModePicker({
         return (
           <div key={mode.id} className={s.option}>
             <OriginalCardFace image={image}>
-              <motion.button
+              {/* The whole copy of the face chooses its mode, so the target is
+                  never smaller than a card; the outline stays on the mode's
+                  own printed paragraph. */}
+              <button
                 type="button"
-                className={s.mark}
-                style={regionStyle(mode.region, image)}
-                data-tone={
-                  active ? "selected" : disabled ? "muted" : "available"
-                }
+                className={s.modeHit}
                 aria-label={mode.label}
                 aria-pressed={choice.kind === "multiple" ? active : undefined}
                 disabled={disabled}
                 aria-describedby={mode.unavailableReason ? reasonId : undefined}
                 onClick={() => choose(mode.id)}
-                {...(animate ? { whileTap: { scale: 0.985 } } : {})}
-                transition={{
-                  duration: animate ? controlMotion.feedback : 0,
-                  ease: controlMotion.ease,
-                }}
               >
-                <AnimatePresence>
-                  {active && (
-                    <motion.span
-                      aria-hidden
-                      className={s.tick}
-                      initial={animate ? { opacity: 0, scale: 0.8 } : false}
-                      animate={{ opacity: 1, scale: 1 }}
-                      exit={{ opacity: 0 }}
-                      transition={{
-                        duration: animate ? controlMotion.feedback : 0,
-                        ease: controlMotion.ease,
-                      }}
-                    >
-                      <Check size="100%" strokeWidth={3} />
-                    </motion.span>
-                  )}
-                </AnimatePresence>
-              </motion.button>
+                <span
+                  className={s.mark}
+                  style={regionStyle(mode.region, image)}
+                  data-tone={
+                    active ? "selected" : disabled ? "muted" : "available"
+                  }
+                >
+                  <AnimatePresence>
+                    {active && (
+                      <motion.span
+                        aria-hidden
+                        className={s.tick}
+                        initial={animate ? { opacity: 0, scale: 0.8 } : false}
+                        animate={{ opacity: 1, scale: 1 }}
+                        exit={{ opacity: 0 }}
+                        transition={{
+                          duration: animate ? controlMotion.feedback : 0,
+                          ease: controlMotion.ease,
+                        }}
+                      >
+                        <Check size="100%" strokeWidth={3} />
+                      </motion.span>
+                    )}
+                  </AnimatePresence>
+                </span>
+              </button>
             </OriginalCardFace>
             {mode.unavailableReason && (
               <span id={reasonId} className={s.reason}>
