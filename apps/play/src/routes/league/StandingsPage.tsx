@@ -19,6 +19,7 @@ import {
 } from "../../league/league-sources";
 import { Portrait } from "../../account/Portrait";
 import { GAP_COPY, LeagueHead, LeagueNotice } from "./LeagueParts";
+import { useArrival } from "../../lib/arrival";
 import * as s from "./league.css";
 
 type Own = NonNullable<Standings["own"]>;
@@ -145,6 +146,7 @@ export function StandingsPage({
   const standings = ready?.standings ?? null;
   const formats = ready?.formats ?? [];
   const ownLoaded = standings?.rows.some((row) => row.isYou) ?? false;
+  const arrival = useArrival((standings?.rows.length ?? 0) > 0);
 
   // A new format starts at the top of its list.
   useEffect(() => {
@@ -199,7 +201,7 @@ export function StandingsPage({
     content = <p className={s.quiet}>No ranked matches yet</p>;
   else
     content = (
-      <div role="rowgroup">
+      <div role="rowgroup" {...arrival.group}>
         {standings.rows.map((row) => (
           <Row
             key={row.playerId}

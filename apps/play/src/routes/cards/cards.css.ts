@@ -703,3 +703,22 @@ export const notice = style({
   bottom: "24px",
   selectors: { [phone]: { right: "16px", left: "16px", bottom: "120px" } },
 });
+
+/**
+ * The chosen card's flight into the detail pane (see card-flight.ts): it
+ * travels on the language's repositioning curve for one scene beat, while
+ * everything else changes at once beneath it.
+ */
+const flight = ':root[data-flight="card"]';
+globalStyle(`${flight}::view-transition-group(card-in-hand)`, {
+  animationDuration: `${m.duration.scene}s`,
+  animationTimingFunction: cssEase(m.ease.travel),
+});
+globalStyle(
+  `${flight}::view-transition-old(card-in-hand), ${flight}::view-transition-new(card-in-hand)`,
+  { height: "100%", animationDuration: `${m.duration.settle}s` },
+);
+globalStyle(
+  `${flight}::view-transition-old(root), ${flight}::view-transition-new(root)`,
+  { animationDuration: `${m.duration.settle}s` },
+);

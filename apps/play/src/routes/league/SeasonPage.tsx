@@ -1,4 +1,5 @@
 import type { ReactElement } from "react";
+import { motion } from "motion/react";
 import { CoinAmount, RankIdentity, RankProgress } from "@spellwake/ui";
 import {
   emblemUrl,
@@ -10,16 +11,27 @@ import {
   type FormatRank,
   type LeagueSource,
 } from "../../league/league-sources";
+import { useArrival, type ArrivalProps } from "../../lib/arrival";
+import { motionLanguage as m } from "../../lib/motion";
 import { COIN } from "../market/ListingDialogs";
 import { GAP_COPY, LeagueHead, LeagueNotice } from "./LeagueParts";
 import * as s from "./league.css";
 
-function SeasonRow({ row }: { row: FormatRank }): ReactElement {
+function SeasonRow({
+  row,
+  arrival,
+  fillAfter,
+}: {
+  row: FormatRank;
+  arrival: ArrivalProps;
+  /** When this row starts arriving, or null once the table is at rest. */
+  fillAfter: number | null;
+}): ReactElement {
   const tier = tierOf(row.rating);
   const progress = progressOf(row.rating);
   const reward = rewardOf(row.rating, row.record);
   return (
-    <div className={s.seasonRow} role="row">
+    <motion.div className={s.seasonRow} role="row" {...arrival}>
       <span className={s.format} role="rowheader">
         {row.format.name}
       </span>
@@ -40,6 +52,15 @@ function SeasonRow({ row }: { row: FormatRank }): ReactElement {
             lowerBound={progress.lowerBound}
             nextBound={progress.nextBound}
             label={progress.label}
+            // The bar is the row's one hero move: it fills as the row lands.
+            {...(fillAfter !== null
+              ? {
+                  arrival: {
+                    delay: fillAfter + m.duration.settle,
+                    duration: m.duration.hero,
+                  },
+                }
+              : {})}
           />
         )}
       </span>
@@ -55,7 +76,7 @@ function SeasonRow({ row }: { row: FormatRank }): ReactElement {
           <CoinAmount amount={reward} iconSrc={COIN} />
         )}
       </span>
-    </div>
+    </motion.div>
   );
 }
 
@@ -89,6 +110,7 @@ function SkeletonRows(): ReactElement {
  */
 export function SeasonPage({ source }: { source: LeagueSource }): ReactElement {
   const ranks = source.status === "ready" ? source.ranks : null;
+  const arrival = useArrival((ranks?.rows.length ?? 0) > 0);
   let body: ReactElement;
   if (source.status === "loading" || ranks?.state === "loading")
     body = <SkeletonRows />;
@@ -99,8 +121,13 @@ export function SeasonPage({ source }: { source: LeagueSource }): ReactElement {
   else if (ranks && ranks.rows.length > 0)
     body = (
       <div role="rowgroup">
-        {ranks.rows.map((row) => (
-          <SeasonRow key={row.format.id} row={row} />
+        {ranks.rows.map((row, index) => (
+          <SeasonRow
+            key={row.format.id}
+            row={row}
+            arrival={arrival.item(index)}
+            fillAfter={arrival.delayOf(index)}
+          />
         ))}
       </div>
     );
