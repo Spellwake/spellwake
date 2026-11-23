@@ -45,7 +45,7 @@ import {
   type TableView,
 } from "../../match/table-model";
 import { CombatLines, useCombat, type CombatUi } from "./combat";
-import { CastPrompt, pendingObject, useCasting } from "./casting";
+import { CastPrompt, ModeChoice, pendingObject, useCasting } from "./casting";
 import { DamagePills, DamageSources, useDamage } from "./damage";
 import { MatchStack, useStackReading } from "./stack";
 import { ConcedeConfirmation, MatchSettings, TableChat } from "./TablePanels";
@@ -696,6 +696,13 @@ function LiveMatch({ source }: { source: ReadyMatch }): ReactElement {
   const casting = useCasting(
     source,
     hasPriority && !activeDecision && !source.chooseOpening,
+    (handle) => {
+      const object = objectByHandle.get(handle);
+      const name = object ? objectName(object) : null;
+      const src = object ? artFor(object) : undefined;
+      const printed = name ? source.printedModesByName?.get(name) : undefined;
+      return name && src && printed ? { name, src, printed } : null;
+    },
   );
   // What is being declared, assigned or cast on the table, if anything.
   const declaring: CombatUi | null = combat.ui ?? damage ?? casting.ui;
@@ -1068,6 +1075,7 @@ function LiveMatch({ source }: { source: ReadyMatch }): ReactElement {
         />
       </ImmersiveFrame>
 
+      <ModeChoice choice={casting.modeChoice} />
       <MatchSettings
         open={settingsOpen}
         onClose={() => setSettingsOpen(false)}

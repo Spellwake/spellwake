@@ -5,7 +5,9 @@ import {
 } from "@spellwake/application-contracts";
 import {
   beginCast,
+  castAction,
   castTargets,
+  chooseCastMode,
   chooseCastTarget,
   costSymbols,
   payCast,
@@ -22,6 +24,7 @@ import {
   previewScene,
   previewSnapshot,
 } from "../match/preview-table";
+import { printedModes } from "../match/printed-modes";
 import { seatBoard } from "../match/table-model";
 
 const alex = { kind: "seat" as const, seatId: PREVIEW_SEATS[1].seatId };
@@ -184,6 +187,7 @@ describe("the preview's cast offers", () => {
 
   test("offer what the untapped Mountains can pay for, and no land (BC-01)", () => {
     expect(offers.map((offer) => nameOf(offer.source)).sort()).toEqual([
+      "Abrade",
       "Goblin Matron",
       "Goblin Piledriver",
       "Krenko, Mob Boss",
@@ -228,7 +232,7 @@ describe("the preview's cast offers", () => {
           : "";
       },
     );
-    expect(names.sort()).toEqual(["Lightning Bolt", "Shock"]);
+    expect(names.sort()).toEqual(["Abrade", "Lightning Bolt", "Shock"]);
   });
 });
 
@@ -286,5 +290,138 @@ describe("casting in the preview", () => {
 
   test("a card that is not in hand is not cast", () => {
     expect(previewCast(table, "elsewhere", null)).toBe(table);
+  });
+});
+
+describe("a modal spell (MC-01 to MC-06)", () => {
+  const ball = { kind: "object" as const, handle: "crystal-ball" };
+  const abrade: CastOffer = {
+    source: "abrade",
+    targets: null,
+    modes: [
+      { mode: 0, label: "Abrade deals 3 damage.", targets: [angel] },
+      { mode: 1, label: "Destroy target artifact.", targets: [ball] },
+    ],
+    cost: "{1}{R}",
+    payment: "automatic",
+    paySources: [],
+  };
+  const noArtifact: CastOffer = {
+    ...abrade,
+    modes: [
+      abrade.modes![0]!,
+      {
+        ...abrade.modes![1]!,
+        targets: [],
+        unavailableReason: "No legal targets",
+      },
+    ],
+  };
+  const choosing = draftOf(beginCast([abrade], "abrade"));
+
+  test("waits for its mode before anything else", () => {
+    expect(choosing).toEqual({ source: "abrade", stage: "mode", target: null });
+    expect(castTargets([abrade], choosing)).toEqual([]);
+  });
+
+  test("choosing a mode goes straight on to that mode's own targets", () => {
+    const damage = draftOf(chooseCastMode([abrade], choosing, 0));
+    expect(damage).toMatchObject({ stage: "target", mode: 0 });
+    expect(castTargets([abrade], damage)).toEqual([angel]);
+    const destroy = draftOf(chooseCastMode([abrade], choosing, 1));
+    expect(castTargets([abrade], destroy)).toEqual([ball]);
+    // The other mode's target is not offered.
+    expect(chooseCastTarget([abrade], destroy, angel)).toEqual({
+      kind: "ignored",
+    });
+  });
+
+  test("the target sends the cast with the mode and its target together", () => {
+    const destroy = draftOf(chooseCastMode([abrade], choosing, 1));
+    const step = chooseCastTarget([abrade], destroy, ball);
+    expect(step).toMatchObject({
+      kind: "submit",
+      action: {
+        kind: "cast-with-resources",
+        source: "abrade",
+        modes: [{ mode: 1, target: ball }],
+      },
+    });
+    if (step.kind !== "submit") return;
+    expect(
+      playerCommandSchema.safeParse({
+        requestId: "00000000-0000-4000-8000-000000000301",
+        basis: previewSnapshot().basis,
+        action: step.action,
+      }).success,
+    ).toBe(true);
+    expect(castAction(step.draft)).toEqual(step.action);
+  });
+
+  test("a mode with no legal target cannot be chosen (MC-02)", () => {
+    const draft = draftOf(beginCast([noArtifact], "abrade"));
+    expect(chooseCastMode([noArtifact], draft, 1)).toEqual({ kind: "ignored" });
+    expect(chooseCastMode([noArtifact], draft, 0).kind).toBe("draft");
+    // With no mode that can be chosen, the spell is not started at all.
+    expect(
+      beginCast(
+        [
+          {
+            ...noArtifact,
+            modes: noArtifact.modes!.map((mode) => ({
+              ...mode,
+              unavailableReason: "No legal targets",
+            })),
+          },
+        ],
+        "abrade",
+      ),
+    ).toEqual({ kind: "ignored" });
+  });
+
+  test("a mode is chosen only while one is waited for, and only an offered one", () => {
+    expect(chooseCastMode([abrade], choosing, 7)).toEqual({ kind: "ignored" });
+    const chosen = draftOf(chooseCastMode([abrade], choosing, 0));
+    expect(chooseCastMode([abrade], chosen, 1)).toEqual({ kind: "ignored" });
+  });
+
+  test("a chosen mode the game stops offering drops the draft", () => {
+    const destroy = draftOf(chooseCastMode([abrade], choosing, 1));
+    expect(reconcileCast([abrade], destroy)).toBe(destroy);
+    expect(reconcileCast([noArtifact], destroy)).toBeNull();
+    expect(reconcileCast([abrade], choosing)).toBe(choosing);
+  });
+
+  test("the preview offers Abrade with both modes, and resolves each", () => {
+    const table = previewSnapshot();
+    const offer = previewCastOffers(table, true).find((entry) => entry.modes);
+    expect(offer?.modes?.map((mode) => mode.targets?.length)).toEqual([16, 2]);
+    expect(
+      previewCastOffers(previewScene("no-artifacts"), true).find(
+        (entry) => entry.modes,
+      )?.modes?.[1],
+    ).toMatchObject({ targets: [], unavailableReason: "No legal targets" });
+    const artifact = offer!.modes![1]!.targets![0]!;
+    const cast = previewCast(table, offer!.source, artifact, [1]);
+    expect(playerSnapshotSchema.safeParse(cast).error?.issues ?? []).toEqual(
+      [],
+    );
+    expect(cast.stack[0]?.modes).toEqual([1]);
+    const resolved = previewResolveTop(cast);
+    expect(playerSnapshotSchema.safeParse(resolved).success).toBe(true);
+    if (artifact.kind !== "object") throw new Error("Not a card.");
+    // Destroyed: the artifact is in its owner's graveyard, not on the table.
+    expect(
+      resolved.visibleObjects.find((entry) => entry.handle === artifact.handle)
+        ?.zone,
+    ).toMatch(/^zone-graveyard-/);
+  });
+
+  test("its printed mode regions are known by printing, in printed order", () => {
+    const printed = printedModes({ set: "trc", number: "449" });
+    expect(printed?.regions).toHaveLength(2);
+    expect(printed!.regions[0]!.y).toBeLessThan(printed!.regions[1]!.y);
+    expect(printedModes({ set: "TRC", number: "1" })).toBeNull();
+    expect(printedModes(null)).toBeNull();
   });
 });
