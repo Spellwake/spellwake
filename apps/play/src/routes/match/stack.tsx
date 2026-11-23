@@ -1,0 +1,334 @@
+import {
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ReactElement,
+  type RefObject,
+} from "react";
+import { AnimatePresence, motion, useReducedMotion } from "motion/react";
+import { CircleUserRound } from "lucide-react";
+import type {
+  PlayerObject,
+  PlayerSnapshot,
+} from "@spellwake/application-contracts";
+import { CompactSpellStack, type StackEntry } from "@spellwake/ui";
+import { useAnchors } from "./anchors";
+import type { CardMark, SeatMark } from "./combat";
+import * as s from "./match-table.css";
+
+type WireEntry = PlayerSnapshot["stack"][number];
+
+/** The pile's own card size, which every pose inside it is measured in. */
+const CARD = { width: 178, height: 224 };
+/** How far each older card shows above and to the left of the one in front. */
+const PEEK = { x: 21, y: 20, most: 5 };
+
+/** Shows only the picture of a printed face inside the ability frame's window. */
+const ART_WINDOW = {
+  width: "119%",
+  height: "auto",
+  maxWidth: "none",
+  marginLeft: "-9.5%",
+  marginTop: "-18.3%",
+} as const;
+
+const nameOf = (object: PlayerObject | undefined): string | null =>
+  object?.identity.kind === "known"
+    ? object.identity.characteristics.name
+    : null;
+
+/** A spell is its own card on the stack; anything else is an ability of its source. */
+function abilityType(label: string): string {
+  if (/trigger/i.test(label)) return "Triggered ability";
+  if (/activat/i.test(label)) return "Activated ability";
+  return "Ability";
+}
+
+/**
+ * Which stack item is being read, and what that marks on the table: the
+ * player or card it targets. Reading never casts, retargets or passes.
+ */
+export function useStackReading(snapshot: PlayerSnapshot): {
+  selectedId: string | null;
+  select: (id: string | null) => void;
+  marks: ReadonlyMap<string, CardMark>;
+  seatMarks: ReadonlyMap<string, SeatMark>;
+} {
+  const [chosen, select] = useState<string | null>(null);
+  // An item that has left the stack is no longer being read.
+  const selected = snapshot.stack.find((entry) => entry.handle === chosen);
+  const target = selected?.targets[0];
+  return useMemo(
+    () => ({
+      selectedId: selected?.handle ?? null,
+      select,
+      marks:
+        target?.kind === "object"
+          ? new Map([[target.handle, "ivory" as const]])
+          : new Map(),
+      seatMarks:
+        target?.kind === "seat"
+          ? new Map([[target.seatId, "marked" as const]])
+          : new Map(),
+    }),
+    [selected, target],
+  );
+}
+
+interface Place {
+  x: number;
+  y: number;
+  scale: number;
+}
+
+/**
+ * Where the pile sits: under the turn panel on a wide screen, and under the
+ * players along the right edge when the panel is docked below. It keeps clear
+ * of the hand and shrinks before it would leave the table.
+ */
+function usePilePlace(
+  host: RefObject<HTMLDivElement | null>,
+  count: number,
+  clearBottom: number,
+): Place | null {
+  const [place, setPlace] = useState<Place | null>(null);
+  useLayoutEffect(() => {
+    const measure = () => {
+      const stage = host.current?.parentElement?.getBoundingClientRect();
+      if (!stage || stage.width === 0) return;
+      const rect = (name: string) =>
+        document
+          .querySelector(`[data-frame="${name}"]`)
+          ?.getBoundingClientRect();
+      const side = rect("hud-side");
+      const players = rect("hud-players");
+      const density =
+        parseFloat(getComputedStyle(document.documentElement).fontSize) / 16;
+      const peeks = Math.min(Math.max(count - 1, 0), PEEK.most);
+      const under = (players?.bottom ?? stage.top) - stage.top;
+      const floor = stage.height - clearBottom - 10;
+      const fit = (top: number, right: number, most: number): Place => {
+        // The oldest card peeks above the front one, so the room is shared.
+        const room = Math.max(floor - top, 60);
+        // On a short screen the pile never takes more than half the height.
+        const tall = CARD.height + peeks * PEEK.y;
+        const scale = Math.max(
+          0.42,
+          Math.min(most, room / tall, (stage.height * 0.5) / tall),
+        );
+        return {
+          scale,
+          x: right - CARD.width * scale,
+          y: top + peeks * PEEK.y * scale,
+        };
+      };
+      const docked = !side || side.top - stage.top > stage.height * 0.45;
+      let next: Place;
+      if (docked) {
+        // A phone: small, along the right edge under the players.
+        const most = Math.min(density, (stage.width * 0.27) / CARD.width);
+        next = fit(under + 14, stage.width - 14, most);
+      } else {
+        const below = fit(
+          side.bottom - stage.top + 28 * density,
+          side.right - stage.left - 46 * density,
+          density,
+        );
+        // With no room under the panel, the pile stands beside it instead.
+        next =
+          below.scale >= density * 0.8
+            ? below
+            : fit(under + 16, side.left - stage.left - 20, density);
+      }
+      setPlace((current) =>
+        current &&
+        Math.abs(current.x - next.x) < 0.5 &&
+        Math.abs(current.y - next.y) < 0.5 &&
+        Math.abs(current.scale - next.scale) < 0.005
+          ? current
+          : next,
+      );
+    };
+    measure();
+    const observer = new ResizeObserver(measure);
+    const side = document.querySelector('[data-frame="hud-side"]');
+    if (side) observer.observe(side);
+    if (host.current?.parentElement)
+      observer.observe(host.current.parentElement);
+    window.addEventListener("resize", measure);
+    return () => {
+      observer.disconnect();
+      window.removeEventListener("resize", measure);
+    };
+  }, [host, count, clearBottom]);
+  return place;
+}
+
+/**
+ * The spells and abilities waiting to resolve, as approved: a compact pile of
+ * printed faces, the newest in front. Clicking a face reads it in place and
+ * draws one line to what it targets; Escape or the table puts it back.
+ */
+export function MatchStack({
+  snapshot,
+  seatNames,
+  faceOf,
+  selectedId,
+  onSelect,
+  follow,
+  clearBottom = 0,
+}: {
+  snapshot: PlayerSnapshot;
+  seatNames: ReadonlyMap<string, string>;
+  faceOf: (object: PlayerObject) => string | undefined;
+  selectedId: string | null;
+  onSelect: (id: string | null) => void;
+  /** Changes whenever the cards may have moved. */
+  follow: unknown;
+  clearBottom?: number;
+}): ReactElement {
+  const host = useRef<HTMLDivElement>(null);
+  const reduced = useReducedMotion();
+  const stack = snapshot.stack;
+  // The pile fades out with what it last held.
+  const last = useRef(stack);
+  useEffect(() => {
+    if (stack.length > 0) last.current = stack;
+  }, [stack]);
+  const shown = stack.length > 0 ? stack : last.current;
+  const place = usePilePlace(host, shown.length, clearBottom);
+
+  const objects = useMemo(
+    () => new Map(snapshot.visibleObjects.map((o) => [o.handle, o] as const)),
+    [snapshot.visibleObjects],
+  );
+  const stackZone = snapshot.zones.find((zone) => zone.zoneType === "stack");
+  const spells = new Set(
+    stackZone?.visibility === "visible" ? stackZone.objects : [],
+  );
+
+  const selected = shown.find((entry) => entry.handle === selectedId);
+  const target = selected?.targets[0];
+  const anchorName =
+    target?.kind === "seat"
+      ? `seat:${target.seatId}`
+      : target?.kind === "object"
+        ? `card:${target.handle}`
+        : null;
+  const { rects } = useAnchors(
+    host,
+    anchorName ? [anchorName] : [],
+    `${String(follow)}:${place?.x}:${place?.y}:${place?.scale}`,
+  );
+
+  const boardTarget = (): StackEntry["target"] => {
+    const rect = anchorName ? rects.get(anchorName) : undefined;
+    if (!rect || !place || !target || target.kind === "stack") return undefined;
+    const scale = place.scale;
+    if (target.kind === "seat")
+      return {
+        kind: "board",
+        label: seatNames.get(target.seatId) ?? "Player",
+        // The portrait is the round picture at the head of the seat's chip.
+        anchor: {
+          x: (rect.left + rect.height * 0.5) / scale,
+          y: (rect.bottom - 2) / scale,
+        },
+      };
+    // A card is met at the point of its edge nearest the pile.
+    const from = {
+      x: (CARD.width / 2) * scale,
+      y: (CARD.height / 2) * scale,
+    };
+    return {
+      kind: "board",
+      label: nameOf(objects.get(target.handle)) ?? "Card",
+      anchor: {
+        x: Math.min(Math.max(from.x, rect.left + 4), rect.right - 4) / scale,
+        y: Math.min(Math.max(from.y, rect.top + 4), rect.bottom - 4) / scale,
+      },
+    };
+  };
+
+  const items = shown.map((entry: WireEntry): StackEntry => {
+    const source = entry.sourceObject
+      ? objects.get(entry.sourceObject)
+      : undefined;
+    const face = source ? faceOf(source) : undefined;
+    const name = nameOf(source);
+    const first = entry.targets[0];
+    const targeted: StackEntry["target"] =
+      entry.handle !== selectedId || !first
+        ? undefined
+        : first.kind === "stack"
+          ? { kind: "item", id: first.handle }
+          : boardTarget();
+    const base = {
+      id: entry.handle,
+      controller: seatNames.get(entry.controllerSeatId) ?? "Player",
+      portrait: <CircleUserRound aria-hidden="true" />,
+      ...(targeted ? { target: targeted } : {}),
+    };
+    const isSpell =
+      entry.sourceObject !== null && spells.has(entry.sourceObject);
+    if (isSpell && face && name)
+      return {
+        ...base,
+        kind: "spell",
+        image: { src: face, name, width: 500, height: 700 },
+      };
+    const known = source?.identity.kind === "known" ? source.identity : null;
+    if (isSpell && known)
+      // A spell with no picture: its printed words on the same plain frame.
+      return {
+        ...base,
+        kind: "ability",
+        name: known.characteristics.name,
+        typeLabel: known.characteristics.typeLine,
+        effect: known.characteristics.rulesText,
+      };
+    const typeLabel = abilityType(entry.label);
+    return {
+      ...base,
+      kind: "ability",
+      name: name ?? entry.label,
+      ...(face ? { art: <img src={face} alt="" style={ART_WINDOW} /> } : {}),
+      typeLabel,
+      effect: entry.label === typeLabel ? "" : entry.label,
+    };
+  });
+
+  return (
+    <AnimatePresence>
+      {stack.length > 0 && (
+        <motion.div
+          ref={host}
+          key="pile"
+          className={s.pileHost}
+          data-match-stack={stack.length}
+          style={{
+            x: place?.x ?? 0,
+            y: place?.y ?? 0,
+            scale: place?.scale ?? 1,
+            visibility: place ? "visible" : "hidden",
+          }}
+          initial={reduced ? false : { opacity: 0 }}
+          animate={{ opacity: 1 }}
+          exit={{ opacity: 0 }}
+          transition={{
+            duration: reduced ? 0 : 0.28,
+            ease: [0.22, 1, 0.36, 1],
+          }}
+        >
+          <CompactSpellStack
+            items={items}
+            selectedId={selectedId}
+            onSelect={onSelect}
+          />
+        </motion.div>
+      )}
+    </AnimatePresence>
+  );
+}

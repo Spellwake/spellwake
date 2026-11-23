@@ -1234,7 +1234,8 @@
         "team_ref",
         "controller_kind",
         "ready",
-        "retired_at"
+        "retired_at",
+        "ai_tier"
       ],
       "supabase_auth_admin": []
     }
@@ -1365,7 +1366,8 @@
         "controller_kind",
         "source_revision_id",
         "deck_snapshot_ref",
-        "deck_accepted_at"
+        "deck_accepted_at",
+        "ai_tier"
       ],
       "supabase_auth_admin": []
     }
@@ -1664,7 +1666,8 @@
         "provider_observation_receipt_id",
         "stop_receipt_id",
         "stop_observation_receipt_id",
-        "provider_start_receipt_id"
+        "provider_start_receipt_id",
+        "ai_tier"
       ],
       "supabase_auth_admin": []
     }
@@ -2504,6 +2507,26 @@
   },
   {
     "relation": "trade_session_item",
+    "kind": "table",
+    "reads": {
+      "anon": [],
+      "authenticated": [],
+      "service_role": [],
+      "supabase_auth_admin": []
+    }
+  },
+  {
+    "relation": "ai_usage_daily",
+    "kind": "table",
+    "reads": {
+      "anon": [],
+      "authenticated": [],
+      "service_role": [],
+      "supabase_auth_admin": []
+    }
+  },
+  {
+    "relation": "ai_usage_reservation",
     "kind": "table",
     "reads": {
       "anon": [],

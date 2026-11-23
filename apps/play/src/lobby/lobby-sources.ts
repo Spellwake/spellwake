@@ -19,7 +19,17 @@ export type LobbyDeck = {
 /** The AI's own choice of deck, offered first in the AI's chooser. */
 export const RANDOM_DECK = "random";
 
-export type AiDifficulty = "easy" | "hard";
+export type AiTier = "normal" | "advanced";
+export type AiDifficulty = AiTier;
+
+/** Daily Advanced AI quota state shown in the lobby when AI seats are present. */
+export type LobbyAiQuota = {
+  displayUnlimited: boolean;
+  dailyLimit: number | null;
+  remainingToday: number | null;
+  requiredAdvanced: number;
+  resetsAt: string;
+};
 export type LobbySeat = {
   id: string;
   kind: "you" | "person" | "ai" | "open";
@@ -128,6 +138,8 @@ export type LobbySource =
         ((seatId: string, kind: "human" | "ai") => Promise<Outcome>) | null;
       setDifficulty:
         ((seatId: string, difficulty: AiDifficulty) => Promise<Outcome>) | null;
+      /** Daily Advanced AI allowance for the host, or null when unavailable. */
+      aiQuota?: LobbyAiQuota | null;
       /** Host only: the AI's deck, or RANDOM_DECK. */
       setAiDeck: ((seatId: string, deckId: string) => Promise<Outcome>) | null;
       /** Host only, or null where rules cannot be changed. */

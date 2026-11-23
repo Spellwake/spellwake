@@ -1015,6 +1015,13 @@
     ]
   },
   {
+    "name": "read_my_ai_quota",
+    "arguments": "",
+    "roles": [
+      "authenticated"
+    ]
+  },
+  {
     "name": "read_my_cards",
     "arguments": "p_query text, p_exact boolean, p_after uuid, p_limit integer",
     "roles": [
@@ -1330,8 +1337,22 @@
     ]
   },
   {
+    "name": "read_native_ai_active_games",
+    "arguments": "p_after uuid, p_limit integer",
+    "roles": [
+      "service_role"
+    ]
+  },
+  {
     "name": "read_native_ai_binding_work",
     "arguments": "p_after uuid, p_limit integer",
+    "roles": [
+      "service_role"
+    ]
+  },
+  {
+    "name": "read_native_ai_default_deck",
+    "arguments": "p_format_id uuid, p_mode text",
     "roles": [
       "service_role"
     ]
@@ -1708,6 +1729,13 @@
     ]
   },
   {
+    "name": "read_set_ai_slot_tier_command",
+    "arguments": "p_subject uuid, p_session uuid, p_request uuid, p_slot uuid, p_expected numeric, p_tier text",
+    "roles": [
+      "service_role"
+    ]
+  },
+  {
     "name": "read_social_command",
     "arguments": "p_subject uuid, p_session uuid, p_input jsonb",
     "roles": [
@@ -1890,6 +1918,13 @@
     ]
   },
   {
+    "name": "restore_ai_usage_reservation",
+    "arguments": "p_match uuid",
+    "roles": [
+      "service_role"
+    ]
+  },
+  {
     "name": "restore_game_checkpoint",
     "arguments": "p_game uuid, p_epoch numeric, p_operational_revision numeric, p_checkpoint uuid, p_new_owner text, p_restoration_ref text, p_request uuid",
     "roles": [
@@ -1990,6 +2025,13 @@
   {
     "name": "send_game_message_command",
     "arguments": "p_subject uuid, p_session uuid, p_request uuid, p_match uuid, p_body text",
+    "roles": [
+      "service_role"
+    ]
+  },
+  {
+    "name": "set_ai_slot_tier_command",
+    "arguments": "p_subject uuid, p_session uuid, p_request uuid, p_slot uuid, p_expected numeric, p_tier text",
     "roles": [
       "service_role"
     ]

@@ -4,6 +4,8 @@ import { publicOrigin } from "../lib/public-config";
 export { publicOrigin } from "../lib/public-config";
 import {
   addAiDispositionSchema,
+  aiQuotaStatusSchema,
+  aiStatusPageSchema,
   bootstrapAckSchema,
   bootstrapDispositionSchema,
   bootstrapRequestSchema,
@@ -19,8 +21,11 @@ import {
   roomConfigurationAckSchema,
   roomConfigurationDispositionSchema,
   roomDetailSchema,
+  setAiTierDispositionSchema,
+  setAiTierRequestSchema,
   tableProfilePageSchema,
   unreadyDispositionSchema,
+  validAiStatusPage,
   validHostRoomConfiguration,
   validRoomConfigurationAck,
   validRoomDetail,
@@ -820,6 +825,83 @@ export class ApplicationApi {
       : Promise.resolve<ApiResponse<z.infer<typeof removeAiDispositionSchema>>>(
           { status: "fail", data: { request: "invalid" } },
         );
+  }
+  /** Sets an AI seat's tier (`normal` unlimited or `advanced` quota-metered). */
+  setAiTier(
+    bearer: string,
+    slotId: string,
+    input: z.infer<typeof setAiTierRequestSchema>,
+  ) {
+    const parsed = setAiTierRequestSchema.safeParse(input);
+    return parsed.success && identifierSchema.safeParse(slotId).success
+      ? this.request(
+          `/v1/ai-slots/${encodeURIComponent(slotId)}/tier`,
+          bearer,
+          roomConfigurationAckSchema,
+          parsed.data,
+        )
+      : Promise.resolve<ApiResponse<z.infer<typeof roomConfigurationAckSchema>>>({
+          status: "fail",
+          data: { request: "invalid" },
+        });
+  }
+  setAiTierDisposition(
+    bearer: string,
+    slotId: string,
+    input: z.infer<typeof setAiTierRequestSchema>,
+  ) {
+    const parsed = setAiTierRequestSchema.safeParse(input);
+    return parsed.success && identifierSchema.safeParse(slotId).success
+      ? this.request(
+          `/v1/ai-slots/${encodeURIComponent(slotId)}/tier/disposition`,
+          bearer,
+          setAiTierDispositionSchema,
+          parsed.data,
+        )
+      : Promise.resolve<ApiResponse<z.infer<typeof setAiTierDispositionSchema>>>({
+          status: "fail",
+          data: { request: "invalid" },
+        });
+  }
+  /** Reads AI slot statuses (tier, readiness, binding) for a room. */
+  async roomAiStatus(
+    bearer: string,
+    expectedAccountId: string,
+    roomId: string,
+    signal?: AbortSignal,
+  ) {
+    if (!identifierSchema.safeParse(roomId).success) {
+      return { status: "fail", data: { room: "invalid" } } as ApiResponse<
+        z.infer<typeof aiStatusPageSchema>
+      >;
+    }
+    const result = await this.request(
+      `/v1/rooms/${encodeURIComponent(roomId)}/ai`,
+      bearer,
+      aiStatusPageSchema,
+      undefined,
+      signal,
+    );
+    if (
+      result.status === "success" &&
+      !validAiStatusPage(result.data, expectedAccountId, roomId, null, 100)
+    ) {
+      return {
+        status: "error",
+        message: "Server returned inconsistent AI status.",
+      } as ApiResponse<z.infer<typeof aiStatusPageSchema>>;
+    }
+    return result;
+  }
+  /** Reads the caller's daily Advanced AI allowance and UTC reset instant. */
+  aiQuota(bearer: string, signal?: AbortSignal) {
+    return this.request(
+      "/v1/account/ai-quota",
+      bearer,
+      aiQuotaStatusSchema,
+      undefined,
+      signal,
+    );
   }
   /** The table rules a room may use: Free-for-All and the like, with their seat ranges. */
   tableProfiles(

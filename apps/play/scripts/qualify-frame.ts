@@ -10,7 +10,13 @@
  * for overflow, see-through surfaces, target sizes, overlap and focus cover.
  * An optional filter runs only the cases whose name contains it.
  */
-import { chromium, type Browser, type Page } from "@playwright/test";
+import {
+  chromium,
+  expect,
+  type Browser,
+  type Locator,
+  type Page,
+} from "@playwright/test";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import {
@@ -89,7 +95,21 @@ type Case = {
     | "prediction-calendar"
     /** League: Standings scrolled to your row, and a player's profile from it. */
     | "league-scrolled"
-    | "league-profile";
+    | "league-profile"
+    /** The match: another seat's board, and the whole table. */
+    | "match-opponent"
+    | "match-overview"
+    /** Declaring: an attacker sent at a player, and a blocker linked from the whole table. */
+    | "match-attack"
+    | "match-block"
+    /** Combat damage: a point moved between targets, a second source, a player target, and Confirm. */
+    | "match-damage"
+    | "match-damage-two"
+    | "match-trample"
+    /** The stack: a spell read in place, the oldest of a long pile, and both resolved. */
+    | "match-stack-read"
+    | "match-stack-oldest"
+    | "match-resolve";
 };
 
 const viewports: Viewport[] = [
@@ -104,6 +124,8 @@ const viewports: Viewport[] = [
   { name: "desktop-large", width: 1920, height: 1080, touch: false },
   { name: "ultrawide", width: 2560, height: 1080, touch: false },
 ];
+const expectText = (locator: Locator, text: string): Promise<void> =>
+  expect(locator).toHaveText(text);
 const named = (name: string): Viewport => {
   const found = viewports.find((viewport) => viewport.name === name);
   if (!found) throw new Error(`Unknown viewport ${name}.`);
@@ -326,6 +348,68 @@ const cases: Case[] = [
       ].map((state) => at(probe(state), "supply-vote")),
     ];
   }),
+  // The match table on every screen: your board, another seat's, and the whole table.
+  ...viewports.flatMap((viewport): Case[] =>
+    ([undefined, "match-opponent", "match-overview"] as const).map((state) => ({
+      viewport,
+      art: "none",
+      decks: "six",
+      path: "/match",
+      ...(state ? { state } : {}),
+    })),
+  ),
+  // Declaring attackers and blockers on the table, on every screen.
+  ...viewports.flatMap((viewport): Case[] => [
+    {
+      viewport,
+      art: "none",
+      decks: "six",
+      path: "/probe/table?state=attack",
+    },
+    {
+      viewport,
+      art: "none",
+      decks: "six",
+      path: "/probe/table?state=attack",
+      state: "match-attack",
+    },
+    {
+      viewport,
+      art: "none",
+      decks: "six",
+      path: "/probe/table?state=block",
+    },
+    {
+      viewport,
+      art: "none",
+      decks: "six",
+      path: "/probe/table?state=block",
+      state: "match-block",
+    },
+  ]),
+  // Assigning combat damage and reading the stack, on every screen.
+  ...viewports.flatMap((viewport): Case[] =>
+    (
+      [
+        ["damage", undefined],
+        ["damage", "match-damage"],
+        ["damage-two", "match-damage-two"],
+        ["trample", "match-trample"],
+        ["stack", undefined],
+        ["stack", "match-stack-read"],
+        ["stack", "match-resolve"],
+        ["stack-long", undefined],
+        ["stack-long", "match-stack-oldest"],
+        ["stack-waiting", undefined],
+      ] as const
+    ).map(([scene, state]) => ({
+      viewport,
+      art: "none",
+      decks: "six",
+      path: `/probe/table?state=${scene}`,
+      ...(state ? { state } : {}),
+    })),
+  ),
   // League on every screen, both sections, then its formats and states.
   ...viewports.flatMap((viewport): Case[] =>
     ["/league/season", "/league/standings"].map((path) => ({
@@ -989,7 +1073,9 @@ function inspect({
       !control.closest("[inert]") &&
       control.tagName !== "INPUT" &&
       !control.closest("[role=region]") &&
-      !control.closest("[data-frame=dock]")
+      !control.closest("[data-frame=dock]") &&
+      // Cards on a table overlap by design: a fanned hand, a squeezed row, a pile.
+      !control.closest("[data-match-table]")
     );
   });
   for (const [index, first] of fixed.entries())
@@ -1208,6 +1294,150 @@ async function run(browser: Browser, test: Case): Promise<Finding[]> {
       .getByRole("heading", { name: /Supply (vote|results)/ })
       .waitFor();
     await page.waitForTimeout(900);
+  }
+  if (state === "match-attack") {
+    await page
+      .getByRole("button", { name: "Goblin Guide", exact: true })
+      .click();
+    await page.getByRole("button", { name: "View Alex’s board" }).click();
+    // The assignment must have been made: Attack is offered only then.
+    await page
+      .getByRole("button", { name: "Attack", exact: true })
+      .and(page.locator(":enabled"))
+      .waitFor();
+    await page.waitForTimeout(1100);
+  }
+  if (state === "match-block") {
+    await page.getByRole("button", { name: "View the whole table" }).click();
+    await page.locator('[data-match-table="overview"]').waitFor();
+    await page.waitForTimeout(900);
+    const blocker = page.getByRole("button", {
+      name: "Mogg War Marshal",
+      exact: true,
+    });
+    // On a small screen the whole table is a map, and blocks are made from a board view.
+    if (await blocker.isVisible()) {
+      await blocker.click();
+      await page
+        .getByRole("button", { name: /Alex’s Krenko, Mob Boss/ })
+        .click();
+      // The link must have been made: Block is offered only then.
+      await page
+        .getByRole("button", { name: "Block", exact: true })
+        .and(page.locator(":enabled"))
+        .waitFor();
+    }
+    await page.waitForTimeout(1100);
+  }
+  if (
+    state === "match-damage" ||
+    state === "match-damage-two" ||
+    state === "match-trample"
+  ) {
+    const confirm = page
+      .getByRole("button", { name: "Confirm", exact: true })
+      .and(page.locator(":enabled"));
+    // The suggested split is complete, so Confirm is offered at once.
+    await confirm.waitFor();
+    // The targets are on Alex's board (Morgan's for the second source).
+    if (state === "match-damage-two") {
+      await page
+        .getByRole("button", { name: /^Goblin Guide, 2 of 2 assigned$/ })
+        .click();
+      await page.getByRole("button", { name: "View Morgan’s board" }).click();
+    } else {
+      await page.getByRole("button", { name: "View Alex’s board" }).click();
+    }
+    await page.locator('[data-match-table="seat"]').waitFor();
+    await page.waitForTimeout(900);
+    const amount = (name: string) =>
+      page
+        .getByRole("group", { name: `Damage to ${name}`, exact: true })
+        .getByRole("status");
+    if (state === "match-damage") {
+      await page
+        .getByRole("button", { name: "More damage to Goblin Matron" })
+        .click();
+      await expectText(amount("Krenko, Mob Boss"), "3");
+      await expectText(amount("Goblin Matron"), "1");
+      // Taking a point away leaves it unassigned, and Confirm waits.
+      await page
+        .getByRole("button", { name: "Less damage to Goblin Matron" })
+        .click();
+      await page
+        .getByRole("button", { name: "Confirm", exact: true })
+        .and(page.locator(":disabled"))
+        .waitFor();
+      await page
+        .getByRole("button", { name: "More damage to Goblin Matron" })
+        .click();
+      await confirm.click();
+      // Accepted: the controls leave the table.
+      await page
+        .getByRole("group", { name: /^Damage to / })
+        .first()
+        .waitFor({ state: "detached" });
+    }
+    if (state === "match-damage-two") {
+      await page
+        .getByRole("button", { name: "More damage to Legion Loyalist" })
+        .click();
+      await expectText(amount("Goblin Piledriver"), "1");
+      await expectText(amount("Legion Loyalist"), "1");
+      await confirm.waitFor();
+    }
+    if (state === "match-trample") {
+      await expectText(amount("Goblin Matron"), "1");
+      await expectText(amount("Alex"), "5");
+      // Lethal damage stays on the blocker: nothing more can go to the player.
+      await page
+        .getByRole("button", { name: "More damage to Alex" })
+        .and(page.locator(":disabled"))
+        .waitFor();
+      await page
+        .getByRole("button", { name: "More damage to Goblin Matron" })
+        .click();
+      await expectText(amount("Alex"), "4");
+    }
+    await page.waitForTimeout(700);
+  }
+  if (state === "match-stack-read") {
+    await page.getByRole("option", { name: /^Shock, Morgan/ }).click();
+    await page
+      .getByRole("option", { name: "Shock, Morgan, targeting You" })
+      .and(page.locator('[aria-selected="true"]'))
+      .waitFor();
+    await page.waitForTimeout(700);
+  }
+  if (state === "match-stack-oldest") {
+    const pile = page.getByRole("listbox", { name: "Inspect stack" });
+    await pile.focus();
+    await page.keyboard.press("Home");
+    await page
+      .getByRole("option", { name: /^Lightning Bolt, Alex, targeting You/ })
+      .and(page.locator('[aria-selected="true"]'))
+      .waitFor();
+    await page.waitForTimeout(700);
+  }
+  if (state === "match-resolve") {
+    const resolve = page.getByRole("button", { name: "Resolve", exact: true });
+    await resolve.click();
+    await page.locator('[data-match-stack="1"]').waitFor();
+    await resolve.click();
+    // Nothing waits: the pile is gone and the turn action is Next again.
+    await page.locator("[data-match-stack]").waitFor({ state: "detached" });
+    await page.getByRole("button", { name: "Next", exact: true }).waitFor();
+    await page.waitForTimeout(500);
+  }
+  if (state === "match-opponent") {
+    await page.getByRole("button", { name: "View Alex’s board" }).click();
+    await page.locator('[data-match-table="seat"]').waitFor();
+    await page.waitForTimeout(1200);
+  }
+  if (state === "match-overview") {
+    await page.getByRole("button", { name: "View the whole table" }).click();
+    await page.locator('[data-match-table="overview"]').waitFor();
+    await page.waitForTimeout(1200);
   }
   if (state === "league-scrolled") {
     await page

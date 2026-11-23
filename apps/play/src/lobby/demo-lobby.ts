@@ -76,7 +76,7 @@ const aiSeat = (id: string): DemoSeat => ({
   isReady: true,
   deck: RANDOM_DECK,
   needsNewDeck: false,
-  difficulty: "easy",
+  difficulty: "normal",
 });
 
 /** Every human goes back to Not ready, and any countdown stops: the rules changed under them. */
@@ -361,6 +361,21 @@ export function useDemoLobby(
           seat.id === seatId ? { ...seat, difficulty } : seat,
         ),
       })),
+    aiQuota: {
+      displayUnlimited: false,
+      dailyLimit: 3,
+      remainingToday: 3,
+      requiredAdvanced: room.seats.filter(
+        (seat) => seat.kind === "ai" && seat.difficulty === "advanced",
+      ).length,
+      resetsAt: new Date(
+        Date.UTC(
+          new Date().getUTCFullYear(),
+          new Date().getUTCMonth(),
+          new Date().getUTCDate() + 1,
+        ),
+      ).toISOString(),
+    },
     setAiDeck: (seatId, id) =>
       hostChange((current) => ({
         ...current,
