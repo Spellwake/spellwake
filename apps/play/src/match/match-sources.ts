@@ -3,6 +3,7 @@ import type {
   PlayerSnapshot,
 } from "@spellwake/application-contracts";
 import type { SourceGap } from "../decks/deck-sources";
+import type { CastOffer } from "./cast-draft";
 
 export type MatchActionCommand = PlayerCommand["action"];
 
@@ -29,6 +30,11 @@ export type MatchSource =
       artByPrintingId: ReadonlyMap<string, string>;
       /** Card pictures by card name, for a table whose cards have no printing. */
       faceByName?: ReadonlyMap<string, string>;
+      /**
+       * The cards the game offers to cast now. Absent where the game does not
+       * say, which is every live match until the player view carries offers.
+       */
+      castOffers?: readonly CastOffer[];
       connectionState: MatchConnectionState;
       commandPending: boolean;
       commandError: string | null;

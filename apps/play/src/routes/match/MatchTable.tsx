@@ -15,6 +15,7 @@ import {
   type Placement,
   type TableView,
 } from "../../match/table-model";
+import type { CardMark } from "./combat";
 import * as s from "./match-table.css";
 
 const SLEEVE = `${import.meta.env.BASE_URL}cards/spellwake-sleeve-midnight.svg`;
@@ -101,6 +102,7 @@ export function MatchTable({
   isPlayable,
   isOffered,
   marks,
+  handTucked = false,
   clearBottom = 0,
   onCard,
   onPile,
@@ -112,8 +114,9 @@ export function MatchTable({
   /** A card in hand the viewer may play now. */
   isPlayable?: (object: PlayerObject) => boolean;
   /** Rims for a declaration in progress, by card handle. */
-  marks?:
-    ReadonlyMap<string, "eligible" | "copper" | "ivory" | "gold"> | undefined;
+  marks?: ReadonlyMap<string, CardMark> | undefined;
+  /** While a spell waits for its target, the hand sinks to show the board. */
+  handTucked?: boolean;
   /** Height along the lower edge that floating controls cover, in pixels. */
   clearBottom?: number;
   /** A card offered as a choice for the action in progress. */
@@ -149,6 +152,10 @@ export function MatchTable({
   const piece = (placement: Placement): ReactElement => {
     const { object, kind, zone } = placement;
     const scale = placement.width / s.BASE_WIDTH;
+    // A tucked hand keeps only its top edge in view.
+    const y =
+      placement.y +
+      (handTucked && zone === "hand" ? placement.width * 1.4 * 0.3 : 0);
     const name = cardName(object);
     const owner = seatNames.get(placement.seatId) ?? "Player";
     const mine = placement.seatId === viewerSeat;
@@ -181,7 +188,7 @@ export function MatchTable({
             ? false
             : {
                 x: placement.x,
-                y: placement.y + 26,
+                y: y + 26,
                 scale: scale * 0.94,
                 rotate: placement.rotate,
                 opacity: 0,
@@ -189,7 +196,7 @@ export function MatchTable({
         }
         animate={{
           x: placement.x,
-          y: placement.y,
+          y,
           scale,
           rotate: placement.rotate,
           opacity: 1,

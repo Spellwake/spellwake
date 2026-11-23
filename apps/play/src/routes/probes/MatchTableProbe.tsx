@@ -34,12 +34,25 @@ export function MatchTableProbe(): ReactElement {
     scene ? previewScene(scene) : previewSnapshot(),
   );
   // `?chat=refused` makes the table refuse every message, to show that line.
+  // `?pay=paused` makes every cast pause for payment, as a manual game would.
+  const refused = params.get("chat") === "refused";
+  const paused = params.get("pay") === "paused";
   const shown =
-    source.status === "ready" && params.get("chat") === "refused"
-      ? {
+    source.status !== "ready"
+      ? source
+      : {
           ...source,
-          chat: { ...source.chat, send: () => Promise.resolve(false) },
-        }
-      : source;
+          ...(refused
+            ? { chat: { ...source.chat, send: () => Promise.resolve(false) } }
+            : {}),
+          ...(paused && source.castOffers
+            ? {
+                castOffers: source.castOffers.map((offer) => ({
+                  ...offer,
+                  payment: "paused" as const,
+                })),
+              }
+            : {}),
+        };
   return <MatchPage source={shown} />;
 }
