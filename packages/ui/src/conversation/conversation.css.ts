@@ -135,6 +135,13 @@ globalStyle(`${field} button`, {
   padding: 0,
   cursor: "pointer",
 });
+// A fingertip-sized send button, whatever the field's own height.
+globalStyle(`${field} button`, {
+  "@media": { "(pointer: coarse)": { minWidth: "44PX", minHeight: "44PX" } },
+});
+globalStyle(`${field}`, {
+  "@media": { "(pointer: coarse)": { alignItems: "center" } },
+});
 globalStyle(`${field} button span, ${field} button svg`, { display: "block" });
 globalStyle(`${field} button:disabled`, {
   color: "#bcb6a8",

@@ -17,7 +17,7 @@ export function SettingSwitch({
   onCheckedChange,
 }: SettingSwitchProps) {
   return (
-    <span className={s.switchBox}>
+    <label className={s.switchBox}>
       <input
         id={id}
         className={s.toggle}
@@ -39,6 +39,6 @@ export function SettingSwitch({
           ease: controlMotion.ease,
         }}
       />
-    </span>
+    </label>
   );
 }

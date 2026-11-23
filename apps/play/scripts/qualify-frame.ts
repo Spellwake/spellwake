@@ -109,7 +109,13 @@ type Case = {
     /** The stack: a spell read in place, the oldest of a long pile, and both resolved. */
     | "match-stack-read"
     | "match-stack-oldest"
-    | "match-resolve";
+    | "match-resolve"
+    /** Table chat and settings: a message sent, one refused, settings changed, conceding and watching. */
+    | "match-chat-send"
+    | "match-chat-refused"
+    | "match-settings"
+    | "match-concede"
+    | "match-watch-chat";
 };
 
 const viewports: Viewport[] = [
@@ -407,6 +413,25 @@ const cases: Case[] = [
       art: "none",
       decks: "six",
       path: `/probe/table?state=${scene}`,
+      ...(state ? { state } : {}),
+    })),
+  ),
+  // Table chat, settings, conceding and watching, on every screen.
+  ...viewports.flatMap((viewport): Case[] =>
+    (
+      [
+        ["/probe/table", "match-chat-send"],
+        ["/probe/table?chat=refused", "match-chat-refused"],
+        ["/probe/table", "match-settings"],
+        ["/probe/table", "match-concede"],
+        ["/probe/table?state=watching", undefined],
+        ["/probe/table?state=watching", "match-watch-chat"],
+      ] as const
+    ).map(([path, state]) => ({
+      viewport,
+      art: "none",
+      decks: "six",
+      path,
       ...(state ? { state } : {}),
     })),
   ),
@@ -1400,6 +1425,94 @@ async function run(browser: Browser, test: Case): Promise<Finding[]> {
       await expectText(amount("Alex"), "4");
     }
     await page.waitForTimeout(700);
+  }
+  if (state === "match-chat-send" || state === "match-chat-refused") {
+    const chat = page.getByRole("region", { name: "Table chat" });
+    // Something unread waits, and opening the chat at its end clears it.
+    await page
+      .getByRole("button", { name: "Table chat, unread messages" })
+      .click();
+    await chat.waitFor();
+    const field = chat.getByRole("textbox", { name: "Message the table" });
+    await field.fill("Good game, everyone.");
+    await field.press("Enter");
+    if (state === "match-chat-send") {
+      // Accepted: the message joins the history and the draft is cleared.
+      await chat.getByText("Good game, everyone.").waitFor();
+      await expect(field).toHaveValue("");
+      await chat.getByRole("button", { name: "Close table chat" }).click();
+      await chat.waitFor({ state: "detached" });
+      await page
+        .getByRole("button", { name: "Table chat", exact: true })
+        .click();
+      await chat.waitFor();
+    } else {
+      // Refused: the words stay, with one short line.
+      await chat.getByText("Couldn’t send message.").waitFor();
+      await expect(field).toHaveValue("Good game, everyone.");
+      // Closed and reopened, the draft is still there.
+      await field.press("Escape");
+      await chat.waitFor({ state: "detached" });
+      await page.getByRole("button", { name: /^Table chat/ }).click();
+      await expect(
+        chat.getByRole("textbox", { name: "Message the table" }),
+      ).toHaveValue("Good game, everyone.");
+    }
+    await page.waitForTimeout(500);
+  }
+  if (state === "match-settings" || state === "match-concede") {
+    await page.getByRole("button", { name: "Settings", exact: true }).click();
+    const settings = page.getByRole("dialog", { name: "Settings" });
+    await settings.waitFor();
+    const music = settings.getByRole("slider", { name: "Music" });
+    await music.focus();
+    await music.press("Home");
+    await expect(music).toHaveValue("0");
+    const tap = settings.getByRole("switch", { name: "Auto-tap mana" });
+    const was = await tap.isChecked();
+    await tap.setChecked(!was);
+    await expect(tap).toBeChecked({ checked: !was });
+    if (state === "match-settings") {
+      // Closed and reopened, the changes are still there: there is no Save.
+      await page.keyboard.press("Escape");
+      await settings.waitFor({ state: "hidden" });
+      await page.getByRole("button", { name: "Settings", exact: true }).click();
+      await expect(settings.getByRole("slider", { name: "Music" })).toHaveValue(
+        "0",
+      );
+    } else {
+      await settings
+        .getByRole("button", { name: "Concede", exact: true })
+        .click();
+      const confirm = page.getByRole("dialog", { name: "Concede?" });
+      await confirm.waitFor();
+      // Cancel goes back to the settings it came from.
+      await confirm.getByRole("button", { name: "Cancel" }).click();
+      await settings
+        .getByRole("button", { name: "Concede", exact: true })
+        .click();
+      await confirm
+        .getByRole("button", { name: "Concede", exact: true })
+        .click();
+      // Accepted: still at the table, watching, with nothing to act on.
+      await page.getByText("Watching", { exact: true }).waitFor();
+      await expect(
+        page.getByRole("button", { name: "Next", exact: true }),
+      ).toHaveCount(0);
+      await page.getByRole("button", { name: "Settings", exact: true }).click();
+      await settings.waitFor();
+      await expect(
+        settings.getByRole("button", { name: "Concede" }),
+      ).toHaveCount(0);
+    }
+    await page.waitForTimeout(600);
+  }
+  if (state === "match-watch-chat") {
+    await page.getByRole("button", { name: /^Table chat/ }).click();
+    const chat = page.getByRole("region", { name: "Table chat" });
+    await chat.getByText("Chat is read-only.").waitFor();
+    await expect(chat.getByRole("textbox")).toHaveCount(0);
+    await page.waitForTimeout(500);
   }
   if (state === "match-stack-read") {
     await page.getByRole("option", { name: /^Shock, Morgan/ }).click();
