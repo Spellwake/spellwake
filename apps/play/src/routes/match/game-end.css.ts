@@ -40,6 +40,25 @@ export const reason = style({
   color: t.color.muted,
 });
 
+/** The game's place in its match: "Game 1 · You lead 1–0". */
+export const series = style({
+  margin: 0,
+  fontSize: t.font.hint,
+  lineHeight: 1.25,
+  letterSpacing: "0.08em",
+  textTransform: "uppercase",
+  color: t.color.muted,
+});
+/** What the next game waits on. */
+export const next = style({
+  margin: 0,
+  fontSize: t.font.small,
+  lineHeight: 1.25,
+  color: t.color.ink,
+});
+/** The time left keeps its width as it counts. */
+export const nextTime = style({ fontVariantNumeric: "tabular-nums" });
+
 /** The table dims behind the band so the result reads first. */
 export const scrim = style({
   position: "absolute",

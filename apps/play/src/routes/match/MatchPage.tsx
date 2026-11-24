@@ -579,6 +579,9 @@ function LiveMatch({ source }: { source: ReadyMatch }): ReactElement {
   const { snapshot, seatNames, artByPrintingId } = source;
   // Once the game is over nothing more is asked or offered at this table.
   const result = source.result ?? null;
+  const series = (result && source.series) ?? null;
+  // Between the games of a match there is still a match to walk away from.
+  const matchGoesOn = series !== null && series.next.kind !== "over";
   // The band lifts so the finished table can be seen.
   const [resultRaised, setResultRaised] = useState(true);
 
@@ -612,6 +615,7 @@ function LiveMatch({ source }: { source: ReadyMatch }): ReactElement {
     "closed" | "asking" | "sending" | "failed"
   >("closed");
   const [leaveOpen, setLeaveOpen] = useState(false);
+  const [leavingMatch, setLeavingMatch] = useState(false);
 
   const objectByHandle = useMemo(
     () => new Map(snapshot.visibleObjects.map((o) => [o.handle, o] as const)),
@@ -937,7 +941,11 @@ function LiveMatch({ source }: { source: ReadyMatch }): ReactElement {
             aria-label="Leave table"
             // A player who is out has nothing left to concede.
             onClick={() =>
-              watching || result ? source.onLeave() : setLeaveOpen(true)
+              matchGoesOn
+                ? setLeavingMatch(true)
+                : watching || result
+                  ? source.onLeave()
+                  : setLeaveOpen(true)
             }
           >
             <LogOut size={ICON} aria-hidden="true" />
@@ -976,7 +984,11 @@ function LiveMatch({ source }: { source: ReadyMatch }): ReactElement {
             {damage && <DamageSources sources={damage.sources} />}
             {result ? (
               !bandShown && (
-                <GameEndPanel result={result} onLeave={source.onLeave} />
+                <GameEndPanel
+                  result={result}
+                  series={series}
+                  onLeave={source.onLeave}
+                />
               )
             ) : watching ? (
               <p className={s.watching}>Watching</p>
@@ -1135,6 +1147,7 @@ function LiveMatch({ source }: { source: ReadyMatch }): ReactElement {
           <GameEndBand
             open={bandShown}
             result={result}
+            series={series}
             onView={() => setResultRaised(false)}
             onLeave={source.onLeave}
           />
@@ -1330,6 +1343,21 @@ function LiveMatch({ source }: { source: ReadyMatch }): ReactElement {
         onConfirm={() => {
           setLeaveOpen(false);
           void source.sendAction({ kind: "concede" }).finally(source.onLeave);
+        }}
+      />
+
+      {/* Between games there is no game to concede, only a match to leave. */}
+      <ConfirmationDialog
+        open={leavingMatch}
+        appearance="match"
+        title="Leave match?"
+        description="The match is not over. The next game starts without you."
+        confirmLabel="Leave match"
+        cancelLabel="Stay at table"
+        onCancel={() => setLeavingMatch(false)}
+        onConfirm={() => {
+          setLeavingMatch(false);
+          source.onLeave();
         }}
       />
 

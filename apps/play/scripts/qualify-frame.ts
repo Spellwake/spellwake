@@ -119,6 +119,9 @@ type Case = {
     | "match-end"
     | "match-end-view"
     | "match-end-chat"
+    | "match-series"
+    | "match-series-next"
+    | "match-series-leave"
     /** Casting: waiting for a target, a player targeted, a paused payment, and a creature. */
     | "match-cast-target"
     | "match-cast-player"
@@ -488,6 +491,15 @@ const cases: Case[] = [
         ["/probe/table?end=none", "match-end"],
         ["/probe/table?end=won", "match-end-view"],
         ["/probe/table?end=won", "match-end-chat"],
+        // One game of a best of three: what the next game waits on, starting
+        // it, leaving between games, and the match decided.
+        ["/probe/table?end=won&series=deciding", "match-series"],
+        ["/probe/table?end=lost&series=stuck", "match-series"],
+        ["/probe/table?end=won&series=untimed", "match-series"],
+        ["/probe/table?end=won&series=waiting", "match-series"],
+        ["/probe/table?end=lost&series=over", "match-series"],
+        ["/probe/table?end=won&series=deciding", "match-series-next"],
+        ["/probe/table?end=won&series=deciding", "match-series-leave"],
       ] as const
     ).map(([path, state]) => ({
       viewport,
@@ -1635,6 +1647,71 @@ async function run(browser: Browser, test: Case): Promise<Finding[]> {
     await page.waitForTimeout(500);
   }
   if (
+    state === "match-series" ||
+    state === "match-series-next" ||
+    state === "match-series-leave"
+  ) {
+    const query = new URLSearchParams(test.path.split("?")[1]);
+    const kind = query.get("series") ?? "";
+    const band = page.getByRole("dialog", {
+      name: query.get("end") === "won" ? "You won" : "You lost",
+      exact: true,
+    });
+    await band.waitFor();
+    const nextGame = band.getByRole("button", { name: "Next game" });
+    const leave = band.getByRole("button", { name: "Leave table" });
+    if (kind === "over") {
+      // The match is decided: its score, and the way out.
+      await band.getByText("Match over · 1–2").waitFor();
+      await leave.waitFor();
+      await expect(nextGame).toHaveCount(0);
+    } else {
+      await band
+        .getByText(
+          query.get("end") === "won"
+            ? "Game 1 · You lead 1–0"
+            : "Game 1 · You trail 0–1",
+        )
+        .waitFor();
+      // Between games the band never offers to leave the table.
+      await expect(leave).toHaveCount(0);
+      if (kind === "waiting") {
+        await band.getByText("Waiting for the next game…").waitFor();
+        await expect(nextGame).toHaveCount(0);
+      } else {
+        await nextGame.waitFor();
+        await band
+          .getByText(
+            kind === "untimed"
+              ? "The next game starts when everyone is ready."
+              : /Next game in \d:\d\d/,
+          )
+          .waitFor();
+        if (kind === "stuck")
+          await band.getByText(/That didn’t go through\./).waitFor();
+      }
+    }
+    if (state === "match-series-next") {
+      // Lifted, the same answer is offered where the turn's actions were.
+      await band.getByRole("button", { name: "View table" }).click();
+      await band.waitFor({ state: "detached" });
+      const kept = page.getByRole("group", { name: "Game result" });
+      await kept.getByText(/Next game in \d:\d\d/).waitFor();
+      await kept.getByRole("button", { name: "Next game" }).click();
+      await kept.getByText("Waiting for the next game…").waitFor();
+      await expect(kept.getByRole("button")).toHaveCount(0);
+    }
+    if (state === "match-series-leave") {
+      await page.getByRole("button", { name: "Leave table" }).click();
+      const confirm = page.getByRole("dialog", { name: "Leave match?" });
+      await confirm.waitFor();
+      await confirm.getByRole("button", { name: "Stay at table" }).click();
+      await confirm.waitFor({ state: "hidden" });
+      await band.waitFor();
+    }
+    await page.waitForTimeout(1400);
+  }
+  if (
     state === "match-end" ||
     state === "match-end-view" ||
     state === "match-end-chat"
@@ -2254,7 +2331,7 @@ const caseName = (test: Case): string =>
     test.path === BUILDER_PATH
       ? "builder"
       : test.path
-          .split(/[/?=]/)
+          .split(/[/?=&]/)
           .filter((part) => part && part !== "state")
           .join("-"),
     `art-${test.art}`,

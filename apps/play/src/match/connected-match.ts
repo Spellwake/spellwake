@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useQueries, useQuery } from "@tanstack/react-query";
 import {
   identifierSchema,
+  matchDetailSchema,
   type PlayerCursor,
   type PlayerSnapshot,
   type RoomGameHandoff,
@@ -15,10 +16,17 @@ import {
   looksFinished,
   type GameRow,
 } from "./game-result";
+import {
+  gameRows,
+  ownDecisions,
+  seriesStanding,
+  type SeriesStanding,
+} from "./match-series";
 import type {
   MatchActionCommand,
   MatchChatEntry,
   MatchConnectionState,
+  MatchSeries,
   MatchSource,
 } from "./match-sources";
 
@@ -136,7 +144,8 @@ export function useConnectedMatch(
     },
   });
 
-  const target: ActiveGameTarget | null = useMemo(() => {
+  // The game this page arrived at. A match of several games moves on from it.
+  const arrived: ActiveGameTarget | null = useMemo(() => {
     if (directTarget) return directTarget;
     if (
       roomHandoff.data?.state === "admitted" &&
@@ -150,6 +159,9 @@ export function useConnectedMatch(
     }
     return latestMatch.data ?? null;
   }, [directTarget, roomHandoff.data, latestMatch.data]);
+  const [followed, setFollowed] = useState<ActiveGameTarget | null>(null);
+  const target =
+    followed && followed.matchId === arrived?.matchId ? followed : arrived;
 
   const [snapshot, setSnapshot] = useState<PlayerSnapshot | null>(null);
   const [connectionState, setConnectionState] =
@@ -200,6 +212,141 @@ export function useConnectedMatch(
     [finishedGame.data, snapshot],
   );
   const finished = result !== null;
+
+  // One game of several: where the match stands, and what the next game
+  // waits on. Read again until the match is decided or the next game is dealt.
+  const seatCount = snapshot?.players.length ?? 0;
+  const standingQuery = useQuery<{
+    standing: SeriesStanding | null;
+    settled: boolean;
+  }>({
+    queryKey: [
+      "match-series",
+      owner?.accountId,
+      target?.matchId,
+      target?.gameId,
+      seatCount,
+    ],
+    enabled: finished && !!owner && !!services && !!target?.matchId,
+    refetchInterval: (query) => (query.state.data?.settled ? false : 2000),
+    queryFn: async ({ signal }) => {
+      const unread = { standing: null, settled: false };
+      if (!owner || !services || !target?.matchId) return unread;
+      const bearer = await ownerBearer(services, owner);
+      const [detailRes, gamesRes, decisionsRes] = await Promise.all([
+        services.api.matchDetail(bearer, target.matchId, signal),
+        services.api.matchGames(bearer, target.matchId, null, 10, signal),
+        services.api.matchDecisions(bearer, target.matchId, null, 20, signal),
+      ]);
+      const detail =
+        detailRes.status === "success"
+          ? matchDetailSchema.safeParse(detailRes.data)
+          : null;
+      if (!detail?.success || gamesRes.status !== "success") return unread;
+      if (detail.data.match.structure === "bo1")
+        return { standing: null, settled: true };
+      const items = (data: Record<string, unknown>) =>
+        Array.isArray(data["items"]) ? (data["items"] as unknown[]) : [];
+      const standing = seriesStanding(
+        detail.data,
+        gameRows(items(gamesRes.data)),
+        decisionsRes.status === "success"
+          ? ownDecisions(items(decisionsRes.data))
+          : [],
+        target.gameId,
+        seatCount,
+      );
+      return { standing, settled: standing?.next.kind === "over" };
+    },
+  });
+  const standing = standingQuery.data?.standing ?? null;
+
+  // The next game has been dealt: this page follows the match to it.
+  const started = standing?.next.kind === "started" ? standing.next : null;
+  const matchId = target?.matchId ?? null;
+  useEffect(() => {
+    if (!started || !matchId) return;
+    cursorRef.current = null;
+    setSnapshot(null);
+    setConnectionState("connecting");
+    setFollowed({
+      matchId,
+      gameId: started.gameId,
+      contextId: started.contextId,
+    });
+  }, [started, matchId]);
+
+  // Starting the next game at once means answering with the deck already
+  // being played. The room this match came from is where that deck is named.
+  const deciding = standing?.next.kind === "deciding" ? standing.next : null;
+  const playedDeck = useQuery({
+    queryKey: ["match-played-deck", owner?.accountId, params.roomId],
+    enabled: !!deciding && !!owner && !!services && isUuid(params.roomId),
+    staleTime: Infinity,
+    queryFn: async ({ signal }): Promise<string | null> => {
+      if (!owner || !services || !isUuid(params.roomId)) return null;
+      const res = await services.api.roomEnrichedDetail(
+        await ownerBearer(services, owner),
+        params.roomId,
+        signal,
+      );
+      if (res.status !== "success") return null;
+      return (
+        res.data.slots.find((slot) => slot.accountId === owner.accountId)
+          ?.deckRevisionId ?? null
+      );
+    },
+  });
+  const [answer, setAnswer] = useState<{
+    decisionId: string;
+    state: "pending" | "failed";
+  } | null>(null);
+  const deckRevisionId = playedDeck.data ?? null;
+  const refetchStanding = standingQuery.refetch;
+  const ready = useCallback(async () => {
+    if (!owner || !services || !deciding || !deckRevisionId) return;
+    setAnswer({ decisionId: deciding.decisionId, state: "pending" });
+    let taken = false;
+    try {
+      const res = await services.api.betweenGameReply(
+        await ownerBearer(services, owner),
+        {
+          requestId: crypto.randomUUID(),
+          decisionId: deciding.decisionId,
+          expectedRevision: deciding.matchRevision,
+          selectedRevisionId: deckRevisionId,
+        },
+      );
+      taken = res.status === "success";
+    } catch {
+      taken = false;
+    }
+    if (taken) await refetchStanding();
+    // Not taken, the time still runs and the same deck is kept at its end.
+    setAnswer(
+      taken ? null : { decisionId: deciding.decisionId, state: "failed" },
+    );
+  }, [owner, services, deciding, deckRevisionId, refetchStanding]);
+
+  const series = useMemo((): MatchSeries | null => {
+    if (!standing) return null;
+    const { gameNumber, score, next } = standing;
+    if (next.kind === "over") return { gameNumber, score, next };
+    if (next.kind !== "deciding")
+      return { gameNumber, score, next: { kind: "waiting" } };
+    const mine = answer?.decisionId === next.decisionId ? answer.state : null;
+    return {
+      gameNumber,
+      score,
+      next: {
+        kind: "deciding",
+        deadlineAt: next.deadlineAt,
+        ready: deckRevisionId ? () => void ready() : null,
+        readyPending: mine === "pending",
+        readyFailed: mine === "failed",
+      },
+    };
+  }, [standing, answer, deckRevisionId, ready]);
 
   // Initial view load + live SSE stream with automatic reconnect.
   useEffect(() => {
@@ -539,6 +686,7 @@ export function useConnectedMatch(
     artByPrintingId: artQueries,
     connectionState,
     result,
+    series,
     commandPending,
     commandError,
     dismissCommandError: () => setCommandError(null),

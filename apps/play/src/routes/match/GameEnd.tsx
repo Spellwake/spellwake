@@ -1,7 +1,8 @@
-import { useEffect, useId, useRef, type ReactElement } from "react";
+import { useEffect, useId, useRef, useState, type ReactElement } from "react";
 import { AnimatePresence, motion } from "motion/react";
 import { ActionButton, useAllowsControlMotion } from "@spellwake/ui";
-import type { GameResult } from "../../match/match-sources";
+import type { GameResult, MatchSeries } from "../../match/match-sources";
+import { scoreLine, timeLeft } from "../../match/match-series";
 import * as s from "./game-end.css";
 
 const TITLE: Record<GameResult["outcome"], string> = {
@@ -25,15 +26,97 @@ function typing(): boolean {
   );
 }
 
+/** The game's place in its match, above the result: "Game 1 · You lead 1–0". */
+function seriesLine(series: MatchSeries): string {
+  const where =
+    series.next.kind === "over" ? "Match over" : `Game ${series.gameNumber}`;
+  if (!series.score) return where;
+  return series.next.kind === "over"
+    ? `${where} · ${series.score.you}–${series.score.them}`
+    : `${where} · ${scoreLine(series.score)}`;
+}
+
+/** A match of several games reads by how the match came out once it is decided. */
+function outcomeOf(
+  result: GameResult,
+  series: MatchSeries | null,
+): GameResult["outcome"] {
+  return series?.next.kind === "over" ? series.next.outcome : result.outcome;
+}
+const titleOf = (result: GameResult, series: MatchSeries | null): string =>
+  TITLE[outcomeOf(result, series)];
+
+/** What the next game waits on, counted down where there is a time. */
+function NextGame({ series }: { series: MatchSeries }): ReactElement | null {
+  const next = series.next;
+  const deadlineAt = next.kind === "deciding" ? next.deadlineAt : null;
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    if (!deadlineAt) return;
+    setNow(Date.now());
+    const tick = window.setInterval(() => setNow(Date.now()), 1000);
+    return () => window.clearInterval(tick);
+  }, [deadlineAt]);
+  if (next.kind === "over") return null;
+  if (next.kind === "waiting")
+    return <p className={s.next}>Waiting for the next game…</p>;
+  return (
+    <p className={s.next}>
+      {next.readyFailed
+        ? "That didn’t go through. "
+        : next.readyPending
+          ? "Starting the next game… "
+          : ""}
+      {deadlineAt ? (
+        <>
+          Next game in{" "}
+          <span className={s.nextTime}>{timeLeft(deadlineAt, now)}</span>
+        </>
+      ) : (
+        !next.readyPending && "The next game starts when everyone is ready."
+      )}
+    </p>
+  );
+}
+
+/** Next game while the match goes on; Leave table once nothing is left to play. */
+function EndAction({
+  series,
+  onLeave,
+}: {
+  series: MatchSeries | null;
+  onLeave: () => void;
+}): ReactElement | null {
+  const next = series?.next;
+  if (!next || next.kind === "over")
+    return (
+      <ActionButton emphasis="primary" onClick={onLeave}>
+        Leave table
+      </ActionButton>
+    );
+  if (next.kind !== "deciding" || !next.ready) return null;
+  return (
+    <ActionButton
+      emphasis="primary"
+      pending={next.readyPending}
+      onClick={next.ready}
+    >
+      Next game
+    </ActionButton>
+  );
+}
+
 /**
  * The result where the turn's actions were, once the band has been lifted to
  * look at the finished table.
  */
 export function GameEndPanel({
   result,
+  series,
   onLeave,
 }: {
   result: GameResult;
+  series: MatchSeries | null;
   onLeave: () => void;
 }): ReactElement {
   const panel = useRef<HTMLDivElement>(null);
@@ -47,14 +130,14 @@ export function GameEndPanel({
       className={s.panel}
       role="group"
       aria-label="Game result"
-      data-outcome={result.outcome}
+      data-outcome={outcomeOf(result, series)}
       tabIndex={-1}
     >
-      <p className={s.panelTitle}>{TITLE[result.outcome]}</p>
+      {series && <p className={s.series}>{seriesLine(series)}</p>}
+      <p className={s.panelTitle}>{titleOf(result, series)}</p>
       {result.reason && <p className={s.reason}>{result.reason}</p>}
-      <ActionButton emphasis="primary" onClick={onLeave}>
-        Leave table
-      </ActionButton>
+      {series && <NextGame series={series} />}
+      <EndAction series={series} onLeave={onLeave} />
     </div>
   );
 }
@@ -66,11 +149,13 @@ export function GameEndPanel({
 export function GameEndBand({
   open,
   result,
+  series,
   onView,
   onLeave,
 }: {
   open: boolean;
   result: GameResult;
+  series: MatchSeries | null;
   /** Lifts the band and leaves the finished table in view. */
   onView: () => void;
   onLeave: () => void;
@@ -115,7 +200,7 @@ export function GameEndBand({
           role="dialog"
           aria-labelledby={title}
           {...(result.reason ? { "aria-describedby": reason } : {})}
-          data-outcome={result.outcome}
+          data-outcome={outcomeOf(result, series)}
           tabIndex={-1}
           onKeyDown={(event) => {
             if (event.key !== "Escape") return;
@@ -138,6 +223,16 @@ export function GameEndBand({
                 : { duration: 0 },
             }}
           />
+          {series && (
+            <motion.p
+              className={s.series}
+              initial={animate ? { opacity: 0 } : false}
+              animate={{ opacity: 1, transition: settle(0.16) }}
+              exit={{ opacity: 0, transition: lift(0.14) }}
+            >
+              {seriesLine(series)}
+            </motion.p>
+          )}
           <motion.h2
             id={title}
             className={s.bandTitle}
@@ -149,7 +244,7 @@ export function GameEndBand({
             }}
             exit={{ opacity: 0, transition: lift(0.14) }}
           >
-            {TITLE[result.outcome]}
+            {titleOf(result, series)}
           </motion.h2>
           <motion.span
             className={s.bandRule}
@@ -168,15 +263,18 @@ export function GameEndBand({
               {result.reason}
             </motion.p>
           )}
+          {series && series.next.kind !== "over" && (
+            <motion.div {...rise} transition={settle(0.52)}>
+              <NextGame series={series} />
+            </motion.div>
+          )}
           <motion.div
             className={s.bandActions}
             {...rise}
             transition={settle(0.58)}
           >
             <ActionButton onClick={onView}>View table</ActionButton>
-            <ActionButton emphasis="primary" onClick={onLeave}>
-              Leave table
-            </ActionButton>
+            <EndAction series={series} onLeave={onLeave} />
           </motion.div>
         </motion.section>
       )}
