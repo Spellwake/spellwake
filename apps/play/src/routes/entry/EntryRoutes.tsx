@@ -33,6 +33,12 @@ import {
 import { endCurrentSession } from "../../auth/services";
 import { ownerBearer } from "../../data/account";
 import {
+  holdInvite,
+  inviteLocation,
+  readInvite,
+  takeHeldInvite,
+} from "../../data/room-invite";
+import {
   CodeScreen,
   DeletionPendingScreen,
   ReturnScreen,
@@ -149,6 +155,21 @@ function AccountReturn(): ReactElement | null {
 export function AccountGate({ children }: { children: ReactNode }): ReactNode {
   const { state } = useAccount();
   const location = useLocation();
+  const navigate = useNavigate();
+  const isSignedOut = state.status === "signed_out";
+  const isSettled = state.status === "ready" && !!state.session.accountId;
+  // Sign-in carries only a plain destination, so an invitation link opened
+  // while signed out is kept in this tab and taken up once the account is in.
+  useEffect(() => {
+    if (!isSignedOut) return;
+    const invite = readInvite(location);
+    if (invite) holdInvite(invite);
+  }, [isSignedOut, location]);
+  useEffect(() => {
+    if (!isSettled) return;
+    const invite = takeHeldInvite();
+    if (invite) void navigate(inviteLocation(invite), { replace: true });
+  }, [isSettled, navigate]);
   if (state.status === "unconfigured") return children;
   if (state.status === "signed_out") {
     const next = authDestination(location.pathname);

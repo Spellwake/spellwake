@@ -533,8 +533,12 @@ function useLowerDock(): { trayHeight: number; clearBottom: number } {
   const measure = useCallback(() => {
     const panel = document.querySelector('[data-frame="hud-side"]');
     const stage = { width: window.innerWidth, height: window.innerHeight };
-    const top = panel?.getBoundingClientRect().top ?? 0;
-    const docked = !!panel && top > stage.height * 0.45;
+    const box = panel?.getBoundingClientRect();
+    const top = box?.top ?? 0;
+    // Docked along the lower edge, the panel spans the stage; beside the
+    // table it is a narrow column. Its width does not change with what it
+    // holds or with the tray, so this answer cannot flip as either grows.
+    const docked = !!box && box.width > stage.width * 0.6;
     const rootSize = parseFloat(
       getComputedStyle(document.documentElement).fontSize,
     );

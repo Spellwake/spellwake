@@ -481,6 +481,7 @@ export function useDemoLobby(
       );
       return succeeded(undefined);
     },
+    inviteLink: null,
     departure: room.departure,
     beginDeparture: () =>
       update((current) => ({ ...current, departure: { stage: "confirm" } })),

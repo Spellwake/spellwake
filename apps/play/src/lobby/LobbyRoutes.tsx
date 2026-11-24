@@ -1,6 +1,7 @@
-import { useCallback, type ReactElement } from "react";
-import { useNavigate, useSearchParams } from "react-router-dom";
+import { useCallback, useMemo, type ReactElement } from "react";
+import { useLocation, useNavigate, useSearchParams } from "react-router-dom";
 import { useAccount } from "../auth/AccountProvider";
+import { readInvite } from "../data/room-invite";
 import type { PlayMode } from "../decks/deck-sources";
 import { LobbyPage } from "../routes/lobby/LobbyPage";
 import { useConnectedLobby } from "./connected-lobby";
@@ -62,6 +63,22 @@ function AccountLobby({ mode }: { mode: PlayMode }): ReactElement {
       ),
     [setParams],
   );
+  // An invitation link carries its token in the fragment. Once used it is
+  // dropped from the address, so a reload or a shared screen never repeats it.
+  const location = useLocation();
+  const token = readInvite(location)?.token ?? null;
+  const forgetInvite = useCallback(
+    () =>
+      void navigate(
+        { pathname: location.pathname, search: location.search },
+        { replace: true },
+      ),
+    [navigate, location.pathname, location.search],
+  );
+  const invitation = useMemo(
+    () => (token ? { token, onUsed: forgetInvite } : null),
+    [token, forgetInvite],
+  );
   const source = useConnectedLobby(
     mode,
     params.get("room"),
@@ -69,6 +86,7 @@ function AccountLobby({ mode }: { mode: PlayMode }): ReactElement {
     onRoom,
     back,
     started,
+    invitation,
   );
   return <LobbyPage source={source} onBack={back} />;
 }
