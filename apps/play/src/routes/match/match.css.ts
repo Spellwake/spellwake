@@ -134,6 +134,8 @@ export const decisionCard = style({
   maxHeight: "34vh",
   overflowY: "auto",
   overscrollBehavior: "contain",
+  // A sideways phone has room for little more than the turn panel itself.
+  "@media": { "(max-height: 480px)": { maxHeight: "22vh" } },
 });
 
 export const decisionTitle = style({
@@ -147,6 +149,36 @@ export const decisionRow = style({
   flexWrap: "wrap",
   gap: 8,
   alignItems: "center",
+});
+
+/** What a row of a built answer is about; it takes the room its buttons leave. */
+export const decisionLabel = style({
+  flex: "1 1 160px",
+  minWidth: 0,
+  fontSize: t.font.small,
+  color: t.color.ink,
+});
+/** A row's own buttons stay together when the row wraps. */
+export const decisionControls = style({
+  display: "flex",
+  flexWrap: "nowrap",
+  alignItems: "center",
+  gap: 8,
+});
+export const decisionAmount = style({
+  minWidth: 56,
+  textAlign: "center",
+  fontSize: t.font.small,
+  fontVariantNumeric: "tabular-nums",
+  color: t.color.ink,
+});
+export const decisionList = style({
+  margin: 0,
+  padding: 0,
+  listStyle: "none",
+  display: "flex",
+  flexDirection: "column",
+  gap: 8,
 });
 
 export const manaBar = style({

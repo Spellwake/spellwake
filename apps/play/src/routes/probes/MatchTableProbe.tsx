@@ -90,12 +90,19 @@ const SCENES: readonly PreviewScene[] = [
   "stack-waiting",
   "watching",
   "no-artifacts",
+  "ask-order",
+  "ask-targets",
+  "ask-counters",
+  "ask-prevention",
+  "ask-modes",
+  "ask-attack-cost",
 ];
 
 /**
  * Development only: the preview match started part-way through a turn, for
  * the stress checks and review captures. `?state=` names the scene: declaring
- * attackers or blockers, assigning combat damage, or spells on the stack.
+ * attackers or blockers, assigning combat damage, spells on the stack, or
+ * (`ask-…`) one of the questions answered by building something up.
  */
 export function MatchTableProbe(): ReactElement {
   const [params] = useSearchParams();

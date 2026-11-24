@@ -454,13 +454,11 @@ const creaturesOf = (snapshot: PlayerSnapshot, seatId: string) =>
   );
 const decision = (
   snapshot: PlayerSnapshot,
-  kind:
-    | "declare-attackers"
-    | "declare-blockers"
-    | "assign-combat-damage"
-    | "distribution",
+  kind: PlayerDecision["kind"],
   domain: PlayerDecision["domain"],
+  subjectLabel?: string,
 ): PlayerDecision => ({
+  ...(subjectLabel ? { subjectLabel } : {}),
   decision: `decision-${kind}-${snapshot.turn?.number ?? "0"}`,
   basis: snapshot.basis,
   respondingSeatIds: [snapshot.viewerSeatId],
@@ -1174,7 +1172,117 @@ export type PreviewScene =
   | "stack-long"
   | "stack-waiting"
   | "watching"
-  | "no-artifacts";
+  | "no-artifacts"
+  | AskScene;
+/** One question of each kind the table answers by building something up. */
+const ASK_SCENES = [
+  "ask-order",
+  "ask-targets",
+  "ask-counters",
+  "ask-prevention",
+  "ask-modes",
+  "ask-attack-cost",
+] as const;
+type AskScene = (typeof ASK_SCENES)[number];
+
+/** The table with one built-up question waiting for the viewer. */
+function askScene(scene: AskScene): PlayerSnapshot {
+  const table = previewSnapshot();
+  const viewer = table.viewerSeatId;
+  const mine = creaturesOf(table, viewer).map((object) => object.handle);
+  const others = table.players
+    .map((player) => player.seatId)
+    .filter((seatId) => seatId !== viewer);
+  const object = (handle: string) => ({ kind: "object" as const, handle });
+  const seatTarget = (seatId: string) => ({ kind: "seat" as const, seatId });
+  const [first = "", second = "", third = ""] = mine;
+  const asked =
+    scene === "ask-order"
+      ? decision(table, "order-triggers", {
+          kind: "ordering",
+          objects: mine.slice(0, 3),
+          labels: [],
+        })
+      : scene === "ask-targets"
+        ? decision(table, "proliferate", {
+            kind: "target-list",
+            targets: [
+              ...mine.slice(0, 2).map(object),
+              ...others.slice(0, 2).map(seatTarget),
+            ],
+            minimum: "0",
+            maximum: "4",
+          })
+        : scene === "ask-counters"
+          ? decision(table, "counter-removal", {
+              kind: "counter-removal",
+              permanent: first,
+              maximum: 3,
+              available: [
+                { kind: "plus-one", count: 2 },
+                { kind: "charge", count: 4 },
+              ],
+            })
+          : scene === "ask-prevention"
+            ? decision(table, "allocate-prevention", {
+                kind: "prevention",
+                attempts: [
+                  {
+                    attempt: first,
+                    maximum: "2",
+                    label: "Shock on Goblin Guide",
+                  },
+                  {
+                    attempt: second,
+                    maximum: "3",
+                    label: "Lightning Bolt on you",
+                  },
+                ],
+                required: "3",
+              })
+            : scene === "ask-modes"
+              ? decision(
+                  table,
+                  "modes",
+                  {
+                    kind: "trigger-modes",
+                    minimum: 1,
+                    maximum: 2,
+                    distinctTargets: true,
+                    modes: [
+                      {
+                        index: 0,
+                        targetRequired: true,
+                        targets: [first, second, third]
+                          .filter(Boolean)
+                          .map(object),
+                      },
+                      { index: 1, targetRequired: false, targets: [] },
+                      {
+                        index: 2,
+                        targetRequired: true,
+                        targets: others.slice(0, 2).map(seatTarget),
+                      },
+                    ],
+                  },
+                  "Goblin Chieftain’s trigger",
+                )
+              : decision(table, "declare-attackers", {
+                  kind: "attack-cost",
+                  generic: "2",
+                  whitePhyrexian: "1",
+                });
+  return {
+    ...table,
+    decisions: [asked],
+    // An attack cost is paid from mana already in the pool.
+    players: table.players.map((player) =>
+      player.seatId === viewer && scene === "ask-attack-cost"
+        ? { ...player, manaPool: [{ color: "red", amount: "3" }] }
+        : player,
+    ),
+  };
+}
 
 /** Combat damage being assigned on the viewer's turn. */
 function damageScene(
@@ -1276,6 +1384,8 @@ function stackScene(
 
 /** The preview table part-way through a turn, for the development probe. */
 export function previewScene(scene: PreviewScene): PlayerSnapshot {
+  const ask = ASK_SCENES.find((name) => name === scene);
+  if (ask) return askScene(ask);
   if (scene === "damage" || scene === "damage-two" || scene === "trample")
     return damageScene(scene);
   if (scene === "stack" || scene === "stack-long" || scene === "stack-waiting")
