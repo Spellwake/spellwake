@@ -2026,7 +2026,7 @@ fn related(value: &TriggerRelated) -> Value {
         TriggerRelated::Step { position, active } => {
             json!({"tag":"Step","position":damage_trace::turn_position_view(*position),"active":active.0})
         }
-        TriggerRelated::ReflexiveTrigger => json!({"tag":"ReflexiveTrigger"}),
+        TriggerRelated::ReflexiveTrigger { .. } => json!({"tag":"ReflexiveTrigger"}),
     }
 }
 fn occurrence_id(value: spellwake_engine::occurrence::OccurrenceId) -> Value {
@@ -4505,6 +4505,7 @@ pub fn occurrence(value: &RulesOccurrence) -> Value {
             source,
             controller,
             body,
+            ..
         } => {
             json!({"tag":"ReflexiveTrigger","source":appearance(source),"controller":controller.0,"body":program::body(body)})
         }

@@ -935,11 +935,7 @@ impl ManaOutput {
                         ManaOutputRestriction::Fixed(rule) => rule.valid_authored(vocabulary),
                         ManaOutputRestriction::ChosenCreatureType(_) => true,
                     },
-                    ManaOutputModifier::SpendEffect(effect) => !matches!(
-                        effect,
-                        ManaSpendEffect::RetainUntilCleanup
-                            | ManaSpendEffect::RetainUntilEndOfCombat
-                    ),
+                    ManaOutputModifier::SpendEffect(_) => true,
                     ManaOutputModifier::SideEffect(
                         ManaSideEffect::GainLife(n) | ManaSideEffect::DamageController(n),
                     ) => n.is_positive(),

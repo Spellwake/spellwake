@@ -117,6 +117,24 @@ impl ObjectFilterFlags {
     pub const MATCHES_NAMED_AGENDA: Self = Self(1 << 15);
     /// Matches a spell or ability on the stack that has exactly one target.
     pub const SINGLE_TARGET: Self = Self(1 << 16);
+    /// Matches cards with distinct names within a search/selection.
+    pub const DIFFERENT_NAMES: Self = Self(1 << 17);
+    /// Matches cards with distinct mana values within a search/selection.
+    pub const DIFFERENT_MANA_VALUES: Self = Self(1 << 18);
+    /// Matches cards with distinct colors within a search/selection.
+    pub const DIFFERENT_COLORS: Self = Self(1 << 19);
+    /// Matches cards with distinct card types within a search/selection.
+    pub const DIFFERENT_CARD_TYPES: Self = Self(1 << 20);
+    /// Preserves past-tense last-known-information controller/owner phrasing.
+    pub const LKI_PAST_TENSE: Self = Self(1 << 21);
+    /// Matches face-up permanents or exiled cards (`Ashiok, Nightmare Muse`, `Expose the Culprit`).
+    pub const FACE_UP: Self = Self(1 << 22);
+    /// Matches creatures that attacked or blocked this turn (`Gideon's Triumph`).
+    pub const ATTACKED_OR_BLOCKED_THIS_TURN: Self = Self(1 << 23);
+    /// Matches a commander (`Campfire`, `Opal Palace`, `Stinging Study`).
+    pub const IS_COMMANDER: Self = Self(1 << 24);
+    /// Matches a non-commander object (`The Peregrine Dynamo`).
+    pub const NOT_COMMANDER: Self = Self(1 << 25);
 
     /// Combine two flag sets.
     #[must_use]
@@ -156,6 +174,12 @@ pub enum ControllerRelation {
     OwnerYou,
     OwnerOpponent,
     OwnerThatPlayer,
+    ActivePlayer,
+    ChosenPlayer,
+    ThatPlayerOrPlaneswalkerController,
+    NextPlayerInDirection,
+    PlayerToLeft,
+    PlayerToRight,
 }
 
 /// Zone predicate on a filtered card/object.
@@ -167,18 +191,36 @@ pub enum ZoneFilter {
     YourGraveyard,
     OpponentGraveyard,
     OpponentsGraveyards,
+    TargetOpponentGraveyard,
+    DefendingPlayerGraveyard,
+    SingleGraveyard,
     AnyGraveyard,
     AllGraveyards,
     ThatPlayerGraveyard,
     TargetPlayerGraveyard,
     YourHand,
     ThatPlayerHand,
+    TargetPlayerHand,
+    TargetOpponentHand,
+    OpponentHand,
+    OpponentsHands,
+    EachPlayerHand,
+    AnyHand,
     YourLibrary,
+    TargetPlayerLibrary,
+    TargetOpponentLibrary,
+    ThatPlayerLibrary,
+    OpponentLibrary,
+    EachPlayerLibrary,
+    AnyLibrary,
     CommandZone,
     OutsideTheGame,
     YourGraveyardOrExile,
     AnyGraveyardOrExile,
     YourHandOrGraveyard,
+    YourLibraryOrGraveyard,
+    YourGraveyardHandOrLibrary,
+    ItsOwnerGraveyard,
 }
 
 /// Combat-state predicate on a battlefield creature.
@@ -228,6 +270,79 @@ pub enum NameFilterAst {
     SelfName,
     Exact(String),
     SameAsReferenced,
+    SameAs(Box<SubjectRefAst>),
+}
+
+/// Typed reference to objects affected by an earlier action in the same resolution.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum PriorActionRefKind {
+    SacrificedThisWay,
+    DestroyedThisWay,
+    ExiledThisWay,
+    DiscardedThisWay,
+    RevealedThisWay,
+    PutIntoGraveyardThisWay,
+    ReturnedToHandThisWay,
+    TappedThisWay,
+    ReceivedCounterThisWay(String),
+    ChosenThisWay { negated: bool },
+}
+
+/// Structured relational, superlative, or characteristic predicate on an `ObjectFilterAst`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum FilterPredicateAst {
+    SuperlativeStat {
+        stat: StatKind,
+        greatest: bool,
+    },
+    SuperlativeAmong {
+        stat: StatKind,
+        greatest: bool,
+        scope: Box<ObjectFilterAst>,
+    },
+    OfEachCategory(String),
+    ManaValueParity {
+        even: bool,
+    },
+    HasManaSymbolInCost(String),
+    HasAbilityKind {
+        kind: String,
+        negated: bool,
+    },
+    CouldProduce(String),
+    CouldAttachTo(Box<SubjectRefAst>),
+    SharesPropertyWith {
+        property: String,
+        reference: Box<SubjectRefAst>,
+        negated: bool,
+    },
+    DifferentNameFrom(Box<SubjectRefAst>),
+    ManaValueIn(Vec<i32>),
+    StatRelationTo {
+        stat: StatKind,
+        cmp: CompareOp,
+        expr: Box<ValueExprAst>,
+    },
+    SameTotalPowerAndToughness,
+    HasBasicLandType,
+    AttachedBy(Box<ObjectFilterAst>),
+    AttachedTo(Box<SubjectRefAst>),
+    AnyOf(Vec<ObjectFilterAst>),
+    AffectedByPriorAction(PriorActionRefKind),
+    AttackingTarget {
+        target: Box<SubjectRefAst>,
+        this_turn: bool,
+    },
+    Blocking(Box<SubjectRefAst>),
+    Exclude(Box<SubjectRefAst>),
+    MatchesChosen {
+        negated: bool,
+    },
+    TargetsSubject(Box<SubjectRefAst>),
+    NotOwnedByController,
+    FromSource(Box<ObjectFilterAst>),
+    NthSpellCastThisTurn(u8),
+    StateQualification(String),
 }
 
 /// Orthogonal 13-dimension object filter AST.
@@ -243,7 +358,11 @@ pub struct ObjectFilterAst {
     pub forbidden_colors: ColorMask,
     pub color_arity: Option<ColorArity>,
     pub controller: Option<ControllerRelation>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub owner: Option<ControllerRelation>,
     pub zone: Option<ZoneFilter>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub extra_zones: Vec<ZoneFilter>,
     pub combat: Option<CombatState>,
     pub tapped: Option<bool>,
     pub token: Option<bool>,
@@ -254,6 +373,8 @@ pub struct ObjectFilterAst {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub named: Option<NameFilterAst>,
     pub flags: ObjectFilterFlags,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub predicates: Vec<FilterPredicateAst>,
     pub any_permanent: bool,
     pub any_card: bool,
     pub any_spell: bool,
@@ -274,7 +395,9 @@ impl ObjectFilterAst {
             && self.forbidden_colors.is_empty()
             && self.color_arity.is_none()
             && self.controller.is_none()
+            && self.owner.is_none()
             && self.zone.is_none()
+            && self.extra_zones.is_empty()
             && self.combat.is_none()
             && self.tapped.is_none()
             && self.token.is_none()
@@ -284,6 +407,7 @@ impl ObjectFilterAst {
             && self.counter_kind.is_none()
             && self.named.is_none()
             && self.flags.is_empty()
+            && self.predicates.is_empty()
             && !self.any_permanent
             && !self.any_card
             && !self.any_spell
@@ -310,6 +434,11 @@ pub enum PlayerRefAst {
     ItsController,
     ItsOwner,
     ThatObjectController,
+    ThatPlayerOrPlaneswalkerController,
+    EachPlayerOnYourTeam,
+    ChosenPlayer,
+    TargetOpponentWhoseTurnItIs,
+    TargetOpponentAtRandom,
 }
 
 /// Target cardinality specification.
@@ -322,12 +451,38 @@ pub enum TargetCountAst {
     AnyNumber,
 }
 
+/// Pile reference for pile-separation effects (Fact or Fiction, Make an Example, etc.).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum PileRefAst {
+    ChosenPile,
+    OtherPile,
+    ThatPile,
+    EachPile,
+    FilteredInPile {
+        filter: Box<ObjectFilterAst>,
+        pile: Box<PileRefAst>,
+    },
+}
+
 /// Subject or target reference inside an effect, trigger, or static clause.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum SubjectRefAst {
     SelfObject,
     Anaphora(String),
     AttachedHost(String),
+    /// Explicit zone-qualified self or anaphora subject (e.g. `~ from your graveyard`, `it from exile`).
+    InZone {
+        subject: Box<SubjectRefAst>,
+        zone: ZoneFilter,
+    },
+    /// Possessive controller of an arbitrary subject (e.g. `target spell's controller`).
+    ControllerOf(Box<SubjectRefAst>),
+    /// Possessive owner of an arbitrary subject (e.g. `target creature's owner`).
+    OwnerOf(Box<SubjectRefAst>),
+    /// Craft LKI group (`the exiled cards used to craft ~`).
+    CraftExiledCards,
+    /// Pile reference subject (`that pile`, `the creatures in their chosen pile`).
+    PileRef(PileRefAst),
     AnyTarget,
     TargetPlayerOrPlaneswalker {
         opponent_only: bool,
@@ -339,6 +494,18 @@ pub enum SubjectRefAst {
     TargetObject {
         filter: Box<ObjectFilterAst>,
         count: TargetCountAst,
+    },
+    /// Shared target pool across disjunctive target specifications (e.g. `up to three target creatures
+    /// from the battlefield and/or creature cards from graveyards`, `target opponent or battle`).
+    TargetOneOf {
+        options: Vec<SubjectRefAst>,
+        count: TargetCountAst,
+    },
+    /// Distinct ordinal target slot (`another target creature`, `a third target creature`) preserving
+    /// pairwise distinctness across multi-target instructions (`Serpentine Spike`).
+    DistinctTarget {
+        ordinal: u8,
+        filter: Box<ObjectFilterAst>,
     },
     Player(PlayerRefAst),
     PlayerMatching {
@@ -456,6 +623,83 @@ pub enum ValueExprAst {
     PartySize,
     /// Total number of cards in all players' hands.
     TotalCardsInAllHands,
+    /// Exponentiation (e.g. `2^x` in Mathemagics).
+    Pow {
+        base: Box<ValueExprAst>,
+        exp: Box<ValueExprAst>,
+    },
+    /// Number of colors of mana spent to cast a referenced spell (`that spell`).
+    ColorsOfManaSpentOn(Box<SubjectRefAst>),
+    /// Count of a specific color's mana symbols in the mana costs of a subject group.
+    ColorPipsIn {
+        color: String,
+        subject: Box<SubjectRefAst>,
+    },
+    /// Saturating shortfall below a threshold (`for each card less than two a player draws this way`).
+    Shortfall {
+        threshold: Box<ValueExprAst>,
+        actual: Box<ValueExprAst>,
+    },
+    /// Extreme stat value among filtered objects (e.g. `greatest mana value of a commander you own`).
+    ExtremeStatAmong {
+        stat: StatKind,
+        greatest: bool,
+        filter: Box<ObjectFilterAst>,
+        #[serde(default)]
+        or_toughness: bool,
+    },
+    /// Distinct count of a characteristic category among filtered objects (`different powers`, `permanent types`, `colors`, etc.).
+    DistinctCountAmong {
+        category: String,
+        filter: Box<ObjectFilterAst>,
+    },
+    /// Greatest number of objects in a filtered set sharing a single subtype (`Skemfar Shadowsage`, `Basalt Ravager`).
+    MaxSharedSubtypeCount {
+        filter: Box<ObjectFilterAst>,
+    },
+    /// Count of players matching a predicate (`players who control more lands than you`, `players being attacked`).
+    CountPlayersMatching {
+        predicate: String,
+    },
+    /// Turn-scoped or game-scoped event counter (`permanents you've sacrificed this turn`, `times cast from command zone`).
+    EventCountThisTurn {
+        event: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        player: Option<PlayerRefAst>,
+    },
+    /// Total counters of a given kind across all objects matching a filter (`time counters among permanents you control`).
+    CounterCountAmong {
+        counter_kind: String,
+        filter: Box<ObjectFilterAst>,
+    },
+    /// Number of unique vowels on the referenced name sticker (`Unfinity` eternal-legal cards).
+    StickerUniqueVowels,
+    /// Absolute difference between two numeric expressions (`the difference between its power and toughness`).
+    AbsDiff(Box<ValueExprAst>, Box<ValueExprAst>),
+    /// Maximum of two numeric expressions (`2 or the greatest power among Dinosaurs you control, whichever is greater`).
+    Max(Box<ValueExprAst>, Box<ValueExprAst>),
+    /// Minimum of two numeric expressions (`X or enchanted creature's toughness minus 1, whichever is smaller`).
+    Min(Box<ValueExprAst>, Box<ValueExprAst>),
+    /// Mana value of a commander owned by `owner` (battlefield or command zone); `greatest: false` when player chooses (`Stinging Study`).
+    CommanderManaValue {
+        owner: PlayerRefAst,
+        greatest: bool,
+    },
+    /// Number of listed keywords possessed by a subject (`Akroma, Vision of Ixidor`).
+    CountKeywordsIn {
+        subject: Box<SubjectRefAst>,
+        keywords: Vec<String>,
+    },
+    /// Mana spent to activate an ability (`Mr. House, President and CEO`).
+    ManaSpentToActivate {
+        mana_filter: Option<String>,
+    },
+    /// Number of times a commander has been cast from the command zone this game (`Opal Palace`).
+    TimesCastFromCommandZone(Box<SubjectRefAst>),
+    /// Number of cards drawn by a player during the current resolution (`Malignant Growth`).
+    CountDrawnThisWay(PlayerRefAst),
+    /// Amount of energy (`{E}`) paid during the current resolution (`Wheel of Potential`).
+    EnergyPaidThisWay,
     /// Opt-in tabletop honor-system integer input (e.g. bystander number, dexterity count).
     ManualTabletopNumber {
         prompt: String,
@@ -470,6 +714,7 @@ pub enum DurationAst {
     UntilEndOfTurn,
     UntilYourNextTurn,
     UntilEndOfNextTurn,
+    UntilEndOfPlayersNextTurn(PlayerRefAst),
     Permanent,
     UntilSourceLeaves,
     ForAsLongAs(Box<ConditionAst>),
@@ -680,6 +925,60 @@ pub enum GameMarker {
         filter: Box<ObjectFilterAst>,
         predicate: Box<ObjectFilterAst>,
     },
+    DealtDamageThisWay {
+        combat_only: bool,
+    },
+    DealtDamageBySelfThisTurn {
+        combat_only: bool,
+    },
+    SubjectHarnessed(Box<SubjectRefAst>),
+    AdditionalCostPaid {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        description: Option<String>,
+    },
+    PlayerDealtDamageBy {
+        player: PlayerRefAst,
+        source_filter: Box<ObjectFilterAst>,
+        min_sources: u16,
+        combat_only: bool,
+        this_game: bool,
+    },
+    PlayerHadCardsPutIntoGraveyardThisTurn {
+        player: PlayerRefAst,
+        min_count: u16,
+    },
+    IsNthSpellMatchingThisTurn {
+        nth: u8,
+        filters: Vec<ObjectFilterAst>,
+    },
+    TopCardOfZoneMatches {
+        zone: ZoneFilter,
+        filter: Box<ObjectFilterAst>,
+    },
+    PlayerActionExtremeStat {
+        player: PlayerRefAst,
+        action: PriorActionRefKind,
+        stat: StatKind,
+        greatest: bool,
+        allow_tie: bool,
+    },
+    CycledCardNamedTimesThisGame {
+        name: NameFilterAst,
+        min_times: u16,
+    },
+    RevealedDistinctNames {
+        min_count: u16,
+    },
+    EnergyPaidThisWayAtLeast(u16),
+    ZoneActionCountThisWay {
+        action: PriorActionRefKind,
+        min_count: u16,
+    },
+    DistinctCardTypesAmong {
+        filter: Box<ObjectFilterAst>,
+        min_count: u16,
+    },
+    SameManaValueAsTriggerSpell,
 }
 
 /// Condition AST used by intervening-if triggers, resolution branches, and conditional statics.
@@ -820,6 +1119,39 @@ pub enum ConditionAst {
     Not(Box<ConditionAst>),
     And(Box<ConditionAst>, Box<ConditionAst>),
     Or(Box<ConditionAst>, Box<ConditionAst>),
+    /// Coin-flip outcome condition (`if you win all the flips`, `if you won N or more flips`).
+    CoinFlipOutcome {
+        outcome: String,
+    },
+    /// Player tie comparison (`if two or more players are tied for fewest`).
+    PlayersTiedFor {
+        metric: String,
+        min_tied: u8,
+    },
+    /// Turn/game history check (`if ~ dealt damage to another creature this turn`, `if you cycled two or more cards this turn`).
+    EventOccurredThisTurn {
+        event: String,
+    },
+    /// General numeric expression comparison (`if there are four or more basic land types among lands that player controls`).
+    ExprCompare {
+        lhs: Box<ValueExprAst>,
+        op: CompareOp,
+        rhs: Box<ValueExprAst>,
+    },
+    /// Unspent mana threshold check (`as long as you have six or more unspent mana`).
+    UnspentManaAtLeast {
+        player: PlayerRefAst,
+        amount: i32,
+    },
+    /// Prime-number cardinality check (`if you control a prime number of lands`).
+    PrimeNumberCheck {
+        expr: Box<ValueExprAst>,
+    },
+    /// Quantified check over a referenced object/player group (`if any of those creatures have ...`).
+    AnyOfGroupMatches {
+        group: Box<SubjectRefAst>,
+        predicate: String,
+    },
     /// Opt-in tabletop honor-system yes/no check (e.g. attire, physical feat, social prompt).
     ManualTabletopCheck {
         prompt: String,
@@ -848,6 +1180,15 @@ pub enum ManaSpecAst {
     },
     AnyLandCouldProduce {
         controller: ControllerRelation,
+    },
+    /// Filtered mana-production query (`one mana of any color that a Gate you control could produce`).
+    AnyObjectCouldProduce {
+        filter: Box<ObjectFilterAst>,
+        any_type: bool,
+    },
+    /// Mana color constrained to colors among a filtered group (`Mox Amber`).
+    AnyColorAmong {
+        source: Box<SubjectRefAst>,
     },
     ChosenColor,
     CommanderColorIdentity,
@@ -896,6 +1237,8 @@ pub enum CostAtomAst {
         base: String,
         per: String,
     },
+    /// Pay generic mana equal to a dynamic expression (`Repulsive Mutation`: `mana equal to the greatest power ...`).
+    PayGenericManaExpr(Box<ValueExprAst>),
     Behold(Box<ObjectFilterAst>),
     TapSelf,
     UntapSelf,
@@ -905,13 +1248,22 @@ pub enum CostAtomAst {
     Sacrifice {
         count: Box<ValueExprAst>,
         filter: Box<ObjectFilterAst>,
+        #[serde(default)]
+        up_to: bool,
+        #[serde(default)]
+        min_one: bool,
     },
+    SacrificeAll(Box<ObjectFilterAst>),
     DiscardSelf,
     DiscardHand,
     Discard {
         count: Box<ValueExprAst>,
         filter: Box<ObjectFilterAst>,
         random: bool,
+        #[serde(default)]
+        up_to: bool,
+        #[serde(default)]
+        any_number: bool,
     },
     ExileSelf {
         from_graveyard: bool,
@@ -920,8 +1272,28 @@ pub enum CostAtomAst {
     Exile {
         count: Box<ValueExprAst>,
         filter: Box<ObjectFilterAst>,
+        #[serde(default)]
+        face_down: bool,
+        #[serde(default)]
+        face_up: bool,
+        #[serde(default)]
+        single_graveyard: bool,
+        #[serde(default)]
+        any_number: bool,
+        #[serde(default)]
+        min_one: bool,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        total_mv: Option<(CompareOp, Box<ValueExprAst>)>,
     },
     ExileTopLibrary {
+        count: Box<ValueExprAst>,
+        face_down: bool,
+    },
+    /// Exile top card(s) of a non-library zone (e.g. `Exile the top [creature] card of your graveyard`).
+    ExileTopZone {
+        zone: ZoneFilter,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        filter: Option<Box<ObjectFilterAst>>,
         count: Box<ValueExprAst>,
         face_down: bool,
     },
@@ -932,6 +1304,14 @@ pub enum CostAtomAst {
         counter_kind: String,
         subject: Box<SubjectRefAst>,
     },
+    /// Remove counters distributed from among matching permanents (e.g. `Hopeful Initiate`, `Ooze Flux`).
+    RemoveCountersFromAmong {
+        all: bool,
+        min_one: bool,
+        count: Option<Box<ValueExprAst>>,
+        counter_kind: String,
+        filter: Box<ObjectFilterAst>,
+    },
     PutCounters {
         count: Box<ValueExprAst>,
         counter_kind: String,
@@ -940,6 +1320,8 @@ pub enum CostAtomAst {
     TapPermanent {
         count: Box<ValueExprAst>,
         filter: Box<ObjectFilterAst>,
+        #[serde(default)]
+        any_number: bool,
     },
     UntapPermanent {
         count: Box<ValueExprAst>,
@@ -1011,6 +1393,8 @@ pub enum TriggerEventAst {
         source: Option<Box<SubjectRefAst>>,
         recipient: Option<Box<SubjectRefAst>>,
         grouped: bool,
+        #[serde(default)]
+        excess_only: bool,
     },
     Attacks {
         subject: Option<Box<SubjectRefAst>>,
@@ -1033,6 +1417,14 @@ pub enum TriggerEventAst {
     BecomesBlocked {
         subject: Box<SubjectRefAst>,
         blocker: Option<Box<SubjectRefAst>>,
+    },
+    /// Filtered or multi-creature blocking / becoming-blocked trigger (`Serra Inquisitors`, `Lairwatch Giant`, `Godsend`).
+    BlocksOrBecomesBlockedBy {
+        subject: Box<SubjectRefAst>,
+        other_filter: Box<ObjectFilterAst>,
+        blocks: bool,
+        becomes_blocked: bool,
+        min_count: u8,
     },
     SpellCast {
         caster: PlayerRefAst,
@@ -1199,6 +1591,31 @@ pub struct TriggerSpecAst {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ModalModeAst {
     pub body: Vec<InstructionAst>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub label: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub granted: Option<Box<FaceAst>>,
+}
+
+/// Modifier on a library search (`instead of one`, `an additional`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum SearchModifierAst {
+    InsteadOfOne,
+    Additional,
+}
+
+/// Optional count limit for cast/play permissions (`up to N of`, `any number of`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum CountLimitAst {
+    UpTo(Box<ValueExprAst>),
+    AnyNumber,
+}
+
+/// Alternative casting cost specified on a cast permission (`pay life equal to its mana value`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum AltCastCostAst {
+    PayLifeEqualToManaValue,
+    PayCost(Vec<CostAtomAst>),
 }
 
 /// Kind of orthogonal pairwise exchange (`Exchange` instruction).
@@ -1338,6 +1755,8 @@ pub enum InstructionAst {
     Draw {
         player: PlayerRefAst,
         count: Box<ValueExprAst>,
+        #[serde(default)]
+        up_to: bool,
     },
     DealDamage {
         source: Box<SubjectRefAst>,
@@ -1348,6 +1767,8 @@ pub enum InstructionAst {
         source: Box<SubjectRefAst>,
         amount: Box<ValueExprAst>,
         targets_desc: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        divider: Option<PlayerRefAst>,
     },
     SwitchPowerToughness {
         subject: Box<SubjectRefAst>,
@@ -1433,11 +1854,21 @@ pub enum InstructionAst {
     Proliferate,
     Destroy {
         subject: Box<SubjectRefAst>,
+        #[serde(default)]
+        random: bool,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        except: Option<Box<SubjectRefAst>>,
     },
     ModifyPreviousDestroyNoRegen,
     Exile {
         actor: Option<PlayerRefAst>,
         subject: Box<SubjectRefAst>,
+        #[serde(default)]
+        random: bool,
+        #[serde(default)]
+        face_down: bool,
+        #[serde(default)]
+        into_pile: bool,
     },
     ExileUntilLeaves {
         subject: Box<SubjectRefAst>,
@@ -1456,6 +1887,14 @@ pub enum InstructionAst {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         count: Option<Box<ValueExprAst>>,
         subject: Box<SubjectRefAst>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        except: Option<Box<SubjectRefAst>>,
+        #[serde(default)]
+        half: bool,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        rounding: Option<Rounding>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        chooser: Option<PlayerRefAst>,
     },
     SacrificeAnyNumber {
         player: PlayerRefAst,
@@ -1483,6 +1922,18 @@ pub enum InstructionAst {
         transformed: bool,
         with_counter: Option<String>,
         attached_to: Option<Box<SubjectRefAst>>,
+        #[serde(default)]
+        random: bool,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        except: Option<Box<SubjectRefAst>>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        count: Option<Box<ValueExprAst>>,
+        #[serde(default)]
+        up_to: bool,
+        #[serde(default)]
+        any_number: bool,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        actor: Option<PlayerRefAst>,
     },
     MoveZone {
         subject: Box<SubjectRefAst>,
@@ -1517,10 +1968,26 @@ pub enum InstructionAst {
         up_to: bool,
         #[serde(default)]
         any_number: bool,
+        #[serde(default)]
+        exact: bool,
         filter: Box<ObjectFilterAst>,
         reveal: bool,
         to_zone: String,
         shuffle: bool,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        extra_zones: Vec<ZoneFilter>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        secondary_filter: Option<Box<ObjectFilterAst>>,
+        #[serde(default)]
+        secondary_is_or: bool,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        where_x: Option<Box<ValueExprAst>>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        rest_to_zone: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        modifier: Option<SearchModifierAst>,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        follow_up: Vec<InstructionAst>,
     },
     ShuffleLibrary {
         player: PlayerRefAst,
@@ -1552,6 +2019,8 @@ pub enum InstructionAst {
     },
     TapPermanent {
         subject: Box<SubjectRefAst>,
+        #[serde(default)]
+        any_number: bool,
     },
     UntapPermanent {
         subject: Box<SubjectRefAst>,
@@ -1578,6 +2047,10 @@ pub enum InstructionAst {
     Attach {
         subject: Box<SubjectRefAst>,
         target: Box<SubjectRefAst>,
+        #[serde(default)]
+        any_number: bool,
+        #[serde(default)]
+        all: bool,
     },
     GainControl {
         controller: PlayerRefAst,
@@ -1608,6 +2081,10 @@ pub enum InstructionAst {
         subject: Box<SubjectRefAst>,
         free: bool,
         duration: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        count_limit: Option<CountLimitAst>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        alt_cost: Option<AltCastCostAst>,
     },
     CombatRuleMod {
         subject: Box<SubjectRefAst>,
@@ -1698,6 +2175,8 @@ pub enum InstructionAst {
     Manifest {
         count: Box<ValueExprAst>,
         dread: bool,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        subject: Option<Box<SubjectRefAst>>,
     },
     Cloak {
         count: Box<ValueExprAst>,
@@ -1759,6 +2238,8 @@ pub enum InstructionAst {
         subject: Box<SubjectRefAst>,
         counter_kind: String,
         count: Box<ValueExprAst>,
+        #[serde(default)]
+        face_down: bool,
     },
     ShuffleIntoLibrary {
         subject: Box<SubjectRefAst>,
@@ -1785,10 +2266,18 @@ pub enum InstructionAst {
     },
     ChangeTargets {
         target: Box<SubjectRefAst>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        new_target: Option<Box<SubjectRefAst>>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        must_target: Option<Box<SubjectRefAst>>,
+        #[serde(default)]
+        single_target_only: bool,
     },
     SeparateIntoPiles {
         chooser: PlayerRefAst,
         pile_count: u8,
+        #[serde(default)]
+        face_down_piles: u8,
     },
     ChoosePile {
         chooser: PlayerRefAst,
@@ -1799,6 +2288,8 @@ pub enum InstructionAst {
     },
     AddManaLandProduced {
         player: PlayerRefAst,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        count: Option<Box<ValueExprAst>>,
     },
     ReorderTopLibrary,
     Recruit,
@@ -1830,6 +2321,10 @@ pub enum InstructionAst {
         amount: Box<ValueExprAst>,
         from: Box<SubjectRefAst>,
         to: Box<SubjectRefAst>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        source_choice: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        duration: Option<DurationAst>,
     },
     AbilityCostReduction {
         delta: String,
@@ -1935,6 +2430,186 @@ pub enum InstructionAst {
         subject: Box<SubjectRefAst>,
         until: DurationAst,
     },
+    /// Non-You or filtered-player emblem creation (e.g. `Chandra, Roaring Flame`).
+    CreateEmblemFor {
+        recipient: Box<SubjectRefAst>,
+        text: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        compiled: Option<Box<FaceAst>>,
+    },
+    /// Generalized action applied to a subject-referenced or filtered player set.
+    ForEachSubjectPlayer {
+        players: Box<SubjectRefAst>,
+        body: Vec<InstructionAst>,
+    },
+    /// Keyword action: Harness (Infinity Stones / Marvel).
+    Harness {
+        subject: Box<SubjectRefAst>,
+    },
+    /// Structured selection from a group (e.g. `choose one of them at random`).
+    ChooseFromGroup {
+        count: Box<ValueExprAst>,
+        random: bool,
+        group: Box<SubjectRefAst>,
+    },
+    /// Temporary special-action timing window (`any time you could activate a mana ability`).
+    TemporarySpecialAction {
+        timing: String,
+        duration: DurationAst,
+        body: Vec<InstructionAst>,
+    },
+    /// Iterate over each color among a subject group (`Sunbird Standard`).
+    ForEachColorAmong {
+        source: Box<SubjectRefAst>,
+        body: Vec<InstructionAst>,
+    },
+    /// Modal choice modifier or constraint (`choose both instead`, `each mode must target a different player`).
+    ModalModifier(String),
+    /// Repeat-process loop with explicit dynamic count, keyword list, or until-condition (`Another Round`, `Kathril`, `Timesifter`).
+    RepeatProcessExt {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        times: Option<Box<ValueExprAst>>,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        for_list: Vec<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        until: Option<String>,
+    },
+    /// Temporary mana-spending rule (`you may spend colorless mana as though it were mana of any color`).
+    TemporaryManaSpendRule {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        mana_kind: Option<String>,
+        as_though: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        purpose: Option<String>,
+        duration: DurationAst,
+        #[serde(default)]
+        next_only: bool,
+    },
+    /// Duration-scoped continuous body (`For as long as <cond>, <effect>`).
+    ForAsLongAs {
+        condition: Box<ConditionAst>,
+        body: Vec<InstructionAst>,
+    },
+    /// Next-action delayed trigger (`When you next cast <spell> this turn, <effect>`).
+    WhenYouNext {
+        event: String,
+        body: Vec<InstructionAst>,
+        duration: DurationAst,
+    },
+    /// Dual variable binding (`where X is <e1> and Y is <e2>`).
+    BindXY {
+        x_expr: Box<ValueExprAst>,
+        y_expr: Box<ValueExprAst>,
+        body: Vec<InstructionAst>,
+    },
+    /// Choose a counter (or kind of counter) on a subject (`Animation Module`, `Clockspinning`, `Contractual Safeguard`).
+    ChooseCounter {
+        subject: Box<SubjectRefAst>,
+        #[serde(default)]
+        kind_only: bool,
+    },
+    /// Move counter(s) from one object to another (`Leech Bonder`).
+    MoveCounter {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        counter_kind: Option<String>,
+        from: Box<SubjectRefAst>,
+        to: Box<SubjectRefAst>,
+    },
+    /// Suspect or unsuspect a creature (`Frantic Scapegoat`, `Airtight Alibi`, `Absolving Lammasu`).
+    SetSuspected {
+        subject: Box<SubjectRefAst>,
+        #[serde(default)]
+        remove: bool,
+    },
+    /// Auction/bidding action (`Pain's Reward`, `Mages' Contest`, `Illicit Auction`).
+    BiddingAction(String),
+    /// Voting modifier/action (`Illusion of Choice`, `Mob Verdict`).
+    VotingAction(String),
+    /// Symmetric "does the same" / "the same way" repetition (`Balance`, `Restore Balance`, `Juxtapose`, `The Wedding of River Song`).
+    RepeatSameWay(String),
+    /// Temporary entry modifier (`Lands you control enter tapped this turn`, `They enter tapped and attacking`).
+    EntersTappedRule {
+        subject: Box<SubjectRefAst>,
+        tapped: bool,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        attacking: Option<String>,
+        duration: DurationAst,
+    },
+    /// Turn a permanent face down (`Master of the Veil`).
+    TurnFaceDown {
+        subject: Box<SubjectRefAst>,
+    },
+    /// Action targeting a pile or cards in a pile (`Phyrexian Portal`, `Bend or Break`, `Abstract Performance`).
+    PileAction {
+        action: String,
+        pile: PileRefAst,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        filter: Option<Box<ObjectFilterAst>>,
+    },
+    /// Characteristic-only or target-only modal option (`Outlaws' Merriment`, `Wild Shape`, `Genku`, `Call Damage Control`).
+    TokenCharacteristicsChoice(String),
+    /// Generalized reveal/look-at subject action (`Nightshade Assassin`, `Vault 21`, `Guided Passage`, `Mindblaze`).
+    RevealCards {
+        subject: Box<SubjectRefAst>,
+    },
+    /// Mana-spend rider applied when the produced mana is spent to cast a matching spell (`Opal Palace`, `Biophagus`, `Jade Orb`).
+    ManaSpendRider {
+        cast_filter: Box<ObjectFilterAst>,
+        rider: Vec<InstructionAst>,
+    },
+    /// Turn-order or direction-ordered sequential player selection (`Order of Succession`, `The Legend of Yangchen`, `Manifold Insights`, `Rejoin the Fight`, `Fortunate Few`, `Grenzo's Rebuttal`).
+    SequentialChoose {
+        start_player: PlayerRefAst,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        direction: Option<String>,
+        each_player: PlayerRefAst,
+        filter: Box<ObjectFilterAst>,
+        #[serde(default)]
+        distinct: bool,
+        count: TargetCountAst,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        body: Vec<InstructionAst>,
+    },
+    /// Choose one object per category filter (`Cataclysm`, `Selective Adaptation`).
+    ChoosePerFilter {
+        player: PlayerRefAst,
+        categories: Vec<ObjectFilterAst>,
+        #[serde(default)]
+        sacrifice_rest: bool,
+    },
+    /// Turn face-down object(s) face up (`Pyxis of Pandemonium`).
+    TurnFaceUp {
+        player: PlayerRefAst,
+        subject: Box<SubjectRefAst>,
+    },
+    /// Choose one keyword from a fixed list to grant (`Ballroom Brawlers`).
+    GrantKeywordChoice {
+        subject: Box<SubjectRefAst>,
+        choices: Vec<String>,
+        duration: DurationAst,
+    },
+    /// Look at one or more hidden objects/zones (`Spy Network`).
+    LookAt {
+        player: PlayerRefAst,
+        targets: Vec<SubjectRefAst>,
+    },
+    /// Typed reflexive triggered ability (`Explosion of Riches`, `Saruman of Many Colors`, `Unleash the Inferno`).
+    ReflexiveEventTrigger {
+        trigger: TriggerSpecAst,
+        body: Vec<InstructionAst>,
+    },
+    /// Exile or reveal from top of library until cumulative stat total reaches a threshold (`Dream Harvest`, `Tasha's Hideous Laughter`).
+    ExileOrRevealTopUntilTotalStat {
+        exile: bool,
+        player: PlayerRefAst,
+        stat: StatKind,
+        threshold: Box<ValueExprAst>,
+    },
+    /// Lossless structured effect rule preserving full semantics for specialized Magic rules (`Karn Liberated`, `Global Ruin`, `Feather`, `Invert`, etc.).
+    StructuredRule {
+        kind: String,
+        text: String,
+    },
 }
 
 /// Consolidated static ability AST (5 core categories + Conspiracy command-zone agenda).
@@ -1997,6 +2672,12 @@ pub enum StaticAbilityAst {
     },
     AlternativeCastCost {
         cost: Vec<CostAtomAst>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        condition: Option<Box<ConditionAst>>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        for_spells: Option<Box<ObjectFilterAst>>,
+        #[serde(default)]
+        next_only: bool,
     },
     FlashbackCostModifier {
         cost: String,
@@ -2097,6 +2778,134 @@ pub enum StaticAbilityAst {
     Otherwise(Box<StaticAbilityAst>),
     /// Follow-up imperative instructions in a multi-sentence static/replacement paragraph.
     FollowUp(Vec<InstructionAst>),
+    /// Prototype alternate mana cost and power/toughness header (`{M} - P/T`).
+    PrototypeStats {
+        cost: Vec<CostAtomAst>,
+        power: String,
+        toughness: String,
+    },
+    /// Typed counter prevention static (`can't have -1/-1 counters put on them`, `can't get poison counters`).
+    PreventCounters {
+        subject: Box<SubjectRefAst>,
+        counter_kind: Option<String>,
+        condition: Option<Box<ConditionAst>>,
+    },
+    /// Damage-as-though keyword proxy static (`all damage is dealt to you as though its source had infect`).
+    DamageDealtAsThough {
+        damage_filter: String,
+        target: Box<SubjectRefAst>,
+        source_keyword: String,
+        condition: Option<Box<ConditionAst>>,
+    },
+    /// Leading `For each <per>, <static>` scaling wrapper (preserves quantifier losslessly).
+    ScaledBy {
+        per: Box<ValueExprAst>,
+        inner: Box<StaticAbilityAst>,
+    },
+    /// Conspiracy / draft-matters static rule (`Reveal ~ as you draft it`, `As you draft a card, ...`).
+    DraftAction(String),
+    /// Static mana-spending rule (`You may spend white mana as though it were mana of any color`).
+    ManaSpendRule {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        mana_kind: Option<String>,
+        as_though: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        purpose: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        condition: Option<Box<ConditionAst>>,
+    },
+    /// Static look/reveal rule (`Play with your hand revealed`, `You may look at face-down creatures ...`).
+    LookOrRevealRule {
+        rule: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        filter: Option<Box<ObjectFilterAst>>,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        follow_up: Vec<InstructionAst>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        condition: Option<Box<ConditionAst>>,
+    },
+    /// Static rule paired with a player ignore-effect payment (`Leonin Arbiter`, `Lost in Thought`, `Damping Engine`).
+    WithIgnoreCost {
+        inner: Box<StaticAbilityAst>,
+        who: String,
+        cost: Vec<CostAtomAst>,
+        duration: DurationAst,
+    },
+    /// Alternative activation/keyword cost (`Bruenor`, `New Perspectives`, `Heart of Kiran`).
+    AlternativeAbilityCost {
+        cost: Vec<CostAtomAst>,
+        ability_kind: String,
+        scope: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        condition: Option<Box<ConditionAst>>,
+    },
+    /// Damage-doubling static (`Double all damage ~ would deal`).
+    DoubleAllDamage {
+        source: Box<SubjectRefAst>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        condition: Option<Box<ConditionAst>>,
+    },
+    /// Fractional damage prevention (`prevent half that damage, rounded up`).
+    PreventFractionDamage {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        source: Option<Box<SubjectRefAst>>,
+        target: Box<SubjectRefAst>,
+        numerator: u8,
+        denom: u8,
+        rounding: Rounding,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        condition: Option<Box<ConditionAst>>,
+    },
+    /// Threshold damage prevention (`If a source would deal 3 or less damage to ~, prevent that damage`).
+    PreventThresholdDamage {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        source: Option<Box<SubjectRefAst>>,
+        target: Box<SubjectRefAst>,
+        max_damage: Box<ValueExprAst>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        condition: Option<Box<ConditionAst>>,
+    },
+    /// Damage prevention paired with replacement follow-up (`Panther Habit`, `Unbreathing Horde`).
+    PreventAndReplaceDamage {
+        target: Box<SubjectRefAst>,
+        follow_up: Vec<InstructionAst>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        condition: Option<Box<ConditionAst>>,
+    },
+    /// Counter-placement scaling replacement (`Vorinclex, Monstrous Raider`).
+    CounterModificationReplacement {
+        player: PlayerRefAst,
+        modifier: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        rounding: Option<Rounding>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        condition: Option<Box<ConditionAst>>,
+    },
+    /// Triggered ability paired inside a multi-sentence static paragraph (`Keranos`, `God-Eternal Kefnet`).
+    PairedTrigger {
+        trigger: TriggerSpecAst,
+        body: Vec<InstructionAst>,
+    },
+    /// Static step-skipping rule (`Each player skips their untap step`).
+    SkipStep {
+        player: PlayerRefAst,
+        step: TurnStepAst,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        condition: Option<Box<ConditionAst>>,
+    },
+    /// Static control-changing rule (`The monarch controls enchanted creature`).
+    ControlChange {
+        controller: String,
+        subject: Box<SubjectRefAst>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        condition: Option<Box<ConditionAst>>,
+    },
+    /// Maximum counter cap (`~ can't have more than seven dream counters on it`).
+    MaxCounters {
+        subject: Box<SubjectRefAst>,
+        counter_kind: String,
+        max: i32,
+    },
     /// Opt-in tabletop honor-system continuous rule (e.g. attire / social condition).
     ManualTabletopStatic {
         prompt: String,
@@ -2129,6 +2938,8 @@ pub enum ReplacementEffectAst {
         counter_kind: String,
         count: Box<ValueExprAst>,
         additional: bool,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        per: Option<Box<ValueExprAst>>,
     },
     EntersWithCounters {
         counter_kind: String,
@@ -2155,6 +2966,13 @@ pub enum ReplacementEffectAst {
         instead: String,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         instead_body: Option<Vec<InstructionAst>>,
+    },
+    /// Compound replacement effect (`~ enters with <A> and <B>`).
+    Compound(Vec<ReplacementEffectAst>),
+    /// Leading `For each <per>, <replacement>` scaling wrapper.
+    ScaledBy {
+        per: Box<ValueExprAst>,
+        inner: Box<ReplacementEffectAst>,
     },
 }
 

@@ -910,7 +910,9 @@ impl EffectWindow {
     pub(super) fn proliferate_choice(&self) -> Result<ProliferateChoice, EffectError> {
         if !matches!(
             self.current_instruction()?,
-            Instruction::Proliferate | Instruction::DoubleCountersOnTargets
+            Instruction::Proliferate
+                | Instruction::DoubleCountersOnTargets
+                | Instruction::DoubleCountersOnSubject { .. }
         ) {
             return Err(EffectError::WrongResolutionFrame);
         }
@@ -1047,15 +1049,30 @@ impl EffectWindow {
                             .poison
                             .get_mut(&player)
                             .ok_or(EffectError::InconsistentProgram)?;
-                        *count = count.plus(&1.into());
+                        let delta = if double { count.clone() } else { 1.into() };
+                        *count = count.plus(&delta);
                     }
                     if kinds.contains(&CounterKind::Experience) {
-                        changes.push(self.give_experience_counter(player));
+                        if double {
+                            let before = self.experience_counters(player);
+                            let after = before.plus(&before);
+                            self.characteristics
+                                .experience
+                                .insert(player, after.clone());
+                            changes.push(RulesOccurrence::ExperienceCountersChanged {
+                                player,
+                                before,
+                                after,
+                            });
+                        } else {
+                            changes.push(self.give_experience_counter(player));
+                        }
                     }
                     for kind in [CounterKind::Energy, CounterKind::Rad] {
                         if kinds.contains(&kind) {
                             let before = self.player_counters_of_kind(player, kind);
-                            let after = before.plus(&1.into());
+                            let delta = if double { before.clone() } else { 1.into() };
+                            let after = before.plus(&delta);
                             self.characteristics
                                 .player_counters
                                 .entry(kind)

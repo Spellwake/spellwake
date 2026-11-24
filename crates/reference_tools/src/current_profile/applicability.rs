@@ -1324,7 +1324,7 @@ native!(TriggerCauseSet, self, {
             | TriggerRelated::MiracleRevealed(_)
             | TriggerRelated::Step { .. }
             | TriggerRelated::DamageDealtToPermanent { .. }
-            | TriggerRelated::ReflexiveTrigger => Ok(()),
+            | TriggerRelated::ReflexiveTrigger { .. } => Ok(()),
         })
 });
 native!(WaitingInstance, self, {
