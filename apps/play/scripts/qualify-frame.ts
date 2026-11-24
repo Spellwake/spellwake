@@ -120,6 +120,12 @@ type Case = {
     | "match-end-view"
     | "match-end-chat"
     | "league-history"
+    | "quests"
+    | "play-choose"
+    | "play-options"
+    | "play-search"
+    | "play-refused"
+    | "play-found"
     | "match-series"
     | "match-series-next"
     | "match-series-leave"
@@ -575,6 +581,49 @@ const cases: Case[] = [
       art: "dark",
       decks: "six",
       path,
+    })),
+  ),
+  // Daily quests under the decks, on every screen: three quests and a swap,
+  // one quest with nothing won, a refused swap, and no quests at all.
+  ...viewports.flatMap((viewport): Case[] =>
+    (
+      [
+        ["/collection/decks", "quests"],
+        ["/open-play", "quests"],
+        ["/collection/decks?quests=one", "quests"],
+        ["/collection/decks?quests=refused", "quests"],
+        ["/collection/decks?quests=none", "quests"],
+      ] as const
+    ).map(([path, state]) => ({
+      viewport,
+      art: "none",
+      decks: "six",
+      path,
+      state,
+    })),
+  ),
+  // Play on a deck, on every screen: the two ways to play, the match options,
+  // a search that waits and is cancelled, one that cannot start, a format
+  // with one match length or none, Open Play without rank, and a found match.
+  ...viewports.flatMap((viewport): Case[] =>
+    (
+      [
+        ["/collection/decks", "play-choose"],
+        ["/collection/decks?search=none", "play-choose"],
+        ["/collection/decks", "play-options"],
+        ["/collection/decks?search=single-only", "play-options"],
+        ["/open-play", "play-options"],
+        ["/collection/decks?search=waits", "play-search"],
+        ["/open-play?search=waits", "play-search"],
+        ["/collection/decks?search=refused", "play-refused"],
+        ["/collection/decks", "play-found"],
+      ] as const
+    ).map(([path, state]) => ({
+      viewport,
+      art: "none",
+      decks: "six",
+      path,
+      state,
     })),
   ),
   // League · History on every screen: the list read to its end, no matches,
@@ -2161,6 +2210,117 @@ async function run(browser: Browser, test: Case): Promise<Finding[]> {
     await page.getByRole("button", { name: "View the whole table" }).click();
     await page.locator('[data-match-table="overview"]').waitFor();
     await page.waitForTimeout(1200);
+  }
+  if (state === "quests") {
+    const kind = new URLSearchParams(test.path.split("?")[1]).get("quests");
+    await page
+      .getByRole("region", { name: "Deck library", exact: true })
+      .waitFor();
+    const row = page.getByRole("region", { name: "Daily quests" });
+    if (kind === "none") {
+      // With no quests there is no row, and the decks are as they were.
+      await expect(row).toHaveCount(0);
+    } else {
+      // Where the dock floats over the page the row ends the deck list.
+      await row.scrollIntoViewIfNeeded();
+      await row.waitFor();
+      const quests = row.getByRole("listitem");
+      const swaps = row.getByRole("button", { name: /^Swap / });
+      await expect(quests).toHaveCount(kind === "one" ? 1 : 3);
+      await expect(quests.first()).toContainText("Cast 20 red or green spells");
+      await expect(quests.first()).toContainText("12 / 20");
+      // Today's one swap is offered on one quest only.
+      await expect(swaps).toHaveCount(1);
+      if (kind === "one") {
+        await expect(row.getByText(/wins? today/)).toHaveCount(0);
+      } else {
+        await expect(quests.nth(1)).toContainText("Done");
+        await row.getByText("wins today").waitFor();
+        await swaps.click();
+        if (kind === "refused") {
+          await row.getByText("No other quest is available today.").waitFor();
+          await expect(swaps).toHaveCount(1);
+        } else {
+          // Swapped: another quest takes its place and the swap is spent.
+          await expect(quests.first()).toContainText(
+            "Cast 20 black or green spells",
+          );
+          await expect(swaps).toHaveCount(0);
+        }
+      }
+    }
+    await page.waitForTimeout(900);
+  }
+  if (
+    state === "play-choose" ||
+    state === "play-options" ||
+    state === "play-search" ||
+    state === "play-refused" ||
+    state === "play-found"
+  ) {
+    const kind = new URLSearchParams(test.path.split("?")[1]).get("search");
+    const collection = test.path.startsWith("/collection");
+    await page.getByRole("button", { name: "Play Goblins" }).click();
+    const how = page.getByRole("dialog", { name: "Play Goblins" });
+    const findChoice = how.getByRole("button", { name: /^Find a match/ });
+    await how.getByRole("button", { name: /^Play with friends/ }).waitFor();
+    if (state === "play-choose") {
+      if (kind === "none") {
+        // A format that cannot be queued says so and offers only the table.
+        await expect(findChoice).toBeDisabled();
+        await expect(findChoice).toContainText(
+          "Not available for Standard yet.",
+        );
+      } else await expect(findChoice).toBeEnabled();
+    } else {
+      await findChoice.click();
+      const options = page.getByRole("dialog", { name: "Find a match" });
+      await options.waitFor();
+      const three = options.getByRole("radio", { name: "Best of three" });
+      const ranked = options.getByRole("switch", { name: "Ranked" });
+      // Only a Collection deck can be played for rank.
+      await expect(ranked).toHaveCount(collection ? 1 : 0);
+      if (kind === "single-only") await expect(three).toBeDisabled();
+      const start = options.getByRole("button", { name: "Find match" });
+      if (state === "play-options") {
+        // Back returns to the two ways to play.
+        await options.getByRole("button", { name: "Back" }).click();
+        await how.waitFor();
+        await findChoice.click();
+        await options.waitFor();
+      }
+      if (state === "play-search") {
+        await three.check({ force: true });
+        await start.click();
+        const searching = page.getByRole("dialog", { name: "Finding a match" });
+        await searching
+          .getByText(
+            collection
+              ? "Standard · Best of three · Ranked"
+              : "Standard · Best of three",
+          )
+          .waitFor();
+        await searching.getByText(/Searching for players \d:\d\d/).waitFor();
+        // Cancelling returns to the options, with nothing left running.
+        await searching.getByRole("button", { name: "Cancel search" }).click();
+        await options.waitFor();
+        await start.click();
+        await searching.waitFor();
+      }
+      if (state === "play-refused") {
+        await start.click();
+        await options.getByText("Couldn’t start the search.").waitFor();
+        await expect(start).toBeEnabled();
+      }
+      if (state === "play-found") {
+        await start.click();
+        // A found match goes straight to the table: no lobby in between.
+        await page.getByRole("dialog", { name: "Match found" }).waitFor();
+        await page.waitForURL(/\/match$/);
+        await page.getByRole("region", { name: "Players" }).waitFor();
+      }
+    }
+    await page.waitForTimeout(900);
   }
   if (state === "league-history") {
     const kind = new URLSearchParams(test.path.split("?")[1]).get("history");
