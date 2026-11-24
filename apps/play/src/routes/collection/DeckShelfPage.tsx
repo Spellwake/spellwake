@@ -21,6 +21,7 @@ import {
 } from "../../decks/deck-sources";
 import { ImportDeckDialog } from "../import/ImportDeckDialog";
 import { lobbyPath } from "../../lobby/LobbyRoutes";
+import { PlayDialog } from "./PlayDialog";
 import { motionLanguage as m } from "../../lib/motion";
 import * as s from "./deck-shelf.css";
 
@@ -64,6 +65,13 @@ export function DeckShelfPage({
   // The address carries the format's name, which reads the same from either source.
   const [formatName, setFormatName] = useQueryState("format", parseAsString);
   const [createFailure, setCreateFailure] = useState<string | null>(null);
+  const [playing, setPlaying] = useState<{
+    id: string;
+    name: string;
+    format: string;
+  } | null>(null);
+  // Concept only: `?play=find|searching|found` opens the first deck's dialog at that step.
+  const [playStep] = useQueryState("play", parseAsString);
   const [isImporting, setIsImporting] = useQueryState("import", parseAsBoolean);
   const isCreating = useRef(false);
   const searchRegion = useRef<HTMLDivElement>(null);
@@ -205,7 +213,11 @@ export function DeckShelfPage({
                       icon={<Play fill="currentColor" />}
                       aria-label={`Play ${deck.name}`}
                       onClick={() =>
-                        void navigate(`${lobbyPath(mode)}?deck=${deck.id}`)
+                        setPlaying({
+                          id: deck.id,
+                          name: deck.name,
+                          format: deck.format.name,
+                        })
                       }
                     >
                       Play
@@ -262,6 +274,31 @@ export function DeckShelfPage({
               ]
         }
       />
+      {(() => {
+        const first = playStep ? visible[0] : undefined;
+        const deck =
+          playing ??
+          (first
+            ? { id: first.id, name: first.name, format: first.format.name }
+            : null);
+        const step = (["find", "searching", "found"] as const).find(
+          (name) => name === playStep,
+        );
+        return (
+          deck && (
+            <PlayDialog
+              key={`${deck.id}:${step ?? "choose"}`}
+              deck={deck}
+              mode={mode}
+              {...(step ? { initial: step } : {})}
+              onFriends={() =>
+                void navigate(`${lobbyPath(mode)}?deck=${deck.id}`)
+              }
+              onClose={() => setPlaying(null)}
+            />
+          )
+        );
+      })()}
       {isImporting && shelf && (
         <ImportDeckDialog
           onImport={importList}
