@@ -976,7 +976,7 @@ impl Bindings {
                                         | TriggerRelated::Phased(_)
                                         | TriggerRelated::Mutated(_)
                                         | TriggerRelated::MiracleRevealed(_)
-                                        | TriggerRelated::ReflexiveTrigger
+                                        | TriggerRelated::ReflexiveTrigger { .. }
                                         | TriggerRelated::LeftGame(_) => false,
                                     }
                                 }

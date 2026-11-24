@@ -192,6 +192,25 @@ fn body(change: CreatureTypeTextChange, value: &mut ExecutableBody) {
                     word(change, kind);
                 }
             }
+            Instruction::AddMana(yield_kind) => {
+                let inner = match yield_kind {
+                    crate::program::EffectManaYield::RetainedUntilCleanup(inner) => inner.as_mut(),
+                    other => other,
+                };
+                if let crate::program::EffectManaYield::Counted { amount, .. }
+                | crate::program::EffectManaYield::RetainedUntilEndOfCombat {
+                    amount, ..
+                }
+                | crate::program::EffectManaYield::Split { amount, .. }
+                | crate::program::EffectManaYield::Choice { amount, .. }
+                | crate::program::EffectManaYield::LandProducible { amount, .. }
+                | crate::program::EffectManaYield::CommanderIdentity { amount }
+                | crate::program::EffectManaYield::SourceChosenColor { amount }
+                | crate::program::EffectManaYield::DistinctColors { amount } = inner
+                {
+                    rewrite_amount(amount);
+                }
+            }
             Instruction::DamageTargetControllersCreatures { amount, .. }
             | Instruction::Scry { amount, .. }
             | Instruction::Surveil { amount, .. }
@@ -201,16 +220,6 @@ fn body(change: CreatureTypeTextChange, value: &mut ExecutableBody) {
             | Instruction::DrawAndDamageOpponents { amount }
             | Instruction::DrawControllerAndTarget { amount }
             | Instruction::DrawEachPlayer { amount }
-            | Instruction::AddMana(
-                crate::program::EffectManaYield::Counted { amount, .. }
-                | crate::program::EffectManaYield::RetainedUntilEndOfCombat { amount, .. }
-                | crate::program::EffectManaYield::Split { amount, .. }
-                | crate::program::EffectManaYield::Choice { amount, .. }
-                | crate::program::EffectManaYield::LandProducible { amount, .. }
-                | crate::program::EffectManaYield::CommanderIdentity { amount }
-                | crate::program::EffectManaYield::SourceChosenColor { amount }
-                | crate::program::EffectManaYield::DistinctColors { amount },
-            )
             | Instruction::OfferDynamicManaPayment {
                 extra_generic: amount,
                 ..

@@ -154,6 +154,7 @@ pub(super) struct OptionalEffectWork {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct ResolutionPaymentWork {
     variable: bool,
+    defines_x: bool,
     restricted_colors: Option<[ManaType; 2]>,
     pub(super) cursor: ResolutionCursor,
     pub(super) payer: SeatId,
@@ -2207,6 +2208,7 @@ impl EffectWindow {
                 self.start_resolution_payment(
                     ResolutionPaymentWork {
                         variable: true,
+                        defines_x: false,
                         restricted_colors: None,
                         cursor,
                         payer,
@@ -2233,15 +2235,19 @@ impl EffectWindow {
                     .resolving()
                     .ok_or(EffectError::WrongResolutionFrame)?
                     .controller();
-                let extra = self
-                    .resolve_value_expr(controller, extra_generic)?
-                    .max(0.into());
+                let defines_x = *extra_generic == ValueExpr::chosen_x();
                 let mut cost = fixed.clone();
-                cost.generic = cost.generic.plus(&extra);
+                if !defines_x {
+                    let extra = self
+                        .resolve_value_expr(controller, extra_generic)?
+                        .max(0.into());
+                    cost.generic = cost.generic.plus(&extra);
+                }
                 let payer = self.resolving_player_identity_at(*payer, Some(&cursor))?;
                 self.start_resolution_payment(
                     ResolutionPaymentWork {
-                        variable: false,
+                        variable: defines_x,
+                        defines_x,
                         restricted_colors: None,
                         cursor,
                         payer,
@@ -2273,6 +2279,7 @@ impl EffectWindow {
                 self.start_resolution_payment(
                     ResolutionPaymentWork {
                         variable: false,
+                        defines_x: false,
                         restricted_colors,
                         cursor,
                         payer,
@@ -3284,7 +3291,22 @@ impl EffectWindow {
                         crate::mana::ManaPaymentError::MissingRequired,
                     ));
                 }
-                if work.variable {
+                let mut paid_x: Option<RulesInteger> = None;
+                if work.defines_x {
+                    let amount = allocation
+                        .spend
+                        .iter()
+                        .fold(RulesInteger::from(0), |total, row| total.plus(&row.amount));
+                    let fixed_total = work.cost.total();
+                    if amount < fixed_total {
+                        return Err(EffectError::InvalidManaPayment(
+                            crate::mana::ManaPaymentError::WrongTotal,
+                        ));
+                    }
+                    let x = amount.minus(&fixed_total);
+                    work.cost.generic = work.cost.generic.plus(&x);
+                    paid_x = Some(x);
+                } else if work.variable {
                     let amount = allocation
                         .spend
                         .iter()
@@ -3311,6 +3333,9 @@ impl EffectWindow {
                     restricted_mana: Vec::new(),
                 };
                 next.debit_mana_at_cut(&payment, false, turn, &mut append)?;
+                if let Some(x) = paid_x {
+                    next.window.set_chosen_x(work.cursor.entry, x)?;
+                }
                 ResolutionPaymentOutcome::Paid(payment)
             }
             ResolutionPaymentReply::Decline => ResolutionPaymentOutcome::Declined,
@@ -3339,7 +3364,7 @@ impl EffectWindow {
                 work.declined_destination
             }
         };
-        if work.variable {
+        if work.variable && !work.defines_x {
             let seats = work
                 .cursor
                 .impulse

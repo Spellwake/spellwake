@@ -140,6 +140,22 @@ pub(crate) struct CharacteristicState {
     pub(crate) attacked_objects_this_turn: BTreeSet<ObjectId>,
     pub(crate) blocked_objects_this_turn: BTreeSet<ObjectId>,
     pub(crate) entered_objects_this_turn: BTreeSet<ObjectId>,
+    /// Number of combat phases that have begun this turn (1 during the first combat phase).
+    pub(crate) combat_phases_this_turn: u8,
+    /// Number of cards put into each player's graveyard from anywhere this turn.
+    pub(crate) cards_entered_graveyard_this_turn: BTreeMap<SeatId, u16>,
+    /// Number of counters placed on creatures by each player this turn.
+    pub(crate) counters_placed_on_creatures_this_turn: BTreeMap<SeatId, u16>,
+    /// Number of lands that entered the battlefield under each player's control this turn.
+    pub(crate) lands_entered_this_turn: BTreeMap<SeatId, u16>,
+    /// Number of dice rolled by each player this turn.
+    pub(crate) dice_rolled_this_turn: BTreeMap<SeatId, u16>,
+    /// Total mana value of spells cast by each player this turn.
+    pub(crate) other_spells_mv_this_turn: BTreeMap<SeatId, u32>,
+    /// Battlefield permanents that entered directly from a graveyard.
+    pub(crate) entered_from_graveyard: BTreeSet<ObjectId>,
+    /// Battlefield permanents cast via an alternative or conditional keyword cost.
+    pub(crate) paid_alternative_objects: BTreeSet<ObjectId>,
     /// Graveyard object incarnations that died (moved battlefield -> graveyard) this turn.
     pub(crate) died_this_turn: BTreeSet<ObjectId>,
     /// Card names chosen via `ResolutionChoiceDomain::CardName` linked to a source permanent.
@@ -213,6 +229,8 @@ pub(crate) struct CharacteristicState {
     pub(crate) tribute_paid: BTreeSet<ObjectId>,
     pub(crate) evoked: BTreeSet<ObjectId>,
     pub(crate) kicked: BTreeSet<ObjectId>,
+    /// Per-index kicker payment counts carried from stack spells onto entering permanents.
+    pub(crate) kicker_counts: BTreeMap<ObjectId, BTreeMap<usize, RulesInteger>>,
     pub(crate) bestowed_spells: BTreeSet<ObjectId>,
     pub(crate) bestowed_auras: BTreeMap<ObjectId, ContinuousEffectId>,
     reconfigure_effects: BTreeMap<ObjectId, ContinuousEffectId>,
@@ -275,6 +293,14 @@ impl Default for CharacteristicState {
             attacked_objects_this_turn: BTreeSet::new(),
             blocked_objects_this_turn: BTreeSet::new(),
             entered_objects_this_turn: BTreeSet::new(),
+            combat_phases_this_turn: 0,
+            cards_entered_graveyard_this_turn: BTreeMap::new(),
+            counters_placed_on_creatures_this_turn: BTreeMap::new(),
+            lands_entered_this_turn: BTreeMap::new(),
+            dice_rolled_this_turn: BTreeMap::new(),
+            other_spells_mv_this_turn: BTreeMap::new(),
+            entered_from_graveyard: BTreeSet::new(),
+            paid_alternative_objects: BTreeSet::new(),
             died_this_turn: BTreeSet::new(),
             named_cards: BTreeMap::new(),
             activated_sources_this_turn: BTreeMap::new(),
@@ -331,6 +357,7 @@ impl Default for CharacteristicState {
             tribute_paid: BTreeSet::new(),
             evoked: BTreeSet::new(),
             kicked: BTreeSet::new(),
+            kicker_counts: BTreeMap::new(),
             bestowed_spells: BTreeSet::new(),
             bestowed_auras: BTreeMap::new(),
             reconfigure_effects: BTreeMap::new(),
@@ -848,11 +875,21 @@ impl CharacteristicState {
         self.expire_effects_matching(ResolvedDuration::expires_at_end_of_combat)
     }
 
+    pub(crate) fn clear_extra_turn_history(&mut self) {
+        self.combat_phases_this_turn = 0;
+        self.cards_entered_graveyard_this_turn.clear();
+        self.counters_placed_on_creatures_this_turn.clear();
+        self.lands_entered_this_turn.clear();
+        self.dice_rolled_this_turn.clear();
+        self.other_spells_mv_this_turn.clear();
+    }
+
     pub(crate) fn expire_at_turn_start(
         &mut self,
         active: crate::priority::SeatId,
         turn: u64,
     ) -> Vec<ContinuousEffectId> {
+        self.clear_extra_turn_history();
         self.expire_effects_matching(|duration| duration.expires_at_turn_start(active, turn))
     }
 
@@ -1089,6 +1126,10 @@ impl CharacteristicState {
         });
         self.kicked.retain(|object| live.contains(object));
         self.evoked.retain(|object| live.contains(object));
+        self.entered_from_graveyard
+            .retain(|object| live.contains(object));
+        self.paid_alternative_objects
+            .retain(|object| live.contains(object));
         self.saddled.retain(|object| live.contains(object));
         self.ring_bearer.retain(|_, object| live.contains(object));
         self.unlocked_doors

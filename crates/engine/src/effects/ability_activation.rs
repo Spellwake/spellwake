@@ -593,6 +593,10 @@ impl EffectWindow {
                 if card.zone() != ObjectZone::Hand(actor) {
                     return Err(EffectError::NotOwnHand);
                 }
+            } else if restriction.as_ref().is_some_and(|r| r.is_only_opponents()) {
+                if card.zone() != ObjectZone::Battlefield || card.controller() == Some(actor) {
+                    return Err(EffectError::ActivationConditionNotMet);
+                }
             } else if !restriction.as_ref().is_some_and(|r| r.is_any_player())
                 || card.zone() != ObjectZone::Battlefield
             {
@@ -1192,8 +1196,15 @@ impl EffectWindow {
             .entry(source)
             .or_insert(0);
         *activated_count = activated_count.saturating_add(1);
-        if restriction.as_ref().is_some_and(|r| r.has_once_each_turn()) {
-            next.activated_this_turn.insert(exhausted_id.clone());
+        if restriction
+            .as_ref()
+            .is_some_and(|r| r.has_turn_activation_cap())
+        {
+            let count = next
+                .activated_this_turn
+                .entry(exhausted_id.clone())
+                .or_insert(0);
+            *count = count.saturating_add(1);
         }
         if restriction.as_ref().is_some_and(|r| r.has_exhaust()) {
             next.characteristics.exhausted.insert(exhausted_id);
@@ -2083,13 +2094,34 @@ impl EffectWindow {
                 }
             }
             ActivationRestriction::OnceEachTurn
-                if self.activated_this_turn.contains(exhausted_id) =>
+                if self
+                    .activated_this_turn
+                    .get(exhausted_id)
+                    .copied()
+                    .unwrap_or(0)
+                    >= 1 =>
+            {
+                return Err(EffectError::ActivationConditionNotMet);
+            }
+            ActivationRestriction::MaxPerTurn(limit)
+                if self
+                    .activated_this_turn
+                    .get(exhausted_id)
+                    .copied()
+                    .unwrap_or(0)
+                    >= *limit =>
             {
                 return Err(EffectError::ActivationConditionNotMet);
             }
             ActivationRestriction::Sorcery => validate_main_phase(&self.window, turn, actor)?,
             ActivationRestriction::SorceryOnceEachTurn => {
-                if self.activated_this_turn.contains(exhausted_id) {
+                if self
+                    .activated_this_turn
+                    .get(exhausted_id)
+                    .copied()
+                    .unwrap_or(0)
+                    >= 1
+                {
                     return Err(EffectError::ActivationConditionNotMet);
                 }
                 validate_main_phase(&self.window, turn, actor)?;
@@ -2101,7 +2133,13 @@ impl EffectWindow {
                 if self.window.active_player() != actor {
                     return Err(TimingError::NotActivePlayer.into());
                 }
-                if self.activated_this_turn.contains(exhausted_id) {
+                if self
+                    .activated_this_turn
+                    .get(exhausted_id)
+                    .copied()
+                    .unwrap_or(0)
+                    >= 1
+                {
                     return Err(EffectError::ActivationConditionNotMet);
                 }
             }
@@ -2113,6 +2151,23 @@ impl EffectWindow {
                     .map(|t| t.position().step)
                     .or(self.current_step)
                     .is_some_and(|s| s.phase() == crate::turn::Phase::Combat) =>
+            {
+                return Err(EffectError::ActivationConditionNotMet);
+            }
+            ActivationRestriction::DuringStep(expected)
+                if turn.map(|t| t.position().step).or(self.current_step) != Some(*expected) =>
+            {
+                return Err(EffectError::ActivationConditionNotMet);
+            }
+            ActivationRestriction::DuringOwnStep(expected)
+                if self.window.active_player() != actor
+                    || turn.map(|t| t.position().step).or(self.current_step) != Some(*expected) =>
+            {
+                return Err(EffectError::ActivationConditionNotMet);
+            }
+            ActivationRestriction::DuringOpponentsStep(expected)
+                if self.window.active_player() == actor
+                    || turn.map(|t| t.position().step).or(self.current_step) != Some(*expected) =>
             {
                 return Err(EffectError::ActivationConditionNotMet);
             }
