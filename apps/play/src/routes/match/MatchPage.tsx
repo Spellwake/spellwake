@@ -1,6 +1,7 @@
 import {
   useCallback,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -529,30 +530,37 @@ function DecisionPanel({
  */
 function useLowerDock(): { trayHeight: number; clearBottom: number } {
   const [dock, setDock] = useState({ trayHeight: 0, clearBottom: 0 });
+  const measure = useCallback(() => {
+    const panel = document.querySelector('[data-frame="hud-side"]');
+    const stage = { width: window.innerWidth, height: window.innerHeight };
+    const box = panel?.getBoundingClientRect();
+    const top = box?.top ?? 0;
+    // Docked along the lower edge, the panel spans the stage; beside the
+    // table it is a narrow column. Its width does not change with what it
+    // holds or with the tray, so this answer cannot flip as either grows.
+    const docked = !!box && box.width > stage.width * 0.6;
+    const rootSize = parseFloat(
+      getComputedStyle(document.documentElement).fontSize,
+    );
+    const next = docked
+      ? {
+          // The frame reserves its tray in design pixels.
+          trayHeight: (handShownHeight(stage) * 16) / rootSize,
+          clearBottom: stage.height - top + 10,
+        }
+      : { trayHeight: 0, clearBottom: 0 };
+    setDock((current) =>
+      Math.abs(current.trayHeight - next.trayHeight) < 1 &&
+      Math.abs(current.clearBottom - next.clearBottom) < 1
+        ? current
+        : next,
+    );
+  }, []);
+  // The frame reserves the tray this hook reports, which lifts the panel
+  // without resizing it. No observer reports that move, so the panel is read
+  // again once the tray it asked for is in place.
+  useLayoutEffect(measure, [measure, dock.trayHeight]);
   useEffect(() => {
-    const measure = () => {
-      const panel = document.querySelector('[data-frame="hud-side"]');
-      const stage = { width: window.innerWidth, height: window.innerHeight };
-      const top = panel?.getBoundingClientRect().top ?? 0;
-      const docked = !!panel && top > stage.height * 0.45;
-      const rootSize = parseFloat(
-        getComputedStyle(document.documentElement).fontSize,
-      );
-      const next = docked
-        ? {
-            // The frame reserves its tray in design pixels.
-            trayHeight: (handShownHeight(stage) * 16) / rootSize,
-            clearBottom: stage.height - top + 10,
-          }
-        : { trayHeight: 0, clearBottom: 0 };
-      setDock((current) =>
-        Math.abs(current.trayHeight - next.trayHeight) < 1 &&
-        Math.abs(current.clearBottom - next.clearBottom) < 1
-          ? current
-          : next,
-      );
-    };
-    measure();
     const panel = document.querySelector('[data-frame="hud-side"]');
     const observer = new ResizeObserver(measure);
     if (panel) observer.observe(panel);
@@ -561,7 +569,7 @@ function useLowerDock(): { trayHeight: number; clearBottom: number } {
       observer.disconnect();
       window.removeEventListener("resize", measure);
     };
-  }, []);
+  }, [measure]);
   return dock;
 }
 

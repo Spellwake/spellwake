@@ -165,8 +165,25 @@ type StandRoom = {
   revision: number;
   countdownAt: string | null;
   slots: StandSlot[];
+  /** Seats the room holds; two unless it says otherwise. */
+  seats?: number;
 };
 const rooms = new Map<string, StandRoom>();
+/** A room the owner hosts alone with a seat open, and Mira's room with a seat open. */
+const HOSTED_ROOM = id(310);
+const FRIEND_ROOM = id(311);
+const FRIEND_INVITE = `${"F".repeat(42)}Q`;
+const WRONG_INVITE = `${"W".repeat(42)}A`;
+/** Active invitation tokens by room. */
+const invitations = new Map<string, string[]>([[FRIEND_ROOM, [FRIEND_INVITE]]]);
+const standSlot = (n: number, accountId: string | null): StandSlot => ({
+  id: id(n),
+  accountId,
+  seatIndex: String(n % 10),
+  controllerKind: "human",
+  ready: false,
+  deckRevisionId: null,
+});
 const roomSummary = (room: StandRoom) => ({
   id: room.id,
   hostId: room.hostId,
@@ -179,7 +196,7 @@ const roomSummary = (room: StandRoom) => ({
   revision: String(room.revision),
   structure: "bo1",
   configurationId: id(96),
-  targetSeatCount: "2",
+  targetSeatCount: String(room.seats ?? 2),
   countdownAt: room.countdownAt,
 });
 /** Messages with Mira, newest first, as the conversation read returns them. */
@@ -359,6 +376,20 @@ const people = new Map<
   [OWNER_TOKEN, { subject: SUBJECT, method: "google", accountId: ACCOUNT }],
   [NEW_TOKEN, { subject: NEW_SUBJECT, method: "email_code", accountId: null }],
 ]);
+for (const [roomId, hostId, slots] of [
+  [HOSTED_ROOM, ACCOUNT, [standSlot(320, ACCOUNT)]],
+  [FRIEND_ROOM, MIRA, [standSlot(330, MIRA), standSlot(331, null)]],
+] as const)
+  rooms.set(roomId, {
+    id: roomId,
+    hostId,
+    formatId: STANDARD.id,
+    mode: "collection",
+    state: "lobby",
+    revision: 1,
+    countdownAt: null,
+    slots: [...slots],
+  });
 const unauthorized = {
   code: 401,
   body: { status: "fail", data: { session: "unauthorized" } },
@@ -949,7 +980,9 @@ function answer(method: string, url: URL, body: unknown, bearer: string) {
     return keep(success({ resourceId: room.id }));
   }
   const roomPath =
-    /^\/v1\/rooms\/([^/]+)(?:\/(ready|unready|configuration))?$/.exec(path);
+    /^\/v1\/rooms\/([^/]+)(?:\/(ready|unready|configuration|invitations|join))?$/.exec(
+      path,
+    );
   if (roomPath) {
     const room = rooms.get(roomPath[1] ?? "");
     if (!room)
@@ -958,6 +991,34 @@ function answer(method: string, url: URL, body: unknown, bearer: string) {
         body: { status: "fail", data: { room: "unavailable" } },
       };
     const action = roomPath[2];
+    if (method === "POST" && action === "invitations") {
+      if (room.hostId !== person.accountId)
+        return refuse({ room: "unavailable" });
+      if (command["expectedRevision"] !== String(room.revision))
+        return refuse({ revision: "conflict" });
+      const token = `${String(nextId++).padStart(42, "I")}A`;
+      invitations.set(room.id, [...(invitations.get(room.id) ?? []), token]);
+      return success({ resourceId: id(nextId++), token });
+    }
+    if (method === "POST" && action === "join") {
+      const mine = room.slots.find(
+        (slot) => slot.accountId === person.accountId,
+      );
+      if (mine) return success({ resourceId: room.id, slotId: mine.id });
+      if (!invitations.get(room.id)?.includes(String(command["token"])))
+        return refuse({ invitation: "unavailable" });
+      const open = room.slots.find((slot) => slot.accountId === null);
+      if (!open) return refuse({ capacity: "full" });
+      open.accountId = person.accountId;
+      room.revision += 1;
+      return success({ resourceId: room.id, slotId: open.id });
+    }
+    // Only a member may read a room.
+    if (!room.slots.some((slot) => slot.accountId === person.accountId))
+      return {
+        code: 404,
+        body: { status: "fail", data: { room: "unavailable" } },
+      };
     if (method === "GET" && !action)
       return success({
         accountId: person.accountId,
@@ -1875,6 +1936,84 @@ try {
     },
   );
   await host.close();
+
+  // Friend invitations: the host's link, and a friend opening one.
+  const inviter = await open(OWNER_TOKEN);
+  inviter.on("pageerror", (error) => errors.push(String(error)));
+  await inviter
+    .context()
+    .grantPermissions(["clipboard-read", "clipboard-write"]);
+  await visit(inviter, `/collection/lobby?room=${HOSTED_ROOM}`);
+  await check(
+    "lobby: Copy invite link issues one invitation against the room and copies an address with its token only in the fragment",
+    async () => {
+      const copy = inviter.getByRole("button", { name: "Copy invite link" });
+      await copy.click();
+      await inviter.getByText("Invite link copied").first().waitFor();
+      const first = await inviter.evaluate(() =>
+        navigator.clipboard.readText(),
+      );
+      // A second press hands out the same link without asking again.
+      await copy.click();
+      await inviter.waitForTimeout(600);
+      const second = await inviter.evaluate(() =>
+        navigator.clipboard.readText(),
+      );
+      const issued = sent(`/v1/rooms/${HOSTED_ROOM}/invitations`);
+      const address = new URL(first);
+      const token = invitations.get(HOSTED_ROOM)?.[0];
+      return (
+        issued.length === 1 &&
+        issued[0]?.["expectedRevision"] === "1" &&
+        address.pathname.endsWith("/collection/lobby") &&
+        address.searchParams.get("room") === HOSTED_ROOM &&
+        !!token &&
+        address.hash === `#invite=${token}` &&
+        !address.search.includes(token) &&
+        second === first
+      );
+    },
+  );
+  await inviter.close();
+  const friend = await open(OWNER_TOKEN);
+  friend.on("pageerror", (error) => errors.push(String(error)));
+  await check(
+    "lobby: an invitation link takes a seat before the room is read and then forgets its token; a wrong one says the lobby is unavailable",
+    async () => {
+      await visit(
+        friend,
+        `/collection/lobby?room=${FRIEND_ROOM}#invite=${WRONG_INVITE}`,
+      );
+      await friend
+        .getByRole("heading", { name: "Lobby unavailable" })
+        .waitFor();
+      const refused = sent(`/v1/rooms/${FRIEND_ROOM}/join`).length;
+      const seatedEarly = rooms
+        .get(FRIEND_ROOM)
+        ?.slots.some((slot) => slot.accountId === ACCOUNT);
+      await visit(friend, "/collection/decks");
+      await visit(
+        friend,
+        `/collection/lobby?room=${FRIEND_ROOM}#invite=${FRIEND_INVITE}`,
+      );
+      // Mira hosts this room; the friend arrives as its second player.
+      await friend.getByText("Mira").first().waitFor();
+      await friend.getByText("2/2").waitFor();
+      await friend.waitForURL((url) => url.hash === "");
+      const joins = sent(`/v1/rooms/${FRIEND_ROOM}/join`);
+      return (
+        refused === 1 &&
+        !seatedEarly &&
+        joins.length === 2 &&
+        joins[1]?.["token"] === FRIEND_INVITE &&
+        new URL(friend.url()).searchParams.get("room") === FRIEND_ROOM &&
+        !!rooms
+          .get(FRIEND_ROOM)
+          ?.slots.some((slot) => slot.accountId === ACCOUNT)
+      );
+    },
+  );
+  await friend.close();
 
   // Trade, on a page of its own.
   const trader = await open(OWNER_TOKEN);

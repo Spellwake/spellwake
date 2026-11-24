@@ -140,8 +140,8 @@ function useAllSets() {
  * sold out or not yet known. Buy packs quotes the chosen quantity and sends
  * one journaled `pack_buy` naming that quote's policy, revision and exact
  * total; an unknown outcome keeps the dialog and Check status recovers that
- * same purchase, and a reload restores it without sending. The application
- * has no supply vote source yet, so the vote banner is not shown.
+ * same purchase, and a reload restores it without sending. The vote banner
+ * shows while an active season has a supply ballot, read and saved whole.
  */
 export function useConnectedSupply(): SupplySource {
   const gap = useInventoryGap();

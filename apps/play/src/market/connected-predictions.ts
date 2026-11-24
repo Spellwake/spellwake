@@ -252,11 +252,11 @@ function usePriceCheck(printingId: string | null) {
  * one journaled `publish_market`; pressing Create again after a failure looks
  * up or resends that same request first.
  *
- * Not yet possible against this application, so shown as unavailable: a
- * bet, because its order can fill in part and leave a resting remainder
- * where the design takes the whole amount or nothing, once per prediction;
- * the questions this account created, which no read lists; and the dated
- * price a result rests on.
+ * A bet sends one `predictionBet` for the chosen side and amount.
+ *
+ * Not yet possible against this application, so shown as unavailable: the
+ * questions this account created, which no read lists; and the dated price a
+ * result rests on.
  */
 export function useConnectedPredictions(): PredictionsSource {
   const gap = useInventoryGap();

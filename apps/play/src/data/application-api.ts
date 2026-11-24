@@ -145,6 +145,10 @@ import {
   predictionSearchPageSchema,
   roomGameHandoffSchema,
   roomEnrichedDetailSchema,
+  issueInvitationSchema,
+  issuedInvitationSchema,
+  joinRoomSchema,
+  joinRoomAckSchema,
   roomInviteNotificationAckSchema,
   limitedDraftStateSchema,
   limitedDraftAckSchema,
@@ -2766,19 +2770,26 @@ export class ApplicationApi {
     );
   }
 
+  /** Issues one invitation to the room. Its token is the capability: never log it. */
   issueRoomInvitation(
     bearer: string,
     roomId: string,
-    input: { requestId: string },
+    input: z.input<typeof issueInvitationSchema>,
     signal?: AbortSignal,
   ) {
-    return this.request(
-      `/v1/rooms/${encodeURIComponent(roomId)}/invitations`,
-      bearer,
-      z.record(z.string(), z.unknown()),
-      input,
-      signal,
-    );
+    const parsed = issueInvitationSchema.safeParse(input);
+    return parsed.success
+      ? this.request(
+          `/v1/rooms/${encodeURIComponent(roomId)}/invitations`,
+          bearer,
+          issuedInvitationSchema,
+          parsed.data,
+          signal,
+        )
+      : Promise.resolve<ApiResponse<z.infer<typeof issuedInvitationSchema>>>({
+          status: "fail",
+          data: { command: "invalid" },
+        });
   }
 
   inviteRoomByUsername(
@@ -2797,19 +2808,29 @@ export class ApplicationApi {
     );
   }
 
+  /**
+   * Takes a seat in a room. A private room admits only the bearer of one of
+   * its invitations; the token is required and null where there is none.
+   */
   joinRoom(
     bearer: string,
     roomId: string,
-    input: { requestId: string; token?: string },
+    input: z.input<typeof joinRoomSchema>,
     signal?: AbortSignal,
   ) {
-    return this.request(
-      `/v1/rooms/${encodeURIComponent(roomId)}/join`,
-      bearer,
-      z.record(z.string(), z.unknown()),
-      input,
-      signal,
-    );
+    const parsed = joinRoomSchema.safeParse(input);
+    return parsed.success
+      ? this.request(
+          `/v1/rooms/${encodeURIComponent(roomId)}/join`,
+          bearer,
+          joinRoomAckSchema.refine((ack) => ack.resourceId === roomId),
+          parsed.data,
+          signal,
+        )
+      : Promise.resolve<ApiResponse<z.infer<typeof joinRoomAckSchema>>>({
+          status: "fail",
+          data: { command: "invalid" },
+        });
   }
 
   invitations(bearer: string, after?: string | null, limit = 50, signal?: AbortSignal) {

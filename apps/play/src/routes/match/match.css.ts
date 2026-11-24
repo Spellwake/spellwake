@@ -129,6 +129,11 @@ export const decisionCard = style({
   display: "flex",
   flexDirection: "column",
   gap: 10,
+  // A long question scrolls inside its card, so the panel never outgrows
+  // the screen or climbs over the players.
+  maxHeight: "34vh",
+  overflowY: "auto",
+  overscrollBehavior: "contain",
 });
 
 export const decisionTitle = style({

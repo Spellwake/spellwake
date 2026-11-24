@@ -1,6 +1,6 @@
 import { useEffect, useState, type ReactElement } from "react";
 import { motion, useReducedMotion } from "motion/react";
-import { ChevronLeft, Pencil, UsersRound } from "lucide-react";
+import { ChevronLeft, Link2, Pencil, UsersRound } from "lucide-react";
 import {
   ActionButton,
   Dialog,
@@ -14,7 +14,7 @@ import {
   rulesLine,
   type LobbySource,
 } from "../../lobby/lobby-sources";
-import type { Outcome } from "../../decks/deck-sources";
+import { failed, succeeded, type Outcome } from "../../decks/deck-sources";
 import { useCommand, useNotice } from "../account/operation";
 import { DepartureDialog } from "./DepartureDialog";
 import { ChooseDeckDialog, InviteDialog } from "./LobbyChoosers";
@@ -60,6 +60,7 @@ export function LobbyPage({
   const [isInviting, setIsInviting] = useState(false);
   const [isEditingRules, setIsEditingRules] = useState(false);
   const readyCommand = useCommand();
+  const linkCommand = useCommand();
   const notice = useNotice();
   const reduce = useReducedMotion() ?? false;
   const arrival = useArrival(source.status === "ready");
@@ -100,6 +101,25 @@ export function LobbyPage({
     void readyCommand.run(work).then((outcome) => {
       if (outcome?.status === "fail") notice.say(outcome.message);
     });
+  };
+  const makeLink = lobby.inviteLink;
+  const copyInviteLink = (): void => {
+    if (!makeLink) return;
+    void linkCommand
+      .run(async () => {
+        const link = await makeLink();
+        if (link.status === "fail") return link;
+        return navigator.clipboard.writeText(link.value).then(
+          () => succeeded(undefined),
+          () => failed("Couldn’t copy the link."),
+        );
+      })
+      .then((outcome) => {
+        if (outcome)
+          notice.say(
+            outcome.status === "fail" ? outcome.message : "Invite link copied",
+          );
+      });
   };
   const messages = [
     ...(lobby.notice
@@ -149,9 +169,22 @@ export function LobbyPage({
                 Invite players
               </ActionButton>
             )}
+            {/* Where people cannot be invited by name, the host hands out a link. */}
+            {!(lobby.findPlayers && lobby.invite) && lobby.inviteLink && (
+              <ActionButton
+                treatment="compact-form"
+                icon={<Link2 />}
+                pending={linkCommand.isBusy}
+                disabled={isLocked || !hasOpenSeat}
+                onClick={copyInviteLink}
+              >
+                Copy invite link
+              </ActionButton>
+            )}
           </div>
           {lobby.aiQuota &&
-            lobby.seats.some((seat) => seat.kind === "ai") && (() => {
+            lobby.seats.some((seat) => seat.kind === "ai") &&
+            (() => {
               const q = lobby.aiQuota;
               const overLimit =
                 q.requiredAdvanced > 0 &&
@@ -163,7 +196,9 @@ export function LobbyPage({
                   : "Advanced AI: Unlimited"
                 : `Advanced AI: ${q.remainingToday ?? 0}/${q.dailyLimit ?? 0} remaining today · Resets 00:00 UTC`;
               return (
-                <p className={`${overLimit ? s.warning : s.passive} ${s.quotaLine}`}>
+                <p
+                  className={`${overLimit ? s.warning : s.passive} ${s.quotaLine}`}
+                >
                   {label}
                 </p>
               );
@@ -223,6 +258,7 @@ export function LobbyPage({
                   name={lobby.yourDeck.name}
                   appearance={lobby.yourDeck.appearance}
                   modelUrl={MODEL_URL}
+                  artworkUrl={import.meta.env.BASE_URL}
                   className={s.boxButton}
                   stageClassName={s.boxStage}
                   statusClassName={s.boxStatus}
