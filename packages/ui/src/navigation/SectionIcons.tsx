@@ -1,5 +1,5 @@
 import type { ReactElement, SVGProps } from "react";
-import { Boxes, Tag } from "lucide-react";
+import { Boxes, History, Tag } from "lucide-react";
 
 type IconProps = SVGProps<SVGSVGElement>;
 const frame = {
@@ -70,4 +70,7 @@ export function StandingsIcon(props: IconProps): ReactElement {
       />
     </svg>
   );
+}
+export function HistoryIcon(props: IconProps): ReactElement {
+  return <History {...props} />;
 }

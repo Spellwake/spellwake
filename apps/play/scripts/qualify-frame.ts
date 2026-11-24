@@ -119,6 +119,7 @@ type Case = {
     | "match-end"
     | "match-end-view"
     | "match-end-chat"
+    | "league-history"
     | "match-series"
     | "match-series-next"
     | "match-series-leave"
@@ -574,6 +575,24 @@ const cases: Case[] = [
       art: "dark",
       decks: "six",
       path,
+    })),
+  ),
+  // League · History on every screen: the list read to its end, no matches,
+  // slow reads and a failed read.
+  ...viewports.flatMap((viewport): Case[] =>
+    (
+      [
+        ["/league/history", "league-history"],
+        ["/league/history?history=empty", "league-history"],
+        ["/league/history?history=slow", "league-history"],
+        ["/league/history?history=failed", "league-history"],
+      ] as const
+    ).map(([path, state]) => ({
+      viewport,
+      art: "dark",
+      decks: "six",
+      path,
+      state,
     })),
   ),
   ...(
@@ -2142,6 +2161,34 @@ async function run(browser: Browser, test: Case): Promise<Finding[]> {
     await page.getByRole("button", { name: "View the whole table" }).click();
     await page.locator('[data-match-table="overview"]').waitFor();
     await page.waitForTimeout(1200);
+  }
+  if (state === "league-history") {
+    const kind = new URLSearchParams(test.path.split("?")[1]).get("history");
+    const table = page.getByRole("table", { name: "Match history" });
+    await table.waitFor();
+    if (kind === "empty") {
+      await table.getByText("No matches yet").waitFor();
+    } else if (kind === "failed") {
+      // A list that could not be read says so; it does not claim there are none.
+      await page.getByText("Couldn’t load your matches.").waitFor();
+      await expect(table.getByText("No matches yet")).toHaveCount(0);
+    } else {
+      const rows = table.getByRole("rowgroup").getByRole("row");
+      await expect(rows.first()).toBeVisible();
+      if (kind === "slow") {
+        // Two matches are still being read; the rest already show.
+        expect(await rows.count()).toBeGreaterThanOrEqual(6);
+        await expect(rows.first()).toContainText("Sam and 2 others");
+      } else {
+        // Newest first, and the oldest are shown as the end comes into view.
+        await expect(rows.first()).toContainText("Won");
+        await expect(rows.first()).toContainText("Alex");
+        await expect(rows.first()).toContainText("Today");
+        await rows.last().scrollIntoViewIfNeeded();
+        await expect(rows).toHaveCount(10);
+      }
+    }
+    await page.waitForTimeout(900);
   }
   if (state === "league-scrolled") {
     await page
