@@ -23,6 +23,7 @@ import {
   roomDetailSchema,
   setAiTierDispositionSchema,
   setAiTierRequestSchema,
+  profileConfigurationPageSchema,
   tableProfilePageSchema,
   unreadyDispositionSchema,
   validAiStatusPage,
@@ -918,6 +919,24 @@ export class ApplicationApi {
       bearer,
       tableProfilePageSchema.refine(
         (page) => page.accountId === expectedAccountId,
+      ),
+      undefined,
+      signal,
+    );
+  }
+  /** The formats, seat counts and match lengths one table profile can be played at. */
+  profileConfigurations(
+    bearer: string,
+    expectedAccountId: string,
+    profileId: string,
+    signal?: AbortSignal,
+  ) {
+    return this.request(
+      `/v1/table-profiles/${encodeURIComponent(profileId)}/configurations?limit=100`,
+      bearer,
+      profileConfigurationPageSchema.refine(
+        (page) =>
+          page.accountId === expectedAccountId && page.profileId === profileId,
       ),
       undefined,
       signal,

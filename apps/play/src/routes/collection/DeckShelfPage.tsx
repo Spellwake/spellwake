@@ -21,7 +21,6 @@ import {
 } from "../../decks/deck-sources";
 import { ImportDeckDialog } from "../import/ImportDeckDialog";
 import { lobbyPath } from "../../lobby/LobbyRoutes";
-import { PlayDialog } from "./PlayDialog";
 import { motionLanguage as m } from "../../lib/motion";
 import * as s from "./deck-shelf.css";
 
@@ -44,6 +43,13 @@ const GAP_COPY: Record<
     description: "Check your connection, then reload.",
   },
 };
+/** The deck Play was pressed for, and the two ways out of what it opens. */
+export type PlayProps = {
+  deck: { id: string; name: string; format: string };
+  /** Opens the lobby with this deck. */
+  onFriends: () => void;
+  onClose: () => void;
+};
 const MODEL_URL = `${import.meta.env.BASE_URL}models/deck-box-leather.glb?bend=1`;
 /** Tiles beyond this arrive together so a long shelf never keeps the eye waiting. */
 const STAGGERED_TILES = 9;
@@ -56,9 +62,12 @@ const STAGGERED_TILES = 9;
 export function DeckShelfPage({
   mode,
   source,
+  play,
 }: {
   mode: PlayMode;
   source: DeckShelfSource;
+  /** What Play on a deck opens. It comes from the account or the preview, as the decks do. */
+  play: (props: PlayProps) => ReactElement;
 }): ReactElement {
   const navigate = useNavigate();
   const [query, setQuery] = useQueryState("q", parseAsString.withDefault(""));
@@ -70,8 +79,6 @@ export function DeckShelfPage({
     name: string;
     format: string;
   } | null>(null);
-  // Concept only: `?play=find|searching|found` opens the first deck's dialog at that step.
-  const [playStep] = useQueryState("play", parseAsString);
   const [isImporting, setIsImporting] = useQueryState("import", parseAsBoolean);
   const isCreating = useRef(false);
   const searchRegion = useRef<HTMLDivElement>(null);
@@ -274,31 +281,13 @@ export function DeckShelfPage({
               ]
         }
       />
-      {(() => {
-        const first = playStep ? visible[0] : undefined;
-        const deck =
-          playing ??
-          (first
-            ? { id: first.id, name: first.name, format: first.format.name }
-            : null);
-        const step = (["find", "searching", "found"] as const).find(
-          (name) => name === playStep,
-        );
-        return (
-          deck && (
-            <PlayDialog
-              key={`${deck.id}:${step ?? "choose"}`}
-              deck={deck}
-              mode={mode}
-              {...(step ? { initial: step } : {})}
-              onFriends={() =>
-                void navigate(`${lobbyPath(mode)}?deck=${deck.id}`)
-              }
-              onClose={() => setPlaying(null)}
-            />
-          )
-        );
-      })()}
+      {playing &&
+        play({
+          deck: playing,
+          onFriends: () =>
+            void navigate(`${lobbyPath(mode)}?deck=${playing.id}`),
+          onClose: () => setPlaying(null),
+        })}
       {isImporting && shelf && (
         <ImportDeckDialog
           onImport={importList}

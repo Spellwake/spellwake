@@ -2,13 +2,12 @@ import { useEffect, useState, type ReactElement } from "react";
 import { Search, Users } from "lucide-react";
 import { ActionButton, Dialog, RadioGroup, SettingSwitch } from "@spellwake/ui";
 import type { PlayMode } from "../../decks/deck-sources";
+import {
+  LENGTH_LABEL,
+  type FindMatchSource,
+  type MatchLength,
+} from "../../play/find-match";
 import * as s from "./play-dialog.css";
-
-type MatchLength = "single" | "three";
-const LENGTH_LABEL: Record<MatchLength, string> = {
-  single: "Single game",
-  three: "Best of three",
-};
 
 /** The time spent searching, as "0:12". */
 function Elapsed({ since }: { since: number }): ReactElement {
@@ -26,64 +25,80 @@ function Elapsed({ since }: { since: number }): ReactElement {
 }
 
 /**
- * Concept: what Play on a deck offers. A table with friends (the lobby), or a
- * match found for you, which goes from searching straight to the table.
+ * What Play on a deck offers: a table with friends (the lobby), or a match
+ * found for you, which goes from searching straight to the table.
  */
 export function PlayDialog({
   deck,
   mode,
-  initial = "choose",
+  find,
   onFriends,
   onClose,
 }: {
   deck: { name: string; format: string };
   mode: PlayMode;
-  /** Concept only: opens at a later step for review captures. */
-  initial?: "choose" | "find" | "searching" | "found";
+  find: FindMatchSource;
   /** Opens the lobby with this deck. */
   onFriends: () => void;
   onClose: () => void;
 }): ReactElement {
-  const [step, setStep] = useState(initial);
-  const [length, setLength] = useState<MatchLength>("single");
+  const [choosing, setChoosing] = useState<"how" | "match">("how");
+  const [wanted, setWanted] = useState<MatchLength>("single");
   const [ranked, setRanked] = useState(mode === "collection");
-  const [since, setSince] = useState(() => Date.now());
-  const terms = [
-    deck.format,
-    LENGTH_LABEL[length],
-    ...(mode === "collection" && ranked ? ["Ranked"] : []),
-  ].join(" · ");
+  const [stopping, setStopping] = useState(false);
+  const lengths = find.lengths;
+  // A format with one match length offers that one.
+  const length: MatchLength =
+    lengths && !lengths[wanted]
+      ? lengths.single
+        ? "single"
+        : "three"
+      : wanted;
+  const canQueue = !!lengths && (lengths.single || lengths.three);
+  const stop = (then?: () => void) => {
+    setStopping(true);
+    void find.cancel().finally(() => {
+      setStopping(false);
+      then?.();
+    });
+  };
 
-  if (step === "searching" || step === "found")
+  if (find.phase === "searching" || find.phase === "found") {
+    const isFound = find.phase === "found";
     return (
       <Dialog
         open
         size="compact"
-        title={step === "found" ? "Match found" : "Finding a match"}
-        subtitle={terms}
-        onClose={onClose}
+        title={isFound ? "Match found" : "Finding a match"}
+        {...(find.terms ? { subtitle: find.terms } : {})}
+        // Closing the dialog ends the search with it; a found match is not left.
+        onClose={() => (isFound ? undefined : stop(onClose))}
+        busy={isFound || stopping}
         actions={
-          step === "searching" ? (
-            <ActionButton onClick={() => setStep("find")}>
+          isFound ? undefined : (
+            <ActionButton pending={stopping} onClick={() => stop()}>
               Cancel search
             </ActionButton>
-          ) : undefined
+          )
         }
       >
         <div className={s.searching} role="status">
-          <span className={s.pulse} data-found={step === "found"} />
-          {step === "found" ? (
+          <span className={s.pulse} data-found={isFound} />
+          {isFound ? (
             <p className={s.line}>Taking you to the table…</p>
           ) : (
             <p className={s.line}>
-              Searching for players <Elapsed since={since} />
+              Searching for players{" "}
+              {find.since !== null && <Elapsed since={find.since} />}
             </p>
           )}
+          {find.failure && <p className={s.failure}>{find.failure}</p>}
         </div>
       </Dialog>
     );
+  }
 
-  if (step === "find")
+  if (choosing === "match")
     return (
       <Dialog
         open
@@ -91,15 +106,20 @@ export function PlayDialog({
         title="Find a match"
         subtitle={`${deck.name} · ${deck.format}`}
         onClose={onClose}
+        busy={find.phase === "starting"}
         actions={
           <>
-            <ActionButton onClick={() => setStep("choose")}>Back</ActionButton>
+            <ActionButton
+              disabled={find.phase === "starting"}
+              onClick={() => setChoosing("how")}
+            >
+              Back
+            </ActionButton>
             <ActionButton
               emphasis="primary"
-              onClick={() => {
-                setSince(Date.now());
-                setStep("searching");
-              }}
+              disabled={!canQueue}
+              pending={find.phase === "starting"}
+              onClick={() => find.find(length, ranked && mode === "collection")}
             >
               Find match
             </ActionButton>
@@ -111,12 +131,14 @@ export function PlayDialog({
             label="Match length"
             treatment="chips"
             value={length}
-            options={[
-              { value: "single", label: LENGTH_LABEL.single },
-              { value: "three", label: LENGTH_LABEL.three },
-            ]}
+            disabled={find.phase === "starting"}
+            options={(["single", "three"] as const).map((value) => ({
+              value,
+              label: LENGTH_LABEL[value],
+              disabled: !lengths?.[value],
+            }))}
             onValueChange={(value) =>
-              setLength(value === "three" ? "three" : "single")
+              setWanted(value === "three" ? "three" : "single")
             }
           />
           {mode === "collection" && (
@@ -128,9 +150,15 @@ export function PlayDialog({
               <SettingSwitch
                 label="Ranked"
                 checked={ranked}
+                disabled={find.phase === "starting"}
                 onCheckedChange={setRanked}
               />
             </div>
+          )}
+          {find.failure && (
+            <p className={s.failure} role="alert">
+              {find.failure}
+            </p>
           )}
         </div>
       </Dialog>
@@ -157,15 +185,18 @@ export function PlayDialog({
         <button
           type="button"
           className={s.choice}
-          onClick={() => setStep("find")}
+          disabled={lengths !== null && !canQueue}
+          onClick={() => setChoosing("match")}
         >
           <Search className={s.choiceIcon} aria-hidden="true" />
           <span className={s.choiceText}>
             <span className={s.choiceTitle}>Find a match</span>
             <span className={s.choiceHint}>
-              {mode === "collection"
-                ? "Be matched with a player. Ranked or casual."
-                : "Be matched with a player."}
+              {lengths !== null && !canQueue
+                ? `Not available for ${deck.format} yet.`
+                : mode === "collection"
+                  ? "Be matched with a player. Ranked or casual."
+                  : "Be matched with a player."}
             </span>
           </span>
         </button>

@@ -1,8 +1,9 @@
-import { keyframes, style } from "@vanilla-extract/css";
+import { globalStyle, keyframes, style } from "@vanilla-extract/css";
 import { controlTokens as t } from "@spellwake/ui/tokens";
 import { standardMotion } from "@spellwake/ui/motion";
+import { TOUCH_TARGET, touch } from "../../components/shell/glass.css";
 
-/** Concept: the two ways to play a deck, and the search that follows one of them. */
+/** The two ways to play a deck, and the search that follows one of them. */
 export const choices = style({
   display: "flex",
   flexDirection: "column",
@@ -23,7 +24,8 @@ export const choice = style({
   textAlign: "left",
   cursor: "pointer",
   selectors: {
-    "&:hover": { borderColor: t.color.goldEdge },
+    "&:disabled": { cursor: "default", opacity: 0.55 },
+    "&:hover:not(:disabled)": { borderColor: t.color.goldEdge },
     "&:focus-visible": {
       outline: `2px solid ${t.color.focus}`,
       outlineOffset: "2px",
@@ -54,6 +56,10 @@ export const options = style({
   flexDirection: "column",
   gap: "18px",
 });
+// The shared chips are sized for a pointer. On a touch screen each is a fingertip tall.
+globalStyle(`${options} label > span`, {
+  "@media": { [touch]: { minHeight: TOUCH_TARGET } },
+});
 
 /** A named setting with its switch at the end of the row. */
 export const setting = style({
@@ -68,6 +74,14 @@ export const settingText = style({
   flexDirection: "column",
   gap: "4px",
   minWidth: 0,
+});
+
+/** Why the last step did not happen. */
+export const failure = style({
+  margin: 0,
+  fontSize: t.font.hint,
+  lineHeight: 1.25,
+  color: t.color.gold,
 });
 
 export const searching = style({
