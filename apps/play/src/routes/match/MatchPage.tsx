@@ -58,6 +58,12 @@ import { MatchStack, useStackReading } from "./stack";
 import { ConcedeConfirmation, MatchSettings, TableChat } from "./TablePanels";
 import { hasUnseen } from "../../match/table-panels";
 import { MatchTable } from "./MatchTable";
+import {
+  GameEndBand,
+  GameEndDialog,
+  GameEndPanel,
+  type Standing,
+} from "./GameEnd";
 import * as table from "./match-table.css";
 import * as s from "./match.css";
 
@@ -573,9 +579,21 @@ function useLowerDock(): { trayHeight: number; clearBottom: number } {
   return dock;
 }
 
-function LiveMatch({ source }: { source: ReadyMatch }): ReactElement {
+/** Concept only: the three ways a finished game's result can be shown. */
+export type EndLook = "panel" | "dialog" | "band";
+
+function LiveMatch({
+  source,
+  endLook,
+}: {
+  source: ReadyMatch;
+  endLook: EndLook;
+}): ReactElement {
   const dock = useLowerDock();
   const { snapshot, seatNames, artByPrintingId } = source;
+  const result = source.result ?? null;
+  // The dialog and the band step aside so the finished table can be seen.
+  const [resultRaised, setResultRaised] = useState(true);
 
   const [view, setView] = useState<TableView>({
     kind: "seat",
@@ -920,7 +938,9 @@ function LiveMatch({ source }: { source: ReadyMatch }): ReactElement {
             className={frame.hudButton}
             aria-label="Leave table"
             // A player who is out has nothing left to concede.
-            onClick={() => (watching ? source.onLeave() : setLeaveOpen(true))}
+            onClick={() =>
+              watching || result ? source.onLeave() : setLeaveOpen(true)
+            }
           >
             <LogOut size={ICON} aria-hidden="true" />
           </button>
@@ -932,7 +952,7 @@ function LiveMatch({ source }: { source: ReadyMatch }): ReactElement {
               phase={phaseInfo.phase}
               phaseLabel={phaseInfo.label}
             />
-            {source.connectionState !== "live" && (
+            {source.connectionState !== "live" && !result && (
               <span className={s.statusBadge} role="status">
                 {source.connectionState === "reconnecting"
                   ? "Reconnecting…"
@@ -953,7 +973,11 @@ function LiveMatch({ source }: { source: ReadyMatch }): ReactElement {
               </div>
             )}
             {damage && <DamageSources sources={damage.sources} />}
-            {watching ? (
+            {result ? (
+              (endLook === "panel" || !resultRaised) && (
+                <GameEndPanel result={result} onLeave={source.onLeave} />
+              )
+            ) : watching ? (
               <p className={s.watching}>Watching</p>
             ) : declaring ? (
               <MatchActions
@@ -986,7 +1010,7 @@ function LiveMatch({ source }: { source: ReadyMatch }): ReactElement {
               />
             )}
             <div className={s.sideDecisions}>
-              {source.chooseOpening && (
+              {source.chooseOpening && !result && (
                 <div className={s.decisionCard}>
                   <p className={s.decisionTitle}>Choose play or draw</p>
                   <div className={s.decisionRow}>
@@ -1005,7 +1029,7 @@ function LiveMatch({ source }: { source: ReadyMatch }): ReactElement {
                   </div>
                 </div>
               )}
-              {activeDecision && !declaring && !casting.dividing && (
+              {activeDecision && !result && !declaring && !casting.dividing && (
                 <DecisionPanel
                   key={activeDecision.decision}
                   decision={activeDecision}
@@ -1116,7 +1140,31 @@ function LiveMatch({ source }: { source: ReadyMatch }): ReactElement {
           onSeen={seeChat}
           onClose={() => setChatOpen(false)}
         />
+        {result && endLook === "band" && resultRaised && (
+          <GameEndBand
+            result={result}
+            onView={() => setResultRaised(false)}
+            onLeave={source.onLeave}
+          />
+        )}
       </ImmersiveFrame>
+      {result && endLook === "dialog" && (
+        <GameEndDialog
+          open={resultRaised}
+          result={result}
+          standings={snapshot.players.map((player): Standing => ({
+            seatId: player.seatId,
+            name:
+              player.seatId === snapshot.viewerSeatId
+                ? "You"
+                : (seatNames.get(player.seatId) ?? "Player"),
+            note: player.eliminated ? "Out" : `${player.life} life`,
+            won: result.winnerSeatIds.includes(player.seatId),
+          }))}
+          onView={() => setResultRaised(false)}
+          onLeave={source.onLeave}
+        />
+      )}
 
       <ModeChoice choice={casting.modeChoice} />
       <MatchSettings
@@ -1319,7 +1367,13 @@ function LiveMatch({ source }: { source: ReadyMatch }): ReactElement {
   );
 }
 
-export function MatchPage({ source }: { source: MatchSource }): ReactElement {
+export function MatchPage({
+  source,
+  endLook = "panel",
+}: {
+  source: MatchSource;
+  endLook?: EndLook;
+}): ReactElement {
   if (source.status === "loading") {
     return (
       <section className={s.emptyShell} aria-label="Loading match">
@@ -1349,5 +1403,5 @@ export function MatchPage({ source }: { source: MatchSource }): ReactElement {
       </section>
     );
   }
-  return <LiveMatch source={source} />;
+  return <LiveMatch source={source} endLook={endLook} />;
 }
