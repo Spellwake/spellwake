@@ -21,6 +21,8 @@ import {
 } from "../../decks/deck-sources";
 import { ImportDeckDialog } from "../import/ImportDeckDialog";
 import { lobbyPath } from "../../lobby/LobbyRoutes";
+import type { QuestsSource } from "../../play/quest-sources";
+import { QuestStrip } from "./QuestStrip";
 import { motionLanguage as m } from "../../lib/motion";
 import * as s from "./deck-shelf.css";
 
@@ -43,6 +45,13 @@ const GAP_COPY: Record<
     description: "Check your connection, then reload.",
   },
 };
+/** The deck Play was pressed for, and the two ways out of what it opens. */
+export type PlayProps = {
+  deck: { id: string; name: string; format: string };
+  /** Opens the lobby with this deck. */
+  onFriends: () => void;
+  onClose: () => void;
+};
 const MODEL_URL = `${import.meta.env.BASE_URL}models/deck-box-leather.glb?bend=1`;
 /** Tiles beyond this arrive together so a long shelf never keeps the eye waiting. */
 const STAGGERED_TILES = 9;
@@ -55,15 +64,26 @@ const STAGGERED_TILES = 9;
 export function DeckShelfPage({
   mode,
   source,
+  play,
+  quests,
 }: {
   mode: PlayMode;
   source: DeckShelfSource;
+  /** What Play on a deck opens. It comes from the account or the preview, as the decks do. */
+  play: (props: PlayProps) => ReactElement;
+  /** Today's quests, shown above the decks. Absent where there are none to read. */
+  quests?: QuestsSource;
 }): ReactElement {
   const navigate = useNavigate();
   const [query, setQuery] = useQueryState("q", parseAsString.withDefault(""));
   // The address carries the format's name, which reads the same from either source.
   const [formatName, setFormatName] = useQueryState("format", parseAsString);
   const [createFailure, setCreateFailure] = useState<string | null>(null);
+  const [playing, setPlaying] = useState<{
+    id: string;
+    name: string;
+    format: string;
+  } | null>(null);
   const [isImporting, setIsImporting] = useQueryState("import", parseAsBoolean);
   const isCreating = useRef(false);
   const searchRegion = useRef<HTMLDivElement>(null);
@@ -205,7 +225,11 @@ export function DeckShelfPage({
                       icon={<Play fill="currentColor" />}
                       aria-label={`Play ${deck.name}`}
                       onClick={() =>
-                        void navigate(`${lobbyPath(mode)}?deck=${deck.id}`)
+                        setPlaying({
+                          id: deck.id,
+                          name: deck.name,
+                          format: deck.format.name,
+                        })
                       }
                     >
                       Play
@@ -215,6 +239,8 @@ export function DeckShelfPage({
               </motion.article>
             ))}
           </div>
+          {/* Where the dock floats over the page, the quests end the list. */}
+          {quests && <QuestStrip source={quests} place="list" />}
         </div>
       ) : (
         <div className={s.center}>
@@ -262,6 +288,15 @@ export function DeckShelfPage({
               ]
         }
       />
+      {/* On a wide screen the quests stay along the bottom edge, under the decks. */}
+      {quests && <QuestStrip source={quests} place="edge" />}
+      {playing &&
+        play({
+          deck: playing,
+          onFriends: () =>
+            void navigate(`${lobbyPath(mode)}?deck=${playing.id}`),
+          onClose: () => setPlaying(null),
+        })}
       {isImporting && shelf && (
         <ImportDeckDialog
           onImport={importList}
