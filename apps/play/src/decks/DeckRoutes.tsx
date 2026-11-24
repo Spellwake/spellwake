@@ -1,8 +1,16 @@
 import type { ReactElement } from "react";
-import { useParams } from "react-router-dom";
+import { parseAsString, useQueryState } from "nuqs";
+import { useNavigate, useParams } from "react-router-dom";
 import { useAccount } from "../auth/AccountProvider";
+import { lobbyPath } from "../lobby/LobbyRoutes";
+import { useConnectedFindMatch } from "../play/connected-find-match";
+import { useDemoFindMatch } from "../play/demo-find-match";
 import { DeckBuilderPage } from "../routes/builder/DeckBuilderPage";
-import { DeckShelfPage } from "../routes/collection/DeckShelfPage";
+import {
+  DeckShelfPage,
+  type PlayProps,
+} from "../routes/collection/DeckShelfPage";
+import { PlayDialog } from "../routes/collection/PlayDialog";
 import {
   useConnectedDeckBuilder,
   useConnectedDeckShelf,
@@ -19,11 +27,74 @@ import { useDemoDeckBuilder, useDemoDeckShelf } from "./demo-sources";
 const useIsPreview = (): boolean =>
   useAccount().state.status === "unconfigured";
 
+function AccountPlay({
+  mode,
+  deck,
+  onFriends,
+  onClose,
+}: PlayProps & { mode: PlayMode }): ReactElement {
+  const navigate = useNavigate();
+  const find = useConnectedFindMatch(
+    mode,
+    deck,
+    (found) =>
+      // A seat that could not be readied is shown its room, where it can be.
+      void navigate(
+        found.to === "table"
+          ? `/match?room=${found.roomId}`
+          : `${lobbyPath(mode)}?room=${found.roomId}`,
+      ),
+  );
+  return (
+    <PlayDialog
+      deck={deck}
+      mode={mode}
+      find={find}
+      onFriends={onFriends}
+      onClose={onClose}
+    />
+  );
+}
+const DEMO_SEARCHES = ["waits", "refused", "single-only", "none"] as const;
+function PreviewPlay({
+  mode,
+  deck,
+  onFriends,
+  onClose,
+}: PlayProps & { mode: PlayMode }): ReactElement {
+  const navigate = useNavigate();
+  // `?search=` chooses how the preview's search behaves; it finds a match otherwise.
+  const [param] = useQueryState("search", parseAsString);
+  const behaviour = DEMO_SEARCHES.find((name) => name === param) ?? "finds";
+  const find = useDemoFindMatch(deck, behaviour, () => void navigate("/match"));
+  return (
+    <PlayDialog
+      deck={deck}
+      mode={mode}
+      find={find}
+      onFriends={onFriends}
+      onClose={onClose}
+    />
+  );
+}
+
 function AccountShelf({ mode }: { mode: PlayMode }): ReactElement {
-  return <DeckShelfPage mode={mode} source={useConnectedDeckShelf(mode)} />;
+  return (
+    <DeckShelfPage
+      mode={mode}
+      source={useConnectedDeckShelf(mode)}
+      play={(props) => <AccountPlay mode={mode} {...props} />}
+    />
+  );
 }
 function PreviewShelf({ mode }: { mode: PlayMode }): ReactElement {
-  return <DeckShelfPage mode={mode} source={useDemoDeckShelf(mode)} />;
+  return (
+    <DeckShelfPage
+      mode={mode}
+      source={useDemoDeckShelf(mode)}
+      play={(props) => <PreviewPlay mode={mode} {...props} />}
+    />
+  );
 }
 export function DeckShelfRoute({ mode }: { mode: PlayMode }): ReactElement {
   return useIsPreview() ? (
