@@ -4,6 +4,7 @@ import { useNavigate, useParams } from "react-router-dom";
 import { useAccount } from "../auth/AccountProvider";
 import { lobbyPath } from "../lobby/LobbyRoutes";
 import { useConnectedFindMatch } from "../play/connected-find-match";
+import { useConnectedQuests } from "../play/connected-quests";
 import { useDemoFindMatch } from "../play/demo-find-match";
 import { useDemoQuests } from "../play/demo-quests";
 import { DeckBuilderPage } from "../routes/builder/DeckBuilderPage";
@@ -85,16 +86,22 @@ function AccountShelf({ mode }: { mode: PlayMode }): ReactElement {
       mode={mode}
       source={useConnectedDeckShelf(mode)}
       play={(props) => <AccountPlay mode={mode} {...props} />}
+      quests={useConnectedQuests()}
     />
   );
 }
+const DEMO_QUESTS = ["one", "none", "refused"] as const;
 function PreviewShelf({ mode }: { mode: PlayMode }): ReactElement {
+  // `?quests=` chooses how the preview's daily quests behave.
+  const [questsParam] = useQueryState("quests", parseAsString);
   return (
     <DeckShelfPage
       mode={mode}
       source={useDemoDeckShelf(mode)}
       play={(props) => <PreviewPlay mode={mode} {...props} />}
-      quests={useDemoQuests()}
+      quests={useDemoQuests(
+        DEMO_QUESTS.find((name) => name === questsParam) ?? "three",
+      )}
     />
   );
 }

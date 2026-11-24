@@ -7,7 +7,7 @@ const phone = ':root[data-device="phone"] &';
 const compact = ':root[data-shell="compact"] &';
 const wide = ':root:not([data-shell="compact"]) &';
 
-/** Concept: today's quests in one slim row under the decks. */
+/** Today's quests in one slim row under the decks. */
 export const strip = style({
   flexShrink: 0,
   display: "flex",
@@ -97,8 +97,9 @@ export const swap = style({
   flexShrink: 0,
   display: "grid",
   placeItems: "center",
-  width: "30px",
-  height: "30px",
+  // Never smaller than a pointer can press, however the page is scaled.
+  width: "max(30px, 24PX)",
+  height: "max(30px, 24PX)",
   padding: 0,
   borderRadius: "50%",
   border: `1px solid ${t.color.fieldEdge}`,
@@ -170,3 +171,14 @@ export const winsCount = style({
   fontVariantNumeric: "tabular-nums",
 });
 export const winsLabel = style({ whiteSpace: "nowrap" });
+/** Why a swap did not happen. */
+export const notice = style({
+  flexShrink: 0,
+  alignSelf: "center",
+  margin: 0,
+  maxWidth: "200px",
+  fontSize: t.font.hint,
+  lineHeight: 1.2,
+  color: t.color.gold,
+  selectors: { [phone]: { alignSelf: "flex-start", maxWidth: "none" } },
+});

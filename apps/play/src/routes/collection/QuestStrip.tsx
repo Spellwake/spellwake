@@ -12,7 +12,7 @@ function Quest({
   rerolling,
 }: {
   quest: DailyQuest;
-  /** Absent once today's swap is used, or for a finished quest. */
+  /** Present only on the quest today's one swap may be spent on. */
   onReroll?: (() => void) | undefined;
   rerolling: boolean;
 }): ReactElement {
@@ -84,16 +84,17 @@ export function QuestStrip({
           <Quest
             key={quest.id}
             quest={quest}
-            rerolling={source.rerolling === quest.id}
-            onReroll={
-              source.canReroll && !quest.done
-                ? () => source.reroll(quest.id)
-                : undefined
-            }
+            rerolling={source.swapping && source.swappable === quest.id}
+            onReroll={source.swappable === quest.id ? source.swap : undefined}
           />
         ))}
       </ul>
-      {source.wins && (
+      {source.notice && (
+        <p className={s.notice} role="status">
+          {source.notice}
+        </p>
+      )}
+      {source.wins && source.wins.count > 0 && (
         <p className={s.wins}>
           <span className={s.winsCount}>{source.wins.count}</span>
           <span className={s.winsLabel}>
