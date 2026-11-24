@@ -520,7 +520,7 @@ fn instruction_has_upto_one_target(ins: &InstructionAst) -> bool {
         | InstructionAst::ReturnZone { subject, .. }
         | InstructionAst::MoveZone { subject, .. }
         | InstructionAst::TapPermanent { subject, .. }
-        | InstructionAst::UntapPermanent { subject }
+        | InstructionAst::UntapPermanent { subject, .. }
         | InstructionAst::TapOrUntapPermanent { subject }
         | InstructionAst::SkipNextUntap { subject }
         | InstructionAst::Regenerate { subject }
@@ -591,7 +591,7 @@ fn rewrite_instruction_upto_one_to_exact_one(ins: &mut InstructionAst) -> bool {
         | InstructionAst::ReturnZone { subject, .. }
         | InstructionAst::MoveZone { subject, .. }
         | InstructionAst::TapPermanent { subject, .. }
-        | InstructionAst::UntapPermanent { subject }
+        | InstructionAst::UntapPermanent { subject, .. }
         | InstructionAst::TapOrUntapPermanent { subject }
         | InstructionAst::SkipNextUntap { subject }
         | InstructionAst::Regenerate { subject }
@@ -6816,13 +6816,21 @@ fn expand_top_level_compound_targets(ins: &[InstructionAst]) -> Vec<InstructionA
                     continue;
                 }
             }
-            InstructionAst::UntapPermanent { subject } => {
-                if let SubjectRefAst::Compound(parts) = subject.as_ref()
+            InstructionAst::UntapPermanent {
+                subject,
+                count,
+                up_to,
+            } => {
+                if count.is_none()
+                    && !*up_to
+                    && let SubjectRefAst::Compound(parts) = subject.as_ref()
                     && parts.len() >= 2
                 {
                     for p in parts {
                         out.push(InstructionAst::UntapPermanent {
                             subject: Box::new(p.clone()),
+                            count: None,
+                            up_to: false,
                         });
                     }
                     continue;

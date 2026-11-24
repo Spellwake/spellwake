@@ -742,6 +742,14 @@ pub fn parse_object_filter(phrase: &str, vocab: &Vocabulary) -> Result<ObjectFil
             s = prefix.trim().to_string();
             continue;
         }
+        if let Some(prefix) = s.strip_suffix(" that were blocked by that creature this turn") {
+            flt.predicates.push(FilterPredicateAst::BlockedBy {
+                blocker: Box::new(SubjectRefAst::Anaphora("that creature".to_string())),
+                this_turn: true,
+            });
+            s = prefix.trim().to_string();
+            continue;
+        }
         if let Some(prefix) = s.strip_suffix(" that attacked or blocked this turn") {
             flt.flags = flt
                 .flags

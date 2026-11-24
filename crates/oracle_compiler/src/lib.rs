@@ -11,6 +11,7 @@ pub mod keywords;
 pub mod preprocess;
 pub mod vocab;
 pub mod wave_e6;
+pub mod wave_e7;
 
 use std::error::Error;
 use std::fmt;
@@ -2571,6 +2572,281 @@ mod tests {
             signal.strictly_compiled,
             "Signal the Clans (gtc): {:?}",
             signal.faces[0].failures
+        );
+    }
+
+    #[test]
+    fn pass_e7_untap_and_lossless_upgrades() {
+        let members: Vec<String> = [
+            "Shark",
+            "Illusion",
+            "Drake",
+            "Human",
+            "Wizard",
+            "Goblin",
+            "Artificer",
+            "Dragon",
+            "Avatar",
+            "Zombie",
+            "God",
+            "Ooze",
+            "Tiefling",
+            "Warrior",
+            "Phyrexian",
+            "Angel",
+            "Wall",
+            "Fish",
+            "Beast",
+            "Bird",
+            "Hippo",
+            "Construct",
+        ]
+        .into_iter()
+        .map(str::to_string)
+        .collect();
+        let vocab = Vocabulary::from_creature_members(&members);
+        let compile = |name: &str, type_line: &str, oracle_text: &str| {
+            compile_card(
+                &CardInput {
+                    oracle_id: "test",
+                    name,
+                    layout: "normal",
+                    faces: vec![FaceInput {
+                        name,
+                        type_line,
+                        oracle_text,
+                    }],
+                },
+                &vocab,
+            )
+        };
+
+        // 1. Giant Shark trigger routing: uses typed DEALT_DAMAGE_THIS_TURN instead of dead branch
+        let shark = compile(
+            "Giant Shark",
+            "Creature — Shark",
+            "This creature can't attack unless defending player controls an Island.\nWhenever this creature blocks or becomes blocked by a creature that has been dealt damage this turn, this creature gets +2/+0 and gains trample until end of turn.\nWhen you control no Islands, sacrifice this creature.",
+        );
+        assert!(
+            shark.strictly_compiled,
+            "Giant Shark: {:?}",
+            shark.faces[0].failures
+        );
+        let has_typed_block_trig = shark.faces[0].abilities.iter().any(|ab| {
+            matches!(
+                ab,
+                AbilityAst::Triggered { trigger, .. }
+                    if trigger.events.iter().any(|ev| matches!(
+                        ev,
+                        TriggerEventAst::BlocksOrBecomesBlockedBy {
+                            other_filter,
+                            blocks: true,
+                            becomes_blocked: true,
+                            min_count: 1,
+                            ..
+                        } if other_filter.flags.0 & ast::ObjectFilterFlags::DEALT_DAMAGE_THIS_TURN.0 != 0
+                    ))
+            )
+        });
+        assert!(
+            has_typed_block_trig,
+            "Giant Shark must emit typed BlocksOrBecomesBlockedBy with DEALT_DAMAGE_THIS_TURN: {:?}",
+            shark.faces[0].abilities
+        );
+
+        // 2. InstructionAst::UntapPermanent preserves count and up_to for non-targeted untap cards
+        let palinchron = compile(
+            "Palinchron",
+            "Creature — Illusion",
+            "Flying\nWhen Palinchron enters, untap up to seven lands.\n{2}{U}{U}: Return Palinchron to its owner's hand.",
+        );
+        assert!(palinchron.strictly_compiled);
+        assert!(palinchron.faces[0].abilities.iter().any(|ab| matches!(
+            ab,
+            AbilityAst::Triggered { body, .. }
+                if body.iter().any(|ins| matches!(
+                    ins,
+                    InstructionAst::UntapPermanent {
+                        subject,
+                        count: Some(cnt),
+                        up_to: true,
+                    } if matches!(subject.as_ref(), ast::SubjectRefAst::Group(f) if f.any_types == ast::CardTypeMask::LAND)
+                        && **cnt == ast::ValueExprAst::Const(7)
+                ))
+        )));
+
+        let frantic = compile(
+            "Frantic Search",
+            "Instant",
+            "Draw two cards, then discard two cards. Untap up to three lands.",
+        );
+        assert!(frantic.strictly_compiled);
+        assert!(frantic.faces[0].spell_effects.iter().any(|ins| matches!(
+            ins,
+            InstructionAst::UntapPermanent {
+                count: Some(cnt),
+                up_to: true,
+                ..
+            } if **cnt == ast::ValueExprAst::Const(3)
+        )));
+
+        let azusa = compile(
+            "Likeness of the Seeker",
+            "Enchantment Creature — Human Monk",
+            "When Likeness of the Seeker enters, untap up to three lands you control.",
+        );
+        assert!(azusa.strictly_compiled);
+        assert!(azusa.faces[0].abilities.iter().any(|ab| matches!(
+            ab,
+            AbilityAst::Triggered { body, .. }
+                if body.iter().any(|ins| matches!(
+                    ins,
+                    InstructionAst::UntapPermanent {
+                        subject,
+                        count: Some(cnt),
+                        up_to: true,
+                    } if matches!(subject.as_ref(), ast::SubjectRefAst::Group(f) if f.controller == Some(ast::ControllerRelation::You))
+                        && **cnt == ast::ValueExprAst::Const(3)
+                ))
+        )));
+
+        let shriekwood = compile(
+            "Shriekwood Devourer",
+            "Creature — Treefolk",
+            "Whenever Shriekwood Devourer attacks, untap up to X lands, where X is its power.",
+        );
+        assert!(shriekwood.strictly_compiled);
+        let shriek_json = serde_json::to_string(&shriekwood).unwrap_or_default();
+        assert!(
+            shriek_json.contains("\"UntapPermanent\"")
+                && shriek_json.contains("\"ChosenX\"")
+                && shriek_json.contains("\"up_to\":true"),
+            "Shriekwood Devourer must preserve ChosenX + up_to: {shriek_json}"
+        );
+
+        // Targeted untap preserves TargetObject with count: None, up_to: false
+        let twiddle = compile(
+            "Garruk Wildspeaker",
+            "Planeswalker — Garruk",
+            "+1: Untap two target lands.",
+        );
+        assert!(twiddle.strictly_compiled);
+        assert!(twiddle.faces[0].abilities.iter().any(|ab| matches!(
+            ab,
+            AbilityAst::Loyalty { body, .. }
+                if body.iter().any(|ins| matches!(
+                    ins,
+                    InstructionAst::UntapPermanent {
+                        subject,
+                        count: None,
+                        up_to: false,
+                    } if matches!(subject.as_ref(), ast::SubjectRefAst::TargetObject { count: ast::TargetCountAst::Exact(2), .. })
+                ))
+        )));
+
+        // 3. All 9 high-playability black-border staples compile strictly with zero StructuredRule / GameStateFlag
+        let staples = [
+            (
+                "Chains of Mephistopheles",
+                "Enchantment",
+                "If a player would draw a card except the first one they draw in each of their draw steps, that player discards a card instead. If the player discards a card this way, they draw a card. If the player doesn't discard a card this way, they mill a card.",
+            ),
+            (
+                "Chancellor of the Annex",
+                "Creature — Phyrexian Angel",
+                "You may reveal this card from your opening hand. If you do, when each opponent casts their first spell of the game, counter that spell unless that player pays {1}.\nFlying\nWhenever an opponent casts a spell, counter it unless that player pays {1}.",
+            ),
+            (
+                "Goblin Welder",
+                "Creature — Goblin Artificer",
+                "{T}: Choose target artifact a player controls and target artifact card in that player's graveyard. If both targets are still legal as this ability resolves, that player simultaneously sacrifices the artifact and returns the artifact card to the battlefield.",
+            ),
+            (
+                "Helm of Obedience",
+                "Artifact",
+                "{X}, {T}: Target opponent mills a card, then repeats this process until a creature card or X cards have been put into their graveyard this way, whichever comes first. If one or more creature cards were put into that graveyard this way, sacrifice this artifact and put one of them onto the battlefield under your control. X can't be 0.",
+            ),
+            (
+                "Niv-Mizzet Reborn",
+                "Legendary Creature — Dragon Avatar",
+                "Flying\nWhen Niv-Mizzet enters, reveal the top ten cards of your library. For each color pair, choose a card that's exactly those colors from among them. Put the chosen cards into your hand and the rest on the bottom of your library in a random order.",
+            ),
+            (
+                "The Book of Vile Darkness",
+                "Legendary Artifact — Book",
+                "At the beginning of your end step, if you lost 2 or more life this turn, create a 2/2 black Zombie creature token.\n{T}, Exile The Book of Vile Darkness and artifacts you control named Eye of Vecna and Hand of Vecna: Create Vecna, a legendary 8/8 black Zombie God creature token with indestructible and all triggered abilities of the exiled cards.",
+            ),
+            (
+                "The Chain Veil",
+                "Legendary Artifact",
+                "At the beginning of your end step, if you didn't activate a loyalty ability of a planeswalker this turn, you lose 2 life.\n{4}, {T}: For each planeswalker you control, you may activate one of its loyalty abilities once this turn as though none of its loyalty abilities have been activated this turn.",
+            ),
+            (
+                "The Mimeoplasm",
+                "Legendary Creature — Ooze",
+                "As The Mimeoplasm enters, you may exile two creature cards from graveyards. If you do, it enters as a copy of one of those cards with a number of additional +1/+1 counters on it equal to the power of the other card.",
+            ),
+            (
+                "Zevlor, Elturel Exile",
+                "Legendary Creature — Tiefling Warrior",
+                "Haste\n{2}, {T}: When you next cast an instant or sorcery spell that targets only a single opponent or a single permanent an opponent controls this turn, for each other opponent, choose that player or a permanent they control, copy that spell, and the copy targets the chosen player or permanent.",
+            ),
+        ];
+        for (name, tl, ot) in staples {
+            let compiled = compile(name, tl, ot);
+            assert!(
+                compiled.strictly_compiled,
+                "{name} failed: {:?}",
+                compiled.faces[0].failures
+            );
+            let json = serde_json::to_string(&compiled).unwrap_or_default();
+            assert!(
+                !json.contains("\"StructuredRule\""),
+                "{name} must not emit StructuredRule: {json}"
+            );
+            assert!(
+                !json.contains("\"GameStateFlag\""),
+                "{name} must not emit GameStateFlag: {json}"
+            );
+        }
+
+        // Verify typed AST structure on key Pass E7 orthogonal variants
+        let welder = compile(
+            "Goblin Welder",
+            "Creature — Goblin Artificer",
+            "{T}: Choose target artifact a player controls and target artifact card in that player's graveyard. If both targets are still legal as this ability resolves, that player simultaneously sacrifices the artifact and returns the artifact card to the battlefield.",
+        );
+        let welder_json = serde_json::to_string(&welder).unwrap_or_default();
+        assert!(
+            welder_json.contains("\"AllTargetsLegal\"") && welder_json.contains("\"Simultaneous\""),
+            "Goblin Welder must emit AllTargetsLegal + Simultaneous: {welder_json}"
+        );
+
+        let snowblind = compile(
+            "Snowblind",
+            "Enchantment — Aura",
+            "Enchant creature\nEnchanted creature gets -X/-Y. If that creature is attacking, X is the number of snow lands defending player controls. Otherwise, X is the number of snow lands its controller controls. Y is equal to X or to enchanted creature's toughness minus 1, whichever is smaller.",
+        );
+        assert!(
+            snowblind.strictly_compiled,
+            "Snowblind: {:?}",
+            snowblind.faces[0].failures
+        );
+        let snow_json = serde_json::to_string(&snowblind).unwrap_or_default();
+        assert!(
+            snow_json.contains("\"DynamicModifyPT\"") && snow_json.contains("\"Conditional\""),
+            "Snowblind must emit DynamicModifyPT + Conditional: {snow_json}"
+        );
+
+        let wild = compile(
+            "Wild Endeavor",
+            "Sorcery",
+            "Roll two d4 and choose one result. Create a number of 3/3 green Beast creature tokens equal to that result. Then search your library for a number of basic land cards equal to the other result, put them onto the battlefield tapped, then shuffle.",
+        );
+        assert!(
+            wild.strictly_compiled,
+            "Wild Endeavor: {:?}",
+            wild.faces[0].failures
         );
     }
 }

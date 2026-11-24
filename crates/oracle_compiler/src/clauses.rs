@@ -2149,21 +2149,6 @@ fn parse_trigger_events(core: &str, vocab: &Vocabulary) -> Result<Vec<TriggerEve
             },
         ]);
     }
-    if blow == "~ blocks or becomes blocked by a creature that has been dealt damage this turn" {
-        return Ok(vec![TriggerEventAst::BlocksOrBecomesBlockedBy {
-            subject: Box::new(SubjectRefAst::SelfObject),
-            other_filter: Box::new(ObjectFilterAst {
-                any_types: CardTypeMask::CREATURE,
-                predicates: vec![crate::ast::FilterPredicateAst::StateQualification(
-                    "that has been dealt damage this turn".to_string(),
-                )],
-                ..ObjectFilterAst::default()
-            }),
-            blocks: true,
-            becomes_blocked: true,
-            min_count: 1,
-        }]);
-    }
     if let Some(subj_raw) = blow
         .strip_suffix(" blocks or becomes blocked")
         .or_else(|| blow.strip_suffix(" blocks or becomes blocked by a creature"))
@@ -2186,26 +2171,31 @@ fn parse_trigger_events(core: &str, vocab: &Vocabulary) -> Result<Vec<TriggerEve
         (" becomes blocked by ", false, true),
         (" blocks ", true, false),
     ] {
-        if let Some((subj_raw, rhs_raw)) = blow.split_once(needle)
-            && let Ok(subj) = parse_subject_or_target(subj_raw.trim(), vocab)
-        {
-            let (min_count, flt_raw) = if let Some(r) = rhs_raw.strip_prefix("two or more ") {
-                (2u8, r)
-            } else if let Some(r) = rhs_raw.strip_prefix("one or more ") {
-                (1u8, r)
-            } else if let Some(r) = rhs_raw.strip_prefix("three or more ") {
-                (3u8, r)
-            } else {
-                (1u8, rhs_raw)
-            };
-            if let Ok(other_filter) = parse_object_filter(flt_raw.trim(), vocab) {
-                return Ok(vec![TriggerEventAst::BlocksOrBecomesBlockedBy {
-                    subject: Box::new(subj),
-                    other_filter: Box::new(other_filter),
-                    blocks,
-                    becomes_blocked,
-                    min_count,
-                }]);
+        for cand in [blow_raw, blow] {
+            if let Some((subj_raw, rhs_raw)) = cand.split_once(needle)
+                && let Ok(subj) = parse_subject_or_target(subj_raw.trim(), vocab)
+            {
+                let (min_count, flt_raw) = if let Some(r) = rhs_raw.strip_prefix("two or more ") {
+                    (2u8, r)
+                } else if let Some(r) = rhs_raw.strip_prefix("one or more ") {
+                    (1u8, r)
+                } else if let Some(r) = rhs_raw.strip_prefix("three or more ") {
+                    (3u8, r)
+                } else {
+                    (1u8, rhs_raw)
+                };
+                if let Ok(other_filter) = parse_object_filter(flt_raw.trim(), vocab) {
+                    return Ok(vec![TriggerEventAst::BlocksOrBecomesBlockedBy {
+                        subject: Box::new(subj),
+                        other_filter: Box::new(other_filter),
+                        blocks,
+                        becomes_blocked,
+                        min_count,
+                    }]);
+                }
+            }
+            if blow_raw == blow {
+                break;
             }
         }
     }
@@ -3934,7 +3924,6 @@ fn parse_trigger_events(core: &str, vocab: &Vocabulary) -> Result<Vec<TriggerEve
             | "you earthbend"
             | "you firebend"
             | "you airbend"
-            | "~ blocks or becomes blocked by a creature that has been dealt damage this turn"
             | "a creature you control that was turned face up this turn deals combat damage to a player"
             | "~ enters from anywhere other than a graveyard or exile"
             | "an opponent casts a spell or activates an ability"
@@ -5992,6 +5981,11 @@ pub fn parse_atomic_effect(
             DelayedStepScope::EachOfYour,
         ),
         (
+            "at the beginning of each of your upkeeps for the rest of the game, ",
+            TurnStepAst::Upkeep,
+            DelayedStepScope::EachOfYour,
+        ),
+        (
             "at the beginning of your upkeep, ",
             TurnStepAst::Upkeep,
             DelayedStepScope::YourNext,
@@ -7332,6 +7326,8 @@ pub fn parse_atomic_effect(
         return Ok(vec![
             InstructionAst::UntapPermanent {
                 subject: Box::new(subj.clone()),
+                count: None,
+                up_to: false,
             },
             InstructionAst::CombatRuleMod {
                 subject: Box::new(subj),
@@ -8550,11 +8546,9 @@ pub fn parse_atomic_effect(
 
     // "<player> taps/untaps <subj>" / "<player> incubates <val>" / "<player> amasses <subt> <val>" / "exchange life totals with <player>"
     if let Some((_, subj_raw)) = split_leading_player_verb(&low, "untap", "untaps")
-        && let Ok(subj) = parse_subject_or_target(subj_raw, vocab)
+        && let Some(ins) = parse_untap_permanent_instruction(subj_raw, vocab)
     {
-        return Ok(vec![InstructionAst::UntapPermanent {
-            subject: Box::new(subj),
-        }]);
+        return Ok(vec![ins]);
     }
     if let Some((_, subj_raw)) = split_leading_player_verb(&low, "tap", "taps")
         && let Ok(subj) = parse_subject_or_target(subj_raw, vocab)
@@ -10156,6 +10150,111 @@ fn collect_top_level_and_splits(s: &str) -> Vec<(usize, usize)> {
         i += 1;
     }
     out
+}
+
+/// Parse an untap clause body (after `untap ` / `<player> untap(s) `), preserving
+/// non-targeted cardinality (`up to N/X/that many`, exact `N/X/that many`, `a number of ... equal to ...`)
+/// losslessly on `InstructionAst::UntapPermanent` while keeping targeted phrases on `SubjectRefAst::TargetObject`.
+fn parse_untap_permanent_instruction(rest: &str, vocab: &Vocabulary) -> Option<InstructionAst> {
+    let clean = rest.trim().trim_end_matches('.');
+    if clean.is_empty() {
+        return None;
+    }
+    let low = clean.to_ascii_lowercase();
+    if !low.contains("target") {
+        if let Some(after) = low.strip_prefix("up to ") {
+            if let Some(flt_raw) = after.strip_prefix("that many ")
+                && let Ok(flt) = parse_object_filter(flt_raw.trim(), vocab)
+            {
+                return Some(InstructionAst::UntapPermanent {
+                    subject: Box::new(SubjectRefAst::Group(Box::new(flt))),
+                    count: Some(Box::new(ValueExprAst::PriorResult)),
+                    up_to: true,
+                });
+            }
+            if let Some(after_num) = after.strip_prefix("a number of ")
+                && let Some((flt_raw, val_raw)) = after_num.split_once(" equal to ")
+                && let (Ok(flt), Ok(val)) = (
+                    parse_object_filter(flt_raw.trim(), vocab),
+                    parse_value_expr(val_raw.trim(), vocab),
+                )
+            {
+                return Some(InstructionAst::UntapPermanent {
+                    subject: Box::new(SubjectRefAst::Group(Box::new(flt))),
+                    count: Some(Box::new(val)),
+                    up_to: true,
+                });
+            }
+            if let Some((cnt_tok, flt_raw)) = after.split_once(' ') {
+                let count = if cnt_tok == "x" {
+                    Some(ValueExprAst::ChosenX)
+                } else if let Some(n) = parse_number_word(cnt_tok)
+                    && n >= 0
+                {
+                    Some(ValueExprAst::Const(n))
+                } else {
+                    None
+                };
+                if let Some(val) = count
+                    && let Ok(flt) = parse_object_filter(flt_raw.trim(), vocab)
+                {
+                    return Some(InstructionAst::UntapPermanent {
+                        subject: Box::new(SubjectRefAst::Group(Box::new(flt))),
+                        count: Some(Box::new(val)),
+                        up_to: true,
+                    });
+                }
+            }
+        }
+        if let Some(after_num) = low.strip_prefix("a number of ")
+            && let Some((flt_raw, val_raw)) = after_num.split_once(" equal to ")
+            && let (Ok(flt), Ok(val)) = (
+                parse_object_filter(flt_raw.trim(), vocab),
+                parse_value_expr(val_raw.trim(), vocab),
+            )
+        {
+            return Some(InstructionAst::UntapPermanent {
+                subject: Box::new(SubjectRefAst::Group(Box::new(flt))),
+                count: Some(Box::new(val)),
+                up_to: false,
+            });
+        }
+        if let Some(flt_raw) = low.strip_prefix("that many ")
+            && let Ok(flt) = parse_object_filter(flt_raw.trim(), vocab)
+        {
+            return Some(InstructionAst::UntapPermanent {
+                subject: Box::new(SubjectRefAst::Group(Box::new(flt))),
+                count: Some(Box::new(ValueExprAst::PriorResult)),
+                up_to: false,
+            });
+        }
+        if let Some((cnt_tok, flt_raw)) = low.split_once(' ') {
+            let count = if cnt_tok == "x" {
+                Some(ValueExprAst::ChosenX)
+            } else if let Some(n) = parse_number_word(cnt_tok)
+                && n >= 2
+            {
+                Some(ValueExprAst::Const(n))
+            } else {
+                None
+            };
+            if let Some(val) = count
+                && let Ok(flt) = parse_object_filter(flt_raw.trim(), vocab)
+            {
+                return Some(InstructionAst::UntapPermanent {
+                    subject: Box::new(SubjectRefAst::Group(Box::new(flt))),
+                    count: Some(Box::new(val)),
+                    up_to: false,
+                });
+            }
+        }
+    }
+    let subj = parse_subject_or_target(clean, vocab).ok()?;
+    Some(InstructionAst::UntapPermanent {
+        subject: Box::new(subj),
+        count: None,
+        up_to: false,
+    })
 }
 
 fn split_leading_player_verb<'a>(
@@ -12989,6 +13088,7 @@ fn try_parse_zone_moves(low: &str, vocab: &Vocabulary) -> Option<InstructionAst>
 }
 
 fn try_parse_search_library(low: &str, vocab: &Vocabulary) -> Option<InstructionAst> {
+    let low = low.strip_prefix("then ").unwrap_or(low);
     let (opt_player, leading_subject_player, after) = if let Some(a) = low.strip_prefix("search ") {
         (None, None, a)
     } else if let Some((who_raw, a)) = low
@@ -13238,8 +13338,15 @@ fn try_parse_search_library(low: &str, vocab: &Vocabulary) -> Option<Instruction
         (flt_clean, None, false)
     };
 
-    let (mut cnt, flt_raw) = if any_number {
+    let (cnt, flt_raw) = if any_number {
         (ValueExprAst::Const(0), primary_raw)
+    } else if let Some(after_num) = primary_raw
+        .strip_prefix("a number of ")
+        .or_else(|| primary_raw.strip_prefix("number of "))
+        && let Some((inner_flt, eq_val)) = after_num.split_once(" equal to ")
+        && let Ok(parsed_cnt) = parse_value_expr(eq_val.trim(), vocab)
+    {
+        (parsed_cnt, inner_flt.trim())
     } else {
         peel_leading_count(primary_raw, vocab)
     };
@@ -13271,13 +13378,6 @@ fn try_parse_search_library(low: &str, vocab: &Vocabulary) -> Option<Instruction
         };
         base_flt.named = Some(nf);
         base_flt
-    } else if let Some(after_num) = flt_raw.strip_prefix("number of ")
-        && let Some((inner_flt, eq_val)) = after_num.split_once(" equal to ")
-        && let Ok(parsed_cnt) = parse_value_expr(eq_val, vocab)
-        && let Ok(f) = parse_object_filter(inner_flt, vocab)
-    {
-        cnt = parsed_cnt;
-        f
     } else {
         parse_object_filter(flt_raw, vocab).ok()?
     };
@@ -13783,11 +13883,9 @@ fn try_parse_misc_actions(
         });
     }
     if let Some(rest) = low.strip_prefix("untap ")
-        && let Ok(subj) = parse_subject_or_target(rest, vocab)
+        && let Some(ins) = parse_untap_permanent_instruction(rest, vocab)
     {
-        return Some(InstructionAst::UntapPermanent {
-            subject: Box::new(subj),
-        });
+        return Some(ins);
     }
     if let Some((who_raw, rest)) = low
         .split_once(" shuffles ")
@@ -22979,10 +23077,6 @@ fn parse_wave_e5_effects(
             "reanimate_damaged_creature",
         ),
         (
-            "at this turn's next end of combat, destroy all creatures that were blocked by that creature this turn",
-            "delayed_destroy_blocked_eoc",
-        ),
-        (
             "it deals 1 damage to each creature that doesn't have first strike, double strike, vigilance, or haste",
             "damage_without_combat_kws",
         ),
@@ -23069,6 +23163,7 @@ fn parse_wave_e5_effects(
     }
 
     crate::wave_e6::parse_wave_e6_effects(s, low, s_nodur, dur, vocab)
+        .or_else(|| crate::wave_e7::parse_wave_e7_effects(s, low, s_nodur, dur, vocab))
 }
 
 #[inline(never)]
@@ -24252,4 +24347,5 @@ fn parse_wave_e4_statics(s: &str, low: &str, vocab: &Vocabulary) -> Option<Stati
     }
 
     crate::wave_e6::parse_wave_e6_statics(s, low, vocab)
+        .or_else(|| crate::wave_e7::parse_wave_e7_statics(s, low, vocab))
 }

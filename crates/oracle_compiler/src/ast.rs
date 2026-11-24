@@ -342,6 +342,38 @@ pub enum FilterPredicateAst {
     NotOwnedByController,
     FromSource(Box<ObjectFilterAst>),
     NthSpellCastThisTurn(u8),
+    /// Matches the Nth spell a player casts in the entire game (`Chancellor of the Annex`).
+    NthSpellCastThisGame(u8),
+    /// Matches an object that a referenced spell or ability could legally target (`Exterminator Magmarch`).
+    CouldBeTargetedBy(Box<SubjectRefAst>),
+    /// Matches an object that is not currently targeted by an object matching the filter (`Goblin Artisans`).
+    NotTargetedBy(Box<ObjectFilterAst>),
+    /// Matches an object whose color count satisfies the comparison (`Evolving Door`).
+    ColorCountCompare {
+        op: CompareOp,
+        expr: Box<ValueExprAst>,
+    },
+    /// Matches creatures blocked by the referenced creature (`Glyph of Doom`, `Glyph of Delusion`, `Glyph of Reincarnation`).
+    BlockedBy {
+        blocker: Box<SubjectRefAst>,
+        #[serde(default)]
+        this_turn: bool,
+    },
+    /// Matches creatures continuously controlled (or not continuously controlled) since turn start (`Total War`).
+    ControlledSinceTurnStart {
+        #[serde(default)]
+        negated: bool,
+    },
+    /// Matches the most recent object in turn history satisfying the surrounding filter (`Suffocation`).
+    LastMatchingThisTurn,
+    /// Matches permanents on which the source put `counter_kind` and has not removed one (`Cyclopean Tomb`).
+    CounterPlacedNotRemovedBySelf {
+        counter_kind: String,
+    },
+    /// Matches cards with the same name as a card spliced onto the referenced spell (`Minamo's Meddling`).
+    SameNameAsSplicedOnto(Box<SubjectRefAst>),
+    /// Matches permanents of the Nth type from a prior ordered type choice (`Rite of Ruin`).
+    NthChosenType(u8),
     StateQualification(String),
 }
 
@@ -700,6 +732,14 @@ pub enum ValueExprAst {
     CountDrawnThisWay(PlayerRefAst),
     /// Amount of energy (`{E}`) paid during the current resolution (`Wheel of Potential`).
     EnergyPaidThisWay,
+    /// Conditional numeric expression choosing between two branches (`Snowblind`).
+    Conditional {
+        condition: Box<ConditionAst>,
+        then_expr: Box<ValueExprAst>,
+        else_expr: Box<ValueExprAst>,
+    },
+    /// Pre-damage cap of the damaged target: player life total before damage, planeswalker loyalty before damage, or creature toughness (`Drain Life`, `Soul Burn`).
+    TargetPreDamageCap,
     /// Opt-in tabletop honor-system integer input (e.g. bystander number, dexterity count).
     ManualTabletopNumber {
         prompt: String,
@@ -979,6 +1019,14 @@ pub enum GameMarker {
         min_count: u16,
     },
     SameManaValueAsTriggerSpell,
+    /// All targets of the resolving spell or ability are still legal (`Goblin Welder`).
+    AllTargetsLegal,
+    /// Subject shares a color with the most common color (or tied for most common) among `scope` (`Barrin's Unmaking`).
+    SharesMostCommonColorAmong {
+        subject: Box<SubjectRefAst>,
+        scope: Box<ObjectFilterAst>,
+        allow_tie: bool,
+    },
 }
 
 /// Condition AST used by intervening-if triggers, resolution branches, and conditional statics.
@@ -1673,6 +1721,15 @@ pub enum DelayedStepScope {
     EachOfYour,
 }
 
+/// Closed category domain for `InstructionAst::ForEachCategory`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum CategoryIterationKind {
+    /// Each of the ten two-color pairs (`Niv-Mizzet Reborn`).
+    ColorPair,
+    /// Each distinct kind of counter among matching objects (`Exotic Pets`).
+    CounterKindAmong(Box<ObjectFilterAst>),
+}
+
 /// Core parameterized Magic instruction AST.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum InstructionAst {
@@ -2024,6 +2081,10 @@ pub enum InstructionAst {
     },
     UntapPermanent {
         subject: Box<SubjectRefAst>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        count: Option<Box<ValueExprAst>>,
+        #[serde(default)]
+        up_to: bool,
     },
     TapOrUntapPermanent {
         subject: Box<SubjectRefAst>,
@@ -2605,6 +2666,22 @@ pub enum InstructionAst {
         stat: StatKind,
         threshold: Box<ValueExprAst>,
     },
+    /// Execute two or more atomic instructions simultaneously (`Goblin Welder`, `Sands of Time`).
+    Simultaneous(Vec<InstructionAst>),
+    /// Iterate over a closed category domain (`Niv-Mizzet Reborn`, `Exotic Pets`).
+    ForEachCategory {
+        category: CategoryIterationKind,
+        body: Vec<InstructionAst>,
+    },
+    /// A player loses all unspent mana (`Pygmy Hippo`).
+    LoseUnspentMana {
+        player: PlayerRefAst,
+    },
+    /// One referenced player controls another referenced player during the controlled player's next turn (`Cruel Entertainment`).
+    PlayerControlsPlayerTurn {
+        controller: Box<SubjectRefAst>,
+        controlled: Box<SubjectRefAst>,
+    },
     /// Lossless structured effect rule preserving full semantics for specialized Magic rules (`Karn Liberated`, `Global Ruin`, `Feather`, `Invert`, etc.).
     StructuredRule {
         kind: String,
@@ -2768,6 +2845,14 @@ pub enum StaticAbilityAst {
         subject: Box<SubjectRefAst>,
         power: Box<ValueExprAst>,
         toughness: Box<ValueExprAst>,
+        condition: Option<Box<ConditionAst>>,
+    },
+    /// CR 613.4c dynamic signed power/toughness modification using arbitrary `ValueExprAst` expressions (`Snowblind`).
+    DynamicModifyPT {
+        subject: Box<SubjectRefAst>,
+        power_delta: Box<ValueExprAst>,
+        toughness_delta: Box<ValueExprAst>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
         condition: Option<Box<ConditionAst>>,
     },
     /// Composed conjunction of two or more static abilities (`Tamiyo's Compleation`, `Hold for Questioning`).
