@@ -24,11 +24,13 @@ export async function mountBoxMotion(
   host: HTMLElement,
   url: string,
   options: {
+    /** Public folder holding the box's texture inputs; see `box-textures`. */
+    artworkUrl: string;
     collection?: boolean;
     appearance?: BoxAppearance;
     view?: BoxView | undefined;
     signal?: AbortSignal;
-  } = {},
+  },
 ): Promise<BoxMotion> {
   options.signal?.throwIfAborted();
   // Every box is drawn by the page's one renderer into its own canvas.
@@ -346,7 +348,12 @@ export async function mountBoxMotion(
     }
     leather = createLeatherBend(flap);
     // Face art that arrives after the first paint needs a fresh frame.
-    textures = await createBoxTextures(model, options.signal, draw);
+    textures = await createBoxTextures(
+      model,
+      options.artworkUrl,
+      options.signal,
+      draw,
+    );
     options.signal?.throwIfAborted();
     if (options.appearance) textures.repaint(options.appearance);
     flap.add(rear, front);

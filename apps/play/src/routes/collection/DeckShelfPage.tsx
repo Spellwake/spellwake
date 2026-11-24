@@ -186,6 +186,7 @@ export function DeckShelfPage({
                   name={deck.name}
                   appearance={deck.appearance}
                   modelUrl={MODEL_URL}
+                  artworkUrl={import.meta.env.BASE_URL}
                   className={s.open}
                   stageClassName={s.boxStage}
                   statusClassName={s.boxStatus}
