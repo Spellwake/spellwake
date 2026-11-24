@@ -31,10 +31,12 @@ import {
   type RoomCommand,
 } from "@spellwake/application-contracts";
 import { DEFAULT_APPEARANCE } from "@spellwake/deck-box";
+import { isTauri } from "@tauri-apps/api/core";
 import { z } from "zod";
 import { useAccount } from "../auth/AccountProvider";
 import { ownerBearer, useDeckLibrary } from "../data/account";
 import { useDeckFormats } from "../data/deck-commands";
+import { inviteAddress } from "../data/room-invite";
 import type { IntentDisposition } from "../data/intent-journal";
 import {
   failed,
@@ -62,6 +64,7 @@ const POLL_MS = 2000;
 const READ_ATTEMPTS = 3;
 const COULDNT = "Couldn’t change the lobby.";
 const UNCONFIRMED = "Couldn’t confirm the change.";
+const COULDNT_LINK = "Couldn’t make an invite link.";
 type Errors = Record<string, string>;
 const asErrors = (schema: z.ZodType) => schema as z.ZodType<Errors>;
 const asDisposition = (schema: z.ZodType) =>
@@ -98,7 +101,9 @@ function refusal(errors: Errors): string {
  * action is one journaled command against the revision the screen last read,
  * so a stale action is refused rather than applied to a changed room. The
  * server cannot set AI difficulty, give an AI a chosen deck, change a room's
- * format or invite a named person, so those controls are left out.
+ * format or invite a named person, so those controls are left out. A friend
+ * joins through the host's invitation link: opening it takes a seat with the
+ * invitation it carries before the room is read.
  */
 export function useConnectedLobby(
   mode: PlayMode,
@@ -107,6 +112,8 @@ export function useConnectedLobby(
   onRoom: (roomId: string) => void,
   onLeave: () => void,
   onStarted: () => void,
+  /** The invitation the address carried, and what to do once it has been used. */
+  invitation: { token: string; onUsed: () => void } | null = null,
 ): LobbySource {
   const gap = useInventoryGap();
   const { state, services, isCurrentSession } = useAccount();
@@ -122,6 +129,11 @@ export function useConnectedLobby(
     "starting" | "unconfirmed" | null
   >(null);
   const [createFailed, setCreateFailed] = useState(false);
+  /** An invitation is used before the room is read: only a member may read it. */
+  const [admission, setAdmission] = useState<
+    "pending" | "admitted" | "full" | "unavailable"
+  >(invitation ? "pending" : "admitted");
+  const inviteLinks = useRef(new Map<string, string>());
   const { hasNextPage, isFetchingNextPage, fetchNextPage } = library;
   useEffect(() => {
     if (hasNextPage && !isFetchingNextPage) void fetchNextPage();
@@ -160,7 +172,7 @@ export function useConnectedLobby(
   const roomKey = ["room", owner?.accountId, owner?.sessionId, roomId];
   const detail = useQuery({
     queryKey: roomKey,
-    enabled: !!owner && !!services && !!roomId,
+    enabled: !!owner && !!services && !!roomId && admission === "admitted",
     refetchInterval: POLL_MS,
     retry: READ_ATTEMPTS - 1,
     queryFn: async ({ signal }) => {
@@ -339,6 +351,35 @@ export function useConnectedLobby(
     [act, api],
   );
 
+  // An invitation link: take the seat once. Joining again as a member succeeds,
+  // so a lost answer is simply asked again.
+  const joining = useRef(false);
+  const inviteToken = invitation?.token ?? null;
+  const onInviteUsed = invitation?.onUsed;
+  useEffect(() => {
+    if (!inviteToken || !roomId || joining.current || !owner || !services)
+      return;
+    joining.current = true;
+    void (async () => {
+      let settled: "admitted" | "full" | "unavailable" = "unavailable";
+      for (let attempt = 0; attempt < READ_ATTEMPTS; attempt += 1) {
+        const result = await services.api
+          .joinRoom(await ownerBearer(services, owner), roomId, {
+            requestId: crypto.randomUUID(),
+            token: inviteToken,
+          })
+          .catch(() => null);
+        if (result?.status === "success") settled = "admitted";
+        else if (result?.status === "fail")
+          settled = "capacity" in result.data ? "full" : "unavailable";
+        else continue;
+        break;
+      }
+      setAdmission(settled);
+      onInviteUsed?.();
+    })();
+  }, [inviteToken, roomId, owner, services, onInviteUsed]);
+
   // Play with a deck and no room yet: the room is made once, then the deck chosen in it.
   const creating = useRef(false);
   useEffect(() => {
@@ -493,6 +534,8 @@ export function useConnectedLobby(
     };
   if (!roomId)
     return createFailed ? { status: "unavailable" } : { status: "loading" };
+  if (admission === "pending") return { status: "loading" };
+  if (admission !== "admitted") return { status: admission };
   if (detail.isPending) return { status: "loading" };
   if (detail.data === null || detail.isError) return { status: "unavailable" };
   if (!detail.data || !room) return { status: "loading" };
@@ -776,6 +819,31 @@ export function useConnectedLobby(
         : null,
     findPlayers: null,
     invite: null,
+    // A copied address must open in a browser, which an installed app's own address cannot.
+    inviteLink:
+      isHost && !isTauri()
+        ? async () => {
+            const kept = inviteLinks.current.get(roomId);
+            if (kept) return succeeded(kept);
+            const result = await api()
+              .issueRoomInvitation(await bearer(), roomId, {
+                requestId: crypto.randomUUID(),
+                expectedRevision: room.revision,
+              })
+              .catch(() => null);
+            if (result?.status !== "success")
+              return failed(
+                result?.status === "fail" ? refusal(result.data) : COULDNT_LINK,
+              );
+            const address = inviteAddress(
+              window.location.origin,
+              import.meta.env.BASE_URL,
+              { mode, roomId, token: result.data.token },
+            );
+            inviteLinks.current.set(roomId, address);
+            return succeeded(address);
+          }
+        : null,
     departure,
     beginDeparture: () => setDeparture({ stage: "confirm" }),
     cancelDeparture: () => setDeparture(null),

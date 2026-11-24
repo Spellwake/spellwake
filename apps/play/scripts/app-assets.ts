@@ -5,6 +5,16 @@
 export const appAssets = [
   "coin.svg",
   "models/deck-box-leather.glb",
+  // What the deck box paints its faces from; without them every box is blank.
+  "materials/leather-color.jpg",
+  "materials/leather-normal.jpg",
+  "materials/leather-roughness.jpg",
+  "mana-symbols/W.svg",
+  "mana-symbols/U.svg",
+  "mana-symbols/B.svg",
+  "mana-symbols/R.svg",
+  "mana-symbols/G.svg",
+  "mana-symbols/C.svg",
   "entry/apple.svg",
   "entry/discord.svg",
   "entry/google.svg",

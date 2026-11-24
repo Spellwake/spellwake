@@ -90,6 +90,7 @@ const host: Ready = {
   applyRules: done,
   findPlayers: () => Promise.resolve([]),
   invite: done,
+  inviteLink: null,
   departure: null,
   beginDeparture: noop,
   cancelDeparture: noop,
@@ -168,19 +169,40 @@ export function LobbyProbe(): ReactElement {
                   }
                 : state === "invited"
                   ? { ...host, notice: "Invitation sent to Sol" }
-                  : state === "closing"
-                    ? departing({ stage: "pending" })
-                    : state === "closure-unconfirmed"
-                      ? departing({ stage: "unconfirmed", isChecking: false })
-                      : state === "not-closed"
-                        ? departing({ stage: "rejected" })
-                        : state === "close"
-                          ? departing({ stage: "confirm" })
-                          : state === "closed" ||
-                              state === "full" ||
-                              state === "unavailable" ||
-                              state === "loading"
-                            ? { status: state }
-                            : host;
+                  : state === "invite-link"
+                    ? {
+                        ...host,
+                        seats: host.seats.map((s) =>
+                          s.name === "Sol"
+                            ? seat({
+                                id: "open",
+                                kind: "open",
+                                name: "Open seat",
+                              })
+                            : s,
+                        ),
+                        findPlayers: null,
+                        invite: null,
+                        inviteLink: () =>
+                          Promise.resolve(
+                            succeeded(
+                              "https://app.spellwake.com/open-play/lobby?room=0b8f6c1e-2a4d-4e7b-9c3a-5d6e7f809a1b#invite=preview",
+                            ),
+                          ),
+                      }
+                    : state === "closing"
+                      ? departing({ stage: "pending" })
+                      : state === "closure-unconfirmed"
+                        ? departing({ stage: "unconfirmed", isChecking: false })
+                        : state === "not-closed"
+                          ? departing({ stage: "rejected" })
+                          : state === "close"
+                            ? departing({ stage: "confirm" })
+                            : state === "closed" ||
+                                state === "full" ||
+                                state === "unavailable" ||
+                                state === "loading"
+                              ? { status: state }
+                              : host;
   return <LobbyPage source={source} onBack={noop} />;
 }
