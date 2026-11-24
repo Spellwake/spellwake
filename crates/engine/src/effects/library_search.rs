@@ -115,7 +115,7 @@ impl EffectWindow {
         let (filter, other_library): (Option<&LibrarySearch>, Option<SeatId>) = match operation {
             Instruction::SearchLibrary { filter } => match filter.source {
                 SearchSource::PlayerLibrary(subject) => (Some(filter), Some(subject)),
-                SearchSource::TargetOpponentLibrary => {
+                SearchSource::TargetOpponentLibrary | SearchSource::TargetPlayerLibrary => {
                     let bound = self.instruction_target(entry)?;
                     let TargetRef::Player(subject) = bound.choice().target else {
                         return Err(EffectError::InconsistentProgram);

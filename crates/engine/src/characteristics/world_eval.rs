@@ -931,6 +931,25 @@ pub(crate) fn eval_world_value_expr(ctx: &WorldEvalCtx<'_>, expr: &ValueExpr) ->
                 });
                 i64::from(in_z).into()
             }
+            SourceStateExpr::IsRingBearer => i64::from(
+                ctx.state.ring_bearer.get(&ctx.controller) == Some(&ctx.source)
+                    && ctx.objects.get(&ctx.source).is_some_and(|o| {
+                        o.zone == ObjectZone::Battlefield && o.controller == Some(ctx.controller)
+                    }),
+            )
+            .into(),
+            SourceStateExpr::EnteredFromGraveyard => {
+                i64::from(ctx.state.entered_from_graveyard.contains(&ctx.source)).into()
+            }
+            SourceStateExpr::PaidAlternative => i64::from(
+                ctx.state.paid_alternative_objects.contains(&ctx.source)
+                    || ctx
+                        .state
+                        .cast_summaries
+                        .get(&ctx.source)
+                        .is_some_and(|s| s.paid_alternative),
+            )
+            .into(),
         },
         ValueExpr::CountOtherSharingSourceSubtype => {
             let subtypes = ctx
@@ -1255,12 +1274,32 @@ pub(crate) fn eval_world_value_expr(ctx: &WorldEvalCtx<'_>, expr: &ValueExpr) ->
             )
             .into(),
             EventValueKind::PaidAlternative => i64::from(
-                ctx.state
-                    .cast_summaries
-                    .get(&ctx.source)
-                    .is_some_and(|s| s.paid_alternative),
+                ctx.state.paid_alternative_objects.contains(&ctx.source)
+                    || ctx
+                        .state
+                        .cast_summaries
+                        .get(&ctx.source)
+                        .is_some_and(|s| s.paid_alternative),
             )
             .into(),
+            EventValueKind::KickerCount(idx) => ctx
+                .state
+                .kicker_counts
+                .get(&ctx.source)
+                .and_then(|m| m.get(idx))
+                .or_else(|| {
+                    ctx.trigger_subject
+                        .and_then(|id| ctx.state.kicker_counts.get(&id))
+                        .and_then(|m| m.get(idx))
+                })
+                .cloned()
+                .unwrap_or_else(|| {
+                    if *idx == 0 && ctx.state.kicked.contains(&ctx.source) {
+                        1.into()
+                    } else {
+                        0.into()
+                    }
+                }),
             _ => 0.into(),
         },
         ValueExpr::PlayerStat(stat) => match stat {
@@ -1719,6 +1758,63 @@ pub(crate) fn eval_world_value_expr(ctx: &WorldEvalCtx<'_>, expr: &ValueExpr) ->
             .into(),
             PlayerStatExpr::HasInitiative => {
                 i64::from(ctx.state.initiative == Some(ctx.controller)).into()
+            }
+            PlayerStatExpr::CombatPhasesThisTurn => {
+                i64::from(ctx.state.combat_phases_this_turn).into()
+            }
+            PlayerStatExpr::CardsEnteredGraveyardThisTurn => i64::from(
+                ctx.state
+                    .cards_entered_graveyard_this_turn
+                    .get(&ctx.controller)
+                    .copied()
+                    .unwrap_or(0),
+            )
+            .into(),
+            PlayerStatExpr::CountersPlacedOnCreaturesThisTurn => i64::from(
+                ctx.state
+                    .counters_placed_on_creatures_this_turn
+                    .get(&ctx.controller)
+                    .copied()
+                    .unwrap_or(0),
+            )
+            .into(),
+            PlayerStatExpr::LandsEnteredThisTurn(role) => resolve_world_player(ctx, *role)
+                .map_or_else(
+                    || 0.into(),
+                    |seat| {
+                        i64::from(
+                            ctx.state
+                                .lands_entered_this_turn
+                                .get(&seat)
+                                .copied()
+                                .unwrap_or(0),
+                        )
+                        .into()
+                    },
+                ),
+            PlayerStatExpr::DiceRolledThisTurn => i64::from(
+                ctx.state
+                    .dice_rolled_this_turn
+                    .get(&ctx.controller)
+                    .copied()
+                    .unwrap_or(0),
+            )
+            .into(),
+            PlayerStatExpr::OtherSpellsCastManaValueThisTurn => {
+                let total = ctx
+                    .state
+                    .other_spells_mv_this_turn
+                    .get(&ctx.controller)
+                    .copied()
+                    .unwrap_or(0);
+                let own_mv = ctx
+                    .objects
+                    .get(&ctx.source)
+                    .filter(|o| o.zone == ObjectZone::Stack && o.controller == Some(ctx.controller))
+                    .and_then(|o| object_mana_value(ctx, o))
+                    .and_then(|mv| mv.to_usize())
+                    .map_or(0u32, |n| u32::try_from(n).unwrap_or(u32::MAX));
+                i64::from(total.saturating_sub(own_mv)).into()
             }
         },
     }

@@ -554,37 +554,7 @@ pub(super) fn lower_keyword(
             });
             Ok(())
         }
-        "equip" => {
-            let p_str = param.ok_or("oracle:equip-non-mana")?;
-            let (cost, source_cost, hybrids, extra_costs) =
-                if let Some((mc, 0, hybs)) = parse_mana_cost_full(p_str) {
-                    (mc, SourceCost::None, hybs, Vec::new())
-                } else {
-                    let compiler_vocab = cached_compiler_vocab(vocabulary);
-                    let atoms =
-                        spellwake_oracle_compiler::clauses::parse_cost_list(p_str, &compiler_vocab)
-                            .map_err(|_| "oracle:equip-non-mana")?;
-                    lower_activation_cost_full(&atoms, None, vocabulary)
-                        .map_err(|_| "oracle:equip-non-mana")?
-                };
-            let id = ids.activated();
-            if !hybrids.is_empty() {
-                program.activation_hybrid_symbols.insert(id, hybrids);
-            }
-            if !extra_costs.is_empty() {
-                program.extra_activation_costs.insert(id, extra_costs);
-            }
-            program.activated.push(ActivatedAbility {
-                id,
-                mana_cost: cost,
-                source_cost,
-                body: ExecutableBody::new(
-                    BodyTarget::SingleCreature,
-                    vec![Instruction::Attach(AttachAbility::Equip)],
-                ),
-            });
-            Ok(())
-        }
+        "equip" => lower_equip_keyword(param, program, vocabulary, ids),
         "scavenge" => {
             let p_str = param.ok_or("oracle:kw-param")?;
             let (mana_cost, 0, hybrids) = parse_mana_cost_full(p_str).ok_or("oracle:kw-param")?
@@ -703,47 +673,8 @@ pub(super) fn lower_keyword(
             });
             Ok(())
         }
-        "basic landcycling" => {
-            let cost = param
-                .and_then(parse_fixed_mana_cost)
-                .ok_or("oracle:cycling-non-mana")?;
-            program.activated.push(ActivatedAbility {
-                id: ids.activated(),
-                mana_cost: cost,
-                source_cost: SourceCost::HandDiscardSelf(HandDiscardKeyword::Cycling),
-                body: ExecutableBody::new(
-                    BodyTarget::None,
-                    vec![Instruction::SearchLibrary {
-                        filter: Box::new(LibrarySearch::to_hand(SearchCardMatcher::BasicLand)),
-                    }],
-                ),
-            });
-            Ok(())
-        }
-        "plainscycling" | "islandcycling" | "swampcycling" | "mountaincycling"
-        | "forestcycling" => {
-            let cost = param
-                .and_then(parse_fixed_mana_cost)
-                .ok_or("oracle:cycling-non-mana")?;
-            let lt = match lower.as_str() {
-                "plainscycling" => LandType::Plains,
-                "islandcycling" => LandType::Island,
-                "swampcycling" => LandType::Swamp,
-                "mountaincycling" => LandType::Mountain,
-                _ => LandType::Forest,
-            };
-            program.activated.push(ActivatedAbility {
-                id: ids.activated(),
-                mana_cost: cost,
-                source_cost: SourceCost::HandDiscardSelf(HandDiscardKeyword::Cycling),
-                body: ExecutableBody::new(
-                    BodyTarget::None,
-                    vec![Instruction::SearchLibrary {
-                        filter: Box::new(LibrarySearch::land_subtype_to_hand(lt)),
-                    }],
-                ),
-            });
-            Ok(())
+        s if s.ends_with("cycling") && s != "cycling" => {
+            lower_typecycling_keyword(s, param, program, vocabulary, ids)
         }
         "transmute" => {
             let cost = param
@@ -1606,6 +1537,17 @@ pub(super) fn lower_keyword(
             }
             Ok(())
         }
+        s if s.starts_with("hexproof from ") && param.is_none() => {
+            let quals =
+                parse_hexproof_from_qualities(s.strip_prefix("hexproof ").unwrap_or(s), vocabulary)
+                    .ok_or("oracle:unsupported-keyword")?;
+            for q in quals {
+                program
+                    .printed_keywords
+                    .insert(KeywordAbility::HexproofFrom(q));
+            }
+            Ok(())
+        }
         s if s == "friends forever" || s.starts_with("partner\u{2014}") => {
             program.printed_keywords.insert(KeywordAbility::Partner);
             Ok(())
@@ -2136,6 +2078,9 @@ pub(super) fn lower_keyword(
             });
             Ok(())
         }
+        "champion" | "champion a" | "champion an" if !is_spell => {
+            lower_champion_keyword(param, program, vocabulary, ids)
+        }
         _ => Err("oracle:unsupported-keyword"),
     }
 }
@@ -2183,21 +2128,36 @@ pub(super) fn replace_targets_with_each_ins(
     ins: &InstructionAst,
 ) -> Result<(InstructionAst, bool), &'static str> {
     match ins {
-        InstructionAst::Destroy { subject } => {
+        InstructionAst::Destroy {
+            subject,
+            random,
+            except,
+        } => {
             let (s, c) = replace_targets_with_each_subject(subject)?;
             Ok((
                 InstructionAst::Destroy {
                     subject: Box::new(s),
+                    random: *random,
+                    except: except.clone(),
                 },
                 c,
             ))
         }
-        InstructionAst::Exile { actor, subject } => {
+        InstructionAst::Exile {
+            actor,
+            subject,
+            random,
+            face_down,
+            into_pile,
+        } => {
             let (s, c) = replace_targets_with_each_subject(subject)?;
             Ok((
                 InstructionAst::Exile {
                     actor: *actor,
                     subject: Box::new(s),
+                    random: *random,
+                    face_down: *face_down,
+                    into_pile: *into_pile,
                 },
                 c,
             ))
@@ -2210,6 +2170,12 @@ pub(super) fn replace_targets_with_each_ins(
             transformed,
             with_counter,
             attached_to,
+            random,
+            except,
+            count,
+            up_to,
+            any_number,
+            actor,
         } if attached_to.is_none() => {
             let (s, c) = replace_targets_with_each_subject(subject)?;
             Ok((
@@ -2221,6 +2187,12 @@ pub(super) fn replace_targets_with_each_ins(
                     transformed: *transformed,
                     with_counter: with_counter.clone(),
                     attached_to: None,
+                    random: *random,
+                    except: except.clone(),
+                    count: count.clone(),
+                    up_to: *up_to,
+                    any_number: *any_number,
+                    actor: *actor,
                 },
                 c,
             ))
@@ -2293,12 +2265,17 @@ pub(super) fn replace_targets_with_each_ins(
                 c,
             ))
         }
-        InstructionAst::Draw { player, count } => {
+        InstructionAst::Draw {
+            player,
+            count,
+            up_to,
+        } => {
             let (p, c) = replace_targets_with_each_player(*player);
             Ok((
                 InstructionAst::Draw {
                     player: p,
                     count: count.clone(),
+                    up_to: *up_to,
                 },
                 c,
             ))
@@ -2313,11 +2290,15 @@ pub(super) fn replace_targets_with_each_ins(
                 c,
             ))
         }
-        InstructionAst::TapPermanent { subject } => {
+        InstructionAst::TapPermanent {
+            subject,
+            any_number,
+        } => {
             let (s, c) = replace_targets_with_each_subject(subject)?;
             Ok((
                 InstructionAst::TapPermanent {
                     subject: Box::new(s),
+                    any_number: *any_number,
                 },
                 c,
             ))
@@ -2361,7 +2342,322 @@ pub(super) fn replace_targets_with_each_ins(
                 c,
             ))
         }
+        InstructionAst::SetSuspected { subject, remove } => {
+            let (s, c) = replace_targets_with_each_subject(subject)?;
+            Ok((
+                InstructionAst::SetSuspected {
+                    subject: Box::new(s),
+                    remove: *remove,
+                },
+                c,
+            ))
+        }
+        InstructionAst::TurnFaceDown { subject } => {
+            let (s, c) = replace_targets_with_each_subject(subject)?;
+            Ok((
+                InstructionAst::TurnFaceDown {
+                    subject: Box::new(s),
+                },
+                c,
+            ))
+        }
+        InstructionAst::BindXY {
+            x_expr,
+            y_expr,
+            body,
+        } => {
+            if overload_value_expr_has_target(x_expr) || overload_value_expr_has_target(y_expr) {
+                return Err("oracle:overload-unsupported-target");
+            }
+            let (new_body, c) = replace_targets_with_each_body(body)?;
+            Ok((
+                InstructionAst::BindXY {
+                    x_expr: x_expr.clone(),
+                    y_expr: y_expr.clone(),
+                    body: new_body,
+                },
+                c,
+            ))
+        }
+        InstructionAst::ForAsLongAs { condition, body } => {
+            if overload_condition_has_target(condition) {
+                return Err("oracle:overload-unsupported-target");
+            }
+            let (new_body, c) = replace_targets_with_each_body(body)?;
+            Ok((
+                InstructionAst::ForAsLongAs {
+                    condition: condition.clone(),
+                    body: new_body,
+                },
+                c,
+            ))
+        }
+        InstructionAst::ForEachSubjectPlayer { players, body } => {
+            let (p, c_players) = replace_targets_with_each_subject(players)?;
+            let (new_body, c_body) = replace_targets_with_each_body(body)?;
+            Ok((
+                InstructionAst::ForEachSubjectPlayer {
+                    players: Box::new(p),
+                    body: new_body,
+                },
+                c_players || c_body,
+            ))
+        }
         _ => Err("oracle:overload-unsupported-ins"),
+    }
+}
+
+fn replace_targets_with_each_body(
+    body: &[InstructionAst],
+) -> Result<(Vec<InstructionAst>, bool), &'static str> {
+    let mut out = Vec::with_capacity(body.len());
+    let mut changed = false;
+    for ins in body {
+        let (next, c) = replace_targets_with_each_ins(ins)?;
+        changed |= c;
+        out.push(next);
+    }
+    Ok((out, changed))
+}
+
+fn overload_player_is_target(player: PlayerRefAst) -> bool {
+    matches!(
+        player,
+        PlayerRefAst::TargetPlayer | PlayerRefAst::TargetOpponent
+    )
+}
+
+fn overload_pile_has_target(pile: &spellwake_oracle_compiler::ast::PileRefAst) -> bool {
+    match pile {
+        spellwake_oracle_compiler::ast::PileRefAst::FilteredInPile { filter, pile } => {
+            overload_filter_has_target(filter) || overload_pile_has_target(pile)
+        }
+        _ => false,
+    }
+}
+
+fn overload_filter_has_target(filter: &ObjectFilterAst) -> bool {
+    if matches!(
+        filter.controller,
+        Some(ControllerRelation::TargetOpponent | ControllerRelation::TargetPlayer)
+    ) {
+        return true;
+    }
+    if matches!(
+        filter.zone,
+        Some(
+            ZoneFilter::TargetOpponentGraveyard
+                | ZoneFilter::TargetPlayerGraveyard
+                | ZoneFilter::TargetPlayerHand
+                | ZoneFilter::TargetOpponentHand
+                | ZoneFilter::TargetPlayerLibrary
+                | ZoneFilter::TargetOpponentLibrary
+        )
+    ) {
+        return true;
+    }
+    if matches!(
+        &filter.named,
+        Some(spellwake_oracle_compiler::ast::NameFilterAst::SameAs(subject))
+            if overload_subject_has_target(subject)
+    ) {
+        return true;
+    }
+    filter
+        .stat_bounds
+        .iter()
+        .any(|b| overload_value_expr_has_target(&b.value))
+        || filter.predicates.iter().any(|pred| match pred {
+            spellwake_oracle_compiler::ast::FilterPredicateAst::CouldAttachTo(s)
+            | spellwake_oracle_compiler::ast::FilterPredicateAst::DifferentNameFrom(s) => {
+                overload_subject_has_target(s)
+            }
+            spellwake_oracle_compiler::ast::FilterPredicateAst::SharesPropertyWith {
+                reference,
+                ..
+            } => overload_subject_has_target(reference),
+            spellwake_oracle_compiler::ast::FilterPredicateAst::StatRelationTo { expr, .. } => {
+                overload_value_expr_has_target(expr)
+            }
+            spellwake_oracle_compiler::ast::FilterPredicateAst::AttachedBy(f) => {
+                overload_filter_has_target(f)
+            }
+            _ => false,
+        })
+}
+
+fn overload_subject_has_target(subj: &SubjectRefAst) -> bool {
+    match subj {
+        SubjectRefAst::AnyTarget
+        | SubjectRefAst::TargetPlayerOrPlaneswalker { .. }
+        | SubjectRefAst::TargetPlayer { .. }
+        | SubjectRefAst::TargetObject { .. }
+        | SubjectRefAst::TargetOneOf { .. }
+        | SubjectRefAst::DistinctTarget { .. } => true,
+        SubjectRefAst::Player(p) => overload_player_is_target(*p),
+        SubjectRefAst::PlayerMatching { player, condition } => {
+            overload_player_is_target(*player) || overload_condition_has_target(condition)
+        }
+        SubjectRefAst::InZone { subject, .. }
+        | SubjectRefAst::ControllerOf(subject)
+        | SubjectRefAst::OwnerOf(subject) => overload_subject_has_target(subject),
+        SubjectRefAst::Each(f) | SubjectRefAst::All(f) | SubjectRefAst::Group(f) => {
+            overload_filter_has_target(f)
+        }
+        SubjectRefAst::Compound(items) => items.iter().any(overload_subject_has_target),
+        SubjectRefAst::PileRef(pile) => overload_pile_has_target(pile),
+        SubjectRefAst::ManualTabletopSelection { filter, .. } => {
+            filter.as_deref().is_some_and(overload_filter_has_target)
+        }
+        SubjectRefAst::SelfObject
+        | SubjectRefAst::Anaphora(_)
+        | SubjectRefAst::AttachedHost(_)
+        | SubjectRefAst::CraftExiledCards
+        | SubjectRefAst::TriggerSubject
+        | SubjectRefAst::TriggerCause => false,
+    }
+}
+
+fn overload_value_expr_has_target(expr: &ValueExprAst) -> bool {
+    match expr {
+        ValueExprAst::ObjectStat { subject, .. }
+        | ValueExprAst::CounterCount { subject, .. }
+        | ValueExprAst::ColorsOfManaSpentOn(subject)
+        | ValueExprAst::ColorPipsIn { subject, .. } => overload_subject_has_target(subject),
+        ValueExprAst::PlayerStat { player, .. }
+        | ValueExprAst::PlayerCounterCount { player, .. }
+        | ValueExprAst::StartingLifeTotal(player)
+        | ValueExprAst::LifeChangedThisTurn { player, .. } => overload_player_is_target(*player),
+        ValueExprAst::EventCountThisTurn { player, .. } => {
+            player.is_some_and(overload_player_is_target)
+        }
+        ValueExprAst::Count(f)
+        | ValueExprAst::AggregateStat { filter: f, .. }
+        | ValueExprAst::ColorsAmong(f)
+        | ValueExprAst::CardTypesAmong(f)
+        | ValueExprAst::SubtypesAmong(f)
+        | ValueExprAst::ExtremeStatAmong { filter: f, .. }
+        | ValueExprAst::DistinctCountAmong { filter: f, .. }
+        | ValueExprAst::MaxSharedSubtypeCount { filter: f }
+        | ValueExprAst::CounterCountAmong { filter: f, .. } => overload_filter_has_target(f),
+        ValueExprAst::Add(a, b)
+        | ValueExprAst::Sub(a, b)
+        | ValueExprAst::Mul(a, b)
+        | ValueExprAst::AbsDiff(a, b) => {
+            overload_value_expr_has_target(a) || overload_value_expr_has_target(b)
+        }
+        ValueExprAst::DivConst { expr, .. } => overload_value_expr_has_target(expr),
+        ValueExprAst::AggregateOverPlayers { metric, .. } => overload_value_expr_has_target(metric),
+        ValueExprAst::Pow { base, exp } => {
+            overload_value_expr_has_target(base) || overload_value_expr_has_target(exp)
+        }
+        ValueExprAst::Shortfall { threshold, actual } => {
+            overload_value_expr_has_target(threshold) || overload_value_expr_has_target(actual)
+        }
+        _ => false,
+    }
+}
+
+fn overload_marker_has_target(marker: &GameMarker) -> bool {
+    match marker {
+        GameMarker::SameNameAsTarget | GameMarker::TargetsCommander => true,
+        GameMarker::Monarch(p)
+        | GameMarker::Initiative(p)
+        | GameMarker::OwnerHasCardInExile { player: p }
+        | GameMarker::PlayerIsPoisoned { player: p }
+        | GameMarker::PlayerHasRadCounter { player: p }
+        | GameMarker::AttackedWithMinCreaturesThisTurn { player: p, .. }
+        | GameMarker::DrewCardsThisTurn { player: p, .. }
+        | GameMarker::CastSpellsThisTurn { player: p, .. }
+        | GameMarker::PlayerGainedOrLostLifeThisTurn { player: p }
+        | GameMarker::LostLifeLastTurn { player: p }
+        | GameMarker::DidNotAttackWithCreatureThisTurn { player: p }
+        | GameMarker::CreatedTokenThisTurn { player: p }
+        | GameMarker::LandOrSpellOutsideHandThisTurn { player: p } => overload_player_is_target(*p),
+        GameMarker::PlayerHasMoreHandThan { player, than } => {
+            overload_player_is_target(*player) || overload_player_is_target(*than)
+        }
+        GameMarker::AttackedThisTurn { subject }
+        | GameMarker::InZone { subject, .. }
+        | GameMarker::ControlledSubject(subject)
+        | GameMarker::DidNotAttackThisTurn { subject, .. }
+        | GameMarker::AttackedOrBlockedThisTurn { subject }
+        | GameMarker::AttackedThisCombat { subject }
+        | GameMarker::SubjectEnteredThisTurn(subject)
+        | GameMarker::SubjectWasCast { subject, .. }
+        | GameMarker::DamageDealtToSubjectThisTurn { subject, .. }
+        | GameMarker::SubjectHarnessed(subject) => overload_subject_has_target(subject),
+        GameMarker::GreaterPowerOrToughnessThan { subject, other } => {
+            overload_subject_has_target(subject) || overload_subject_has_target(other)
+        }
+        GameMarker::PutCountersOnSubjectThisTurn {
+            player, subject, ..
+        } => overload_player_is_target(*player) || overload_subject_has_target(subject),
+        GameMarker::SacrificedThisTurn { player, filter }
+        | GameMarker::ControlsNamed { player, filter, .. }
+        | GameMarker::ControlsGreatestStat { player, filter, .. } => {
+            overload_player_is_target(*player) || overload_filter_has_target(filter)
+        }
+        GameMarker::DidNotCastThisTurn { player, filter } => {
+            overload_player_is_target(*player)
+                || filter.as_deref().is_some_and(overload_filter_has_target)
+        }
+        GameMarker::ControlsMoreThanOpponents { filter, .. }
+        | GameMarker::ControlsFewerThanOpponent { filter }
+        | GameMarker::CardPutIntoGraveyardThisTurn { filter }
+        | GameMarker::ZoneActionHappenedThisWay { filter, .. } => {
+            overload_filter_has_target(filter)
+        }
+        GameMarker::OnlyObjectInZone {
+            subject, filter, ..
+        } => overload_subject_has_target(subject) || overload_filter_has_target(filter),
+        GameMarker::AllMatchingAre { filter, predicate } => {
+            overload_filter_has_target(filter) || overload_filter_has_target(predicate)
+        }
+        _ => false,
+    }
+}
+
+fn overload_condition_has_target(cond: &ConditionAst) -> bool {
+    match cond {
+        ConditionAst::Compare { lhs, rhs, .. } | ConditionAst::ExprCompare { lhs, rhs, .. } => {
+            overload_value_expr_has_target(lhs) || overload_value_expr_has_target(rhs)
+        }
+        ConditionAst::PrimeNumberCheck { expr } => overload_value_expr_has_target(expr),
+        ConditionAst::Marker(marker) => overload_marker_has_target(marker),
+        ConditionAst::Not(inner) => overload_condition_has_target(inner),
+        ConditionAst::And(a, b) | ConditionAst::Or(a, b) => {
+            overload_condition_has_target(a) || overload_condition_has_target(b)
+        }
+        ConditionAst::HasKeyword { subject, .. }
+        | ConditionAst::HasStatus { subject, .. }
+        | ConditionAst::StatCompare { subject, .. }
+        | ConditionAst::CounterCompare { subject, .. } => overload_subject_has_target(subject),
+        ConditionAst::MatchesFilter { subject, filter } => {
+            overload_subject_has_target(subject) || overload_filter_has_target(filter)
+        }
+        ConditionAst::AnyOfGroupMatches { group, .. } => overload_subject_has_target(group),
+        ConditionAst::CastSpellThisTurn { player, filter }
+        | ConditionAst::ControlsCount { player, filter, .. } => {
+            overload_player_is_target(*player) || overload_filter_has_target(filter)
+        }
+        ConditionAst::PlayerCounterCompare { player, .. }
+        | ConditionAst::PlayerActionThisTurn { player, .. }
+        | ConditionAst::LifeCompare { player, .. }
+        | ConditionAst::HandCount { player, .. }
+        | ConditionAst::GraveyardCount { player, .. }
+        | ConditionAst::LostLifeThisTurn { player, .. }
+        | ConditionAst::UnspentManaAtLeast { player, .. } => overload_player_is_target(*player),
+        ConditionAst::OpponentMoreThanYou { filter, .. } => {
+            filter.as_deref().is_some_and(overload_filter_has_target)
+        }
+        ConditionAst::TotalStatCompare { filter, .. }
+        | ConditionAst::TargetsFilter(filter)
+        | ConditionAst::ZoneObjectCount { filter, .. }
+        | ConditionAst::EnteredUnderYourControlThisTurn { filter, .. } => {
+            overload_filter_has_target(filter)
+        }
+        _ => false,
     }
 }
 
@@ -2494,38 +2790,589 @@ pub(super) fn parse_hexproof_from_qualities(
         .or_else(|| trimmed.strip_prefix("From "))
         .unwrap_or(trimmed);
     let low_full = stripped.to_ascii_lowercase();
-    if low_full == "activated and triggered abilities" {
+    if matches!(low_full.as_str(), "each color" | "all colors") {
+        return Some(vec![
+            HexproofQuality::Color(Color::White),
+            HexproofQuality::Color(Color::Blue),
+            HexproofQuality::Color(Color::Black),
+            HexproofQuality::Color(Color::Red),
+            HexproofQuality::Color(Color::Green),
+        ]);
+    }
+    if matches!(
+        low_full.as_str(),
+        "activated and triggered abilities" | "activated or triggered abilities"
+    ) {
         return Some(vec![HexproofQuality::ActivatedOrTriggeredAbility]);
     }
     let mut out = Vec::new();
-    for part in low_full.split(" and ") {
-        let word = part
-            .trim()
-            .strip_prefix("from ")
-            .unwrap_or(part.trim())
-            .trim();
-        let q = match word {
-            "white" => HexproofQuality::Color(Color::White),
-            "blue" => HexproofQuality::Color(Color::Blue),
-            "black" => HexproofQuality::Color(Color::Black),
-            "red" => HexproofQuality::Color(Color::Red),
-            "green" => HexproofQuality::Color(Color::Green),
-            "monocolored" => HexproofQuality::Monocolored,
-            "multicolored" => HexproofQuality::Multicolored,
-            "artifact" | "artifacts" => HexproofQuality::CardType(CardType::Artifact),
-            "creature" | "creatures" => HexproofQuality::CardType(CardType::Creature),
-            "enchantment" | "enchantments" => HexproofQuality::CardType(CardType::Enchantment),
-            "instant" | "instants" => HexproofQuality::CardType(CardType::Instant),
-            "sorcery" | "sorceries" => HexproofQuality::CardType(CardType::Sorcery),
-            "land" | "lands" => HexproofQuality::CardType(CardType::Land),
-            "planeswalker" | "planeswalkers" => HexproofQuality::CardType(CardType::Planeswalker),
-            "battle" | "battles" => HexproofQuality::CardType(CardType::Battle),
-            other => {
-                let st = resolve_protection_subtype(other, vocabulary)?;
-                HexproofQuality::Subtype(st)
+    for comma_part in low_full.split(',') {
+        let seg = comma_part.trim();
+        if seg.is_empty() {
+            return None;
+        }
+        for and_part in seg.split(" and ") {
+            for part in and_part.split(" or ") {
+                let mut word = part.trim();
+                word = word
+                    .strip_prefix("and ")
+                    .or_else(|| word.strip_prefix("or "))
+                    .unwrap_or(word)
+                    .trim();
+                word = word.strip_prefix("from ").unwrap_or(word).trim();
+                if word.is_empty() {
+                    return None;
+                }
+                let q = match word {
+                    "white" => HexproofQuality::Color(Color::White),
+                    "blue" => HexproofQuality::Color(Color::Blue),
+                    "black" => HexproofQuality::Color(Color::Black),
+                    "red" => HexproofQuality::Color(Color::Red),
+                    "green" => HexproofQuality::Color(Color::Green),
+                    "monocolored" => HexproofQuality::Monocolored,
+                    "multicolored" => HexproofQuality::Multicolored,
+                    "artifact" | "artifacts" => HexproofQuality::CardType(CardType::Artifact),
+                    "creature" | "creatures" => HexproofQuality::CardType(CardType::Creature),
+                    "enchantment" | "enchantments" => {
+                        HexproofQuality::CardType(CardType::Enchantment)
+                    }
+                    "instant" | "instants" => HexproofQuality::CardType(CardType::Instant),
+                    "sorcery" | "sorceries" => HexproofQuality::CardType(CardType::Sorcery),
+                    "land" | "lands" => HexproofQuality::CardType(CardType::Land),
+                    "planeswalker" | "planeswalkers" => {
+                        HexproofQuality::CardType(CardType::Planeswalker)
+                    }
+                    "battle" | "battles" => HexproofQuality::CardType(CardType::Battle),
+                    other => {
+                        let st = resolve_protection_subtype(other, vocabulary)?;
+                        HexproofQuality::Subtype(st)
+                    }
+                };
+                if !out.contains(&q) {
+                    out.push(q);
+                }
             }
-        };
-        out.push(q);
+        }
     }
     (!out.is_empty()).then_some(out)
+}
+
+fn lower_equip_keyword(
+    param: Option<&str>,
+    program: &mut Program,
+    vocabulary: &CreatureTypeVocabulary,
+    ids: &mut LoweringIds,
+) -> Result<(), &'static str> {
+    let raw = param.ok_or("oracle:equip-non-mana")?;
+    let trimmed = trim_equip_param(raw);
+    if trimmed.is_empty() {
+        return Err("oracle:equip-non-mana");
+    }
+    let (core, restriction) = strip_equip_trailing_restrictions(trimmed);
+    let core = trim_equip_param(core);
+    if core.is_empty() {
+        return Err("oracle:equip-non-mana");
+    }
+
+    // Fast path for plain or hybrid mana equip costs without loading the compiler vocabulary.
+    if let Some((mana_cost, 0, hybrids)) = parse_mana_cost_full(core) {
+        emit_equip_ability(
+            program,
+            ids,
+            (mana_cost, SourceCost::None, hybrids, Vec::new()),
+            BodyTarget::SingleCreature,
+            restriction,
+        );
+        return Ok(());
+    }
+
+    let compiler_vocab = cached_compiler_vocab(vocabulary);
+    let (target, cost_branches) =
+        if let Some(branches) = parse_equip_cost_branches(core, &compiler_vocab, vocabulary) {
+            (BodyTarget::SingleCreature, branches)
+        } else if let Some((quality_raw, cost_raw)) = split_equip_quality_and_cost(core)
+            && let Some(obj) = parse_equip_quality_filter(quality_raw, &compiler_vocab, vocabulary)
+            && let Some(branches) = parse_equip_cost_branches(cost_raw, &compiler_vocab, vocabulary)
+        {
+            (BodyTarget::FilteredPermanent(obj), branches)
+        } else {
+            return Err("oracle:equip-non-mana");
+        };
+
+    for branch in cost_branches {
+        emit_equip_ability(program, ids, branch, target, restriction.clone());
+    }
+    Ok(())
+}
+
+fn emit_equip_ability(
+    program: &mut Program,
+    ids: &mut LoweringIds,
+    lowered_cost: LoweredActivationCost,
+    target: BodyTarget,
+    restriction: Option<ActivationRestriction>,
+) {
+    let (mana_cost, source_cost, hybrids, extra_costs) = lowered_cost;
+    let id = ids.activated();
+    if !hybrids.is_empty() {
+        program.activation_hybrid_symbols.insert(id, hybrids);
+    }
+    if !extra_costs.is_empty() {
+        program.extra_activation_costs.insert(id, extra_costs);
+    }
+    if let Some(res) = restriction {
+        program.activation_restrictions.insert(id, res);
+    }
+    program.activated.push(ActivatedAbility {
+        id,
+        mana_cost,
+        source_cost,
+        body: ExecutableBody::new(target, vec![Instruction::Attach(AttachAbility::Equip)]),
+    });
+}
+
+fn trim_equip_param(raw: &str) -> &str {
+    raw.trim()
+        .trim_start_matches(['\u{2014}', '-', ':'])
+        .trim()
+        .trim_end_matches('.')
+        .trim()
+}
+
+fn strip_equip_trailing_restrictions(raw: &str) -> (&str, Option<ActivationRestriction>) {
+    let mut core = raw.trim();
+    let mut restriction: Option<ActivationRestriction> = None;
+    while let Some((before, tail)) = core.rsplit_once(". ")
+        && let Some(parsed) = parse_equip_trailing_restriction(tail)
+    {
+        restriction = Some(combine_activation_restrictions(restriction, parsed));
+        core = before.trim().trim_end_matches('.').trim();
+    }
+    (core, restriction)
+}
+
+fn parse_equip_trailing_restriction(sentence: &str) -> Option<ActivationRestriction> {
+    let trimmed = sentence.trim().trim_end_matches('.').trim();
+    let low = trimmed.to_ascii_lowercase();
+    let rest = low
+        .strip_prefix("activate this ability only ")
+        .or_else(|| low.strip_prefix("activate only "))?;
+    match rest {
+        "once each turn" | "once per turn" => Some(ActivationRestriction::OnceEachTurn),
+        "as a sorcery" => Some(ActivationRestriction::Sorcery),
+        "as a sorcery and only once each turn" | "once each turn and only as a sorcery" => {
+            Some(ActivationRestriction::SorceryOnceEachTurn)
+        }
+        "during your turn" => Some(ActivationRestriction::DuringYourTurn),
+        "during your turn and only once each turn" | "once each turn and only during your turn" => {
+            Some(ActivationRestriction::DuringYourTurnOnceEachTurn)
+        }
+        "during your upkeep" => Some(ActivationRestriction::DuringUpkeep),
+        "once" => Some(ActivationRestriction::Exhaust),
+        _ => None,
+    }
+}
+
+fn normalize_equip_cost_text(raw: &str) -> String {
+    let mut s = trim_equip_param(raw).to_string();
+    for phrase in [
+        "this Equipment",
+        "This Equipment",
+        "this equipment",
+        "This equipment",
+        "this permanent",
+        "This permanent",
+        "this artifact",
+        "This artifact",
+    ] {
+        if s.contains(phrase) {
+            s = s.replace(phrase, "~");
+        }
+    }
+    s
+}
+
+fn parse_single_equip_cost(
+    raw: &str,
+    compiler_vocab: &Vocabulary,
+    vocabulary: &CreatureTypeVocabulary,
+) -> Option<LoweredActivationCost> {
+    let cleaned = normalize_equip_cost_text(raw);
+    if cleaned.is_empty() {
+        return None;
+    }
+    if let Some((mc, 0, hybs)) = parse_mana_cost_full(&cleaned) {
+        return Some((mc, SourceCost::None, hybs, Vec::new()));
+    }
+    let low = cleaned.to_ascii_lowercase();
+    if low.contains("where x is") {
+        return None;
+    }
+    let atoms =
+        spellwake_oracle_compiler::clauses::parse_cost_list(&cleaned, compiler_vocab).ok()?;
+    if atoms.is_empty() {
+        return None;
+    }
+    if let Ok((mana_cost, mut source_cost, hybrids, extra_costs)) =
+        lower_activation_cost_full(&atoms, None, vocabulary)
+    {
+        if matches!(
+            source_cost,
+            SourceCost::HandDiscardSelf(_)
+                | SourceCost::GraveyardSelf { .. }
+                | SourceCost::GraveyardDiscard { .. }
+                | SourceCost::GraveyardExileOther { .. }
+                | SourceCost::GraveyardPayLife { .. }
+                | SourceCost::Ninjutsu { .. }
+                | SourceCost::GenericX { .. }
+        ) {
+            return None;
+        }
+        // Preserve "another" self-exclusion when `parse_cost_list` strips the leading
+        // quantifier (for example, "Sacrifice another nonland permanent").
+        if low.starts_with("sacrifice another ")
+            && atoms.len() == 1
+            && let SourceCost::SacrificeSelected { filter, .. } = &mut source_cost
+        {
+            match filter {
+                SelectedSacrificeFilter::Creature => {
+                    *filter = SelectedSacrificeFilter::OtherCreature;
+                }
+                SelectedSacrificeFilter::Artifact => {
+                    *filter = SelectedSacrificeFilter::Matching(
+                        ObjectFilter::artifact().other_than_ability_source(),
+                    );
+                }
+                SelectedSacrificeFilter::Matching(obj) => {
+                    *obj = obj.other_than_ability_source();
+                }
+                _ => {}
+            }
+        }
+        return Some((mana_cost, source_cost, hybrids, extra_costs));
+    }
+    // Generic counter removal from self (for example, "remove a counter from ~") parses as
+    // `RemoveCounters { counter_kind: "any", subject: SelfObject }`.
+    if let [
+        CostAtomAst::RemoveCounters {
+            all,
+            count,
+            counter_kind,
+            subject,
+        },
+    ] = atoms.as_slice()
+        && matches!(subject.as_ref(), SubjectRefAst::SelfObject)
+        && matches!(
+            counter_kind.trim().to_ascii_lowercase().as_str(),
+            "" | "a" | "an" | "any" | "counter" | "counters"
+        )
+    {
+        let cnt = if *all {
+            None
+        } else if let Some(c) = count {
+            match c.as_ref() {
+                ValueExprAst::Const(n) if *n > 0 => {
+                    let u = u8::try_from(*n).ok()?;
+                    Some(NonZeroU8::new(u)?)
+                }
+                _ => return None,
+            }
+        } else {
+            Some(NonZeroU8::MIN)
+        };
+        return Some((
+            ManaCost::free(),
+            SourceCost::None,
+            Vec::new(),
+            vec![ExtraActivationCost::RemovePermanentCounters {
+                kind: None,
+                count: cnt,
+                all: *all,
+                filter: ObjectFilter::self_object(),
+            }],
+        ));
+    }
+    None
+}
+
+fn parse_equip_cost_branches(
+    raw: &str,
+    compiler_vocab: &Vocabulary,
+    vocabulary: &CreatureTypeVocabulary,
+) -> Option<Vec<LoweredActivationCost>> {
+    let cleaned = normalize_equip_cost_text(raw);
+    if cleaned.is_empty() {
+        return None;
+    }
+    if let Some((left, right)) = cleaned.split_once(" or ")
+        && let (Some(left_cost), Some(right_cost)) = (
+            parse_single_equip_cost(left, compiler_vocab, vocabulary),
+            parse_single_equip_cost(right, compiler_vocab, vocabulary),
+        )
+    {
+        return Some(vec![left_cost, right_cost]);
+    }
+    parse_single_equip_cost(&cleaned, compiler_vocab, vocabulary).map(|cost| vec![cost])
+}
+
+fn split_equip_quality_and_cost(core: &str) -> Option<(&str, &str)> {
+    if let Some((quality, cost)) = core.split_once('\u{2014}') {
+        let (q, c) = (quality.trim(), cost.trim());
+        if !q.is_empty() && !c.is_empty() {
+            return Some((q, c));
+        }
+    }
+    let brace_idx = core.find('{')?;
+    if brace_idx == 0 {
+        return None;
+    }
+    let q = core[..brace_idx].trim();
+    let c = core[brace_idx..].trim();
+    if q.is_empty() || c.is_empty() {
+        return None;
+    }
+    Some((q, c))
+}
+
+fn parse_equip_quality_filter(
+    quality_raw: &str,
+    compiler_vocab: &Vocabulary,
+    vocabulary: &CreatureTypeVocabulary,
+) -> Option<ObjectFilter> {
+    let quality = quality_raw
+        .trim()
+        .trim_end_matches(['.', ',', ';', ':'])
+        .trim();
+    let quality = quality.strip_suffix(" -").unwrap_or(quality).trim();
+    if quality.is_empty() || quality.contains(['.', ';']) {
+        return None;
+    }
+    let low = quality.to_ascii_lowercase();
+    // CR 702.6d: "Equip commander [cost]" targets a commander creature you control.
+    // `parse_object_filter("commander")` maps "commander" to LEGENDARY, so preserve
+    // exact commander identity via `ObjectFilterFlags::COMMANDER_ONLY`.
+    if low == "commander" || low == "commander creature" {
+        return Some(ObjectFilter::creature().commander().controlled());
+    }
+    let ast_filter =
+        spellwake_oracle_compiler::filter::parse_object_filter(quality, compiler_vocab).ok()?;
+    if ast_filter.zone.is_some()
+        || ast_filter.any_spell
+        || ast_filter.any_card
+        || ast_filter.is_ability
+        || !matches!(ast_filter.controller, None | Some(ControllerRelation::You))
+    {
+        return None;
+    }
+    let obj = lower_object_filter(&ast_filter, vocabulary).ok()?;
+    let ensure_creature_when_untyped = |clause: ObjectClause| -> ObjectClause {
+        if clause.any_types.is_empty() {
+            clause.any_types(CardTypeMask::CREATURE)
+        } else {
+            clause
+        }
+    };
+    let typed = if ast_filter.any_permanent {
+        obj
+    } else {
+        match obj {
+            ObjectFilter::Clause(c) => ObjectFilter::Clause(ensure_creature_when_untyped(c)),
+            ObjectFilter::Either(a, b) => ObjectFilter::Either(
+                ensure_creature_when_untyped(a),
+                ensure_creature_when_untyped(b),
+            ),
+        }
+    };
+    Some(typed.controlled())
+}
+
+fn parse_cycling_land_subtype(prefix: &str) -> Option<LandType> {
+    match prefix {
+        "plains" => Some(LandType::Plains),
+        "island" => Some(LandType::Island),
+        "swamp" => Some(LandType::Swamp),
+        "mountain" => Some(LandType::Mountain),
+        "forest" => Some(LandType::Forest),
+        "cave" => Some(LandType::Cave),
+        "desert" => Some(LandType::Desert),
+        "gate" => Some(LandType::Gate),
+        "lair" => Some(LandType::Lair),
+        "locus" => Some(LandType::Locus),
+        "mine" => Some(LandType::Mine),
+        "planet" => Some(LandType::Planet),
+        "power-plant" => Some(LandType::PowerPlant),
+        "sphere" => Some(LandType::Sphere),
+        "tower" => Some(LandType::Tower),
+        "town" => Some(LandType::Town),
+        "urza's" => Some(LandType::Urzas),
+        _ => None,
+    }
+}
+
+fn lower_typecycling_keyword(
+    lower_name: &str,
+    param: Option<&str>,
+    program: &mut Program,
+    vocabulary: &CreatureTypeVocabulary,
+    ids: &mut LoweringIds,
+) -> Result<(), &'static str> {
+    let prefix = lower_name
+        .strip_suffix("cycling")
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .ok_or("oracle:unsupported-keyword")?;
+    let search = match prefix {
+        "basic land" => LibrarySearch::to_hand(SearchCardMatcher::BasicLand),
+        "land" => LibrarySearch::to_hand(SearchCardMatcher::CardTypes(BTreeSet::from([
+            CardType::Land,
+        ]))),
+        "artifact land" => {
+            LibrarySearch::to_hand(SearchCardMatcher::Filtered(Box::new(ObjectFilter::Clause(
+                ObjectClause::any()
+                    .required_type(CardType::Artifact)
+                    .required_type(CardType::Land),
+            ))))
+        }
+        "artifact" => LibrarySearch::to_hand(SearchCardMatcher::CardTypes(BTreeSet::from([
+            CardType::Artifact,
+        ]))),
+        "creature" => LibrarySearch::to_hand(SearchCardMatcher::CardTypes(BTreeSet::from([
+            CardType::Creature,
+        ]))),
+        "enchantment" => LibrarySearch::to_hand(SearchCardMatcher::CardTypes(BTreeSet::from([
+            CardType::Enchantment,
+        ]))),
+        "instant" => LibrarySearch::to_hand(SearchCardMatcher::CardTypes(BTreeSet::from([
+            CardType::Instant,
+        ]))),
+        "sorcery" => LibrarySearch::to_hand(SearchCardMatcher::CardTypes(BTreeSet::from([
+            CardType::Sorcery,
+        ]))),
+        "planeswalker" => LibrarySearch::to_hand(SearchCardMatcher::CardTypes(BTreeSet::from([
+            CardType::Planeswalker,
+        ]))),
+        "battle" => LibrarySearch::to_hand(SearchCardMatcher::CardTypes(BTreeSet::from([
+            CardType::Battle,
+        ]))),
+        other => {
+            if let Some(lt) = parse_cycling_land_subtype(other) {
+                LibrarySearch::land_subtype_to_hand(lt)
+            } else if let Some(st) = resolve_protection_subtype(other, vocabulary) {
+                LibrarySearch::to_hand(SearchCardMatcher::CreatureSubtype(st))
+            } else {
+                return Err("oracle:unsupported-keyword");
+            }
+        }
+    };
+    let (cost, x_count, hybrids) = param
+        .and_then(parse_mana_cost_full)
+        .ok_or("oracle:cycling-non-mana")?;
+    if x_count != 0 {
+        return Err("oracle:cycling-non-mana");
+    }
+    let id = ids.activated();
+    if !hybrids.is_empty() {
+        program.activation_hybrid_symbols.insert(id, hybrids);
+    }
+    program.activated.push(ActivatedAbility {
+        id,
+        mana_cost: cost,
+        source_cost: SourceCost::HandDiscardSelf(HandDiscardKeyword::Cycling),
+        body: ExecutableBody::new(
+            BodyTarget::None,
+            vec![Instruction::SearchLibrary {
+                filter: Box::new(search),
+            }],
+        ),
+    });
+    Ok(())
+}
+
+fn lower_champion_keyword(
+    param: Option<&str>,
+    program: &mut Program,
+    vocabulary: &CreatureTypeVocabulary,
+    ids: &mut LoweringIds,
+) -> Result<(), &'static str> {
+    fn strip_article(s: &str) -> &str {
+        s.strip_prefix("a ")
+            .or_else(|| s.strip_prefix("A "))
+            .or_else(|| s.strip_prefix("an "))
+            .or_else(|| s.strip_prefix("An "))
+            .unwrap_or(s)
+            .trim()
+    }
+    let raw = param.ok_or("oracle:kw-param")?;
+    let trimmed = trim_equip_param(raw);
+    let quality = strip_article(trimmed);
+    if quality.is_empty() {
+        return Err("oracle:kw-param");
+    }
+    let compiler_vocab = cached_compiler_vocab(vocabulary);
+    let parsed = if let Some((lhs_raw, rhs_raw)) = quality.split_once(" or ")
+        && !rhs_raw.contains(" or ")
+    {
+        let lhs = strip_article(lhs_raw.trim());
+        let rhs = strip_article(rhs_raw.trim());
+        match (
+            parse_equip_quality_filter(lhs, &compiler_vocab, vocabulary),
+            parse_equip_quality_filter(rhs, &compiler_vocab, vocabulary),
+        ) {
+            (Some(ObjectFilter::Clause(a)), Some(ObjectFilter::Clause(b))) => {
+                Some(ObjectFilter::Either(a, b))
+            }
+            _ => parse_equip_quality_filter(quality, &compiler_vocab, vocabulary),
+        }
+    } else {
+        parse_equip_quality_filter(quality, &compiler_vocab, vocabulary)
+    };
+    let obj = parsed.ok_or("oracle:kw-param")?.other_than_ability_source();
+    program.triggered.push(TriggeredAbility {
+        id: ids.triggered(),
+        condition: TriggerSpec::self_enters(),
+        grouping: TriggerGrouping::EachOccurrence,
+        body: ExecutableBody::new(
+            BodyTarget::None,
+            vec![
+                Instruction::SelectZoneCardsToZone {
+                    player: ResolvingPlayer::Controller,
+                    source_zone: SourceZoneFilter::Battlefield,
+                    filter: Box::new(obj),
+                    min: ValueExpr::literal(0),
+                    max: ValueExpr::literal(1),
+                    destination: SubjectDestination::Exile {
+                        delayed_return: Some(
+                            spellwake_engine::program::DelayedReturnTiming::LinkedGroup(
+                                spellwake_engine::program::LinkedExileGroup::SourceLinked,
+                            ),
+                        ),
+                    },
+                    reveal: false,
+                },
+                Instruction::BranchIfFalse {
+                    condition: ResolutionCondition {
+                        left: ValueExpr::EventValue(EventValueKind::LastActionSucceeded),
+                        comparison: Comparison::Equal,
+                        right: ValueExpr::literal(0),
+                    },
+                    destination: 3,
+                },
+                Instruction::SacrificeSubject {
+                    subject: Box::new(EffectSubject::AbilitySource),
+                },
+            ],
+        ),
+    });
+    program.triggered.push(TriggeredAbility {
+        id: ids.triggered(),
+        condition: TriggerSpec::leaves_battlefield(ObjectFilter::self_object()),
+        grouping: TriggerGrouping::EachOccurrence,
+        body: ExecutableBody::new(
+            BodyTarget::None,
+            vec![Instruction::ReturnCardsExiledWithLink(
+                spellwake_engine::program::LinkedExileGroup::SourceLinked,
+            )],
+        ),
+    });
+    Ok(())
 }

@@ -1364,12 +1364,15 @@ pub struct EffectWindow {
     untap_keep_tapped: Option<BTreeSet<ObjectId>>,
     cast_history: Option<CastTurnHistory>,
     recent_graveyard_cards: Option<BTreeSet<ObjectId>>,
-    activated_this_turn: BTreeSet<(
-        ObjectId,
-        Option<crate::characteristics::CharacteristicTimestamp>,
-        ActivatedAbilityId,
-        crate::characteristics::ActivationOriginPath,
-    )>,
+    activated_this_turn: BTreeMap<
+        (
+            ObjectId,
+            Option<crate::characteristics::CharacteristicTimestamp>,
+            ActivatedAbilityId,
+            crate::characteristics::ActivationOriginPath,
+        ),
+        u8,
+    >,
     combat_damaged_players_by_source: BTreeMap<ObjectId, BTreeSet<SeatId>>,
     skip_next_controller_untap: BTreeSet<ObjectId>,
     /// Target, source and continuous control epoch for an ongoing untap restriction.
@@ -2365,24 +2368,10 @@ impl EffectWindow {
             }
         }
         let mut characteristics = CharacteristicState::default();
-        if programs.values().any(|program| {
-            entry_counters::definition_or_token_matches(program, |definition| {
-                definition.triggered.iter().any(|ability| {
-                    matches!(
-                        ability.condition.event,
-                        crate::program::TriggerEvent::Dies {
-                            mode: crate::program::DiesTriggerMode::DamagedBySource,
-                            ..
-                        }
-                    )
-                }) || definition.zone_replacements.iter().any(|rep| {
-                    matches!(
-                        rep.subject,
-                        crate::program::ZoneReplacementSubject::DamagedBySourceThisTurn
-                    )
-                })
-            })
-        }) {
+        if programs
+            .values()
+            .any(entry_counters::needs_creature_damage_pairs)
+        {
             characteristics.creature_damage_pairs = Some(BTreeSet::new());
         }
         characteristics.commander_chosen_colors = commander_chosen_colors;
@@ -2472,7 +2461,7 @@ impl EffectWindow {
             transform_orders:BTreeMap::new(),
             untap_preface_done: false,
             untap_keep_tapped: None,
-            activated_this_turn:BTreeSet::new(),
+            activated_this_turn: BTreeMap::new(),
             combat_damaged_players_by_source:BTreeMap::new(),
             skip_next_controller_untap: BTreeSet::new(),
             untap_locks: BTreeSet::new(),
@@ -3145,6 +3134,19 @@ impl EffectWindow {
         };
         self.capture_backup(&mut waiting)?;
         let (body, trigger) = waiting.into_payload_parts();
+        if let Some(x) = trigger
+            .causes
+            .members()
+            .iter()
+            .find_map(|member| match &member.related {
+                crate::occurrence::TriggerRelated::ReflexiveTrigger { chosen_x } => {
+                    chosen_x.clone()
+                }
+                _ => None,
+            })
+        {
+            self.window.set_chosen_x(entry, x)?;
+        }
         match self.payloads.entry(entry) {
             std::collections::btree_map::Entry::Vacant(slot) => {
                 slot.insert(StackPayload::Instructions(Box::new(InstructionPayload {
@@ -4190,6 +4192,7 @@ impl EffectWindow {
         if let Some(pairs) = &mut next.characteristics.creature_damage_pairs {
             pairs.clear();
         }
+        next.characteristics.clear_extra_turn_history();
         if let Some(ordinals) = next.spell_ordinals.as_mut() {
             ordinals.clear();
         }

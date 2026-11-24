@@ -343,9 +343,18 @@ impl EffectWindow {
                 let cursor = next
                     .resolution_cursor_mut()
                     .ok_or(EffectError::WrongResolutionFrame)?;
-                match (self.current_instruction()?, reply) {
+                let current = self.current_instruction()?;
+                let effective_mana_yield = match current {
+                    Instruction::AddMana(
+                        crate::program::EffectManaYield::RetainedUntilCleanup(inner),
+                    ) => Some(inner.as_ref()),
+                    Instruction::AddMana(inner) => Some(inner),
+                    _ => None,
+                };
+                match (current, effective_mana_yield, reply) {
                     (
-                        Instruction::AddMana(crate::program::EffectManaYield::Split {
+                        _,
+                        Some(crate::program::EffectManaYield::Split {
                             first,
                             second,
                             amount,
@@ -362,23 +371,31 @@ impl EffectWindow {
                         }
                         cursor.chosen_mana_split = Some(portion);
                     }
-                    (instruction, DecisionReply::ManaColor(color)) => {
+                    (instruction, effective_mana_yield, DecisionReply::ManaColor(color)) => {
                         if bound.split().is_some()
                             || !bound.colors.contains(&color)
-                            || !match instruction {
-                                Instruction::AddMana(
-                                    crate::program::EffectManaYield::RestrictedChoice {
-                                        colors,
-                                        ..
-                                    }
-                                    | crate::program::EffectManaYield::Choice { colors, .. },
+                            || !match (instruction, effective_mana_yield) {
+                                (
+                                    _,
+                                    Some(
+                                        crate::program::EffectManaYield::RestrictedChoice {
+                                            colors,
+                                            ..
+                                        }
+                                        | crate::program::EffectManaYield::Choice { colors, .. },
+                                    ),
                                 ) => colors == &bound.colors,
-                                Instruction::AddMana(
-                                    crate::program::EffectManaYield::LandProducible { .. }
-                                    | crate::program::EffectManaYield::CommanderIdentity { .. }
-                                    | crate::program::EffectManaYield::DistinctColors { .. },
+                                (
+                                    _,
+                                    Some(
+                                        crate::program::EffectManaYield::LandProducible { .. }
+                                        | crate::program::EffectManaYield::CommanderIdentity {
+                                            ..
+                                        }
+                                        | crate::program::EffectManaYield::DistinctColors { .. },
+                                    ),
                                 ) => !bound.colors.is_empty(),
-                                Instruction::GrantProtectionChosenColor(_) => {
+                                (Instruction::GrantProtectionChosenColor(_), _) => {
                                     bound.colors == mana_domains::colored_mana()
                                 }
                                 _ => false,
