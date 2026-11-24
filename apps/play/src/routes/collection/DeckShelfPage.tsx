@@ -21,6 +21,8 @@ import {
 } from "../../decks/deck-sources";
 import { ImportDeckDialog } from "../import/ImportDeckDialog";
 import { lobbyPath } from "../../lobby/LobbyRoutes";
+import type { QuestsSource } from "../../play/quest-sources";
+import { QuestStrip } from "./QuestStrip";
 import { motionLanguage as m } from "../../lib/motion";
 import * as s from "./deck-shelf.css";
 
@@ -63,11 +65,14 @@ export function DeckShelfPage({
   mode,
   source,
   play,
+  quests,
 }: {
   mode: PlayMode;
   source: DeckShelfSource;
   /** What Play on a deck opens. It comes from the account or the preview, as the decks do. */
   play: (props: PlayProps) => ReactElement;
+  /** Today's quests, shown above the decks. Absent where there are none to read. */
+  quests?: QuestsSource;
 }): ReactElement {
   const navigate = useNavigate();
   const [query, setQuery] = useQueryState("q", parseAsString.withDefault(""));
@@ -234,6 +239,8 @@ export function DeckShelfPage({
               </motion.article>
             ))}
           </div>
+          {/* Where the dock floats over the page, the quests end the list. */}
+          {quests && <QuestStrip source={quests} place="list" />}
         </div>
       ) : (
         <div className={s.center}>
@@ -281,6 +288,8 @@ export function DeckShelfPage({
               ]
         }
       />
+      {/* On a wide screen the quests stay along the bottom edge, under the decks. */}
+      {quests && <QuestStrip source={quests} place="edge" />}
       {playing &&
         play({
           deck: playing,
