@@ -95,7 +95,7 @@ impl SupertypeMask {
 
 /// Compact bitflags for status, counter, and turn-history predicates on `ObjectFilterAst`.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
-pub struct ObjectFilterFlags(pub u16);
+pub struct ObjectFilterFlags(pub u32);
 
 impl ObjectFilterFlags {
     pub const EMPTY: Self = Self(0);
@@ -115,6 +115,8 @@ impl ObjectFilterFlags {
     pub const DEALT_DAMAGE_BY_SELF_THIS_TURN: Self = Self(1 << 13);
     pub const MATCHES_CHOSEN_TYPE_OR_COLOR: Self = Self(1 << 14);
     pub const MATCHES_NAMED_AGENDA: Self = Self(1 << 15);
+    /// Matches a spell or ability on the stack that has exactly one target.
+    pub const SINGLE_TARGET: Self = Self(1 << 16);
 
     /// Combine two flag sets.
     #[must_use]
@@ -170,7 +172,13 @@ pub enum ZoneFilter {
     ThatPlayerGraveyard,
     TargetPlayerGraveyard,
     YourHand,
+    ThatPlayerHand,
     YourLibrary,
+    CommandZone,
+    OutsideTheGame,
+    YourGraveyardOrExile,
+    AnyGraveyardOrExile,
+    YourHandOrGraveyard,
 }
 
 /// Combat-state predicate on a battlefield creature.
@@ -214,6 +222,14 @@ pub struct StatBoundAst {
     pub value: Box<ValueExprAst>,
 }
 
+/// Card-name predicate inside `ObjectFilterAst`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum NameFilterAst {
+    SelfName,
+    Exact(String),
+    SameAsReferenced,
+}
+
 /// Orthogonal 13-dimension object filter AST.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ObjectFilterAst {
@@ -235,6 +251,8 @@ pub struct ObjectFilterAst {
     pub forbidden_keywords: Vec<String>,
     pub stat_bounds: Vec<StatBoundAst>,
     pub counter_kind: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub named: Option<NameFilterAst>,
     pub flags: ObjectFilterFlags,
     pub any_permanent: bool,
     pub any_card: bool,
@@ -264,6 +282,7 @@ impl ObjectFilterAst {
             && self.forbidden_keywords.is_empty()
             && self.stat_bounds.is_empty()
             && self.counter_kind.is_none()
+            && self.named.is_none()
             && self.flags.is_empty()
             && !self.any_permanent
             && !self.any_card
@@ -902,6 +921,11 @@ pub enum CostAtomAst {
         count: Box<ValueExprAst>,
         filter: Box<ObjectFilterAst>,
     },
+    ExileTopLibrary {
+        count: Box<ValueExprAst>,
+        face_down: bool,
+    },
+    SacrificeAnyNumber(Box<ObjectFilterAst>),
     RemoveCounters {
         all: bool,
         count: Option<Box<ValueExprAst>>,
@@ -1213,6 +1237,25 @@ pub enum InteractiveChoiceKind {
     },
 }
 
+/// Which player's or turn's step fires a delayed step trigger.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum DelayedStepScope {
+    /// "the next <step>" or "at end of combat" (any player's next matching step).
+    Next,
+    /// "your next <step>" / "your <step>".
+    YourNext,
+    /// "that player's next <step>" / "their next <step>".
+    ThatPlayersNext,
+    /// "each <step>".
+    Each,
+    /// "each player's <step>".
+    EachPlayers,
+    /// "each opponent's <step>".
+    EachOpponents,
+    /// "each of your <step>s".
+    EachOfYour,
+}
+
 /// Core parameterized Magic instruction AST.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum InstructionAst {
@@ -1258,6 +1301,7 @@ pub enum InstructionAst {
     Choice(Vec<Vec<InstructionAst>>),
     DelayedTrigger {
         step: TurnStepAst,
+        scope: DelayedStepScope,
         body: Vec<InstructionAst>,
     },
     DelayedEventTrigger {
@@ -1409,6 +1453,12 @@ pub enum InstructionAst {
     },
     Sacrifice {
         player: PlayerRefAst,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        count: Option<Box<ValueExprAst>>,
+        subject: Box<SubjectRefAst>,
+    },
+    SacrificeAnyNumber {
+        player: PlayerRefAst,
         subject: Box<SubjectRefAst>,
     },
     SacrificeUnlessPay {
@@ -1438,6 +1488,19 @@ pub enum InstructionAst {
         subject: Box<SubjectRefAst>,
         to: String,
     },
+    /// Counted, `up to`, or `any number of` non-targeted zone movement (e.g., Brainstorm, Valakut Awakening, Vessel of Malignity).
+    MoveCounted {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        actor: Option<PlayerRefAst>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        count: Option<Box<ValueExprAst>>,
+        #[serde(default)]
+        up_to: bool,
+        #[serde(default)]
+        any_number: bool,
+        subject: Box<SubjectRefAst>,
+        to: String,
+    },
     ChooseAndKeep {
         pick: String,
         keep_to: String,
@@ -1450,6 +1513,10 @@ pub enum InstructionAst {
     SearchLibrary {
         library: String,
         count: Box<ValueExprAst>,
+        #[serde(default)]
+        up_to: bool,
+        #[serde(default)]
+        any_number: bool,
         filter: Box<ObjectFilterAst>,
         reveal: bool,
         to_zone: String,
@@ -1915,6 +1982,8 @@ pub enum StaticAbilityAst {
         subject: Box<SubjectRefAst>,
         delta: String,
         less: bool,
+        #[serde(default)]
+        next_only: bool,
         per: Option<Box<ObjectFilterAst>>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         scale_expr: Option<Box<ValueExprAst>>,
@@ -1947,6 +2016,10 @@ pub enum StaticAbilityAst {
     },
     PreventAllDamageStatic {
         combat_only: bool,
+        #[serde(default)]
+        noncombat_only: bool,
+        #[serde(default)]
+        both_ways: bool,
         subject: Box<SubjectRefAst>,
         by: Option<Box<SubjectRefAst>>,
     },
@@ -2129,6 +2202,50 @@ pub struct ParseFailureAst {
     pub reason: String,
 }
 
+/// Structured Leveler band (`LEVEL N-M` or `LEVEL N+`) preserving band-scoped stats and abilities.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LevelerBandAst {
+    pub min_level: u8,
+    pub max_level: Option<u8>,
+    pub power: Option<String>,
+    pub toughness: Option<String>,
+    pub keywords: Vec<KeywordAst>,
+    pub statics: Vec<StaticAbilityAst>,
+    pub abilities: Vec<AbilityAst>,
+    pub replacements: Vec<ReplacementEffectAst>,
+}
+
+/// Structured Class level section (`{cost}: Level N`) preserving level-scoped abilities.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ClassLevelSectionAst {
+    pub level: u8,
+    pub cost: Vec<CostAtomAst>,
+    pub keywords: Vec<KeywordAst>,
+    pub statics: Vec<StaticAbilityAst>,
+    pub abilities: Vec<AbilityAst>,
+    pub replacements: Vec<ReplacementEffectAst>,
+}
+
+/// Structured Case `Solved — ...` section preserving solved-only abilities.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CaseSolvedSectionAst {
+    pub keywords: Vec<KeywordAst>,
+    pub statics: Vec<StaticAbilityAst>,
+    pub abilities: Vec<AbilityAst>,
+    pub replacements: Vec<ReplacementEffectAst>,
+}
+
+impl CaseSolvedSectionAst {
+    /// True when this face has no `Solved — ...` abilities.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.keywords.is_empty()
+            && self.statics.is_empty()
+            && self.abilities.is_empty()
+            && self.replacements.is_empty()
+    }
+}
+
 /// Compiled representation of one card face.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct FaceAst {
@@ -2139,6 +2256,12 @@ pub struct FaceAst {
     pub spell_effects: Vec<InstructionAst>,
     pub statics: Vec<StaticAbilityAst>,
     pub replacements: Vec<ReplacementEffectAst>,
+    #[serde(default)]
+    pub level_bands: Vec<LevelerBandAst>,
+    #[serde(default)]
+    pub class_levels: Vec<ClassLevelSectionAst>,
+    #[serde(default)]
+    pub case_solved: CaseSolvedSectionAst,
     pub failures: Vec<ParseFailureAst>,
 }
 

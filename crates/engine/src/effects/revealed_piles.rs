@@ -75,9 +75,11 @@ pub(super) struct RevealedPiles {
     entry_choice: Option<crate::land::EntryChoice>,
     first: Option<Vec<ObjectId>>,
     pub(super) hand: Option<Vec<ObjectId>>,
+    pub(super) secondary_hand: Option<Vec<ObjectId>>,
+    pub(super) pending_random_bottom: Option<Vec<ObjectId>>,
     batches: Vec<(Zone, Vec<ObjectId>, ZoneReplacementBatch)>,
     graveyard_order: Option<Vec<ObjectId>>,
-    bottom_order: Option<Vec<ObjectId>>,
+    pub(super) bottom_order: Option<Vec<ObjectId>>,
     offered: Option<PileChoiceFrame>,
 }
 impl RevealedPiles {
@@ -90,6 +92,8 @@ impl RevealedPiles {
             entry_choice: None,
             first: None,
             hand: None,
+            secondary_hand: None,
+            pending_random_bottom: None,
             batches: Vec::new(),
             graveyard_order: None,
             bottom_order: None,
@@ -226,41 +230,57 @@ impl EffectWindow {
         let look_top_choose = match self.current_instruction()? {
             Instruction::LookTopChoose {
                 filter,
+                reveal_only,
                 to_battlefield,
                 enters_tapped,
                 take_all_matching,
                 max_picks,
                 rest_to_graveyard,
                 rest_to_exile,
+                rest_to_top,
+                random_rest_order,
+                secondary,
                 ..
             } => Some((
                 filter.clone(),
+                *reveal_only,
                 *to_battlefield,
                 *enters_tapped,
                 *take_all_matching,
                 *max_picks,
                 *rest_to_graveyard,
                 *rest_to_exile,
+                *rest_to_top,
+                *random_rest_order,
+                secondary.clone(),
             )),
             _ => None,
         };
         let reveal_until = match self.current_instruction()? {
             Instruction::RevealUntilMatch {
                 filter,
+                count,
                 to_battlefield,
                 enters_tapped,
                 keep_all_revealed,
+                optional_keep,
+                exile_instead_of_reveal,
                 rest_to_graveyard,
                 rest_to_exile,
                 rest_to_bottom,
+                random_rest_order,
             } => Some((
                 filter.clone(),
+                *count,
                 *to_battlefield,
                 *enters_tapped,
                 *keep_all_revealed,
+                *optional_keep,
+                *exile_instead_of_reveal,
                 *rest_to_graveyard,
                 *rest_to_exile,
                 *rest_to_bottom,
+                *random_rest_order,
             )),
             _ => None,
         };
@@ -268,20 +288,24 @@ impl EffectWindow {
             Instruction::LookTopChoose {
                 count,
                 reveal,
+                reveal_only,
                 rest_to_graveyard,
                 rest_to_exile,
                 ..
             } => (
-                self.resolve_value_expr(player, count)?
-                    .max(0.into())
-                    .min(RulesInteger::from_usize(
-                        self.window.cards().library(player).len(),
-                    ))
-                    .to_usize()
-                    .ok_or(EffectError::InconsistentProgram)?,
-                !*reveal,
+                self.resolve_value_expr(
+                    self.window.resolving().map_or(player, |e| e.controller()),
+                    count,
+                )?
+                .max(0.into())
+                .min(RulesInteger::from_usize(
+                    self.window.cards().library(player).len(),
+                ))
+                .to_usize()
+                .ok_or(EffectError::InconsistentProgram)?,
+                !*reveal && !*reveal_only,
                 false,
-                !*rest_to_graveyard && !*rest_to_exile,
+                !*reveal_only && !*rest_to_graveyard && !*rest_to_exile,
             ),
             Instruction::RevealUntilMatch { rest_to_bottom, .. } => {
                 (usize::MAX, false, false, *rest_to_bottom)
@@ -332,6 +356,7 @@ impl EffectWindow {
             work
         } else {
             let library = self.window.cards().library(player);
+            let mut reveal_until_matches: Vec<ObjectId> = Vec::new();
             let named = if let Some(name) = &revealed_name {
                 let evaluated = self.evaluated_characteristics()?;
                 library.iter().position(|id| {
@@ -339,16 +364,25 @@ impl EffectWindow {
                         .get(*id)
                         .is_some_and(|card| self.name_rules().has_name(&card.current_names, name))
                 })
-            } else if let Some((filter, ..)) = &reveal_until {
+            } else if let Some((filter, target_count, ..)) = &reveal_until {
                 let evaluated = self.evaluated_characteristics()?;
                 let excluded = BTreeSet::new();
-                library.iter().position(|id| {
-                    evaluated.get(*id).is_some_and(|card| {
+                let need = usize::from((*target_count).max(1));
+                let mut stop_idx = None;
+                for (idx, id) in library.iter().enumerate() {
+                    if evaluated.get(*id).is_some_and(|card| {
                         filter.matches_static_characteristics(card, &excluded, || {
                             self.copiable_program(*id).map(Program::mana_value)
                         })
-                    })
-                })
+                    }) {
+                        reveal_until_matches.push(*id);
+                        if reveal_until_matches.len() >= need {
+                            stop_idx = Some(idx);
+                            break;
+                        }
+                    }
+                }
+                stop_idx
             } else {
                 None
             };
@@ -386,15 +420,31 @@ impl EffectWindow {
                     },
                 )?;
             }
+            if look_top_choose
+                .as_ref()
+                .is_some_and(|(_, reveal_only, ..)| *reveal_only)
+            {
+                let evaluated = self.evaluated_characteristics()?;
+                let revealed_types: BTreeSet<CardType> = cards
+                    .iter()
+                    .filter_map(|id| evaluated.get(*id))
+                    .flat_map(|card| card.current_types.iter().copied())
+                    .collect();
+                if let Some(cursor) = self.resolution_cursor_mut() {
+                    cursor.results.revealed_top_types = revealed_types;
+                    cursor.results.revealed_top_card = cards.first().copied();
+                }
+                return Ok(None);
+            }
             let mut work = RevealedPiles::new(cards);
             if revealed_name.is_some() {
                 work.creature = Some(named_card);
-            } else if let Some((_, _, _, keep_all_revealed, ..)) = &reveal_until {
-                work.hand = Some(if *keep_all_revealed {
-                    work.cards.clone()
-                } else {
-                    named_card.into_iter().collect()
-                });
+            } else if let Some((_, _, _, _, keep_all_revealed, optional_keep, ..)) = &reveal_until {
+                if *keep_all_revealed {
+                    work.hand = Some(work.cards.clone());
+                } else if !*optional_keep || reveal_until_matches.is_empty() {
+                    work.hand = Some(reveal_until_matches);
+                }
             }
             Box::new(work)
         };
@@ -433,19 +483,108 @@ impl EffectWindow {
                 },
             }
         };
-        let choice = if reveal_until.is_some() {
-            None
+        let chooser = self.window.resolving().map_or(player, |e| e.controller());
+        let choice = if let Some((filter, _, _, _, _, optional_keep, ..)) = &reveal_until {
+            if work.hand.is_some() || !*optional_keep {
+                None
+            } else {
+                let current = self.evaluated_characteristics()?;
+                let excluded = BTreeSet::new();
+                let eligible: Vec<_> = work
+                    .cards
+                    .iter()
+                    .copied()
+                    .filter(|id| {
+                        current.get(*id).is_some_and(|card| {
+                            filter.matches_static_characteristics(card, &excluded, || {
+                                self.copiable_program(*id).map(Program::mana_value)
+                            })
+                        })
+                    })
+                    .collect();
+                if eligible.is_empty() {
+                    work.hand = Some(Vec::new());
+                    None
+                } else if eligible.len() > 1 {
+                    Some((
+                        chooser,
+                        PileChoice::OptionalUpTo {
+                            looked: work.cards.clone(),
+                            eligible: eligible.clone(),
+                            max: eligible.len(),
+                        },
+                    ))
+                } else {
+                    Some((
+                        chooser,
+                        PileChoice::OptionalCreatureToBattlefield {
+                            looked: work.cards.clone(),
+                            eligible,
+                        },
+                    ))
+                }
+            }
         } else if let Some((
             filter,
+            _reveal_only,
             _to_battlefield,
             _enters_tapped,
             take_all_matching,
             max_picks,
             _rest_to_graveyard,
             _rest_to_exile,
+            _rest_to_top,
+            _random_rest_order,
+            secondary,
         )) = &look_top_choose
         {
-            if work.hand.is_some() {
+            if let Some(primary_chosen) = &work.hand {
+                if let Some(sec) = secondary
+                    && work.secondary_hand.is_none()
+                {
+                    let current = self.evaluated_characteristics()?;
+                    let excluded = BTreeSet::new();
+                    let eligible: Vec<_> = work
+                        .cards
+                        .iter()
+                        .copied()
+                        .filter(|id| {
+                            !primary_chosen.contains(id)
+                                && current.get(*id).is_some_and(|card| {
+                                    sec.filter.matches_static_characteristics(
+                                        card,
+                                        &excluded,
+                                        || self.copiable_program(*id).map(Program::mana_value),
+                                    )
+                                })
+                        })
+                        .collect();
+                    if eligible.is_empty() || sec.max_picks == 0 {
+                        work.secondary_hand = Some(Vec::new());
+                        None
+                    } else if sec.max_picks > 1 {
+                        Some((
+                            chooser,
+                            PileChoice::OptionalUpTo {
+                                looked: work.cards.clone(),
+                                eligible,
+                                max: usize::from(sec.max_picks),
+                            },
+                        ))
+                    } else {
+                        Some((
+                            chooser,
+                            PileChoice::OptionalCreatureToBattlefield {
+                                looked: work.cards.clone(),
+                                eligible,
+                            },
+                        ))
+                    }
+                } else {
+                    None
+                }
+            } else if !*take_all_matching && *max_picks == 0 {
+                work.hand = Some(Vec::new());
                 None
             } else if let Some(filter) = filter {
                 let current = self.evaluated_characteristics()?;
@@ -467,7 +606,7 @@ impl EffectWindow {
                     None
                 } else if *max_picks > 1 {
                     Some((
-                        player,
+                        chooser,
                         PileChoice::OptionalUpTo {
                             looked: work.cards.clone(),
                             eligible,
@@ -476,7 +615,7 @@ impl EffectWindow {
                     ))
                 } else {
                     Some((
-                        player,
+                        chooser,
                         PileChoice::OptionalCreatureToBattlefield {
                             looked: work.cards.clone(),
                             eligible,
@@ -488,7 +627,7 @@ impl EffectWindow {
                 None
             } else if *max_picks > 1 {
                 Some((
-                    player,
+                    chooser,
                     PileChoice::OptionalUpTo {
                         looked: work.cards.clone(),
                         eligible: work.cards.clone(),
@@ -501,7 +640,7 @@ impl EffectWindow {
                 } else {
                     PileChoice::OneToHand(work.cards.clone())
                 };
-                Some((player, choice))
+                Some((chooser, choice))
             }
         } else if let Some(hand_filter) = hand_filter {
             if work.hand.is_some() {
@@ -671,10 +810,10 @@ impl EffectWindow {
                     if share_attached_type
                         || look_top_choose
                             .as_ref()
-                            .is_some_and(|(_, to_battlefield, ..)| *to_battlefield)
+                            .is_some_and(|(_, _, to_battlefield, ..)| *to_battlefield)
                         || reveal_until
                             .as_ref()
-                            .is_some_and(|(_, to_battlefield, ..)| *to_battlefield)
+                            .is_some_and(|(_, _, to_battlefield, ..)| *to_battlefield)
                     {
                         Zone::Battlefield
                     } else {
@@ -683,17 +822,53 @@ impl EffectWindow {
                     work.hand.clone().ok_or(EffectError::InconsistentProgram)?,
                 )
             };
+            let secondary_chosen = work.secondary_hand.clone().unwrap_or_default();
+            let secondary_zone = look_top_choose
+                .as_ref()
+                .and_then(|(.., sec)| sec.as_ref())
+                .map_or(Zone::Hand, |sec| {
+                    if sec.to_battlefield {
+                        Zone::Battlefield
+                    } else {
+                        Zone::Hand
+                    }
+                });
             let remainder: Vec<_> = work
                 .cards
                 .iter()
                 .copied()
-                .filter(|id| !chosen.contains(id))
+                .filter(|id| !chosen.contains(id) && !secondary_chosen.contains(id))
                 .collect();
+            let random_rest_order = look_top_choose
+                .as_ref()
+                .is_some_and(|(_, _, _, _, _, _, _, _, _, random_rest, _)| *random_rest)
+                || reveal_until
+                    .as_ref()
+                    .is_some_and(|(.., random_rest)| *random_rest);
             if other_pile_to_bottom && work.bottom_order.is_none() {
                 if remainder.len() > 1 {
+                    if random_rest_order {
+                        work.pending_random_bottom = Some(remainder);
+                        self.resolution_cursor_mut()
+                            .ok_or(EffectError::WrongResolutionFrame)?
+                            .revealed_piles = Some(work);
+                        let cursor = self
+                            .resolution_cursor()
+                            .ok_or(EffectError::WrongResolutionFrame)?
+                            .clone();
+                        self.pending_work =
+                            Some(PendingWork::OptionalEffect(Box::new(OptionalEffectWork {
+                                cursor,
+                                chooser,
+                                options: BTreeSet::new(),
+                                rebound_or_buyback: false,
+                                cast: None,
+                            })));
+                        return Ok(None);
+                    }
                     let frame = PileChoiceFrame {
                         revision: self.revision,
-                        chooser: player,
+                        chooser,
                         choice: PileChoice::BottomOrder(remainder),
                     };
                     work.offered = Some(frame.clone());
@@ -706,17 +881,17 @@ impl EffectWindow {
             }
             let rest_zone = if look_top_choose
                 .as_ref()
-                .is_some_and(|(_, _, _, _, _, _, rest_to_exile)| *rest_to_exile)
+                .is_some_and(|(_, _, _, _, _, _, _, rest_to_exile, ..)| *rest_to_exile)
                 || reveal_until
                     .as_ref()
-                    .is_some_and(|(_, _, _, _, _, rest_to_exile, _)| *rest_to_exile)
+                    .is_some_and(|(_, _, _, _, _, _, _, _, rest_to_exile, ..)| *rest_to_exile)
             {
                 Zone::Exile
             } else {
                 Zone::Graveyard
             };
             let leave_rest_in_library = reveal_until.as_ref().is_some_and(
-                |(_, _, _, _, rest_to_gy, rest_to_exile, rest_to_bottom)| {
+                |(_, _, _, _, _, _, _, rest_to_gy, rest_to_exile, rest_to_bottom, _)| {
                     !*rest_to_gy && !*rest_to_exile && !*rest_to_bottom
                 },
             );
@@ -725,9 +900,13 @@ impl EffectWindow {
             } else {
                 remainder
             };
-            for (zone, cards) in [(chosen_zone, chosen), (rest_zone, rest_cards)] {
+            for (zone, cards) in [
+                (chosen_zone, chosen),
+                (secondary_zone, secondary_chosen),
+                (rest_zone, rest_cards),
+            ] {
                 if !cards.is_empty() {
-                    let batch = self.revealed_batch(entry, instruction, player, zone, &cards)?;
+                    let batch = self.revealed_batch(entry, instruction, chooser, zone, &cards)?;
                     work.batches.push((zone, cards, batch));
                 }
             }
@@ -800,7 +979,7 @@ impl EffectWindow {
                     moves.push((
                         id,
                         destination
-                            .physical(Some(player))
+                            .physical(Some(chooser))
                             .ok_or(EffectError::InconsistentProgram)?,
                     ));
                 }
@@ -823,7 +1002,7 @@ impl EffectWindow {
                     self.object_entry_choice_frame(
                         match movement.1 {
                             ObjectDestination::Battlefield { controller } => controller,
-                            _ => player,
+                            _ => chooser,
                         },
                         movement.0,
                     )?,
@@ -854,18 +1033,41 @@ impl EffectWindow {
         if !self.window.cards().library(player).starts_with(&work.cards) {
             return Err(EffectError::InvalidLibraryPartition);
         }
-        let (window, mut movements) = self.window.record_library_search_moves(
-            self.window.revision(),
-            entry,
-            player,
-            player,
-            &moves,
-        )?;
-        self.window = window;
+        let mut movements = if moves.is_empty() {
+            Vec::new()
+        } else {
+            let (window, movements) = self.window.record_library_search_moves(
+                self.window.revision(),
+                entry,
+                player,
+                chooser,
+                &moves,
+            )?;
+            self.window = window;
+            movements
+        };
         if let Some(bottom) = work.bottom_order {
-            self.bottom_remaining_looked_at(player, entry, &bottom)?;
+            if look_top_choose
+                .as_ref()
+                .is_some_and(|(_, _, _, _, _, _, _, _, rest_to_top, ..)| *rest_to_top)
+            {
+                self.top_remaining_looked_at(player, entry, &bottom)?;
+            } else {
+                self.bottom_remaining_looked_at(player, entry, &bottom)?;
+            }
         }
         let mut counters = Vec::new();
+        let secondary_ids: BTreeSet<ObjectId> = work
+            .secondary_hand
+            .as_deref()
+            .unwrap_or_default()
+            .iter()
+            .copied()
+            .collect();
+        let secondary_tapped = look_top_choose
+            .as_ref()
+            .and_then(|(.., sec)| sec.as_ref())
+            .is_some_and(|sec| sec.enters_tapped);
         for movement in &mut movements {
             if movement.after.zone() != ObjectZone::Battlefield {
                 continue;
@@ -877,13 +1079,17 @@ impl EffectWindow {
             }
             self.stage_resolution_entry_choice(movement.before.id(), id)?;
             self.characteristics.register_battlefield_entry(id)?;
-            if look_top_choose
-                .as_ref()
-                .is_some_and(|(_, _, enters_tapped, ..)| *enters_tapped)
-                || reveal_until
+            let should_tap = if secondary_ids.contains(&movement.before.id()) {
+                secondary_tapped
+            } else {
+                look_top_choose
                     .as_ref()
-                    .is_some_and(|(_, _, enters_tapped, ..)| *enters_tapped)
-            {
+                    .is_some_and(|(_, _, _, enters_tapped, ..)| *enters_tapped)
+                    || reveal_until
+                        .as_ref()
+                        .is_some_and(|(_, _, _, enters_tapped, ..)| *enters_tapped)
+            };
+            if should_tap {
                 self.window.enter_tapped(id)?;
             }
             if let Some(host) = self.resolution_aura_choices.remove(&movement.before.id()) {
@@ -975,7 +1181,11 @@ impl EffectWindow {
                 PileChoice::OptionalCreatureToBattlefield { eligible, .. },
                 DecisionReply::SelectResolution(selected),
             ) if selected.len() <= 1 && selected.iter().all(|id| eligible.contains(id)) => {
-                work.hand = Some(selected);
+                if work.hand.is_some() && work.secondary_hand.is_none() {
+                    work.secondary_hand = Some(selected);
+                } else {
+                    work.hand = Some(selected);
+                }
             }
             (
                 PileChoice::OptionalUpTo { eligible, max, .. },
@@ -984,7 +1194,11 @@ impl EffectWindow {
                 && selected.iter().all(|id| eligible.contains(id))
                 && selected.iter().collect::<BTreeSet<_>>().len() == selected.len() =>
             {
-                work.hand = Some(selected);
+                if work.hand.is_some() && work.secondary_hand.is_none() {
+                    work.secondary_hand = Some(selected);
+                } else {
+                    work.hand = Some(selected);
+                }
             }
             (PileChoice::Creature(domain), DecisionReply::SelectResolution(selected))
                 if selected.len() == 1 && domain.contains(&selected[0]) =>

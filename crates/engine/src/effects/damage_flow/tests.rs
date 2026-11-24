@@ -521,6 +521,8 @@ pub(crate) fn n04_player_batch_fixture() -> (EffectWindow, RuleProgress) {
         random_selection: None,
         results: ResolutionResults::default(),
         chosen_effect_color: None,
+        chosen_option_index: None,
+        chosen_distinct_colors: Vec::new(),
         chosen_mana_split: None,
         tempting_token_offer: None,
         destroyed_permanents: None,

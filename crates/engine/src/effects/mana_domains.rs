@@ -6,6 +6,18 @@ impl EffectWindow {
         &self,
         actor: SeatId,
     ) -> Result<BTreeSet<ManaType>, EffectError> {
+        let opponents: BTreeSet<SeatId> = self
+            .combat_rules
+            .opponents(self.window.participants(), actor)?
+            .into_iter()
+            .collect();
+        self.land_colors_for_players(&opponents)
+    }
+
+    pub(super) fn land_colors_for_players(
+        &self,
+        players: &BTreeSet<SeatId>,
+    ) -> Result<BTreeSet<ManaType>, EffectError> {
         let world = self.evaluated_characteristics()?;
         let lands = world
             .objects
@@ -59,15 +71,9 @@ impl EffectWindow {
                 break;
             }
         }
-        let opponents = self
-            .combat_rules
-            .opponents(self.window.participants(), actor)?;
         Ok(lands
             .into_iter()
-            .filter(|land| {
-                land.controller
-                    .is_some_and(|seat| opponents.contains(&seat))
-            })
+            .filter(|land| land.controller.is_some_and(|seat| players.contains(&seat)))
             .flat_map(|land| domains.get(&land.object).into_iter().flatten().copied())
             .filter(|color| *color != ManaType::Colourless)
             .collect())

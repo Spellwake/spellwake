@@ -1013,6 +1013,7 @@ fn complete_pass_run() -> Run {
                     any_types: Default::default(),
                     required_types: BTreeSet::from([crate::program::CardType::Creature]),
                     forbidden_types: BTreeSet::new(),
+                    object_filter: None,
                 },
             },
             Instruction::PutPowerToughnessCounters {
@@ -1752,6 +1753,7 @@ fn already_departed_token_cessation_only_pass_does_not_construct_empty_replaceme
                             any_types: Default::default(),
                             required_types: BTreeSet::from([crate::program::CardType::Creature]),
                             forbidden_types: BTreeSet::new(),
+                            object_filter: None,
                         },
                     },
                     gain(1),

@@ -602,6 +602,8 @@ fn cl_target_depart_return() {
         random_selection: None,
         results: ResolutionResults::default(),
         chosen_effect_color: None,
+        chosen_option_index: None,
+        chosen_distinct_colors: Vec::new(),
         chosen_mana_split: None,
         tempting_token_offer: None,
         destroyed_permanents: None,

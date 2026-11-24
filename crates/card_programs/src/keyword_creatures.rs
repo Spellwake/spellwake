@@ -268,8 +268,29 @@ impl Registry {
                             )
                         })
                         .or_else(|| {
-                            oracle_lowering::compile_transforming(card, vocabulary, indicator)
+                            oracle_lowering::compile_transforming(
+                                card,
+                                inventory,
+                                vocabulary,
+                                indicator,
+                                loyalty_source_verified,
+                            )
                         })
+                })
+                .flatten();
+            let modal_dfc = (profile == Profile::Current && card.layout == "modal_dfc")
+                .then(|| {
+                    let indicator = card
+                        .oracle_id
+                        .as_deref()
+                        .and_then(|id| inventory.back_color_indicator(id));
+                    oracle_lowering::compile_modal_dfc(
+                        card,
+                        inventory,
+                        vocabulary,
+                        indicator,
+                        loyalty_source_verified,
+                    )
                 })
                 .flatten();
             // The existing compilers read the first side as the base price. Preserve all
@@ -302,7 +323,14 @@ impl Registry {
                 })
                 .flatten();
             let meld = (profile == Profile::Current && card.layout == "meld")
-                .then(|| meld::compile(compiler_input, inventory, vocabulary))
+                .then(|| {
+                    meld::compile(
+                        compiler_input,
+                        inventory,
+                        vocabulary,
+                        loyalty_source_verified,
+                    )
+                })
                 .flatten();
             let name_restriction = (profile == Profile::Current && card.name == "Nevermore")
                 .then(|| {
@@ -315,6 +343,7 @@ impl Registry {
                 .flatten();
             let definition = walker
                 .or(transforming)
+                .or(modal_dfc)
                 .or(meld)
                 .or(name_restriction)
                 .map_or_else(|| compile(compiler_input, vocabulary, profile), Ok)
@@ -335,7 +364,10 @@ impl Registry {
                     if program.split.is_none() {
                         program.names = ObjectNames::single(
                             EnglishCardName::new(
-                                if program.reverse_face().is_some() || program.adventure.is_some() {
+                                if program.back_face().is_some()
+                                    || program.adventure.is_some()
+                                    || program.prepare_spell.is_some()
+                                {
                                     card.faces[0].name.clone()
                                 } else {
                                     card.name.clone()
@@ -432,6 +464,20 @@ impl Registry {
 }
 
 fn compile(
+    card: &InventoryCard,
+    vocabulary: &CreatureTypeVocabulary,
+    profile: Profile,
+) -> Result<Program, &'static str> {
+    compile_legacy(card, vocabulary, profile).or_else(|reason| {
+        if profile == Profile::Current {
+            oracle_lowering::compile(card, vocabulary).ok_or(reason)
+        } else {
+            Err(reason)
+        }
+    })
+}
+
+fn compile_legacy(
     card: &InventoryCard,
     vocabulary: &CreatureTypeVocabulary,
     profile: Profile,

@@ -2,8 +2,46 @@
 use super::*;
 use crate::occurrence::{EventCause, RulesOccurrence};
 
+/// Fixed-capacity deterministic inline key for arbitrary MTG named counters.
+/// Stores ASCII-lowercased counter names up to 24 bytes so `CounterKind` remains `Copy`.
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct CustomCounterKey([u8; 24]);
+
+impl CustomCounterKey {
+    /// Construct a normalized custom counter key from a non-empty ASCII label (1..=24 bytes).
+    #[must_use]
+    pub fn from_label(label: &str) -> Option<Self> {
+        let trimmed = label.trim();
+        let bytes = trimmed.as_bytes();
+        if bytes.is_empty() || bytes.len() > 24 {
+            return None;
+        }
+        let mut buf = [0u8; 24];
+        for (i, &b) in bytes.iter().enumerate() {
+            if !b.is_ascii() || b.is_ascii_control() {
+                return None;
+            }
+            buf[i] = b.to_ascii_lowercase();
+        }
+        Some(Self(buf))
+    }
+
+    /// Borrow the normalized lowercase ASCII counter name.
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        let len = self.0.iter().position(|&b| b == 0).unwrap_or(self.0.len());
+        std::str::from_utf8(&self.0[..len]).unwrap_or("")
+    }
+}
+
+impl std::fmt::Debug for CustomCounterKey {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "CustomCounterKey({:?})", self.as_str())
+    }
+}
+
 /// Counter kinds that can occur on a permanent or player in this engine.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum CounterKind {
     PlusOne,
     MinusOne,
@@ -118,9 +156,18 @@ pub enum CounterKind {
     Shield,
     /// CR 122.1h finality counter (exiles a permanent instead of putting it into a graveyard).
     Finality,
+    /// Arbitrary non-standard power/toughness counter such as +0/+1, +2/+2, -0/-1, or -2/-2.
+    PtDelta {
+        power: i8,
+        toughness: i8,
+    },
+    /// Any other named permanent counter (CR 122.1) stored by normalized lowercase label.
+    Custom(CustomCounterKey),
     Poison,
     Experience,
     Energy,
+    /// CR 725 rad counter on a player.
+    Rad,
 }
 
 impl CounterKind {
@@ -265,11 +312,147 @@ impl CounterKind {
     /// Whether this counter kind is a player counter (CR 122.1).
     #[must_use]
     pub const fn is_player_counter(self) -> bool {
-        matches!(self, Self::Poison | Self::Experience | Self::Energy)
+        matches!(
+            self,
+            Self::Poison | Self::Experience | Self::Energy | Self::Rad
+        )
+    }
+
+    /// Whether this counter kind can exist on a permanent (CR 122.1).
+    #[must_use]
+    pub const fn is_permanent(self) -> bool {
+        !self.is_player_counter()
     }
 
     pub(crate) fn is_named(self) -> bool {
         !self.is_player_counter() && !matches!(self, Self::PlusOne | Self::MinusOne)
+    }
+
+    /// Canonical lowercase Oracle label for display and wire projection.
+    #[must_use]
+    pub fn oracle_label(self) -> std::borrow::Cow<'static, str> {
+        use std::borrow::Cow;
+        match self {
+            Self::PlusOne => Cow::Borrowed("+1/+1"),
+            Self::MinusOne => Cow::Borrowed("-1/-1"),
+            Self::PtDelta { power, toughness } => {
+                let ps = if power >= 0 { "+" } else { "" };
+                let ts = if toughness >= 0 { "+" } else { "" };
+                Cow::Owned(format!("{ps}{power}/{ts}{toughness}"))
+            }
+            Self::Custom(key) => Cow::Owned(key.as_str().to_owned()),
+            Self::Page => Cow::Borrowed("page"),
+            Self::Quest => Cow::Borrowed("quest"),
+            Self::Verse => Cow::Borrowed("verse"),
+            Self::Suspect => Cow::Borrowed("suspect"),
+            Self::Charge => Cow::Borrowed("charge"),
+            Self::Storage => Cow::Borrowed("storage"),
+            Self::Lore => Cow::Borrowed("lore"),
+            Self::Loyalty => Cow::Borrowed("loyalty"),
+            Self::Defense => Cow::Borrowed("defense"),
+            Self::Time => Cow::Borrowed("time"),
+            Self::Fade => Cow::Borrowed("fade"),
+            Self::Age => Cow::Borrowed("age"),
+            Self::Indestructible => Cow::Borrowed("indestructible"),
+            Self::Corpse => Cow::Borrowed("corpse"),
+            Self::Vow => Cow::Borrowed("vow"),
+            Self::Blessing => Cow::Borrowed("blessing"),
+            Self::Despair => Cow::Borrowed("despair"),
+            Self::Hatchling => Cow::Borrowed("hatchling"),
+            Self::Study => Cow::Borrowed("study"),
+            Self::Eyeball => Cow::Borrowed("eyeball"),
+            Self::Slime => Cow::Borrowed("slime"),
+            Self::Oil => Cow::Borrowed("oil"),
+            Self::Level => Cow::Borrowed("level"),
+            Self::Spore => Cow::Borrowed("spore"),
+            Self::Ki => Cow::Borrowed("ki"),
+            Self::Soul => Cow::Borrowed("soul"),
+            Self::Fuse => Cow::Borrowed("fuse"),
+            Self::Depletion => Cow::Borrowed("depletion"),
+            Self::Bounty => Cow::Borrowed("bounty"),
+            Self::Flood => Cow::Borrowed("flood"),
+            Self::Flame => Cow::Borrowed("flame"),
+            Self::Hour => Cow::Borrowed("hour"),
+            Self::Brick => Cow::Borrowed("brick"),
+            Self::Plague => Cow::Borrowed("plague"),
+            Self::Doom => Cow::Borrowed("doom"),
+            Self::Pressure => Cow::Borrowed("pressure"),
+            Self::Feather => Cow::Borrowed("feather"),
+            Self::Fate => Cow::Borrowed("fate"),
+            Self::Infection => Cow::Borrowed("infection"),
+            Self::Ice => Cow::Borrowed("ice"),
+            Self::Tide => Cow::Borrowed("tide"),
+            Self::Growth => Cow::Borrowed("growth"),
+            Self::Divinity => Cow::Borrowed("divinity"),
+            Self::Fungus => Cow::Borrowed("fungus"),
+            Self::Hit => Cow::Borrowed("hit"),
+            Self::Gold => Cow::Borrowed("gold"),
+            Self::Blood => Cow::Borrowed("blood"),
+            Self::Cage => Cow::Borrowed("cage"),
+            Self::Coin => Cow::Borrowed("coin"),
+            Self::Credit => Cow::Borrowed("credit"),
+            Self::Death => Cow::Borrowed("death"),
+            Self::Delay => Cow::Borrowed("delay"),
+            Self::Devotion => Cow::Borrowed("devotion"),
+            Self::Egg => Cow::Borrowed("egg"),
+            Self::Eon => Cow::Borrowed("eon"),
+            Self::Fury => Cow::Borrowed("fury"),
+            Self::Incubation => Cow::Borrowed("incubation"),
+            Self::Knowledge => Cow::Borrowed("knowledge"),
+            Self::Luck => Cow::Borrowed("luck"),
+            Self::Mine => Cow::Borrowed("mine"),
+            Self::Music => Cow::Borrowed("music"),
+            Self::Muster => Cow::Borrowed("muster"),
+            Self::Net => Cow::Borrowed("net"),
+            Self::Omen => Cow::Borrowed("omen"),
+            Self::Ore => Cow::Borrowed("ore"),
+            Self::Pain => Cow::Borrowed("pain"),
+            Self::Petal => Cow::Borrowed("petal"),
+            Self::Phylactery => Cow::Borrowed("phylactery"),
+            Self::Pin => Cow::Borrowed("pin"),
+            Self::Plot => Cow::Borrowed("plot"),
+            Self::Prey => Cow::Borrowed("prey"),
+            Self::Pupa => Cow::Borrowed("pupa"),
+            Self::Shell => Cow::Borrowed("shell"),
+            Self::Silver => Cow::Borrowed("silver"),
+            Self::Sleep => Cow::Borrowed("sleep"),
+            Self::Soot => Cow::Borrowed("soot"),
+            Self::Stash => Cow::Borrowed("stash"),
+            Self::Strife => Cow::Borrowed("strife"),
+            Self::Task => Cow::Borrowed("task"),
+            Self::Tower => Cow::Borrowed("tower"),
+            Self::Training => Cow::Borrowed("training"),
+            Self::Trap => Cow::Borrowed("trap"),
+            Self::Treasure => Cow::Borrowed("treasure"),
+            Self::Valor => Cow::Borrowed("valor"),
+            Self::Velocity => Cow::Borrowed("velocity"),
+            Self::Vitality => Cow::Borrowed("vitality"),
+            Self::Void => Cow::Borrowed("void"),
+            Self::Vortex => Cow::Borrowed("vortex"),
+            Self::Wage => Cow::Borrowed("wage"),
+            Self::Winch => Cow::Borrowed("winch"),
+            Self::Wind => Cow::Borrowed("wind"),
+            Self::Wish => Cow::Borrowed("wish"),
+            Self::Flying => Cow::Borrowed("flying"),
+            Self::FirstStrike => Cow::Borrowed("first strike"),
+            Self::DoubleStrike => Cow::Borrowed("double strike"),
+            Self::Deathtouch => Cow::Borrowed("deathtouch"),
+            Self::Haste => Cow::Borrowed("haste"),
+            Self::Hexproof => Cow::Borrowed("hexproof"),
+            Self::Lifelink => Cow::Borrowed("lifelink"),
+            Self::Menace => Cow::Borrowed("menace"),
+            Self::Reach => Cow::Borrowed("reach"),
+            Self::Shadow => Cow::Borrowed("shadow"),
+            Self::Trample => Cow::Borrowed("trample"),
+            Self::Vigilance => Cow::Borrowed("vigilance"),
+            Self::Stun => Cow::Borrowed("stun"),
+            Self::Shield => Cow::Borrowed("shield"),
+            Self::Finality => Cow::Borrowed("finality"),
+            Self::Poison => Cow::Borrowed("poison"),
+            Self::Experience => Cow::Borrowed("experience"),
+            Self::Energy => Cow::Borrowed("energy"),
+            Self::Rad => Cow::Borrowed("rad"),
+        }
     }
 
     pub(crate) fn tracks_linked_values(self) -> bool {
@@ -392,7 +575,48 @@ impl CounterKind {
             "poison" => Self::Poison,
             "experience" => Self::Experience,
             "energy" => Self::Energy,
-            _ => return None,
+            "rad" => Self::Rad,
+            other => {
+                let trimmed = other.trim();
+                if let Some((p_str, t_str)) = trimmed.split_once('/')
+                    && (p_str.starts_with('+') || p_str.starts_with('-'))
+                    && (t_str.starts_with('+') || t_str.starts_with('-'))
+                    && let (Ok(power), Ok(toughness)) = (p_str.parse::<i8>(), t_str.parse::<i8>())
+                {
+                    return Some(Self::PtDelta { power, toughness });
+                }
+                if matches!(
+                    trimmed,
+                    "" | "a"
+                        | "an"
+                        | "any"
+                        | "all"
+                        | "that"
+                        | "those"
+                        | "this"
+                        | "the"
+                        | "each"
+                        | "one"
+                        | "two"
+                        | "three"
+                        | "x"
+                        | "counter"
+                        | "counters"
+                        | "another"
+                        | "other"
+                        | "more"
+                        | "kind"
+                        | "type"
+                        | "same"
+                ) || !trimmed
+                    .bytes()
+                    .all(|b| b.is_ascii_alphabetic() || matches!(b, b' ' | b'-' | b'\''))
+                    || trimmed.contains("  ")
+                {
+                    return None;
+                }
+                return CustomCounterKey::from_label(trimmed).map(Self::Custom);
+            }
         })
     }
 }
@@ -418,8 +642,53 @@ impl ProliferateChoice {
     }
 }
 impl CharacteristicState {
+    /// Every permanent counter kind with a positive count currently on `object`.
+    pub(crate) fn present_permanent_counter_kinds(
+        &self,
+        object: ObjectId,
+    ) -> BTreeSet<CounterKind> {
+        let mut kinds = BTreeSet::new();
+        let pt = self.counters(object);
+        if pt.plus_one.is_positive() {
+            kinds.insert(CounterKind::PlusOne);
+        }
+        if pt.minus_one.is_positive() {
+            kinds.insert(CounterKind::MinusOne);
+        }
+        for (kind, map) in [
+            (CounterKind::Vow, &self.vow_counters),
+            (CounterKind::Corpse, &self.corpse_counters),
+            (CounterKind::Blessing, &self.blessing_counters),
+            (CounterKind::Despair, &self.despair_counters),
+            (CounterKind::Hatchling, &self.hatchling_counters),
+            (CounterKind::Indestructible, &self.indestructible_counters),
+            (CounterKind::Page, &self.page_counters),
+            (CounterKind::Quest, &self.quest_counters),
+            (CounterKind::Verse, &self.verse_counters),
+            (CounterKind::Suspect, &self.suspect_counters),
+            (CounterKind::Charge, &self.charge),
+            (CounterKind::Defense, &self.defense),
+            (CounterKind::Loyalty, &self.loyalty),
+            (CounterKind::Storage, &self.storage),
+            (CounterKind::Lore, &self.lore),
+            (CounterKind::Time, &self.time_counters),
+            (CounterKind::Fade, &self.fade),
+            (CounterKind::Age, &self.age),
+        ] {
+            if map.get(&object).is_some_and(RulesInteger::is_positive) {
+                kinds.insert(kind);
+            }
+        }
+        for (&kind, map) in &self.named_counters {
+            if map.get(&object).is_some_and(RulesInteger::is_positive) {
+                kinds.insert(kind);
+            }
+        }
+        kinds
+    }
+
     pub(crate) fn total_permanent_counters(&self, object: ObjectId) -> RulesInteger {
-        CounterKind::PERMANENT
+        self.present_permanent_counter_kinds(object)
             .into_iter()
             .fold(RulesInteger::from(0), |total, kind| {
                 total.plus(&self.permanent_counter_count(object, kind))
@@ -452,7 +721,8 @@ impl CharacteristicState {
             | CounterKind::MinusOne
             | CounterKind::Experience
             | CounterKind::Poison
-            | CounterKind::Energy => return None,
+            | CounterKind::Energy
+            | CounterKind::Rad => return None,
             _ => self.named_counters.entry(kind).or_default(),
         })
     }
@@ -482,7 +752,10 @@ impl CharacteristicState {
             CounterKind::Age => &self.age,
             CounterKind::PlusOne => return self.counters(object).plus_one,
             CounterKind::MinusOne => return self.counters(object).minus_one,
-            CounterKind::Poison | CounterKind::Experience | CounterKind::Energy => return 0.into(),
+            CounterKind::Poison
+            | CounterKind::Experience
+            | CounterKind::Energy
+            | CounterKind::Rad => return 0.into(),
             _ => {
                 return self
                     .named_counters
@@ -500,6 +773,20 @@ impl EffectWindow {
     /// Number of counters of the given kind on this battlefield incarnation.
     pub fn counters_of_kind(&self, object: ObjectId, kind: CounterKind) -> RulesInteger {
         self.characteristics.permanent_counter_count(object, kind)
+    }
+
+    /// All non-dedicated named counters (including keyword, P/T delta, and custom counters)
+    /// currently present with positive count on this battlefield incarnation.
+    pub fn extra_named_counters(&self, object: ObjectId) -> BTreeMap<CounterKind, RulesInteger> {
+        let mut out = BTreeMap::new();
+        for (&kind, map) in &self.characteristics.named_counters {
+            if let Some(count) = map.get(&object)
+                && count.is_positive()
+            {
+                out.insert(kind, count.clone());
+            }
+        }
+        out
     }
 
     /// Resolve a source-relative counter expression from the current or last battlefield appearance.
@@ -588,7 +875,7 @@ impl EffectWindow {
                     after,
                 }))
             }
-            CounterKind::Energy => {
+            CounterKind::Energy | CounterKind::Rad => {
                 let before = self.player_counters_of_kind(player, kind);
                 let after = before.plus(amount);
                 self.characteristics
@@ -643,14 +930,7 @@ impl EffectWindow {
             .filter(|o| o.zone() == ObjectZone::Battlefield)
         {
             let id = object.id();
-            let kinds: BTreeSet<_> = CounterKind::PERMANENT
-                .into_iter()
-                .filter(|kind| {
-                    self.characteristics
-                        .permanent_counter_count(id, *kind)
-                        .is_positive()
-                })
-                .collect();
+            let kinds = self.characteristics.present_permanent_counter_kinds(id);
             if !kinds.is_empty() {
                 domain.insert(TargetRef::Object(id), kinds);
             }
@@ -663,11 +943,10 @@ impl EffectWindow {
             if self.experience_counters(player).is_positive() {
                 counters.insert(CounterKind::Experience);
             }
-            if self
-                .player_counters_of_kind(player, CounterKind::Energy)
-                .is_positive()
-            {
-                counters.insert(CounterKind::Energy);
+            for kind in [CounterKind::Energy, CounterKind::Rad] {
+                if self.player_counters_of_kind(player, kind).is_positive() {
+                    counters.insert(kind);
+                }
             }
             if !counters.is_empty() {
                 domain.insert(TargetRef::Player(player), counters);
@@ -688,7 +967,7 @@ impl EffectWindow {
         chosen: Vec<TargetRef>,
         journal: &mut RulesJournal,
     ) -> Result<(), EffectError> {
-        self.increase_existing_counters(frame, chosen, false, journal)
+        self.increase_existing_counters(frame, chosen, false, None, journal)
     }
 
     pub(super) fn double_target_counters(
@@ -702,7 +981,26 @@ impl EffectWindow {
             .map(TargetRef::Object)
             .filter(|target| frame.domain.contains_key(target))
             .collect();
-        self.increase_existing_counters(&frame, chosen, true, journal)
+        self.increase_existing_counters(&frame, chosen, true, None, journal)
+    }
+
+    pub(super) fn double_subject_counters(
+        &mut self,
+        objects: Vec<ObjectId>,
+        kind_filter: Option<CounterKind>,
+        journal: &mut RulesJournal,
+    ) -> Result<(), EffectError> {
+        let frame = self.proliferate_choice()?;
+        let chosen = objects
+            .into_iter()
+            .map(TargetRef::Object)
+            .filter(|target| {
+                frame.domain.get(target).is_some_and(|kinds| {
+                    kind_filter.map_or(!kinds.is_empty(), |k| kinds.contains(&k))
+                })
+            })
+            .collect();
+        self.increase_existing_counters(&frame, chosen, true, kind_filter, journal)
     }
 
     fn increase_existing_counters(
@@ -710,6 +1008,7 @@ impl EffectWindow {
         frame: &ProliferateChoice,
         chosen: Vec<TargetRef>,
         double: bool,
+        kind_filter: Option<CounterKind>,
         journal: &mut RulesJournal,
     ) -> Result<(), EffectError> {
         let chosen_set = chosen.iter().copied().collect::<BTreeSet<_>>();
@@ -728,11 +1027,19 @@ impl EffectWindow {
         let mut pt_updates = Vec::new();
         let mut changes = Vec::new();
         for selected_object in chosen_set {
-            let kinds = frame
+            let all_kinds = frame
                 .domain
                 .get(&selected_object)
                 .ok_or(EffectError::IllegalTarget)?;
+            let kinds: BTreeSet<CounterKind> = match kind_filter {
+                Some(k) => all_kinds.iter().copied().filter(|x| *x == k).collect(),
+                None => all_kinds.clone(),
+            };
+            if kinds.is_empty() {
+                continue;
+            }
             selected.insert(selected_object, kinds.clone());
+            let kinds = &kinds;
             match selected_object {
                 TargetRef::Player(player) => {
                     if kinds.contains(&CounterKind::Poison) {
@@ -745,20 +1052,22 @@ impl EffectWindow {
                     if kinds.contains(&CounterKind::Experience) {
                         changes.push(self.give_experience_counter(player));
                     }
-                    if kinds.contains(&CounterKind::Energy) {
-                        let before = self.player_counters_of_kind(player, CounterKind::Energy);
-                        let after = before.plus(&1.into());
-                        self.characteristics
-                            .player_counters
-                            .entry(CounterKind::Energy)
-                            .or_default()
-                            .insert(player, after.clone());
-                        changes.push(RulesOccurrence::PlayerCounterChanged {
-                            player,
-                            kind: CounterKind::Energy,
-                            before,
-                            after,
-                        });
+                    for kind in [CounterKind::Energy, CounterKind::Rad] {
+                        if kinds.contains(&kind) {
+                            let before = self.player_counters_of_kind(player, kind);
+                            let after = before.plus(&1.into());
+                            self.characteristics
+                                .player_counters
+                                .entry(kind)
+                                .or_default()
+                                .insert(player, after.clone());
+                            changes.push(RulesOccurrence::PlayerCounterChanged {
+                                player,
+                                kind,
+                                before,
+                                after,
+                            });
+                        }
                     }
                 }
                 TargetRef::Object(object) => {

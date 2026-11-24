@@ -366,8 +366,7 @@ pub(in crate::keyword_creatures) fn body(text: &str, name: &str) -> Option<Execu
         let count = u8::try_from(number(count)?).ok().filter(|count| *count > 0)?;
         return Some(ExecutableBody::new(BodyTarget::FilteredOwnGraveyardCard(ObjectFilter::creature()), vec![
             Instruction::SacrificeToContinue { filter: PermanentTypeFilter {
-                any_types: Default::default(), required_types: [CardType::Creature].into(), forbidden_types: Default::default(),
-            } },
+                any_types: Default::default(), required_types: [CardType::Creature].into(), forbidden_types: Default::default(), object_filter: None } },
             Instruction::ReturnGraveyardTargetsTapped(count),
         ]));
     }
@@ -1223,6 +1222,7 @@ fn player_selection(clause: &str) -> Option<(BodyTarget, Instruction)> {
                 any_types,
                 required_types,
                 forbidden_types: BTreeSet::new(),
+                object_filter: None,
             },
         },
     ))

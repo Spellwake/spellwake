@@ -63,6 +63,7 @@ impl EffectWindow {
         let mut tap_controlled_artifact = false;
         let mut restriction: Option<ManaOutputRestriction> = None;
         let mut side_effect: Option<ManaSideEffect> = None;
+        let mut activation_conditions: Vec<crate::activated::ActivationRestriction> = Vec::new();
         while let ManaOutput::Modified { modifier, output } = cursor {
             match modifier {
                 ManaOutputModifier::RequirePermanents { selector, minimum } => {
@@ -103,6 +104,59 @@ impl EffectWindow {
                     side_effect = Some(effect);
                     cursor = *output;
                 }
+                ManaOutputModifier::ActivationCondition(cond) => {
+                    activation_conditions.push(*cond);
+                    cursor = *output;
+                }
+            }
+        }
+        let (mana_ordinal, mana_origin) = match ability {
+            crate::mana::ManaAbilityRef::Printed(id) => (id.0, None),
+            crate::mana::ManaAbilityRef::BasicLand(land) => (10_000 + u64::from(land as u8), None),
+            crate::mana::ManaAbilityRef::GrantedAnyColor(effect) => (20_000, Some(effect)),
+            crate::mana::ManaAbilityRef::GrantedFixedColor(effect, color) => {
+                (30_000 + u64::from(color as u8), Some(effect))
+            }
+            crate::mana::ManaAbilityRef::Inherited(effect) => (40_000, Some(effect)),
+        };
+        let mana_synth_id =
+            crate::activated::ActivatedAbilityId(u64::MAX.saturating_sub(mana_ordinal));
+        let mana_exhaust_key = (
+            source,
+            None,
+            mana_synth_id,
+            crate::characteristics::ActivationOriginPath::direct(mana_synth_id, mana_origin),
+        );
+        for cond in &activation_conditions {
+            if matches!(
+                cond,
+                crate::activated::ActivationRestriction::Sorcery
+                    | crate::activated::ActivationRestriction::SorceryOnceEachTurn
+            ) {
+                if self.window.active_player() != actor
+                    || !self.window.entries().is_empty()
+                    || !matches!(
+                        self.current_step,
+                        Some(crate::turn::Step::PrecombatMain | crate::turn::Step::PostcombatMain)
+                    )
+                {
+                    return Err(EffectError::ManaActivationConditionNotMet);
+                }
+                if cond.has_once_each_turn() && self.activated_this_turn.contains(&mana_exhaust_key)
+                {
+                    return Err(EffectError::ManaActivationConditionNotMet);
+                }
+            } else {
+                self.check_activation_restriction(
+                    cond,
+                    actor,
+                    source,
+                    card,
+                    &evaluated,
+                    None,
+                    &mana_exhaust_key,
+                )
+                .map_err(|_| EffectError::ManaActivationConditionNotMet)?;
             }
         }
         if let Some(sac_cost) = sacrifice {
@@ -476,6 +530,20 @@ impl EffectWindow {
         let mut next = self.clone();
         next.revision = revision;
         next.window = window;
+        if activation_conditions
+            .iter()
+            .any(crate::activated::ActivationRestriction::has_once_each_turn)
+        {
+            next.activated_this_turn.insert(mana_exhaust_key.clone());
+        }
+        if activation_conditions
+            .iter()
+            .any(crate::activated::ActivationRestriction::has_exhaust)
+        {
+            next.characteristics
+                .exhausted
+                .insert(mana_exhaust_key.clone());
+        }
         let storage_change =
             if selected == ManaOutput::CounterBased(CounterManaYield::RemoveStorageCounters) {
                 let amount = bundle

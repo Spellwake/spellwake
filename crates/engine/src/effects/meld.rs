@@ -6,10 +6,24 @@ use spellwake_contracts::names::EnglishCardName;
 
 impl EffectWindow {
     fn meld_source(&self, entry: StackEntryId) -> Result<ObjectId, EffectError> {
-        self.execution_bindings(entry)
+        if let Some(id) = self
+            .execution_bindings(entry)
             .and_then(|b| b.trigger.as_ref())
             .map(|b| b.source.object.id())
-            .ok_or(EffectError::WrongResolutionFrame)
+        {
+            return Ok(id);
+        }
+        let resolving = self
+            .window
+            .resolving()
+            .filter(|e| e.id() == entry)
+            .ok_or(EffectError::WrongResolutionFrame)?;
+        match resolving.kind() {
+            StackKind::ActivatedAbility { source } | StackKind::TriggeredAbility { source } => {
+                Ok(source.id())
+            }
+            _ => Err(EffectError::WrongResolutionFrame),
+        }
     }
 
     pub(super) fn meld_selection(
@@ -36,10 +50,7 @@ impl EffectWindow {
             .objects
             .values()
             .filter(|v| {
-                v.object != source
-                    && owned(v)
-                    && v.is_creature()
-                    && self.name_rules.has_name(&v.current_names, mate)
+                v.object != source && owned(v) && self.name_rules.has_name(&v.current_names, mate)
             })
             .map(|v| v.object)
             .collect();
@@ -125,8 +136,21 @@ impl EffectWindow {
                 .meld_partner
                 .as_ref()
                 .is_some_and(|p| left.names.iter().any(|n| n == p));
-        let same_result=left.triggered.iter().chain(&right.triggered).flat_map(|t|&t.body.instructions)
-            .any(|op|matches!(op, Instruction::MeldExiledPair(printed) if printed.names==back.names));
+        let same_result = left
+            .triggered
+            .iter()
+            .chain(&right.triggered)
+            .map(|t| &t.body.instructions)
+            .chain(
+                left.activated
+                    .iter()
+                    .chain(&right.activated)
+                    .map(|a| &a.body.instructions),
+            )
+            .flatten()
+            .any(|op| {
+                matches!(op, Instruction::MeldExiledPair(printed) if printed.names == back.names)
+            });
         if !genuine || !same_result {
             return Ok(());
         }

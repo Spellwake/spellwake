@@ -21,6 +21,7 @@ pub(super) mod fixture;
 mod input_codec;
 pub(in crate::native_game) mod projection;
 mod replies;
+mod wire_audit;
 use fixture::*;
 
 fn shape_basis() -> GameBasis {

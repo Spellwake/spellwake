@@ -104,6 +104,7 @@ fn sacrifice(players: AffectedPlayers) -> Instruction {
             any_types: Default::default(),
             required_types: BTreeSet::from([CardType::Creature]),
             forbidden_types: BTreeSet::new(),
+            object_filter: None,
         },
     }
 }
@@ -425,6 +426,7 @@ mod tests {
                 any_types: Default::default(),
                 required_types: BTreeSet::from([CardType::Creature]),
                 forbidden_types: BTreeSet::new(),
+                object_filter: None,
             },
         };
         let mut fleshbag = Program::creature(

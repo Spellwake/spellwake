@@ -109,12 +109,14 @@ impl NativeProgramSource {
                 return Err(RegistryError::UnsupportedPlacement.into());
             }
             if let Some((joined,face))=self.meld_results.get(oracle)
-                && bound.program().triggered.iter().any(|ability|ability.body.instructions.iter().any(|op|matches!(op,spellwake_engine::program::Instruction::MeldExiledPair(back) if back.as_ref()==program))) {
+                && bound.program().triggered.iter().map(|a| &a.body.instructions).chain(bound.program().activated.iter().map(|a| &a.body.instructions)).flatten().any(|op|matches!(op,spellwake_engine::program::Instruction::MeldExiledPair(back) if back.as_ref()==program)) {
                 if found.is_some(){return Err(NativeInitialError::Invalid);}
                 found=Some(NativePrintedCard {oracle:joined,characteristics:face_characteristics(face,program.printed_loyalty.as_ref(),program.printed_defense.as_ref())?});
                 continue;
             }
-            let face = if bound.program() == program {
+            let face = if bound.program() == program
+                || bound.program().prototype.as_deref() == Some(program)
+            {
                 if program.split.is_some() {
                     split_characteristics(card)?
                 } else if card.layout == "meld" && program.meld_partner.is_some() {
@@ -126,7 +128,10 @@ impl NativeProgramSource {
                         program.printed_loyalty.as_ref(),
                         program.printed_defense.as_ref(),
                     )?
-                } else if program.reverse_face().is_some() || program.adventure.is_some() {
+                } else if program.back_face().is_some()
+                    || program.adventure.is_some()
+                    || program.prepare_spell.is_some()
+                {
                     let [front, _] = card.faces.as_slice() else {
                         return Err(NativeInitialError::Invalid);
                     };
@@ -158,8 +163,9 @@ impl NativeProgramSource {
                     None,
                     None,
                 )?
-            } else if bound.program().reverse_face() == Some(program)
+            } else if bound.program().back_face() == Some(program)
                 || bound.program().adventure.as_deref() == Some(program)
+                || bound.program().prepare_spell.as_deref() == Some(program)
             {
                 let [_, back] = card.faces.as_slice() else {
                     return Err(NativeInitialError::Invalid);

@@ -1,5 +1,5 @@
 //! Complete owned trigger causes; construction stays with the publication owner.
-use super::{EventId, OccurrenceId, SeatId, TriggerError, TriggerRelated};
+use super::{EventId, ObjectId, OccurrenceId, SeatId, TriggerError, TriggerRelated};
 use crate::program::TriggerGrouping;
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -11,6 +11,37 @@ pub struct TriggerCauseMember {
     /// reserved for an explicitly represented condition with no participant role.
     pub related_player: Option<SeatId>,
     pub related: TriggerRelated,
+}
+
+impl TriggerCauseMember {
+    /// Best-effort subject object identity carried by this trigger cause, if any.
+    pub(crate) fn subject_object_id(&self) -> Option<ObjectId> {
+        match &self.related {
+            TriggerRelated::ZoneChange { after, .. }
+            | TriggerRelated::TokenCreated { after, .. }
+            | TriggerRelated::Discard { after, .. } => Some(after.object.id()),
+            TriggerRelated::Combatant(id)
+            | TriggerRelated::AttackedAlone(id)
+            | TriggerRelated::TargetedPermanent(id)
+            | TriggerRelated::CounterSource(id)
+            | TriggerRelated::StateTriggerSource(id)
+            | TriggerRelated::Phased(id)
+            | TriggerRelated::Mutated(id)
+            | TriggerRelated::ManaSource(id)
+            | TriggerRelated::MiracleRevealed(id)
+            | TriggerRelated::LeftGame(id) => Some(*id),
+            TriggerRelated::DamageDealtToPermanent { recipient, .. } => Some(*recipient),
+            TriggerRelated::CombatDamageToPlayer { source, .. } => Some(*source),
+            TriggerRelated::CombatDamageToPlaneswalker { planeswalker, .. } => Some(*planeswalker),
+            TriggerRelated::SubtypeCombatDamage { creature, .. }
+            | TriggerRelated::AttachedCreatureDamaged { creature, .. } => Some(*creature),
+            TriggerRelated::StatusChange(sc) => Some(sc.after.id()),
+            TriggerRelated::DamageSource(crate::damage::DamageSourceId::Object(id)) => Some(*id),
+            TriggerRelated::DeclaredSubtypeAttackers(ids) => ids.first().copied(),
+            TriggerRelated::AttackGroup { creatures, .. } => creatures.first().copied(),
+            _ => None,
+        }
+    }
 }
 
 /// Ability-specific logical boundary, without a new identity namespace.

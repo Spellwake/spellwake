@@ -148,6 +148,7 @@ fn land_instruction(text: &str) -> Option<Instruction> {
                     any_types: Default::default(),
                     required_types: [CardType::Land].into(),
                     forbidden_types: BTreeSet::new(),
+                    object_filter: None,
                 },
             }
         }

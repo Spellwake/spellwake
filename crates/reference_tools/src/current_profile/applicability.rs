@@ -241,6 +241,7 @@ native!(StaticContinuousAbility, self, {
                 | StaticModifierRule::ExtraEntryLoyalty
                 | StaticModifierRule::TwiceLoyaltyPerTurn
         ),
+        Self::EventReplacement { .. } => false,
     };
     if rejected {
         return Err(ApplicabilityError);
@@ -258,6 +259,7 @@ native!(StaticContinuousAbility, self, {
                 part,
                 StaticPart::InheritCounteredCreatureAbilities
                     | StaticPart::GrantActivated(_)
+                    | StaticPart::GrantActivatedRestricted { .. }
                     | StaticPart::GrantTrigger(_)
                     | StaticPart::GrantFixedColorMana(_)
                     | StaticPart::BlockingRestriction(_)
@@ -291,6 +293,37 @@ native!(ExecutableBody, self, {
     }
     self.instructions.iter().try_for_each(|value| match value {
         Instruction::CopyAbility
+        | Instruction::OfferDynamicManaPayment { .. }
+        | Instruction::PayLife { .. }
+        | Instruction::PayEnergy { .. }
+        | Instruction::ExileFromZone { .. }
+        | Instruction::TapOrUntapControlled { .. }
+        | Instruction::ExertAbilitySource
+        | Instruction::CollectEvidence { .. }
+        | Instruction::Blight { .. }
+        | Instruction::MoveSubject { .. }
+        | Instruction::SelectZoneCardsToZone { .. }
+        | Instruction::ChooseOption { .. }
+        | Instruction::DealDamageFrom { .. }
+        | Instruction::DivideDamageAmongTargets { .. }
+        | Instruction::GainControlOfPermanent { .. }
+        | Instruction::GiveFixedTargetControl { .. }
+        | Instruction::BecomeCopy { .. }
+        | Instruction::BecomeCopyFixedTargets { .. }
+        | Instruction::DoublePowerToughnessSubject { .. }
+        | Instruction::DoubleCountersOnSubject { .. }
+        | Instruction::ShuffleSubjectIntoLibrary { .. }
+        | Instruction::WinGame(_)
+        | Instruction::LoseGame(_)
+        | Instruction::DistributeCountersAmongTargets { .. }
+        | Instruction::AttachPermanent { .. }
+        | Instruction::SkipNextUntap { .. }
+        | Instruction::RequireCombatAction { .. }
+        | Instruction::CreateTemporaryRule { .. }
+        | Instruction::CreateTokenCopy { .. }
+        | Instruction::CreateAuraTokenAttached { .. }
+        | Instruction::ExploreSubject(_)
+        | Instruction::ScheduleDelayedEventTrigger { .. }
         | Instruction::CounterSpellToExile
         | Instruction::UntapControlledCreatures
         | Instruction::SetGroupTapped { .. }
@@ -299,6 +332,9 @@ native!(ExecutableBody, self, {
         | Instruction::ClearSourceCounters(_)
         | Instruction::TransformSource
         | Instruction::TransformSourceAndAttachToTarget
+        | Instruction::AdvanceClassLevel(_)
+        | Instruction::SolveSourceCase
+        | Instruction::BecomePreparedSource
         | Instruction::TransformSubtype(_)
         | Instruction::ModifyAnyNumberOfPermanents { .. }
         | Instruction::WeakenTargetByChosenX
@@ -491,6 +527,8 @@ native!(ExecutableBody, self, {
         | Instruction::ExileUntilOtherTargetLeaves
         | Instruction::FixedTargetClause(_)
         | Instruction::ExileResolvingSpell
+        | Instruction::ReturnResolvingSpellToHand
+        | Instruction::Ascend
         | Instruction::DestroyFixedTargets
         | Instruction::DestroyTargetAndAttachedEquipment
         | Instruction::ReturnFixedTargets
@@ -546,6 +584,7 @@ native!(ExecutableBody, self, {
         | Instruction::DrawEachPlayer { .. }
         | Instruction::DrawPlayersControllingName(_)
         | Instruction::DrawTargetPlayer { .. }
+        | Instruction::DrawPlayer { .. }
         | Instruction::ReturnSourceGraveyardToBattlefield { .. }
         | Instruction::ReturnUpToOneRecentGraveyardCard
         | Instruction::ReturnSourceGraveyardToHand
@@ -751,6 +790,9 @@ native!(ExecutableBody, self, {
         | Instruction::DiscardFiltered { .. }
         | Instruction::ExileTopPlay { .. }
         | Instruction::LookTopChoose { .. }
+        | Instruction::MoveGraveyardGroup { .. }
+        | Instruction::PutHandPermanentFiltered { .. }
+        | Instruction::RepeatLoop { .. }
         | Instruction::RevealUntilMatch { .. }
         | Instruction::ShufflePlayerLibrary(_)
         | Instruction::ShuffleTargetIntoLibrary
@@ -760,7 +802,38 @@ native!(ExecutableBody, self, {
         | Instruction::RemoveCountersFromPermanent { .. }
         | Instruction::DamageGroupAmount { .. }
         | Instruction::DoublePowerToughness { .. }
-        | Instruction::DrawController { .. } => Ok(()),
+        | Instruction::DisallowDamagePreventionThisTurn
+        | Instruction::GrantNoMaxHandSizeRestOfGame
+        | Instruction::DestroySubject { .. }
+        | Instruction::GrantCardPlayPermission { .. }
+        | Instruction::DrawController { .. }
+        | Instruction::RollDie { .. }
+        | Instruction::FlipCoins { .. }
+        | Instruction::ChooseValue { .. }
+        | Instruction::ChooseOptionForPlayers { .. }
+        | Instruction::Vote { .. }
+        | Instruction::Incubate { .. }
+        | Instruction::Connive { .. }
+        | Instruction::ConniveFinalize { .. }
+        | Instruction::Discover { .. }
+        | Instruction::Clash { .. }
+        | Instruction::RingTemptsYou
+        | Instruction::VentureIntoDungeon { .. }
+        | Instruction::TakeInitiative { .. }
+        | Instruction::UnlockDoor { .. }
+        | Instruction::Behold { .. }
+        | Instruction::ManifestDread
+        | Instruction::Monstrosity { .. }
+        | Instruction::Fight { .. }
+        | Instruction::Exchange(_)
+        | Instruction::CopyStackObject { .. }
+        | Instruction::ExileGroupFromZone { .. }
+        | Instruction::SacrificeSubject { .. }
+        | Instruction::DestroyChosen { .. }
+        | Instruction::CastLinkedFaceDownFree
+        | Instruction::Ripple(_)
+        | Instruction::Demonstrate
+        | Instruction::Enlist => Ok(()),
     })
 });
 native!(TriggeredAbility, self, {
@@ -995,7 +1068,16 @@ fn abilities(
         .try_for_each(NativeCaptureValue::check_current10)
 }
 native!(Program, self, {
-    if self.meld_partner.is_some() || self.split.is_some() || self.disturb.is_some() {
+    if self.meld_partner.is_some()
+        || self.split.is_some()
+        || self.disturb.is_some()
+        || self.modal_back.is_some()
+        || self.flip_back.is_some()
+        || self.prototype.is_some()
+        || self.prepare_spell.is_some()
+        || self.enters_prepared
+        || !self.static_conditions.is_empty()
+    {
         return Err(ApplicabilityError);
     }
     if self.cannot_be_countered || !self.variable_loyalty_costs.is_empty() {
@@ -1103,7 +1185,9 @@ native!(GameObject, self, {
     }
     match self.origin() {
         ObjectOrigin::Card(_) => Ok(()),
-        ObjectOrigin::PermanentSpellCopy { .. } => Err(ApplicabilityError),
+        ObjectOrigin::PermanentSpellCopy { .. } | ObjectOrigin::SpellCopy { .. } => {
+            Err(ApplicabilityError)
+        }
         ObjectOrigin::Token { definition } => definition.check_current10(),
     }
 });
@@ -1145,10 +1229,14 @@ native!(ResolvedContinuousEffect, self, {
         ResolvedPart::Copy(program) => program.check_current10(),
         ResolvedPart::InheritedAbilities(_)
         | ResolvedPart::GrantActivated(_)
+        | ResolvedPart::GrantActivatedRestricted { .. }
         | ResolvedPart::GrantTrigger(_)
         | ResolvedPart::GrantAnyColorMana
         | ResolvedPart::GrantFixedColorMana(_)
-        | ResolvedPart::BlockingRestriction(_) => Err(ApplicabilityError),
+        | ResolvedPart::GrantMana(_)
+        | ResolvedPart::TypeWithSubtypes { .. }
+        | ResolvedPart::BlockingRestriction(_)
+        | ResolvedPart::CompoundAbilities(_) => Err(ApplicabilityError),
         ResolvedPart::Abilities(change) => change.check_current10(),
         ResolvedPart::Control(_)
         | ResolvedPart::Text(_)
@@ -1403,8 +1491,10 @@ native!(RuleFrame, self, {
         | RuleFrame::CreatureType(_) => Ok(()),
         RuleFrame::LoyaltyRemoval(_)
         | RuleFrame::ResolutionManaColor(_)
+        | RuleFrame::OptionIndex(_)
         | RuleFrame::Proliferate(_)
-        | RuleFrame::CounterRemoval(_) => Err(ApplicabilityError),
+        | RuleFrame::CounterRemoval(_)
+        | RuleFrame::UntapKeepTapped(_) => Err(ApplicabilityError),
     }
 });
 native!(EffectDecision, self, {
@@ -1452,8 +1542,10 @@ native!(EffectDecision, self, {
         | EffectDecision::CreatureType(_) => Ok(()),
         EffectDecision::LoyaltyRemoval(_)
         | EffectDecision::ResolutionManaColor(_)
+        | EffectDecision::OptionIndex(_)
         | EffectDecision::Proliferate(_)
-        | EffectDecision::CounterRemoval(_) => Err(ApplicabilityError),
+        | EffectDecision::CounterRemoval(_)
+        | EffectDecision::UntapKeepTapped(_) => Err(ApplicabilityError),
     }
 });
 native!(GameState, self, {
@@ -1579,10 +1671,13 @@ native!(spellwake_engine::effects::DecisionReply, self, {
         | DecisionReply::ManaColor(_)
         | DecisionReply::CreatureType(_) => Ok(()),
         DecisionReply::Proliferate(_)
+        | DecisionReply::OptionIndex(_)
         | DecisionReply::RemoveCounters(_)
         | DecisionReply::SplitMana(_)
         | DecisionReply::TriggerModes(_)
-        | DecisionReply::ApplyCounterDoublersFirst(_) => Err(ApplicabilityError),
+        | DecisionReply::ApplyCounterDoublersFirst(_)
+        | DecisionReply::UntapKeepTapped(_)
+        | DecisionReply::OpeningBattlefield(_) => Err(ApplicabilityError),
     }
 });
 native!(GameInput, self, {
@@ -1595,6 +1690,7 @@ native!(GameInput, self, {
         | GameCommand::ActivateEmblem { .. }
         | GameCommand::ActivatePermanentTargets { .. }
         | GameCommand::ActivateGranted { .. }
+        | GameCommand::ActivateModalAbility { .. }
         | GameCommand::ActivateLoyaltyX { .. } => Err(ApplicabilityError),
         GameCommand::ActivateManaWithBundle { .. }
         | GameCommand::PlayLandWithEntryColor { .. }
@@ -1778,6 +1874,9 @@ native!(RulesOccurrence, self, {
         RulesOccurrence::AttackDefenderChanged { .. }
         | RulesOccurrence::AttackCostPaid { .. }
         | RulesOccurrence::Mutated { .. }
+        | RulesOccurrence::ClassLevelReached { .. }
+        | RulesOccurrence::CaseSolved { .. }
+        | RulesOccurrence::PreparedSpellCast { .. }
         | RulesOccurrence::Phased { .. }
         | RulesOccurrence::MiracleRevealed { .. }
         | RulesOccurrence::HandCardRevealed { .. }
@@ -2018,7 +2117,13 @@ native!(RulesOccurrence, self, {
         | RulesOccurrence::CombatEnded { .. }
         | RulesOccurrence::PlayerCounterChanged { .. }
         | RulesOccurrence::StepBegan { .. }
-        | RulesOccurrence::ReflexiveTrigger { .. } => Ok(()),
+        | RulesOccurrence::ReflexiveTrigger { .. }
+        | RulesOccurrence::StateConditionMet { .. }
+        | RulesOccurrence::KeywordActionPerformed { .. }
+        | RulesOccurrence::DoorUnlocked { .. }
+        | RulesOccurrence::DieRolled { .. }
+        | RulesOccurrence::VotesCast { .. }
+        | RulesOccurrence::BecameMonstrous { .. } => Ok(()),
     }
 });
 

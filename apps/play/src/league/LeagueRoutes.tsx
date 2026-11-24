@@ -3,9 +3,12 @@ import { useAtom } from "jotai";
 import { atomWithStorage } from "jotai/utils";
 import { parseAsString, useQueryState } from "nuqs";
 import { useAccount } from "../auth/AccountProvider";
+import { HistoryPage } from "../routes/league/HistoryPage";
 import { SeasonPage } from "../routes/league/SeasonPage";
 import { StandingsPage } from "../routes/league/StandingsPage";
 import { useConnectedLeague } from "./connected-league";
+import { useConnectedHistory } from "./connected-history";
+import { useDemoHistory } from "./demo-history";
 import { usePreviewLeague } from "./demo-league";
 import type { LeagueSource } from "./league-sources";
 
@@ -82,4 +85,19 @@ function AccountStandings(): ReactElement {
 /** League · Standings, from the account where an application API is named, else the preview. */
 export function StandingsRoute(): ReactElement {
   return useIsPreview() ? <PreviewStandings /> : <AccountStandings />;
+}
+
+const HISTORY_STATES = ["empty", "slow", "failed"] as const;
+function PreviewHistory(): ReactElement {
+  // `?history=` shows the preview with no matches, slow reads or a failed read.
+  const [param] = useQueryState("history", parseAsString);
+  const state = HISTORY_STATES.find((name) => name === param) ?? "list";
+  return <HistoryPage source={useDemoHistory(state)} />;
+}
+function AccountHistory(): ReactElement {
+  return <HistoryPage source={useConnectedHistory()} />;
+}
+/** League · History, from the account where an application API is named, else the preview. */
+export function HistoryRoute(): ReactElement {
+  return useIsPreview() ? <PreviewHistory /> : <AccountHistory />;
 }

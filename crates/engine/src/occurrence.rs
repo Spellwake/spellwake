@@ -102,6 +102,8 @@ pub struct SupportedAppearance {
     pub cast_origin: Option<(SeatId, bool)>,
     /// X on this exact stack incarnation, including a copy of a permanent spell.
     pub spell_x: Option<RulesInteger>,
+    /// Kicker payment counts on this exact stack incarnation (e.g. Squad, Multikicker).
+    pub kicker_choices: BTreeMap<usize, RulesInteger>,
     /// Current attachment host captured at the event cut.
     pub attached_to: Option<crate::targets::TargetRef>,
     /// This exact permanent has resolved a saddle ability this turn.
@@ -169,6 +171,52 @@ pub struct MarkedDamageRemoval {
     pub previous: RulesInteger,
 }
 impl SupportedAppearance {
+    pub(crate) fn synthetic_emblem(controller: SeatId) -> Self {
+        let empty = crate::program::Program::enchantment(None);
+        Self {
+            cast_origin: None,
+            spell_x: None,
+            kicker_choices: BTreeMap::new(),
+            attached_to: None,
+            saddled: false,
+            object: GameObject::synthetic_emblem(controller),
+            copiable_names: spellwake_contracts::names::ObjectNames::nameless(),
+            current_names: spellwake_contracts::names::ObjectNames::nameless(),
+            copiable_supertypes: BTreeSet::new(),
+            current_supertypes: BTreeSet::new(),
+            copiable_card_types: BTreeSet::new(),
+            copiable_creature_subtypes: BTreeSet::new(),
+            copiable_land_subtypes: BTreeSet::new(),
+            copiable_spell_subtypes: BTreeSet::new(),
+            copiable_artifact_subtypes: BTreeSet::new(),
+            copiable_enchantment_subtypes: BTreeSet::new(),
+            types: BTreeSet::new(),
+            creature_subtypes: BTreeSet::new(),
+            land_subtypes: BTreeSet::new(),
+            spell_subtypes: BTreeSet::new(),
+            artifact_subtypes: BTreeSet::new(),
+            enchantment_subtypes: BTreeSet::new(),
+            intrinsic_mana: BTreeSet::new(),
+            colors: BTreeSet::new(),
+            abilities: PrintedAbilityRoster::empty_emblem(ObjectId::SENTINEL),
+            printed_text: PrintedText::from_program(&empty),
+            keywords: BTreeSet::new(),
+            previous_upkeep: None,
+            time_counters: None,
+            fade_counters: None,
+            renowned: false,
+            toxic_value: None,
+            granted_unblockable: false,
+            granted_exalted: BTreeMap::new(),
+            granted_triggers: BTreeMap::new(),
+            granted_combat_keywords: BTreeMap::new(),
+            copiable_power_toughness: None,
+            battlefield_counters: None,
+            battlefield_total_counters: None,
+            battlefield_marked_damage: None,
+            current_power_toughness: None,
+        }
+    }
     /// CR 702.30a checks acquisition since the start of the controller's previous upkeep.
     pub(crate) fn echo_condition(&self) -> bool {
         self.object
@@ -185,6 +233,8 @@ impl SupportedAppearance {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CastOccurrence {
     cast_from_graveyard: bool,
+    cast_from_exile: bool,
+    cast_from_hand: bool,
     cast_from_library: Option<SeatId>,
     pub(crate) ordinal_this_turn: Option<RulesInteger>,
     mana_value: RulesInteger,
@@ -226,6 +276,7 @@ impl CastOccurrence {
 pub enum OpeningMovePhase {
     ReturnForMulligan,
     ChargedBottom,
+    PregameBattlefield,
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum OpeningShufflePhase {
@@ -537,6 +588,7 @@ pub enum PlayerLossReason {
     TenPoisonCounters,
     FailedDraw,
     Conceded,
+    Effect,
 }
 /// A source-attributed poison-counter result. Multiple contributions can share a simultaneous cut.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -731,6 +783,8 @@ pub enum EventCause {
     MechanismUnit,
 }
 /// One canonical occurrence. Overlapping move properties share its one identity.
+// `KeywordActionPerformed` holds `PlayerTriggerAction` inline matching `ObjectFilter` value semantics.
+#[allow(clippy::large_enum_variant)]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RulesOccurrence {
     /// A scheduled turn of a departed player would have started (CR 800.4k, 800.4m).
@@ -792,6 +846,43 @@ pub enum RulesOccurrence {
     },
     Mutated {
         permanent: ObjectId,
+    },
+    /// A Class permanent reached the indicated level (CR 716).
+    ClassLevelReached {
+        object: ObjectId,
+        level: u8,
+    },
+    /// A Case permanent became solved (CR 719).
+    CaseSolved {
+        object: ObjectId,
+    },
+    /// A permanent became monstrous (CR 701.31).
+    BecameMonstrous {
+        object: ObjectId,
+        count: RulesInteger,
+    },
+    /// A Room door was unlocked (CR 709.5).
+    DoorUnlocked {
+        object: ObjectId,
+        player: SeatId,
+        half: crate::program::SplitHalf,
+        fully_unlocked: bool,
+    },
+    /// A player rolled a die (CR 706).
+    DieRolled {
+        player: SeatId,
+        sides: u16,
+        result: u16,
+    },
+    /// Votes were tallied for a resolving `Instruction::Vote`.
+    VotesCast {
+        options: Vec<String>,
+        counts: Vec<u16>,
+    },
+    /// A prepared permanent cast a copy of its spell face and became unprepared.
+    PreparedSpellCast {
+        source: ObjectId,
+        entry: StackEntryId,
     },
     AttackDefenderChanged {
         attacker: ObjectId,
@@ -1122,6 +1213,17 @@ pub enum RulesOccurrence {
         definition: TriggeredAbilityId,
         grant: Option<crate::characteristics::EffectInstanceKey>,
     },
+    /// A general world-evaluable state-trigger condition became true (CR 603.8).
+    StateConditionMet {
+        object: ObjectId,
+        definition: TriggeredAbilityId,
+        grant: Option<crate::characteristics::EffectInstanceKey>,
+    },
+    /// A player performed a tracked keyword action (for example collect evidence, exert, investigate, connive).
+    KeywordActionPerformed {
+        player: SeatId,
+        action: crate::program::PlayerTriggerAction,
+    },
     PermanentCounterChanged {
         object: ObjectId,
         kind: crate::effects::CounterKind,
@@ -1360,6 +1462,7 @@ pub struct TriggerModesChoice {
     pub minimum: u8,
     pub maximum: u8,
     pub distinct_targets: bool,
+    pub allow_repeat: bool,
     pub modes: Vec<TriggerModeOption>,
 }
 
@@ -1794,6 +1897,8 @@ impl RulesView<'_> {
         Ok(CastOccurrence {
             cast_from_library: actual.cast_from_library,
             cast_from_graveyard: actual.cast_from_graveyard,
+            cast_from_exile: actual.cast_summary.cast_from_exile,
+            cast_from_hand: actual.cast_from_any_hand(),
             cast_original_object: actual.cast_original_object,
             ordinal_this_turn: None,
             mana_value,
@@ -1842,6 +1947,9 @@ impl RulesView<'_> {
             spell_x: stack_spell
                 .and_then(crate::stack_window::StackEntry::chosen_x)
                 .cloned(),
+            kicker_choices: stack_spell
+                .map(|entry| entry.kicker_choices().clone())
+                .unwrap_or_default(),
             object: physical.clone(),
             copiable_names: current.defined.names.clone(),
             current_names: current.current_names.clone(),
@@ -1959,6 +2067,7 @@ pub(crate) struct WaitingEmblem {
     pub controller: SeatId,
     pub emblem: crate::emblem::EmblemId,
     pub body: ExecutableBody,
+    pub trigger: Option<TriggerBinding>,
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum AbilityCopyWatch {
@@ -1971,6 +2080,7 @@ pub(crate) enum DelayedCopyAction {
     ReturnExiledWithCounters(Vec<ObjectId>),
     ReturnExiled(Vec<ObjectId>),
     Sacrifice(Vec<ObjectId>),
+    Exile(Vec<ObjectId>),
     SpellTwice(Box<CastOccurrence>, BTreeSet<crate::characteristics::Color>),
     AbilityTwice(
         Arc<crate::effects::CapturedAbilityCopy>,
@@ -1990,6 +2100,17 @@ struct GraveyardCastWatch {
 }
 
 /// Only checked counters and owned waiting instances survive acceptance.
+/// Event-driven delayed triggered ability (CR 603.7) scheduled by `Instruction::ScheduleDelayedEventTrigger`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct DelayedEventTrigger {
+    source: SupportedAppearance,
+    controller: SeatId,
+    trigger: crate::program::TriggerSpec,
+    body: ExecutableBody,
+    expires: crate::characteristics::ResolvedDuration,
+    once: bool,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct TriggerState {
     next_event: u64,
@@ -2021,6 +2142,7 @@ pub(crate) struct TriggerState {
         SeatId,
     )>,
     delayed_steps: Vec<DelayedStepTrigger>,
+    delayed_event_triggers: Vec<DelayedEventTrigger>,
     next_spell_or_loyalty: Vec<(
         SeatId,
         StackEntryId,
@@ -2051,6 +2173,7 @@ impl Default for TriggerState {
             once_this_turn: BTreeSet::new(),
             used_optional_trigger_effects: BTreeSet::new(),
             delayed_steps: vec![],
+            delayed_event_triggers: vec![],
             next_spell_or_loyalty: Vec::new(),
             ability_copy_watches: vec![],
         }
@@ -2353,6 +2476,20 @@ impl TriggerState {
             DelayedCopyAction::Sacrifice(objects),
         ));
     }
+    pub(crate) fn delay_copy_exile(
+        &mut self,
+        original: StackEntryId,
+        controller: SeatId,
+        step: crate::turn::Step,
+        objects: Vec<ObjectId>,
+    ) {
+        self.delayed_copy_steps.push((
+            controller,
+            original,
+            step,
+            DelayedCopyAction::Exile(objects),
+        ));
+    }
     pub(crate) fn attacked_this_turn(&self, object: ObjectId) -> bool {
         self.declared_attackers_this_turn.contains(&object)
     }
@@ -2523,6 +2660,40 @@ impl TriggerState {
                 body,
             },
         });
+    }
+    pub(crate) fn delay_event_trigger(
+        &mut self,
+        source: SupportedAppearance,
+        controller: SeatId,
+        trigger: crate::program::TriggerSpec,
+        body: ExecutableBody,
+        expires: crate::characteristics::ResolvedDuration,
+        once: bool,
+    ) {
+        self.delayed_event_triggers.push(DelayedEventTrigger {
+            source,
+            controller,
+            trigger,
+            body,
+            expires,
+            once,
+        });
+    }
+    pub(crate) fn expire_delayed_event_triggers_at_cleanup(&mut self, active: SeatId, turn: u64) {
+        self.delayed_event_triggers
+            .retain(|delay| !delay.expires.expires_at_cleanup(active, turn));
+    }
+    pub(crate) fn expire_delayed_event_triggers_at_end_of_combat(&mut self) {
+        self.delayed_event_triggers
+            .retain(|delay| !delay.expires.expires_at_end_of_combat());
+    }
+    pub(crate) fn expire_delayed_event_triggers_at_turn_start(
+        &mut self,
+        active: SeatId,
+        turn: u64,
+    ) {
+        self.delayed_event_triggers
+            .retain(|delay| !delay.expires.expires_at_turn_start(active, turn));
     }
     pub(crate) fn counters(&self) -> (u64, u64, u64) {
         (self.next_event, self.next_instance, self.next_wave)
@@ -2975,26 +3146,14 @@ impl TriggerState {
                 self.once_this_turn.insert(once_key);
             }
             for causes in causes::group_matches(id, ability.grouping, members)? {
-                let death = source.object.zone() == ObjectZone::Battlefield
-                    && !matches!(
-                        ability.condition.event,
-                        TriggerEvent::PlayerAction {
-                            action: PlayerTriggerAction::Sacrificed(_),
-                            ..
-                        }
-                    )
-                    && causes.members().iter().any(|member|matches!(&member.related, TriggerRelated::ZoneChange {before,after}
-                        if before.object.zone()==ObjectZone::Battlefield && before.is_creature() && matches!(after.object.zone(),ObjectZone::Graveyard(_))));
-                let extra = if death {
-                    let cut = if ability.condition.is_lookback() {
-                        before
-                    } else {
-                        after
-                    };
-                    cut.evaluated.controlled_rules(controller, |ability| matches!(ability,crate::characteristics::StaticContinuousAbility::Modifier { rule: crate::characteristics::StaticModifierRule::AdditionalCreatureDeathTrigger, .. }))
-                } else {
-                    0
-                };
+                let extra = additional_trigger_count(
+                    ability.as_ref(),
+                    &source,
+                    controller,
+                    &causes,
+                    before,
+                    after,
+                );
                 let mut body = ability.body.clone();
                 use crate::program::BodyTarget;
                 for target in std::iter::once(&mut body.target).chain(
@@ -3021,6 +3180,38 @@ impl TriggerState {
                         *filter = filter.bind_related_player(player);
                     }
                 }
+                if let Some(crate::program::TriggerCondition::Eval(rc)) =
+                    &ability.condition.intervening_if
+                {
+                    let prepend = |target_body: &mut ExecutableBody| {
+                        for op in &mut target_body.instructions {
+                            match op {
+                                crate::program::Instruction::BranchIfFalse {
+                                    destination, ..
+                                }
+                                | crate::program::Instruction::Jump { destination } => {
+                                    *destination = destination.saturating_add(1);
+                                }
+                                _ => {}
+                            }
+                        }
+                        let end = target_body.instructions.len().saturating_add(1);
+                        target_body.instructions.insert(
+                            0,
+                            crate::program::Instruction::BranchIfFalse {
+                                condition: rc.as_ref().clone(),
+                                destination: end,
+                            },
+                        );
+                    };
+                    if let Some(modes) = &mut body.triggered_modes {
+                        for option in &mut modes.options {
+                            prepend(option);
+                        }
+                    } else {
+                        prepend(&mut body);
+                    }
+                }
                 for _ in 0..=extra {
                     let instance = WaitingInstance {
                         id: TriggerInstanceId(self.next_instance),
@@ -3039,6 +3230,62 @@ impl TriggerState {
                     discoveries.push(RulesRecord::TriggerDiscovered(Box::new(instance)));
                 }
             }
+        }
+        // Match active event-driven delayed triggers (CR 603.7).
+        if !self.delayed_event_triggers.is_empty() {
+            let existing = std::mem::take(&mut self.delayed_event_triggers);
+            let mut retained = Vec::with_capacity(existing.len());
+            for delay in existing {
+                let synth_ability = crate::program::TriggeredAbility {
+                    id: TriggeredAbilityId(0),
+                    condition: delay.trigger.clone(),
+                    grouping: TriggerGrouping::EachOccurrence,
+                    body: delay.body.clone(),
+                };
+                let mut members = Vec::new();
+                for occurrence in &event.occurrences {
+                    match_trigger_event(
+                        &synth_ability.condition.event,
+                        synth_ability.condition.intervening_if.as_ref(),
+                        &synth_ability,
+                        &delay.source,
+                        delay.controller,
+                        occurrence,
+                        &event.cause,
+                        delay.source.object.id(),
+                        synth_ability.id,
+                        None,
+                        after,
+                        &mut members,
+                    )?;
+                }
+                let fired = !members.is_empty();
+                if fired {
+                    for causes in
+                        causes::group_matches(id, TriggerGrouping::EachOccurrence, members)?
+                    {
+                        let instance = WaitingInstance {
+                            id: TriggerInstanceId(self.next_instance),
+                            definition: TriggeredAbilityId(0),
+                            granting_effect: None,
+                            causes,
+                            source: delay.source.clone(),
+                            controller: delay.controller,
+                            body: delay.body.clone(),
+                        };
+                        self.next_instance = self
+                            .next_instance
+                            .checked_add(1)
+                            .ok_or(TriggerError::InstanceIdentityExhausted)?;
+                        self.waiting.insert(instance.id, instance.clone());
+                        discoveries.push(RulesRecord::TriggerDiscovered(Box::new(instance)));
+                    }
+                }
+                if !(delay.once && fired) {
+                    retained.push(delay);
+                }
+            }
+            self.delayed_event_triggers = retained;
         }
         for occurrence in &event.occurrences {
             if let RulesOccurrence::CastCompleted(cast) = &occurrence.value
@@ -3443,6 +3690,7 @@ impl TriggerState {
                                     crate::program::BodyTarget::None,
                                     vec![Instruction::ReturnDelayedGraveyardCard(object)],
                                 ),
+                                trigger: None,
                             },
                         );
                         discoveries.push(RulesRecord::EmblemTriggerDiscovered {
@@ -3700,6 +3948,7 @@ impl TriggerState {
                                 amount: amount.clone(),
                             }],
                         ),
+                        trigger: None,
                     },
                 );
                 discoveries.push(RulesRecord::EmblemTriggerDiscovered {
@@ -3759,6 +4008,7 @@ impl TriggerState {
                         emblem: emblem.id,
                         controller: owner,
                         body: ExecutableBody::new(BodyTarget::None, instructions),
+                        trigger: None,
                     },
                 );
                 discoveries.push(RulesRecord::EmblemTriggerDiscovered {
@@ -3802,6 +4052,7 @@ impl TriggerState {
                                 amount: amount.clone(),
                             }],
                         ),
+                        trigger: None,
                     },
                 );
                 discoveries.push(RulesRecord::EmblemTriggerDiscovered {
@@ -3810,6 +4061,84 @@ impl TriggerState {
                     emblem: emblem.id,
                     cause: row.id,
                 });
+            }
+        }
+        for emblem in before.characteristics.emblems.values() {
+            let crate::emblem::EmblemDefinition::Authored { triggered, .. } = &emblem.definition
+            else {
+                continue;
+            };
+            if triggered.is_empty() {
+                continue;
+            }
+            let synth = SupportedAppearance::synthetic_emblem(emblem.controller);
+            let synth_id = synth.object.id();
+            for ability in triggered {
+                let mut members = Vec::new();
+                for row in &event.occurrences {
+                    matching::match_trigger_event(
+                        &ability.condition.event,
+                        ability.condition.intervening_if.as_ref(),
+                        ability,
+                        &synth,
+                        emblem.controller,
+                        row,
+                        &event.cause,
+                        synth_id,
+                        ability.id,
+                        None,
+                        after,
+                        &mut members,
+                    )?;
+                }
+                if members.is_empty() {
+                    continue;
+                }
+                let groups: Vec<(TriggerCauseKey, Vec<TriggerCauseMember>)> = match ability.grouping
+                {
+                    crate::program::TriggerGrouping::EachOccurrence => members
+                        .into_iter()
+                        .map(|m| (TriggerCauseKey::Occurrence(m.occurrence), vec![m]))
+                        .collect(),
+                    crate::program::TriggerGrouping::OneOrMoreTogether
+                    | crate::program::TriggerGrouping::OneOrMoreOnceEachTurn
+                    | crate::program::TriggerGrouping::OneOrMoreByPlayer => {
+                        vec![(TriggerCauseKey::Together, members)]
+                    }
+                };
+                for (cause_key, group) in groups {
+                    let Some(first_cause) = group.first().map(|m| m.occurrence) else {
+                        continue;
+                    };
+                    let causes = TriggerCauseSet::new(event.id, cause_key, group)?;
+                    let instance = TriggerInstanceId(self.next_instance);
+                    self.next_instance = self
+                        .next_instance
+                        .checked_add(1)
+                        .ok_or(TriggerError::InstanceIdentityExhausted)?;
+                    let trigger_binding = TriggerBinding {
+                        instance,
+                        definition: ability.id,
+                        granting_effect: None,
+                        causes,
+                        source: synth.clone(),
+                    };
+                    self.emblem_waiting.insert(
+                        instance,
+                        WaitingEmblem {
+                            controller: emblem.controller,
+                            emblem: emblem.id,
+                            body: ability.body.clone(),
+                            trigger: Some(trigger_binding),
+                        },
+                    );
+                    discoveries.push(RulesRecord::EmblemTriggerDiscovered {
+                        instance,
+                        controller: emblem.controller,
+                        emblem: emblem.id,
+                        cause: first_cause,
+                    });
+                }
             }
         }
         for occurrence in &event.occurrences {
@@ -3822,4 +4151,239 @@ impl TriggerState {
         records.append(&mut discoveries);
         Ok(RulesTransition::new(self, id, RulesJournal { records }))
     }
+}
+
+fn additional_trigger_count(
+    ability: &TriggeredAbility,
+    source: &SupportedAppearance,
+    controller: SeatId,
+    causes: &TriggerCauseSet,
+    before: &RulesView<'_>,
+    after: &RulesView<'_>,
+) -> usize {
+    use crate::characteristics::{
+        StaticContinuousAbility, StaticModifierRule, TriggerMultiplierEvent,
+    };
+    if source.object.zone() != ObjectZone::Battlefield {
+        return 0;
+    }
+    let cut = if ability.condition.is_lookback() {
+        before
+    } else {
+        after
+    };
+    let is_sacrifice_trigger = matches!(
+        ability.condition.event,
+        TriggerEvent::PlayerAction {
+            action: PlayerTriggerAction::Sacrificed(_),
+            ..
+        }
+    );
+    let is_creature_death = !is_sacrifice_trigger
+        && causes.members().iter().any(|member| {
+            matches!(
+                &member.related,
+                TriggerRelated::ZoneChange { before, after }
+                    if before.object.zone() == ObjectZone::Battlefield
+                        && before.is_creature()
+                        && matches!(after.object.zone(), ObjectZone::Graveyard(_))
+            )
+        });
+    fn check_ev(
+        ev: &TriggerMultiplierEvent,
+        causes: &TriggerCauseSet,
+        cut: &RulesView<'_>,
+    ) -> bool {
+        let excluded = BTreeSet::new();
+        match ev {
+            TriggerMultiplierEvent::Any => true,
+            TriggerMultiplierEvent::Enters(filter) => causes.members().iter().any(|m| {
+                matches!(
+                    &m.related,
+                    TriggerRelated::ZoneChange { before: b, after: a }
+                        if b.object.zone() != ObjectZone::Battlefield
+                            && a.object.zone() == ObjectZone::Battlefield
+                            && cut.evaluated.get(a.object.id()).is_some_and(|view| {
+                                filter.matches_static_characteristics(
+                                    view,
+                                    &excluded,
+                                    || Some(view.defined.mana_value.clone()),
+                                )
+                            })
+                )
+            }),
+            TriggerMultiplierEvent::Dies(filter) => causes.members().iter().any(|m| {
+                matches!(
+                    &m.related,
+                    TriggerRelated::ZoneChange { before: b, after: a }
+                        if b.object.zone() == ObjectZone::Battlefield
+                            && matches!(a.object.zone(), ObjectZone::Graveyard(_))
+                            && cut.evaluated.get(b.object.id()).is_some_and(|view| {
+                                filter.matches_static_characteristics(
+                                    view,
+                                    &excluded,
+                                    || Some(view.defined.mana_value.clone()),
+                                )
+                            })
+                )
+            }),
+            TriggerMultiplierEvent::LeavesBattlefield(filter) => causes.members().iter().any(|m| {
+                matches!(
+                    &m.related,
+                    TriggerRelated::ZoneChange { before: b, after: a }
+                        if b.object.zone() == ObjectZone::Battlefield
+                            && a.object.zone() != ObjectZone::Battlefield
+                            && cut.evaluated.get(b.object.id()).is_some_and(|view| {
+                                filter.matches_static_characteristics(
+                                    view,
+                                    &excluded,
+                                    || Some(view.defined.mana_value.clone()),
+                                )
+                            })
+                )
+            }),
+            TriggerMultiplierEvent::Attacks(filter) => causes.members().iter().any(|m| {
+                let attacker_ids: Vec<ObjectId> = match &m.related {
+                    TriggerRelated::Combatant(id) | TriggerRelated::AttackedAlone(id) => vec![*id],
+                    TriggerRelated::AttackGroup { creatures, .. }
+                    | TriggerRelated::DeclaredSubtypeAttackers(creatures) => creatures.clone(),
+                    _ => Vec::new(),
+                };
+                attacker_ids.iter().any(|id| {
+                    cut.evaluated.get(*id).is_some_and(|view| {
+                        filter.matches_static_characteristics(view, &excluded, || {
+                            Some(view.defined.mana_value.clone())
+                        })
+                    })
+                })
+            }),
+            TriggerMultiplierEvent::SpellCastOrCopy(spell_filter) => {
+                causes.members().iter().any(|m| match &m.related {
+                    TriggerRelated::SpellCast(cast) => {
+                        spell_filter.matches_spell_appearance(cast.spell())
+                    }
+                    TriggerRelated::SpellCopied(_) => true,
+                    _ => false,
+                })
+            }
+            TriggerMultiplierEvent::DealsDamage {
+                combat_only,
+                to_player_only,
+            } => causes.members().iter().any(|m| match &m.related {
+                TriggerRelated::CombatDamageToPlayer { .. }
+                | TriggerRelated::SubtypeCombatDamage { .. } => true,
+                TriggerRelated::CombatDamageToPlaneswalker { .. } => !*to_player_only,
+                TriggerRelated::DamageToOpponent { .. } => !*combat_only,
+                TriggerRelated::DamageDealtToPermanent { .. }
+                | TriggerRelated::AttachedCreatureDamaged { .. }
+                | TriggerRelated::DamageReceived { .. } => !*combat_only && !*to_player_only,
+                _ => false,
+            }),
+            TriggerMultiplierEvent::AnyOf(items) => {
+                items.iter().any(|item| check_ev(item, causes, cut))
+            }
+        }
+    }
+    let mut total = 0usize;
+    for permanent in cut
+        .evaluated
+        .objects
+        .values()
+        .filter(|o| o.zone == ObjectZone::Battlefield && o.controller == Some(controller))
+    {
+        for rule in permanent
+            .printed_text
+            .continuous
+            .iter()
+            .chain(&permanent.printed_text.additional_battlefield_abilities)
+        {
+            if !(permanent.abilities.continuous == Some(rule.id())
+                || permanent
+                    .abilities
+                    .additional_battlefield_abilities
+                    .contains(&rule.id()))
+            {
+                continue;
+            }
+            match rule {
+                StaticContinuousAbility::Modifier {
+                    rule: StaticModifierRule::AdditionalCreatureDeathTrigger,
+                    ..
+                } => {
+                    if is_creature_death {
+                        total = total.saturating_add(1);
+                    }
+                }
+                StaticContinuousAbility::Modifier {
+                    rule: StaticModifierRule::AdditionalTrigger(mult),
+                    ..
+                } => {
+                    if mult.exclude_self && permanent.object == source.object.id() {
+                        continue;
+                    }
+                    if mult.exclude_sacrifice_triggers && is_sacrifice_trigger {
+                        continue;
+                    }
+                    if let Some(sel) = &mult.triggering_source
+                        && !crate::characteristics::selector_matches_permanent(
+                            cut.cards,
+                            &cut.evaluated,
+                            permanent.object,
+                            controller,
+                            sel,
+                            source.object.id(),
+                            cut.name_rules,
+                        )
+                    {
+                        continue;
+                    }
+                    if check_ev(&mult.event, causes, cut) {
+                        total = total.saturating_add(usize::from(mult.additional));
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+    for (owner, rule) in &cut.evaluated.emblem_rules {
+        if *owner != controller {
+            continue;
+        }
+        match rule {
+            StaticContinuousAbility::Modifier {
+                rule: StaticModifierRule::AdditionalCreatureDeathTrigger,
+                ..
+            } => {
+                if is_creature_death {
+                    total = total.saturating_add(1);
+                }
+            }
+            StaticContinuousAbility::Modifier {
+                rule: StaticModifierRule::AdditionalTrigger(mult),
+                ..
+            } => {
+                if mult.exclude_sacrifice_triggers && is_sacrifice_trigger {
+                    continue;
+                }
+                if let Some(sel) = &mult.triggering_source
+                    && !crate::characteristics::selector_matches_permanent(
+                        cut.cards,
+                        &cut.evaluated,
+                        ObjectId::SENTINEL,
+                        controller,
+                        sel,
+                        source.object.id(),
+                        cut.name_rules,
+                    )
+                {
+                    continue;
+                }
+                if check_ev(&mult.event, causes, cut) {
+                    total = total.saturating_add(usize::from(mult.additional));
+                }
+            }
+            _ => {}
+        }
+    }
+    total
 }

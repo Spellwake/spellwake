@@ -42,7 +42,10 @@ impl DamagePending {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) enum DamageFollowup {
-    RemovePlusOneCounter(ObjectId),
+    RemovePlusOneCounter {
+        object: ObjectId,
+        count: RulesInteger,
+    },
     RemoveShieldCounter(ObjectId),
     LibraryTop {
         player: SeatId,
@@ -194,7 +197,8 @@ impl EffectWindow {
             }
             DamageGroup::Opponents => self.combat_rules.opponents(participants, controller)?,
             DamageGroup::Players | DamageGroup::CreaturesAndPlayers => participants.to_vec(),
-            DamageGroup::FilteredAndPlayers { players, .. } => {
+            DamageGroup::FilteredAndPlayers { players, .. }
+            | DamageGroup::AffectedPlayers(players) => {
                 let cursor = self.resolution_cursor();
                 self.selection_players(players, controller, cursor)?
             }
@@ -868,6 +872,8 @@ impl EffectWindow {
                                 | Instruction::DamageOpponentsAmount(_)
                                 | Instruction::DamageRelatedPlayerAmount(_)
                                 | Instruction::DamageGroupAmount { .. }
+                                | Instruction::DealDamageFrom { .. }
+                                | Instruction::DivideDamageAmongTargets { .. }
                                 | Instruction::DivideThreeDamageAmongTargets
                                 | Instruction::DamageOrderedTargets { .. }
                                 | Instruction::DamageFromPower(_)
@@ -954,15 +960,12 @@ impl EffectWindow {
         &self,
         trample_overflow: bool,
     ) -> Result<Vec<DamageInput>, EffectError> {
-        let Some((dealer, target)) = self.legal_linked_targets()? else {
+        let Some((dealer, target_ref)) = self.legal_linked_target_refs()? else {
             return Ok(Vec::new());
         };
         let evaluated = self.evaluated_characteristics()?;
         let dealer_view = evaluated
             .get(dealer)
-            .ok_or(EffectError::InconsistentProgram)?;
-        let target_view = evaluated
-            .get(target)
             .ok_or(EffectError::InconsistentProgram)?;
         let power = &dealer_view
             .power_toughness
@@ -984,46 +987,65 @@ impl EffectWindow {
                 .controller
                 .ok_or(EffectError::InconsistentProgram)?,
         };
-        let mut to_creature = power.clone();
-        let mut inputs = Vec::new();
-        if trample_overflow && dealer_view.has_keyword(KeywordAbility::Trample) {
-            let marked = self
-                .damage
-                .get(&target)
-                .cloned()
-                .unwrap_or_else(|| 0.into());
-            let mut lethal = evaluated
-                .lethal_damage_threshold(target_view)
-                .ok_or(EffectError::InconsistentProgram)?
-                .minus(&marked)
-                .max(0.into());
-            if dealer_view.has_keyword(KeywordAbility::Deathtouch) {
-                lethal = lethal.min(1.into());
-            }
-            to_creature = to_creature.min(lethal);
-            let excess = power.minus(&to_creature);
-            if excess.is_positive() {
-                let player = target_view
-                    .controller
+        match target_ref {
+            TargetRef::Player(seat) => Ok(vec![DamageInput {
+                source,
+                target: DamageRecipient::Player(seat),
+                amount: power.clone(),
+            }]),
+            TargetRef::Object(target) => {
+                let target_view = evaluated
+                    .get(target)
                     .ok_or(EffectError::InconsistentProgram)?;
-                inputs.push(DamageInput {
-                    source: source.clone(),
-                    target: DamageRecipient::Player(player),
-                    amount: excess,
-                });
+                let Some(recipient) = target_view.damage_recipient() else {
+                    return Ok(Vec::new());
+                };
+                let mut to_target = power.clone();
+                let mut inputs = Vec::new();
+                if trample_overflow
+                    && target_view.is_creature()
+                    && dealer_view.has_keyword(KeywordAbility::Trample)
+                {
+                    let marked = self
+                        .damage
+                        .get(&target)
+                        .cloned()
+                        .unwrap_or_else(|| 0.into());
+                    let mut lethal = evaluated
+                        .lethal_damage_threshold(target_view)
+                        .ok_or(EffectError::InconsistentProgram)?
+                        .minus(&marked)
+                        .max(0.into());
+                    if dealer_view.has_keyword(KeywordAbility::Deathtouch) {
+                        lethal = lethal.min(1.into());
+                    }
+                    to_target = to_target.min(lethal);
+                    let excess = power.minus(&to_target);
+                    if excess.is_positive() {
+                        let player = target_view
+                            .controller
+                            .ok_or(EffectError::InconsistentProgram)?;
+                        inputs.push(DamageInput {
+                            source: source.clone(),
+                            target: DamageRecipient::Player(player),
+                            amount: excess,
+                        });
+                    }
+                }
+                if to_target.is_positive() {
+                    inputs.insert(
+                        0,
+                        DamageInput {
+                            source,
+                            target: recipient,
+                            amount: to_target,
+                        },
+                    );
+                }
+                Ok(inputs)
             }
+            TargetRef::Stack(_) => Ok(Vec::new()),
         }
-        if to_creature.is_positive() {
-            inputs.insert(
-                0,
-                DamageInput {
-                    source,
-                    target: DamageRecipient::Creature(target),
-                    amount: to_creature,
-                },
-            );
-        }
-        Ok(inputs)
     }
 
     pub(super) fn install_damage_batch(
@@ -1082,6 +1104,41 @@ impl EffectWindow {
             .collect();
         let (mut batch, append) = self.damage_state.begin_batch(origin, kind, inputs)?;
         batch.disallow_prevention_from(&unpreventable);
+        let static_no_prevent = evaluated.objects.values().any(|p| {
+            p.zone == ObjectZone::Battlefield
+                && p.printed_text
+                    .continuous
+                    .iter()
+                    .chain(&p.printed_text.additional_battlefield_abilities)
+                    .any(|ab| {
+                        (p.abilities.continuous == Some(ab.id())
+                            || p.abilities
+                                .additional_battlefield_abilities
+                                .contains(&ab.id()))
+                            && matches!(
+                                ab,
+                                crate::characteristics::StaticContinuousAbility::DamageRule {
+                                    rule: crate::characteristics::StaticDamageRule::DamageCannotBePrevented,
+                                    ..
+                                }
+                            )
+                    })
+        }) || self.temporary_rules.iter().any(|active| {
+            matches!(
+                &active.rule,
+                crate::program::TemporaryRuleKind::TemporaryStatic(ab)
+                    if matches!(
+                        ab.as_ref(),
+                        crate::characteristics::StaticContinuousAbility::DamageRule {
+                            rule: crate::characteristics::StaticDamageRule::DamageCannotBePrevented,
+                            ..
+                        }
+                    )
+            )
+        });
+        if self.damage_state.prevention_disallowed_this_turn || static_no_prevent {
+            batch.disallow_all_prevention();
+        }
         batch.set_recipient_controllers(&controllers);
         let parent = match self.pending_work.take() {
             Some(PendingWork::Resolution(cursor)) => DamageParent::Resolution(cursor),
@@ -1378,6 +1435,9 @@ impl EffectWindow {
                     }
                     DamageEffectId::StaticHalfPrevention { .. }
                     | DamageEffectId::StaticDouble(_)
+                    | DamageEffectId::StaticModify(_, _)
+                    | DamageEffectId::TemporaryStaticModify(_)
+                    | DamageEffectId::TemporaryPrevention(_)
                     | DamageEffectId::DoubleDamageFromEquippedCreature(_)
                     | DamageEffectId::DoubleDamageToEquippedCreature(_) => {
                         next.apply_static_damage_modification(application, &mut append)?
@@ -1387,6 +1447,7 @@ impl EffectWindow {
                     }
                     DamageEffectId::ProtectionMulticolored
                     | DamageEffectId::ProtectionSubtype(_)
+                    | DamageEffectId::ProtectionFrom(_)
                     | DamageEffectId::Protection(_) => {
                         next.prevent_by_protection(application, &mut journal, &mut append)?
                     }
@@ -1468,6 +1529,9 @@ impl EffectWindow {
                 }
                 DamageEffectId::StaticHalfPrevention { .. }
                 | DamageEffectId::StaticDouble(_)
+                | DamageEffectId::StaticModify(_, _)
+                | DamageEffectId::TemporaryStaticModify(_)
+                | DamageEffectId::TemporaryPrevention(_)
                 | DamageEffectId::DoubleDamageFromEquippedCreature(_)
                 | DamageEffectId::DoubleDamageToEquippedCreature(_) => {
                     self.apply_static_damage_modification(application, append)?
@@ -1475,6 +1539,7 @@ impl EffectWindow {
                 DamageEffectId::EmblemCap { .. } => self.apply_emblem_cap(application, append)?,
                 DamageEffectId::ProtectionMulticolored
                 | DamageEffectId::ProtectionSubtype(_)
+                | DamageEffectId::ProtectionFrom(_)
                 | DamageEffectId::Protection(_) => {
                     self.prevent_by_protection(application, journal, append)?
                 }
@@ -1798,6 +1863,71 @@ impl EffectWindow {
         }
         let prohibited = self.life_gain_prohibitions(&before.view().evaluated)?;
         gains.retain(|(_, player), _| !prohibited.contains(player));
+        // Enforce StaticDamageRule::MinimumLifeTotal (Worship, Ali from Cairo, Fortune Thief).
+        for (&player, loss) in &mut losses {
+            if !loss.is_positive() {
+                continue;
+            }
+            let Some(current_life) = self.life.get(player) else {
+                continue;
+            };
+            let mut highest_floor: Option<RulesInteger> = None;
+            for perm in before
+                .view()
+                .evaluated
+                .objects
+                .values()
+                .filter(|p| p.zone == ObjectZone::Battlefield && p.controller == Some(player))
+            {
+                for ability in perm
+                    .printed_text
+                    .continuous
+                    .iter()
+                    .chain(&perm.printed_text.additional_battlefield_abilities)
+                {
+                    let active = perm.abilities.continuous == Some(ability.id())
+                        || perm
+                            .abilities
+                            .additional_battlefield_abilities
+                            .contains(&ability.id());
+                    if !active {
+                        continue;
+                    }
+                    if let crate::characteristics::StaticContinuousAbility::DamageRule {
+                        rule:
+                            crate::characteristics::StaticDamageRule::MinimumLifeTotal {
+                                floor,
+                                require_creature,
+                            },
+                        ..
+                    } = ability
+                    {
+                        let creature_ok = !*require_creature
+                            || before.view().evaluated.objects.values().any(|c| {
+                                c.zone == ObjectZone::Battlefield
+                                    && c.controller == Some(player)
+                                    && c.is_creature()
+                            });
+                        if creature_ok {
+                            let f = RulesInteger::from(i64::from(*floor));
+                            if highest_floor.as_ref().is_none_or(|cur| f > *cur) {
+                                highest_floor = Some(f);
+                            }
+                        }
+                    }
+                }
+            }
+            if let Some(floor) = highest_floor {
+                if *current_life <= floor {
+                    *loss = 0.into();
+                } else {
+                    let max_loss = current_life.minus(&floor);
+                    if *loss > max_loss {
+                        *loss = max_loss;
+                    }
+                }
+            }
+        }
         let life_changes = self
             .life
             .apply_damage_changes(&losses, id, &gains)
@@ -2069,14 +2199,19 @@ impl EffectWindow {
                 break;
             };
             let (player, amount, mill) = match followup {
-                DamageFollowup::RemovePlusOneCounter(object) => {
+                DamageFollowup::RemovePlusOneCounter { object, count } => {
                     let previous = self.characteristics.counters(object);
-                    if previous.plus_one.is_positive() {
+                    if previous.plus_one.is_positive() && count.is_positive() {
+                        let take = if count > previous.plus_one {
+                            previous.plus_one.clone()
+                        } else {
+                            count
+                        };
                         let before = self.rules_snapshot(None)?;
                         let after = self.characteristics.take_power_toughness_counters(
                             object,
                             &PowerToughnessCounters {
-                                plus_one: 1.into(),
+                                plus_one: take,
                                 minus_one: 0.into(),
                             },
                         )?;

@@ -44,6 +44,7 @@ fn real_until_end_of_turn_expiry_changes_the_cleanup_selection_domain_before_the
                     any_types: Default::default(),
                     required_types: BTreeSet::from([CardType::Artifact]),
                     forbidden_types: BTreeSet::new(),
+                    object_filter: None,
                 },
             },
             Instruction::AdjustControllerLife {
@@ -350,6 +351,7 @@ fn a_real_created_token_and_dying_observer_share_lookback_before_later_cessation
                                 any_types: Default::default(),
                                 required_types: BTreeSet::from([CardType::Creature]),
                                 forbidden_types: BTreeSet::new(),
+                                object_filter: None,
                             },
                         },
                         // A real resolution decision exposes the gap between movement

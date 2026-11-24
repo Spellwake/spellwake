@@ -48,6 +48,34 @@ impl EffectWindow {
         current: &crate::characteristics::EvaluatedCharacteristics,
     ) -> Result<BTreeSet<SeatId>, EffectError> {
         let mut prohibited = BTreeSet::new();
+        for active in &self.temporary_rules {
+            match &active.rule {
+                crate::program::TemporaryRuleKind::PlayerCantGainLife { .. } => {
+                    prohibited.extend(active.resolved_players.iter().copied());
+                }
+                crate::program::TemporaryRuleKind::TemporaryStatic(ability) => {
+                    match ability.as_ref() {
+                        crate::characteristics::StaticContinuousAbility::Restriction {
+                            rule: crate::characteristics::StaticRestriction::PlayersCannotGainLife,
+                            ..
+                        } => {
+                            prohibited.extend(self.window.participants().iter().copied());
+                        }
+                        crate::characteristics::StaticContinuousAbility::Restriction {
+                            rule: crate::characteristics::StaticRestriction::OpponentsCannotGainLife,
+                            ..
+                        } => {
+                            prohibited.extend(
+                                self.combat_rules
+                                    .opponents(self.window.participants(), active.controller)?,
+                            );
+                        }
+                        _ => {}
+                    }
+                }
+                _ => {}
+            }
+        }
         for source in current
             .objects
             .values()
@@ -110,6 +138,342 @@ impl EffectWindow {
                         .is_none_or(|before| *total <= *before),
                     LifeAdjustment::Lose(_) => true,
                 }
+        });
+        for (&player, adjustment) in adjustments.iter_mut() {
+            let is_gain = matches!(adjustment, LifeAdjustment::Gain(_));
+            let is_loss = matches!(adjustment, LifeAdjustment::Lose(_));
+            if !is_gain && !is_loss {
+                continue;
+            }
+            let amount = match adjustment {
+                LifeAdjustment::Gain(a) | LifeAdjustment::Lose(a) => a,
+                LifeAdjustment::Set(_) => continue,
+            };
+            if !amount.is_positive() {
+                continue;
+            }
+            let mut total_add = 0i64;
+            let mut factors: Vec<u8> = Vec::new();
+            let mut lose_instead = false;
+            let mut skip_event = false;
+            for active in &self.temporary_rules {
+                if active.consumed {
+                    continue;
+                }
+                if let crate::program::TemporaryRuleKind::TemporaryStatic(ability) = &active.rule {
+                    match ability.as_ref() {
+                        crate::characteristics::StaticContinuousAbility::Modifier {
+                            rule:
+                                crate::characteristics::StaticModifierRule::ModifyLifeGain {
+                                    player: relation,
+                                    add,
+                                    multiply,
+                                    lose_instead: invert,
+                                },
+                            ..
+                        } if is_gain => {
+                            let applies = match relation {
+                                crate::program::PlayerRelation::Controller => {
+                                    player == active.controller
+                                }
+                                crate::program::PlayerRelation::Opponent => self
+                                    .combat_rules
+                                    .opponents(self.window.participants(), active.controller)?
+                                    .contains(&player),
+                                crate::program::PlayerRelation::AnyParticipant => true,
+                            };
+                            if applies {
+                                total_add = total_add.saturating_add(i64::from(*add));
+                                if *multiply > 1 {
+                                    factors.push(*multiply);
+                                }
+                                if *invert {
+                                    lose_instead = true;
+                                }
+                            }
+                        }
+                        crate::characteristics::StaticContinuousAbility::EventReplacement {
+                            event,
+                            condition,
+                            action,
+                            ..
+                        } => {
+                            let rel_opt = match event {
+                                crate::characteristics::ReplaceableEvent::LifeGain {
+                                    player: rel,
+                                } if is_gain => Some(rel),
+                                crate::characteristics::ReplaceableEvent::LifeLoss {
+                                    player: rel,
+                                } if is_loss => Some(rel),
+                                _ => None,
+                            };
+                            if let Some(relation) = rel_opt {
+                                let applies = match relation {
+                                    crate::program::AffectedPlayers::One(
+                                        crate::program::ResolvingPlayer::Controller,
+                                    ) => player == active.controller,
+                                    crate::program::AffectedPlayers::EachOpponent
+                                    | crate::program::AffectedPlayers::EachOtherPlayer => self
+                                        .combat_rules
+                                        .opponents(self.window.participants(), active.controller)?
+                                        .contains(&player),
+                                    crate::program::AffectedPlayers::EachPlayer
+                                    | crate::program::AffectedPlayers::One(_) => true,
+                                };
+                                let cond_ok = condition.as_deref().is_none_or(|cond| {
+                                    active.source_object.is_some_and(|src| {
+                                        let ctx = crate::characteristics::WorldEvalCtx {
+                                            active_player: self.window.active_player(),
+                                            participants: self.window.participants(),
+                                            life: Some(&self.life),
+                                            combat: self.combat.as_ref(),
+                                            cards: self.window.cards(),
+                                            programs: &self.programs,
+                                            state: &self.characteristics,
+                                            objects: &current.objects,
+                                            source: src,
+                                            controller: active.controller,
+                                            name_rules: &self.name_rules,
+                                            trigger_subject: None,
+                                            related_player: None,
+                                            defending_player: None,
+                                        };
+                                        match cond {
+                                            crate::characteristics::StaticSourceCondition::Eval(
+                                                rc,
+                                            ) => crate::characteristics::eval_world_condition(
+                                                &ctx, rc,
+                                            ),
+                                            _ => true,
+                                        }
+                                    })
+                                });
+                                if applies && cond_ok {
+                                    match action {
+                                        crate::characteristics::StaticReplacementAction::ModifyAmount {
+                                            add,
+                                            multiply,
+                                        } => {
+                                            if let crate::program::ValueExpr::Literal(v) = add.as_ref()
+                                                && let Some(u) = v.to_usize()
+                                            {
+                                                total_add = total_add.saturating_add(
+                                                    i64::try_from(u).unwrap_or(i64::MAX),
+                                                );
+                                            }
+                                            if *multiply > 1 {
+                                                factors.push(*multiply);
+                                            }
+                                        }
+                                        crate::characteristics::StaticReplacementAction::Skip => {
+                                            skip_event = true;
+                                        }
+                                        crate::characteristics::StaticReplacementAction::ReplaceWithBody {
+                                            ..
+                                        } => {}
+                                    }
+                                }
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            for source in current
+                .objects
+                .values()
+                .filter(|perm| perm.zone == ObjectZone::Battlefield)
+            {
+                let Some(source_ctrl) = source.controller else {
+                    continue;
+                };
+                for ability in source
+                    .printed_text
+                    .continuous
+                    .iter()
+                    .chain(&source.printed_text.additional_battlefield_abilities)
+                {
+                    let active = source.abilities.continuous == Some(ability.id())
+                        || source
+                            .abilities
+                            .additional_battlefield_abilities
+                            .contains(&ability.id());
+                    if !active {
+                        continue;
+                    }
+                    match ability {
+                        crate::characteristics::StaticContinuousAbility::Modifier {
+                            rule:
+                                crate::characteristics::StaticModifierRule::ModifyLifeGain {
+                                    player: relation,
+                                    add,
+                                    multiply,
+                                    lose_instead: invert,
+                                },
+                            ..
+                        } if is_gain => {
+                            let applies = match relation {
+                                crate::program::PlayerRelation::Controller => player == source_ctrl,
+                                crate::program::PlayerRelation::Opponent => self
+                                    .combat_rules
+                                    .opponents(self.window.participants(), source_ctrl)?
+                                    .contains(&player),
+                                crate::program::PlayerRelation::AnyParticipant => true,
+                            };
+                            if applies {
+                                total_add = total_add.saturating_add(i64::from(*add));
+                                if *multiply > 1 {
+                                    factors.push(*multiply);
+                                }
+                                if *invert {
+                                    lose_instead = true;
+                                }
+                            }
+                        }
+                        crate::characteristics::StaticContinuousAbility::Modifier {
+                            rule:
+                                crate::characteristics::StaticModifierRule::ConditionalModifyLifeGain {
+                                    condition,
+                                    player: relation,
+                                    add,
+                                    multiply,
+                                },
+                            ..
+                        } if is_gain => {
+                            let applies = match relation {
+                                crate::program::PlayerRelation::Controller => player == source_ctrl,
+                                crate::program::PlayerRelation::Opponent => self
+                                    .combat_rules
+                                    .opponents(self.window.participants(), source_ctrl)?
+                                    .contains(&player),
+                                crate::program::PlayerRelation::AnyParticipant => true,
+                            };
+                            if applies {
+                                let ctx = crate::characteristics::WorldEvalCtx {
+                                    active_player: self.window.active_player(),
+                                    participants: self.window.participants(),
+                                    life: Some(&self.life),
+                                    combat: self.combat.as_ref(),
+                                    cards: self.window.cards(),
+                                    programs: &self.programs,
+                                    state: &self.characteristics,
+                                    objects: &current.objects,
+                                    source: source.object,
+                                    controller: source_ctrl,
+                                    name_rules: &self.name_rules,
+                                    trigger_subject: None,
+                                    related_player: None,
+                                    defending_player: None,
+                                };
+                                if crate::characteristics::eval_world_condition(&ctx, condition) {
+                                    total_add = total_add.saturating_add(i64::from(*add));
+                                    if *multiply > 1 {
+                                        factors.push(*multiply);
+                                    }
+                                }
+                            }
+                        }
+                        crate::characteristics::StaticContinuousAbility::EventReplacement {
+                            event,
+                            condition,
+                            action,
+                            ..
+                        } => {
+                            let rel_opt = match event {
+                                crate::characteristics::ReplaceableEvent::LifeGain {
+                                    player: rel,
+                                } if is_gain => Some(rel),
+                                crate::characteristics::ReplaceableEvent::LifeLoss {
+                                    player: rel,
+                                } if is_loss => Some(rel),
+                                _ => None,
+                            };
+                            if let Some(relation) = rel_opt {
+                                let applies = match relation {
+                                    crate::program::AffectedPlayers::One(
+                                        crate::program::ResolvingPlayer::Controller,
+                                    ) => player == source_ctrl,
+                                    crate::program::AffectedPlayers::EachOpponent
+                                    | crate::program::AffectedPlayers::EachOtherPlayer => self
+                                        .combat_rules
+                                        .opponents(self.window.participants(), source_ctrl)?
+                                        .contains(&player),
+                                    crate::program::AffectedPlayers::EachPlayer
+                                    | crate::program::AffectedPlayers::One(_) => true,
+                                };
+                                let ctx = crate::characteristics::WorldEvalCtx {
+                                    active_player: self.window.active_player(),
+                                    participants: self.window.participants(),
+                                    life: Some(&self.life),
+                                    combat: self.combat.as_ref(),
+                                    cards: self.window.cards(),
+                                    programs: &self.programs,
+                                    state: &self.characteristics,
+                                    objects: &current.objects,
+                                    source: source.object,
+                                    controller: source_ctrl,
+                                    name_rules: &self.name_rules,
+                                    trigger_subject: None,
+                                    related_player: None,
+                                    defending_player: None,
+                                };
+                                let cond_ok = condition.as_deref().is_none_or(|cond| match cond {
+                                    crate::characteristics::StaticSourceCondition::Eval(rc) => {
+                                        crate::characteristics::eval_world_condition(&ctx, rc)
+                                    }
+                                    _ => true,
+                                });
+                                if applies && cond_ok {
+                                    match action {
+                                        crate::characteristics::StaticReplacementAction::ModifyAmount {
+                                            add,
+                                            multiply,
+                                        } => {
+                                            let val = crate::characteristics::eval_world_value_expr(
+                                                &ctx, add,
+                                            );
+                                            if val.is_positive()
+                                                && let Some(u) = val.to_usize()
+                                            {
+                                                total_add = total_add.saturating_add(
+                                                    i64::try_from(u).unwrap_or(i64::MAX),
+                                                );
+                                            }
+                                            if *multiply > 1 {
+                                                factors.push(*multiply);
+                                            }
+                                        }
+                                        crate::characteristics::StaticReplacementAction::Skip => {
+                                            skip_event = true;
+                                        }
+                                        crate::characteristics::StaticReplacementAction::ReplaceWithBody {
+                                            ..
+                                        } => {}
+                                    }
+                                }
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            if skip_event {
+                *amount = 0.into();
+                continue;
+            }
+            if total_add != 0 {
+                *amount = amount.plus(&RulesInteger::from(total_add)).max(0.into());
+            }
+            for factor in factors {
+                *amount = amount.times(&RulesInteger::from(i64::from(factor)));
+            }
+            if is_gain && lose_instead {
+                *adjustment = LifeAdjustment::Lose(amount.clone());
+            }
+        }
+        adjustments.retain(|_, adjustment| match adjustment {
+            LifeAdjustment::Gain(a) | LifeAdjustment::Lose(a) => a.is_positive(),
+            LifeAdjustment::Set(_) => true,
         });
         Ok(())
     }

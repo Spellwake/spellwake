@@ -47,11 +47,13 @@ mod creature_type_flow;
 mod damage_flow;
 mod entry_copy;
 mod entry_counters;
+mod extra_costs;
 mod mana_activation;
 mod mana_domains;
 mod mana_provenance;
 mod mana_sacrifice;
 mod monarch;
+mod pass_c_ops;
 mod progress_rules;
 mod rule_resume;
 pub use commanders::CommanderRecord;
@@ -92,7 +94,7 @@ mod amass;
 mod counter_removal;
 mod proliferate;
 pub use counter_removal::CounterRemovalChoice;
-pub use proliferate::{CounterKind, ProliferateChoice};
+pub use proliferate::{CounterKind, CustomCounterKey, ProliferateChoice};
 mod activation_cost;
 mod graveyard_exile;
 mod graveyard_shuffle;
@@ -734,11 +736,66 @@ impl EntryChoiceFrame {
         &self.eligible_reveals
     }
 }
+/// General N-way option choice issued during resolution (mana bundles, disjunctive choices, modes).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OptionIndexFrame {
+    pub(crate) revision: u64,
+    pub(crate) entry: StackEntryId,
+    pub(crate) instruction: usize,
+    pub(crate) chooser: SeatId,
+    pub(crate) count: u8,
+    pub(crate) labels: Vec<String>,
+}
+impl OptionIndexFrame {
+    /// Revision at which this choice frame was issued.
+    #[must_use]
+    pub fn revision(&self) -> u64 {
+        self.revision
+    }
+    /// Player who must choose an option index in `0..count`.
+    #[must_use]
+    pub fn chooser(&self) -> SeatId {
+        self.chooser
+    }
+    /// Number of available options (`0..count`).
+    #[must_use]
+    pub fn count(&self) -> u8 {
+        self.count
+    }
+    /// Human-readable labels for each offered option (`0..count`).
+    #[must_use]
+    pub fn labels(&self) -> &[String] {
+        &self.labels
+    }
+}
+
+/// Active player's CR 502.3 choice of tapped permanents with "you may choose not to untap"
+/// to keep tapped during their untap step.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UntapKeepTappedFrame {
+    pub(crate) revision: u64,
+    pub(crate) chooser: SeatId,
+    pub(crate) objects: Vec<ObjectId>,
+}
+
+impl UntapKeepTappedFrame {
+    pub fn revision(&self) -> u64 {
+        self.revision
+    }
+    pub fn chooser(&self) -> SeatId {
+        self.chooser
+    }
+    pub fn objects(&self) -> &[ObjectId] {
+        &self.objects
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum EffectDecision {
     Mutation(MutationFrame),
     ManaColor(ManaColorChoice),
     ResolutionManaColor(ResolutionManaColorChoice),
+    OptionIndex(OptionIndexFrame),
     RevealedPiles(PileChoiceFrame),
     MyriadDefender(MyriadDefenderFrame),
     ReselectAttackDefender(AttackDefenderFrame),
@@ -767,6 +824,7 @@ pub enum EffectDecision {
     TokenDefender(crate::token::TokenDefenderFrame),
     TimestampOrder(TokenTimestampOrder),
     TransformOrder(crate::day_night::TransformOrder),
+    UntapKeepTapped(UntapKeepTappedFrame),
     Checks(CheckDecision),
     Triggers(TriggerOrder),
     TriggerTarget(TriggerTargetChoice),
@@ -782,6 +840,7 @@ impl EffectDecision {
         match self {
             Self::ManaColor(f) => f.chooser(),
             Self::ResolutionManaColor(f) => f.chooser,
+            Self::OptionIndex(f) => f.chooser,
             Self::Mutation(f) => f.chooser(),
             Self::RevealedPiles(f) => f.chooser,
             Self::MyriadDefender(f) => f.chooser(),
@@ -808,6 +867,7 @@ impl EffectDecision {
             Self::TokenDefender(f) => f.chooser(),
             Self::TimestampOrder(f) => f.chooser(),
             Self::TransformOrder(f) => f.chooser(),
+            Self::UntapKeepTapped(f) => f.chooser(),
             Self::Checks(f) => f.chooser(),
             Self::Triggers(f) => f.chooser(),
             Self::TriggerTarget(f) => f.chooser(),
@@ -823,6 +883,7 @@ impl EffectDecision {
         match self {
             Self::ManaColor(_)
             | Self::ResolutionManaColor(_)
+            | Self::OptionIndex(_)
             | Self::DrawReplacement(_)
             | Self::Mutation(_)
             | Self::RevealedPiles(_)
@@ -831,6 +892,7 @@ impl EffectDecision {
             | Self::PlaneswalkerType(_)
             | Self::AttackDirection(_)
             | Self::OpponentChoice(_)
+            | Self::UntapKeepTapped(_)
             | Self::LoyaltyRemoval(_) => EffectError::SelectionRequired,
             Self::DamageRecipientChoice(_) | Self::LinkedAuraChoice(_) => {
                 EffectError::SelectionRequired
@@ -909,11 +971,16 @@ pub enum DecisionReply {
     MyriadDefender(Option<TargetRef>),
     ReselectAttackDefender(Option<TargetRef>),
     PlaneswalkerType(crate::program::PlaneswalkerSubtype),
+    /// Subset of eligible tapped permanents kept tapped during untap (CR 502.3).
+    UntapKeepTapped(Vec<ObjectId>),
+    /// Subset of eligible opening-hand cards put onto the battlefield pregame (CR 103.6).
+    OpeningBattlefield(Vec<ObjectId>),
     AttackDirection(AttackDirection),
     OpponentChoice(SeatId),
     ChooseDamageRecipient(TargetRef),
     DrawReplacement(DrawReplacementChoice),
     ChoosePile(u8),
+    OptionIndex(u8),
     ChooseLandKind(bool),
     TransformOrder(Vec<ObjectId>),
     TimestampOrder(Vec<TokenBatchMember>),
@@ -1186,6 +1253,8 @@ struct CardPlayPermission {
     player: SeatId,
     duration: CardPlayDuration,
     any_color: bool,
+    free: bool,
+    cast_only: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -1200,15 +1269,31 @@ enum CardPlayDuration {
 enum CardPlayZone {
     Exile,
     Graveyard,
+    Hand,
 }
 
 impl CardPlayZone {
     fn allows(self, zone: ObjectZone) -> bool {
         matches!(
             (self, zone),
-            (Self::Exile, ObjectZone::Exile) | (Self::Graveyard, ObjectZone::Graveyard(_))
+            (Self::Exile, ObjectZone::Exile)
+                | (Self::Graveyard, ObjectZone::Graveyard(_))
+                | (Self::Hand, ObjectZone::Hand(_))
         )
     }
+}
+
+/// Active duration-scoped game-rule modification installed by `Instruction::CreateTemporaryRule`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ActiveTemporaryRule {
+    pub(crate) id: u64,
+    pub(crate) controller: SeatId,
+    pub(crate) source_object: Option<ObjectId>,
+    pub(crate) rule: crate::program::TemporaryRuleKind,
+    pub(crate) duration: crate::characteristics::ResolvedDuration,
+    pub(crate) resolved_players: BTreeSet<SeatId>,
+    pub(crate) resolved_objects: BTreeSet<ObjectId>,
+    pub(crate) consumed: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1275,6 +1360,8 @@ pub struct EffectWindow {
     previous_turn_casts: Option<crate::program::PreviousTurnCastCondition>,
     previous_active_spells: Option<u8>,
     transform_orders: BTreeMap<SeatId, Vec<ObjectId>>,
+    untap_preface_done: bool,
+    untap_keep_tapped: Option<BTreeSet<ObjectId>>,
     cast_history: Option<CastTurnHistory>,
     recent_graveyard_cards: Option<BTreeSet<ObjectId>>,
     activated_this_turn: BTreeSet<(
@@ -1295,6 +1382,10 @@ pub struct EffectWindow {
     flash_through_cleanup: BTreeSet<SeatId>,
     ability_resolutions_this_turn:
         BTreeMap<(ObjectId, crate::characteristics::ActivationOriginPath), u16>,
+    chosen_modal_modes_turn: BTreeMap<(ObjectId, crate::program::TriggeredAbilityId), BTreeSet<u8>>,
+    chosen_modal_modes_ever: BTreeMap<(ObjectId, crate::program::TriggeredAbilityId), BTreeSet<u8>>,
+    temporary_rules: Vec<ActiveTemporaryRule>,
+    next_temp_rule_id: u64,
     source_cast_uses: BTreeSet<(ObjectId, crate::characteristics::StaticAbilityId)>,
     source_cast_pending:
         BTreeMap<StackEntryId, Vec<(ObjectId, crate::characteristics::StaticAbilityId)>>,
@@ -1671,6 +1762,9 @@ struct SacrificedManaSource {
     tapped: bool,
     was_land: bool,
     was_artifact: bool,
+    was_snow: bool,
+    was_treasure: bool,
+    was_creature: bool,
     names: spellwake_contracts::names::ObjectNames,
 }
 
@@ -1722,6 +1816,7 @@ struct InstructionPayload {
     pending_copy_targets: Vec<Option<TargetChoice>>,
     rebound_over_buyback: Option<bool>,
     exile_on_resolve: bool,
+    return_to_hand_on_resolve: bool,
     copiable_traits: Option<CopiableSpellTraits>,
     body: ExecutableBody,
     bindings: ExecutionBindings,
@@ -1806,6 +1901,7 @@ impl StackPayload {
             modes: Vec::new(),
             rebound_over_buyback: None,
             exile_on_resolve: false,
+            return_to_hand_on_resolve: false,
             cascade: None,
             copy_run: None,
             pending_copy_targets: Vec::new(),
@@ -1845,10 +1941,39 @@ pub struct RetainedStackPayload<'a> {
     /// Actual retained capture bindings, not reconstructed from current objects.
     pub bindings: Option<&'a ExecutionBindings>,
 }
+/// CR 608.2h last-known information for a targeted object during resolution.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct TargetLki {
+    pub(super) owner: SeatId,
+    pub(super) controller: Option<SeatId>,
+    pub(super) mana_value: RulesInteger,
+    pub(super) power: Option<RulesInteger>,
+    pub(super) toughness: Option<RulesInteger>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ClashState {
+    chooser: SeatId,
+    opponent: SeatId,
+    chooser_card: Option<ObjectId>,
+    opponent_card: Option<ObjectId>,
+    stage: u8,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct DiscoverState {
+    candidate: Option<ObjectId>,
+    exiled: Vec<ObjectId>,
+    awaiting_random_bottom: bool,
+    bottom_order: Option<Vec<ObjectId>>,
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 struct ResolutionResults {
+    target_lki: BTreeMap<ObjectId, TargetLki>,
     sampled_graveyard_cards: Option<BTreeSet<ObjectId>>,
     revealed_top_types: BTreeSet<CardType>,
+    revealed_top_card: Option<ObjectId>,
     countered_spell_controller: Option<(StackEntryId, SeatId)>,
     counter_target_types: BTreeSet<CardType>,
     shuffled_source_owner: Option<SeatId>,
@@ -1867,6 +1992,29 @@ struct ResolutionResults {
     selected_graveyard_exile_creatures: usize,
     last_sacrificed_creature: Option<crate::characteristics::PowerToughness>,
     returned_target_permanent: Option<ObjectId>,
+    last_die_roll: Option<RulesInteger>,
+    last_die_rolls: Vec<u16>,
+    die_roll_ready: bool,
+    last_coin_flips_won: Option<RulesInteger>,
+    last_coin_flip_won: Option<bool>,
+    coin_flip_ready: bool,
+    chosen_card_type: Option<CardType>,
+    chosen_basic_land_type: Option<crate::land::LandType>,
+    chosen_card_name: Option<String>,
+    last_moved_controllers: Vec<SeatId>,
+    last_moved_objects: Vec<ObjectId>,
+    chosen_number: Option<RulesInteger>,
+    chosen_option_index: Option<u8>,
+    vote_counts: Vec<u16>,
+    winning_vote_option: Option<u8>,
+    pending_voters: std::collections::VecDeque<SeatId>,
+    voters_initialized: bool,
+    pending_option_players: std::collections::VecDeque<SeatId>,
+    option_players_initialized: bool,
+    last_nonland_discarded: u16,
+    clash_state: Option<ClashState>,
+    discover_state: Option<DiscoverState>,
+    manifest_dread_candidates: Vec<ObjectId>,
 }
 /// Points into the owned payload. Tokens never own another mutable program counter.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1881,6 +2029,8 @@ struct ResolutionCursor {
     results: ResolutionResults,
     revealed_piles: Option<Box<revealed_piles::RevealedPiles>>,
     chosen_effect_color: Option<ManaType>,
+    chosen_option_index: Option<u8>,
+    chosen_distinct_colors: Vec<ManaType>,
     chosen_mana_split: Option<RulesInteger>,
     tempting_token_offer: Option<token_offers::TemptingTokenOffer>,
     destroyed_permanents: Option<usize>,
@@ -2225,6 +2375,11 @@ impl EffectWindow {
                             ..
                         }
                     )
+                }) || definition.zone_replacements.iter().any(|rep| {
+                    matches!(
+                        rep.subject,
+                        crate::program::ZoneReplacementSubject::DamagedBySourceThisTurn
+                    )
                 })
             })
         }) {
@@ -2315,6 +2470,8 @@ impl EffectWindow {
             previous_turn_casts: None,
             previous_active_spells: None,
             transform_orders:BTreeMap::new(),
+            untap_preface_done: false,
+            untap_keep_tapped: None,
             activated_this_turn:BTreeSet::new(),
             combat_damaged_players_by_source:BTreeMap::new(),
             skip_next_controller_untap: BTreeSet::new(),
@@ -2325,6 +2482,10 @@ impl EffectWindow {
             creatures_required_to_attack: BTreeMap::new(),
             flash_through_cleanup: BTreeSet::new(),
             ability_resolutions_this_turn: BTreeMap::new(),
+            chosen_modal_modes_turn: BTreeMap::new(),
+            chosen_modal_modes_ever: BTreeMap::new(),
+            temporary_rules: Vec::new(),
+            next_temp_rule_id: 1,
             source_cast_uses: BTreeSet::new(),
             source_cast_pending: BTreeMap::new(),
             cast_history: programs
@@ -2752,15 +2913,118 @@ impl EffectWindow {
             StackKind::CardSpell(object) => Some(self.stack_spell_mana_value(*object)?),
             _ => None,
         };
-        Ok(evaluated.objects.values().any(|source| {
-            if source.zone != ObjectZone::Battlefield || source.controller != Some(entry.controller()) { return false; }
-            match &source.printed_text.continuous {
-                Some(crate::characteristics::StaticContinuousAbility::CastPermission { id, permission: crate::characteristics::CastPermissionRule::ControllerSpellsCannotBeCountered(matching) }) =>
-                    source.abilities.continuous == Some(*id) && !matching.is_disjoint(&types),
-                Some(crate::characteristics::StaticContinuousAbility::CostModifier { id, modifier: crate::characteristics::SpellCostModifier::HighManaValueProtected { minimum, .. } }) =>
-                    source.abilities.continuous == Some(*id) && cast_value.as_ref().is_some_and(|value| value >= &i64::from(minimum.get()).into()),
-                _ => false,
+        if self.temporary_rules.iter().any(|active| {
+            let crate::program::TemporaryRuleKind::CantBeCountered {
+                filter,
+                controller_only,
+            } = &active.rule
+            else {
+                return false;
+            };
+            if *controller_only && entry.controller() != active.controller {
+                return false;
             }
+            match filter {
+                None => true,
+                Some(f) => match entry.kind() {
+                    StackKind::CardSpell(obj) => evaluated.get(*obj).is_some_and(|view| {
+                        self.matches_object_filter(
+                            *f,
+                            view,
+                            active.controller,
+                            None,
+                            &BTreeSet::new(),
+                            &evaluated,
+                        )
+                    }),
+                    _ => true,
+                },
+            }
+        }) {
+            return Ok(true);
+        }
+        Ok(evaluated.objects.values().any(|source| {
+            if source.zone != ObjectZone::Battlefield
+                || source.controller != Some(entry.controller())
+            {
+                return false;
+            }
+            source
+                .printed_text
+                .continuous
+                .iter()
+                .chain(&source.printed_text.additional_battlefield_abilities)
+                .any(|ability| {
+                    let active = source.abilities.continuous == Some(ability.id())
+                        || source
+                            .abilities
+                            .additional_battlefield_abilities
+                            .contains(&ability.id());
+                    if !active {
+                        return false;
+                    }
+                    match ability {
+                        crate::characteristics::StaticContinuousAbility::CastPermission {
+                            permission:
+                                crate::characteristics::CastPermissionRule::ControllerSpellsCannotBeCountered(
+                                    matching,
+                                ),
+                            ..
+                        } => !matching.is_disjoint(&types),
+                        crate::characteristics::StaticContinuousAbility::CastPermission {
+                            permission:
+                                crate::characteristics::CastPermissionRule::ControllerSpellsCannotBeCounteredFiltered(
+                                    filter,
+                                ),
+                            ..
+                        } => match entry.kind() {
+                            StackKind::CardSpell(obj) => {
+                                evaluated.get(*obj).is_some_and(|view| {
+                                    let aura_or_equip = view.has_type(CardType::Enchantment)
+                                        && self
+                                            .copiable_program(*obj)
+                                            .and_then(Program::permanent)
+                                            .is_some_and(|p| {
+                                                matches!(
+                                                    p.attachment,
+                                                    Some(crate::attachment::AttachmentKind::Aura(_))
+                                                )
+                                            })
+                                        || view.has_type(CardType::Artifact)
+                                            && self
+                                                .copiable_program(*obj)
+                                                .and_then(Program::permanent)
+                                                .is_some_and(|p| {
+                                                    matches!(
+                                                        p.attachment,
+                                                        Some(
+                                                            crate::attachment::AttachmentKind::Equipment
+                                                        )
+                                                    )
+                                                });
+                                    filter.matches_characteristics(
+                                        view,
+                                        aura_or_equip,
+                                        source.entry_creature_type,
+                                    )
+                                })
+                            }
+                            StackKind::SpellCopy { .. } => filter.matches_card_types(&types),
+                            _ => false,
+                        },
+                        crate::characteristics::StaticContinuousAbility::CostModifier {
+                            modifier:
+                                crate::characteristics::SpellCostModifier::HighManaValueProtected {
+                                    minimum,
+                                    ..
+                                },
+                            ..
+                        } => cast_value
+                            .as_ref()
+                            .is_some_and(|value| value >= &i64::from(minimum.get()).into()),
+                        _ => false,
+                    }
+                })
         }))
     }
 
@@ -2911,6 +3175,7 @@ impl EffectWindow {
                     modes: chosen_modes,
                     rebound_over_buyback: None,
                     exile_on_resolve: false,
+                    return_to_hand_on_resolve: false,
                     cascade: None,
                     copy_run: None,
                     pending_copy_targets: Vec::new(),
@@ -3065,12 +3330,85 @@ impl EffectWindow {
                 self.triggers
                     .delay_sacrifice(source, controller, crate::turn::Step::End, objects);
             }
+            StackKind::ActivatedAbility { source } | StackKind::TriggeredAbility { source } => {
+                let appearance = self
+                    .rules_snapshot(None)?
+                    .view()
+                    .appearance(source.id())
+                    .or_else(|| {
+                        self.execution_bindings(entry)
+                            .and_then(|b| b.trigger.as_ref())
+                            .map(|t| t.source.clone())
+                    })
+                    .ok_or(EffectError::InconsistentProgram)?;
+                self.triggers.delay_sacrifice(
+                    appearance,
+                    controller,
+                    crate::turn::Step::End,
+                    objects,
+                );
+            }
             StackKind::SpellCopy { .. } => self.triggers.delay_copy_sacrifice(
                 entry,
                 controller,
                 crate::turn::Step::End,
                 objects,
             ),
+            _ => return Err(EffectError::InconsistentProgram),
+        }
+        Ok(())
+    }
+
+    /// Capture one delayed exile trigger for newly created tokens from any resolving stack entry.
+    pub(crate) fn delay_entry_exile(
+        &mut self,
+        entry: StackEntryId,
+        controller: SeatId,
+        step: crate::turn::Step,
+        objects: Vec<ObjectId>,
+    ) -> Result<(), EffectError> {
+        let actual = self
+            .window
+            .resolving()
+            .filter(|actual| actual.id() == entry && actual.controller() == controller)
+            .ok_or(EffectError::WrongResolutionFrame)?;
+        if objects.iter().copied().collect::<BTreeSet<_>>().len() != objects.len()
+            || objects.iter().any(|id| {
+                self.window
+                    .cards()
+                    .get(*id)
+                    .is_none_or(|card| card.zone() != ObjectZone::Battlefield)
+            })
+        {
+            return Err(EffectError::InconsistentProgram);
+        }
+        match actual.kind() {
+            StackKind::CardSpell(id) => {
+                let source = self
+                    .rules_snapshot(None)?
+                    .view()
+                    .appearance(*id)
+                    .ok_or(EffectError::InconsistentProgram)?;
+                self.triggers.delay_exile(source, controller, step, objects);
+            }
+            StackKind::ActivatedAbility { source } | StackKind::TriggeredAbility { source } => {
+                let appearance = self
+                    .execution_bindings(entry)
+                    .and_then(|b| b.trigger.as_ref())
+                    .map(|t| t.source.clone())
+                    .or_else(|| {
+                        self.rules_snapshot(None)
+                            .ok()
+                            .and_then(|s| s.view().appearance(source.id()))
+                    })
+                    .ok_or(EffectError::InconsistentProgram)?;
+                self.triggers
+                    .delay_exile(appearance, controller, step, objects);
+            }
+            StackKind::SpellCopy { .. } => {
+                self.triggers
+                    .delay_copy_exile(entry, controller, step, objects);
+            }
             _ => return Err(EffectError::InconsistentProgram),
         }
         Ok(())
@@ -3129,6 +3467,117 @@ impl EffectWindow {
             })
     }
 
+    /// Check active `CardPlayPermission` (non-exile) and `TemporaryRuleKind::ZoneCastPermission`
+    /// grants for casting `object`. Returns `(zone_allowed, free, any_color, consumed_rule_idx)`.
+    pub(super) fn temporary_zone_cast_grant(
+        &self,
+        object: ObjectId,
+        player: SeatId,
+        current: &EvaluatedCharacteristics,
+        face: Option<&Program>,
+    ) -> (bool, bool, bool, Option<usize>) {
+        let Some(card) = self.window.cards().get(object) else {
+            return (false, false, false, None);
+        };
+        let is_land = face.is_some_and(|p| p.has_type(CardType::Land));
+        let mut zone_allowed = false;
+        let mut free = false;
+        let mut any_color = false;
+        for grant in &self.card_play_permissions {
+            if grant.object == object
+                && grant.player == player
+                && grant.zone.allows(card.zone())
+                && !(grant.cast_only && is_land)
+            {
+                zone_allowed = true;
+                free |= grant.free && !is_land;
+                any_color |= grant.any_color;
+            }
+        }
+        let mut consumed_idx = None;
+        if let Some(view) = current.get(object) {
+            for (idx, active) in self.temporary_rules.iter().enumerate() {
+                if active.consumed || !active.resolved_players.contains(&player) {
+                    continue;
+                }
+                let crate::program::TemporaryRuleKind::ZoneCastPermission {
+                    zone,
+                    filter,
+                    cast_only,
+                    free: rule_free,
+                    any_color: rule_any_color,
+                    once,
+                    ..
+                } = &active.rule
+                else {
+                    continue;
+                };
+                if *cast_only && is_land {
+                    continue;
+                }
+                let zone_ok = match zone {
+                    crate::program::SourceZoneFilter::Hand => {
+                        card.zone() == ObjectZone::Hand(player)
+                    }
+                    crate::program::SourceZoneFilter::Graveyard => {
+                        card.zone() == ObjectZone::Graveyard(player)
+                    }
+                    crate::program::SourceZoneFilter::OpponentGraveyard => {
+                        matches!(card.zone(), ObjectZone::Graveyard(owner) if owner != player)
+                    }
+                    crate::program::SourceZoneFilter::AnyGraveyard => {
+                        matches!(card.zone(), ObjectZone::Graveyard(_))
+                    }
+                    crate::program::SourceZoneFilter::Exile => card.zone() == ObjectZone::Exile,
+                    crate::program::SourceZoneFilter::Battlefield => {
+                        card.zone() == ObjectZone::Battlefield
+                    }
+                    crate::program::SourceZoneFilter::YourLibrary => {
+                        card.zone() == ObjectZone::Library(player)
+                    }
+                    crate::program::SourceZoneFilter::OpponentExile => {
+                        card.zone() == ObjectZone::Exile && card.owner() != player
+                    }
+                    crate::program::SourceZoneFilter::LinkedExile => {
+                        card.zone() == ObjectZone::Exile
+                            && active.source_object.is_some_and(|src| {
+                                self.linked_exiles
+                                    .get(&src)
+                                    .is_some_and(|list| list.contains(&object))
+                                    || self
+                                        .characteristics
+                                        .imprinted_cards
+                                        .get(&src)
+                                        .is_some_and(|list| list.contains(&object))
+                            })
+                    }
+                };
+                if !zone_ok {
+                    continue;
+                }
+                if filter.is_some_and(|f| {
+                    !self.matches_object_filter(
+                        f,
+                        view,
+                        active.controller,
+                        None,
+                        &BTreeSet::new(),
+                        current,
+                    )
+                }) {
+                    continue;
+                }
+                zone_allowed = true;
+                free |= *rule_free && !is_land;
+                any_color |= *rule_any_color;
+                if *once && consumed_idx.is_none() {
+                    consumed_idx = Some(idx);
+                }
+            }
+        }
+        (zone_allowed, free, any_color, consumed_idx)
+    }
+
     /// An unexpired free-cast permission constrained by its granting effect.
     pub fn may_cast_free_from_exile(&self, object: ObjectId, player: SeatId) -> bool {
         self.may_cast_free_face(object, player, self.copiable_program(object))
@@ -3142,6 +3591,12 @@ impl EffectWindow {
             .get(object)
             .is_some_and(|card| card.zone() == ObjectZone::Exile)
             && (self.free_exiled_cards.contains(&(object, player))
+                || self.card_play_permissions.iter().any(|grant| {
+                    grant.zone == CardPlayZone::Exile
+                        && grant.object == object
+                        && grant.player == player
+                        && grant.free
+                })
                 || !self
                     .free_exile_types_for(object, player, Some(program))
                     .is_empty()
@@ -3279,14 +3734,15 @@ impl EffectWindow {
             .cloned()
             .unwrap_or_else(|| 0.into())
     }
-    /// Printed definition of the other physical face, if this is a transforming card.
+    /// Printed definition of the other physical face, if this is a double-faced card.
     pub fn opposite_physical_face(&self, id: ObjectId) -> Option<&Program> {
         let card = self.window.cards().get(id)?;
         let front = self.programs.get(&card.card_id()?)?;
-        let back = front.reverse_face()?;
+        let back = front.back_face()?;
         Some(if card.transformed() { front } else { back })
     }
     /// A transforming card's back face uses its front's mana value, except when copying another permanent.
+    /// Modal double-faced back faces use their own face's mana value (CR 712.8f).
     pub fn permanent_mana_value(&self, id: ObjectId) -> Option<RulesInteger> {
         let permanent = self.window.cards().get(id)?;
         if permanent.zone() != ObjectZone::Battlefield {
@@ -3300,11 +3756,12 @@ impl EffectWindow {
         {
             return Some(value);
         }
-        if permanent.transformed() && self.characteristics.copied_definition(id).is_none() {
-            return self
-                .programs
-                .get(&permanent.card_id()?)
-                .map(Program::mana_value);
+        if permanent.transformed()
+            && self.characteristics.copied_definition(id).is_none()
+            && let Some(front) = self.programs.get(&permanent.card_id()?)
+            && front.modal_back.is_none()
+        {
+            return Some(front.mana_value());
         }
         self.copiable_program(id).map(Program::mana_value)
     }
@@ -3386,6 +3843,37 @@ impl EffectWindow {
     /// Batch consumers compute it once and perform lookups in the returned map.
     pub fn evaluated_characteristics(&self) -> Result<EvaluatedCharacteristics, EffectError> {
         self.evaluate_for_participants(self.window.participants())
+    }
+
+    /// Snapshot CR 608.2h last-known information for a targeted object before or during resolution.
+    pub(super) fn capture_target_lki(
+        &self,
+        id: ObjectId,
+        evaluated: &EvaluatedCharacteristics,
+    ) -> Option<TargetLki> {
+        let object = self.window.cards().get(id)?;
+        let view = evaluated.get(id);
+        let controller = view
+            .and_then(|v| v.controller)
+            .or_else(|| object.controller());
+        let mana_value = self
+            .copiable_program(id)
+            .map(Program::mana_value)
+            .unwrap_or_else(|| 0.into());
+        let (power, toughness) = match view.and_then(|v| v.power_toughness.as_ref()) {
+            Some(pt) => (
+                Some(pt.derived.power.clone()),
+                Some(pt.derived.toughness.clone()),
+            ),
+            None => (None, None),
+        };
+        Some(TargetLki {
+            owner: object.owner(),
+            controller,
+            mana_value,
+            power,
+            toughness,
+        })
     }
 
     fn evaluate_for_participants(
@@ -3667,6 +4155,38 @@ impl EffectWindow {
         next.characteristics.cards_drawn_this_turn_counts.clear();
         next.characteristics.descended_this_turn.clear();
         next.characteristics.committed_crime_this_turn.clear();
+        next.characteristics.entered_types_this_turn.clear();
+        next.characteristics.permanents_entered_this_turn.clear();
+        next.characteristics.cast_spell_types_this_turn.clear();
+        next.characteristics
+            .noncreature_spells_cast_this_turn
+            .clear();
+        next.characteristics.spells_cast_from_hand_this_turn.clear();
+        next.characteristics.lands_played_this_turn.clear();
+        next.characteristics.cards_left_graveyard_this_turn.clear();
+        next.characteristics
+            .nonland_permanents_left_battlefield_this_turn
+            .clear();
+        next.characteristics.creatures_died_this_turn_count = 0;
+        next.characteristics
+            .controlled_creatures_died_this_turn
+            .clear();
+        next.characteristics.tokens_created_this_turn.clear();
+        next.characteristics.attacking_creatures_this_turn.clear();
+        next.characteristics.attacked_objects_this_turn.clear();
+        next.characteristics.exerted_objects_this_turn.clear();
+        next.characteristics.blocked_objects_this_turn.clear();
+        next.characteristics.entered_objects_this_turn.clear();
+        next.characteristics.died_this_turn.clear();
+        next.characteristics.activated_sources_this_turn.clear();
+        next.characteristics
+            .ability_resolutions_by_source_this_turn
+            .clear();
+        next.characteristics.players_dealt_damage_this_turn.clear();
+        next.characteristics
+            .players_dealt_noncombat_damage_this_turn
+            .clear();
+        next.characteristics.object_damage_taken_this_turn.clear();
         if let Some(pairs) = &mut next.characteristics.creature_damage_pairs {
             pairs.clear();
         }
@@ -3803,6 +4323,64 @@ impl EffectWindow {
                     crate::mana::ManaRestriction::CreatureSpellOfType(kind)
                     | crate::mana::ManaRestriction::CreatureSpellOfTypeUncounterable(kind)
                     | crate::mana::ManaRestriction::CreatureSpellOrAbilityOfType(kind) => kind.is_some_and(|kind| spell_view.is_some_and(|value| value.has_type(CardType::Creature) && value.current_creature_subtypes.contains(&kind))),
+                    crate::mana::ManaRestriction::InstantOrSorcerySpell
+                    | crate::mana::ManaRestriction::InstantOrSorceryOrForetell => spell_view.is_some_and(|value| value.has_type(CardType::Instant) || value.has_type(CardType::Sorcery)),
+                    crate::mana::ManaRestriction::ArtifactSpell
+                    | crate::mana::ManaRestriction::ArtifactSpellOrAnyAbility => spell_view.is_some_and(|value| value.has_type(CardType::Artifact)),
+                    crate::mana::ManaRestriction::ArtifactAbility
+                    | crate::mana::ManaRestriction::ActivatedAbility => false,
+                    crate::mana::ManaRestriction::CastSpell => true,
+                    crate::mana::ManaRestriction::NotSpellFromHand => !spell.cast_from_hand_of(actor),
+                    crate::mana::ManaRestriction::CostContainingX => matches!(spell.kind(), StackKind::CardSpell(object) if self.copiable_program(*object).is_some_and(|p| p.x_mana_symbols > 0)),
+                    crate::mana::ManaRestriction::LegendarySpell => spell_view.is_some_and(|value| value.current_supertypes.contains(&crate::program::Supertype::Legendary)),
+                    crate::mana::ManaRestriction::MulticoloredSpell => spell_view.is_some_and(|value| value.current_colors.len() >= 2),
+                    crate::mana::ManaRestriction::EnchantmentSpell => spell_view.is_some_and(|value| value.has_type(CardType::Enchantment)),
+                    crate::mana::ManaRestriction::CreatureSpellOrAbility => spell_view.is_some_and(|value| value.has_type(CardType::Creature)),
+                    crate::mana::ManaRestriction::ColoredSpellWithoutX => spell_view.is_some_and(|value| !value.current_colors.is_empty()) && matches!(spell.kind(), StackKind::CardSpell(object) if self.copiable_program(*object).is_some_and(|p| p.x_mana_symbols == 0)),
+                    crate::mana::ManaRestriction::SpellWithMinManaValue(min) => match spell.kind() {
+                        StackKind::CardSpell(object) => self.stack_spell_mana_value(*object).is_ok_and(|mv| mv >= i64::from(min).into()),
+                        _ => false,
+                    },
+                    crate::mana::ManaRestriction::CreatureSpellWithMinManaValue(min) => {
+                        spell_view.is_some_and(|value| value.has_type(CardType::Creature))
+                            && matches!(spell.kind(), StackKind::CardSpell(object) if self.stack_spell_mana_value(*object).is_ok_and(|mv| mv >= i64::from(min).into()))
+                    }
+                    crate::mana::ManaRestriction::HistoricSpell => spell_view.is_some_and(|value| {
+                        value.has_type(CardType::Artifact)
+                            || value.current_supertypes.contains(&crate::program::Supertype::Legendary)
+                            || value.current_enchantment_subtypes.contains(&crate::program::EnchantmentSubtype::Saga)
+                    }),
+                    crate::mana::ManaRestriction::CreatureOrPlaneswalkerSpell => spell_view.is_some_and(|value| {
+                        value.has_type(CardType::Creature) || value.has_type(CardType::Planeswalker)
+                    }),
+                    crate::mana::ManaRestriction::CreatureAbility => false,
+                    crate::mana::ManaRestriction::PermanentSpell => spell_view.is_some_and(|value| {
+                        value.has_type(CardType::Artifact)
+                            || value.has_type(CardType::Battle)
+                            || value.has_type(CardType::Creature)
+                            || value.has_type(CardType::Enchantment)
+                            || value.has_type(CardType::Planeswalker)
+                    }),
+                    crate::mana::ManaRestriction::SpellFromGraveyardOrExile => {
+                        spell.cast_summary().cast_from_graveyard || spell.cast_summary().cast_from_exile
+                    }
+                    crate::mana::ManaRestriction::EquipmentOrEquipAbility => spell_view.is_some_and(|value| {
+                        value.current_artifact_subtypes.contains(&crate::program::ArtifactSubtype::Equipment)
+                    }),
+                    crate::mana::ManaRestriction::SpellWithMinManaValueOrX(min) => match spell.kind() {
+                        StackKind::CardSpell(object) => {
+                            self.stack_spell_mana_value(*object).is_ok_and(|mv| mv >= i64::from(min).into())
+                                || self.copiable_program(*object).is_some_and(|p| p.x_mana_symbols > 0)
+                        }
+                        _ => false,
+                    },
+                    crate::mana::ManaRestriction::CreatureSpellWithMinManaValueOrX(min) => {
+                        spell_view.is_some_and(|value| value.has_type(CardType::Creature))
+                            && matches!(spell.kind(), StackKind::CardSpell(object) if self.stack_spell_mana_value(*object).is_ok_and(|mv| mv >= i64::from(min).into()) || self.copiable_program(*object).is_some_and(|p| p.x_mana_symbols > 0))
+                    }
+                    crate::mana::ManaRestriction::CreatureOrEnchantmentSpell => spell_view.is_some_and(|value| {
+                        value.has_type(CardType::Creature) || value.has_type(CardType::Enchantment)
+                    }),
         })
     }
     fn prepare_restricted_mana_payment(
@@ -3867,10 +4445,17 @@ impl EffectWindow {
         source: &ObjectCharacteristics,
     ) -> bool {
         match rule {
-            crate::mana::ManaRestriction::ArtifactSpellOrAbility => {
-                source.has_type(CardType::Artifact)
-            }
-            crate::mana::ManaRestriction::NotNonartifactSpell => true,
+            crate::mana::ManaRestriction::ArtifactSpellOrAbility
+            | crate::mana::ManaRestriction::ArtifactAbility => source.has_type(CardType::Artifact),
+            crate::mana::ManaRestriction::NotNonartifactSpell
+            | crate::mana::ManaRestriction::ArtifactSpellOrAnyAbility
+            | crate::mana::ManaRestriction::ActivatedAbility
+            | crate::mana::ManaRestriction::NotSpellFromHand => true,
+            crate::mana::ManaRestriction::CreatureSpellOrAbility
+            | crate::mana::ManaRestriction::CreatureAbility => source.is_creature(),
+            crate::mana::ManaRestriction::EquipmentOrEquipAbility => source
+                .current_artifact_subtypes
+                .contains(&crate::program::ArtifactSubtype::Equipment),
             crate::mana::ManaRestriction::CreatureSpellOrAbilityOfType(Some(kind)) => {
                 source.is_creature() && source.current_creature_subtypes.contains(&kind)
             }
@@ -4555,6 +5140,9 @@ impl EffectWindow {
                 adventure: false,
                 split_half: None,
                 disturb: false,
+                modal_back: false,
+                prototype: false,
+                prepare: false,
                 splice: Vec::new(),
                 use_alternative: false,
                 use_granted_flashback: false,
@@ -4650,6 +5238,43 @@ impl EffectWindow {
                 &mut append,
             )?;
         }
+        let spell_extra_costs: Vec<_> = self
+            .window
+            .entries()
+            .iter()
+            .find(|e| e.id() == entry)
+            .and_then(|e| self.window.spell_object(e))
+            .and_then(|id| self.copiable_program(id))
+            .map(|p| p.extra_cast_costs.clone())
+            .unwrap_or_default();
+        if !spell_extra_costs.is_empty() {
+            let extra_objects: Vec<ObjectId> = payment
+                .objects
+                .iter()
+                .filter_map(|r| match r {
+                    crate::mana::CastResource::ExtraCost(id) => Some(*id),
+                    _ => None,
+                })
+                .collect();
+            let chosen_x = self
+                .window
+                .entries()
+                .iter()
+                .find(|e| e.id() == entry)
+                .and_then(|e| e.chosen_x())
+                .cloned();
+            self.pay_extra_costs_at_cut(
+                actor,
+                None,
+                entry,
+                crate::occurrence::EventCause::CastLifePayment { entry },
+                &spell_extra_costs,
+                &extra_objects,
+                chosen_x.as_ref(),
+                turn,
+                &mut append,
+            )?;
+        }
         let remaining = self.pay_cast_resources(&payment.objects, entry, turn, &mut append)?;
         let receipt = ManaPaymentRecord {
             from_lots: payment
@@ -4723,9 +5348,74 @@ impl EffectWindow {
                 _ => None,
             }
         });
-        Ok(extra.fold(1.into(), |n: RulesInteger, increment| {
+        let temp_extra: u32 = self
+            .temporary_rules
+            .iter()
+            .filter_map(|active| match &active.rule {
+                crate::program::TemporaryRuleKind::AdditionalLandPlay { count, .. }
+                    if active.resolved_players.contains(&actor) =>
+                {
+                    Some(u32::from(*count))
+                }
+                _ => None,
+            })
+            .sum();
+        let base = extra.fold(1.into(), |n: RulesInteger, increment| {
             n.plus(&i64::from(increment).into())
-        }))
+        });
+        Ok(base.plus(&i64::from(temp_extra).into()))
+    }
+
+    /// Resolve authored continuous-effect / temporary-rule durations against the current
+    /// resolving entry, turn number, and source control epoch. Returns `Ok(None)` if a
+    /// `WhileControllingAbilitySource` source is no longer controlled on the battlefield.
+    pub(super) fn resolve_duration(
+        &self,
+        entry: &crate::stack_window::StackEntry,
+        duration: crate::characteristics::ResolvedDuration,
+    ) -> Result<Option<crate::characteristics::ResolvedDuration>, EffectError> {
+        use crate::characteristics::ResolvedDuration;
+        Ok(match duration {
+            ResolvedDuration::UntilControllerNextTurn => {
+                Some(ResolvedDuration::UntilPlayerNextTurn {
+                    player: entry.controller(),
+                    created_in_turn: self.current_turn_number,
+                })
+            }
+            ResolvedDuration::ThroughControllerNextTurn => {
+                Some(ResolvedDuration::ThroughNextTurn {
+                    player: entry.controller(),
+                    created_in_turn: self.current_turn_number,
+                })
+            }
+            ResolvedDuration::WhileControllingAbilitySource => {
+                let (StackKind::ActivatedAbility { source }
+                | StackKind::TriggeredAbility { source }) = entry.kind()
+                else {
+                    return Err(EffectError::InconsistentProgram);
+                };
+                let source = source.id();
+                let controller = entry.controller();
+                let Some(epoch) = self
+                    .window
+                    .cards()
+                    .get(source)
+                    .filter(|card| {
+                        card.zone() == ObjectZone::Battlefield
+                            && card.controller() == Some(controller)
+                    })
+                    .and_then(GameObject::control_epoch)
+                else {
+                    return Ok(None);
+                };
+                Some(ResolvedDuration::WhileSourceControlled {
+                    source,
+                    controller,
+                    epoch,
+                })
+            }
+            other => Some(other),
+        })
     }
 
     /// Ordinary authored land admission; the root owns the per-turn allowance.
@@ -4770,18 +5460,26 @@ impl EffectWindow {
     ) -> Result<RulesTransition<Self, LandPlayRecord>, EffectError> {
         let revision = self.next_revision(expected)?;
         self.ensure_resolution_or_idle()?;
-        let permitted_outside_hand =
-            self.may_play_from_exile(land, actor) || self.library_play_permitted(land, actor)?;
+        let permitted_outside_hand = self.may_play_from_exile(land, actor)
+            || self.library_play_permitted(land, actor)?
+            || self.graveyard_land_play_permitted(land, actor)?;
         let flash = self
             .window
             .cards()
             .get(land)
             .filter(|source| source.zone() == ObjectZone::Hand(actor) || permitted_outside_hand)
             .and_then(|source| self.programs.get(&source.card_id()?))
-            .is_some_and(|program| {
-                program.has_type(CardType::Land)
-                    && program.printed_keywords.contains(&KeywordAbility::Flash)
-            });
+            .and_then(|program| {
+                if program.has_type(CardType::Land) {
+                    Some(program)
+                } else {
+                    program
+                        .modal_back
+                        .as_deref()
+                        .filter(|back| back.has_type(CardType::Land))
+                }
+            })
+            .is_some_and(|program| program.printed_keywords.contains(&KeywordAbility::Flash));
         crate::actions::validate_land_timing(&self.window, Some(turn), actor, flash)?;
         let source = self
             .window
@@ -4791,12 +5489,21 @@ impl EffectWindow {
         if source.zone() != ObjectZone::Hand(actor) && !permitted_outside_hand {
             return Err(EffectError::NotOwnHand);
         }
-        if !matches!(
-            source.card_id().and_then(|card| self.programs.get(&card)),
-            Some(program) if program.has_type(CardType::Land)
-        ) {
+        let front_program = source
+            .card_id()
+            .and_then(|card| self.programs.get(&card))
+            .ok_or(EffectError::NotLand)?;
+        let use_modal_back_land = if front_program.has_type(CardType::Land) {
+            false
+        } else if front_program
+            .modal_back
+            .as_deref()
+            .is_some_and(|back| back.has_type(CardType::Land))
+        {
+            true
+        } else {
             return Err(EffectError::NotLand);
-        }
+        };
         let physical = destination
             .physical(Some(actor))
             .ok_or(EffectError::InconsistentProgram)?;
@@ -4814,6 +5521,9 @@ impl EffectWindow {
             ..self.clone()
         };
         if destination == crate::program::PublicZoneDestination::Battlefield {
+            if use_modal_back_land {
+                next.window.enter_transformed(record.after.id())?;
+            }
             next.stage_resolution_entry_choice(land, record.after.id())?;
             if let Some(choice @ crate::land::EntryChoice::Chapter(_)) = choice {
                 next.entry_choices.insert(record.after.id(), choice);
@@ -4823,11 +5533,20 @@ impl EffectWindow {
                     next.copiable_program(record.after.id())
                         .and_then(Program::permanent)
                         .and_then(|permanent| permanent.entry_tap),
-                    Some(crate::land::EntryTap::AlwaysChooseColorExcept(_))
+                    Some(
+                        crate::land::EntryTap::AlwaysChooseColorExcept(_)
+                            | crate::land::EntryTap::ChooseColor
+                            | crate::land::EntryTap::ChooseColorExcept(_)
+                    )
                 ) {
                     return Err(EffectError::IllegalEntryColor);
                 }
                 next.entry_color_choices.insert(record.after.id(), color);
+                if let Some(c) = color.color() {
+                    next.characteristics
+                        .entry_color_choices
+                        .insert(record.after.id(), c);
+                }
             }
             if let Some(choice @ crate::land::EntryChoice::Reveal(_)) = choice {
                 if !matches!(
@@ -4859,6 +5578,33 @@ impl EffectWindow {
                         .and_then(Program::permanent)
                         .and_then(|permanent| permanent.entry_tap),
                     Some(crate::land::EntryTap::UnlessPayLife(_))
+                ) {
+                    return Err(EffectError::InconsistentProgram);
+                }
+                next.entry_choices.insert(record.after.id(), choice);
+            }
+            if let Some(choice @ crate::land::EntryChoice::OptionIndex(_)) = choice {
+                if !next
+                    .copiable_program(record.after.id())
+                    .and_then(Program::permanent)
+                    .and_then(|permanent| permanent.entry_tap)
+                    .is_some_and(|rule| rule.option_labels().is_some())
+                {
+                    return Err(EffectError::InconsistentProgram);
+                }
+                next.entry_choices.insert(record.after.id(), choice);
+            }
+            if let Some(choice @ crate::land::EntryChoice::Opponent(_)) = choice {
+                if !matches!(
+                    next.copiable_program(record.after.id())
+                        .and_then(Program::permanent)
+                        .and_then(|permanent| permanent.entry_tap),
+                    Some(
+                        crate::land::EntryTap::ChooseOpponent
+                            | crate::land::EntryTap::ChoosePlayer
+                            | crate::land::EntryTap::SiegeProtector
+                            | crate::land::EntryTap::ChosenOpponentControls
+                    )
                 ) {
                     return Err(EffectError::InconsistentProgram);
                 }
@@ -4913,7 +5659,40 @@ impl EffectWindow {
         &self,
         work: &LandPlayWork,
     ) -> Result<Option<EntryChoiceFrame>, EffectError> {
-        self.object_entry_choice_frame(work.actor, work.land)
+        let chooser = self
+            .prospective_entry_controllers
+            .get(&work.land)
+            .copied()
+            .unwrap_or(work.actor);
+        let Some(front) = self.prospective_definition(work.land) else {
+            return Ok(None);
+        };
+        let land_face = if front.has_type(CardType::Land) {
+            front
+        } else if let Some(back) = front
+            .modal_back
+            .as_deref()
+            .filter(|back| back.has_type(CardType::Land))
+        {
+            back
+        } else {
+            front
+        };
+        if land_face
+            .permanent()
+            .and_then(|permanent| permanent.entry_tap)
+            == Some(crate::land::EntryTap::ChooseModalFace)
+        {
+            return Ok(Some(EntryChoiceFrame {
+                revision: self.revision,
+                chooser,
+                object: work.land,
+                rule: crate::land::EntryTap::ChooseModalFace,
+                eligible_reveals: Vec::new(),
+                card_names: None,
+            }));
+        }
+        self.entry_choice_for_definition(chooser, work.land, land_face, true)
     }
     fn object_entry_choice_frame(
         &self,
@@ -4966,12 +5745,31 @@ impl EffectWindow {
             }
             EntryTap::ReadAhead { .. }
             | EntryTap::AlwaysChooseColorExcept(_)
+            | EntryTap::ChooseColor
+            | EntryTap::ChooseColorExcept(_)
             | EntryTap::ChooseCreatureType
             | EntryTap::ChooseNonlandCardName
-            | EntryTap::SiegeProtector
+            | EntryTap::ChooseOpponent
+            | EntryTap::ChoosePlayer
             | EntryTap::ChooseTwoPlayers
+            | EntryTap::ChooseCardType
+            | EntryTap::ChooseBasicLandType
+            | EntryTap::ChooseOddOrEven
+            | EntryTap::ChooseKhansOrDragons
+            | EntryTap::Unleash
+            | EntryTap::Riot
+            | EntryTap::Tribute(_)
+            | EntryTap::SiegeProtector
             | EntryTap::UnlessPayLife(_) => Vec::new(),
             _ => return Ok(None),
+        };
+        let chooser = if matches!(rule, EntryTap::Tribute(_)) {
+            self.opponents_of(chooser)
+                .ok()
+                .and_then(|ops| ops.first().copied())
+                .unwrap_or(chooser)
+        } else {
+            chooser
         };
         Ok(Some(EntryChoiceFrame {
             revision: self.revision,
@@ -4989,9 +5787,13 @@ impl EffectWindow {
     ) -> bool {
         match (frame.rule, choice) {
             (
-                crate::land::EntryTap::AlwaysChooseColorExcept(excluded),
+                crate::land::EntryTap::AlwaysChooseColorExcept(excluded)
+                | crate::land::EntryTap::ChooseColorExcept(excluded),
                 crate::land::EntryChoice::Color(color),
             ) => color != excluded && color != ManaType::Colourless,
+            (crate::land::EntryTap::ChooseColor, crate::land::EntryChoice::Color(color)) => {
+                color != ManaType::Colourless
+            }
             (
                 crate::land::EntryTap::ReadAhead { final_chapter },
                 crate::land::EntryChoice::Chapter(n),
@@ -5004,9 +5806,20 @@ impl EffectWindow {
                 crate::land::EntryTap::ChooseNonlandCardName,
                 crate::land::EntryChoice::CardName(index),
             ) => frame.card_names().get(index.0).is_some(),
-            (crate::land::EntryTap::SiegeProtector, crate::land::EntryChoice::Opponent(player)) => {
-                self.opponents_of(frame.chooser)
-                    .is_ok_and(|players| players.contains(&player))
+            (
+                crate::land::EntryTap::SiegeProtector | crate::land::EntryTap::ChooseOpponent,
+                crate::land::EntryChoice::Opponent(player),
+            ) => self
+                .opponents_of(frame.chooser)
+                .is_ok_and(|players| players.contains(&player)),
+            (crate::land::EntryTap::ChoosePlayer, crate::land::EntryChoice::Opponent(player)) => {
+                self.window.participants().contains(&player)
+            }
+            (rule, crate::land::EntryChoice::OptionIndex(idx))
+                if rule.option_labels().is_some() =>
+            {
+                rule.option_labels()
+                    .is_some_and(|labels| usize::from(idx) < labels.len())
             }
             (
                 crate::land::EntryTap::ChooseTwoPlayers,
@@ -5054,6 +5867,7 @@ impl EffectWindow {
         if source.zone() != ObjectZone::Hand(actor)
             && !self.may_play_from_exile(land, actor)
             && !self.library_play_permitted(land, actor)?
+            && !self.graveyard_land_play_permitted(land, actor)?
         {
             return Err(EffectError::NotOwnHand);
         }
@@ -5061,10 +5875,18 @@ impl EffectWindow {
             .card_id()
             .and_then(|id| self.programs.get(&id))
             .ok_or(EffectError::NotLand)?;
-        if !program.has_type(CardType::Land) {
+        let land_face = if program.has_type(CardType::Land) {
+            program
+        } else if let Some(back) = program
+            .modal_back
+            .as_deref()
+            .filter(|back| back.has_type(CardType::Land))
+        {
+            back
+        } else {
             return Err(EffectError::NotLand);
-        }
-        let flash = program.printed_keywords.contains(&KeywordAbility::Flash);
+        };
+        let flash = land_face.printed_keywords.contains(&KeywordAbility::Flash);
         crate::actions::validate_land_timing(&self.window, Some(turn), actor, flash)?;
         let batch = self.begin_zone_replacements_with_entry(
             zone_replacement::AuthorizedZoneBatch {
@@ -5321,6 +6143,8 @@ impl EffectWindow {
                     random_selection: None,
                     results: ResolutionResults::default(),
                     chosen_effect_color: None,
+                    chosen_option_index: None,
+                    chosen_distinct_colors: Vec::new(),
                     chosen_mana_split: None,
                     tempting_token_offer: None,
                     destroyed_permanents: None,
@@ -5434,6 +6258,14 @@ impl EffectWindow {
         if self.aura_on_stack(&entry).is_some() {
             return next.resolve_permanent_entry(&entry);
         }
+        let mut results = ResolutionResults::default();
+        for bound in entry.targets().targets() {
+            if let TargetRef::Object(id) = bound.choice().target
+                && let Some(lki) = next.capture_target_lki(id, &current)
+            {
+                results.target_lki.insert(id, lki);
+            }
+        }
         next.pending_work = Some(PendingWork::Resolution(ResolutionCursor {
             revealed_piles: None,
             chosen_opponent: None,
@@ -5443,8 +6275,10 @@ impl EffectWindow {
             meld_pair: None,
             manifest_remaining: None,
             random_selection: None,
-            results: ResolutionResults::default(),
+            results,
             chosen_effect_color: None,
+            chosen_option_index: None,
+            chosen_distinct_colors: Vec::new(),
             chosen_mana_split: None,
             tempting_token_offer: None,
             destroyed_permanents: None,
@@ -5905,13 +6739,17 @@ impl EffectWindow {
             match choice {
                 crate::land::EntryChoice::Color(color) => {
                     self.entry_color_choices.insert(new, color);
+                    if let Some(c) = color.color() {
+                        self.characteristics.entry_color_choices.insert(new, c);
+                    }
                 }
                 reveal @ (crate::land::EntryChoice::Players(_)
                 | crate::land::EntryChoice::Opponent(_)
                 | crate::land::EntryChoice::Reveal(_)
                 | crate::land::EntryChoice::Chapter(_)
                 | crate::land::EntryChoice::CardName(_)
-                | crate::land::EntryChoice::PayLife(_)) => {
+                | crate::land::EntryChoice::PayLife(_)
+                | crate::land::EntryChoice::OptionIndex(_)) => {
                     self.entry_choices.insert(new, reveal);
                 }
                 crate::land::EntryChoice::CreatureType(kind) => {
@@ -6450,9 +7288,41 @@ impl EffectWindow {
         let rebound_selected = matches!(self.payloads.get(&entry.id()),Some(StackPayload::Instructions(payload)) if payload.rebound_over_buyback==Some(true));
         let self_exile = resolved
             && matches!(self.payloads.get(&entry.id()), Some(StackPayload::Instructions(payload)) if payload.exile_on_resolve);
-        let destination = if self_exile {
+        let self_return_to_hand = resolved
+            && matches!(self.payloads.get(&entry.id()), Some(StackPayload::Instructions(payload)) if payload.return_to_hand_on_resolve);
+        let temp_exile_spell = self.temporary_rules.iter().any(|active| {
+            let crate::program::TemporaryRuleKind::ExileSpellOnResolve { filter, .. } =
+                &active.rule
+            else {
+                return false;
+            };
+            if !active.resolved_players.contains(&entry.controller()) {
+                return false;
+            }
+            match filter {
+                None => true,
+                Some(f) => match entry.kind() {
+                    StackKind::CardSpell(object) => {
+                        self.evaluated_characteristics().ok().is_some_and(|eval| {
+                            eval.get(*object).is_some_and(|view| {
+                                self.matches_object_filter(
+                                    *f,
+                                    view,
+                                    active.controller,
+                                    active.source_object,
+                                    &BTreeSet::new(),
+                                    &eval,
+                                )
+                            })
+                        })
+                    }
+                    _ => true,
+                },
+            }
+        });
+        let destination = if self_exile || temp_exile_spell {
             ObjectDestination::Exile
-        } else if resolved && entry.bought_back() && !rebound_selected {
+        } else if self_return_to_hand || (resolved && entry.bought_back() && !rebound_selected) {
             ObjectDestination::Hand
         } else {
             ObjectDestination::Graveyard
@@ -6736,6 +7606,9 @@ impl EffectWindow {
                     .is_ok_and(|opponents| opponents.contains(&object.owner()))
             }),
             ControllerFilter::RelatedPlayer => false,
+            ControllerFilter::TargetPlayer | ControllerFilter::TargetOpponent => self
+                .resolving_player(crate::program::ResolvingPlayer::TargetPlayer)
+                .is_ok_and(|seat| p.controller == Some(seat)),
             ControllerFilter::Player(seat) => p.controller == Some(seat),
         };
         if !controller_ok {
@@ -6926,6 +7799,164 @@ impl EffectWindow {
                 .is_some_and(|card| card.face_down().is_some())
         {
             return false;
+        }
+        if clause.flags.contains(ObjectFilterFlags::EXILED_WITH_SELF)
+            && !ability_source.is_some_and(|src| {
+                self.characteristics
+                    .imprinted_cards
+                    .get(&src)
+                    .is_some_and(|list| list.contains(&id))
+                    || self
+                        .characteristics
+                        .ability_donors_in_exile
+                        .get(&src)
+                        .is_some_and(|list| list.contains(&id))
+                    || self
+                        .linked_exiles
+                        .get(&src)
+                        .is_some_and(|list| list.contains(&id))
+            })
+        {
+            return false;
+        }
+        if clause
+            .flags
+            .contains(ObjectFilterFlags::DEALT_DAMAGE_BY_SELF_THIS_TURN)
+            && !ability_source.is_some_and(|src| {
+                self.characteristics
+                    .creature_damage_pairs
+                    .as_ref()
+                    .is_some_and(|pairs| pairs.contains(&(src, id)))
+            })
+        {
+            return false;
+        }
+        if clause.flags.contains(ObjectFilterFlags::DIED_THIS_TURN)
+            && !self.characteristics.died_this_turn.contains(&id)
+        {
+            return false;
+        }
+        if clause
+            .flags
+            .contains(ObjectFilterFlags::MATCHES_SOURCE_ENTRY_COLOR)
+            && !ability_source.is_some_and(|src| {
+                self.characteristics
+                    .entry_color_choices
+                    .get(&src)
+                    .is_some_and(|color| p.current_colors.contains(color))
+            })
+        {
+            return false;
+        }
+        let eval_anchor = |anchor: crate::program::DynamicStatAnchor| -> Option<RulesInteger> {
+            use crate::program::DynamicStatAnchor as A;
+            match anchor {
+                A::ChosenX => self.window.resolving().and_then(|e| e.chosen_x().cloned()),
+                A::SourcePower => ability_source
+                    .and_then(|src| evaluated.get(src))
+                    .and_then(|o| {
+                        o.power_toughness
+                            .as_ref()
+                            .map(|pt| pt.derived.power.clone())
+                    }),
+                A::SourceToughness => {
+                    ability_source
+                        .and_then(|src| evaluated.get(src))
+                        .and_then(|o| {
+                            o.power_toughness
+                                .as_ref()
+                                .map(|pt| pt.derived.toughness.clone())
+                        })
+                }
+                A::SourceManaValue => ability_source.and_then(|src| self.permanent_mana_value(src)),
+                A::SourceCounters(kind) => ability_source
+                    .map(|src| self.characteristics.permanent_counter_count(src, kind)),
+                A::ControllerLife => self.life.get(controller).cloned(),
+                A::ControllerHandSize => Some(RulesInteger::from_usize(
+                    self.window
+                        .cards()
+                        .iter()
+                        .filter(|o| o.zone() == ObjectZone::Hand(controller))
+                        .count(),
+                )),
+                A::ControllerGraveyardCount => Some(RulesInteger::from_usize(
+                    self.window.cards().graveyard(controller).len(),
+                )),
+                A::ControllerControlledCount(ct) => Some(RulesInteger::from_usize(
+                    evaluated
+                        .objects
+                        .values()
+                        .filter(|o| {
+                            o.zone == ObjectZone::Battlefield
+                                && o.controller == Some(controller)
+                                && o.has_type(ct)
+                        })
+                        .count(),
+                )),
+                A::ControllerSubtypeCount(sub) => Some(RulesInteger::from_usize(
+                    evaluated
+                        .objects
+                        .values()
+                        .filter(|o| {
+                            o.zone == ObjectZone::Battlefield
+                                && o.controller == Some(controller)
+                                && o.current_creature_subtypes.contains(&sub)
+                        })
+                        .count(),
+                )),
+                A::TriggerSubjectPower => self
+                    .window
+                    .resolving()
+                    .and_then(|e| self.execution_bindings(e.id()))
+                    .and_then(|b| b.trigger.as_ref())
+                    .and_then(|t| t.causes.members().first())
+                    .and_then(|c| c.subject_object_id())
+                    .and_then(|tid| evaluated.get(tid))
+                    .and_then(|o| {
+                        o.power_toughness
+                            .as_ref()
+                            .map(|pt| pt.derived.power.clone())
+                    }),
+                A::TriggerSubjectManaValue => self
+                    .window
+                    .resolving()
+                    .and_then(|e| self.execution_bindings(e.id()))
+                    .and_then(|b| b.trigger.as_ref())
+                    .and_then(|t| t.causes.members().first())
+                    .and_then(|c| c.subject_object_id())
+                    .and_then(|tid| self.permanent_mana_value(tid)),
+            }
+        };
+        if let PowerFilter::CompareAnchor { op, anchor } = clause.power
+            && !p
+                .power_toughness
+                .as_ref()
+                .zip(eval_anchor(anchor))
+                .is_some_and(|(stats, bound)| op.evaluate(&stats.derived.power, &bound))
+        {
+            return false;
+        }
+        if let crate::program::ToughnessFilter::CompareAnchor { op, anchor } = clause.toughness
+            && !p
+                .power_toughness
+                .as_ref()
+                .zip(eval_anchor(anchor))
+                .is_some_and(|(stats, bound)| op.evaluate(&stats.derived.toughness, &bound))
+        {
+            return false;
+        }
+        if let crate::program::ManaValueFilter::CompareAnchor { op, anchor } = clause.mana_value {
+            let mv = if p.zone == ObjectZone::Battlefield {
+                self.permanent_mana_value(id)
+            } else {
+                self.copiable_program(id).map(Program::mana_value)
+            };
+            if !mv
+                .zip(eval_anchor(anchor))
+                .is_some_and(|(value, bound)| op.evaluate(&value, &bound))
+            {
+                return false;
+            }
         }
         if matches!(clause.power, PowerFilter::AtMostControlledCreatureCount)
             && !p.power_toughness.as_ref().is_some_and(|stats| {
@@ -7184,6 +8215,60 @@ impl EffectWindow {
             BodyTarget::SingleStackEntry => {
                 matches!(target, TargetRef::Stack(id) if self.window.entries().iter().chain(self.window.resolving()).any(|entry| entry.id() == id))
             }
+            BodyTarget::SingleStackObject(filter) => match target {
+                TargetRef::Stack(id) => self
+                    .window
+                    .entries()
+                    .iter()
+                    .chain(self.window.resolving())
+                    .find(|entry| entry.id() == id)
+                    .is_some_and(|entry| match entry.kind() {
+                        StackKind::ActivatedAbility { .. } | StackKind::TriggeredAbility { .. } => {
+                            let target_ok = match filter.target_shape {
+                                crate::program::SpellTargetShape::Any => true,
+                                crate::program::SpellTargetShape::SingleTarget => {
+                                    entry.targets().targets().len() == 1
+                                }
+                                crate::program::SpellTargetShape::TargetingPlayer => entry
+                                    .targets()
+                                    .targets()
+                                    .iter()
+                                    .any(|t| matches!(t.choice().target, TargetRef::Player(_))),
+                                crate::program::SpellTargetShape::TargetingOnlySource => false,
+                            };
+                            let controller_ok = match filter.object {
+                                crate::program::ObjectFilter::Clause(c) => match c.controller {
+                                    crate::program::ControllerFilter::Any => true,
+                                    crate::program::ControllerFilter::You => {
+                                        entry.controller() == controller
+                                    }
+                                    crate::program::ControllerFilter::Opponent
+                                    | crate::program::ControllerFilter::NotYou => {
+                                        entry.controller() != controller
+                                    }
+                                    crate::program::ControllerFilter::Player(seat) => {
+                                        entry.controller() == seat
+                                    }
+                                    _ => true,
+                                },
+                                crate::program::ObjectFilter::Either(_, _) => true,
+                            };
+                            target_ok && controller_ok
+                        }
+                        StackKind::CardSpell(_) | StackKind::SpellCopy { .. } => self
+                            .legal_target_kind_in(
+                                BodyTarget::SingleSpell(filter),
+                                target,
+                                controller,
+                                evaluated,
+                            ),
+                        StackKind::Speed
+                        | StackKind::Monarch
+                        | StackKind::DelayedCopy { .. }
+                        | StackKind::Emblem { .. } => false,
+                    }),
+                _ => false,
+            },
             BodyTarget::SingleSpell(filter) => match target {
                 TargetRef::Stack(id) => self
                     .window
@@ -7204,8 +8289,16 @@ impl EffectWindow {
                         let zone_ok = match filter.cast_zone {
                             crate::program::SpellCastZoneFilter::Any => true,
                             crate::program::SpellCastZoneFilter::NotOwnersHand => !from_owners_hand,
-                            crate::program::SpellCastZoneFilter::Graveyard
-                            | crate::program::SpellCastZoneFilter::OwnLibrary => false,
+                            crate::program::SpellCastZoneFilter::Exile => {
+                                entry.cast_summary().cast_from_exile
+                            }
+                            crate::program::SpellCastZoneFilter::Hand => entry.cast_from_any_hand(),
+                            crate::program::SpellCastZoneFilter::Graveyard => {
+                                entry.cast_from_graveyard
+                            }
+                            crate::program::SpellCastZoneFilter::OwnLibrary => {
+                                entry.cast_from_library == Some(controller)
+                            }
                         };
                         if !zone_ok {
                             return false;
@@ -7259,7 +8352,9 @@ impl EffectWindow {
                                 }
                                 crate::program::ControllerFilter::OwnerYou
                                 | crate::program::ControllerFilter::OwnerOpponent
-                                | crate::program::ControllerFilter::RelatedPlayer => false,
+                                | crate::program::ControllerFilter::RelatedPlayer
+                                | crate::program::ControllerFilter::TargetPlayer
+                                | crate::program::ControllerFilter::TargetOpponent => false,
                             },
                             crate::program::ObjectFilter::Either(_, _) => true,
                         };
@@ -7505,6 +8600,61 @@ impl EffectWindow {
             | Instruction::AddPlayerCounter { .. }
             | Instruction::ExileTopPlay { .. }
             | Instruction::LookTopChoose { .. }
+            | Instruction::MoveSubject { .. }
+            | Instruction::SelectZoneCardsToZone { .. }
+            | Instruction::ChooseOption { .. }
+            | Instruction::DealDamageFrom { .. }
+            | Instruction::DivideDamageAmongTargets { .. }
+            | Instruction::GainControlOfPermanent { .. }
+            | Instruction::GiveFixedTargetControl { .. }
+            | Instruction::BecomeCopy { .. }
+            | Instruction::BecomeCopyFixedTargets { .. }
+            | Instruction::DoublePowerToughnessSubject { .. }
+            | Instruction::DoubleCountersOnSubject { .. }
+            | Instruction::ShuffleSubjectIntoLibrary { .. }
+            | Instruction::WinGame(_)
+            | Instruction::LoseGame(_)
+            | Instruction::DistributeCountersAmongTargets { .. }
+            | Instruction::RollDie { .. }
+            | Instruction::FlipCoins { .. }
+            | Instruction::ChooseValue { .. }
+            | Instruction::ChooseOptionForPlayers { .. }
+            | Instruction::Vote { .. }
+            | Instruction::Incubate { .. }
+            | Instruction::Connive { .. }
+            | Instruction::ConniveFinalize { .. }
+            | Instruction::Discover { .. }
+            | Instruction::Clash { .. }
+            | Instruction::RingTemptsYou
+            | Instruction::VentureIntoDungeon { .. }
+            | Instruction::TakeInitiative { .. }
+            | Instruction::UnlockDoor { .. }
+            | Instruction::Behold { .. }
+            | Instruction::ManifestDread
+            | Instruction::Monstrosity { .. }
+            | Instruction::Fight { .. }
+            | Instruction::Exchange(_)
+            | Instruction::CopyStackObject { .. }
+            | Instruction::ExileGroupFromZone { .. }
+            | Instruction::SacrificeSubject { .. }
+            | Instruction::DestroyChosen { .. }
+            | Instruction::CastLinkedFaceDownFree
+            | Instruction::Ripple(_)
+            | Instruction::Demonstrate
+            | Instruction::Enlist
+            | Instruction::AttachPermanent { .. }
+            | Instruction::SkipNextUntap { .. }
+            | Instruction::RequireCombatAction { .. }
+            | Instruction::CreateTemporaryRule { .. }
+            | Instruction::DestroySubject { .. }
+            | Instruction::GrantCardPlayPermission { .. }
+            | Instruction::CreateTokenCopy { .. }
+            | Instruction::CreateAuraTokenAttached { .. }
+            | Instruction::ExploreSubject(_)
+            | Instruction::ScheduleDelayedEventTrigger { .. }
+            | Instruction::MoveGraveyardGroup { .. }
+            | Instruction::PutHandPermanentFiltered { .. }
+            | Instruction::RepeatLoop { .. }
             | Instruction::RevealUntilMatch { .. }
             | Instruction::ControlManaSourceThroughNextTurn
             | Instruction::GrantControllerFlashUntilCleanup
@@ -7650,6 +8800,7 @@ impl EffectWindow {
             | Instruction::BoostSourceByCastManaValue
             | Instruction::BoostLoneAttacker
             | Instruction::DrawTargetPlayer { .. }
+            | Instruction::DrawPlayer { .. }
             | Instruction::DrawHighestEntrantController
             | Instruction::DrawRelatedPlayer
             | Instruction::DrawCombatDamageSourceController
@@ -7671,6 +8822,8 @@ impl EffectWindow {
             | Instruction::CopyOtherTargetAsArtifact
             | Instruction::FixedTargetClause(_)
             | Instruction::ExileResolvingSpell
+            | Instruction::ReturnResolvingSpellToHand
+            | Instruction::Ascend
             | Instruction::DestroyFixedTargets
             | Instruction::DestroyTargetAndAttachedEquipment
             | Instruction::ReturnFixedTargets
@@ -7737,6 +8890,8 @@ impl EffectWindow {
             | Instruction::AdditionalCombat { .. }
             | Instruction::AdditionalCombatAfterUntappingAttackers
             | Instruction::TakeExtraTurn
+            | Instruction::DisallowDamagePreventionThisTurn
+            | Instruction::GrantNoMaxHandSizeRestOfGame
             | Instruction::PreventDamageThisTurn(_)
             | Instruction::MoveGroup { .. }
             | Instruction::PutTargetInLibrary(_)
@@ -7802,6 +8957,9 @@ impl EffectWindow {
             | Instruction::ClearSourceCounters(_)
             | Instruction::TransformSource
             | Instruction::TransformSourceAndAttachToTarget
+            | Instruction::AdvanceClassLevel(_)
+            | Instruction::SolveSourceCase
+            | Instruction::BecomePreparedSource
             | Instruction::TransformSubtype(_)
             | Instruction::UntapAbilitySource
             | Instruction::TapAbilitySource
@@ -7834,6 +8992,14 @@ impl EffectWindow {
             | Instruction::GainControllerLife { .. }
             | Instruction::DrainTargetAndGain(_)
             | Instruction::AdjustControllerLife { .. }
+            | Instruction::PayLife { .. }
+            | Instruction::PayEnergy { .. }
+            | Instruction::ExileFromZone { .. }
+            | Instruction::TapOrUntapControlled { .. }
+            | Instruction::ExertAbilitySource
+            | Instruction::CollectEvidence { .. }
+            | Instruction::Blight { .. }
+            | Instruction::OfferDynamicManaPayment { .. }
             | Instruction::ExchangeLifeWithSourceToughness => false,
         })
     }

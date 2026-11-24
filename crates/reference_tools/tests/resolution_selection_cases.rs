@@ -678,7 +678,10 @@ fn resolve_choices(
                     | ResolutionSelectionKind::Bolster
                     | ResolutionSelectionKind::Amass
                     | ResolutionSelectionKind::Untap
-                    | ResolutionSelectionKind::EnterBattlefield =>
+                    | ResolutionSelectionKind::EnterBattlefield
+                    | ResolutionSelectionKind::BlightCreature
+                    | ResolutionSelectionKind::CollectEvidence
+                    | ResolutionSelectionKind::SelectZoneCards =>
                         panic!("unexpected selection cohort"),
                 }
             );
@@ -719,7 +722,10 @@ fn resolve_choices(
                     | ResolutionSelectionKind::Bolster
                     | ResolutionSelectionKind::Amass
                     | ResolutionSelectionKind::Untap
-                    | ResolutionSelectionKind::EnterBattlefield =>
+                    | ResolutionSelectionKind::EnterBattlefield
+                    | ResolutionSelectionKind::BlightCreature
+                    | ResolutionSelectionKind::CollectEvidence
+                    | ResolutionSelectionKind::SelectZoneCards =>
                         panic!("unexpected selection cohort"),
                 }
             );

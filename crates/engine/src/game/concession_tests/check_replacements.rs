@@ -431,6 +431,7 @@ fn concession_combined_complete_sba_copy_token_counter_loss_work_is_frozen() {
                     any_types: Default::default(),
                     required_types: BTreeSet::from([crate::program::CardType::Creature]),
                     forbidden_types: BTreeSet::new(),
+                    object_filter: None,
                 },
             },
             Instruction::PutPowerToughnessCounters {

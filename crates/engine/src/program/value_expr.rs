@@ -32,6 +32,7 @@ pub enum ObjectStatKind {
     Power,
     Toughness,
     ManaValue,
+    Loyalty,
 }
 
 /// Aggregation operator over matching battlefield objects.
@@ -57,6 +58,12 @@ pub enum ValueObjectRef {
     ExiledCostCreature,
     TriggeringSpell,
     FinalSaga,
+    /// Top card revealed by `LookTopChoose { reveal_only: true }` or `MayRevealLibraryTop`.
+    RevealedTop,
+    /// Object that caused the current triggered ability to fire (e.g., entering/attacking/targeted/dying permanent).
+    TriggerSubject,
+    /// Permanent to which the ability source Aura or Equipment is attached.
+    AttachedHost,
 }
 
 /// Subject whose counters are counted by [`ValueExpr::CounterCount`].
@@ -66,6 +73,8 @@ pub enum CounterSubjectRef {
     TriggerSource,
     DyingSource,
     TargetObject,
+    TriggerSubject,
+    AttachedHost,
     ControllerExperience,
     ControllerEnergy,
     ControllerPoison,
@@ -79,30 +88,162 @@ pub enum AttachedCountKind {
     CursesOnRelatedPlayer,
 }
 
+/// Player-agnostic zone kind for [`SourceStateExpr::InZone`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SourceZoneKind {
+    Battlefield,
+    Graveyard,
+    Hand,
+    Exile,
+    Command,
+    Stack,
+    Library,
+}
+
+/// Source-permanent state or turn-history scalar read by [`ValueExpr::SourceState`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SourceStateExpr {
+    /// `1` if the ability source entered the battlefield this turn, else `0`.
+    EnteredThisTurn,
+    /// `1` if the ability source attacked this turn, else `0`.
+    AttackedThisTurn,
+    /// `1` if the ability source attacked or blocked this turn, else `0`.
+    AttackedOrBlockedThisTurn,
+    /// `1` if the ability source is attacking or blocking in the current combat, else `0`.
+    AttackedOrBlockedThisCombat,
+    /// `1` if the ability source is currently the only attacking creature, else `0`.
+    AttackingAlone,
+    /// `1` if the ability source is saddled, else `0`.
+    Saddled,
+    /// `1` if the ability source is renowned, else `0`.
+    Renowned,
+    /// `1` if the ability source is currently paired with another creature (soulbond), else `0`.
+    Paired,
+    /// `1` if the ability source is monstrous (CR 701.31), else `0`.
+    Monstrous,
+    /// `1` if tribute was paid as the ability source entered the battlefield (CR 702.104), else `0`.
+    TributePaid,
+    /// `1` if the ability source is suspected (CR 701.58), else `0`.
+    Suspected,
+    /// `1` if the ability source Case is solved (CR 719), else `0`.
+    Solved,
+    /// `1` if the ability source is prepared, else `0`.
+    Prepared,
+    /// `1` if the ability source is goaded, else `0`.
+    Goaded,
+    /// `1` if the ability source was exerted this turn, else `0`.
+    ExertedThisTurn,
+    /// `1` if the ability source is currently in `zone`, else `0`.
+    InZone(SourceZoneKind),
+    /// Total damage dealt to the ability source this turn.
+    DamageDealtThisTurn,
+    /// Number of times any activated ability of the ability source was activated this turn.
+    AbilityActivatedThisTurn,
+    /// Number of times abilities of the ability source have resolved this turn.
+    AbilityResolvedCountThisTurn,
+    /// Total mana spent to cast the ability source.
+    ManaSpentToCast,
+    /// Number of distinct colors of mana spent to cast the ability source.
+    ColorsSpentToCast,
+    /// Amount of a specific mana type spent to cast the ability source.
+    ManaTypeSpentToCast(crate::mana::ManaType),
+    /// Amount of mana from snow sources spent to cast the ability source.
+    SnowManaSpentToCast,
+    /// Amount of mana from Treasure sources spent to cast the ability source.
+    TreasureManaSpentToCast,
+    /// Amount of mana produced by creatures spent to cast the ability source.
+    CreatureManaSpentToCast,
+    /// `1` if the ability source was cast from anywhere other than its caster's hand.
+    CastFromOutsideHand,
+    /// `1` if the ability source was cast from exile.
+    CastFromExile,
+    /// `1` if the ability source was cast from a graveyard.
+    CastFromGraveyard,
+    /// `1` if the ability source was cast during its controller's main phase.
+    CastDuringMainPhase,
+    /// `1` if the ability source was bargained.
+    Bargained,
+    /// `1` if the gift was promised for the ability source.
+    GiftPromised,
+    /// `1` if the ability source was cleaved.
+    Cleaved,
+    /// `1` if evidence was collected for the ability source.
+    EvidenceCollected,
+}
+
+/// Turn-history statistic checked across active opponents.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OpponentTurnStat {
+    Discarded,
+    Sacrificed,
+    CastSpells,
+    DrewCards,
+    Attacked,
+    GainedLife,
+    LostLife,
+    PlayedLand,
+    CreatureEntered,
+    PermanentLeft,
+}
+
 /// Player-level scalar statistic read by [`ValueExpr::PlayerStat`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PlayerStatExpr {
     ControllerLife,
     ControllerLifeAboveStarting,
+    ControllerStartingLife,
+    OpponentMaxLife,
+    /// Minimum life total among active opponents (falls back to controller life if no opponents).
+    OpponentMinLife,
+    /// Maximum count of `CounterKind` across active opponents (e.g. Corrupted poison check).
+    OpponentMaxCounter(CounterKind),
+    /// Nonzero (`1`) if any active opponent performed the tracked turn action this turn.
+    OpponentStatThisTurn(OpponentTurnStat),
+    /// Global day/night state: `0 = Neither`, `1 = Day`, `2 = Night`.
+    DayNightState,
+    /// Minimum number of cards in any active participant's library.
+    MinLibrarySize,
     OpponentsLifeLostThisTurn,
     CardsDrawnThisTurn,
     CardsShortOfHandSize(u8),
     LargestHandSize,
     ControllerIsMonarch,
+    OpponentIsMonarch,
+    NoMonarch,
     ControlsGreatestCreature,
     ControllerIsActivePlayer,
+    ControllerIsAttacking,
+    ControllerIsDefending,
+    ControllerSpeed,
     OwnGraveyardDistinctCardTypes,
+    AllGraveyardsDistinctCardTypes,
     ControllerLifeLostThisTurn,
     ControllerLifeGainedThisTurn,
     ControllerSpellsCastThisTurn,
+    CastSpellTypeThisTurn(super::CardType),
+    CastNoncreatureSpellsThisTurn,
+    CastSpellsFromHandThisTurn,
     ControllerAttackedThisTurn,
+    AttackingCreaturesThisTurn,
     ControllerDiscardedThisTurn,
     ControllerSacrificedThisTurn,
     PermanentLeftBattlefieldThisTurn,
+    NonlandPermanentLeftBattlefieldThisTurn,
+    EnteredPermanentThisTurn,
+    EnteredTypeThisTurn(super::CardType),
     CreatureEnteredUnderControlThisTurn,
+    PlayedLandThisTurn,
+    CardsLeftGraveyardThisTurn,
+    CreaturesDiedThisTurn,
+    ControlledCreatureDiedThisTurn,
+    CreatedTokensThisTurn,
+    OpponentDealtDamageThisTurn {
+        noncombat_only: bool,
+    },
     DescendedThisTurn,
     CommittedCrimeThisTurn,
     ControllerHasCityBlessing,
+    AnyOpponentPoisoned,
     /// Current life total of any resolving player.
     PlayerLife(ResolvingPlayer),
     /// Number of cards in any resolving player's hand.
@@ -111,6 +252,18 @@ pub enum PlayerStatExpr {
     PlayerLibrarySize(ResolvingPlayer),
     /// Number of cards in any resolving player's graveyard.
     PlayerGraveyardSize(ResolvingPlayer),
+    /// `1` if the controller activated a loyalty ability this turn, else `0`.
+    LoyaltyActivatedThisTurn,
+    /// `1` if it is currently the controller's main phase, else `0`.
+    IsOwnMainPhase,
+    /// `1` if the controller has activated an exhaust ability on the source permanent, else `0`.
+    ExhaustActivatedThisTurn,
+    /// Number of dungeons the controller has completed this game (CR 309.7).
+    CompletedDungeons,
+    /// Number of times the Ring has tempted the controller (0..=4, CR 701.52).
+    RingLevel,
+    /// `1` if the controller currently has the initiative (CR 725), else `0`.
+    HasInitiative,
 }
 
 /// Subject tested by [`ValueExpr::ObjectMatches`] (evaluates to `1` if matched, `0` otherwise).
@@ -124,6 +277,8 @@ pub enum MatchObjectRef {
     DyingCreature,
     SacrificedCreature,
     TargetObject,
+    TriggerSubject,
+    AttachedHost,
 }
 
 /// Runtime event, stack, or resolution binding read by [`ValueExpr::EventValue`].
@@ -131,6 +286,7 @@ pub enum MatchObjectRef {
 pub enum EventValueKind {
     ChosenX,
     EnteredKickerX,
+    EnteredKickerCount(usize),
     KickerCount(usize),
     PaidAlternative,
     Bargained,
@@ -156,6 +312,33 @@ pub enum EventValueKind {
     SelectedGraveyardExileCreatures,
     SourceAttackedThisTurn,
     TriggerSourceOnBattlefield,
+    ManaSpentToCast,
+    ColorsSpentToCast,
+    ManaTypeSpentToCast(crate::mana::ManaType),
+    SnowManaSpentToCast,
+    TreasureManaSpentToCast,
+    CreatureManaSpentToCast,
+    CastFromOutsideHand,
+    CastFromExile,
+    GiftPromised,
+    Cleaved,
+    EvidenceCollected,
+    /// Final chosen or combined die roll result from the most recent `Instruction::RollDie`.
+    LastDieRoll,
+    /// Number of coin flips won during the most recent `Instruction::FlipCoins`.
+    CoinFlipsWon,
+    /// `1` if the most recent coin flip was won, else `0`.
+    LastCoinFlipWon,
+    /// Number chosen by `Instruction::ChooseValue(Number)`.
+    ChosenNumber,
+    /// 0-based option index chosen by `Instruction::ChooseValue(LabeledOption)`.
+    ChosenOptionIndex,
+    /// Vote count received by option `u8` in the most recent `Instruction::Vote`.
+    VoteCount(u8),
+    /// Winning option index from the most recent `Instruction::Vote`.
+    WinningVoteOption,
+    /// Count of nonland cards discarded during the most recent `Instruction::Connive`.
+    LastNonlandDiscarded,
 }
 
 /// Composable numeric expression unifying effect amounts and resolution-condition operands.
@@ -169,6 +352,24 @@ pub enum ValueExpr {
         filter: Box<ObjectFilter>,
         controller_scope: Option<ResolvingPlayer>,
     },
+    /// Maximum count of objects matching `filter` in `zone` across all active opponents.
+    OpponentMaxCount {
+        zone: ValueZone,
+        filter: Box<ObjectFilter>,
+    },
+    /// Minimum count of objects matching `filter` in `zone` across all active opponents.
+    OpponentMinCount {
+        zone: ValueZone,
+        filter: Box<ObjectFilter>,
+    },
+    /// CR 700.8: number of creatures in controller's party (0..=4) for `[Cleric, Rogue, Warrior, Wizard]`.
+    PartyCount(Box<[CreatureTypeId; 4]>),
+    /// Number of distinct WUBRG colors among battlefield permanents matching `filter` (0..=5).
+    DistinctColors { filter: Box<ObjectFilter> },
+    /// Number of distinct mana values among cards in `player`'s graveyard.
+    DistinctManaValuesInGraveyard(ResolvingPlayer),
+    /// Source-permanent state or turn-history scalar.
+    SourceState(SourceStateExpr),
     /// Count other battlefield creatures controlled by the resolving player sharing a subtype with the trigger source.
     CountOtherSharingSourceSubtype,
     /// Count creatures currently attacking the resolving controller directly (not a planeswalker).
@@ -414,20 +615,23 @@ impl ValueExpr {
     pub fn references_ability_source(&self) -> bool {
         match self {
             Self::ObjectStat {
-                subject: ValueObjectRef::AbilitySource,
+                subject: ValueObjectRef::AbilitySource | ValueObjectRef::AttachedHost,
                 ..
             }
             | Self::CounterCount {
-                subject: CounterSubjectRef::AbilitySource,
+                subject: CounterSubjectRef::AbilitySource | CounterSubjectRef::AttachedHost,
                 ..
             }
             | Self::ObjectMatches {
-                subject: MatchObjectRef::AbilitySource,
+                subject: MatchObjectRef::AbilitySource | MatchObjectRef::AttachedHost,
                 ..
-            } => true,
-            Self::Count { filter, .. } | Self::Aggregate { filter, .. } => {
-                filter.excludes_ability_source()
             }
+            | Self::SourceState(_) => true,
+            Self::Count { filter, .. }
+            | Self::OpponentMaxCount { filter, .. }
+            | Self::OpponentMinCount { filter, .. }
+            | Self::DistinctColors { filter }
+            | Self::Aggregate { filter, .. } => filter.excludes_ability_source(),
             Self::Scale { expr, .. } | Self::DivConst { expr, .. } => {
                 expr.references_ability_source()
             }
@@ -447,6 +651,367 @@ impl ValueExpr {
                     || else_value.references_ability_source()
             }
             _ => false,
+        }
+    }
+
+    /// True if this expression can be evaluated purely against a world snapshot without resolution/stack state.
+    #[must_use]
+    pub fn is_world_evaluable(&self) -> bool {
+        let world_player = |p: ResolvingPlayer| {
+            matches!(
+                p,
+                ResolvingPlayer::Controller
+                    | ResolvingPlayer::ActivePlayer
+                    | ResolvingPlayer::EnchantedPlayer
+            )
+        };
+        let world_filter =
+            |f: &ObjectFilter| f.chosen_type_slot().is_none() && !f.has_related_player();
+        match self {
+            Self::Literal(_)
+            | Self::DomainCount
+            | Self::OpponentsCount
+            | Self::Devotion(_)
+            | Self::PartyCount(_)
+            | Self::CountOtherSharingSourceSubtype
+            | Self::CountAttackingController => true,
+            Self::SourceState(kind) => !matches!(kind, SourceStateExpr::Goaded),
+            Self::Count {
+                zone,
+                filter,
+                controller_scope,
+            } => {
+                let zone_ok = match *zone {
+                    ValueZone::Battlefield | ValueZone::AllGraveyards | ValueZone::Exile(None) => {
+                        true
+                    }
+                    ValueZone::Graveyard(p)
+                    | ValueZone::Hand(p)
+                    | ValueZone::Library(p)
+                    | ValueZone::Exile(Some(p)) => world_player(p),
+                };
+                zone_ok && controller_scope.is_none_or(world_player) && world_filter(filter)
+            }
+            Self::OpponentMaxCount { zone, filter } | Self::OpponentMinCount { zone, filter } => {
+                matches!(
+                    zone,
+                    ValueZone::Battlefield
+                        | ValueZone::Graveyard(_)
+                        | ValueZone::Hand(_)
+                        | ValueZone::Library(_)
+                        | ValueZone::Exile(_)
+                ) && world_filter(filter)
+            }
+            Self::DistinctColors { filter } | Self::Aggregate { filter, .. } => {
+                world_filter(filter)
+            }
+            Self::DistinctManaValuesInGraveyard(p) => world_player(*p),
+            Self::ObjectStat { subject, .. } => matches!(
+                subject,
+                ValueObjectRef::AbilitySource
+                    | ValueObjectRef::TriggerSource
+                    | ValueObjectRef::AttachedHost
+            ),
+            Self::CounterCount { subject, .. } => matches!(
+                subject,
+                CounterSubjectRef::AbilitySource
+                    | CounterSubjectRef::TriggerSource
+                    | CounterSubjectRef::AttachedHost
+                    | CounterSubjectRef::ControllerExperience
+                    | CounterSubjectRef::ControllerEnergy
+                    | CounterSubjectRef::ControllerPoison
+            ),
+            Self::AttachedCount(kind) => matches!(
+                kind,
+                AttachedCountKind::EquipmentOnSource | AttachedCountKind::AurasAndEquipmentOnSource
+            ),
+            Self::PlayerStat(stat) => match stat {
+                PlayerStatExpr::CardsShortOfHandSize(_) => false,
+                PlayerStatExpr::PlayerLife(p)
+                | PlayerStatExpr::PlayerHandSize(p)
+                | PlayerStatExpr::PlayerLibrarySize(p)
+                | PlayerStatExpr::PlayerGraveyardSize(p) => world_player(*p),
+                _ => true,
+            },
+            Self::ObjectMatches { subject, filter } => {
+                matches!(
+                    subject,
+                    MatchObjectRef::AbilitySource | MatchObjectRef::AttachedHost
+                ) && world_filter(filter)
+            }
+            Self::EventValue(kind) => matches!(
+                kind,
+                EventValueKind::CreaturesDiedThisTurn
+                    | EventValueKind::SourceAttackedThisTurn
+                    | EventValueKind::ManaSpentToCast
+                    | EventValueKind::ColorsSpentToCast
+                    | EventValueKind::ManaTypeSpentToCast(_)
+                    | EventValueKind::SnowManaSpentToCast
+                    | EventValueKind::TreasureManaSpentToCast
+                    | EventValueKind::CreatureManaSpentToCast
+                    | EventValueKind::CastFromOutsideHand
+                    | EventValueKind::CastFromExile
+                    | EventValueKind::CastFromGraveyard
+                    | EventValueKind::CastDuringOwnMain
+                    | EventValueKind::Bargained
+                    | EventValueKind::GiftPromised
+                    | EventValueKind::Cleaved
+                    | EventValueKind::EvidenceCollected
+                    | EventValueKind::PaidAlternative
+                    | EventValueKind::KickerCount(_)
+            ),
+            Self::Scale { expr, .. } | Self::DivConst { expr, .. } => expr.is_world_evaluable(),
+            Self::Add(a, b) | Self::Sub(a, b) => a.is_world_evaluable() && b.is_world_evaluable(),
+            Self::Conditional {
+                left,
+                right,
+                then_value,
+                else_value,
+                ..
+            } => {
+                left.is_world_evaluable()
+                    && right.is_world_evaluable()
+                    && then_value.is_world_evaluable()
+                    && else_value.is_world_evaluable()
+            }
+        }
+    }
+
+    /// True if this expression can be evaluated at trigger time against a world snapshot plus trigger event context.
+    #[must_use]
+    pub fn is_trigger_world_evaluable(&self) -> bool {
+        let trig_player = |p: ResolvingPlayer| {
+            matches!(
+                p,
+                ResolvingPlayer::Controller
+                    | ResolvingPlayer::ActivePlayer
+                    | ResolvingPlayer::EnchantedPlayer
+                    | ResolvingPlayer::UniqueRelatedPlayer
+                    | ResolvingPlayer::DefendingPlayer
+                    | ResolvingPlayer::TargetController
+                    | ResolvingPlayer::TargetOwner
+            )
+        };
+        let world_filter =
+            |f: &ObjectFilter| f.chosen_type_slot().is_none() && !f.has_related_player();
+        match self {
+            Self::Literal(_)
+            | Self::DomainCount
+            | Self::OpponentsCount
+            | Self::Devotion(_)
+            | Self::PartyCount(_)
+            | Self::CountOtherSharingSourceSubtype
+            | Self::CountAttackingController => true,
+            Self::SourceState(kind) => !matches!(kind, SourceStateExpr::Goaded),
+            Self::Count {
+                zone,
+                filter,
+                controller_scope,
+            } => {
+                let zone_ok = match *zone {
+                    ValueZone::Battlefield | ValueZone::AllGraveyards | ValueZone::Exile(None) => {
+                        true
+                    }
+                    ValueZone::Graveyard(p)
+                    | ValueZone::Hand(p)
+                    | ValueZone::Library(p)
+                    | ValueZone::Exile(Some(p)) => trig_player(p),
+                };
+                zone_ok && controller_scope.is_none_or(trig_player) && world_filter(filter)
+            }
+            Self::OpponentMaxCount { zone, filter } | Self::OpponentMinCount { zone, filter } => {
+                matches!(
+                    zone,
+                    ValueZone::Battlefield
+                        | ValueZone::Graveyard(_)
+                        | ValueZone::Hand(_)
+                        | ValueZone::Library(_)
+                        | ValueZone::Exile(_)
+                ) && world_filter(filter)
+            }
+            Self::DistinctColors { filter } | Self::Aggregate { filter, .. } => {
+                world_filter(filter)
+            }
+            Self::DistinctManaValuesInGraveyard(p) => trig_player(*p),
+            Self::ObjectStat { subject, .. } => matches!(
+                subject,
+                ValueObjectRef::AbilitySource
+                    | ValueObjectRef::TriggerSource
+                    | ValueObjectRef::AttachedHost
+                    | ValueObjectRef::TriggerSubject
+                    | ValueObjectRef::DyingCreature
+                    | ValueObjectRef::EnteringPermanent
+                    | ValueObjectRef::TriggeringSpell
+            ),
+            Self::CounterCount { subject, .. } => matches!(
+                subject,
+                CounterSubjectRef::AbilitySource
+                    | CounterSubjectRef::TriggerSource
+                    | CounterSubjectRef::AttachedHost
+                    | CounterSubjectRef::TriggerSubject
+                    | CounterSubjectRef::ControllerExperience
+                    | CounterSubjectRef::ControllerEnergy
+                    | CounterSubjectRef::ControllerPoison
+            ),
+            Self::AttachedCount(kind) => matches!(
+                kind,
+                AttachedCountKind::EquipmentOnSource | AttachedCountKind::AurasAndEquipmentOnSource
+            ),
+            Self::PlayerStat(stat) => match stat {
+                PlayerStatExpr::CardsShortOfHandSize(_) => false,
+                PlayerStatExpr::PlayerLife(p)
+                | PlayerStatExpr::PlayerHandSize(p)
+                | PlayerStatExpr::PlayerLibrarySize(p)
+                | PlayerStatExpr::PlayerGraveyardSize(p) => trig_player(*p),
+                _ => true,
+            },
+            Self::ObjectMatches { subject, filter } => {
+                matches!(
+                    subject,
+                    MatchObjectRef::AbilitySource
+                        | MatchObjectRef::AttachedHost
+                        | MatchObjectRef::TriggerSubject
+                        | MatchObjectRef::DyingCreature
+                ) && world_filter(filter)
+            }
+            Self::EventValue(kind) => matches!(
+                kind,
+                EventValueKind::CreaturesDiedThisTurn
+                    | EventValueKind::SourceAttackedThisTurn
+                    | EventValueKind::ManaSpentToCast
+                    | EventValueKind::ColorsSpentToCast
+                    | EventValueKind::ManaTypeSpentToCast(_)
+                    | EventValueKind::SnowManaSpentToCast
+                    | EventValueKind::TreasureManaSpentToCast
+                    | EventValueKind::CreatureManaSpentToCast
+                    | EventValueKind::CastFromOutsideHand
+                    | EventValueKind::CastFromExile
+                    | EventValueKind::CastFromGraveyard
+                    | EventValueKind::CastDuringOwnMain
+                    | EventValueKind::Bargained
+                    | EventValueKind::GiftPromised
+                    | EventValueKind::Cleaved
+                    | EventValueKind::EvidenceCollected
+                    | EventValueKind::PaidAlternative
+                    | EventValueKind::KickerCount(_)
+            ),
+            Self::Scale { expr, .. } | Self::DivConst { expr, .. } => {
+                expr.is_trigger_world_evaluable()
+            }
+            Self::Add(a, b) | Self::Sub(a, b) => {
+                a.is_trigger_world_evaluable() && b.is_trigger_world_evaluable()
+            }
+            Self::Conditional {
+                left,
+                right,
+                then_value,
+                else_value,
+                ..
+            } => {
+                left.is_trigger_world_evaluable()
+                    && right.is_trigger_world_evaluable()
+                    && then_value.is_trigger_world_evaluable()
+                    && else_value.is_trigger_world_evaluable()
+            }
+        }
+    }
+
+    /// Validate that this expression is world-evaluable and references only valid creature types.
+    pub(crate) fn validate_world_expr(
+        &self,
+        vocabulary: &CreatureTypeVocabulary,
+    ) -> Result<(), DefinitionError> {
+        if !self.is_world_evaluable() {
+            return Err(DefinitionError::InvalidInstruction);
+        }
+        self.validate_trigger_world_condition(vocabulary)
+    }
+
+    /// Validate that this expression is trigger-world-evaluable and references only valid creature types.
+    pub(crate) fn validate_trigger_world_condition(
+        &self,
+        vocabulary: &CreatureTypeVocabulary,
+    ) -> Result<(), DefinitionError> {
+        if !self.is_trigger_world_evaluable() {
+            return Err(DefinitionError::InvalidInstruction);
+        }
+        match self {
+            Self::Count { filter, .. }
+            | Self::OpponentMaxCount { filter, .. }
+            | Self::OpponentMinCount { filter, .. }
+            | Self::DistinctColors { filter }
+            | Self::Aggregate { filter, .. }
+            | Self::ObjectMatches { filter, .. } => filter.validate_vocabulary(vocabulary),
+            Self::PartyCount(roles) => {
+                if roles.iter().any(|ct| vocabulary.label(*ct).is_none()) {
+                    return Err(DefinitionError::ForeignCreatureType);
+                }
+                Ok(())
+            }
+            Self::Scale { expr, .. } | Self::DivConst { expr, .. } => {
+                expr.validate_trigger_world_condition(vocabulary)
+            }
+            Self::Add(a, b) | Self::Sub(a, b) => {
+                a.validate_trigger_world_condition(vocabulary)?;
+                b.validate_trigger_world_condition(vocabulary)
+            }
+            Self::Conditional {
+                left,
+                right,
+                then_value,
+                else_value,
+                ..
+            } => {
+                left.validate_trigger_world_condition(vocabulary)?;
+                right.validate_trigger_world_condition(vocabulary)?;
+                then_value.validate_trigger_world_condition(vocabulary)?;
+                else_value.validate_trigger_world_condition(vocabulary)
+            }
+            _ => Ok(()),
+        }
+    }
+
+    /// Validate that this expression is purely world-evaluable and references only valid creature types.
+    pub(crate) fn validate_world_condition(
+        &self,
+        vocabulary: &CreatureTypeVocabulary,
+    ) -> Result<(), DefinitionError> {
+        if !self.is_world_evaluable() {
+            return Err(DefinitionError::InvalidInstruction);
+        }
+        match self {
+            Self::Count { filter, .. }
+            | Self::OpponentMaxCount { filter, .. }
+            | Self::OpponentMinCount { filter, .. }
+            | Self::DistinctColors { filter }
+            | Self::Aggregate { filter, .. }
+            | Self::ObjectMatches { filter, .. } => filter.validate_vocabulary(vocabulary),
+            Self::PartyCount(roles) => {
+                if roles.iter().any(|ct| vocabulary.label(*ct).is_none()) {
+                    return Err(DefinitionError::ForeignCreatureType);
+                }
+                Ok(())
+            }
+            Self::Scale { expr, .. } | Self::DivConst { expr, .. } => {
+                expr.validate_world_condition(vocabulary)
+            }
+            Self::Add(a, b) | Self::Sub(a, b) => {
+                a.validate_world_condition(vocabulary)?;
+                b.validate_world_condition(vocabulary)
+            }
+            Self::Conditional {
+                left,
+                right,
+                then_value,
+                else_value,
+                ..
+            } => {
+                left.validate_world_condition(vocabulary)?;
+                right.validate_world_condition(vocabulary)?;
+                then_value.validate_world_condition(vocabulary)?;
+                else_value.validate_world_condition(vocabulary)
+            }
+            _ => Ok(()),
         }
     }
 
@@ -491,12 +1056,225 @@ impl ValueExpr {
         )
     }
 
+    /// True if this expression directly reads from the resolving spell or ability's target.
+    #[must_use]
+    pub fn uses_target(&self) -> bool {
+        match self {
+            Self::Count {
+                zone,
+                controller_scope,
+                ..
+            } => {
+                let role_uses = |r: ResolvingPlayer| {
+                    matches!(
+                        r,
+                        ResolvingPlayer::TargetPlayer
+                            | ResolvingPlayer::TargetController
+                            | ResolvingPlayer::TargetOwner
+                            | ResolvingPlayer::TargetSpellController
+                    )
+                };
+                controller_scope.is_some_and(role_uses)
+                    || matches!(
+                        zone,
+                        ValueZone::Hand(r) | ValueZone::Graveyard(r) | ValueZone::Library(r)
+                            if role_uses(*r)
+                    )
+            }
+            Self::PlayerStat(
+                PlayerStatExpr::PlayerLife(r)
+                | PlayerStatExpr::PlayerHandSize(r)
+                | PlayerStatExpr::PlayerLibrarySize(r)
+                | PlayerStatExpr::PlayerGraveyardSize(r),
+            ) => matches!(
+                r,
+                ResolvingPlayer::TargetPlayer
+                    | ResolvingPlayer::TargetController
+                    | ResolvingPlayer::TargetOwner
+                    | ResolvingPlayer::TargetSpellController
+            ),
+            Self::ObjectStat {
+                subject: ValueObjectRef::TargetObject,
+                ..
+            }
+            | Self::ObjectMatches {
+                subject: MatchObjectRef::TargetObject,
+                ..
+            }
+            | Self::CounterCount {
+                subject: CounterSubjectRef::TargetObject,
+                ..
+            } => true,
+            Self::Scale { expr, .. } | Self::DivConst { expr, .. } => expr.uses_target(),
+            Self::Add(a, b) | Self::Sub(a, b) => a.uses_target() || b.uses_target(),
+            Self::Conditional {
+                left,
+                right,
+                then_value,
+                else_value,
+                ..
+            } => {
+                left.uses_target()
+                    || right.uses_target()
+                    || then_value.uses_target()
+                    || else_value.uses_target()
+            }
+            _ => false,
+        }
+    }
+
+    /// Determine the target operand family required by any target references inside this expression.
+    pub(super) fn required_operand_family(
+        &self,
+        target: super::BodyTarget,
+    ) -> Result<Option<super::OperandFamily>, super::DefinitionError> {
+        use super::{BodyTarget, DefinitionError, OperandFamily};
+        let merge = |acc: &mut Option<OperandFamily>, next: Option<OperandFamily>| {
+            if let Some(f) = next {
+                if let Some(existing) = *acc
+                    && existing != f
+                {
+                    return Err(DefinitionError::OperandFamily);
+                }
+                *acc = Some(f);
+            }
+            Ok(())
+        };
+        let role_family = |r: ResolvingPlayer| -> Result<Option<OperandFamily>, DefinitionError> {
+            match r {
+                ResolvingPlayer::TargetPlayer => match target {
+                    BodyTarget::SinglePlayer | BodyTarget::SingleOpponent => {
+                        Ok(Some(OperandFamily::Player))
+                    }
+                    BodyTarget::SingleAnyTarget
+                    | BodyTarget::SinglePlayerOrPlaneswalker
+                    | BodyTarget::SingleOpponentOrPlaneswalker => {
+                        Ok(Some(OperandFamily::DamageRecipient))
+                    }
+                    _ => Err(DefinitionError::OperandFamily),
+                },
+                ResolvingPlayer::TargetController | ResolvingPlayer::TargetOwner => match target {
+                    BodyTarget::SingleCreature
+                    | BodyTarget::SinglePermanent
+                    | BodyTarget::SinglePlaneswalker
+                    | BodyTarget::FilteredPermanent(_) => Ok(Some(OperandFamily::Permanent)),
+                    BodyTarget::SingleAnyTarget
+                    | BodyTarget::SinglePlayerOrPlaneswalker
+                    | BodyTarget::SingleOpponentOrPlaneswalker => {
+                        Ok(Some(OperandFamily::DamageRecipient))
+                    }
+                    _ => Err(DefinitionError::OperandFamily),
+                },
+                ResolvingPlayer::TargetSpellController => match target {
+                    BodyTarget::SingleSpell(_) => Ok(Some(OperandFamily::Spell)),
+                    _ => Err(DefinitionError::OperandFamily),
+                },
+                _ => Ok(None),
+            }
+        };
+        match self {
+            Self::Count {
+                zone,
+                filter,
+                controller_scope,
+            } => {
+                let mut out = None;
+                if let Some(r) = controller_scope {
+                    merge(&mut out, role_family(*r)?)?;
+                }
+                if let ValueZone::Hand(r) | ValueZone::Graveyard(r) | ValueZone::Library(r) = zone {
+                    merge(&mut out, role_family(*r)?)?;
+                }
+                if filter.has_target_player() {
+                    merge(&mut out, Some(OperandFamily::Player))?;
+                }
+                Ok(out)
+            }
+            Self::Aggregate { filter, .. } | Self::DistinctColors { filter } => {
+                if filter.has_target_player() {
+                    Ok(Some(OperandFamily::Player))
+                } else {
+                    Ok(None)
+                }
+            }
+            Self::PlayerStat(
+                PlayerStatExpr::PlayerLife(r)
+                | PlayerStatExpr::PlayerHandSize(r)
+                | PlayerStatExpr::PlayerLibrarySize(r)
+                | PlayerStatExpr::PlayerGraveyardSize(r),
+            ) => role_family(*r),
+            Self::ObjectStat {
+                subject: ValueObjectRef::TargetObject,
+                ..
+            }
+            | Self::ObjectMatches {
+                subject: MatchObjectRef::TargetObject,
+                ..
+            }
+            | Self::CounterCount {
+                subject: CounterSubjectRef::TargetObject,
+                ..
+            } => match target {
+                BodyTarget::SingleCreature
+                | BodyTarget::SinglePermanent
+                | BodyTarget::SinglePlaneswalker
+                | BodyTarget::FilteredPermanent(_) => Ok(Some(OperandFamily::Permanent)),
+                BodyTarget::SingleAnyTarget
+                | BodyTarget::SingleCreatureOrPlayer
+                | BodyTarget::SinglePlayerOrPlaneswalker
+                | BodyTarget::SingleOpponentOrPlaneswalker => {
+                    Ok(Some(OperandFamily::DamageRecipient))
+                }
+                BodyTarget::SingleSpell(_) => Ok(Some(OperandFamily::Spell)),
+                BodyTarget::AnyGraveyardCard
+                | BodyTarget::AnyGraveyardCreature
+                | BodyTarget::FilteredOwnGraveyardCard(_)
+                | BodyTarget::FilteredAnyGraveyardCard { .. } => {
+                    Ok(Some(OperandFamily::GraveyardCard))
+                }
+                _ => Err(DefinitionError::OperandFamily),
+            },
+            Self::Scale { expr, .. } | Self::DivConst { expr, .. } => {
+                expr.required_operand_family(target)
+            }
+            Self::Add(a, b) | Self::Sub(a, b) => {
+                let mut out = a.required_operand_family(target)?;
+                merge(&mut out, b.required_operand_family(target)?)?;
+                Ok(out)
+            }
+            Self::Conditional {
+                left,
+                right,
+                then_value,
+                else_value,
+                ..
+            } => {
+                let mut out = None;
+                for sub in [left, right, then_value, else_value] {
+                    merge(&mut out, sub.required_operand_family(target)?)?;
+                }
+                Ok(out)
+            }
+            _ => Ok(None),
+        }
+    }
+
     /// Rewrite printed creature-type words when a text-changing effect applies.
     pub(crate) fn rewrite_creature_type(&mut self, from: CreatureTypeId, to: CreatureTypeId) {
         match self {
             Self::Count { filter, .. }
+            | Self::OpponentMaxCount { filter, .. }
+            | Self::OpponentMinCount { filter, .. }
+            | Self::DistinctColors { filter }
             | Self::Aggregate { filter, .. }
             | Self::ObjectMatches { filter, .. } => filter.rewrite_creature_type(from, to),
+            Self::PartyCount(roles) => {
+                for role in roles.iter_mut() {
+                    if *role == from {
+                        *role = to;
+                    }
+                }
+            }
             Self::Scale { expr, .. } | Self::DivConst { expr, .. } => {
                 expr.rewrite_creature_type(from, to);
             }
@@ -522,6 +1300,8 @@ impl ValueExpr {
             | Self::DomainCount
             | Self::OpponentsCount
             | Self::Devotion(_)
+            | Self::DistinctManaValuesInGraveyard(_)
+            | Self::SourceState(_)
             | Self::ObjectStat { .. }
             | Self::CounterCount { .. }
             | Self::AttachedCount(_)
@@ -559,7 +1339,36 @@ impl ValueExpr {
                 a.validate_amount(defined_slots, context, facts, vocabulary)?;
                 b.validate_amount(defined_slots, context, facts, vocabulary)
             }
-            Self::DomainCount | Self::OpponentsCount | Self::Devotion(_) => Ok(()),
+            Self::DomainCount
+            | Self::OpponentsCount
+            | Self::Devotion(_)
+            | Self::DistinctManaValuesInGraveyard(_) => Ok(()),
+            Self::SourceState(_) => {
+                if context.has_source() {
+                    Ok(())
+                } else {
+                    Err(DefinitionError::InvalidInstruction)
+                }
+            }
+            Self::PartyCount(roles) => {
+                if roles.iter().any(|ct| vocabulary.label(*ct).is_none()) {
+                    return Err(DefinitionError::ForeignCreatureType);
+                }
+                Ok(())
+            }
+            Self::OpponentMaxCount { filter, .. }
+            | Self::OpponentMinCount { filter, .. }
+            | Self::DistinctColors { filter } => {
+                filter
+                    .validate_vocabulary(vocabulary)
+                    .map_err(|_| DefinitionError::InvalidInstruction)?;
+                if let Some(slot) = filter.chosen_type_slot()
+                    && !defined_slots.contains(&slot)
+                {
+                    return Err(DefinitionError::UndefinedCreatureTypeSlot);
+                }
+                Ok(())
+            }
             Self::Conditional {
                 left,
                 right,
@@ -585,12 +1394,7 @@ impl ValueExpr {
                 {
                     return Err(DefinitionError::UndefinedCreatureTypeSlot);
                 }
-                if filter.excludes_ability_source()
-                    && !matches!(
-                        context,
-                        BodyContext::TriggerBound { .. } | BodyContext::Activated { .. }
-                    )
-                {
+                if filter.excludes_ability_source() && !context.has_source() {
                     return Err(DefinitionError::InvalidInstruction);
                 }
                 if *zone == ValueZone::Battlefield {
@@ -617,31 +1421,27 @@ impl ValueExpr {
                 filter
                     .validate_vocabulary(vocabulary)
                     .map_err(|_| DefinitionError::InvalidInstruction)?;
-                if filter.excludes_ability_source()
-                    && !matches!(context, BodyContext::TriggerBound { .. })
-                {
+                if filter.excludes_ability_source() && !context.has_source() {
                     return Err(DefinitionError::InvalidInstruction);
                 }
                 Ok(())
             }
             Self::ObjectStat { subject, stat } => match subject {
-                ValueObjectRef::AbilitySource => {
-                    if matches!(
-                        context,
-                        BodyContext::Activated { .. } | BodyContext::TriggerBound { .. }
-                    ) {
+                ValueObjectRef::AbilitySource | ValueObjectRef::AttachedHost => {
+                    if context.has_source() {
                         Ok(())
                     } else {
                         Err(DefinitionError::InvalidInstruction)
                     }
                 }
-                ValueObjectRef::TriggerSource => {
+                ValueObjectRef::TriggerSource | ValueObjectRef::TriggerSubject => {
                     if matches!(context, BodyContext::TriggerBound { .. }) {
                         Ok(())
                     } else {
                         Err(DefinitionError::InvalidInstruction)
                     }
                 }
+                ValueObjectRef::RevealedTop => Ok(()),
                 ValueObjectRef::TargetObject => match stat {
                     ObjectStatKind::Power | ObjectStatKind::Toughness => {
                         if facts.exact_creature_target {
@@ -650,7 +1450,13 @@ impl ValueExpr {
                             Err(DefinitionError::OperandFamily)
                         }
                     }
-                    ObjectStatKind::ManaValue => Ok(()),
+                    ObjectStatKind::ManaValue | ObjectStatKind::Loyalty => {
+                        if facts.has_object_or_spell_target {
+                            Ok(())
+                        } else {
+                            Err(DefinitionError::OperandFamily)
+                        }
+                    }
                 },
                 ValueObjectRef::DyingSource => {
                     if matches!(
@@ -784,26 +1590,23 @@ impl ValueExpr {
                 }
             },
             Self::CounterCount { subject, kind } => match subject {
-                CounterSubjectRef::AbilitySource => {
-                    if kind.is_none_or(|k| CounterKind::PERMANENT.contains(&k))
-                        && matches!(
-                            context,
-                            BodyContext::Activated { .. } | BodyContext::TriggerBound { .. }
-                        )
-                    {
+                CounterSubjectRef::AbilitySource | CounterSubjectRef::AttachedHost => {
+                    if kind.is_none_or(CounterKind::is_permanent) && context.has_source() {
                         Ok(())
                     } else {
                         Err(DefinitionError::InvalidInstruction)
                     }
                 }
                 CounterSubjectRef::TargetObject => {
-                    if kind.is_none_or(|k| CounterKind::PERMANENT.contains(&k)) {
+                    if kind.is_none_or(CounterKind::is_permanent)
+                        && facts.has_object_or_spell_target
+                    {
                         Ok(())
                     } else {
                         Err(DefinitionError::InvalidInstruction)
                     }
                 }
-                CounterSubjectRef::TriggerSource => {
+                CounterSubjectRef::TriggerSource | CounterSubjectRef::TriggerSubject => {
                     if matches!(context, BodyContext::TriggerBound { .. }) {
                         Ok(())
                     } else {
@@ -833,7 +1636,7 @@ impl ValueExpr {
             Self::AttachedCount(kind) => match kind {
                 AttachedCountKind::EquipmentOnSource
                 | AttachedCountKind::AurasAndEquipmentOnSource => {
-                    if matches!(context, BodyContext::TriggerBound { .. }) {
+                    if context.has_source() {
                         Ok(())
                     } else {
                         Err(DefinitionError::InvalidInstruction)
@@ -881,24 +1684,57 @@ impl ValueExpr {
                 }
                 PlayerStatExpr::ControllerLife
                 | PlayerStatExpr::ControllerLifeAboveStarting
+                | PlayerStatExpr::ControllerStartingLife
+                | PlayerStatExpr::OpponentMaxLife
+                | PlayerStatExpr::OpponentMinLife
+                | PlayerStatExpr::OpponentMaxCounter(_)
+                | PlayerStatExpr::OpponentStatThisTurn(_)
+                | PlayerStatExpr::DayNightState
+                | PlayerStatExpr::MinLibrarySize
                 | PlayerStatExpr::OpponentsLifeLostThisTurn
                 | PlayerStatExpr::CardsDrawnThisTurn
                 | PlayerStatExpr::LargestHandSize
                 | PlayerStatExpr::ControllerIsMonarch
+                | PlayerStatExpr::OpponentIsMonarch
+                | PlayerStatExpr::NoMonarch
                 | PlayerStatExpr::ControlsGreatestCreature
                 | PlayerStatExpr::ControllerIsActivePlayer
+                | PlayerStatExpr::ControllerIsAttacking
+                | PlayerStatExpr::ControllerIsDefending
+                | PlayerStatExpr::ControllerSpeed
                 | PlayerStatExpr::OwnGraveyardDistinctCardTypes
+                | PlayerStatExpr::AllGraveyardsDistinctCardTypes
                 | PlayerStatExpr::ControllerLifeLostThisTurn
                 | PlayerStatExpr::ControllerLifeGainedThisTurn
                 | PlayerStatExpr::ControllerSpellsCastThisTurn
+                | PlayerStatExpr::CastSpellTypeThisTurn(_)
+                | PlayerStatExpr::CastNoncreatureSpellsThisTurn
+                | PlayerStatExpr::CastSpellsFromHandThisTurn
                 | PlayerStatExpr::ControllerAttackedThisTurn
+                | PlayerStatExpr::AttackingCreaturesThisTurn
                 | PlayerStatExpr::ControllerDiscardedThisTurn
                 | PlayerStatExpr::ControllerSacrificedThisTurn
                 | PlayerStatExpr::PermanentLeftBattlefieldThisTurn
+                | PlayerStatExpr::NonlandPermanentLeftBattlefieldThisTurn
+                | PlayerStatExpr::EnteredPermanentThisTurn
+                | PlayerStatExpr::EnteredTypeThisTurn(_)
                 | PlayerStatExpr::CreatureEnteredUnderControlThisTurn
+                | PlayerStatExpr::PlayedLandThisTurn
+                | PlayerStatExpr::CardsLeftGraveyardThisTurn
+                | PlayerStatExpr::CreaturesDiedThisTurn
+                | PlayerStatExpr::ControlledCreatureDiedThisTurn
+                | PlayerStatExpr::CreatedTokensThisTurn
+                | PlayerStatExpr::OpponentDealtDamageThisTurn { .. }
                 | PlayerStatExpr::DescendedThisTurn
                 | PlayerStatExpr::CommittedCrimeThisTurn
-                | PlayerStatExpr::ControllerHasCityBlessing => Ok(()),
+                | PlayerStatExpr::ControllerHasCityBlessing
+                | PlayerStatExpr::AnyOpponentPoisoned
+                | PlayerStatExpr::LoyaltyActivatedThisTurn
+                | PlayerStatExpr::IsOwnMainPhase
+                | PlayerStatExpr::ExhaustActivatedThisTurn
+                | PlayerStatExpr::CompletedDungeons
+                | PlayerStatExpr::RingLevel
+                | PlayerStatExpr::HasInitiative => Ok(()),
                 PlayerStatExpr::PlayerLife(role)
                 | PlayerStatExpr::PlayerHandSize(role)
                 | PlayerStatExpr::PlayerLibrarySize(role)
@@ -913,6 +1749,7 @@ impl ValueExpr {
                             | ResolvingPlayer::ActivePlayer
                             | ResolvingPlayer::EnchantedPlayer
                             | ResolvingPlayer::DefendingPlayer
+                            | ResolvingPlayer::ChosenPlayer
                     ) {
                         Ok(())
                     } else {
@@ -1021,7 +1858,7 @@ impl ValueExpr {
                         Err(DefinitionError::InvalidInstruction)
                     }
                 }
-                EventValueKind::EnteredKickerX => {
+                EventValueKind::EnteredKickerX | EventValueKind::EnteredKickerCount(_) => {
                     if matches!(
                         context,
                         BodyContext::TriggerBound {
@@ -1101,7 +1938,26 @@ impl ValueExpr {
                 | EventValueKind::LastActionCount
                 | EventValueKind::SelectedGraveyardExileCreatures
                 | EventValueKind::SourceAttackedThisTurn
-                | EventValueKind::TriggerSourceOnBattlefield => Ok(()),
+                | EventValueKind::TriggerSourceOnBattlefield
+                | EventValueKind::ManaSpentToCast
+                | EventValueKind::ColorsSpentToCast
+                | EventValueKind::ManaTypeSpentToCast(_)
+                | EventValueKind::SnowManaSpentToCast
+                | EventValueKind::TreasureManaSpentToCast
+                | EventValueKind::CreatureManaSpentToCast
+                | EventValueKind::CastFromOutsideHand
+                | EventValueKind::CastFromExile
+                | EventValueKind::GiftPromised
+                | EventValueKind::Cleaved
+                | EventValueKind::EvidenceCollected
+                | EventValueKind::LastDieRoll
+                | EventValueKind::CoinFlipsWon
+                | EventValueKind::LastCoinFlipWon
+                | EventValueKind::ChosenNumber
+                | EventValueKind::ChosenOptionIndex
+                | EventValueKind::VoteCount(_)
+                | EventValueKind::WinningVoteOption
+                | EventValueKind::LastNonlandDiscarded => Ok(()),
             },
         }
     }
@@ -1113,8 +1969,28 @@ impl ValueExpr {
         vocabulary: &CreatureTypeVocabulary,
     ) -> Result<(), DefinitionError> {
         match self {
-            Self::Literal(_) | Self::PlayerStat(_) | Self::CountAttackingController => Ok(()),
-            Self::Count { filter, .. } | Self::Aggregate { filter, .. } => filter
+            Self::Literal(_)
+            | Self::PlayerStat(_)
+            | Self::CountAttackingController
+            | Self::DistinctManaValuesInGraveyard(_) => Ok(()),
+            Self::SourceState(_) => {
+                if !matches!(context, BodyContext::Unbound) {
+                    Ok(())
+                } else {
+                    Err(DefinitionError::InvalidInstruction)
+                }
+            }
+            Self::PartyCount(roles) => {
+                if roles.iter().any(|ct| vocabulary.label(*ct).is_none()) {
+                    return Err(DefinitionError::ForeignCreatureType);
+                }
+                Ok(())
+            }
+            Self::Count { filter, .. }
+            | Self::OpponentMaxCount { filter, .. }
+            | Self::OpponentMinCount { filter, .. }
+            | Self::DistinctColors { filter }
+            | Self::Aggregate { filter, .. } => filter
                 .validate_vocabulary(vocabulary)
                 .map_err(|_| DefinitionError::InvalidInstruction),
             Self::CountOtherSharingSourceSubtype => {
@@ -1154,11 +2030,18 @@ impl ValueExpr {
                             Err(DefinitionError::UnboundTriggerCondition)
                         }
                     }
-                    MatchObjectRef::AbilitySource => {
+                    MatchObjectRef::AbilitySource | MatchObjectRef::AttachedHost => {
                         if vocab_ok && !matches!(context, BodyContext::Unbound) {
                             Ok(())
                         } else {
                             Err(DefinitionError::InvalidInstruction)
+                        }
+                    }
+                    MatchObjectRef::TriggerSubject => {
+                        if vocab_ok && matches!(context, BodyContext::TriggerBound { .. }) {
+                            Ok(())
+                        } else {
+                            Err(DefinitionError::UnboundTriggerCondition)
                         }
                     }
                     MatchObjectRef::DestructionTarget
@@ -1175,20 +2058,15 @@ impl ValueExpr {
                 }
             }
             Self::CounterCount { subject, kind } => match subject {
-                CounterSubjectRef::AbilitySource => {
-                    if kind.is_none_or(|k| CounterKind::PERMANENT.contains(&k))
-                        && matches!(
-                            context,
-                            BodyContext::Activated { .. } | BodyContext::TriggerBound { .. }
-                        )
-                    {
+                CounterSubjectRef::AbilitySource | CounterSubjectRef::AttachedHost => {
+                    if kind.is_none_or(CounterKind::is_permanent) && context.has_source() {
                         Ok(())
                     } else {
                         Err(DefinitionError::InvalidInstruction)
                     }
                 }
                 CounterSubjectRef::TargetObject => {
-                    if kind.is_none_or(|k| CounterKind::PERMANENT.contains(&k)) {
+                    if kind.is_none_or(CounterKind::is_permanent) {
                         Ok(())
                     } else {
                         Err(DefinitionError::InvalidInstruction)
@@ -1197,7 +2075,9 @@ impl ValueExpr {
                 CounterSubjectRef::ControllerExperience
                 | CounterSubjectRef::ControllerEnergy
                 | CounterSubjectRef::ControllerPoison => Ok(()),
-                CounterSubjectRef::TriggerSource | CounterSubjectRef::DyingSource => {
+                CounterSubjectRef::TriggerSource
+                | CounterSubjectRef::TriggerSubject
+                | CounterSubjectRef::DyingSource => {
                     if matches!(context, BodyContext::TriggerBound { .. }) {
                         Ok(())
                     } else {
@@ -1278,6 +2158,7 @@ impl ValueExpr {
                 | EventValueKind::LastActionCount
                 | EventValueKind::SelectedGraveyardExileCreatures
                 | EventValueKind::EnteredKickerX
+                | EventValueKind::EnteredKickerCount(_)
                 | EventValueKind::PaidCreatureTaps
                 | EventValueKind::PaidNamedCounters
                 | EventValueKind::LargestDiscard
@@ -1288,7 +2169,26 @@ impl ValueExpr {
                 | EventValueKind::DeclaredSubtypeAttackers
                 | EventValueKind::TriggeringLifeChange
                 | EventValueKind::CombatDamageToPlayer
-                | EventValueKind::DamageReceived => Ok(()),
+                | EventValueKind::DamageReceived
+                | EventValueKind::ManaSpentToCast
+                | EventValueKind::ColorsSpentToCast
+                | EventValueKind::ManaTypeSpentToCast(_)
+                | EventValueKind::SnowManaSpentToCast
+                | EventValueKind::TreasureManaSpentToCast
+                | EventValueKind::CreatureManaSpentToCast
+                | EventValueKind::CastFromOutsideHand
+                | EventValueKind::CastFromExile
+                | EventValueKind::GiftPromised
+                | EventValueKind::Cleaved
+                | EventValueKind::EvidenceCollected
+                | EventValueKind::LastDieRoll
+                | EventValueKind::CoinFlipsWon
+                | EventValueKind::LastCoinFlipWon
+                | EventValueKind::ChosenNumber
+                | EventValueKind::ChosenOptionIndex
+                | EventValueKind::VoteCount(_)
+                | EventValueKind::WinningVoteOption
+                | EventValueKind::LastNonlandDiscarded => Ok(()),
             },
             Self::Scale { expr, .. } | Self::DivConst { expr, .. } => {
                 expr.validate_condition(context, vocabulary)

@@ -51,12 +51,53 @@ impl ResolutionCondition {
         self.left.validate_condition(context, vocabulary)?;
         self.right.validate_condition(context, vocabulary)
     }
+
+    /// True if both sides can be evaluated purely against a world snapshot without resolution/stack state.
+    #[must_use]
+    pub fn is_world_evaluable(&self) -> bool {
+        self.left.is_world_evaluable() && self.right.is_world_evaluable()
+    }
+
+    /// True if both sides can be evaluated at trigger time using a world snapshot plus trigger event context.
+    #[must_use]
+    pub fn is_trigger_world_evaluable(&self) -> bool {
+        self.left.is_trigger_world_evaluable() && self.right.is_trigger_world_evaluable()
+    }
+
+    /// Validate that both sides are trigger-world-evaluable and reference only known creature types.
+    pub(crate) fn validate_trigger_world(
+        &self,
+        vocabulary: &spellwake_contracts::creature_types::CreatureTypeVocabulary,
+    ) -> Result<(), DefinitionError> {
+        self.left.validate_trigger_world_condition(vocabulary)?;
+        self.right.validate_trigger_world_condition(vocabulary)
+    }
+
+    /// Validate that both sides are purely world-evaluable and reference only known creature types.
+    pub(crate) fn validate_world(
+        &self,
+        vocabulary: &spellwake_contracts::creature_types::CreatureTypeVocabulary,
+    ) -> Result<(), DefinitionError> {
+        self.left.validate_world_condition(vocabulary)?;
+        self.right.validate_world_condition(vocabulary)
+    }
+
+    /// Rewrite printed creature-type words when a text-changing effect applies.
+    pub(crate) fn rewrite_creature_type(
+        &mut self,
+        from: spellwake_contracts::creature_types::CreatureTypeId,
+        to: spellwake_contracts::creature_types::CreatureTypeId,
+    ) {
+        self.left.rewrite_creature_type(from, to);
+        self.right.rewrite_creature_type(from, to);
+    }
 }
 
 /// Static facts only. The live resolution cursor retains the sole local values.
 #[derive(Clone, Default)]
 pub(super) struct FlowFacts {
     pub(super) exact_creature_target: bool,
+    pub(super) has_object_or_spell_target: bool,
     pub definitely: BTreeSet<CreatureTypeSlot>,
     pub possibly: BTreeSet<CreatureTypeSlot>,
     pub donor_moved: bool,
