@@ -149,6 +149,11 @@ export type LobbySource =
       findPlayers:
         ((query: string) => Promise<readonly InviteCandidate[] | null>) | null;
       invite: ((playerId: string) => Promise<Outcome>) | null;
+      /**
+       * Host only: makes the address that admits whoever opens it, or null
+       * where the source has none to give.
+       */
+      inviteLink: (() => Promise<Outcome<string>>) | null;
       departure: Departure | null;
       /** Asks to leave, or for the host to close. Opens the confirmation. */
       beginDeparture: () => void;

@@ -285,6 +285,7 @@ const cases: Case[] = [
       "close",
       "closure-unconfirmed",
       "closed",
+      "invite-link",
     ].map((probe): Case => ({
       viewport: named(name),
       art: "dark",
