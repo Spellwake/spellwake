@@ -1447,41 +1447,98 @@ fn lower_face(
         let mut conditional_free_cast: Option<ConditionalCastCost> = None;
         let mut filtered_spell_effects = Vec::with_capacity(face_ast.spell_effects.len());
         for ins in &face_ast.spell_effects {
+            if let InstructionAst::TemporaryStatic { static_ability, .. } = ins
+                && conditional_free_cast.is_none()
+                && let StaticAbilityAst::AlternativeCastCost {
+                    cost,
+                    condition: Some(cond),
+                    for_spells: None,
+                    next_only: false,
+                } = static_ability.as_ref()
+            {
+                let alt_mana_opt = match cost.as_slice() {
+                    [] => Some(ManaCost::free()),
+                    [CostAtomAst::PayMana(raw)] => parse_fixed_mana_cost(&raw.to_ascii_uppercase()),
+                    _ => None,
+                };
+                if let Some(mana) = alt_mana_opt {
+                    if matches!(cond.as_ref(), ConditionAst::ControlsCommander) {
+                        conditional_free_cast = Some(ConditionalCastCost::ControlsCommander(mana));
+                        continue;
+                    }
+                    let mut tmp = BodyBuilder::new();
+                    if let Ok(res_cond) =
+                        lower_resolution_condition(cond, &mut tmp, vocabulary, false, None)
+                        && tmp.target == BodyTarget::None
+                        && res_cond.is_world_evaluable()
+                        && res_cond.validate_world(vocabulary).is_ok()
+                    {
+                        conditional_free_cast = Some(ConditionalCastCost::Condition {
+                            condition: Box::new(res_cond),
+                            mana,
+                        });
+                        continue;
+                    }
+                }
+            }
             if let InstructionAst::IfCondition {
                 condition,
                 then_body,
             } = ins
                 && conditional_free_cast.is_none()
             {
-                let alt_mana_opt = match then_body.as_slice() {
-                    [
-                        InstructionAst::GrantCastPermission {
-                            subject,
-                            free: true,
-                            ..
-                        },
-                    ] if matches!(subject.as_ref(), SubjectRefAst::SelfObject) => {
-                        Some(ManaCost::free())
-                    }
-                    [InstructionAst::TemporaryStatic { static_ability, .. }] => {
-                        match static_ability.as_ref() {
-                            StaticAbilityAst::AlternativeCastCost { cost, .. } => {
-                                match cost.as_slice() {
-                                    [CostAtomAst::PayMana(raw)] => parse_fixed_mana_cost(raw),
-                                    _ => None,
-                                }
-                            }
-                            _ => None,
+                let (alt_mana_opt, extra_cond): (Option<ManaCost>, Option<&ConditionAst>) =
+                    match then_body.as_slice() {
+                        [
+                            InstructionAst::GrantCastPermission {
+                                subject,
+                                free: true,
+                                ..
+                            },
+                        ] if matches!(subject.as_ref(), SubjectRefAst::SelfObject) => {
+                            (Some(ManaCost::free()), None)
                         }
-                    }
-                    _ => None,
-                };
+                        [InstructionAst::TemporaryStatic { static_ability, .. }] => {
+                            match static_ability.as_ref() {
+                                StaticAbilityAst::AlternativeCastCost {
+                                    cost,
+                                    condition: inner_cond,
+                                    for_spells: None,
+                                    next_only: false,
+                                } => {
+                                    let mana = match cost.as_slice() {
+                                        [] => Some(ManaCost::free()),
+                                        [CostAtomAst::PayMana(raw)] => {
+                                            parse_fixed_mana_cost(&raw.to_ascii_uppercase())
+                                        }
+                                        _ => None,
+                                    };
+                                    (mana, inner_cond.as_deref())
+                                }
+                                _ => (None, None),
+                            }
+                        }
+                        _ => (None, None),
+                    };
                 if let Some(mana) = alt_mana_opt {
+                    let combined_cond = match extra_cond {
+                        Some(ic) => ConditionAst::And(condition.clone(), Box::new(ic.clone())),
+                        None => condition.as_ref().clone(),
+                    };
+                    if matches!(combined_cond, ConditionAst::ControlsCommander) {
+                        conditional_free_cast = Some(ConditionalCastCost::ControlsCommander(mana));
+                        continue;
+                    }
                     let mut tmp = BodyBuilder::new();
-                    if let Ok(res_cond) =
-                        lower_resolution_condition(condition, &mut tmp, vocabulary, false, None)
-                        && tmp.target == BodyTarget::None
+                    if let Ok(res_cond) = lower_resolution_condition(
+                        &combined_cond,
+                        &mut tmp,
+                        vocabulary,
+                        false,
+                        None,
+                    ) && tmp.target == BodyTarget::None
                         && res_cond.is_world_evaluable()
+                        && res_cond.validate_world(vocabulary).is_ok()
                     {
                         conditional_free_cast = Some(ConditionalCastCost::Condition {
                             condition: Box::new(res_cond),
@@ -1613,7 +1670,7 @@ fn lower_face(
 
     // Track Saga Read Ahead and Prototype keywords for post-lowering attachment
     let mut has_read_ahead = false;
-    let mut prototype_param: Option<String> = None;
+    let mut prototype_spec: Option<(ManaCost, u8, Vec<HybridSymbol>, PrintedPowerToughness)> = None;
 
     // Lower keywords
     for (kw_idx, kw) in face_ast.keywords.iter().enumerate() {
@@ -1631,7 +1688,26 @@ fn lower_face(
                 .parameter
                 .as_deref()
                 .ok_or("oracle:prototype-missing-param")?;
-            if prototype_param.replace(param.to_string()).is_some() {
+            let (cost_str, pt_str) = param
+                .split_once(" \u{2014} ")
+                .or_else(|| param.split_once(" - "))
+                .or_else(|| param.split_once('\u{2014}'))
+                .ok_or("oracle:bad-prototype-param")?;
+            let (proto_cost, proto_x, proto_hybrids) =
+                parse_mana_cost_full(&cost_str.trim().to_ascii_uppercase())
+                    .ok_or("oracle:bad-prototype-cost")?;
+            let (p_raw, t_raw) = pt_str
+                .trim()
+                .split_once('/')
+                .ok_or("oracle:bad-prototype-pt")?;
+            let proto_pt = PrintedPowerToughness {
+                power: parse_printed_stat(p_raw.trim()).ok_or("oracle:bad-prototype-pt")?,
+                toughness: parse_printed_stat(t_raw.trim()).ok_or("oracle:bad-prototype-pt")?,
+            };
+            if prototype_spec
+                .replace((proto_cost, proto_x, proto_hybrids, proto_pt))
+                .is_some()
+            {
                 return Err("oracle:duplicate-prototype");
             }
             continue;
@@ -1708,11 +1784,34 @@ fn lower_face(
         lower_replacement(rep, &mut program, vocabulary, &mut ids)?;
     }
 
-    // Lower static abilities (deferring StationBand and DieRollBand for post-ability wiring)
+    // Lower static abilities (deferring PrototypeStats, StationBand, and DieRollBand for post-ability wiring)
     let mut station_bands: Vec<(u8, &str)> = Vec::new();
     let mut die_roll_bands_raw: Vec<(&str, &str)> = Vec::new();
     for st in &face_ast.statics {
         match st {
+            StaticAbilityAst::PrototypeStats {
+                cost,
+                power,
+                toughness,
+            } => {
+                let [CostAtomAst::PayMana(raw)] = cost.as_slice() else {
+                    return Err("oracle:bad-prototype-cost");
+                };
+                let (proto_cost, proto_x, proto_hybrids) =
+                    parse_mana_cost_full(&raw.trim().to_ascii_uppercase())
+                        .ok_or("oracle:bad-prototype-cost")?;
+                let proto_pt = PrintedPowerToughness {
+                    power: parse_printed_stat(power.trim()).ok_or("oracle:bad-prototype-pt")?,
+                    toughness: parse_printed_stat(toughness.trim())
+                        .ok_or("oracle:bad-prototype-pt")?,
+                };
+                if prototype_spec
+                    .replace((proto_cost, proto_x, proto_hybrids, proto_pt))
+                    .is_some()
+                {
+                    return Err("oracle:duplicate-prototype");
+                }
+            }
             StaticAbilityAst::StationBand {
                 min_charge,
                 payload,
@@ -1977,22 +2076,7 @@ fn lower_face(
         }
     }
 
-    if let Some(proto_param) = prototype_param {
-        let (cost_str, pt_str) = proto_param
-            .split_once(" \u{2014} ")
-            .or_else(|| proto_param.split_once(" - "))
-            .or_else(|| proto_param.split_once('\u{2014}'))
-            .ok_or("oracle:bad-prototype-param")?;
-        let (proto_cost, proto_x, proto_hybrids) =
-            parse_mana_cost_full(cost_str.trim()).ok_or("oracle:bad-prototype-cost")?;
-        let (p_raw, t_raw) = pt_str
-            .trim()
-            .split_once('/')
-            .ok_or("oracle:bad-prototype-pt")?;
-        let proto_pt = PrintedPowerToughness {
-            power: parse_printed_stat(p_raw.trim()).ok_or("oracle:bad-prototype-pt")?,
-            toughness: parse_printed_stat(t_raw.trim()).ok_or("oracle:bad-prototype-pt")?,
-        };
+    if let Some((proto_cost, proto_x, proto_hybrids, proto_pt)) = prototype_spec {
         let mut proto = program.clone();
         proto.prototype = None;
         proto.x_mana_symbols = proto_x;

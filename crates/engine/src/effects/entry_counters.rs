@@ -41,6 +41,195 @@ pub(super) fn needs_damage_history(program: &Program) -> bool {
     })
 }
 
+fn filter_uses_damage_pairs(filter: crate::program::ObjectFilter) -> bool {
+    filter.has_flag(crate::program::ObjectFilterFlags::DEALT_DAMAGE_BY_SELF_THIS_TURN)
+}
+
+fn subject_uses_damage_pairs(subject: &crate::program::EffectSubject) -> bool {
+    matches!(
+        subject,
+        crate::program::EffectSubject::Matching(filter) if filter_uses_damage_pairs(*filter)
+    )
+}
+
+fn value_expr_uses_damage_pairs(expr: &crate::program::ValueExpr) -> bool {
+    use crate::program::ValueExpr;
+    match expr {
+        ValueExpr::Count { filter, .. }
+        | ValueExpr::OpponentMaxCount { filter, .. }
+        | ValueExpr::OpponentMinCount { filter, .. }
+        | ValueExpr::DistinctColors { filter }
+        | ValueExpr::Aggregate { filter, .. } => filter_uses_damage_pairs(**filter),
+        ValueExpr::Scale { expr, .. } | ValueExpr::DivConst { expr, .. } => {
+            value_expr_uses_damage_pairs(expr)
+        }
+        ValueExpr::Add(a, b) | ValueExpr::Sub(a, b) => {
+            value_expr_uses_damage_pairs(a) || value_expr_uses_damage_pairs(b)
+        }
+        ValueExpr::Conditional {
+            left,
+            right,
+            then_value,
+            else_value,
+            ..
+        } => {
+            value_expr_uses_damage_pairs(left)
+                || value_expr_uses_damage_pairs(right)
+                || value_expr_uses_damage_pairs(then_value)
+                || value_expr_uses_damage_pairs(else_value)
+        }
+        _ => false,
+    }
+}
+
+fn body_uses_damage_pairs(body: &crate::program::ExecutableBody) -> bool {
+    let target_uses = match body.target {
+        BodyTarget::FilteredPermanent(f)
+        | BodyTarget::FilteredOwnGraveyardCard(f)
+        | BodyTarget::FilteredAnyGraveyardCard { filter: f, .. } => filter_uses_damage_pairs(f),
+        _ => false,
+    };
+    target_uses
+        || body.instructions.iter().any(|op| match op {
+            Instruction::CreateTemporaryRule { rule, .. } => match rule.as_ref() {
+                crate::program::TemporaryRuleKind::ExileIfDies { subject }
+                | crate::program::TemporaryRuleKind::ExileIfLeavesBattlefield { subject } => {
+                    subject_uses_damage_pairs(subject)
+                }
+                crate::program::TemporaryRuleKind::TemporaryStatic(ab) => {
+                    static_uses_damage_pairs(ab)
+                }
+                _ => false,
+            },
+            Instruction::DestroyGroup(f)
+            | Instruction::DestroyGroupWithoutRegeneration(f)
+            | Instruction::PutGroupOnLibraryBottom(f) => filter_uses_damage_pairs(**f),
+            Instruction::MoveGroup { group, .. } => filter_uses_damage_pairs(**group),
+            Instruction::SetGroupTapped { filter, .. } => filter_uses_damage_pairs(**filter),
+            Instruction::PutCountersOnSubject { subject, .. } => subject_uses_damage_pairs(subject),
+            Instruction::DamageGroupAmount { group, amount } => {
+                value_expr_uses_damage_pairs(amount)
+                    || matches!(
+                        group,
+                        crate::program::DamageGroup::Filtered(f)
+                            | crate::program::DamageGroup::FilteredAndPlayers { filter: f, .. }
+                            if filter_uses_damage_pairs(*f)
+                    )
+            }
+            Instruction::DealDamageFrom {
+                source, recipients, ..
+            } => {
+                matches!(
+                    source.as_ref(),
+                    crate::program::DamageSourceRef::Matching(f) if filter_uses_damage_pairs(*f)
+                ) || matches!(
+                    recipients.as_ref(),
+                    crate::program::DamageRecipientsRef::Group(
+                        crate::program::DamageGroup::Filtered(f)
+                            | crate::program::DamageGroup::FilteredAndPlayers { filter: f, .. }
+                    ) if filter_uses_damage_pairs(*f)
+                )
+            }
+            Instruction::ScheduleDelayedStepTrigger { body, .. }
+            | Instruction::EmitReflexiveTrigger { body, .. } => body_uses_damage_pairs(body),
+            Instruction::ScheduleDelayedEventTrigger { trigger, body, .. } => {
+                trigger_event_uses_damage_pairs(&trigger.event) || body_uses_damage_pairs(body)
+            }
+            Instruction::BranchIfFalse { condition, .. } => {
+                value_expr_uses_damage_pairs(&condition.left)
+                    || value_expr_uses_damage_pairs(&condition.right)
+            }
+            _ => false,
+        })
+}
+
+fn trigger_event_uses_damage_pairs(event: &crate::program::TriggerEvent) -> bool {
+    match event {
+        crate::program::TriggerEvent::Dies { mode, subject, .. } => {
+            matches!(
+                mode,
+                crate::program::DiesTriggerMode::DamagedBySource
+                    | crate::program::DiesTriggerMode::DamagedByAttachedHost
+            ) || filter_uses_damage_pairs(*subject)
+        }
+        _ => false,
+    }
+}
+
+fn static_uses_damage_pairs(ability: &crate::characteristics::StaticContinuousAbility) -> bool {
+    use crate::characteristics::{StaticContinuousAbility, StaticPart, StaticReplacementAction};
+    match ability {
+        StaticContinuousAbility::EventReplacement {
+            action: StaticReplacementAction::ReplaceWithBody { body, .. },
+            ..
+        } => body_uses_damage_pairs(body),
+        StaticContinuousAbility::Battlefield { parts, .. } => {
+            parts.0.iter().any(|part| match part {
+                StaticPart::GrantActivated(ab)
+                | StaticPart::GrantActivatedRestricted { ability: ab, .. } => {
+                    body_uses_damage_pairs(&ab.body)
+                }
+                StaticPart::GrantTrigger(trig) => {
+                    trigger_event_uses_damage_pairs(&trig.condition.event)
+                        || body_uses_damage_pairs(&trig.body)
+                }
+                _ => false,
+            })
+        }
+        _ => false,
+    }
+}
+
+fn program_tree_uses_damage_pairs(program: &Program) -> bool {
+    let direct = definition_or_token_matches(program, |p| {
+        p.triggered.iter().any(|ability| {
+            trigger_event_uses_damage_pairs(&ability.condition.event)
+                || body_uses_damage_pairs(&ability.body)
+        }) || p
+            .activated
+            .iter()
+            .any(|ability| body_uses_damage_pairs(&ability.body))
+            || match &p.kind {
+                ProgramKind::Spell(spell) => body_uses_damage_pairs(&spell.body),
+                ProgramKind::Permanent(_) => false,
+            }
+            || p.continuous
+                .iter()
+                .chain(&p.additional_battlefield_abilities)
+                .any(static_uses_damage_pairs)
+            || p.zone_replacements.iter().any(|rep| {
+                matches!(
+                    rep.subject,
+                    crate::program::ZoneReplacementSubject::DamagedBySourceThisTurn
+                )
+            })
+    });
+    if direct {
+        return true;
+    }
+    let sub_programs = [
+        program.nightbound_back.as_deref(),
+        program.transform_back.as_deref(),
+        program.modal_back.as_deref(),
+        program.flip_back.as_deref(),
+        program.prototype.as_deref(),
+        program.adventure.as_deref(),
+        program.prepare_spell.as_deref(),
+        program.split.as_ref().map(|s| &s.right),
+        program.siege_back.as_deref(),
+        program.disturb.as_ref().map(|d| &d.back),
+    ];
+    sub_programs
+        .into_iter()
+        .flatten()
+        .any(program_tree_uses_damage_pairs)
+}
+
+/// Whether this program (or any face/token it can create) reads `creature_damage_pairs`.
+pub(super) fn needs_creature_damage_pairs(program: &Program) -> bool {
+    program_tree_uses_damage_pairs(program)
+}
+
 impl EffectWindow {
     /// Actual damage dealt to each player this turn in games with a printed bloodthirst ability.
     pub fn damage_to_players_this_turn(&self) -> Option<&BTreeMap<SeatId, RulesInteger>> {

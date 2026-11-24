@@ -19,6 +19,19 @@ pub(super) fn value_expr_references_target_anaphora(expr: &ValueExprAst) -> bool
         ValueExprAst::ObjectStat { subject, .. } | ValueExprAst::CounterCount { subject, .. } => {
             subject_is_anaphora(subject)
         }
+        ValueExprAst::Count(f) => {
+            matches!(
+                f.zone,
+                Some(ZoneFilter::ThatPlayerGraveyard | ZoneFilter::ThatPlayerHand)
+            ) || matches!(
+                f.controller,
+                Some(
+                    ControllerRelation::ThatPlayer
+                        | ControllerRelation::ItsController
+                        | ControllerRelation::OwnerThatPlayer
+                )
+            )
+        }
         ValueExprAst::PlayerStat { player, .. }
         | ValueExprAst::PlayerCounterCount { player, .. }
         | ValueExprAst::LifeChangedThisTurn { player, .. } => player_is_target_anaphora(*player),
@@ -62,7 +75,7 @@ pub(super) fn instruction_references_target_anaphora(instr: &InstructionAst) -> 
         InstructionAst::SetLifeTotal { player, value } => {
             player_is_target_anaphora(*player) || value_expr_references_target_anaphora(value)
         }
-        InstructionAst::Draw { player, count }
+        InstructionAst::Draw { player, count, .. }
         | InstructionAst::Mill { player, count }
         | InstructionAst::Scry { player, count }
         | InstructionAst::Surveil { player, count }
@@ -115,6 +128,10 @@ pub(super) fn instruction_references_target_anaphora(instr: &InstructionAst) -> 
         InstructionAst::IfCondition {
             condition,
             then_body,
+        }
+        | InstructionAst::ForAsLongAs {
+            condition,
+            body: then_body,
         } => {
             condition_references_target_anaphora(condition)
                 || then_body.iter().any(instruction_references_target_anaphora)
@@ -129,6 +146,25 @@ pub(super) fn instruction_references_target_anaphora(instr: &InstructionAst) -> 
         | InstructionAst::DelayedTrigger { body: inner, .. }
         | InstructionAst::DelayedEventTrigger { body: inner, .. } => {
             inner.iter().any(instruction_references_target_anaphora)
+        }
+        InstructionAst::BindXY {
+            x_expr,
+            y_expr,
+            body,
+        } => {
+            value_expr_references_target_anaphora(x_expr)
+                || value_expr_references_target_anaphora(y_expr)
+                || body.iter().any(instruction_references_target_anaphora)
+        }
+        InstructionAst::ForEachSubjectPlayer { players, body } => {
+            matches!(players.as_ref(), SubjectRefAst::Player(p) if player_is_target_anaphora(*p))
+                || body.iter().any(instruction_references_target_anaphora)
+        }
+        InstructionAst::CreateEmblemFor { recipient, .. } => {
+            matches!(recipient.as_ref(), SubjectRefAst::Player(p) if player_is_target_anaphora(*p))
+        }
+        InstructionAst::RevealCards { subject } => {
+            matches!(subject.as_ref(), SubjectRefAst::Player(p) if player_is_target_anaphora(*p))
         }
         InstructionAst::OptionalPlayer { player, body } => {
             player_is_target_anaphora(*player)
@@ -160,12 +196,13 @@ pub(super) fn instruction_references_anaphora(instr: &InstructionAst) -> bool {
             subject_is_anaphora(source) || subject_is_anaphora(target)
         }
         InstructionAst::Fight { a, b } => subject_is_anaphora(a) || subject_is_anaphora(b),
-        InstructionAst::MoveCounters { from, to, .. } => {
+        InstructionAst::MoveCounters { from, to, .. }
+        | InstructionAst::MoveCounter { from, to, .. } => {
             subject_is_anaphora(from) || subject_is_anaphora(to)
         }
-        InstructionAst::Attach { subject, target } => {
-            subject_is_anaphora(subject) || subject_is_anaphora(target)
-        }
+        InstructionAst::Attach {
+            subject, target, ..
+        } => subject_is_anaphora(subject) || subject_is_anaphora(target),
         InstructionAst::RedirectDamage { from, to, .. } => {
             subject_is_anaphora(from) || subject_is_anaphora(to)
         }
@@ -184,7 +221,7 @@ pub(super) fn instruction_references_anaphora(instr: &InstructionAst) -> bool {
         | InstructionAst::SacrificeUnlessPay { subject, .. }
         | InstructionAst::ReturnZone { subject, .. }
         | InstructionAst::MoveZone { subject, .. }
-        | InstructionAst::TapPermanent { subject }
+        | InstructionAst::TapPermanent { subject, .. }
         | InstructionAst::UntapPermanent { subject }
         | InstructionAst::TapOrUntapPermanent { subject }
         | InstructionAst::SkipNextUntap { subject }
@@ -208,15 +245,26 @@ pub(super) fn instruction_references_anaphora(instr: &InstructionAst) -> bool {
         | InstructionAst::Explore { subject }
         | InstructionAst::Detain { subject }
         | InstructionAst::Suspect { subject }
+        | InstructionAst::SetSuspected { subject, .. }
+        | InstructionAst::TurnFaceDown { subject }
+        | InstructionAst::RevealCards { subject }
         | InstructionAst::Connive { subject, .. }
         | InstructionAst::Exert { subject }
         | InstructionAst::ExileWithCounters { subject, .. }
         | InstructionAst::ShuffleIntoLibrary { subject }
         | InstructionAst::RemoveFromCombat { subject }
         | InstructionAst::DoubleStatOrCounters { subject, .. } => subject_is_anaphora(subject),
+        InstructionAst::CreateEmblemFor { recipient, .. } => {
+            subject_is_anaphora(recipient)
+                || matches!(
+                    recipient.as_ref(),
+                    SubjectRefAst::ControllerOf(inner) | SubjectRefAst::OwnerOf(inner)
+                        if subject_is_anaphora(inner)
+                )
+        }
         InstructionAst::Counter { target, .. }
         | InstructionAst::PreventDamage { target, .. }
-        | InstructionAst::ChangeTargets { target }
+        | InstructionAst::ChangeTargets { target, .. }
         | InstructionAst::ChangeText { target, .. } => subject_is_anaphora(target),
         InstructionAst::PreventAllDamage { target, .. } => {
             target.as_deref().is_some_and(subject_is_anaphora)
@@ -233,6 +281,8 @@ pub(super) fn instruction_references_anaphora(instr: &InstructionAst) -> bool {
         | InstructionAst::ReplaceEffect(inner)
         | InstructionAst::ReflexiveTrigger(inner)
         | InstructionAst::BindX { body: inner, .. }
+        | InstructionAst::BindXY { body: inner, .. }
+        | InstructionAst::ForAsLongAs { body: inner, .. }
         | InstructionAst::IfCondition {
             then_body: inner, ..
         }
@@ -242,6 +292,9 @@ pub(super) fn instruction_references_anaphora(instr: &InstructionAst) -> bool {
         | InstructionAst::DelayedTrigger { body: inner, .. }
         | InstructionAst::DelayedEventTrigger { body: inner, .. } => {
             inner.iter().any(instruction_references_anaphora)
+        }
+        InstructionAst::ForEachSubjectPlayer { players, body } => {
+            subject_is_anaphora(players) || body.iter().any(instruction_references_anaphora)
         }
         InstructionAst::Unless {
             body,
@@ -256,6 +309,26 @@ pub(super) fn instruction_references_anaphora(instr: &InstructionAst) -> bool {
         InstructionAst::Choice(branches) => branches
             .iter()
             .any(|b| b.iter().any(instruction_references_anaphora)),
+        _ => false,
+    }
+}
+
+fn value_expr_references_chosen_x(expr: &ValueExprAst) -> bool {
+    match expr {
+        ValueExprAst::ChosenX => true,
+        ValueExprAst::Add(a, b)
+        | ValueExprAst::Sub(a, b)
+        | ValueExprAst::Mul(a, b)
+        | ValueExprAst::AbsDiff(a, b) => {
+            value_expr_references_chosen_x(a) || value_expr_references_chosen_x(b)
+        }
+        ValueExprAst::DivConst { expr, .. } => value_expr_references_chosen_x(expr),
+        ValueExprAst::Pow { base, exp } => {
+            value_expr_references_chosen_x(base) || value_expr_references_chosen_x(exp)
+        }
+        ValueExprAst::Shortfall { threshold, actual } => {
+            value_expr_references_chosen_x(threshold) || value_expr_references_chosen_x(actual)
+        }
         _ => false,
     }
 }
@@ -325,9 +398,14 @@ pub(super) fn try_scale_instruction(
             delta: Box::new(scale_ast_amount(delta, mult)),
             gain: *gain,
         }),
-        InstructionAst::Draw { player, count } => Some(InstructionAst::Draw {
+        InstructionAst::Draw {
+            player,
+            count,
+            up_to,
+        } => Some(InstructionAst::Draw {
             player: *player,
             count: Box::new(scale_ast_amount(count, mult)),
+            up_to: *up_to,
         }),
         InstructionAst::Mill { player, count } => Some(InstructionAst::Mill {
             player: *player,
@@ -384,6 +462,31 @@ pub(super) fn try_scale_instruction(
             player: *player,
             count: Box::new(scale_ast_amount(count, mult)),
         }),
+        InstructionAst::BindXY {
+            x_expr,
+            y_expr,
+            body,
+        } if !body.is_empty() && !value_expr_references_chosen_x(&mult) => {
+            let scaled_body = body
+                .iter()
+                .map(|s| try_scale_instruction(s, mult.clone()))
+                .collect::<Option<Vec<_>>>()?;
+            Some(InstructionAst::BindXY {
+                x_expr: x_expr.clone(),
+                y_expr: y_expr.clone(),
+                body: scaled_body,
+            })
+        }
+        InstructionAst::ForEachSubjectPlayer { players, body } if !body.is_empty() => {
+            let scaled_body = body
+                .iter()
+                .map(|s| try_scale_instruction(s, mult.clone()))
+                .collect::<Option<Vec<_>>>()?;
+            Some(InstructionAst::ForEachSubjectPlayer {
+                players: players.clone(),
+                body: scaled_body,
+            })
+        }
         _ => None,
     }
 }
@@ -467,13 +570,52 @@ pub(super) fn try_rewrite_for_each_player(
     target_player: PlayerRefAst,
 ) -> Option<InstructionAst> {
     let matches_loop_player = |p: PlayerRefAst| p == PlayerRefAst::ThatPlayer || p == target_player;
-    match instr {
-        InstructionAst::Draw { player, count } if matches_loop_player(*player) => {
-            Some(InstructionAst::Draw {
-                player: target_player,
-                count: count.clone(),
-            })
+    let rewrite_that_player_controller = |f: &ObjectFilterAst| -> Option<ObjectFilterAst> {
+        if f.controller != Some(ControllerRelation::ThatPlayer) {
+            return None;
         }
+        let mut out = f.clone();
+        out.controller = match target_player {
+            PlayerRefAst::EachPlayer => None,
+            PlayerRefAst::EachOpponent => Some(ControllerRelation::Opponent),
+            PlayerRefAst::You => Some(ControllerRelation::You),
+            _ => return None,
+        };
+        Some(out)
+    };
+    let rewrite_that_player_zone_or_ctrl = |f: &ObjectFilterAst| -> Option<ObjectFilterAst> {
+        let mut out = f.clone();
+        let mut changed = false;
+        if out.controller == Some(ControllerRelation::ThatPlayer) {
+            out.controller = match target_player {
+                PlayerRefAst::EachPlayer => None,
+                PlayerRefAst::EachOpponent => Some(ControllerRelation::Opponent),
+                PlayerRefAst::You => Some(ControllerRelation::You),
+                _ => return None,
+            };
+            changed = true;
+        }
+        if out.zone == Some(ZoneFilter::ThatPlayerHand) {
+            out.zone = Some(match target_player {
+                PlayerRefAst::EachPlayer => ZoneFilter::EachPlayerHand,
+                PlayerRefAst::EachOpponent => ZoneFilter::OpponentsHands,
+                PlayerRefAst::You => ZoneFilter::YourHand,
+                _ => return None,
+            });
+            changed = true;
+        }
+        changed.then_some(out)
+    };
+    match instr {
+        InstructionAst::Draw {
+            player,
+            count,
+            up_to,
+        } if matches_loop_player(*player) => Some(InstructionAst::Draw {
+            player: target_player,
+            count: count.clone(),
+            up_to: *up_to,
+        }),
         InstructionAst::Mill { player, count } if matches_loop_player(*player) => {
             Some(InstructionAst::Mill {
                 player: target_player,
@@ -497,10 +639,18 @@ pub(super) fn try_rewrite_for_each_player(
             player,
             count,
             subject,
+            except,
+            half,
+            rounding,
+            chooser,
         } if matches_loop_player(*player) => Some(InstructionAst::Sacrifice {
             player: target_player,
             count: count.clone(),
             subject: subject.clone(),
+            except: except.clone(),
+            half: *half,
+            rounding: *rounding,
+            chooser: *chooser,
         }),
         InstructionAst::ChangeLife {
             player,
@@ -555,15 +705,106 @@ pub(super) fn try_rewrite_for_each_player(
                 amount: amount.clone(),
             })
         }
-        InstructionAst::GainPlayerCounters {
-            player,
-            counter_kind,
-            count,
-        } if matches_loop_player(*player) => Some(InstructionAst::GainPlayerCounters {
-            player: target_player,
-            counter_kind: counter_kind.clone(),
-            count: count.clone(),
-        }),
+        InstructionAst::CreateEmblemFor {
+            recipient,
+            text,
+            compiled,
+        } if matches!(recipient.as_ref(), SubjectRefAst::Player(p) if matches_loop_player(*p)) => {
+            Some(InstructionAst::CreateEmblemFor {
+                recipient: Box::new(SubjectRefAst::Player(target_player)),
+                text: text.clone(),
+                compiled: compiled.clone(),
+            })
+        }
+        InstructionAst::RevealCards { subject } => match subject.as_ref() {
+            SubjectRefAst::Player(p) if matches_loop_player(*p) => {
+                Some(InstructionAst::RevealCards {
+                    subject: Box::new(SubjectRefAst::Player(target_player)),
+                })
+            }
+            SubjectRefAst::All(f) => Some(InstructionAst::RevealCards {
+                subject: Box::new(SubjectRefAst::All(Box::new(
+                    rewrite_that_player_zone_or_ctrl(f)?,
+                ))),
+            }),
+            SubjectRefAst::Each(f) => Some(InstructionAst::RevealCards {
+                subject: Box::new(SubjectRefAst::Each(Box::new(
+                    rewrite_that_player_zone_or_ctrl(f)?,
+                ))),
+            }),
+            _ => None,
+        },
+        InstructionAst::SetSuspected { subject, remove } => match subject.as_ref() {
+            SubjectRefAst::All(f) => Some(InstructionAst::SetSuspected {
+                subject: Box::new(SubjectRefAst::All(Box::new(
+                    rewrite_that_player_controller(f)?,
+                ))),
+                remove: *remove,
+            }),
+            SubjectRefAst::Each(f) => Some(InstructionAst::SetSuspected {
+                subject: Box::new(SubjectRefAst::Each(Box::new(
+                    rewrite_that_player_controller(f)?,
+                ))),
+                remove: *remove,
+            }),
+            _ => None,
+        },
+        InstructionAst::TurnFaceDown { subject } => match subject.as_ref() {
+            SubjectRefAst::All(f) => Some(InstructionAst::TurnFaceDown {
+                subject: Box::new(SubjectRefAst::All(Box::new(
+                    rewrite_that_player_controller(f)?,
+                ))),
+            }),
+            SubjectRefAst::Each(f) => Some(InstructionAst::TurnFaceDown {
+                subject: Box::new(SubjectRefAst::Each(Box::new(
+                    rewrite_that_player_controller(f)?,
+                ))),
+            }),
+            _ => None,
+        },
+        InstructionAst::BindXY {
+            x_expr,
+            y_expr,
+            body,
+        } if !body.is_empty()
+            && !value_expr_references_target_anaphora(x_expr)
+            && !value_expr_references_target_anaphora(y_expr) =>
+        {
+            let rewritten = body
+                .iter()
+                .map(|s| try_rewrite_for_each_player(s, target_player))
+                .collect::<Option<Vec<_>>>()?;
+            Some(InstructionAst::BindXY {
+                x_expr: x_expr.clone(),
+                y_expr: y_expr.clone(),
+                body: rewritten,
+            })
+        }
+        InstructionAst::ForAsLongAs { condition, body }
+            if !body.is_empty() && !condition_references_target_anaphora(condition) =>
+        {
+            let rewritten = body
+                .iter()
+                .map(|s| try_rewrite_for_each_player(s, target_player))
+                .collect::<Option<Vec<_>>>()?;
+            Some(InstructionAst::ForAsLongAs {
+                condition: condition.clone(),
+                body: rewritten,
+            })
+        }
+        InstructionAst::ForEachSubjectPlayer { players, body }
+            if !body.is_empty()
+                && matches!(players.as_ref(), SubjectRefAst::Player(p) if matches_loop_player(*p)) =>
+        {
+            let rewritten = body
+                .iter()
+                .map(|s| try_rewrite_for_each_player(s, target_player))
+                .collect::<Option<Vec<_>>>()?;
+            Some(InstructionAst::ForEachSubjectPlayer {
+                players: Box::new(SubjectRefAst::Player(target_player)),
+                body: rewritten,
+            })
+        }
         InstructionAst::ExileGraveyard { whose }
             if matches!(
                 whose.trim().to_ascii_lowercase().as_str(),
@@ -686,6 +927,39 @@ pub(super) fn parse_dynamic_pt_expr(
     None
 }
 
+fn bind_filter_player_target_local(
+    builder: &mut BodyBuilder,
+    filter: &ObjectFilter,
+) -> Result<(), &'static str> {
+    let mut needs_player = false;
+    let mut needs_opponent = false;
+    let mut inspect = |clause: ObjectClause| match clause.controller {
+        ControllerFilter::TargetPlayer => needs_player = true,
+        ControllerFilter::TargetOpponent => needs_opponent = true,
+        _ => {}
+    };
+    match *filter {
+        ObjectFilter::Clause(c) => inspect(c),
+        ObjectFilter::Either(a, b) => {
+            inspect(a);
+            inspect(b);
+        }
+    }
+    if needs_opponent {
+        if builder.target != BodyTarget::SingleOpponent {
+            builder.bind_target(BodyTarget::SingleOpponent)?;
+        }
+    } else if needs_player
+        && !matches!(
+            builder.target,
+            BodyTarget::SinglePlayer | BodyTarget::SingleOpponent
+        )
+    {
+        builder.bind_target(BodyTarget::SinglePlayer)?;
+    }
+    Ok(())
+}
+
 pub(super) fn lower_modify_pt_part(
     subject: &SubjectRefAst,
     part: ResolvedPartSpec,
@@ -697,6 +971,9 @@ pub(super) fn lower_modify_pt_part(
 ) -> Result<(), &'static str> {
     match subject {
         s if is_self_pronoun(s, builder, self_pronoun_valid) => {
+            if !self_pronoun_valid && !in_trigger {
+                return Err("oracle:spell-cannot-modify-self");
+            }
             builder.instructions.push(Instruction::ChangeAbilitySource {
                 parts: ResolvedPartsSpec(vec![part]),
                 duration: dur,
@@ -819,6 +1096,7 @@ pub(super) fn lower_modify_pt_part(
             if f.zone.is_none() =>
         {
             let obj = lower_object_filter(f, vocabulary)?;
+            bind_filter_player_target_local(builder, &obj)?;
             builder.last_group_filter = Some(obj);
             builder.instructions.push(Instruction::ChangeGroup {
                 group: Box::new(EffectSubject::Matching(obj)),
@@ -852,6 +1130,8 @@ pub(super) fn lower_modify_pt_target(
                         power_toughness: Some(pt),
                         keywords: BTreeSet::new(),
                     });
+            } else if !self_pronoun_valid {
+                return Err("oracle:spell-cannot-modify-self");
             } else {
                 builder.instructions.push(Instruction::BoostSource {
                     power_toughness: Some(pt),
@@ -915,6 +1195,7 @@ pub(super) fn lower_modify_pt_target(
             if f.zone.is_none() && dur == ResolvedDuration::UntilEndOfTurn =>
         {
             let obj = lower_object_filter(f, vocabulary)?;
+            bind_filter_player_target_local(builder, &obj)?;
             builder.last_group_filter = Some(obj);
             builder
                 .instructions
@@ -1185,9 +1466,12 @@ pub(super) fn lower_resolution_pay_cost_ops(
             count,
             filter,
             random,
+            up_to: false,
+            any_number: false,
         } => {
             let amt = lower_value_expr(resolve_x(count, bound_x), vocabulary)?;
-            let plain_any = filter.is_empty() || filter.any_card;
+            let plain_any = filter.is_empty()
+                || (filter.any_card && filter.predicates.is_empty() && filter.flags.0 == 0);
             if *random {
                 if plain_any && amt == ValueExpr::literal(1) {
                     return Ok(vec![Instruction::DiscardOneAtRandom(player)]);
@@ -1208,7 +1492,12 @@ pub(super) fn lower_resolution_pay_cost_ops(
                 }])
             }
         }
-        CostAtomAst::Sacrifice { count, filter } => {
+        CostAtomAst::Sacrifice {
+            count,
+            filter,
+            up_to: false,
+            min_one: false,
+        } => {
             let amt = lower_value_expr(resolve_x(count, bound_x), vocabulary)?;
             let ptf = lower_permanent_type_filter(filter, vocabulary)?;
             Ok(vec![Instruction::Sacrifice {
@@ -1217,7 +1506,36 @@ pub(super) fn lower_resolution_pay_cost_ops(
                 filter: ptf,
             }])
         }
-        CostAtomAst::Exile { count, filter } => {
+        CostAtomAst::SacrificeAll(filter) => {
+            if !matches!(filter.zone, None | Some(ZoneFilter::Battlefield))
+                || !matches!(
+                    filter.controller,
+                    None | Some(ControllerRelation::You | ControllerRelation::ThatPlayer)
+                )
+            {
+                return Err("oracle:unsupported-pay-cost");
+            }
+            let obj = lower_filter_any(filter)?;
+            let scoped = match player {
+                ResolvingPlayer::Controller => obj.controlled(),
+                ResolvingPlayer::UniqueRelatedPlayer => obj.of_related_player(),
+                ResolvingPlayer::TargetPlayer => obj.of_target_player(),
+                _ => return Err("oracle:unsupported-pay-cost"),
+            };
+            Ok(vec![Instruction::SacrificeSubject {
+                subject: Box::new(EffectSubject::Matching(scoped)),
+            }])
+        }
+        CostAtomAst::Exile {
+            count,
+            filter,
+            face_down: false,
+            face_up: _,
+            single_graveyard: false,
+            any_number: false,
+            min_one: false,
+            total_mv: None,
+        } => {
             let amt = lower_value_expr(resolve_x(count, bound_x), vocabulary)?;
             let zone = match filter.zone {
                 Some(ZoneFilter::YourGraveyard) => CostExileZone::Graveyard,
@@ -1232,6 +1550,8 @@ pub(super) fn lower_resolution_pay_cost_ops(
                 && filter.any_colors.is_empty()
                 && filter.forbidden_colors.is_empty()
                 && filter.stat_bounds.is_empty()
+                && filter.flags.0 == 0
+                && filter.predicates.is_empty()
                 && let ValueExpr::Literal(n) = &amt
                 && let Some(nz) = n
                     .to_usize()
@@ -1251,6 +1571,48 @@ pub(super) fn lower_resolution_pay_cost_ops(
                 filter: Box::new(obj),
             }])
         }
+        CostAtomAst::Exile {
+            filter,
+            face_down: false,
+            face_up: _,
+            single_graveyard: false,
+            any_number: true,
+            min_one,
+            total_mv: None,
+            ..
+        } => {
+            let source_zone = match filter.zone {
+                Some(ZoneFilter::YourHand | ZoneFilter::ThatPlayerHand) => SourceZoneFilter::Hand,
+                Some(ZoneFilter::YourGraveyard | ZoneFilter::ThatPlayerGraveyard) => {
+                    SourceZoneFilter::Graveyard
+                }
+                Some(ZoneFilter::OpponentGraveyard | ZoneFilter::OpponentsGraveyards) => {
+                    SourceZoneFilter::OpponentGraveyard
+                }
+                Some(ZoneFilter::AnyGraveyard | ZoneFilter::AllGraveyards) => {
+                    SourceZoneFilter::AnyGraveyard
+                }
+                Some(ZoneFilter::YourLibrary) => SourceZoneFilter::YourLibrary,
+                Some(ZoneFilter::Exile) => SourceZoneFilter::Exile,
+                None | Some(ZoneFilter::Battlefield) => SourceZoneFilter::Battlefield,
+                _ => return Err("oracle:unsupported-pay-cost"),
+            };
+            let obj = lower_filter_any(filter)?;
+            if obj.has_target_player() && player != ResolvingPlayer::TargetPlayer {
+                return Err("oracle:unsupported-pay-cost");
+            }
+            Ok(vec![Instruction::SelectZoneCardsToZone {
+                player,
+                source_zone,
+                filter: Box::new(obj),
+                min: ValueExpr::literal(if *min_one { 1 } else { 0 }),
+                max: ValueExpr::literal(999),
+                destination: SubjectDestination::Exile {
+                    delayed_return: None,
+                },
+                reveal: false,
+            }])
+        }
         CostAtomAst::BounceToHand(subject) => match subject.as_ref() {
             SubjectRefAst::SelfObject => Ok(vec![Instruction::ReturnSourceToHand]),
             SubjectRefAst::Group(f) | SubjectRefAst::All(f) | SubjectRefAst::Each(f) => {
@@ -1263,7 +1625,11 @@ pub(super) fn lower_resolution_pay_cost_ops(
             }
             _ => Err("oracle:unsupported-pay-cost"),
         },
-        CostAtomAst::TapPermanent { count, filter } => {
+        CostAtomAst::TapPermanent {
+            count,
+            filter,
+            any_number: false,
+        } => {
             let amt = lower_value_expr(resolve_x(count, bound_x), vocabulary)?;
             let obj = lower_filter_any(filter)?;
             Ok(vec![Instruction::TapOrUntapControlled {
@@ -1417,9 +1783,161 @@ pub(super) fn lower_permanent_type_filter(
     })
 }
 
+// Shared search-target binder for SearchLibrary lowering sites in body.rs and instructions.rs.
+#[allow(dead_code)]
+pub(super) fn bind_search_target(
+    builder: &mut BodyBuilder,
+    search: &LibrarySearch,
+) -> Result<(), &'static str> {
+    if search.source == SearchSource::TargetOpponentLibrary {
+        builder.bind_target(BodyTarget::SingleOpponent)?;
+    } else if search.source == SearchSource::TargetPlayerLibrary
+        || search.searcher == ResolvingPlayer::TargetPlayer
+        || search.curse_host() == Some(spellwake_engine::program::AuraSearchHost::TargetPlayer)
+    {
+        builder.bind_target(BodyTarget::SinglePlayer)?;
+    }
+    Ok(())
+}
+
+#[derive(Debug, Clone, Copy, Default)]
+pub(super) struct SearchLibraryExtra<'a> {
+    pub(super) extra_zones: &'a [ZoneFilter],
+    pub(super) secondary_filter: Option<&'a ObjectFilterAst>,
+    pub(super) secondary_is_or: bool,
+    pub(super) where_x: Option<&'a ValueExprAst>,
+    pub(super) rest_to_zone: Option<&'a str>,
+    pub(super) modifier: Option<&'a spellwake_oracle_compiler::ast::SearchModifierAst>,
+}
+
+fn filter_references_chosen_x(f: &ObjectFilterAst) -> bool {
+    f.stat_bounds
+        .iter()
+        .any(|sb| value_expr_references_chosen_x(&sb.value))
+}
+
+fn substitute_chosen_x_in_value_expr(
+    expr: &ValueExprAst,
+    replacement: &ValueExprAst,
+) -> (ValueExprAst, bool) {
+    match expr {
+        ValueExprAst::ChosenX => (replacement.clone(), true),
+        ValueExprAst::Add(a, b) => {
+            let (na, ca) = substitute_chosen_x_in_value_expr(a, replacement);
+            let (nb, cb) = substitute_chosen_x_in_value_expr(b, replacement);
+            (ValueExprAst::Add(Box::new(na), Box::new(nb)), ca || cb)
+        }
+        ValueExprAst::Sub(a, b) => {
+            let (na, ca) = substitute_chosen_x_in_value_expr(a, replacement);
+            let (nb, cb) = substitute_chosen_x_in_value_expr(b, replacement);
+            (ValueExprAst::Sub(Box::new(na), Box::new(nb)), ca || cb)
+        }
+        ValueExprAst::Mul(a, b) => {
+            let (na, ca) = substitute_chosen_x_in_value_expr(a, replacement);
+            let (nb, cb) = substitute_chosen_x_in_value_expr(b, replacement);
+            (ValueExprAst::Mul(Box::new(na), Box::new(nb)), ca || cb)
+        }
+        ValueExprAst::DivConst {
+            expr: inner,
+            denom,
+            rounding,
+        } => {
+            let (ni, ci) = substitute_chosen_x_in_value_expr(inner, replacement);
+            (
+                ValueExprAst::DivConst {
+                    expr: Box::new(ni),
+                    denom: *denom,
+                    rounding: *rounding,
+                },
+                ci,
+            )
+        }
+        ValueExprAst::Pow { base, exp } => {
+            let (nb, cb) = substitute_chosen_x_in_value_expr(base, replacement);
+            let (ne, ce) = substitute_chosen_x_in_value_expr(exp, replacement);
+            (
+                ValueExprAst::Pow {
+                    base: Box::new(nb),
+                    exp: Box::new(ne),
+                },
+                cb || ce,
+            )
+        }
+        ValueExprAst::Shortfall { threshold, actual } => {
+            let (nt, ct) = substitute_chosen_x_in_value_expr(threshold, replacement);
+            let (na, ca) = substitute_chosen_x_in_value_expr(actual, replacement);
+            (
+                ValueExprAst::Shortfall {
+                    threshold: Box::new(nt),
+                    actual: Box::new(na),
+                },
+                ct || ca,
+            )
+        }
+        ValueExprAst::AbsDiff(a, b) => {
+            let (na, ca) = substitute_chosen_x_in_value_expr(a, replacement);
+            let (nb, cb) = substitute_chosen_x_in_value_expr(b, replacement);
+            (ValueExprAst::AbsDiff(Box::new(na), Box::new(nb)), ca || cb)
+        }
+        _ => (expr.clone(), false),
+    }
+}
+
+fn substitute_chosen_x_in_filter(
+    filter: &ObjectFilterAst,
+    replacement: &ValueExprAst,
+) -> Option<ObjectFilterAst> {
+    let mut out = filter.clone();
+    let mut changed = false;
+    for sb in &mut out.stat_bounds {
+        let (nv, c) = substitute_chosen_x_in_value_expr(&sb.value, replacement);
+        if c {
+            *sb.value = nv;
+            changed = true;
+        }
+    }
+    changed.then_some(out)
+}
+
+fn extract_single_basic_land_type(f: &ObjectFilterAst) -> Option<LandType> {
+    if f.subtypes.len() != 1
+        || !(f.any_types.is_empty() || f.any_types == AstCardTypeMask::LAND)
+        || !f.forbidden_types.is_empty()
+        || !f.required_supertypes.is_empty()
+        || !f.forbidden_supertypes.is_empty()
+        || !f.forbidden_subtypes.is_empty()
+        || !f.any_colors.is_empty()
+        || !f.forbidden_colors.is_empty()
+        || f.color_arity.is_some()
+        || f.controller.is_some()
+        || f.zone.is_some()
+        || f.combat.is_some()
+        || f.tapped.is_some()
+        || f.token.is_some()
+        || !f.required_keywords.is_empty()
+        || !f.forbidden_keywords.is_empty()
+        || !f.stat_bounds.is_empty()
+        || f.counter_kind.is_some()
+        || f.named.is_some()
+        || !f.flags.is_empty()
+        || !f.predicates.is_empty()
+        || f.any_spell
+        || f.is_ability
+    {
+        return None;
+    }
+    match parse_basic_land_subtype(&f.subtypes[0])? {
+        BasicLandType::Plains => Some(LandType::Plains),
+        BasicLandType::Island => Some(LandType::Island),
+        BasicLandType::Swamp => Some(LandType::Swamp),
+        BasicLandType::Mountain => Some(LandType::Mountain),
+        BasicLandType::Forest => Some(LandType::Forest),
+    }
+}
+
 // Internal lowering helper taking the orthogonal fields of `InstructionAst::SearchLibrary` plus lowering flags.
 #[allow(clippy::too_many_arguments)]
-pub(super) fn lower_library_search(
+pub(super) fn lower_library_search_ext(
     library: &str,
     count: &ValueExprAst,
     filter: &ObjectFilterAst,
@@ -1429,9 +1947,14 @@ pub(super) fn lower_library_search(
     optional_search: bool,
     up_to: bool,
     any_number: bool,
+    extra: &SearchLibraryExtra<'_>,
 ) -> Result<LibrarySearch, &'static str> {
+    if extra.modifier.is_some() {
+        return Err("oracle:unsupported-search-modifier");
+    }
+
     let lib_low = library.trim().to_ascii_lowercase();
-    let (searcher, source) = match lib_low.as_str() {
+    let (searcher, mut source) = match lib_low.as_str() {
         "your" | "own" | "" => (ResolvingPlayer::Controller, SearchSource::OwnLibrary),
         "your library and/or graveyard"
         | "your graveyard and/or library"
@@ -1449,12 +1972,120 @@ pub(super) fn lower_library_search(
             ResolvingPlayer::UniqueRelatedPlayer,
             SearchSource::OwnLibrary,
         ),
-        "target player" | "target player's" | "target player's library" => {
-            (ResolvingPlayer::TargetPlayer, SearchSource::OwnLibrary)
-        }
+        "target player" | "target player's" | "target player's library" => (
+            ResolvingPlayer::Controller,
+            SearchSource::TargetPlayerLibrary,
+        ),
         _ => return Err("oracle:unsupported-search-source"),
     };
-    let search_count = if any_number {
+    if !extra.extra_zones.is_empty() {
+        if source == SearchSource::OwnLibrary && extra.extra_zones == [ZoneFilter::YourGraveyard] {
+            source = SearchSource::OwnLibraryOrGraveyard;
+        } else {
+            return Err("oracle:unsupported-search-source");
+        }
+    }
+
+    let mut substituted_filter_owned: Option<ObjectFilterAst> = None;
+    let mut substituted_secondary_owned: Option<ObjectFilterAst> = None;
+    let mut where_x_count: Option<SearchCount> = None;
+    if let Some(where_expr) = extra.where_x {
+        if any_number || value_expr_references_chosen_x(where_expr) {
+            return Err("oracle:unsupported-search-where-x");
+        }
+        if matches!(count, ValueExprAst::ChosenX) {
+            let ValueExprAst::CountPlayersMatching { predicate } = where_expr else {
+                return Err("oracle:unsupported-search-where-x");
+            };
+            let pred_low = predicate.trim().to_ascii_lowercase();
+            let is_more_lands = matches!(
+                pred_low.as_str(),
+                "the number of players who control more lands than you"
+                    | "players who control more lands than you"
+                    | "the number of opponents who control more lands than you"
+                    | "opponents who control more lands than you"
+            );
+            if !is_more_lands
+                || filter_references_chosen_x(filter)
+                || extra
+                    .secondary_filter
+                    .is_some_and(filter_references_chosen_x)
+            {
+                return Err("oracle:unsupported-search-where-x");
+            }
+            where_x_count = Some(SearchCount::UpToPlayersWithMoreLands);
+        } else {
+            let mut substituted = false;
+            if let Some(sub_f) = substitute_chosen_x_in_filter(filter, where_expr) {
+                substituted_filter_owned = Some(sub_f);
+                substituted = true;
+            }
+            if let Some(sec) = extra.secondary_filter
+                && let Some(sub_s) = substitute_chosen_x_in_filter(sec, where_expr)
+            {
+                substituted_secondary_owned = Some(sub_s);
+                substituted = true;
+            }
+            if !substituted {
+                return Err("oracle:unsupported-search-where-x");
+            }
+        }
+    }
+    let effective_filter = substituted_filter_owned.as_ref().unwrap_or(filter);
+    let effective_secondary = substituted_secondary_owned
+        .as_ref()
+        .or(extra.secondary_filter);
+
+    let (matcher, pair_constraint, pair_count_override) = if let Some(sec) = effective_secondary {
+        if extra.secondary_is_or {
+            let first = lower_object_filter(effective_filter, vocabulary)?;
+            let second = lower_object_filter(sec, vocabulary)?;
+            let (ObjectFilter::Clause(c1), ObjectFilter::Clause(c2)) = (first, second) else {
+                return Err("oracle:unsupported-secondary-search-filter");
+            };
+            (
+                SearchCardMatcher::Filtered(Box::new(ObjectFilter::Either(c1, c2))),
+                None,
+                None,
+            )
+        } else {
+            if any_number || where_x_count.is_some() || !matches!(count, ValueExprAst::Const(1 | 2))
+            {
+                return Err("oracle:unsupported-secondary-search-filter");
+            }
+            let (Some(sub1), Some(sub2)) = (
+                extract_single_basic_land_type(effective_filter),
+                extract_single_basic_land_type(sec),
+            ) else {
+                return Err("oracle:unsupported-secondary-search-filter");
+            };
+            if sub1 == sub2 {
+                return Err("oracle:unsupported-secondary-search-filter");
+            }
+            (
+                SearchCardMatcher::LandSubtypes {
+                    subtypes: BTreeSet::from([sub1, sub2]),
+                    require_land_type: true,
+                },
+                Some(
+                    spellwake_engine::program::SearchPairConstraint::DistinctLandTypes(sub1, sub2),
+                ),
+                Some(SearchCount::UpTo(2)),
+            )
+        }
+    } else {
+        (
+            lower_search_matcher(effective_filter, vocabulary)?,
+            None,
+            None,
+        )
+    };
+
+    let search_count = if let Some(pair_cnt) = pair_count_override {
+        pair_cnt
+    } else if let Some(wx_cnt) = where_x_count {
+        wx_cnt
+    } else if any_number {
         SearchCount::UpTo(u8::MAX)
     } else {
         let ValueExprAst::Const(n) = count else {
@@ -1464,16 +2095,15 @@ pub(super) fn lower_library_search(
         if n_u8 == 0 {
             return Err("oracle:search-zero");
         }
-        let matcher_preview = lower_search_matcher(filter, vocabulary)?;
-        if matcher_preview == SearchCardMatcher::Any && !optional_search && !up_to {
+        if matcher == SearchCardMatcher::Any && !optional_search && !up_to {
             SearchCount::Exact(NonZeroU8::new(n_u8).ok_or("oracle:search-zero")?)
         } else {
             SearchCount::UpTo(n_u8)
         }
     };
-    let matcher = lower_search_matcher(filter, vocabulary)?;
+
     let dest_low = to_zone.to_ascii_lowercase();
-    let destination = if dest_low.contains("hand") {
+    let mut destination = if dest_low.contains("hand") {
         SearchDestination::Hand
     } else if dest_low.contains("graveyard") {
         SearchDestination::Graveyard
@@ -1491,41 +2121,107 @@ pub(super) fn lower_library_search(
     } else {
         return Err("oracle:unsupported-search-dest");
     };
+    if let Some(rest) = extra.rest_to_zone {
+        let is_count_two = matches!(search_count, SearchCount::UpTo(2))
+            || matches!(search_count, SearchCount::Exact(n) if n.get() == 2);
+        if !is_count_two {
+            return Err("oracle:unsupported-search-dest");
+        }
+        let rest_norm = rest
+            .trim()
+            .trim_end_matches('.')
+            .trim()
+            .to_ascii_lowercase();
+        let rest_is_hand = matches!(
+            rest_norm.as_str(),
+            "hand"
+                | "your hand"
+                | "into your hand"
+                | "in your hand"
+                | "their hand"
+                | "into their hand"
+                | "that player's hand"
+                | "into that player's hand"
+        );
+        let rest_is_graveyard = matches!(
+            rest_norm.as_str(),
+            "graveyard"
+                | "your graveyard"
+                | "into your graveyard"
+                | "their graveyard"
+                | "into their graveyard"
+                | "that player's graveyard"
+                | "into that player's graveyard"
+        );
+        destination = match destination {
+            SearchDestination::Battlefield {
+                tapped: true,
+                post_entry: spellwake_engine::program::SearchBattlefieldPostEntry::None,
+            } if rest_is_hand => SearchDestination::SplitBattlefieldTappedAndHand,
+            SearchDestination::Hand if rest_is_graveyard => {
+                SearchDestination::SplitHandAndGraveyard
+            }
+            _ => return Err("oracle:unsupported-search-dest"),
+        };
+    }
+
     let mut ls = LibrarySearch {
         searcher,
         source,
         matcher,
         mana_value: None,
         count: search_count,
-        pair_constraint: None,
+        pair_constraint,
         destination,
         reveal,
     };
     if !matches!(ls.matcher, SearchCardMatcher::Filtered(_)) {
-        if filter.stat_bounds.len() == 1 {
-            let sb = &filter.stat_bounds[0];
+        if effective_filter.stat_bounds.len() == 1 {
+            let sb = &effective_filter.stat_bounds[0];
             if sb.stat == StatKind::ManaValue {
-                ls.mana_value = match (sb.op, sb.value.as_ref()) {
-                    (CompareOp::Le, ValueExprAst::Const(v)) if *v >= 0 => Some(
-                        SearchManaValue::AtMost(u32::try_from(*v).map_err(|_| "oracle:mv-ovf")?),
-                    ),
-                    (CompareOp::Ge, ValueExprAst::Const(v)) if *v >= 0 => Some(
-                        SearchManaValue::AtLeast(u32::try_from(*v).map_err(|_| "oracle:mv-ovf")?),
-                    ),
+                match (sb.op, sb.value.as_ref()) {
+                    (CompareOp::Le, ValueExprAst::Const(v)) if *v >= 0 => {
+                        ls.mana_value = Some(SearchManaValue::AtMost(
+                            u32::try_from(*v).map_err(|_| "oracle:mv-ovf")?,
+                        ));
+                    }
+                    (CompareOp::Ge, ValueExprAst::Const(v)) if *v >= 0 => {
+                        ls.mana_value = Some(SearchManaValue::AtLeast(
+                            u32::try_from(*v).map_err(|_| "oracle:mv-ovf")?,
+                        ));
+                    }
                     (CompareOp::Eq, ValueExprAst::Const(v)) if *v >= 0 => {
-                        Some(SearchManaValue::Exact(i64::from(*v).into()))
+                        ls.mana_value = Some(SearchManaValue::Exact(i64::from(*v).into()));
                     }
                     (CompareOp::Le, ValueExprAst::ChosenX) => {
-                        Some(SearchManaValue::AtMostAnnouncedX)
+                        ls.mana_value = Some(SearchManaValue::AtMostAnnouncedX);
                     }
-                    _ => return Err("oracle:unsupported-search-mv"),
-                };
+                    (_, ValueExprAst::ChosenX) => {
+                        return Err("oracle:unsupported-search-mv");
+                    }
+                    (
+                        CompareOp::Eq,
+                        ValueExprAst::CounterCount {
+                            subject,
+                            counter_kind,
+                        },
+                    ) if matches!(subject.as_ref(), SubjectRefAst::SelfObject) => {
+                        let ck = parse_counter_kind(counter_kind)
+                            .filter(|c| c.is_permanent())
+                            .ok_or("oracle:unsupported-search-mv")?;
+                        ls.mana_value = Some(SearchManaValue::EqualToSourceCounters(ck));
+                    }
+                    _ => {
+                        let obj = lower_object_filter(effective_filter, vocabulary)?;
+                        ls.matcher = SearchCardMatcher::Filtered(Box::new(obj));
+                    }
+                }
             } else {
-                let obj = lower_object_filter(filter, vocabulary)?;
+                let obj = lower_object_filter(effective_filter, vocabulary)?;
                 ls.matcher = SearchCardMatcher::Filtered(Box::new(obj));
             }
-        } else if !filter.stat_bounds.is_empty() {
-            let obj = lower_object_filter(filter, vocabulary)?;
+        } else if !effective_filter.stat_bounds.is_empty() {
+            let obj = lower_object_filter(effective_filter, vocabulary)?;
             ls.matcher = SearchCardMatcher::Filtered(Box::new(obj));
         }
     }
@@ -1626,7 +2322,15 @@ fn normalize_token_ability_text(raw: &str, tok_name: &str) -> String {
         .replace("this creature", "~")
         .replace("This creature", "~")
         .replace("this artifact", "~")
-        .replace("This artifact", "~");
+        .replace("This artifact", "~")
+        .replace("this enchantment", "~")
+        .replace("This enchantment", "~")
+        .replace("this land", "~")
+        .replace("This land", "~")
+        .replace("this equipment", "~")
+        .replace("This equipment", "~")
+        .replace("this aura", "~")
+        .replace("This aura", "~");
     let tok_low = tok_name.trim().to_ascii_lowercase();
     if !tok_low.is_empty() && tok_low != "token" {
         // Replace case-insensitive token name occurrences with "~"
@@ -1695,6 +2399,45 @@ fn normalize_token_ability_text(raw: &str, tok_name: &str) -> String {
     result
 }
 
+fn lower_token_face_ast(
+    face_ast: &FaceAst,
+    is_aura: bool,
+    program: &mut Program,
+    vocabulary: &CreatureTypeVocabulary,
+    tok_ids: &mut LoweringIds,
+) -> Result<(), &'static str> {
+    if is_aura
+        && program.permanent().and_then(|d| d.attachment).is_none()
+        && face_ast
+            .statics
+            .iter()
+            .any(|st| matches!(st, StaticAbilityAst::AttachmentRestriction { .. }))
+    {
+        let restriction = find_aura_restriction(&face_ast.statics, vocabulary)
+            .map_err(|_| "oracle:unsupported-granted-keyword")?;
+        if let ProgramKind::Permanent(def) = &mut program.kind {
+            def.attachment = Some(AttachmentKind::Aura(restriction));
+        }
+    }
+    for (k_idx, kw_ast) in face_ast.keywords.iter().enumerate() {
+        lower_keyword(kw_ast, k_idx, face_ast, program, vocabulary, tok_ids, false)
+            .map_err(|_| "oracle:unsupported-granted-keyword")?;
+    }
+    for st in &face_ast.statics {
+        lower_static(st, program, vocabulary, tok_ids, false)
+            .map_err(|_| "oracle:unsupported-granted-keyword")?;
+    }
+    for rep in &face_ast.replacements {
+        lower_replacement(rep, program, vocabulary, tok_ids)
+            .map_err(|_| "oracle:unsupported-granted-keyword")?;
+    }
+    for ab in &face_ast.abilities {
+        lower_ability(ab, program, vocabulary, tok_ids)
+            .map_err(|_| "oracle:unsupported-granted-keyword")?;
+    }
+    Ok(())
+}
+
 pub(super) fn lower_token_spec(
     spec: &TokenSpecAst,
     recipients: TokenRecipients,
@@ -1735,27 +2478,17 @@ pub(super) fn lower_token_spec(
             named,
         } => {
             let amt = lower_value_expr(resolve_x(count, bound_x), vocabulary)?;
-            let (p_val, t_val, base_size) =
-                if power.eq_ignore_ascii_case("x") && toughness.eq_ignore_ascii_case("x") {
-                    let x_expr = if let Some(bx) = bound_x {
-                        lower_value_expr(bx, vocabulary)?
-                    } else {
-                        ValueExpr::chosen_x()
-                    };
-                    (0i64, 0i64, Some(TokenSize::AtCreation(x_expr)))
-                } else {
-                    let p: i64 = power.parse().map_err(|_| "oracle:token-pt")?;
-                    let t: i64 = toughness.parse().map_err(|_| "oracle:token-pt")?;
-                    (p, t, None)
-                };
 
             let mut creature_subtypes = BTreeSet::new();
             let mut artifact_subtypes = BTreeSet::new();
             let mut enchantment_subtypes = BTreeSet::new();
             let mut land_subtypes = BTreeSet::new();
             let mut ordered_subtypes = Vec::new();
+            let mut is_aura = false;
             for st in subtypes {
-                if let Some(ct) = vocabulary.resolve_label(st) {
+                if st.eq_ignore_ascii_case("aura") {
+                    is_aura = true;
+                } else if let Some(ct) = vocabulary.resolve_label(st) {
                     if creature_subtypes.insert(ct) {
                         ordered_subtypes.push(TokenSubtype::Creature(ct));
                     }
@@ -1767,28 +2500,126 @@ pub(super) fn lower_token_spec(
                     if enchantment_subtypes.insert(et) {
                         ordered_subtypes.push(TokenSubtype::Enchantment(et));
                     }
-                } else if let Some(lt) = LandType::from_wire_label(st) {
-                    land_subtypes.insert(lt);
+                } else if let Some(lt) =
+                    LandType::from_wire_label(st).or_else(|| parse_land_subtype(st))
+                {
+                    if land_subtypes.insert(lt) {
+                        ordered_subtypes.push(TokenSubtype::Land(lt));
+                    }
                 } else {
                     return Err("oracle:token-unknown-subtype");
                 }
             }
 
-            let mut p = Program::creature(None, p_val.into(), t_val.into(), creature_subtypes);
-            let extra_types = card_type_mask_to_set(*card_types)?;
-            for t in extra_types {
-                if t.is_permanent() {
-                    p.card_types.insert(t);
+            let is_noncreature = power.is_empty()
+                && toughness.is_empty()
+                && (card_types.0 & AstCardTypeMask::CREATURE.0) == 0;
+            let (mut p, base_size) = if is_noncreature {
+                if *attacking {
+                    return Err("oracle:noncreature-attacking-token");
                 }
-            }
+                let mut perm_types = card_type_mask_to_set(*card_types)?;
+                if perm_types.is_empty()
+                    || perm_types
+                        .iter()
+                        .any(|t| matches!(t, CardType::Instant | CardType::Sorcery))
+                    || !perm_types.iter().copied().any(CardType::is_permanent)
+                {
+                    return Err("oracle:token-nonpermanent-type");
+                }
+                if is_aura {
+                    perm_types.insert(CardType::Enchantment);
+                }
+                if artifact_subtypes.contains(&ArtifactSubtype::Equipment)
+                    || artifact_subtypes.contains(&ArtifactSubtype::Fortification)
+                {
+                    perm_types.insert(CardType::Artifact);
+                }
+                let attachment = if artifact_subtypes.contains(&ArtifactSubtype::Equipment) {
+                    Some(AttachmentKind::Equipment)
+                } else if artifact_subtypes.contains(&ArtifactSubtype::Fortification) {
+                    Some(AttachmentKind::Fortification)
+                } else {
+                    None
+                };
+                let prog = Program::new(
+                    perm_types,
+                    creature_subtypes,
+                    land_subtypes,
+                    ProgramKind::Permanent(PermanentDefinition {
+                        entry_tap: None,
+                        attachment,
+                        printed_pt: None,
+                        casting_cost: None,
+                    }),
+                );
+                (prog, None)
+            } else {
+                let (p_val, t_val, base_size) =
+                    if power.eq_ignore_ascii_case("x") && toughness.eq_ignore_ascii_case("x") {
+                        let x_expr = if let Some(bx) = bound_x {
+                            lower_value_expr(bx, vocabulary)?
+                        } else {
+                            ValueExpr::chosen_x()
+                        };
+                        (0i64, 0i64, Some(TokenSize::AtCreation(x_expr)))
+                    } else {
+                        let p: i64 = power.parse().map_err(|_| "oracle:token-pt")?;
+                        let t: i64 = toughness.parse().map_err(|_| "oracle:token-pt")?;
+                        (p, t, None)
+                    };
+                let mut prog =
+                    Program::creature(None, p_val.into(), t_val.into(), creature_subtypes);
+                let extra_types = card_type_mask_to_set(*card_types)?;
+                for t in extra_types {
+                    if t.is_permanent() {
+                        prog.card_types.insert(t);
+                    }
+                }
+                prog.land_subtypes = land_subtypes;
+                if artifact_subtypes.contains(&ArtifactSubtype::Equipment)
+                    && let ProgramKind::Permanent(def) = &mut prog.kind
+                {
+                    def.attachment = Some(AttachmentKind::Equipment);
+                }
+                (prog, base_size)
+            };
             p.supertypes = supertype_mask_to_set(*supertypes)?;
             p.artifact_subtypes = artifact_subtypes;
             p.enchantment_subtypes = enchantment_subtypes;
-            p.land_subtypes = land_subtypes;
             p.effect_defined_colors = Some(color_mask_to_set(*colors));
+
+            let mut type_words: Vec<&str> = Vec::new();
+            if p.supertypes.contains(&Supertype::Legendary) {
+                type_words.push("Legendary");
+            }
+            for ct in &p.card_types {
+                match ct {
+                    CardType::Artifact => type_words.push("Artifact"),
+                    CardType::Battle => type_words.push("Battle"),
+                    CardType::Creature => type_words.push("Creature"),
+                    CardType::Enchantment => type_words.push("Enchantment"),
+                    CardType::Kindred => type_words.push("Kindred"),
+                    CardType::Land => type_words.push("Land"),
+                    CardType::Planeswalker => type_words.push("Planeswalker"),
+                    CardType::Instant | CardType::Sorcery => {}
+                }
+            }
+            if is_aura {
+                type_words.push("Aura");
+            }
+            if p.artifact_subtypes.contains(&ArtifactSubtype::Equipment) {
+                type_words.push("Equipment");
+            }
+            let tok_type_line = if type_words.is_empty() {
+                "Creature".to_string()
+            } else {
+                type_words.join(" ")
+            };
 
             let mut tok_ids = LoweringIds::default();
             let compiler_vocab = cached_compiler_vocab(vocabulary);
+            let tok_name = named.as_deref().unwrap_or("Token");
             for kw_raw in keywords {
                 if kw_raw.contains('"') {
                     let mut rest = kw_raw.as_str();
@@ -1816,15 +2647,16 @@ pub(super) fn lower_token_spec(
                         if let Some(kw) = lower_keyword_ability_name(trimmed) {
                             p.printed_keywords.insert(kw);
                         } else {
+                            let norm_part = normalize_token_ability_text(trimmed, tok_name);
                             let parsed_kw = compile_card(
                                 &CardInput {
                                     oracle_id: "",
-                                    name: "Token",
+                                    name: tok_name,
                                     layout: "normal",
                                     faces: vec![FaceInput {
-                                        name: "Token",
-                                        type_line: "Creature",
-                                        oracle_text: trimmed,
+                                        name: tok_name,
+                                        type_line: &tok_type_line,
+                                        oracle_text: &norm_part,
                                     }],
                                 },
                                 &compiler_vocab,
@@ -1833,34 +2665,16 @@ pub(super) fn lower_token_spec(
                                 return Err("oracle:unsupported-granted-keyword");
                             }
                             if let Some(face_ast) = parsed_kw.faces.first() {
-                                for (k_idx, kw_ast) in face_ast.keywords.iter().enumerate() {
-                                    lower_keyword(
-                                        kw_ast,
-                                        k_idx,
-                                        face_ast,
-                                        &mut p,
-                                        vocabulary,
-                                        &mut tok_ids,
-                                        false,
-                                    )
-                                    .map_err(|_| "oracle:unsupported-granted-keyword")?;
-                                }
-                                for st in &face_ast.statics {
-                                    lower_static(st, &mut p, vocabulary, &mut tok_ids, false)
-                                        .map_err(|_| "oracle:unsupported-granted-keyword")?;
-                                }
-                                for rep in &face_ast.replacements {
-                                    lower_replacement(rep, &mut p, vocabulary, &mut tok_ids)
-                                        .map_err(|_| "oracle:unsupported-granted-keyword")?;
-                                }
-                                for ab in &face_ast.abilities {
-                                    lower_ability(ab, &mut p, vocabulary, &mut tok_ids)
-                                        .map_err(|_| "oracle:unsupported-granted-keyword")?;
-                                }
+                                lower_token_face_ast(
+                                    face_ast,
+                                    is_aura,
+                                    &mut p,
+                                    vocabulary,
+                                    &mut tok_ids,
+                                )?;
                             }
                         }
                     }
-                    let tok_name = named.as_deref().unwrap_or("Token");
                     for q in quoted_texts {
                         if q.is_empty() {
                             continue;
@@ -1873,7 +2687,7 @@ pub(super) fn lower_token_spec(
                                 layout: "normal",
                                 faces: vec![FaceInput {
                                     name: tok_name,
-                                    type_line: "Creature",
+                                    type_line: &tok_type_line,
                                     oracle_text: &norm_q,
                                 }],
                             },
@@ -1888,35 +2702,11 @@ pub(super) fn lower_token_spec(
                         if !face_ast.spell_effects.is_empty() {
                             return Err("oracle:unsupported-granted-keyword");
                         }
-                        for (k_idx, kw_ast) in face_ast.keywords.iter().enumerate() {
-                            lower_keyword(
-                                kw_ast,
-                                k_idx,
-                                face_ast,
-                                &mut p,
-                                vocabulary,
-                                &mut tok_ids,
-                                false,
-                            )
-                            .map_err(|_| "oracle:unsupported-granted-keyword")?;
-                        }
-                        for st in &face_ast.statics {
-                            lower_static(st, &mut p, vocabulary, &mut tok_ids, false)
-                                .map_err(|_| "oracle:unsupported-granted-keyword")?;
-                        }
-                        for rep in &face_ast.replacements {
-                            lower_replacement(rep, &mut p, vocabulary, &mut tok_ids)
-                                .map_err(|_| "oracle:unsupported-granted-keyword")?;
-                        }
-                        for ab in &face_ast.abilities {
-                            lower_ability(ab, &mut p, vocabulary, &mut tok_ids)
-                                .map_err(|_| "oracle:unsupported-granted-keyword")?;
-                        }
+                        lower_token_face_ast(face_ast, is_aura, &mut p, vocabulary, &mut tok_ids)?;
                     }
                 } else if let Some(kw) = lower_keyword_ability_name(kw_raw) {
                     p.printed_keywords.insert(kw);
                 } else {
-                    let tok_name = named.as_deref().unwrap_or("Token");
                     let norm_kw = normalize_token_ability_text(kw_raw, tok_name);
                     let compiled_kw = compile_card(
                         &CardInput {
@@ -1925,7 +2715,7 @@ pub(super) fn lower_token_spec(
                             layout: "normal",
                             faces: vec![FaceInput {
                                 name: tok_name,
-                                type_line: "Creature",
+                                type_line: &tok_type_line,
                                 oracle_text: &norm_kw,
                             }],
                         },
@@ -1945,42 +2735,31 @@ pub(super) fn lower_token_spec(
                     {
                         return Err("oracle:unsupported-granted-keyword");
                     }
-                    for (k_idx, kw_ast) in face_ast.keywords.iter().enumerate() {
-                        lower_keyword(
-                            kw_ast,
-                            k_idx,
-                            face_ast,
-                            &mut p,
-                            vocabulary,
-                            &mut tok_ids,
-                            false,
-                        )
-                        .map_err(|_| "oracle:unsupported-granted-keyword")?;
-                    }
-                    for st in &face_ast.statics {
-                        lower_static(st, &mut p, vocabulary, &mut tok_ids, false)
-                            .map_err(|_| "oracle:unsupported-granted-keyword")?;
-                    }
-                    for rep in &face_ast.replacements {
-                        lower_replacement(rep, &mut p, vocabulary, &mut tok_ids)
-                            .map_err(|_| "oracle:unsupported-granted-keyword")?;
-                    }
-                    for ab in &face_ast.abilities {
-                        lower_ability(ab, &mut p, vocabulary, &mut tok_ids)
-                            .map_err(|_| "oracle:unsupported-granted-keyword")?;
-                    }
+                    lower_token_face_ast(face_ast, is_aura, &mut p, vocabulary, &mut tok_ids)?;
                 }
+            }
+            if is_aura
+                && !matches!(
+                    p.permanent().and_then(|d| d.attachment),
+                    Some(AttachmentKind::Aura(_))
+                )
+            {
+                return Err("oracle:aura-missing-enchant");
             }
 
             let token_name = if let Some(n) = named {
                 TokenName::Specified(
                     EnglishCardName::new(n.clone()).map_err(|_| "oracle:token-name")?,
                 )
-            } else {
-                if ordered_subtypes.is_empty() {
-                    return Err("oracle:nameless-token");
-                }
+            } else if !ordered_subtypes.is_empty() {
                 TokenName::Default { ordered_subtypes }
+            } else if is_aura {
+                TokenName::Specified(
+                    EnglishCardName::new("Aura Token".to_string())
+                        .map_err(|_| "oracle:token-name")?,
+                )
+            } else {
+                return Err("oracle:nameless-token");
             };
 
             let def = TokenDefinition::new(p, token_name, vocabulary)

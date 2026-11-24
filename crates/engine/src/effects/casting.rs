@@ -2516,6 +2516,9 @@ impl EffectWindow {
         let step = turn.map(|s| s.position().step).or(self.current_step);
         let active = self.window.active_player();
         match restriction {
+            R::Sorcery => Ok(active == caster
+                && self.window.entries().is_empty()
+                && matches!(step, Some(Step::PrecombatMain | Step::PostcombatMain))),
             R::DuringCombat => Ok(step.is_some_and(|s| s.phase() == Phase::Combat)),
             R::DuringCombatBeforeBlockers => Ok(matches!(
                 step,

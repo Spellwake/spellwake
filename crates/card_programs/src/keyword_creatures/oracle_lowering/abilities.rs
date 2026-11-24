@@ -202,12 +202,21 @@ pub(super) fn lower_ability(
             let (mut spec, mut grouping, guard) = lower_trigger_spec(trigger, vocabulary)?;
             if spec.zone == spellwake_engine::program::TriggerZone::Battlefield
                 && (body_returns_self_from_graveyard(body)
+                    || matches!(
+                        spec.event,
+                        TriggerEvent::PlayerAction {
+                            action: PlayerTriggerAction::DiscardedByOpponent(Some(filter)),
+                            ..
+                        } if filter == ObjectFilter::self_object()
+                    )
                     || (matches!(program.kind, ProgramKind::Spell(_))
                         && (body_references_self_from_graveyard(body)
                             || matches!(
                                 spec.event,
                                 TriggerEvent::PlayerAction {
-                                    action: PlayerTriggerAction::Discarded,
+                                    action: PlayerTriggerAction::Discarded
+                                        | PlayerTriggerAction::DiscardedMatching(_)
+                                        | PlayerTriggerAction::DiscardedByOpponent(_),
                                     ..
                                 }
                             )
@@ -619,9 +628,10 @@ pub(super) fn try_lower_mana_ability(
     {
         return None;
     }
-    // Extract AddMana + optional SpendRestriction + optional Life/Damage side effect
+    // Extract AddMana + optional SpendRestriction / SpendEffect + optional Life/Damage side effect
     let mut mana_spec: Option<&ManaSpecAst> = None;
     let mut restriction: Option<spellwake_engine::mana::ManaOutputRestriction> = None;
+    let mut spend_effect: Option<spellwake_engine::mana::ManaSpendEffect> = None;
     let mut side_effect: Option<ManaSideEffect> = None;
     for ins in &filtered_body {
         match ins {
@@ -634,18 +644,33 @@ pub(super) fn try_lower_mana_ability(
                 }
                 mana_spec = Some(mana);
             }
-            InstructionAst::ManaSpendRestriction(r) => {
-                if restriction.is_some() {
+            InstructionAst::RetainManaUntilEndOfTurn => {
+                if spend_effect.is_some() {
                     return None;
                 }
-                if let Some(scope) = parse_chosen_type_mana_scope(r) {
-                    restriction = Some(
-                        spellwake_engine::mana::ManaOutputRestriction::ChosenCreatureType(scope),
-                    );
+                spend_effect = Some(spellwake_engine::mana::ManaSpendEffect::RetainUntilCleanup);
+            }
+            InstructionAst::ManaSpendRestriction(r) => {
+                if let Some(effect) = parse_mana_spend_effect(r) {
+                    if spend_effect.is_some() {
+                        return None;
+                    }
+                    spend_effect = Some(effect);
                 } else {
-                    restriction = Some(spellwake_engine::mana::ManaOutputRestriction::Fixed(
-                        parse_mana_restriction(r, vocabulary)?,
-                    ));
+                    if restriction.is_some() {
+                        return None;
+                    }
+                    if let Some(scope) = parse_chosen_type_mana_scope(r) {
+                        restriction = Some(
+                            spellwake_engine::mana::ManaOutputRestriction::ChosenCreatureType(
+                                scope,
+                            ),
+                        );
+                    } else {
+                        restriction = Some(spellwake_engine::mana::ManaOutputRestriction::Fixed(
+                            parse_mana_restriction(r, vocabulary)?,
+                        ));
+                    }
                 }
             }
             InstructionAst::ChangeLife {
@@ -765,18 +790,22 @@ pub(super) fn try_lower_mana_ability(
                 }
                 sac_self = true;
             }
-            CostAtomAst::Sacrifice { count, filter }
-                if matches!(count.as_ref(), ValueExprAst::Const(1))
-                    && filter.any_types == AstCardTypeMask::CREATURE
-                    && filter_only_has(
-                        filter,
-                        FilterAllow {
-                            types: true,
-                            controller: true,
-                            ..FilterAllow::NONE
-                        },
-                    )
-                    && matches!(filter.controller, None | Some(ControllerRelation::You)) =>
+            CostAtomAst::Sacrifice {
+                count,
+                filter,
+                up_to: false,
+                min_one: false,
+            } if matches!(count.as_ref(), ValueExprAst::Const(1))
+                && filter.any_types == AstCardTypeMask::CREATURE
+                && filter_only_has(
+                    filter,
+                    FilterAllow {
+                        types: true,
+                        controller: true,
+                        ..FilterAllow::NONE
+                    },
+                )
+                && matches!(filter.controller, None | Some(ControllerRelation::You)) =>
             {
                 if sac_creature {
                     return None;
@@ -801,9 +830,11 @@ pub(super) fn try_lower_mana_ability(
         // let paid-life mana abilities fall back cleanly unless exact.
         return None;
     }
-    if (sac_self || sac_creature) && (pay_mana.is_some() || side_effect.is_some()) {
+    if (sac_self || sac_creature)
+        && (pay_mana.is_some() || side_effect.is_some() || spend_effect.is_some())
+    {
         // Engine ManaOutput::valid_for_sacrifice_inner and mana_activation reject combining
-        // ManaOutputModifier::Sacrifice with PayMana or SideEffect; fall back to ActivatedAbility.
+        // ManaOutputModifier::Sacrifice with PayMana, SideEffect, or SpendEffect; fall back to ActivatedAbility.
         return None;
     }
     if let Some(ref mc) = pay_mana
@@ -819,6 +850,9 @@ pub(super) fn try_lower_mana_ability(
 
     if let Some(res) = restriction {
         output = output.with_modifier(ManaOutputModifier::Restrict(res));
+    }
+    if let Some(se) = spend_effect {
+        output = output.with_modifier(ManaOutputModifier::SpendEffect(se));
     }
     if let Some(se) = side_effect {
         output = output.with_modifier(ManaOutputModifier::SideEffect(se));
@@ -869,9 +903,59 @@ pub(super) fn try_lower_mana_ability(
     Some(output)
 }
 
+fn normalize_mana_clause(raw: &str) -> String {
+    let mut trimmed = raw.trim().to_ascii_lowercase();
+    loop {
+        let mut next = trimmed.trim().trim_matches('"').trim();
+        if !next.contains('(') {
+            next = next.trim_end_matches(')');
+        }
+        next = next
+            .trim_end_matches('.')
+            .trim_end_matches('"')
+            .trim_end_matches('.')
+            .trim();
+        if !next.contains('(') {
+            next = next.trim_end_matches(')').trim();
+        }
+        if next.len() == trimmed.len() {
+            break;
+        }
+        trimmed = next.to_owned();
+    }
+    if let Some(rest) = trimmed
+        .strip_prefix("you may spend this mana only ")
+        .or_else(|| trimmed.strip_prefix("you can spend this mana only "))
+        .or_else(|| trimmed.strip_prefix("this mana can be spent only "))
+        .or_else(|| trimmed.strip_prefix("this mana can only be spent "))
+    {
+        format!("spend this mana only {rest}")
+    } else {
+        trimmed
+    }
+}
+
+fn parse_mana_spend_effect(raw: &str) -> Option<spellwake_engine::mana::ManaSpendEffect> {
+    use spellwake_engine::mana::ManaSpendEffect;
+    match normalize_mana_clause(raw).as_str() {
+        "you don't lose this mana as steps and phases end"
+        | "until end of turn, you don't lose this mana as steps and phases end"
+        | "you don't lose this mana as steps and phases end until end of turn"
+        | "this mana doesn't empty from your mana pool as steps and phases end"
+        | "until end of turn, this mana doesn't empty from your mana pool as steps and phases end" => {
+            Some(ManaSpendEffect::RetainUntilCleanup)
+        }
+        "until end of combat, you don't lose this mana as steps and phases end"
+        | "you don't lose this mana as steps and phases end until end of combat" => {
+            Some(ManaSpendEffect::RetainUntilEndOfCombat)
+        }
+        _ => None,
+    }
+}
+
 fn parse_chosen_type_mana_scope(raw: &str) -> Option<spellwake_engine::mana::ChosenTypeManaScope> {
     use spellwake_engine::mana::ChosenTypeManaScope;
-    let low = raw.trim().trim_end_matches('.').to_ascii_lowercase();
+    let low = normalize_mana_clause(raw);
     if !low.contains("of the chosen type") {
         return None;
     }
@@ -890,7 +974,7 @@ pub(super) fn parse_mana_restriction(
     raw: &str,
     vocabulary: &CreatureTypeVocabulary,
 ) -> Option<ManaRestriction> {
-    let low = raw.trim().trim_end_matches('.').to_ascii_lowercase();
+    let low = normalize_mana_clause(raw);
     match low.as_str() {
         "spend this mana only to cast a creature spell"
         | "spend this mana only to cast creature spells" => Some(ManaRestriction::CreatureSpell),
@@ -899,29 +983,69 @@ pub(super) fn parse_mana_restriction(
             Some(ManaRestriction::NoncreatureSpell)
         }
         "spend this mana only to cast an artifact spell or activate an ability of an artifact"
+        | "spend this mana only to cast an artifact spell or to activate an ability of an artifact"
         | "spend this mana only to cast an artifact spell or activate an ability of an artifact source"
+        | "spend this mana only to cast an artifact spell or to activate an ability of an artifact source"
         | "spend this mana only to cast artifact spells or activate abilities of artifacts"
-        | "spend this mana only to cast artifact spells or activate abilities of artifact sources" => {
+        | "spend this mana only to cast artifact spells or to activate abilities of artifacts"
+        | "spend this mana only to cast artifact spells or activate abilities of artifact sources"
+        | "spend this mana only to cast artifact spells or to activate abilities of artifact sources"
+        | "spend this mana only to cast artifact spells and activate abilities of artifacts"
+        | "spend this mana only to cast artifact spells and to activate abilities of artifacts"
+        | "spend this mana only to cast artifact spells and activate abilities of artifact sources"
+        | "spend this mana only to cast artifact spells and to activate abilities of artifact sources"
+        | "spend this mana only to cast an artifact spell or activate abilities of artifacts"
+        | "spend this mana only to cast artifact spells or activate an ability of an artifact"
+        | "spend this mana only to activate an ability of an artifact or cast an artifact spell"
+        | "spend this mana only to activate an ability of an artifact or to cast an artifact spell"
+        | "spend this mana only to activate an ability of an artifact source or cast an artifact spell"
+        | "spend this mana only to activate abilities of artifacts or cast artifact spells"
+        | "spend this mana only to activate abilities of artifact sources or cast artifact spells" => {
             Some(ManaRestriction::ArtifactSpellOrAbility)
         }
         "spend this mana only to cast an artifact spell or activate an ability"
-        | "spend this mana only to cast artifact spells or activate abilities" => {
+        | "spend this mana only to cast an artifact spell or to activate an ability"
+        | "spend this mana only to cast artifact spells or activate abilities"
+        | "spend this mana only to cast artifact spells or to activate abilities"
+        | "spend this mana only to cast artifact spells and activate abilities"
+        | "spend this mana only to cast artifact spells and to activate abilities"
+        | "spend this mana only to cast an artifact spell or activate abilities"
+        | "spend this mana only to cast an artifact spell or to activate abilities"
+        | "spend this mana only to cast artifact spells or activate an ability"
+        | "spend this mana only to cast artifact spells or to activate an ability"
+        | "spend this mana only to activate an ability or cast an artifact spell"
+        | "spend this mana only to activate an ability or to cast an artifact spell"
+        | "spend this mana only to activate abilities or cast artifact spells"
+        | "spend this mana only to activate abilities or to cast artifact spells"
+        | "spend this mana only to activate an ability or cast artifact spells"
+        | "spend this mana only to activate abilities or cast an artifact spell" => {
             Some(ManaRestriction::ArtifactSpellOrAnyAbility)
         }
         "spend this mana only to cast an artifact spell"
         | "spend this mana only to cast artifact spells" => Some(ManaRestriction::ArtifactSpell),
         "spend this mana only to activate abilities of artifacts"
-        | "spend this mana only to activate an ability of an artifact" => {
+        | "spend this mana only to activate an ability of an artifact"
+        | "spend this mana only to activate abilities of artifact sources"
+        | "spend this mana only to activate an ability of an artifact source" => {
             Some(ManaRestriction::ArtifactAbility)
         }
         "spend this mana only to activate abilities"
         | "spend this mana only to activate an ability" => Some(ManaRestriction::ActivatedAbility),
         "spend this mana only to cast an instant or sorcery spell"
+        | "spend this mana only to cast an instant or a sorcery spell"
+        | "spend this mana only to cast an instant and/or sorcery spell"
         | "spend this mana only to cast instant or sorcery spells"
-        | "spend this mana only to cast instant and sorcery spells" => {
+        | "spend this mana only to cast instant and sorcery spells"
+        | "spend this mana only to cast instant and/or sorcery spells"
+        | "spend this mana only to cast a sorcery or instant spell"
+        | "spend this mana only to cast sorcery or instant spells"
+        | "spend this mana only to cast sorcery and instant spells" => {
             Some(ManaRestriction::InstantOrSorcerySpell)
         }
-        "spend this mana only to foretell a card from your hand or cast an instant or sorcery spell" => {
+        "spend this mana only to foretell a card from your hand or cast an instant or sorcery spell"
+        | "spend this mana only to foretell cards from your hand or cast instant or sorcery spells"
+        | "spend this mana only to cast an instant or sorcery spell or foretell a card from your hand"
+        | "spend this mana only to cast instant or sorcery spells or foretell cards from your hand" => {
             Some(ManaRestriction::InstantOrSorceryOrForetell)
         }
         "spend this mana only to cast an enchantment spell"
@@ -935,16 +1059,39 @@ pub(super) fn parse_mana_restriction(
             Some(ManaRestriction::MulticoloredSpell)
         }
         "spend this mana only to cast a creature spell or activate an ability of a creature"
-        | "spend this mana only to cast creature spells or activate abilities of creatures" => {
+        | "spend this mana only to cast a creature spell or to activate an ability of a creature"
+        | "spend this mana only to cast creature spells or activate abilities of creatures"
+        | "spend this mana only to cast creature spells or to activate abilities of creatures"
+        | "spend this mana only to cast creature spells and activate abilities of creatures"
+        | "spend this mana only to cast creature spells and to activate abilities of creatures"
+        | "spend this mana only to cast a creature spell or activate abilities of creatures"
+        | "spend this mana only to cast creature spells or activate an ability of a creature"
+        | "spend this mana only to cast a creature spell or activate an ability of a creature source"
+        | "spend this mana only to cast a creature spell or to activate an ability of a creature source"
+        | "spend this mana only to cast creature spells or activate abilities of creature sources"
+        | "spend this mana only to cast creature spells or to activate abilities of creature sources"
+        | "spend this mana only to cast creature spells and activate abilities of creature sources"
+        | "spend this mana only to activate an ability of a creature or cast a creature spell"
+        | "spend this mana only to activate an ability of a creature or to cast a creature spell"
+        | "spend this mana only to activate abilities of creatures or cast creature spells"
+        | "spend this mana only to activate abilities of creature sources or cast creature spells" => {
             Some(ManaRestriction::CreatureSpellOrAbility)
         }
-        "spend this mana only to cast a spell that's one or more colors without {x} in its mana cost" => {
+        "spend this mana only to cast a spell that's one or more colors without {x} in its mana cost"
+        | "spend this mana only to cast spells that are one or more colors without {x} in their mana costs" => {
             Some(ManaRestriction::ColoredSpellWithoutX)
         }
         "spend this mana only to cast spells" | "spend this mana only to cast a spell" => {
             Some(ManaRestriction::CastSpell)
         }
-        "spend this mana only on costs that contain {x}" => Some(ManaRestriction::CostContainingX),
+        "spend this mana only on costs that contain {x}"
+        | "spend this mana only on a cost that contains {x}"
+        | "spend this mana only on costs containing {x}"
+        | "spend this mana only to pay costs that contain {x}"
+        | "spend this mana only to pay a cost that contains {x}"
+        | "spend this mana only to pay costs containing {x}" => {
+            Some(ManaRestriction::CostContainingX)
+        }
         "this mana can't be spent to cast a nonartifact spell"
         | "this mana can't be spent to cast nonartifact spells" => {
             Some(ManaRestriction::NotNonartifactSpell)
@@ -966,16 +1113,26 @@ pub(super) fn parse_mana_restriction(
         | "spend this mana only to cast historic spells" => Some(ManaRestriction::HistoricSpell),
         "spend this mana only to cast a creature or planeswalker spell"
         | "spend this mana only to cast creature or planeswalker spells"
-        | "spend this mana only to cast creature and planeswalker spells" => {
+        | "spend this mana only to cast creature and planeswalker spells"
+        | "spend this mana only to cast creature and/or planeswalker spells"
+        | "spend this mana only to cast a planeswalker or creature spell"
+        | "spend this mana only to cast planeswalker or creature spells"
+        | "spend this mana only to cast planeswalker and creature spells" => {
             Some(ManaRestriction::CreatureOrPlaneswalkerSpell)
         }
         "spend this mana only to cast a creature or enchantment spell"
         | "spend this mana only to cast creature or enchantment spells"
-        | "spend this mana only to cast creature and enchantment spells" => {
+        | "spend this mana only to cast creature and enchantment spells"
+        | "spend this mana only to cast creature and/or enchantment spells"
+        | "spend this mana only to cast an enchantment or creature spell"
+        | "spend this mana only to cast enchantment or creature spells"
+        | "spend this mana only to cast enchantment and creature spells" => {
             Some(ManaRestriction::CreatureOrEnchantmentSpell)
         }
         "spend this mana only to activate abilities of creatures"
-        | "spend this mana only to activate an ability of a creature" => {
+        | "spend this mana only to activate an ability of a creature"
+        | "spend this mana only to activate abilities of creature sources"
+        | "spend this mana only to activate an ability of a creature source" => {
             Some(ManaRestriction::CreatureAbility)
         }
         "spend this mana only to cast a permanent spell"
@@ -983,19 +1140,36 @@ pub(super) fn parse_mana_restriction(
         "spend this mana only to cast spells from your graveyard or exile"
         | "spend this mana only to cast a spell from your graveyard or exile"
         | "spend this mana only to cast spells from exile or your graveyard"
-        | "spend this mana only to cast a spell from exile or your graveyard" => {
+        | "spend this mana only to cast a spell from exile or your graveyard"
+        | "spend this mana only to cast spells from your graveyard or from exile"
+        | "spend this mana only to cast a spell from your graveyard or from exile"
+        | "spend this mana only to cast spells from exile or from your graveyard"
+        | "spend this mana only to cast a spell from exile or from your graveyard" => {
             Some(ManaRestriction::SpellFromGraveyardOrExile)
         }
         "spend this mana only to cast an equipment spell or activate an equip ability"
+        | "spend this mana only to cast an equipment spell or to activate an equip ability"
         | "spend this mana only to cast equipment spells or activate equip abilities"
-        | "spend this mana only to cast equipment spells or activate abilities of equipment" => {
+        | "spend this mana only to cast equipment spells or to activate equip abilities"
+        | "spend this mana only to cast equipment spells and activate equip abilities"
+        | "spend this mana only to cast equipment spells or activate abilities of equipment"
+        | "spend this mana only to cast equipment spells or to activate abilities of equipment"
+        | "spend this mana only to cast an equipment spell or activate an ability of an equipment"
+        | "spend this mana only to cast an equipment spell or to activate an ability of an equipment" => {
             Some(ManaRestriction::EquipmentOrEquipAbility)
         }
         "spend this mana only to cast spells with {x} in their mana costs"
         | "spend this mana only to cast a spell with {x} in its mana cost"
         | "spend this mana only to cast x spells" => Some(ManaRestriction::CostContainingX),
         "spend this mana only to cast colorless eldrazi spells or activate abilities of colorless eldrazi"
-        | "spend this mana only to cast a colorless eldrazi spell or activate an ability of a colorless eldrazi" => {
+        | "spend this mana only to cast colorless eldrazi spells or to activate abilities of colorless eldrazi"
+        | "spend this mana only to cast colorless eldrazi spells and activate abilities of colorless eldrazi"
+        | "spend this mana only to cast a colorless eldrazi spell or activate an ability of a colorless eldrazi"
+        | "spend this mana only to cast a colorless eldrazi spell or to activate an ability of a colorless eldrazi"
+        | "spend this mana only to cast colorless eldrazi spells or activate abilities of colorless eldrazi sources"
+        | "spend this mana only to cast colorless eldrazi spells or to activate abilities of colorless eldrazi sources"
+        | "spend this mana only to cast a colorless eldrazi spell or activate an ability of a colorless eldrazi source"
+        | "spend this mana only to cast a colorless eldrazi spell or to activate an ability of a colorless eldrazi source" => {
             Some(ManaRestriction::ColorlessEldraziSpellOrAbility)
         }
         "spend this mana only to cast a spell with flashback from a graveyard"
@@ -1012,7 +1186,9 @@ pub(super) fn parse_mana_restriction(
                         "spend this mana only to cast a creature spell with mana value ",
                     )
                 })
-                && let Some((num_part, tail)) = rest.split_once(" or greater")
+                && let Some((num_part, tail)) = rest
+                    .split_once(" or greater")
+                    .or_else(|| rest.split_once(" or more"))
                 && let Ok(min_mv) = num_part.trim().parse::<u8>()
             {
                 let t = tail.trim();
@@ -1028,7 +1204,9 @@ pub(super) fn parse_mana_restriction(
                 .or_else(|| {
                     low.strip_prefix("spend this mana only to cast a spell with mana value ")
                 })
-                && let Some((num_part, tail)) = rest.split_once(" or greater")
+                && let Some((num_part, tail)) = rest
+                    .split_once(" or greater")
+                    .or_else(|| rest.split_once(" or more"))
                 && let Ok(min_mv) = num_part.trim().parse::<u8>()
             {
                 let t = tail.trim();
@@ -1039,37 +1217,90 @@ pub(super) fn parse_mana_restriction(
                     return Some(ManaRestriction::SpellWithMinManaValueOrX(min_mv));
                 }
             }
-            if let Some(rest) = low.strip_prefix("spend this mana only to cast ") {
-                if let Some((spell_part, ab_part)) = rest.split_once(" or activate ") {
-                    let sub_raw = spell_part
-                        .trim()
+            let resolve_subtype = |raw_sub: &str| {
+                resolve_protection_subtype(raw_sub, vocabulary).or_else(|| {
+                    raw_sub.trim().strip_suffix("ies").and_then(|stem| {
+                        resolve_protection_subtype(&format!("{stem}y"), vocabulary)
+                    })
+                })
+            };
+            fn peel_spell_subtype(part: &str) -> Option<&str> {
+                let p = part.trim();
+                let no_art = p
+                    .strip_prefix("a ")
+                    .or_else(|| p.strip_prefix("an "))
+                    .unwrap_or(p);
+                no_art
+                    .strip_suffix(" creature spells")
+                    .or_else(|| no_art.strip_suffix(" creature spell"))
+                    .or_else(|| no_art.strip_suffix(" spells"))
+                    .or_else(|| no_art.strip_suffix(" spell"))
+                    .map(str::trim)
+            }
+            let matches_subtype_ability = |ab_part: &str, ct: CreatureTypeId| -> bool {
+                let ab_core = ab_part
+                    .trim()
+                    .strip_prefix("abilities of ")
+                    .or_else(|| ab_part.trim().strip_prefix("an ability of "))
+                    .map(str::trim);
+                ab_core.is_some_and(|core| {
+                    if core == "creatures of that type"
+                        || core == "a creature of that type"
+                        || core == "permanents of that type"
+                        || core == "a permanent of that type"
+                        || core == "sources of that type"
+                        || core == "a source of that type"
+                    {
+                        return true;
+                    }
+                    let cleaned = core
                         .strip_prefix("a ")
-                        .or_else(|| spell_part.trim().strip_prefix("an "))
-                        .unwrap_or(spell_part.trim())
-                        .trim_end_matches(" creature spells")
-                        .trim_end_matches(" creature spell")
-                        .trim_end_matches(" spells")
-                        .trim_end_matches(" spell")
+                        .or_else(|| core.strip_prefix("an "))
+                        .unwrap_or(core);
+                    let cleaned = cleaned
+                        .strip_suffix(" sources")
+                        .or_else(|| cleaned.strip_suffix(" source"))
+                        .or_else(|| cleaned.strip_suffix(" creatures"))
+                        .or_else(|| cleaned.strip_suffix(" creature"))
+                        .or_else(|| cleaned.strip_suffix(" permanents"))
+                        .or_else(|| cleaned.strip_suffix(" permanent"))
+                        .unwrap_or(cleaned)
                         .trim();
-                    if let Some(ct) = resolve_protection_subtype(sub_raw, vocabulary)
-                        && (ab_part.contains(sub_raw) || ab_part.contains("that type"))
+                    resolve_subtype(cleaned) == Some(ct)
+                })
+            };
+            if let Some(rest) = low.strip_prefix("spend this mana only to cast ") {
+                if let Some((spell_part, ab_part)) = rest
+                    .split_once(" or to activate ")
+                    .or_else(|| rest.split_once(" or activate "))
+                    .or_else(|| rest.split_once(" and to activate "))
+                    .or_else(|| rest.split_once(" and activate "))
+                {
+                    if let Some(sub_raw) = peel_spell_subtype(spell_part)
+                        && let Some(ct) = resolve_subtype(sub_raw)
+                        && matches_subtype_ability(ab_part, ct)
                     {
                         return Some(ManaRestriction::CreatureSpellOrAbilityOfType(Some(ct)));
                     }
+                    return None;
                 }
-                let sub_raw = rest
-                    .trim()
-                    .strip_prefix("a ")
-                    .or_else(|| rest.trim().strip_prefix("an "))
-                    .unwrap_or(rest.trim())
-                    .trim_end_matches(" creature spells")
-                    .trim_end_matches(" creature spell")
-                    .trim_end_matches(" spells")
-                    .trim_end_matches(" spell")
-                    .trim();
-                if let Some(ct) = resolve_protection_subtype(sub_raw, vocabulary) {
+                if let Some(sub_raw) = peel_spell_subtype(rest)
+                    && let Some(ct) = resolve_subtype(sub_raw)
+                {
                     return Some(ManaRestriction::CreatureSpellOfType(Some(ct)));
                 }
+            }
+            if let Some(rest) = low.strip_prefix("spend this mana only to activate ")
+                && let Some((ab_part, spell_part)) = rest
+                    .split_once(" or to cast ")
+                    .or_else(|| rest.split_once(" or cast "))
+                    .or_else(|| rest.split_once(" and to cast "))
+                    .or_else(|| rest.split_once(" and cast "))
+                && let Some(sub_raw) = peel_spell_subtype(spell_part)
+                && let Some(ct) = resolve_subtype(sub_raw)
+                && matches_subtype_ability(ab_part, ct)
+            {
+                return Some(ManaRestriction::CreatureSpellOrAbilityOfType(Some(ct)));
             }
             None
         }
@@ -1082,18 +1313,6 @@ pub(super) type LoweredActivationCost = (
     Vec<spellwake_engine::mana::HybridSymbol>,
     Vec<ExtraActivationCost>,
 );
-
-pub(super) fn lower_activation_cost(
-    cost: &[CostAtomAst],
-    zone: Option<&str>,
-    vocabulary: &CreatureTypeVocabulary,
-) -> Result<(ManaCost, SourceCost), &'static str> {
-    let (mc, sc, hybrids, extra) = lower_activation_cost_full(cost, zone, vocabulary)?;
-    if !hybrids.is_empty() || !extra.is_empty() {
-        return Err("oracle:act-mana-cost");
-    }
-    Ok((mc, sc))
-}
 
 pub(super) fn lower_extra_cost_atom(
     atom: &CostAtomAst,
@@ -1227,11 +1446,20 @@ pub(super) fn lower_extra_cost_atom(
                 filter,
             })
         }
-        CostAtomAst::Sacrifice { count, filter } => Ok(ExtraActivationCost::SacrificePermanent {
+        CostAtomAst::Sacrifice {
+            count,
+            filter,
+            up_to: false,
+            min_one: false,
+        } => Ok(ExtraActivationCost::SacrificePermanent {
             filter: lower_filter_any(filter)?,
             count: opt_count(count)?,
         }),
-        CostAtomAst::TapPermanent { count, filter } => Ok(ExtraActivationCost::TapPermanent {
+        CostAtomAst::TapPermanent {
+            count,
+            filter,
+            any_number: false,
+        } => Ok(ExtraActivationCost::TapPermanent {
             filter: lower_filter_any(filter)?,
             count: opt_count(count)?,
             exclude_source: filter.flags.0 & AstFilterFlags::EXCLUDE_SELF.0 != 0,
@@ -1248,6 +1476,11 @@ pub(super) fn lower_extra_cost_atom(
         }
         CostAtomAst::BounceToHand(subject) => match subject.as_ref() {
             SubjectRefAst::SelfObject => Ok(ExtraActivationCost::ReturnSourceToHand),
+            SubjectRefAst::AttachedHost(_) => Ok(ExtraActivationCost::BouncePermanent {
+                filter: ObjectFilter::any().attached_to_self(),
+                count: NonZeroU8::MIN,
+                exclude_source: false,
+            }),
             SubjectRefAst::Group(f) | SubjectRefAst::All(f) | SubjectRefAst::Each(f) => {
                 Ok(ExtraActivationCost::BouncePermanent {
                     filter: lower_filter_any(f)?,
@@ -1255,6 +1488,14 @@ pub(super) fn lower_extra_cost_atom(
                     exclude_source: f.flags.0 & AstFilterFlags::EXCLUDE_SELF.0 != 0,
                 })
             }
+            SubjectRefAst::TargetObject {
+                filter,
+                count: TargetCountAst::Exact(n),
+            } => Ok(ExtraActivationCost::BouncePermanent {
+                filter: lower_filter_any(filter)?,
+                count: nz_u8(i32::from(*n))?,
+                exclude_source: filter.flags.0 & AstFilterFlags::EXCLUDE_SELF.0 != 0,
+            }),
             _ => Err("oracle:unsupported-activation-cost"),
         },
         CostAtomAst::DiscardHand => Ok(ExtraActivationCost::DiscardCards {
@@ -1267,28 +1508,56 @@ pub(super) fn lower_extra_cost_atom(
             count,
             filter,
             random,
+            up_to: false,
+            any_number: false,
         } => Ok(ExtraActivationCost::DiscardCards {
             filter: lower_filter_any(filter)?,
             count: opt_count(count)?,
             whole_hand: false,
             random: *random,
         }),
-        CostAtomAst::Reveal(subject) => match subject.as_ref() {
-            SubjectRefAst::Group(f) | SubjectRefAst::All(f) | SubjectRefAst::Each(f) => {
-                Ok(ExtraActivationCost::RevealHand {
-                    filter: lower_filter_any(f)?,
-                    count: NonZeroU8::MIN,
+        CostAtomAst::Reveal(subject) => {
+            let inner = match subject.as_ref() {
+                SubjectRefAst::InZone {
+                    subject: inner,
+                    zone: ZoneFilter::YourHand,
+                } => inner.as_ref(),
+                other => other,
+            };
+            match inner {
+                SubjectRefAst::Group(f) | SubjectRefAst::All(f) | SubjectRefAst::Each(f) => {
+                    Ok(ExtraActivationCost::RevealHand {
+                        filter: lower_filter_any(f)?,
+                        count: NonZeroU8::MIN,
+                        allow_controlled: false,
+                    })
+                }
+                SubjectRefAst::TargetObject {
+                    filter,
+                    count: TargetCountAst::Exact(n),
+                } => Ok(ExtraActivationCost::RevealHand {
+                    filter: lower_filter_any(filter)?,
+                    count: nz_u8(i32::from(*n))?,
                     allow_controlled: false,
-                })
+                }),
+                _ => Err("oracle:unsupported-activation-cost"),
             }
-            _ => Err("oracle:unsupported-activation-cost"),
-        },
+        }
         CostAtomAst::Behold(filter) => Ok(ExtraActivationCost::RevealHand {
             filter: lower_filter_any(filter)?,
             count: NonZeroU8::MIN,
             allow_controlled: true,
         }),
-        CostAtomAst::Exile { count, filter } => {
+        CostAtomAst::Exile {
+            count,
+            filter,
+            face_down: false,
+            face_up: _,
+            single_graveyard: false,
+            any_number: false,
+            min_one: false,
+            total_mv: None,
+        } => {
             let zone = match filter.zone {
                 Some(ZoneFilter::YourGraveyard) => CostExileZone::Graveyard,
                 Some(ZoneFilter::YourHand) => CostExileZone::Hand,
@@ -1449,9 +1718,16 @@ pub(super) fn lower_activation_cost_fast(
                 exile_self = true;
                 exile_from_gy = *from_graveyard;
             }
-            CostAtomAst::Exile { count, filter }
-                if filter.zone == Some(ZoneFilter::YourGraveyard) =>
-            {
+            CostAtomAst::Exile {
+                count,
+                filter,
+                face_down: false,
+                face_up: _,
+                single_graveyard: false,
+                any_number: false,
+                min_one: false,
+                total_mv: None,
+            } if filter.zone == Some(ZoneFilter::YourGraveyard) => {
                 if matches!(count.as_ref(), ValueExprAst::Const(1))
                     && filter.any_types == AstCardTypeMask::CREATURE
                     && filter.forbidden_types.is_empty()
@@ -1467,6 +1743,7 @@ pub(super) fn lower_activation_cost_fast(
                     && filter.stat_bounds.is_empty()
                     && filter.counter_kind.is_none()
                     && filter.flags.0 == 0
+                    && filter.predicates.is_empty()
                 {
                     exile_gy_cost = Some(GraveyardExileCost::Creature {
                         pay_mana_cost: false,
@@ -1479,6 +1756,7 @@ pub(super) fn lower_activation_cost_fast(
                     && filter.forbidden_colors.is_empty()
                     && filter.stat_bounds.is_empty()
                     && filter.flags.0 == 0
+                    && filter.predicates.is_empty()
                 {
                     exile_gy_cost = Some(GraveyardExileCost::AnyCountX);
                 } else if let ValueExprAst::Const(n) = count.as_ref()
@@ -1488,7 +1766,9 @@ pub(super) fn lower_activation_cost_fast(
                 {
                     let mut inner = filter.as_ref().clone();
                     inner.zone = None;
-                    let obj = if inner.is_empty() || inner.any_card {
+                    let obj = if inner.is_empty()
+                        || (inner.any_card && inner.predicates.is_empty() && inner.flags.0 == 0)
+                    {
                         ObjectFilter::any()
                     } else {
                         lower_object_filter(&inner, vocabulary)?
@@ -1507,6 +1787,8 @@ pub(super) fn lower_activation_cost_fast(
                 count,
                 filter,
                 random: false,
+                up_to: false,
+                any_number: false,
             } if matches!(count.as_ref(), ValueExprAst::Const(n) if *n > 0) => {
                 let ValueExprAst::Const(n) = count.as_ref() else {
                     unreachable!()
@@ -1525,7 +1807,9 @@ pub(super) fn lower_activation_cost_fast(
                     && filter.required_keywords.is_empty()
                     && filter.forbidden_keywords.is_empty()
                     && filter.stat_bounds.is_empty()
-                    && filter.counter_kind.is_none();
+                    && filter.counter_kind.is_none()
+                    && filter.flags.0 == 0
+                    && filter.predicates.is_empty();
                 if n_u8 == 1 && plain_any {
                     discard_mode = Some(DiscardCostMode::SelectedOne);
                 } else {
@@ -1549,7 +1833,12 @@ pub(super) fn lower_activation_cost_fast(
                 }
                 pay_life = Some(u16::try_from(*n).map_err(|_| "oracle:life-ovf")?);
             }
-            CostAtomAst::Sacrifice { count, filter } => {
+            CostAtomAst::Sacrifice {
+                count,
+                filter,
+                up_to: false,
+                min_one: false,
+            } => {
                 let ValueExprAst::Const(n) = count.as_ref() else {
                     return Err("oracle:act-dynamic-sac");
                 };
@@ -1560,7 +1849,11 @@ pub(super) fn lower_activation_cost_fast(
                 let ssf = lower_selected_sacrifice_filter(filter, vocabulary)?;
                 sac_selected = Some((ssf, n_u8));
             }
-            CostAtomAst::TapPermanent { count, filter } => {
+            CostAtomAst::TapPermanent {
+                count,
+                filter,
+                any_number: false,
+            } => {
                 let tc = match count.as_ref() {
                     ValueExprAst::Const(n) if *n > 0 => TapCostCount::Fixed(
                         NonZeroU8::new(u8::try_from(*n).map_err(|_| "oracle:tap-ovf")?)
@@ -1985,12 +2278,200 @@ pub(super) fn lower_trigger_spec(
     }
     let mut grouping = TriggerGrouping::EachOccurrence;
     let mut events = Vec::with_capacity(trig.events.len());
-    for ev in &trig.events {
-        let (e, g) = lower_trigger_event(ev, vocabulary)?;
-        if g != TriggerGrouping::EachOccurrence {
-            grouping = g;
+    let mut extra_cond: Option<TriggerCondition> = None;
+    let own_main_phase = || {
+        TriggerCondition::And(
+            Box::new(TriggerCondition::ControllersTurn),
+            Box::new(TriggerCondition::Or(
+                Box::new(TriggerCondition::DuringStep(Step::PrecombatMain)),
+                Box::new(TriggerCondition::DuringStep(Step::PostcombatMain)),
+            )),
+        )
+    };
+    let mut handled_single = false;
+    if trig.events.len() == 1 {
+        match &trig.events[0] {
+            TriggerEventAst::KeywordActionPerformed { action, .. } => {
+                let low = action.trim().to_ascii_lowercase();
+                if let Some(cond_raw) = low.strip_prefix("~ attacks while ") {
+                    let cond_trimmed = cond_raw.trim();
+                    let while_cond = match cond_trimmed {
+                        "you have the most life or are tied for most life"
+                        | "you have the most life or are tied for the most life" => {
+                            TriggerCondition::Not(Box::new(TriggerCondition::OpponentHasMoreLife))
+                        }
+                        _ => {
+                            let compiler_vocab = cached_compiler_vocab(vocabulary);
+                            let cond_ast = spellwake_oracle_compiler::filter::parse_condition(
+                                cond_trimmed,
+                                &compiler_vocab,
+                            )
+                            .map_err(|_| "oracle:unsupported-trigger-event")?;
+                            lower_trigger_condition(&cond_ast, vocabulary)?
+                        }
+                    };
+                    events.push(TriggerEvent::Attacks {
+                        subject: ObjectFilter::self_object(),
+                        mode: AttackTriggerMode::Individual {
+                            capture_defender: false,
+                        },
+                    });
+                    extra_cond = Some(while_cond);
+                    handled_single = true;
+                } else {
+                    match low.as_str() {
+                        "you cast an instant spell during your main phase" => {
+                            events.push(TriggerEvent::SpellCast {
+                                caster: TriggerPlayerScope::Relation(PlayerRelation::Controller),
+                                filter: SpellFilter::from_object(ObjectFilter::Clause(
+                                    ObjectClause::instant(),
+                                )),
+                                self_cast: false,
+                                include_copy: false,
+                                min_mana_value: None,
+                            });
+                            extra_cond = Some(own_main_phase());
+                            handled_single = true;
+                        }
+                        "you cast a sorcery spell during your main phase" => {
+                            events.push(TriggerEvent::SpellCast {
+                                caster: TriggerPlayerScope::Relation(PlayerRelation::Controller),
+                                filter: SpellFilter::from_object(ObjectFilter::Clause(
+                                    ObjectClause::sorcery(),
+                                )),
+                                self_cast: false,
+                                include_copy: false,
+                                min_mana_value: None,
+                            });
+                            extra_cond = Some(own_main_phase());
+                            handled_single = true;
+                        }
+                        "an instant or sorcery spell is cast during your turn" => {
+                            events.push(TriggerEvent::SpellCast {
+                                caster: TriggerPlayerScope::Relation(
+                                    PlayerRelation::AnyParticipant,
+                                ),
+                                filter: SpellFilter::from_object(ObjectFilter::Clause(
+                                    ObjectClause::any().any_types(
+                                        CardTypeMask::INSTANT.union(CardTypeMask::SORCERY),
+                                    ),
+                                )),
+                                self_cast: false,
+                                include_copy: false,
+                                min_mana_value: None,
+                            });
+                            extra_cond = Some(TriggerCondition::ControllersTurn);
+                            handled_single = true;
+                        }
+                        "you cast your first spell during each of your turns" => {
+                            events.push(TriggerEvent::SpellCast {
+                                caster: TriggerPlayerScope::Relation(PlayerRelation::Controller),
+                                filter: SpellFilter::any().ordinal_this_turn(NonZeroU32::MIN),
+                                self_cast: false,
+                                include_copy: false,
+                                min_mana_value: None,
+                            });
+                            extra_cond = Some(TriggerCondition::ControllersTurn);
+                            handled_single = true;
+                        }
+                        "you cast a spell during your turn other than your first spell that turn" =>
+                        {
+                            events.push(TriggerEvent::SpellCast {
+                                caster: TriggerPlayerScope::Relation(PlayerRelation::Controller),
+                                filter: SpellFilter::any(),
+                                self_cast: false,
+                                include_copy: false,
+                                min_mana_value: None,
+                            });
+                            extra_cond = Some(TriggerCondition::And(
+                                Box::new(TriggerCondition::ControllersTurn),
+                                Box::new(TriggerCondition::ControllerCastSpellsThisTurn(2)),
+                            ));
+                            handled_single = true;
+                        }
+                        "~ becomes untapped during your untap step" => {
+                            events.push(TriggerEvent::StatusChanged {
+                                subject: ObjectFilter::self_object(),
+                                kind: StatusTriggerKind::BecomesUntapped,
+                            });
+                            extra_cond = Some(TriggerCondition::And(
+                                Box::new(TriggerCondition::ControllersTurn),
+                                Box::new(TriggerCondition::DuringStep(Step::Untap)),
+                            ));
+                            handled_single = true;
+                        }
+                        "you gain life for the first time during each of your turns" => {
+                            events.push(TriggerEvent::LifeChanged {
+                                kind: LifeChangeKind::Gain,
+                                player: PlayerRelation::Controller,
+                            });
+                            grouping = TriggerGrouping::OneOrMoreOnceEachTurn;
+                            extra_cond = Some(TriggerCondition::ControllersTurn);
+                            handled_single = true;
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            TriggerEventAst::SpellCast {
+                caster,
+                spell: Some(f),
+                self_spell: false,
+                targets: None,
+                nth_each_turn,
+                include_copy,
+            } if f.stat_bounds.len() == 1
+                && f.stat_bounds[0].stat == StatKind::ManaValue
+                && !matches!(
+                    (f.stat_bounds[0].op, f.stat_bounds[0].value.as_ref()),
+                    (CompareOp::Ge, ValueExprAst::Const(v)) if *v >= 0
+                )
+                && !matches!(
+                    (f.stat_bounds[0].op, f.stat_bounds[0].value.as_ref()),
+                    (CompareOp::Gt, ValueExprAst::Const(v)) if *v >= 0
+                ) =>
+            {
+                let sb = &f.stat_bounds[0];
+                if let Ok(rhs) = lower_value_expr(sb.value.as_ref(), vocabulary)
+                    && rhs.is_trigger_world_evaluable()
+                {
+                    let mut stripped_filter = f.as_ref().clone();
+                    stripped_filter.stat_bounds.clear();
+                    let stripped_ev = TriggerEventAst::SpellCast {
+                        caster: *caster,
+                        spell: Some(Box::new(stripped_filter)),
+                        self_spell: false,
+                        targets: None,
+                        nth_each_turn: *nth_each_turn,
+                        include_copy: *include_copy,
+                    };
+                    let (e, g) = lower_trigger_event(&stripped_ev, vocabulary)?;
+                    if g != TriggerGrouping::EachOccurrence {
+                        grouping = g;
+                    }
+                    events.push(e);
+                    extra_cond = Some(TriggerCondition::Eval(Box::new(ResolutionCondition {
+                        left: ValueExpr::ObjectStat {
+                            subject: ValueObjectRef::TriggeringSpell,
+                            stat: ObjectStatKind::ManaValue,
+                        },
+                        comparison: lower_comparison(sb.op),
+                        right: rhs,
+                    })));
+                    handled_single = true;
+                }
+            }
+            _ => {}
         }
-        events.push(e);
+    }
+    if !handled_single {
+        for ev in &trig.events {
+            let (e, g) = lower_trigger_event(ev, vocabulary)?;
+            if g != TriggerGrouping::EachOccurrence {
+                grouping = g;
+            }
+            events.push(e);
+        }
     }
     let mut event = if events.len() == 1 {
         events.pop().ok_or("oracle:unreachable")?
@@ -2020,7 +2501,30 @@ pub(super) fn lower_trigger_spec(
             _ => {}
         }
     }
-    let mut extra_cond: Option<TriggerCondition> = None;
+    if !consumed_if
+        && let (
+            TriggerEvent::DealsDamage {
+                source,
+                recipient: DamageTriggerRecipient::Opponent,
+                combat_only: true,
+            },
+            Some(ConditionAst::PlayerActionThisTurn { action, .. }),
+        ) = (&mut event, &trig.intervening_if)
+        && *source == ObjectFilter::any()
+        && let Some(flt_raw) = action
+            .trim()
+            .to_ascii_lowercase()
+            .strip_prefix("any of that damage was dealt by ")
+            .map(str::to_owned)
+    {
+        let compiler_vocab = cached_compiler_vocab(vocabulary);
+        let parsed =
+            spellwake_oracle_compiler::filter::parse_object_filter(flt_raw.trim(), &compiler_vocab)
+                .map_err(|_| "oracle:unsupported-trigger-condition")?;
+        *source = lower_object_filter(&parsed, vocabulary)?;
+        grouping = TriggerGrouping::OneOrMoreTogether;
+        consumed_if = true;
+    }
     for ev in &trig.events {
         if let TriggerEventAst::Attacks {
             qualifier: Some(q), ..
@@ -2082,7 +2586,11 @@ pub(super) fn lower_trigger_spec(
         if let Some(rem) = remaining {
             let tc = lower_trigger_condition(rem, vocabulary)?;
             guard = InterveningCondition::from_trigger_condition(&tc);
-            spec = spec.only_if(tc);
+            let combined = match spec.intervening_if.take() {
+                Some(prev) => TriggerCondition::And(Box::new(prev), Box::new(tc)),
+                None => tc,
+            };
+            spec = spec.only_if(combined);
         }
     }
     Ok((spec, grouping, guard))
@@ -2131,37 +2639,69 @@ pub(super) fn lower_trigger_event(
             let from_norm = from.as_deref().map(|s| {
                 let low = s.trim().to_ascii_lowercase();
                 match low.as_str() {
-                    "the battlefield" => "battlefield".to_owned(),
+                    "the battlefield" | "play" => "battlefield".to_owned(),
+                    "anywhere" => "any".to_owned(),
                     "your graveyard" => "your_graveyard".to_owned(),
-                    "opponent's graveyard" | "an opponent's graveyard" => {
-                        "opponent_graveyard".to_owned()
-                    }
-                    "a graveyard" | "a player's graveyard" | "any graveyard" => {
-                        "graveyard".to_owned()
-                    }
+                    "opponent's graveyard"
+                    | "an opponent's graveyard"
+                    | "opponents' graveyards"
+                    | "your opponents' graveyards" => "opponent_graveyard".to_owned(),
+                    "a graveyard"
+                    | "a player's graveyard"
+                    | "any graveyard"
+                    | "graveyards"
+                    | "its owner's graveyard"
+                    | "their graveyard"
+                    | "their graveyards"
+                    | "their owner's graveyard"
+                    | "their owners' graveyards" => "graveyard".to_owned(),
                     "your hand" => "your_hand".to_owned(),
                     "an opponent's hand" | "opponent's hand" => "opponent_hand".to_owned(),
-                    "a hand" | "a player's hand" => "hand".to_owned(),
+                    "a hand"
+                    | "a player's hand"
+                    | "their hand"
+                    | "its owner's hand"
+                    | "their owner's hand"
+                    | "their owners' hands" => "hand".to_owned(),
                     "your library"
+                    | "your_library"
+                    | "opponent_library"
+                    | "any_library"
                     | "a library"
                     | "any library"
                     | "a player's library"
                     | "their library"
-                    | "an opponent's library" => "library".to_owned(),
+                    | "their libraries"
+                    | "an opponent's library"
+                    | "its owner's library"
+                    | "their owner's library"
+                    | "their owners' libraries" => "library".to_owned(),
+                    "exile" | "the exile zone" => "exile".to_owned(),
+                    "the stack" | "stack" => "stack".to_owned(),
+                    "anywhere other than a graveyard or exile" | "not_graveyard_or_exile" => {
+                        "not_graveyard_or_exile".to_owned()
+                    }
                     _ => low,
                 }
             });
             let to_norm = to.as_deref().map(|s| {
                 let low = s.trim().to_ascii_lowercase();
                 match low.as_str() {
-                    "the battlefield" => "battlefield".to_owned(),
+                    "the battlefield" | "play" => "battlefield".to_owned(),
                     "your graveyard" => "your_graveyard".to_owned(),
-                    "opponent's graveyard" | "an opponent's graveyard" => {
-                        "opponent_graveyard".to_owned()
-                    }
-                    "a graveyard" | "a player's graveyard" | "any graveyard" => {
-                        "graveyard".to_owned()
-                    }
+                    "opponent's graveyard"
+                    | "an opponent's graveyard"
+                    | "opponents' graveyards"
+                    | "your opponents' graveyards" => "opponent_graveyard".to_owned(),
+                    "a graveyard"
+                    | "a player's graveyard"
+                    | "any graveyard"
+                    | "graveyards"
+                    | "its owner's graveyard"
+                    | "their graveyard"
+                    | "their graveyards"
+                    | "their owner's graveyard"
+                    | "their owners' graveyards" => "graveyard".to_owned(),
                     "your hand" => "your_hand".to_owned(),
                     "an opponent's hand" | "opponent's hand" => "opponent_hand".to_owned(),
                     "its owner's hand"
@@ -2170,7 +2710,20 @@ pub(super) fn lower_trigger_event(
                     | "their hand"
                     | "a hand"
                     | "a player's hand"
-                    | "owner's hand" => "hand".to_owned(),
+                    | "owner's hand"
+                    | "hands" => "hand".to_owned(),
+                    "your library"
+                    | "your_library"
+                    | "a library"
+                    | "any library"
+                    | "a player's library"
+                    | "an opponent's library"
+                    | "its owner's library"
+                    | "their owner's library"
+                    | "their owners' libraries"
+                    | "their library"
+                    | "their libraries" => "library".to_owned(),
+                    "exile" | "the exile zone" => "exile".to_owned(),
                     _ => low,
                 }
             });
@@ -2181,52 +2734,59 @@ pub(super) fn lower_trigger_event(
                 to_norm.as_deref(),
                 Some("graveyard" | "any_graveyard" | "your_graveyard" | "opponent_graveyard")
             ) && entering_controller.is_none()
+                && let SubjectRefAst::Group(f) | SubjectRefAst::Each(f) | SubjectRefAst::All(f) =
+                    subject.as_ref()
+                && f.zone.is_none()
             {
-                let bare_card = match subject.as_ref() {
-                    SubjectRefAst::Group(f) | SubjectRefAst::Each(f) | SubjectRefAst::All(f) => {
-                        let mut stripped = f.as_ref().clone();
-                        let ctrl_rel = stripped.controller;
-                        stripped.controller = None;
-                        stripped.any_card = false;
-                        is_unrestricted_filter(&stripped).then_some(ctrl_rel)
-                    }
+                let mut stripped = f.as_ref().clone();
+                let ctrl_rel = stripped.controller;
+                stripped.controller = None;
+                stripped.any_card = false;
+                let from_rel = match from_norm.as_deref() {
+                    Some("your_hand") => Some(PlayerRelation::Controller),
+                    Some("opponent_hand") => Some(PlayerRelation::Opponent),
                     _ => None,
                 };
-                if let Some(ctrl_rel) = bare_card {
-                    let from_rel = match from_norm.as_deref() {
-                        Some("your_hand") => Some(PlayerRelation::Controller),
-                        Some("opponent_hand") => Some(PlayerRelation::Opponent),
-                        _ => None,
-                    };
-                    let to_rel = match to_norm.as_deref() {
-                        Some("your_graveyard") => Some(PlayerRelation::Controller),
-                        Some("opponent_graveyard") => Some(PlayerRelation::Opponent),
-                        _ => None,
-                    };
-                    let subj_rel = match ctrl_rel {
-                        Some(ControllerRelation::You) => Some(PlayerRelation::Controller),
-                        Some(ControllerRelation::Opponent | ControllerRelation::Opponents) => {
-                            Some(PlayerRelation::Opponent)
-                        }
-                        None => None,
-                        _ => return Err("oracle:unsupported-zone-trigger"),
-                    };
-                    let mut chosen: Option<PlayerRelation> = None;
-                    let mut conflict = false;
-                    for rel in [from_rel, to_rel, subj_rel].into_iter().flatten() {
-                        if let Some(prev) = chosen {
-                            if prev != rel {
-                                conflict = true;
-                            }
-                        } else {
-                            chosen = Some(rel);
-                        }
+                let to_rel = match to_norm.as_deref() {
+                    Some("your_graveyard") => Some(PlayerRelation::Controller),
+                    Some("opponent_graveyard") => Some(PlayerRelation::Opponent),
+                    _ => None,
+                };
+                let subj_rel = match ctrl_rel {
+                    Some(ControllerRelation::You) => Some(PlayerRelation::Controller),
+                    Some(ControllerRelation::Opponent | ControllerRelation::Opponents) => {
+                        Some(PlayerRelation::Opponent)
                     }
-                    if !conflict {
+                    None => None,
+                    _ => return Err("oracle:unsupported-zone-trigger"),
+                };
+                let mut chosen: Option<PlayerRelation> = None;
+                let mut conflict = false;
+                for rel in [from_rel, to_rel, subj_rel].into_iter().flatten() {
+                    if let Some(prev) = chosen {
+                        if prev != rel {
+                            conflict = true;
+                        }
+                    } else {
+                        chosen = Some(rel);
+                    }
+                }
+                if !conflict {
+                    let player = chosen.unwrap_or(PlayerRelation::AnyParticipant);
+                    if is_unrestricted_filter(&stripped) {
                         return Ok((
                             TriggerEvent::PlayerAction {
-                                player: chosen.unwrap_or(PlayerRelation::AnyParticipant),
+                                player,
                                 action: PlayerTriggerAction::Discarded,
+                            },
+                            grouping,
+                        ));
+                    }
+                    if let Ok(obj) = lower_object_filter(&stripped, vocabulary) {
+                        return Ok((
+                            TriggerEvent::PlayerAction {
+                                player,
+                                action: PlayerTriggerAction::DiscardedMatching(obj),
                             },
                             grouping,
                         ));
@@ -2234,7 +2794,7 @@ pub(super) fn lower_trigger_event(
                 }
             }
             match (from_norm.as_deref(), to_norm.as_deref()) {
-                (None, Some("battlefield" | "battlefield_transformed")) => Ok((
+                (None | Some("any"), Some("battlefield" | "battlefield_transformed")) => Ok((
                     TriggerEvent::Enters {
                         subject: filter,
                         from_zone: TriggerFromZone::Any,
@@ -2305,10 +2865,46 @@ pub(super) fn lower_trigger_event(
                     },
                     grouping,
                 )),
+                (
+                    Some("not_graveyard_or_exile"),
+                    Some("battlefield" | "battlefield_transformed"),
+                ) => Ok((
+                    TriggerEvent::Enters {
+                        subject: filter,
+                        from_zone: TriggerFromZone::NotGraveyardOrExile,
+                        cast_origin: None,
+                        attached_to_creature: false,
+                    },
+                    grouping,
+                )),
                 (Some("battlefield"), None) => Ok((
                     TriggerEvent::LeavesBattlefield { subject: filter },
                     grouping,
                 )),
+                (Some("battlefield"), Some("not_graveyard")) => Ok((
+                    TriggerEvent::LeavesBattlefieldWithoutDying { subject: filter },
+                    grouping,
+                )),
+                (Some("battlefield"), Some("graveyard_or_exile")) => {
+                    let mode = if filter.guarantees_creature() {
+                        DiesTriggerMode::Creature
+                    } else {
+                        DiesTriggerMode::Permanent
+                    };
+                    Ok((
+                        TriggerEvent::AnyOf(vec![
+                            TriggerEvent::Dies {
+                                subject: filter,
+                                mode,
+                            },
+                            TriggerEvent::Exiled {
+                                subject: filter,
+                                from_zone: TriggerFromZone::Battlefield,
+                            },
+                        ]),
+                        grouping,
+                    ))
+                }
                 (Some("your_graveyard"), None) => Ok((
                     TriggerEvent::LeavesGraveyard {
                         subject: filter,
@@ -2342,6 +2938,7 @@ pub(super) fn lower_trigger_event(
                         Some("graveyard" | "any_graveyard") => TriggerFromZone::Graveyard,
                         Some("hand" | "your_hand" | "opponent_hand") => TriggerFromZone::Hand,
                         Some("library") => TriggerFromZone::Library,
+                        Some("not_graveyard_or_exile") => TriggerFromZone::NotGraveyardOrExile,
                         _ => return Err("oracle:unsupported-zone-trigger"),
                     };
                     Ok((
@@ -2466,16 +3063,9 @@ pub(super) fn lower_trigger_event(
                         grouping,
                     ))
                 }
-                (
-                    _,
-                    Some(
-                        "library"
-                        | "your_library"
-                        | "a library"
-                        | "its owner's library"
-                        | "their library",
-                    ),
-                ) => Ok((TriggerEvent::PutIntoLibrary { subject: filter }, grouping)),
+                (_, Some("library")) => {
+                    Ok((TriggerEvent::PutIntoLibrary { subject: filter }, grouping))
+                }
                 _ => Err("oracle:unsupported-zone-trigger"),
             }
         }
@@ -2513,22 +3103,169 @@ pub(super) fn lower_trigger_event(
             ))
         }
         TriggerEventAst::StepBegan { step, whose } => {
-            let scope = match whose.to_ascii_lowercase().as_str() {
-                "your" | "you" | "your_next" => {
+            let whose_low = whose.trim().to_ascii_lowercase();
+            match whose_low.as_str() {
+                "each of your precombat main phases"
+                | "your precombat main phase"
+                | "your first main phase"
+                | "each of your first main phases" => {
+                    return Ok((
+                        TriggerEvent::StepBegan {
+                            step: Step::PrecombatMain,
+                            player: TriggerPlayerScope::Relation(PlayerRelation::Controller),
+                        },
+                        TriggerGrouping::EachOccurrence,
+                    ));
+                }
+                "each of your postcombat main phases"
+                | "your postcombat main phase"
+                | "your second main phase"
+                | "each of your second main phases" => {
+                    return Ok((
+                        TriggerEvent::StepBegan {
+                            step: Step::PostcombatMain,
+                            player: TriggerPlayerScope::Relation(PlayerRelation::Controller),
+                        },
+                        TriggerGrouping::EachOccurrence,
+                    ));
+                }
+                "each of your main phases" | "your main phase" => {
+                    return Ok((
+                        TriggerEvent::AnyOf(vec![
+                            TriggerEvent::StepBegan {
+                                step: Step::PrecombatMain,
+                                player: TriggerPlayerScope::Relation(PlayerRelation::Controller),
+                            },
+                            TriggerEvent::StepBegan {
+                                step: Step::PostcombatMain,
+                                player: TriggerPlayerScope::Relation(PlayerRelation::Controller),
+                            },
+                        ]),
+                        TriggerGrouping::EachOccurrence,
+                    ));
+                }
+                "each precombat main phase"
+                | "each player's precombat main phase"
+                | "each player's first main phase" => {
+                    return Ok((
+                        TriggerEvent::StepBegan {
+                            step: Step::PrecombatMain,
+                            player: TriggerPlayerScope::Relation(PlayerRelation::AnyParticipant),
+                        },
+                        TriggerGrouping::EachOccurrence,
+                    ));
+                }
+                "each postcombat main phase"
+                | "each player's postcombat main phase"
+                | "each player's second main phase" => {
+                    return Ok((
+                        TriggerEvent::StepBegan {
+                            step: Step::PostcombatMain,
+                            player: TriggerPlayerScope::Relation(PlayerRelation::AnyParticipant),
+                        },
+                        TriggerGrouping::EachOccurrence,
+                    ));
+                }
+                "each of enchanted player's postcombat main phases"
+                | "enchanted player's postcombat main phase" => {
+                    return Ok((
+                        TriggerEvent::StepBegan {
+                            step: Step::PostcombatMain,
+                            player: TriggerPlayerScope::EnchantedPlayer,
+                        },
+                        TriggerGrouping::EachOccurrence,
+                    ));
+                }
+                "combat on your turn" => {
+                    return Ok((
+                        TriggerEvent::StepBegan {
+                            step: Step::BeginningCombat,
+                            player: TriggerPlayerScope::Relation(PlayerRelation::Controller),
+                        },
+                        TriggerGrouping::EachOccurrence,
+                    ));
+                }
+                "combat on each player's turn" => {
+                    return Ok((
+                        TriggerEvent::StepBegan {
+                            step: Step::BeginningCombat,
+                            player: TriggerPlayerScope::Relation(PlayerRelation::AnyParticipant),
+                        },
+                        TriggerGrouping::EachOccurrence,
+                    ));
+                }
+                "combat on each opponent's turn" | "combat on an opponent's turn" => {
+                    return Ok((
+                        TriggerEvent::StepBegan {
+                            step: Step::BeginningCombat,
+                            player: TriggerPlayerScope::Relation(PlayerRelation::Opponent),
+                        },
+                        TriggerGrouping::EachOccurrence,
+                    ));
+                }
+                "combat on enchanted player's turn" | "combat on enchanted opponent's turn" => {
+                    return Ok((
+                        TriggerEvent::StepBegan {
+                            step: Step::BeginningCombat,
+                            player: TriggerPlayerScope::EnchantedPlayer,
+                        },
+                        TriggerGrouping::EachOccurrence,
+                    ));
+                }
+                _ => {}
+            }
+            let scope = match whose_low.as_str() {
+                "your" | "you" | "your_next" | "your turn" | "each of your" => {
                     TriggerPlayerScope::Relation(PlayerRelation::Controller)
                 }
-                "each" | "each_player" | "each player's" | "any" | "next" => {
+                "each" | "each_player" | "each player's" | "any" | "next" | "every"
+                | "each turn" | "each player's turn" => {
                     TriggerPlayerScope::Relation(PlayerRelation::AnyParticipant)
                 }
                 "each_opponent"
                 | "each opponent's"
+                | "your opponents'"
+                | "opponents'"
                 | "an opponent's"
                 | "opponent"
+                | "opponent's"
                 | "each_other_player"
-                | "each other player's" => TriggerPlayerScope::Relation(PlayerRelation::Opponent),
-                "enchanted_player" | "enchanted player's" | "enchanted_opponent" => {
-                    TriggerPlayerScope::EnchantedPlayer
-                }
+                | "each other player's"
+                | "each opponent's turn"
+                | "an opponent's turn" => TriggerPlayerScope::Relation(PlayerRelation::Opponent),
+                "enchanted_player"
+                | "enchanted player"
+                | "enchanted player's"
+                | "enchanted player's turn"
+                | "enchanted_opponent"
+                | "enchanted opponent"
+                | "enchanted opponent's"
+                | "enchanted opponent's turn" => TriggerPlayerScope::EnchantedPlayer,
+                "enchanted creature's controller"
+                | "enchanted creature's controller's"
+                | "enchanted permanent's controller"
+                | "enchanted permanent's controller's"
+                | "enchanted land's controller"
+                | "enchanted land's controller's"
+                | "enchanted artifact's controller"
+                | "enchanted artifact's controller's"
+                | "enchanted enchantment's controller"
+                | "enchanted enchantment's controller's"
+                | "enchanted planeswalker's controller"
+                | "enchanted planeswalker's controller's"
+                | "enchanted battle's controller"
+                | "enchanted battle's controller's"
+                | "equipped creature's controller"
+                | "equipped creature's controller's"
+                | "the controller of enchanted creature"
+                | "the controller of enchanted permanent"
+                | "the controller of enchanted land"
+                | "the controller of enchanted artifact"
+                | "the controller of enchanted enchantment"
+                | "the controller of enchanted planeswalker"
+                | "the controller of equipped creature"
+                | "attached_host_controller" => TriggerPlayerScope::AttachedHostController,
+                "monarch" | "the monarch" | "the monarch's" => TriggerPlayerScope::Monarch,
                 _ => return Err("oracle:unsupported-step-whose"),
             };
             if matches!(step, TurnStepAst::MainPhase) {
@@ -2547,11 +3284,13 @@ pub(super) fn lower_trigger_event(
                 ));
             }
             let st = match step {
+                TurnStepAst::UntapStep => Step::Untap,
                 TurnStepAst::Upkeep => Step::Upkeep,
                 TurnStepAst::DrawStep => Step::Draw,
                 TurnStepAst::BeginningOfCombat => Step::BeginningCombat,
                 TurnStepAst::EndOfCombat => Step::EndCombat,
                 TurnStepAst::EndStep => Step::End,
+                TurnStepAst::CleanupStep => Step::Cleanup,
                 TurnStepAst::PrecombatMain => Step::PrecombatMain,
                 TurnStepAst::PostcombatMain => Step::PostcombatMain,
                 _ => return Err("oracle:unsupported-trigger-step"),
@@ -2601,13 +3340,31 @@ pub(super) fn lower_trigger_event(
                     let mut min_mv = None;
                     if cloned.stat_bounds.len() == 1
                         && cloned.stat_bounds[0].stat == StatKind::ManaValue
-                        && cloned.stat_bounds[0].op == CompareOp::Ge
                         && let ValueExprAst::Const(v) = cloned.stat_bounds[0].value.as_ref()
-                        && let Ok(u) = u16::try_from(*v)
-                        && u > 0
                     {
-                        min_mv = Some(u);
-                        cloned.stat_bounds.clear();
+                        match cloned.stat_bounds[0].op {
+                            CompareOp::Ge => {
+                                if *v == 0 {
+                                    cloned.stat_bounds.clear();
+                                } else if let Ok(u) = u16::try_from(*v)
+                                    && u > 0
+                                {
+                                    min_mv = Some(u);
+                                    cloned.stat_bounds.clear();
+                                }
+                            }
+                            CompareOp::Gt => {
+                                if *v >= 0
+                                    && let Some(next_v) = v.checked_add(1)
+                                    && let Ok(u) = u16::try_from(next_v)
+                                    && u > 0
+                                {
+                                    min_mv = Some(u);
+                                    cloned.stat_bounds.clear();
+                                }
+                            }
+                            _ => {}
+                        }
                     }
                     (lower_spell_filter(&cloned, vocabulary)?, min_mv)
                 }
@@ -2618,6 +3375,61 @@ pub(super) fn lower_trigger_event(
                 None => {}
                 Some(t) if matches!(t.as_ref(), SubjectRefAst::SelfObject) => {
                     sf = sf.targeting_only_source();
+                }
+                Some(t) if !*self_spell && nth_each_turn.is_none() && min_mv.is_none() => {
+                    let inst_sorc_only = match spell {
+                        None => Some(false),
+                        Some(f) => {
+                            let mut stripped = f.as_ref().clone();
+                            stripped.any_spell = false;
+                            if is_unrestricted_filter(&stripped) {
+                                Some(false)
+                            } else if stripped.any_types
+                                == AstCardTypeMask::INSTANT.union(AstCardTypeMask::SORCERY)
+                                && filter_only_has(
+                                    &stripped,
+                                    FilterAllow {
+                                        types: true,
+                                        ..FilterAllow::NONE
+                                    },
+                                )
+                            {
+                                Some(true)
+                            } else {
+                                None
+                            }
+                        }
+                    };
+                    if let Some(inst_sorc) = inst_sorc_only
+                        && let Ok(tgt_filter) = lower_trigger_subject_filter(t, vocabulary)
+                    {
+                        let event = match caster {
+                            PlayerRefAst::You => TriggerEvent::TargetedByController {
+                                subject: tgt_filter,
+                                spell_only: true,
+                                instant_or_sorcery_only: inst_sorc,
+                            },
+                            PlayerRefAst::AnyOpponent | PlayerRefAst::EachOpponent => {
+                                TriggerEvent::Targeted {
+                                    subject: tgt_filter,
+                                    by_opponent: true,
+                                    spell_only: true,
+                                    instant_or_sorcery_only: inst_sorc,
+                                }
+                            }
+                            PlayerRefAst::AnyPlayer | PlayerRefAst::EachPlayer => {
+                                TriggerEvent::Targeted {
+                                    subject: tgt_filter,
+                                    by_opponent: false,
+                                    spell_only: true,
+                                    instant_or_sorcery_only: inst_sorc,
+                                }
+                            }
+                            _ => return Err("oracle:unsupported-spell-target"),
+                        };
+                        return Ok((event, TriggerGrouping::OneOrMoreTogether));
+                    }
+                    return Err("oracle:unsupported-spell-target");
                 }
                 Some(_) => return Err("oracle:unsupported-spell-target"),
             }
@@ -2749,7 +3561,13 @@ pub(super) fn lower_trigger_event(
                             }
                             subj = f;
                         }
-                        grouping = if def_mode == AttackTriggerMode::AtEnchantedPlayer {
+                        grouping = if matches!(
+                            def_mode,
+                            AttackTriggerMode::AtPlayer
+                                | AttackTriggerMode::AtOpponent
+                                | AttackTriggerMode::AtEnchantedPlayer
+                                | AttackTriggerMode::AtOpponentOrPlaneswalker
+                        ) {
                             TriggerGrouping::OneOrMoreByPlayer
                         } else {
                             TriggerGrouping::OneOrMoreTogether
@@ -2792,6 +3610,17 @@ pub(super) fn lower_trigger_event(
                     }
                 }
             };
+            if *grouped
+                && matches!(
+                    mode,
+                    AttackTriggerMode::AtPlayer
+                        | AttackTriggerMode::AtOpponent
+                        | AttackTriggerMode::AtEnchantedPlayer
+                        | AttackTriggerMode::AtOpponentOrPlaneswalker
+                )
+            {
+                grouping = TriggerGrouping::OneOrMoreByPlayer;
+            }
             Ok((
                 TriggerEvent::Attacks {
                     subject: subj,
@@ -2875,12 +3704,78 @@ pub(super) fn lower_trigger_event(
                 TriggerGrouping::EachOccurrence,
             ))
         }
+        TriggerEventAst::BlocksOrBecomesBlockedBy {
+            subject,
+            other_filter,
+            blocks,
+            becomes_blocked,
+            min_count,
+        } if *min_count == 1 && other_filter.zone.is_none() => {
+            let subj = match subject.as_ref() {
+                SubjectRefAst::SelfObject => ObjectFilter::self_object(),
+                SubjectRefAst::AttachedHost(_) => ObjectFilter::any().attached_to_self(),
+                _ => return Err("oracle:unsupported-trigger-event"),
+            };
+            let obj = lower_object_filter(other_filter, vocabulary)?;
+            let event = match (*blocks, *becomes_blocked) {
+                (true, false) => TriggerEvent::BlocksOrBlocked {
+                    subject: subj,
+                    kind: BlockTriggerKind::BlocksMatching(Box::new(obj)),
+                },
+                (false, true) => TriggerEvent::BlocksOrBlocked {
+                    subject: subj,
+                    kind: BlockTriggerKind::BlockedByMatching(Box::new(obj)),
+                },
+                (true, true) => {
+                    let simple_subtype = if let ObjectFilter::Clause(c) = obj
+                        && (c.any_types.is_empty() || c.any_types == CardTypeMask::CREATURE)
+                    {
+                        let base = ObjectClause {
+                            any_types: c.any_types,
+                            subtypes: c.subtypes,
+                            ..ObjectClause::any()
+                        };
+                        if c == base {
+                            match c.subtypes {
+                                SubtypeFilter::Any => Some(None),
+                                SubtypeFilter::Has(st) => Some(Some(st)),
+                                _ => None,
+                            }
+                        } else {
+                            None
+                        }
+                    } else {
+                        None
+                    };
+                    if let Some(required_subtype) = simple_subtype {
+                        TriggerEvent::BlocksOrBlocked {
+                            subject: subj,
+                            kind: BlockTriggerKind::BlocksOrBlockedByEach { required_subtype },
+                        }
+                    } else {
+                        TriggerEvent::AnyOf(vec![
+                            TriggerEvent::BlocksOrBlocked {
+                                subject: subj,
+                                kind: BlockTriggerKind::BlocksMatching(Box::new(obj)),
+                            },
+                            TriggerEvent::BlocksOrBlocked {
+                                subject: subj,
+                                kind: BlockTriggerKind::BlockedByMatching(Box::new(obj)),
+                            },
+                        ])
+                    }
+                }
+                (false, false) => return Err("oracle:unsupported-trigger-event"),
+            };
+            Ok((event, TriggerGrouping::EachOccurrence))
+        }
         TriggerEventAst::DamageDealt {
             combat_only,
             noncombat_only,
             source,
             recipient,
             grouped,
+            excess_only: false,
         } => {
             // "Whenever ~ / a creature you control is dealt damage..." -> TriggerEvent::DealtDamage
             if source.is_none()
@@ -3073,14 +3968,29 @@ pub(super) fn lower_trigger_event(
                 TriggerGrouping::EachOccurrence,
             ))
         }
-        TriggerEventAst::CardDiscarded { player, filter }
-            if filter.is_empty() || filter.any_card =>
-        {
+        TriggerEventAst::CardDiscarded { player, filter } => {
             let rel = lower_player_relation(*player)?;
+            let action = if is_unrestricted_filter(filter) {
+                PlayerTriggerAction::Discarded
+            } else {
+                let mut obj = lower_object_filter(filter, vocabulary)?;
+                if filter.any_permanent && filter.any_types.is_empty() {
+                    match &mut obj {
+                        ObjectFilter::Clause(c) => {
+                            c.any_types = CardTypeMask::PERMANENT;
+                        }
+                        ObjectFilter::Either(c1, c2) => {
+                            c1.any_types = CardTypeMask::PERMANENT;
+                            c2.any_types = CardTypeMask::PERMANENT;
+                        }
+                    }
+                }
+                PlayerTriggerAction::DiscardedMatching(obj)
+            };
             Ok((
                 TriggerEvent::PlayerAction {
                     player: rel,
-                    action: PlayerTriggerAction::Discarded,
+                    action,
                 },
                 TriggerGrouping::EachOccurrence,
             ))
@@ -3219,14 +4129,43 @@ pub(super) fn lower_trigger_event(
             let rel = lower_player_relation(*player)?;
             let low = action.trim().to_ascii_lowercase();
             match low.as_str() {
-                "loses_game" | "an opponent loses the game" | "a player loses the game" => {
+                "loses_game"
+                | "an opponent loses the game"
+                | "another player loses the game"
+                | "a player loses the game" => {
                     let eff_rel = match low.as_str() {
-                        "an opponent loses the game" => PlayerRelation::Opponent,
+                        "an opponent loses the game" | "another player loses the game" => {
+                            PlayerRelation::Opponent
+                        }
                         "a player loses the game" => PlayerRelation::AnyParticipant,
                         _ => rel,
                     };
                     return Ok((
                         TriggerEvent::PlayerLosesGame(eff_rel),
+                        TriggerGrouping::EachOccurrence,
+                    ));
+                }
+                "a creature dealt damage by equipped creature this turn dies"
+                | "a creature dealt damage by enchanted creature this turn dies"
+                | "a creature that was dealt damage by equipped creature this turn dies"
+                | "a creature that was dealt damage by enchanted creature this turn dies" => {
+                    return Ok((
+                        TriggerEvent::Dies {
+                            subject: ObjectFilter::creature(),
+                            mode: DiesTriggerMode::DamagedByAttachedHost,
+                        },
+                        TriggerGrouping::EachOccurrence,
+                    ));
+                }
+                "~ enters from anywhere other than a graveyard or exile"
+                | "~ enters the battlefield from anywhere other than a graveyard or exile" => {
+                    return Ok((
+                        TriggerEvent::Enters {
+                            subject: ObjectFilter::self_object(),
+                            from_zone: TriggerFromZone::NotGraveyardOrExile,
+                            cast_origin: None,
+                            attached_to_creature: false,
+                        },
                         TriggerGrouping::EachOccurrence,
                     ));
                 }
@@ -3463,21 +4402,434 @@ pub(super) fn lower_trigger_event(
                         TriggerGrouping::EachOccurrence,
                     ));
                 }
+                "another player casts a spell from anywhere other than their hand"
+                | "an opponent casts a spell from anywhere other than their hand" => {
+                    return Ok((
+                        TriggerEvent::SpellCast {
+                            caster: TriggerPlayerScope::Relation(PlayerRelation::Opponent),
+                            filter: SpellFilter::any().not_from_owners_hand(),
+                            self_cast: false,
+                            include_copy: false,
+                            min_mana_value: None,
+                        },
+                        TriggerGrouping::EachOccurrence,
+                    ));
+                }
+                "you attack a player with one or more creatures with power 4 or greater" => {
+                    return Ok((
+                        TriggerEvent::Attacks {
+                            subject: ObjectFilter::creature()
+                                .controlled()
+                                .with_power(PowerFilter::AtLeast(4)),
+                            mode: AttackTriggerMode::AtPlayer,
+                        },
+                        TriggerGrouping::OneOrMoreByPlayer,
+                    ));
+                }
+                "three or more creatures you control with flying attack" => {
+                    return Ok((
+                        TriggerEvent::Attacks {
+                            subject: ObjectFilter::creature()
+                                .controlled()
+                                .with_keyword(KeywordAbility::Flying),
+                            mode: AttackTriggerMode::GroupAtLeast(3),
+                        },
+                        TriggerGrouping::OneOrMoreTogether,
+                    ));
+                }
+                "another player attacks with two or more creatures" => {
+                    return Ok((
+                        TriggerEvent::Attacks {
+                            subject: ObjectFilter::creature().opposing(),
+                            mode: AttackTriggerMode::GroupAtLeast(2),
+                        },
+                        TriggerGrouping::OneOrMoreTogether,
+                    ));
+                }
+                "one or more of your opponents are attacked" => {
+                    return Ok((
+                        TriggerEvent::Attacks {
+                            subject: ObjectFilter::creature(),
+                            mode: AttackTriggerMode::AtOpponent,
+                        },
+                        TriggerGrouping::OneOrMoreTogether,
+                    ));
+                }
+                "one or more players sacrifice one or more creatures" => {
+                    return Ok((
+                        TriggerEvent::PlayerAction {
+                            player: PlayerRelation::AnyParticipant,
+                            action: PlayerTriggerAction::Sacrificed(ObjectFilter::creature()),
+                        },
+                        TriggerGrouping::OneOrMoreTogether,
+                    ));
+                }
+                "one or more players discard one or more cards" => {
+                    return Ok((
+                        TriggerEvent::PlayerAction {
+                            player: PlayerRelation::AnyParticipant,
+                            action: PlayerTriggerAction::Discarded,
+                        },
+                        TriggerGrouping::OneOrMoreTogether,
+                    ));
+                }
+                "one or more opponents are dealt noncombat damage" => {
+                    return Ok((
+                        TriggerEvent::DealsNoncombatDamage {
+                            source: ObjectFilter::any(),
+                            recipient: DamageTriggerRecipient::Opponent,
+                        },
+                        TriggerGrouping::OneOrMoreTogether,
+                    ));
+                }
+                "damage is dealt to one of the chosen players" => {
+                    return Ok((
+                        TriggerEvent::DealtDamage {
+                            subject: ObjectFilter::any(),
+                            linked_player: true,
+                        },
+                        TriggerGrouping::EachOccurrence,
+                    ));
+                }
+                "a permanent other than a basic land enters" => {
+                    return Ok((
+                        TriggerEvent::Enters {
+                            subject: ObjectFilter::Either(
+                                ObjectClause::permanent().forbid_types(CardTypeMask::LAND),
+                                ObjectClause {
+                                    forbidden_supertypes: SupertypeMask::BASIC,
+                                    ..ObjectClause::land()
+                                },
+                            ),
+                            from_zone: TriggerFromZone::Any,
+                            cast_origin: None,
+                            attached_to_creature: false,
+                        },
+                        TriggerGrouping::EachOccurrence,
+                    ));
+                }
+                "a permanent owned by another player is put into a graveyard from the battlefield" =>
+                {
+                    return Ok((
+                        TriggerEvent::Dies {
+                            subject: ObjectFilter::Clause(ObjectClause {
+                                controller: ControllerFilter::OwnerOpponent,
+                                ..ObjectClause::permanent()
+                            }),
+                            mode: DiesTriggerMode::Permanent,
+                        },
+                        TriggerGrouping::EachOccurrence,
+                    ));
+                }
+                "you put one or more +1/+1 counters on one or more other heroes you control" => {
+                    if let Some(hero) = vocabulary.resolve_label("Hero") {
+                        return Ok((
+                            TriggerEvent::CountersChanged {
+                                subject: ObjectFilter::permanent()
+                                    .controlled()
+                                    .other_than_ability_source()
+                                    .with_subtype(hero),
+                                kind: CounterTriggerKind::PlusOnePlaced {
+                                    by_controller_only: true,
+                                },
+                            },
+                            TriggerGrouping::OneOrMoreTogether,
+                        ));
+                    }
+                }
+                "~ or another creature is returned to your hand from the battlefield" => {
+                    return Ok((
+                        TriggerEvent::AnyOf(vec![
+                            TriggerEvent::ReturnedToHand {
+                                subject: ObjectFilter::Clause(ObjectClause {
+                                    controller: ControllerFilter::OwnerYou,
+                                    ..ObjectClause::any().self_object()
+                                }),
+                            },
+                            TriggerEvent::ReturnedToHand {
+                                subject: ObjectFilter::Clause(ObjectClause {
+                                    controller: ControllerFilter::OwnerYou,
+                                    ..ObjectClause::creature()
+                                })
+                                .other_than_ability_source(),
+                            },
+                        ]),
+                        TriggerGrouping::EachOccurrence,
+                    ));
+                }
+                "one or more noncreature permanents are returned to hand" => {
+                    return Ok((
+                        TriggerEvent::ReturnedToHand {
+                            subject: ObjectFilter::Clause(ObjectClause::permanent().noncreature()),
+                        },
+                        TriggerGrouping::OneOrMoreTogether,
+                    ));
+                }
+                "you activate an ability" => {
+                    return Ok((
+                        TriggerEvent::AbilityActivated {
+                            player: PlayerRelation::Controller,
+                            source_filter: ObjectFilter::any(),
+                        },
+                        TriggerGrouping::EachOccurrence,
+                    ));
+                }
+                "you cast an instant or sorcery spell or activate an ability" => {
+                    return Ok((
+                        TriggerEvent::AnyOf(vec![
+                            TriggerEvent::SpellCast {
+                                caster: TriggerPlayerScope::Relation(PlayerRelation::Controller),
+                                filter: SpellFilter::from_object(ObjectFilter::Clause(
+                                    ObjectClause::any().any_types(
+                                        CardTypeMask::INSTANT.union(CardTypeMask::SORCERY),
+                                    ),
+                                )),
+                                self_cast: false,
+                                include_copy: false,
+                                min_mana_value: None,
+                            },
+                            TriggerEvent::AbilityActivated {
+                                player: PlayerRelation::Controller,
+                                source_filter: ObjectFilter::any(),
+                            },
+                        ]),
+                        TriggerGrouping::EachOccurrence,
+                    ));
+                }
+                "an opponent casts a spell or activates an ability" => {
+                    return Ok((
+                        TriggerEvent::AnyOf(vec![
+                            TriggerEvent::SpellCast {
+                                caster: TriggerPlayerScope::Relation(PlayerRelation::Opponent),
+                                filter: SpellFilter::any(),
+                                self_cast: false,
+                                include_copy: false,
+                                min_mana_value: None,
+                            },
+                            TriggerEvent::AbilityActivated {
+                                player: PlayerRelation::Opponent,
+                                source_filter: ObjectFilter::any(),
+                            },
+                        ]),
+                        TriggerGrouping::EachOccurrence,
+                    ));
+                }
+                "an opponent sacrifices a nontoken permanent or discards a permanent card" => {
+                    return Ok((
+                        TriggerEvent::AnyOf(vec![
+                            TriggerEvent::PlayerAction {
+                                player: PlayerRelation::Opponent,
+                                action: PlayerTriggerAction::Sacrificed(
+                                    ObjectFilter::permanent().nontoken(),
+                                ),
+                            },
+                            TriggerEvent::PlayerAction {
+                                player: PlayerRelation::Opponent,
+                                action: PlayerTriggerAction::DiscardedMatching(
+                                    ObjectFilter::permanent(),
+                                ),
+                            },
+                        ]),
+                        TriggerGrouping::EachOccurrence,
+                    ));
+                }
+                "a spell or ability causes its controller to shuffle their library" => {
+                    return Ok((
+                        TriggerEvent::PlayerAction {
+                            player: PlayerRelation::AnyParticipant,
+                            action: PlayerTriggerAction::ShuffledLibrary,
+                        },
+                        TriggerGrouping::EachOccurrence,
+                    ));
+                }
+                "you play a card" => {
+                    return Ok((
+                        TriggerEvent::AnyOf(vec![
+                            TriggerEvent::PlayerAction {
+                                player: PlayerRelation::Controller,
+                                action: PlayerTriggerAction::LandPlayed,
+                            },
+                            TriggerEvent::SpellCast {
+                                caster: TriggerPlayerScope::Relation(PlayerRelation::Controller),
+                                filter: SpellFilter::any(),
+                                self_cast: false,
+                                include_copy: false,
+                                min_mana_value: None,
+                            },
+                        ]),
+                        TriggerGrouping::EachOccurrence,
+                    ));
+                }
                 _ => {}
             }
+            if let Some(ord_raw) = low.strip_prefix("you cast your ").and_then(|r| {
+                r.strip_suffix(" spell each turn")
+                    .or_else(|| r.strip_suffix(" spell in a turn"))
+            }) && let Some(ord_n) = match ord_raw.trim() {
+                "first" => Some(1u32),
+                "second" => Some(2u32),
+                "third" => Some(3u32),
+                "fourth" => Some(4u32),
+                "fifth" => Some(5u32),
+                _ => None,
+            } && let Some(nz) = NonZeroU32::new(ord_n)
+            {
+                return Ok((
+                    TriggerEvent::SpellCast {
+                        caster: TriggerPlayerScope::Relation(PlayerRelation::Controller),
+                        filter: SpellFilter::any().ordinal_this_turn(nz),
+                        self_cast: false,
+                        include_copy: false,
+                        min_mana_value: None,
+                    },
+                    TriggerGrouping::EachOccurrence,
+                ));
+            }
+            if let Some(rest) = low.strip_prefix("~ and at least ")
+                && let Some(cnt_raw) = rest
+                    .strip_suffix(" other creatures attack")
+                    .or_else(|| rest.strip_suffix(" other creatures you control attack"))
+                    .or_else(|| rest.strip_suffix(" other creature attack"))
+                    .or_else(|| rest.strip_suffix(" other creature you control attack"))
+                && let Some(min_others) = match cnt_raw.trim() {
+                    "one" | "1" => Some(1u8),
+                    "two" | "2" => Some(2u8),
+                    "three" | "3" => Some(3u8),
+                    "four" | "4" => Some(4u8),
+                    "five" | "5" => Some(5u8),
+                    _ => None,
+                }
+            {
+                return Ok((
+                    TriggerEvent::Attacks {
+                        subject: ObjectFilter::self_object(),
+                        mode: AttackTriggerMode::WithAtLeastOthers(min_others),
+                    },
+                    TriggerGrouping::EachOccurrence,
+                ));
+            }
+            if let Some(raw_rest) = action
+                .trim()
+                .strip_prefix("regenerates:")
+                .or_else(|| low.strip_prefix("regenerates:"))
+            {
+                let subj = lower_regenerates_subject(raw_rest, vocabulary)
+                    .ok_or("oracle:unsupported-trigger-event")?;
+                return Ok((
+                    TriggerEvent::StatusChanged {
+                        subject: subj,
+                        kind: StatusTriggerKind::Regenerated,
+                    },
+                    TriggerGrouping::EachOccurrence,
+                ));
+            }
+            if let Some(discard_raw) = low.strip_prefix("opponent_caused:discard ").or_else(|| {
+                low.strip_prefix("a spell or ability an opponent controls causes you to discard ")
+            }) {
+                let discard_raw = discard_raw.trim();
+                let (core, grouping) = if let Some(rest) = discard_raw.strip_prefix("one or more ")
+                {
+                    (rest.trim(), TriggerGrouping::OneOrMoreTogether)
+                } else {
+                    (discard_raw, TriggerGrouping::EachOccurrence)
+                };
+                let filter = match core {
+                    "~" | "this card" => Some(ObjectFilter::self_object()),
+                    "a card" | "card" | "cards" => None,
+                    other => {
+                        let compiler_vocab = cached_compiler_vocab(vocabulary);
+                        let parsed = spellwake_oracle_compiler::filter::parse_object_filter(
+                            other,
+                            &compiler_vocab,
+                        )
+                        .map_err(|_| "oracle:unsupported-trigger-event")?;
+                        if is_unrestricted_filter(&parsed) {
+                            None
+                        } else {
+                            let mut obj = lower_object_filter(&parsed, vocabulary)
+                                .map_err(|_| "oracle:unsupported-trigger-event")?;
+                            if parsed.any_permanent && parsed.any_types.is_empty() {
+                                match &mut obj {
+                                    ObjectFilter::Clause(c) => {
+                                        c.any_types = CardTypeMask::PERMANENT;
+                                    }
+                                    ObjectFilter::Either(c1, c2) => {
+                                        c1.any_types = CardTypeMask::PERMANENT;
+                                        c2.any_types = CardTypeMask::PERMANENT;
+                                    }
+                                }
+                            }
+                            Some(obj)
+                        }
+                    }
+                };
+                return Ok((
+                    TriggerEvent::PlayerAction {
+                        player: PlayerRelation::Controller,
+                        action: PlayerTriggerAction::DiscardedByOpponent(filter),
+                    },
+                    grouping,
+                ));
+            }
+            if let Some(subj_raw) = low
+                .strip_suffix(" leaves the battlefield without dying")
+                .or_else(|| low.strip_suffix(" leave the battlefield without dying"))
+            {
+                let subj_raw = subj_raw.trim();
+                let compiler_vocab = cached_compiler_vocab(vocabulary);
+                if let Some(other_raw) = subj_raw.strip_prefix("~ or ") {
+                    let parsed = spellwake_oracle_compiler::filter::parse_subject_or_target(
+                        other_raw.trim(),
+                        &compiler_vocab,
+                    )
+                    .map_err(|_| "oracle:unsupported-trigger-event")?;
+                    let other_subj = lower_trigger_subject_filter(&parsed, vocabulary)
+                        .map_err(|_| "oracle:unsupported-trigger-event")?;
+                    return Ok((
+                        TriggerEvent::AnyOf(vec![
+                            TriggerEvent::LeavesBattlefieldWithoutDying {
+                                subject: ObjectFilter::self_object(),
+                            },
+                            TriggerEvent::LeavesBattlefieldWithoutDying {
+                                subject: other_subj,
+                            },
+                        ]),
+                        TriggerGrouping::EachOccurrence,
+                    ));
+                }
+                let (core, grouping) = if let Some(rest) = subj_raw.strip_prefix("one or more ") {
+                    (rest.trim(), TriggerGrouping::OneOrMoreTogether)
+                } else {
+                    (subj_raw, TriggerGrouping::EachOccurrence)
+                };
+                let parsed = spellwake_oracle_compiler::filter::parse_subject_or_target(
+                    core,
+                    &compiler_vocab,
+                )
+                .map_err(|_| "oracle:unsupported-trigger-event")?;
+                let subject = lower_trigger_subject_filter(&parsed, vocabulary)
+                    .map_err(|_| "oracle:unsupported-trigger-event")?;
+                return Ok((
+                    TriggerEvent::LeavesBattlefieldWithoutDying { subject },
+                    grouping,
+                ));
+            }
             let act = match low.as_str() {
-                "scry" | "scries" => PlayerTriggerAction::Scried,
-                "surveil" | "surveils" => PlayerTriggerAction::Surveilled,
-                "cycle" | "cycles" | "cycle a card" | "cycles a card" => {
+                "scry" | "scries" | "you scry" => PlayerTriggerAction::Scried,
+                "surveil" | "surveils" | "you surveil" => PlayerTriggerAction::Surveilled,
+                "cycle" | "cycles" | "cycle a card" | "cycles a card" | "you cycle a card" => {
                     PlayerTriggerAction::Cycled { self_only: false }
                 }
-                "discard" | "discards" | "discard a card" | "discards a card" => {
-                    PlayerTriggerAction::Discarded
+                "discard" | "discards" | "discard a card" | "discards a card"
+                | "you discard a card" => PlayerTriggerAction::Discarded,
+                "commit a crime" | "commits a crime" | "you commit a crime" => {
+                    PlayerTriggerAction::CommittedCrime
                 }
-                "commit a crime" | "commits a crime" => PlayerTriggerAction::CommittedCrime,
-                "draw a card" | "draws a card" => PlayerTriggerAction::DrewCard {
-                    nth_each_turn: None,
-                },
+                "draw a card" | "draws a card" | "you draw a card" => {
+                    PlayerTriggerAction::DrewCard {
+                        nth_each_turn: None,
+                    }
+                }
                 "the final chapter ability of a saga you control resolves" => {
                     PlayerTriggerAction::SagaFinalChapterResolved
                 }
@@ -3487,19 +4839,22 @@ pub(super) fn lower_trigger_event(
                 "proliferate" | "proliferates" | "you proliferate" => {
                     PlayerTriggerAction::Proliferated
                 }
-                "explore" | "explores" => PlayerTriggerAction::Explored,
+                "explore" | "explores" | "you explore" => PlayerTriggerAction::Explored,
                 "shuffle_library"
                 | "shuffle your library"
+                | "you shuffle your library"
                 | "shuffles their library"
                 | "shuffle a library"
                 | "shuffles a library" => PlayerTriggerAction::ShuffledLibrary,
                 "search your library"
+                | "you search your library"
                 | "searches their library"
                 | "search a library"
                 | "searches a library" => PlayerTriggerAction::SearchedLibrary,
-                "become_monarch" | "become the monarch" | "becomes the monarch" => {
-                    PlayerTriggerAction::BecameMonarch
-                }
+                "become_monarch"
+                | "become the monarch"
+                | "becomes the monarch"
+                | "you become the monarch" => PlayerTriggerAction::BecameMonarch,
                 "you get one or more {e}" | "gain_energy" | "get one or more {e}" => {
                     PlayerTriggerAction::GainedEnergy
                 }
@@ -3509,18 +4864,18 @@ pub(super) fn lower_trigger_event(
                 "investigate" | "investigates" | "you investigate" => {
                     PlayerTriggerAction::Investigated
                 }
-                "connive" | "connives" => PlayerTriggerAction::Connived,
+                "connive" | "connives" | "you connive" => PlayerTriggerAction::Connived,
                 "forage" | "forages" | "you forage" => PlayerTriggerAction::Foraged,
                 "you collect evidence" | "collect evidence" | "collects evidence" => {
                     PlayerTriggerAction::CollectedEvidence
                 }
                 "foretell" | "foretells" | "you foretell a card" => PlayerTriggerAction::Foretold,
-                "saddle" | "saddles" => PlayerTriggerAction::Saddled,
-                "exert" | "exerts" => PlayerTriggerAction::Exerted,
+                "~ becomes saddled" | "saddle" | "saddles" => PlayerTriggerAction::Saddled,
+                "exert" | "exerts" | "you exert" => PlayerTriggerAction::Exerted,
                 "~ becomes plotted" | "plot" | "plots" => PlayerTriggerAction::Plotted,
-                "clash" | "clashes" => PlayerTriggerAction::Clashed,
-                "exhaust" | "exhausts" => PlayerTriggerAction::Exhausted,
-                "evolve" | "evolves" => PlayerTriggerAction::Evolved,
+                "clash" | "clashes" | "you clash" => PlayerTriggerAction::Clashed,
+                "exhaust" | "exhausts" | "you exhaust" => PlayerTriggerAction::Exhausted,
+                "evolve" | "evolves" | "you evolve" => PlayerTriggerAction::Evolved,
                 "ring_tempts_you" | "the ring tempts you" => PlayerTriggerAction::RingTemptsYou,
                 "populate" | "populates" | "you populate" => PlayerTriggerAction::Populated,
                 "discover" | "discovers" | "you discover" => PlayerTriggerAction::Discovered,
@@ -3533,24 +4888,29 @@ pub(super) fn lower_trigger_event(
                 | "complete a dungeon"
                 | "completes a dungeon"
                 | "you complete a dungeon" => PlayerTriggerAction::CompletedDungeon,
-                "manifest dread" | "manifests dread" | "you manifest dread" => {
+                "manifest_dread" | "manifest dread" | "manifests dread" | "you manifest dread" => {
                     PlayerTriggerAction::ManifestedDread
                 }
                 "pay life" | "pays life" | "you pay life" => PlayerTriggerAction::PaidLife,
                 "give a gift" | "gives a gift" | "you give a gift" => PlayerTriggerAction::GaveGift,
-                "win a clash" | "wins a clash" | "you win a clash" => PlayerTriggerAction::WonClash,
+                "win a clash"
+                | "wins a clash"
+                | "you win a clash"
+                | "whenever you win a clash"
+                | "you clash and win" => PlayerTriggerAction::WonClash,
                 "copy a spell"
                 | "copies a spell"
                 | "you copy a spell"
+                | "you copy a spell or ability"
                 | "you copy an instant or sorcery spell" => {
                     PlayerTriggerAction::CopiedSpellOrAbility
                 }
-                "enlist" | "enlists" => PlayerTriggerAction::Enlisted,
-                "train" | "trains" => PlayerTriggerAction::Trained,
-                "kick a spell" | "kicks a spell" | "you kick a spell" => {
+                "enlist" | "enlists" | "you enlist" => PlayerTriggerAction::Enlisted,
+                "train" | "trains" | "you train" => PlayerTriggerAction::Trained,
+                "kick_spell" | "kick a spell" | "kicks a spell" | "you kick a spell" => {
                     PlayerTriggerAction::KickedSpell
                 }
-                "scry_to_bottom" => PlayerTriggerAction::ScryToBottom,
+                "scry_to_bottom" | "scry_bottom" => PlayerTriggerAction::ScryToBottom,
                 "waterbend" | "waterbends" | "you waterbend" => PlayerTriggerAction::Waterbended,
                 _ => return Err("oracle:unsupported-trigger-event"),
             };
@@ -3568,22 +4928,65 @@ pub(super) fn lower_trigger_event(
             by_text,
         } => {
             let subj = lower_trigger_subject_filter(subject, vocabulary)?;
-            let (spell_only, inst_sorc) =
-                match by_text.as_deref().map(str::to_ascii_lowercase).as_deref() {
-                    None | Some("a spell or ability") => (false, false),
-                    Some("a spell") => (true, false),
-                    Some("an instant or sorcery spell") => (true, true),
+            let mut grouping = TriggerGrouping::EachOccurrence;
+            let mut opp = *by_opponent;
+            let mut by_controller = false;
+            let (spell_only, inst_sorc) = if let Some(raw) = by_text.as_deref() {
+                let low = raw.trim().to_ascii_lowercase();
+                let mut rest = low.as_str();
+                if let Some(stripped) = rest.strip_suffix(" for the first time each turn") {
+                    rest = stripped.trim_end();
+                    grouping = TriggerGrouping::OneOrMoreOnceEachTurn;
+                }
+                if let Some(stripped) = rest
+                    .strip_suffix(" an opponent controls")
+                    .or_else(|| rest.strip_suffix(" your opponents control"))
+                    .or_else(|| rest.strip_suffix(" opponents control"))
+                    .or_else(|| rest.strip_suffix(" controlled by an opponent"))
+                    .or_else(|| rest.strip_suffix(" controlled by your opponents"))
+                {
+                    rest = stripped.trim_end();
+                    opp = true;
+                } else if let Some(stripped) = rest
+                    .strip_suffix(" you control")
+                    .or_else(|| rest.strip_suffix(" controlled by you"))
+                {
+                    rest = stripped.trim_end();
+                    by_controller = true;
+                }
+                if opp && by_controller {
+                    return Err("oracle:unsupported-targeted-by");
+                }
+                let rest_trimmed = rest.trim();
+                let normalized = rest_trimmed
+                    .strip_prefix("an ")
+                    .or_else(|| rest_trimmed.strip_prefix("a "))
+                    .unwrap_or(rest_trimmed)
+                    .trim();
+                match normalized {
+                    "" | "spell or ability" | "spell or an ability" => (false, false),
+                    "spell" => (true, false),
+                    "instant or sorcery spell" => (true, true),
                     _ => return Err("oracle:unsupported-targeted-by"),
-                };
-            Ok((
-                TriggerEvent::Targeted {
+                }
+            } else {
+                (false, false)
+            };
+            let event = if by_controller {
+                TriggerEvent::TargetedByController {
                     subject: subj,
-                    by_opponent: *by_opponent,
                     spell_only,
                     instant_or_sorcery_only: inst_sorc,
-                },
-                TriggerGrouping::EachOccurrence,
-            ))
+                }
+            } else {
+                TriggerEvent::Targeted {
+                    subject: subj,
+                    by_opponent: opp,
+                    spell_only,
+                    instant_or_sorcery_only: inst_sorc,
+                }
+            };
+            Ok((event, grouping))
         }
         TriggerEventAst::CountersChanged {
             subject,
@@ -3919,6 +5322,92 @@ pub(super) fn lower_trigger_event(
         }
         _ => Err("oracle:unsupported-trigger-event"),
     }
+}
+
+fn lower_regenerates_subject(
+    raw_rest: &str,
+    vocabulary: &CreatureTypeVocabulary,
+) -> Option<ObjectFilter> {
+    let trimmed = raw_rest.trim();
+    if trimmed.eq_ignore_ascii_case("selfobject") || trimmed == "~" {
+        return Some(ObjectFilter::self_object());
+    }
+    let low = trimmed.to_ascii_lowercase();
+    if low.starts_with("attachedhost(")
+        || matches!(
+            low.as_str(),
+            "enchanted creature" | "equipped creature" | "enchanted permanent"
+        )
+    {
+        return Some(ObjectFilter::Clause(ObjectClause::any().attached_to_self()));
+    }
+    let candidates: [(ObjectFilterAst, ObjectFilter); 6] = [
+        (
+            ObjectFilterAst {
+                any_types: AstCardTypeMask::CREATURE,
+                ..ObjectFilterAst::default()
+            },
+            ObjectFilter::creature(),
+        ),
+        (
+            ObjectFilterAst {
+                any_types: AstCardTypeMask::CREATURE,
+                controller: Some(ControllerRelation::You),
+                ..ObjectFilterAst::default()
+            },
+            ObjectFilter::creature().controlled(),
+        ),
+        (
+            ObjectFilterAst {
+                any_types: AstCardTypeMask::CREATURE,
+                controller: Some(ControllerRelation::Opponent),
+                ..ObjectFilterAst::default()
+            },
+            ObjectFilter::creature().opposing(),
+        ),
+        (
+            ObjectFilterAst {
+                any_types: AstCardTypeMask::CREATURE,
+                flags: AstFilterFlags::EXCLUDE_SELF,
+                ..ObjectFilterAst::default()
+            },
+            ObjectFilter::creature().other_than_ability_source(),
+        ),
+        (
+            ObjectFilterAst {
+                any_types: AstCardTypeMask::CREATURE,
+                controller: Some(ControllerRelation::You),
+                flags: AstFilterFlags::EXCLUDE_SELF,
+                ..ObjectFilterAst::default()
+            },
+            ObjectFilter::creature()
+                .controlled()
+                .other_than_ability_source(),
+        ),
+        (
+            ObjectFilterAst {
+                any_permanent: true,
+                ..ObjectFilterAst::default()
+            },
+            ObjectFilter::permanent(),
+        ),
+    ];
+    for (ast_flt, lowered) in candidates {
+        let group = SubjectRefAst::Group(Box::new(ast_flt));
+        if format!("{group:?}") == trimmed {
+            return Some(lowered);
+        }
+    }
+    if !trimmed.contains("ObjectFilterAst") {
+        let compiler_vocab = cached_compiler_vocab(vocabulary);
+        if let Ok(parsed) =
+            spellwake_oracle_compiler::filter::parse_subject_or_target(trimmed, &compiler_vocab)
+            && let Ok(lowered) = lower_trigger_subject_filter(&parsed, vocabulary)
+        {
+            return Some(lowered);
+        }
+    }
+    None
 }
 
 pub(super) fn lower_trigger_subject_filter(
@@ -4337,6 +5826,10 @@ fn try_lower_specialized_trigger_condition(
                     filter: obj,
                     minimum: u8::try_from(v).ok()?,
                 }),
+                (CompareOp::Gt, v) => Some(TriggerCondition::OpponentControlsMatching {
+                    filter: obj,
+                    minimum: v.checked_add(1).and_then(|n| u8::try_from(n).ok())?,
+                }),
                 (CompareOp::Eq, 0) => Some(TriggerCondition::Not(Box::new(
                     TriggerCondition::OpponentControlsMatching {
                         filter: obj,
@@ -4355,8 +5848,50 @@ fn try_lower_specialized_trigger_condition(
                         minimum: u8::try_from(v).ok()?,
                     },
                 ))),
+                (CompareOp::Eq, v) if v > 0 => {
+                    let rc = ResolutionCondition {
+                        left: ValueExpr::count_battlefield(obj.opposing()),
+                        comparison: Comparison::Equal,
+                        right: ValueExpr::literal(i64::from(v)),
+                    };
+                    rc.is_trigger_world_evaluable()
+                        .then(|| TriggerCondition::Eval(Box::new(rc)))
+                }
                 _ => None,
             }
+        }
+        ConditionAst::ControlsCount {
+            player: p @ (PlayerRefAst::DefendingPlayer | PlayerRefAst::ThatPlayer),
+            filter,
+            op,
+            value,
+        } if matches!(
+            filter.controller,
+            None | Some(ControllerRelation::DefendingPlayer | ControllerRelation::ThatPlayer)
+        ) =>
+        {
+            let mut obj = lower_object_filter(filter, vocabulary).ok()?;
+            match &mut obj {
+                ObjectFilter::Clause(c) => {
+                    c.controller = ControllerFilter::RelatedPlayer;
+                }
+                ObjectFilter::Either(c1, c2) => {
+                    c1.controller = ControllerFilter::RelatedPlayer;
+                    c2.controller = ControllerFilter::RelatedPlayer;
+                }
+            }
+            let rp = if matches!(p, PlayerRefAst::DefendingPlayer) {
+                ResolvingPlayer::DefendingPlayer
+            } else {
+                ResolvingPlayer::UniqueRelatedPlayer
+            };
+            let rc = ResolutionCondition {
+                left: ValueExpr::count_player_battlefield(rp, obj),
+                comparison: lower_comparison(*op),
+                right: ValueExpr::literal(i64::from(*value)),
+            };
+            rc.is_trigger_world_evaluable()
+                .then(|| TriggerCondition::Eval(Box::new(rc)))
         }
         ConditionAst::GraveyardCount {
             player: PlayerRefAst::You,
@@ -4501,6 +6036,9 @@ fn try_lower_specialized_trigger_condition(
             Some(TriggerCondition::SourceMatches(Box::new(
                 ObjectFilter::any().with_keyword(kw),
             )))
+        }
+        ConditionAst::Marker(GameMarker::NotManaAbility) => {
+            Some(TriggerCondition::TriggeringAbilityNotMana)
         }
         ConditionAst::Marker(GameMarker::DescendedThisTurn) => {
             Some(TriggerCondition::DescendedThisTurn)

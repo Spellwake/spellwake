@@ -74,7 +74,7 @@ impl ResolutionCondition {
     }
 
     /// Validate that both sides are purely world-evaluable and reference only known creature types.
-    pub(crate) fn validate_world(
+    pub fn validate_world(
         &self,
         vocabulary: &spellwake_contracts::creature_types::CreatureTypeVocabulary,
     ) -> Result<(), DefinitionError> {
@@ -114,6 +114,7 @@ pub(super) struct FlowFacts {
     pub definitely_sacrificed: bool,
     pub definitely_selected_graveyard_exile: bool,
     pub returned_graveyard_target: bool,
+    pub defined_resolution_x: bool,
 }
 impl FlowFacts {
     pub fn merge_into(&self, destination: &mut Option<Self>) {
@@ -136,7 +137,8 @@ impl FlowFacts {
             previous.definitely_selected_graveyard_exile &=
                 self.definitely_selected_graveyard_exile;
             previous.definitely_exiled_milled &= self.definitely_exiled_milled;
-            previous.returned_graveyard_target &= self.returned_graveyard_target;
+            previous.returned_graveyard_target |= self.returned_graveyard_target;
+            previous.defined_resolution_x &= self.defined_resolution_x;
         } else {
             *destination = Some(self.clone());
         }
