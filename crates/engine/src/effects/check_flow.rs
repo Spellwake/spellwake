@@ -225,12 +225,48 @@ impl EffectWindow {
                 && emblem.definition
                     == crate::emblem::EmblemDefinition::UnlimitedHandWithGraveyardReturn
         });
-        let no_limit = emblem || self.evaluated_characteristics()?.objects.values().any(|object| {
-            object.zone == ObjectZone::Battlefield && object.controller == Some(active)
-                && matches!(&object.printed_text.continuous,
-                    Some(crate::characteristics::StaticContinuousAbility::DrawRule { id, rule: crate::characteristics::StaticDrawRule::NoMaximumHandSize })
-                        if object.abilities.continuous == Some(*id))
+        let temp_no_limit = self.temporary_rules.iter().any(|rule_entry| {
+            matches!(
+                &rule_entry.rule,
+                crate::program::TemporaryRuleKind::TemporaryStatic(ability)
+                    if match ability.as_ref() {
+                        crate::characteristics::StaticContinuousAbility::DrawRule {
+                            rule: crate::characteristics::StaticDrawRule::NoMaximumHandSize,
+                            ..
+                        } => rule_entry.controller == active,
+                        crate::characteristics::StaticContinuousAbility::DrawRule {
+                            rule: crate::characteristics::StaticDrawRule::AllPlayersNoMaximumHandSize,
+                            ..
+                        } => true,
+                        _ => false,
+                    }
+            )
         });
+        let no_limit = emblem
+            || temp_no_limit
+            || self
+                .characteristics
+                .no_max_hand_size_players
+                .contains(&active)
+            || self
+                .evaluated_characteristics()?
+                .objects
+                .values()
+                .any(|object| {
+                    object.zone == ObjectZone::Battlefield
+                    && object.has_battlefield_rule(|rule| match rule {
+                        crate::characteristics::StaticContinuousAbility::DrawRule {
+                            rule: crate::characteristics::StaticDrawRule::NoMaximumHandSize,
+                            ..
+                        } => object.controller == Some(active),
+                        crate::characteristics::StaticContinuousAbility::DrawRule {
+                            rule:
+                                crate::characteristics::StaticDrawRule::AllPlayersNoMaximumHandSize,
+                            ..
+                        } => true,
+                        _ => false,
+                    })
+                });
         Ok(if no_limit { 0 } else { excess })
     }
     fn cleanup_hand(&self) -> Vec<ObjectId> {
@@ -615,13 +651,18 @@ impl EffectWindow {
             .effects()
             .any(|effect| effect.duration.expires_at_cleanup(active, number));
         self.floating_mana.end_turn_effects();
+        self.damage_state.prevention_disallowed_this_turn = false;
         self.damage_state.turn_preventions.clear();
         self.damage_state.expire_reflecting_shields();
         self.flash_through_cleanup.clear();
         self.granted_flashback.clear();
         self.creatures_required_to_attack.clear();
         self.damage_exile_until_cleanup.clear();
+        self.temporary_rules
+            .retain(|rule| !rule.duration.expires_at_cleanup(active, number));
         self.triggers.expire_end_of_turn_watches();
+        self.triggers
+            .expire_delayed_event_triggers_at_cleanup(active, number);
         self.regeneration_shields.clear();
         if !expiring && marks_removed.is_empty() && self.characteristics.saddled.is_empty() {
             self.damage.clear();
@@ -905,9 +946,23 @@ impl EffectWindow {
         spec: &crate::program::TriggeredModes,
         controller: SeatId,
         source: Option<&crate::occurrence::SupportedAppearance>,
+        ability_id: Option<crate::program::TriggeredAbilityId>,
     ) -> Result<crate::occurrence::TriggerModesChoice, EffectError> {
+        let excluded_modes: Option<&BTreeSet<u8>> = match (spec.uniqueness, source, ability_id) {
+            (crate::program::ModalUniqueness::OncePerTurn, Some(src), Some(id)) => {
+                self.chosen_modal_modes_turn.get(&(src.object.id(), id))
+            }
+            (crate::program::ModalUniqueness::OncePerGame, Some(src), Some(id)) => {
+                self.chosen_modal_modes_ever.get(&(src.object.id(), id))
+            }
+            _ => None,
+        };
         let mut modes = Vec::new();
         for (index, body) in spec.options.iter().enumerate() {
+            let mode_idx = u8::try_from(index).map_err(|_| EffectError::InconsistentProgram)?;
+            if excluded_modes.is_some_and(|used| used.contains(&mode_idx)) {
+                continue;
+            }
             let target_required = body.target != BodyTarget::None;
             let bounds = body.permanent_target_bounds();
             let targets = if target_required {
@@ -917,7 +972,7 @@ impl EffectWindow {
             };
             if !target_required || targets.len() >= bounds.map_or(1, |(minimum, _)| minimum) {
                 modes.push(crate::occurrence::TriggerModeOption {
-                    index: u8::try_from(index).map_err(|_| EffectError::InconsistentProgram)?,
+                    index: mode_idx,
                     multiple: bounds
                         .map(|(minimum, maximum)| (minimum, maximum.min(targets.len()))),
                     target_required,
@@ -925,13 +980,17 @@ impl EffectWindow {
                 });
             }
         }
-        let maximum = spec
-            .maximum
-            .min(u8::try_from(modes.len()).map_err(|_| EffectError::InconsistentProgram)?);
+        let maximum = if spec.allow_repeat {
+            if modes.is_empty() { 0 } else { spec.maximum }
+        } else {
+            spec.maximum
+                .min(u8::try_from(modes.len()).map_err(|_| EffectError::InconsistentProgram)?)
+        };
         Ok(crate::occurrence::TriggerModesChoice {
             minimum: spec.minimum,
             maximum,
             distinct_targets: spec.distinct_targets,
+            allow_repeat: spec.allow_repeat,
             modes,
         })
     }
@@ -952,9 +1011,14 @@ impl EffectWindow {
         let (body, source) = self
             .waiting_target_body(placement.instance)
             .ok_or(EffectError::InconsistentProgram)?;
+        let ability_id = self
+            .triggers
+            .waiting()
+            .get(&placement.instance)
+            .map(|waiting| waiting.definition);
         let modal = body
             .triggered_modes()
-            .map(|spec| self.trigger_modes_domain(spec, placement.controller, source))
+            .map(|spec| self.trigger_modes_domain(spec, placement.controller, source, ability_id))
             .transpose()?;
         let domain = if modal.is_some() {
             Vec::new()
@@ -1169,11 +1233,13 @@ impl EffectWindow {
         {
             return Err(EffectError::IllegalTarget);
         }
-        let (body, selected, choices) = self.compose_modes(
+        let (body, selected, choices) = self.compose_modes_with_wrap(
             &bodies,
             modes,
             (usize::from(modal.minimum), usize::from(modal.maximum)),
-            false,
+            spec.allow_repeat,
+            spec.prefix.as_deref(),
+            spec.suffix.as_deref(),
             |index, _, target| {
                 modal
                     .modes
@@ -1197,6 +1263,20 @@ impl EffectWindow {
             .ok_or(EffectError::InconsistentProgram)?;
         let mut next = self.clone();
         next.revision = revision;
+        if spec.uniqueness != crate::program::ModalUniqueness::None
+            && let Some(waiting) = self.triggers.waiting().get(&placement.instance)
+        {
+            let key = (waiting.source.object.id(), waiting.definition);
+            let map = match spec.uniqueness {
+                crate::program::ModalUniqueness::OncePerTurn => &mut next.chosen_modal_modes_turn,
+                crate::program::ModalUniqueness::OncePerGame => &mut next.chosen_modal_modes_ever,
+                crate::program::ModalUniqueness::None => unreachable!(),
+            };
+            let used = map.entry(key).or_default();
+            for choice in modes {
+                used.insert(choice.mode);
+            }
+        }
         let has_targets = !choices.is_empty();
         if has_targets {
             let clauses = selected
@@ -1268,6 +1348,9 @@ impl EffectWindow {
                     DelayedCopyAction::Sacrifice(objects) => {
                         vec![Instruction::SacrificeDelayedObjects(objects.clone())]
                     }
+                    DelayedCopyAction::Exile(objects) => {
+                        vec![Instruction::ExileDelayedObjects(objects.clone())]
+                    }
                     DelayedCopyAction::SpellTwice(..) => vec![Instruction::CopyOnCast(
                         crate::program::CastCopyKeyword::CopyObservedSpell,
                     )],
@@ -1305,8 +1388,17 @@ impl EffectWindow {
                     .records
                     .push(RulesRecord::TriggerRemoved { placement, reason });
             } else {
-                self.payloads
-                    .insert(placement.entry, StackPayload::from_body(waiting.body, None));
+                let (body, chosen_modes) = if let Some((b, modes)) = selected {
+                    (b, modes)
+                } else {
+                    (waiting.body, Vec::new())
+                };
+                let mut payload = StackPayload::from_body(body, None);
+                if let StackPayload::Instructions(p) = &mut payload {
+                    p.modes = chosen_modes;
+                    p.bindings.trigger = waiting.trigger;
+                }
+                self.payloads.insert(placement.entry, payload);
                 append.records.push(RulesRecord::TriggerPlaced(placement));
             }
         } else if let Some((_, beneficiary)) = self.triggers.take_monarch(placement.instance) {
@@ -1387,17 +1479,18 @@ impl EffectWindow {
             append
                 .records
                 .push(RulesRecord::TriggerPlacementStarted(placement.clone()));
-            if waiting.body.target == BodyTarget::None {
+            if waiting.body.triggered_modes().is_none() && waiting.body.target == BodyTarget::None {
                 return self.finish_trigger_placement(placement, None, append);
             }
-            if self
-                .trigger_target_domain(&waiting.body, waiting.controller, None)?
-                .len()
-                < waiting
-                    .body
-                    .permanent_target_bounds()
-                    .or_else(|| waiting.body.ordered_any_target_bounds())
-                    .map_or(1, |(min, _)| min)
+            if waiting.body.triggered_modes().is_none()
+                && self
+                    .trigger_target_domain(&waiting.body, waiting.controller, None)?
+                    .len()
+                    < waiting
+                        .body
+                        .permanent_target_bounds()
+                        .or_else(|| waiting.body.ordered_any_target_bounds())
+                        .map_or(1, |(min, _)| min)
             {
                 self.window = self
                     .window
@@ -1499,8 +1592,12 @@ impl EffectWindow {
             .get(&instance)
             .ok_or(EffectError::InconsistentProgram)?;
         let has_legal_choice = if let Some(spec) = waiting.body.triggered_modes() {
-            let domain =
-                self.trigger_modes_domain(spec, placement.controller, Some(&waiting.source))?;
+            let domain = self.trigger_modes_domain(
+                spec,
+                placement.controller,
+                Some(&waiting.source),
+                Some(waiting.definition),
+            )?;
             domain.maximum >= domain.minimum
         } else if waiting.body.target == BodyTarget::None {
             return self.finish_trigger_placement(placement, None, append);
@@ -1710,6 +1807,40 @@ impl EffectWindow {
                 detach.insert(id);
             }
         }
+        // CR 704.5y: If a permanent has more than one Role controlled by the same player
+        // attached to it, each of those Roles except the one with the most recent timestamp
+        // is put into its owner's graveyard.
+        let mut roles_by_controller_host: BTreeMap<(SeatId, TargetRef), Vec<ObjectId>> =
+            BTreeMap::new();
+        for (&id, object) in &current.objects {
+            if object.zone == ObjectZone::Battlefield
+                && object.has_type(CardType::Enchantment)
+                && object
+                    .current_enchantment_subtypes
+                    .contains(&crate::program::EnchantmentSubtype::Role)
+                && let (Some(ctrl), Some(host)) = (object.controller, self.attached_to(id))
+            {
+                roles_by_controller_host
+                    .entry((ctrl, host))
+                    .or_default()
+                    .push(id);
+            }
+        }
+        for roles in roles_by_controller_host.values() {
+            if roles.len() > 1
+                && let Some(&newest) = roles.iter().max()
+            {
+                for &role_id in roles {
+                    if role_id != newest {
+                        dead.entry(role_id)
+                            .and_modify(|causes| causes.insert(StateBasedMoveReason::IllegalAura))
+                            .or_insert_with(|| {
+                                StateBasedMoveReasons::new(StateBasedMoveReason::IllegalAura)
+                            });
+                    }
+                }
+            }
+        }
         let mut losses = self.failed_draws.clone();
         losses.extend(self.life.nonpositive_players());
         losses.extend(self.commander_damage_losses().map(|(player, _)| player));
@@ -1785,7 +1916,10 @@ impl EffectWindow {
                 .window
                 .cards()
                 .iter()
-                .filter(|object| object.is_token() && object.zone() != ObjectZone::Battlefield)
+                .filter(|object| {
+                    (object.is_token() && object.zone() != ObjectZone::Battlefield)
+                        || (object.is_spell_copy() && object.zone() != ObjectZone::Stack)
+                })
                 .map(GameObject::id)
                 .collect(),
             losses,

@@ -33,9 +33,20 @@ impl EffectWindow {
                     && self.soulbond_allows_combat(current, &evaluated)
             })
             .collect();
-        let barred_blocks: BTreeSet<_> = evaluated.objects.values().filter(|p|p.zone == ObjectZone::Battlefield &&
-            p.abilities.attack_requirement == Some(crate::program::AttackRequirement::EnchantedCannotAttackOrBlockController))
-            .filter_map(|p|match p.attached_to {Some(TargetRef::Object(host))=>Some((host,p.controller?)),_=>None}).collect();
+        let barred_blocks: BTreeSet<_> = evaluated
+            .objects
+            .values()
+            .filter(|p| {
+                p.zone == ObjectZone::Battlefield
+                    && p.abilities.all_attack_requirements().any(|r| {
+                        r == crate::program::AttackRequirement::EnchantedCannotAttackOrBlockController
+                    })
+            })
+            .filter_map(|p| match p.attached_to {
+                Some(TargetRef::Object(host)) => Some((host, p.controller?)),
+                _ => None,
+            })
+            .collect();
         let mut choices: BTreeMap<_, Vec<_>> = BTreeMap::new();
         let mut attackers = Vec::new();
         let defending_creatures = evaluated
@@ -75,7 +86,10 @@ impl EffectWindow {
             }
             let max_one = attacker
                 .blocking_restrictions
-                .contains(&BlockingRestriction::AtMostOneBlocker);
+                .contains(&BlockingRestriction::AtMostOneBlocker)
+                || attacker
+                    .blocking_restrictions
+                    .contains(&BlockingRestriction::CannotBeBlockedByMoreThan(1));
             if max_one {
                 at_most_one_blocker.insert(id);
             }
@@ -110,8 +124,17 @@ impl EffectWindow {
             }
         }
         let additional = blockers.iter().filter_map(|blocker| {
+            let max_blocks = blocker.blocking_restrictions.iter().filter_map(|rule| match rule {
+                BlockingRestriction::CannotBlockMoreThan(n) => Some(usize::from(*n)),
+                _ => None,
+            }).min();
+            if let Some(0) = max_blocks {
+                return None;
+            }
             if blocker.blocking_restrictions.contains(&BlockingRestriction::CanBlockAnyNumber) {
-                return (!attackers.is_empty()).then_some((blocker.object, attackers.len()));
+                let raw = attackers.len();
+                let capped = max_blocks.map_or(raw, |m| raw.min(m.saturating_sub(1)));
+                return (capped > 0).then_some((blocker.object, capped));
             }
             let granted = blocker.blocking_restrictions.iter()
                 .filter(|rule| **rule == BlockingRestriction::AdditionalBlock).count();
@@ -119,9 +142,48 @@ impl EffectWindow {
                 && blocker.printed_text.continuous.iter().chain(&blocker.printed_text.additional_battlefield_abilities)
                     .any(|ability| matches!(ability, crate::characteristics::StaticContinuousAbility::Modifier { id, rule: crate::characteristics::StaticModifierRule::AdditionalBlockWhileMonarch }
                         if blocker.abilities.continuous == Some(*id) || blocker.abilities.additional_battlefield_abilities.contains(id)));
-            let count = granted + usize::from(monarch);
+            let raw = granted + usize::from(monarch);
+            let count = max_blocks.map_or(raw, |m| raw.min(m.saturating_sub(1)));
             (count > 0).then_some((blocker.object, count))
         }).collect();
+        let mut must_block = self.must_block_this_turn.clone();
+        let mut must_block_pairs: BTreeMap<(ObjectId, ObjectId), usize> = BTreeMap::new();
+        for &attacker_id in &attackers {
+            if let Some(attacker) = evaluated.get(attacker_id) {
+                let excluded = BTreeSet::new();
+                for rule in &attacker.blocking_restrictions {
+                    if let BlockingRestriction::MustBeBlockedByAllMatching(filter) = rule {
+                        for blocker in &blockers {
+                            if filter.matches_static_characteristics(blocker, &excluded, || {
+                                Some(blocker.defined.mana_value.clone())
+                            }) {
+                                *must_block_pairs
+                                    .entry((blocker.object, attacker_id))
+                                    .or_default() += 1;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        for blocker in &blockers {
+            if blocker
+                .blocking_restrictions
+                .contains(&crate::characteristics::BlockingRestriction::MustBlockEachCombatIfAble)
+            {
+                *must_block.entry(blocker.object).or_default() += 1;
+            }
+            for rule in &blocker.blocking_restrictions {
+                if let crate::characteristics::BlockingRestriction::MustBlockObject(attacker_id) =
+                    rule
+                    && attackers.contains(attacker_id)
+                {
+                    *must_block_pairs
+                        .entry((blocker.object, *attacker_id))
+                        .or_default() += 1;
+                }
+            }
+        }
         Ok(
             BlockersDecision::new(self.revision, actor, attackers, choices, minimums)
                 .chosen_by(combat.blocking_chooser.unwrap_or(actor))
@@ -129,10 +191,11 @@ impl EffectWindow {
                 .with_at_most_one_blocker(at_most_one_blocker)
                 .with_additional_blockers(additional)
                 .with_block_requirements(
-                    &self.must_block_this_turn,
+                    &must_block,
                     &self.must_be_blocked_this_turn,
                     require_at_least_one_block,
-                ),
+                )
+                .with_must_block_pairs(must_block_pairs),
         )
     }
 }
@@ -194,6 +257,7 @@ fn can_block(
         .iter()
         .any(|restriction| match restriction {
             BlockingRestriction::CannotBlock | BlockingRestriction::CannotAttackOrBlock => true,
+            BlockingRestriction::CannotBlockObject(id) => attacker.object == *id,
             BlockingRestriction::CanBlockOnlyFlying => !attacker.has_keyword(Flying),
             BlockingRestriction::CannotBlockSubtype(kind) => {
                 attacker.current_creature_subtypes.contains(kind)
@@ -201,6 +265,12 @@ fn can_block(
             BlockingRestriction::CannotBlockMatching(filter) => {
                 let excluded = BTreeSet::new();
                 filter.matches_static_characteristics(attacker, &excluded, || {
+                    Some(attacker.defined.mana_value.clone())
+                })
+            }
+            BlockingRestriction::CanBlockOnlyMatching(filter) => {
+                let excluded = BTreeSet::new();
+                !filter.matches_static_characteristics(attacker, &excluded, || {
                     Some(attacker.defined.mana_value.clone())
                 })
             }
@@ -214,6 +284,9 @@ fn can_block(
     }
     for restriction in &attacker.blocking_restrictions {
         match restriction {
+            BlockingRestriction::CannotBeBlockedByObject(id) if blocker.object == *id => {
+                return Ok(false);
+            }
             BlockingRestriction::CannotBeBlockedByToughnessAtLeast(minimum)
                 if blocker
                     .power_toughness
@@ -333,13 +406,29 @@ fn can_block(
                     return Ok(false);
                 }
             }
+            BlockingRestriction::CannotBeBlockedByGreaterPower => {
+                let blocker_pt = blocker
+                    .power_toughness
+                    .as_ref()
+                    .ok_or(CombatError::InvalidContext)?;
+                let attacker_pt = attacker
+                    .power_toughness
+                    .as_ref()
+                    .ok_or(CombatError::InvalidContext)?;
+                if blocker_pt.derived.power > attacker_pt.derived.power {
+                    return Ok(false);
+                }
+            }
             _ => {}
         }
     }
-    if attacker.protected_from_colors(&blocker.current_colors)
-        || attacker
-            .protected_from_subtypes(&blocker.current_creature_subtypes, blocker.is_creature())
-    {
+    if attacker.protected_from_source(
+        &blocker.current_colors,
+        &blocker.current_types,
+        &blocker.current_creature_subtypes,
+        blocker.is_creature(),
+        blocker.controller,
+    ) {
         return Ok(false);
     }
     if attacker.has_keyword(Flying) && !(blocker.has_keyword(Flying) || blocker.has_keyword(Reach))

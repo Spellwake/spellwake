@@ -118,6 +118,7 @@ const SELF_NOUNS: &[&str] = &[
     "phenomenon",
     "scheme",
     "conspiracy",
+    "emblem",
 ];
 
 /// Strip parenthetical reminder text and collapse repeated ASCII whitespace.
@@ -512,6 +513,24 @@ pub fn split_sentences(body: &str) -> Vec<&str> {
     for (idx, ch) in body.char_indices() {
         if ch == '"' {
             in_quotes = !in_quotes;
+            if !in_quotes
+                && idx > start
+                && body.as_bytes()[idx - 1] == b'.'
+                && body.get(idx + 1..).is_some_and(|rest| {
+                    rest.starts_with(char::is_whitespace)
+                        && rest
+                            .trim_start()
+                            .chars()
+                            .next()
+                            .is_some_and(|c| c.is_ascii_uppercase())
+                })
+            {
+                let part = body[start..=idx].trim();
+                if !part.is_empty() && part != "\"" {
+                    out.push(part);
+                }
+                start = idx + 1;
+            }
         } else if ch == '.' && !in_quotes {
             let part = body[start..idx].trim();
             if !part.is_empty() && part != "\"" {
@@ -772,12 +791,6 @@ pub fn is_physical_tabletop_clause(lower: &str) -> bool {
         "a shoe",
         "your shoe",
         "wearing a hat",
-        "has a hat",
-        "have a hat",
-        "hat sticker",
-        "a hat ",
-        "a hat.",
-        "a hat,",
         "wearing glasses",
         "person outside",
         "bystander",
@@ -798,5 +811,16 @@ pub fn is_physical_tabletop_clause(lower: &str) -> bool {
         "balance ~",
         "jumping jack",
     ];
-    MARKERS.iter().any(|m| lower.contains(m))
+    // Guard physical hat attire/art prompts so eternal-legal Unfinity sticker clauses
+    // (e.g. "... on that sticker") never trip the silver-border honor-system guard.
+    let mentions_physical_hat = !lower.contains("sticker")
+        && (lower == "a hat"
+            || lower.starts_with("a hat ")
+            || lower.starts_with("a hat.")
+            || lower.starts_with("a hat,")
+            || lower.ends_with(" a hat")
+            || lower.contains(" a hat ")
+            || lower.contains(" a hat.")
+            || lower.contains(" a hat,"));
+    mentions_physical_hat || MARKERS.iter().any(|m| lower.contains(m))
 }

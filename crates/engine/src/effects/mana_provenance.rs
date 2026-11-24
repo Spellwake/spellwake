@@ -9,12 +9,29 @@ struct Lot {
     source: Box<SupportedAppearance>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct ManaSourceTraitCounts {
+    pub(super) snow: RulesInteger,
+    pub(super) treasure: RulesInteger,
+    pub(super) creature: RulesInteger,
+}
+impl Default for ManaSourceTraitCounts {
+    fn default() -> Self {
+        Self {
+            snow: 0.into(),
+            treasure: 0.into(),
+            creature: 0.into(),
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub(super) struct ManaProvenance {
     pub(super) next_id: u64,
     lots: BTreeMap<u64, Lot>,
     commander_entries: BTreeMap<ObjectId, RulesInteger>,
     cast_spending: BTreeMap<StackEntryId, Vec<SpentManaLot>>,
+    pub(super) source_traits: BTreeMap<(SeatId, ManaType), ManaSourceTraitCounts>,
 }
 
 pub(super) type SpentManaLot = (ManaSpendEffect, Box<SupportedAppearance>, RulesInteger);
@@ -25,10 +42,18 @@ impl ManaProvenance {
             self.cast_spending.insert(entry, spent);
         }
     }
+    pub(super) fn end_combat_effects(&mut self) {
+        self.lots
+            .retain(|_, lot| lot.metadata.effect != ManaSpendEffect::RetainUntilEndOfCombat);
+    }
     pub(super) fn end_turn_effects(&mut self) {
         // These units become ordinary until the cleanup step ends.
-        self.lots
-            .retain(|_, lot| lot.metadata.effect != ManaSpendEffect::RetainUntilCleanup);
+        self.lots.retain(|_, lot| {
+            !matches!(
+                lot.metadata.effect,
+                ManaSpendEffect::RetainUntilCleanup | ManaSpendEffect::RetainUntilEndOfCombat
+            )
+        });
     }
 }
 
@@ -40,7 +65,10 @@ impl EffectWindow {
             if retained.contains(&key) {
                 return true;
             }
-            if lot.metadata.effect != ManaSpendEffect::RetainUntilCleanup {
+            if !matches!(
+                lot.metadata.effect,
+                ManaSpendEffect::RetainUntilCleanup | ManaSpendEffect::RetainUntilEndOfCombat
+            ) {
                 return false;
             }
             let total = retained_units
@@ -61,6 +89,85 @@ impl EffectWindow {
         });
         self.restricted_mana
             .retain(|(player, kind, _), _| retained.contains(&(*player, *kind)));
+        self.floating_mana.source_traits.retain(|key, counts| {
+            let Some(remaining) = self.mana.get(key) else {
+                return false;
+            };
+            counts.snow = counts.snow.clone().min(remaining.clone());
+            counts.treasure = counts.treasure.clone().min(remaining.clone());
+            counts.creature = counts.creature.clone().min(remaining.clone());
+            counts.snow.is_positive()
+                || counts.treasure.is_positive()
+                || counts.creature.is_positive()
+        });
+    }
+
+    pub(super) fn record_mana_source_traits(
+        &mut self,
+        owner: SeatId,
+        produced: &BTreeMap<ManaType, RulesInteger>,
+        is_snow: bool,
+        is_treasure: bool,
+        is_creature: bool,
+    ) {
+        if !is_snow && !is_treasure && !is_creature {
+            return;
+        }
+        for (&mana_type, amount) in produced.iter().filter(|(_, amount)| amount.is_positive()) {
+            let entry = self
+                .floating_mana
+                .source_traits
+                .entry((owner, mana_type))
+                .or_default();
+            if is_snow {
+                entry.snow = entry.snow.plus(amount);
+            }
+            if is_treasure {
+                entry.treasure = entry.treasure.plus(amount);
+            }
+            if is_creature {
+                entry.creature = entry.creature.plus(amount);
+            }
+        }
+    }
+
+    pub(super) fn consume_mana_source_traits(
+        &mut self,
+        player: SeatId,
+        spend: &[ManaSpend],
+    ) -> (RulesInteger, RulesInteger, RulesInteger) {
+        let mut snow = RulesInteger::from(0);
+        let mut treasure = RulesInteger::from(0);
+        let mut creature = RulesInteger::from(0);
+        for unit in spend.iter().filter(|u| u.amount.is_positive()) {
+            if let Some(entry) = self
+                .floating_mana
+                .source_traits
+                .get_mut(&(player, unit.mana_type))
+            {
+                let take_snow = entry.snow.clone().min(unit.amount.clone());
+                if take_snow.is_positive() {
+                    entry.snow = entry.snow.minus(&take_snow);
+                    snow = snow.plus(&take_snow);
+                }
+                let take_treasure = entry.treasure.clone().min(unit.amount.clone());
+                if take_treasure.is_positive() {
+                    entry.treasure = entry.treasure.minus(&take_treasure);
+                    treasure = treasure.plus(&take_treasure);
+                }
+                let take_creature = entry.creature.clone().min(unit.amount.clone());
+                if take_creature.is_positive() {
+                    entry.creature = entry.creature.minus(&take_creature);
+                    creature = creature.plus(&take_creature);
+                }
+            }
+        }
+        self.floating_mana.source_traits.retain(|_, counts| {
+            counts.snow.is_positive()
+                || counts.treasure.is_positive()
+                || counts.creature.is_positive()
+        });
+        (snow, treasure, creature)
     }
 
     /// Mana carrying additional effects. These units can pay any ordinary mana cost.

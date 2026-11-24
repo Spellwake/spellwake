@@ -61,6 +61,12 @@ pub enum ActivationRestriction {
     SourceIsTapped,
     /// Activate only if this permanent is untapped.
     SourceIsUntapped,
+    /// Activate only while this Class permanent is at exactly this level (CR 716.2a).
+    ClassLevelExact(u8),
+    /// Activate only while this Class permanent is at least this level (CR 716.2b).
+    MinClassLevel(u8),
+    /// Activate only while this Case permanent is solved (CR 719.3b).
+    SourceIsSolved,
     /// Activate only if your life total is at least this amount.
     ControllerLifeAtLeast(u16),
     /// Activate only if your life total is at most this amount.
@@ -151,9 +157,12 @@ impl ActivationRestriction {
             Self::ControlsMatching { filter, .. } | Self::SourceMatches(filter) => {
                 filter.validate_vocabulary(vocabulary)
             }
-            Self::Condition(cond) => {
-                cond.validate(crate::program::BodyContext::Unbound, vocabulary)
-            }
+            Self::Condition(cond) => cond.validate(
+                crate::program::BodyContext::Activated {
+                    named_counter_cost: false,
+                },
+                vocabulary,
+            ),
             Self::All(items) => {
                 if items.is_empty() {
                     return Err(crate::program::DefinitionError::InvalidInstruction);
@@ -892,6 +901,290 @@ impl ActivatedAbility {
         }
     }
 }
+/// Source zone for an exile cost atom.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CostExileZone {
+    Battlefield,
+    Graveyard,
+    Hand,
+}
+
+/// Additional non-mana cost paid atomically alongside an activated ability's `SourceCost`
+/// or as a mandatory additional cost to cast a spell.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ExtraActivationCost {
+    TapSource,
+    UntapSource,
+    SacrificeSource,
+    ExileSource {
+        from_graveyard: bool,
+        from_hand: bool,
+    },
+    ReturnSourceToHand,
+    DiscardSource,
+    ExertSource,
+    PayLife(LifeCostAmount),
+    PayHalfLife,
+    PayEnergy(u16),
+    PayEnergyExpr(crate::program::ValueExpr),
+    Mill(std::num::NonZeroU8),
+    SourceCounter {
+        kind: crate::effects::CounterKind,
+        delta: CounterCostDelta,
+    },
+    RemovePermanentCounters {
+        kind: Option<crate::effects::CounterKind>,
+        count: Option<std::num::NonZeroU8>,
+        all: bool,
+        filter: crate::program::ObjectFilter,
+    },
+    PutPermanentCounters {
+        kind: crate::effects::CounterKind,
+        count: std::num::NonZeroU8,
+        filter: crate::program::ObjectFilter,
+    },
+    SacrificePermanent {
+        filter: crate::program::ObjectFilter,
+        count: Option<std::num::NonZeroU8>,
+    },
+    TapPermanent {
+        filter: crate::program::ObjectFilter,
+        count: Option<std::num::NonZeroU8>,
+        exclude_source: bool,
+    },
+    UntapPermanent {
+        filter: crate::program::ObjectFilter,
+        count: std::num::NonZeroU8,
+        exclude_source: bool,
+    },
+    BouncePermanent {
+        filter: crate::program::ObjectFilter,
+        count: std::num::NonZeroU8,
+        exclude_source: bool,
+    },
+    DiscardCards {
+        filter: crate::program::ObjectFilter,
+        count: Option<std::num::NonZeroU8>,
+        whole_hand: bool,
+        random: bool,
+    },
+    RevealHand {
+        filter: crate::program::ObjectFilter,
+        count: std::num::NonZeroU8,
+        allow_controlled: bool,
+    },
+    ExileObjects {
+        zone: CostExileZone,
+        filter: crate::program::ObjectFilter,
+        count: Option<std::num::NonZeroU8>,
+        exclude_source: bool,
+    },
+    CollectEvidence(u16),
+    Forage,
+    Waterbend(ManaCost),
+    Blight(std::num::NonZeroU8),
+    ProcessExiledCard,
+    Unattach {
+        self_source: bool,
+    },
+    PayMana(ManaCost),
+    Either(Box<ExtraActivationCost>, Box<ExtraActivationCost>),
+}
+
+impl ExtraActivationCost {
+    /// Validate vocabulary references and structural invariants for this cost atom.
+    pub(crate) fn validate(
+        &self,
+        vocabulary: &spellwake_contracts::creature_types::CreatureTypeVocabulary,
+    ) -> Result<(), crate::program::DefinitionError> {
+        match self {
+            Self::SourceCounter { kind, .. } | Self::PutPermanentCounters { kind, .. } => {
+                if !kind.is_permanent() {
+                    return Err(crate::program::DefinitionError::InvalidInstruction);
+                }
+                if let Self::PutPermanentCounters { filter, .. } = self {
+                    filter.validate_vocabulary(vocabulary)?;
+                }
+                Ok(())
+            }
+            Self::RemovePermanentCounters { kind, filter, .. } => {
+                if let Some(k) = kind
+                    && !k.is_permanent()
+                {
+                    return Err(crate::program::DefinitionError::InvalidInstruction);
+                }
+                filter.validate_vocabulary(vocabulary)
+            }
+            Self::DiscardCards { filter, .. } => filter.validate_vocabulary(vocabulary),
+            Self::SacrificePermanent { filter, .. }
+            | Self::TapPermanent { filter, .. }
+            | Self::UntapPermanent { filter, .. }
+            | Self::BouncePermanent { filter, .. }
+            | Self::RevealHand { filter, .. }
+            | Self::ExileObjects { filter, .. } => filter.validate_vocabulary(vocabulary),
+            Self::PayEnergyExpr(expr) => expr.validate_world_condition(vocabulary),
+            Self::Waterbend(cost) | Self::PayMana(cost) => {
+                if cost.valid() {
+                    Ok(())
+                } else {
+                    Err(crate::program::DefinitionError::CastingCost)
+                }
+            }
+            Self::Either(a, b) => {
+                a.validate(vocabulary)?;
+                b.validate(vocabulary)
+            }
+            Self::TapSource
+            | Self::UntapSource
+            | Self::SacrificeSource
+            | Self::ExileSource { .. }
+            | Self::ReturnSourceToHand
+            | Self::DiscardSource
+            | Self::ExertSource
+            | Self::PayLife(_)
+            | Self::PayHalfLife
+            | Self::PayEnergy(_)
+            | Self::Mill(_)
+            | Self::CollectEvidence(_)
+            | Self::Forage
+            | Self::Blight(_)
+            | Self::ProcessExiledCard
+            | Self::Unattach { .. } => Ok(()),
+        }
+    }
+
+    /// Rewrite printed creature-type words when a text-changing effect applies.
+    pub(crate) fn rewrite_creature_type(
+        &mut self,
+        from: spellwake_contracts::creature_types::CreatureTypeId,
+        to: spellwake_contracts::creature_types::CreatureTypeId,
+    ) {
+        match self {
+            Self::RemovePermanentCounters { filter, .. }
+            | Self::PutPermanentCounters { filter, .. }
+            | Self::SacrificePermanent { filter, .. }
+            | Self::TapPermanent { filter, .. }
+            | Self::UntapPermanent { filter, .. }
+            | Self::BouncePermanent { filter, .. }
+            | Self::DiscardCards { filter, .. }
+            | Self::RevealHand { filter, .. }
+            | Self::ExileObjects { filter, .. } => filter.rewrite_creature_type(from, to),
+            Self::PayEnergyExpr(expr) => expr.rewrite_creature_type(from, to),
+            Self::Either(a, b) => {
+                a.rewrite_creature_type(from, to);
+                b.rewrite_creature_type(from, to);
+            }
+            _ => {}
+        }
+    }
+
+    /// Whether this cost atom taps the ability source itself.
+    #[must_use]
+    pub fn taps_source(&self) -> bool {
+        matches!(self, Self::TapSource)
+    }
+
+    /// Whether this cost atom untaps the ability source itself.
+    #[must_use]
+    pub fn untaps_source(&self) -> bool {
+        matches!(self, Self::UntapSource)
+    }
+
+    /// Whether this cost atom requires activating from the graveyard.
+    #[must_use]
+    pub fn is_from_graveyard(&self) -> bool {
+        matches!(
+            self,
+            Self::ExileSource {
+                from_graveyard: true,
+                ..
+            }
+        )
+    }
+
+    /// Whether this cost atom requires activating from hand.
+    #[must_use]
+    pub fn is_from_hand(&self) -> bool {
+        matches!(
+            self,
+            Self::DiscardSource
+                | Self::ExileSource {
+                    from_hand: true,
+                    ..
+                }
+        )
+    }
+
+    /// Whether this cost atom requires caller-supplied selected objects.
+    #[must_use]
+    pub fn uses_selected_objects(&self) -> bool {
+        match self {
+            Self::RemovePermanentCounters { .. }
+            | Self::PutPermanentCounters { .. }
+            | Self::SacrificePermanent { .. }
+            | Self::TapPermanent { .. }
+            | Self::UntapPermanent { .. }
+            | Self::BouncePermanent { .. }
+            | Self::DiscardCards {
+                whole_hand: false,
+                random: false,
+                ..
+            }
+            | Self::RevealHand { .. }
+            | Self::ExileObjects { .. }
+            | Self::CollectEvidence(_)
+            | Self::Forage
+            | Self::Waterbend(_)
+            | Self::Blight(_)
+            | Self::ProcessExiledCard
+            | Self::Unattach { self_source: false } => true,
+            Self::Either(a, b) => a.uses_selected_objects() || b.uses_selected_objects(),
+            Self::TapSource
+            | Self::UntapSource
+            | Self::SacrificeSource
+            | Self::ExileSource { .. }
+            | Self::ReturnSourceToHand
+            | Self::DiscardSource
+            | Self::ExertSource
+            | Self::PayLife(_)
+            | Self::PayHalfLife
+            | Self::PayEnergy(_)
+            | Self::PayEnergyExpr(_)
+            | Self::PayMana(_)
+            | Self::Mill(_)
+            | Self::SourceCounter { .. }
+            | Self::DiscardCards {
+                whole_hand: true, ..
+            }
+            | Self::DiscardCards { random: true, .. }
+            | Self::Unattach { self_source: true } => false,
+        }
+    }
+
+    /// Whether this cost atom introduces a variable X selection.
+    #[must_use]
+    pub fn uses_chosen_x(&self) -> bool {
+        match self {
+            Self::RemovePermanentCounters {
+                count: None,
+                all: false,
+                ..
+            }
+            | Self::SacrificePermanent { count: None, .. }
+            | Self::TapPermanent { count: None, .. }
+            | Self::ExileObjects { count: None, .. }
+            | Self::DiscardCards {
+                count: None,
+                whole_hand: false,
+                ..
+            } => true,
+            Self::PayEnergyExpr(expr) => expr.is_chosen_x(),
+            Self::Either(a, b) => a.uses_chosen_x() || b.uses_chosen_x(),
+            _ => false,
+        }
+    }
+}
+
 /// Arguments shared by targeted battlefield abilities and cycling in hand.
 pub(crate) struct ActivationRequest {
     pub granting_effect: Option<crate::characteristics::EffectInstanceKey>,
@@ -912,6 +1205,7 @@ pub enum ActivationOrigin {
     Ninjutsu(ObjectId),
     Untargeted,
     Targeted(crate::targets::TargetRef),
+    Modal(Vec<crate::mana::CastMode>),
     Cycling,
     Transmute,
 }

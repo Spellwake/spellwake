@@ -362,6 +362,7 @@ pub struct BlockersDecision {
     additional_blockers: BTreeMap<ObjectId, usize>,
     block_requirements: BTreeMap<ObjectId, usize>,
     blocked_attacker_requirements: BTreeMap<ObjectId, usize>,
+    must_block_pairs: BTreeMap<(ObjectId, ObjectId), usize>,
     require_at_least_one_block: BTreeSet<ObjectId>,
     block_requirement_score: usize,
 }
@@ -390,6 +391,7 @@ impl BlockersDecision {
             additional_blockers: BTreeMap::new(),
             block_requirements: BTreeMap::new(),
             blocked_attacker_requirements: BTreeMap::new(),
+            must_block_pairs: BTreeMap::new(),
             require_at_least_one_block: BTreeSet::new(),
             block_requirement_score: 0,
             single_blocker: false,
@@ -440,6 +442,19 @@ impl BlockersDecision {
             })
             .collect();
         self.require_at_least_one_block = require_at_least_one_block;
+        self.block_requirement_score = self.maximum_block_requirement_score();
+        self
+    }
+    pub(crate) fn with_must_block_pairs(
+        mut self,
+        pairs: BTreeMap<(ObjectId, ObjectId), usize>,
+    ) -> Self {
+        self.must_block_pairs = pairs
+            .into_iter()
+            .filter(|((blocker, attacker), count)| {
+                *count > 0 && self.legal_attackers(*blocker).contains(attacker)
+            })
+            .collect();
         self.block_requirement_score = self.maximum_block_requirement_score();
         self
     }
@@ -532,7 +547,10 @@ impl BlockersDecision {
             .sum::<usize>()
             + selected
                 .iter()
-                .map(|row| self.blocked_attacker_requirement(row.attacker))
+                .map(|row| {
+                    self.blocked_attacker_requirement(row.attacker)
+                        + self.must_block_pair(row.blocker, row.attacker)
+                })
                 .sum::<usize>()
             + counts
                 .keys()

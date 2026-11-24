@@ -23,6 +23,8 @@ impl EffectWindow {
             .map(TargetRef::Object)
             .unwrap_or(choice.target);
         let before = self.rules_snapshot(None)?;
+        // Function-local transient cut enum; consumed immediately without heap storage.
+        #[allow(clippy::large_enum_variant)]
         enum InstructionCut {
             Ready(RulesOccurrence),
             Exit {
@@ -128,6 +130,8 @@ impl EffectWindow {
             | Instruction::AdditionalCombat { .. }
             | Instruction::AdditionalCombatAfterUntappingAttackers
             | Instruction::TakeExtraTurn
+            | Instruction::DisallowDamagePreventionThisTurn
+            | Instruction::GrantNoMaxHandSizeRestOfGame
             | Instruction::PreventDamageThisTurn(_)
             | Instruction::MoveGroup { .. }
             | Instruction::PutTargetInLibrary(_)
@@ -191,6 +195,9 @@ impl EffectWindow {
             | Instruction::ClearSourceCounters(_)
             | Instruction::TransformSource
             | Instruction::TransformSourceAndAttachToTarget
+            | Instruction::AdvanceClassLevel(_)
+            | Instruction::SolveSourceCase
+            | Instruction::BecomePreparedSource
             | Instruction::TransformSubtype(_)
             | Instruction::UntapAbilitySource
             | Instruction::TapAbilitySource
@@ -231,6 +238,69 @@ impl EffectWindow {
             | Instruction::AddPlayerCounter { .. }
             | Instruction::ExileTopPlay { .. }
             | Instruction::LookTopChoose { .. }
+            | Instruction::MoveSubject { .. }
+            | Instruction::SelectZoneCardsToZone { .. }
+            | Instruction::ChooseOption { .. }
+            | Instruction::DealDamageFrom { .. }
+            | Instruction::DivideDamageAmongTargets { .. }
+            | Instruction::GainControlOfPermanent { .. }
+            | Instruction::GiveFixedTargetControl { .. }
+            | Instruction::BecomeCopy { .. }
+            | Instruction::BecomeCopyFixedTargets { .. }
+            | Instruction::DoublePowerToughnessSubject { .. }
+            | Instruction::DoubleCountersOnSubject { .. }
+            | Instruction::ShuffleSubjectIntoLibrary { .. }
+            | Instruction::WinGame(_)
+            | Instruction::LoseGame(_)
+            | Instruction::DistributeCountersAmongTargets { .. }
+            | Instruction::RollDie { .. }
+            | Instruction::FlipCoins { .. }
+            | Instruction::ChooseValue { .. }
+            | Instruction::ChooseOptionForPlayers { .. }
+            | Instruction::Vote { .. }
+            | Instruction::Incubate { .. }
+            | Instruction::Connive { .. }
+            | Instruction::ConniveFinalize { .. }
+            | Instruction::Discover { .. }
+            | Instruction::Clash { .. }
+            | Instruction::RingTemptsYou
+            | Instruction::VentureIntoDungeon { .. }
+            | Instruction::TakeInitiative { .. }
+            | Instruction::UnlockDoor { .. }
+            | Instruction::Behold { .. }
+            | Instruction::ManifestDread
+            | Instruction::Monstrosity { .. }
+            | Instruction::Fight { .. }
+            | Instruction::Exchange(_)
+            | Instruction::CopyStackObject { .. }
+            | Instruction::ExileGroupFromZone { .. }
+            | Instruction::SacrificeSubject { .. }
+            | Instruction::DestroyChosen { .. }
+            | Instruction::CastLinkedFaceDownFree
+            | Instruction::Ripple(_)
+            | Instruction::Demonstrate
+            | Instruction::Enlist
+            | Instruction::AttachPermanent { .. }
+            | Instruction::SkipNextUntap { .. }
+            | Instruction::RequireCombatAction { .. }
+            | Instruction::CreateTemporaryRule { .. }
+            | Instruction::DestroySubject { .. }
+            | Instruction::GrantCardPlayPermission { .. }
+            | Instruction::CreateTokenCopy { .. }
+            | Instruction::CreateAuraTokenAttached { .. }
+            | Instruction::ExploreSubject(_)
+            | Instruction::ScheduleDelayedEventTrigger { .. }
+            | Instruction::MoveGraveyardGroup { .. }
+            | Instruction::PutHandPermanentFiltered { .. }
+            | Instruction::RepeatLoop { .. }
+            | Instruction::OfferDynamicManaPayment { .. }
+            | Instruction::PayLife { .. }
+            | Instruction::PayEnergy { .. }
+            | Instruction::ExileFromZone { .. }
+            | Instruction::TapOrUntapControlled { .. }
+            | Instruction::ExertAbilitySource
+            | Instruction::CollectEvidence { .. }
+            | Instruction::Blight { .. }
             | Instruction::RevealUntilMatch { .. }
             | Instruction::ControlManaSourceThroughNextTurn
             | Instruction::GrantControllerFlashUntilCleanup
@@ -378,6 +448,7 @@ impl EffectWindow {
             | Instruction::BoostSourceByCastManaValue
             | Instruction::BoostLoneAttacker
             | Instruction::DrawTargetPlayer { .. }
+            | Instruction::DrawPlayer { .. }
             | Instruction::DrawHighestEntrantController
             | Instruction::DrawRelatedPlayer
             | Instruction::DrawCombatDamageSourceController
@@ -404,6 +475,8 @@ impl EffectWindow {
             | Instruction::CopyOtherTargetAsArtifact
             | Instruction::FixedTargetClause(_)
             | Instruction::ExileResolvingSpell
+            | Instruction::ReturnResolvingSpellToHand
+            | Instruction::Ascend
             | Instruction::DestroyFixedTargets
             | Instruction::DestroyTargetAndAttachedEquipment
             | Instruction::ReturnFixedTargets
@@ -492,6 +565,7 @@ impl EffectWindow {
                     source,
                     keywords: traits.keywords.clone(),
                     creature_types: traits.creature_subtypes.clone(),
+                    card_types: traits.card_types.clone(),
                     is_creature: traits.card_types.contains(&CardType::Creature),
                     target,
                 };
@@ -594,10 +668,44 @@ impl EffectWindow {
                     .ok_or(EffectError::WrongResolutionFrame)?
                     .results
                     .countered_spell_controller = Some((countered, controller));
+                let temp_exile_countered = self.temporary_rules.iter().any(|active| {
+                    let crate::program::TemporaryRuleKind::ExileSpellOnResolve { filter, .. } =
+                        &active.rule
+                    else {
+                        return false;
+                    };
+                    if !active.resolved_players.contains(&controller) {
+                        return false;
+                    }
+                    match filter {
+                        None => true,
+                        Some(f) => match self
+                            .window
+                            .entries()
+                            .iter()
+                            .find(|spell| spell.id() == countered)
+                            .map(|spell| spell.kind())
+                        {
+                            Some(StackKind::CardSpell(obj)) => {
+                                before.view().evaluated.get(*obj).is_some_and(|view| {
+                                    self.matches_object_filter(
+                                        *f,
+                                        view,
+                                        active.controller,
+                                        active.source_object,
+                                        &BTreeSet::new(),
+                                        &before.view().evaluated,
+                                    )
+                                })
+                            }
+                            _ => true,
+                        },
+                    }
+                });
                 let (window, exit) = self.window.record_targeted_resolution_move_with_exit(
                     self.window.revision(),
                     choice.id,
-                    if instruction == Instruction::CounterSpellToExile {
+                    if instruction == Instruction::CounterSpellToExile || temp_exile_countered {
                         ObjectDestination::Exile
                     } else {
                         ObjectDestination::Graveyard
@@ -820,45 +928,29 @@ impl EffectWindow {
                     return Ok(());
                 };
                 let owner = card.owner();
-                let duration = match duration {
-                    crate::characteristics::ResolvedDuration::WhileControllingAbilitySource => {
-                        let (StackKind::ActivatedAbility { source }
-                        | StackKind::TriggeredAbility { source }) = entry.kind()
-                        else {
-                            return Err(EffectError::InconsistentProgram);
-                        };
-                        let source = source.id();
-                        let controller = entry.controller();
-                        let Some(epoch) = self
-                            .window
-                            .cards()
-                            .get(source)
-                            .filter(|card| {
-                                card.zone() == ObjectZone::Battlefield
-                                    && card.controller() == Some(controller)
-                            })
-                            .and_then(GameObject::control_epoch)
-                        else {
-                            return Ok(());
-                        };
-                        crate::characteristics::ResolvedDuration::WhileSourceControlled {
-                            source,
-                            controller,
-                            epoch,
-                        }
-                    }
-                    value => value,
+                let Some(duration) = self.resolve_duration(&entry, duration)? else {
+                    return Ok(());
                 };
                 let locals = self
                     .resolution_state()
                     .ok_or(EffectError::WrongResolutionFrame)?
                     .locals()
                     .clone();
-                let parts =
-                    parts.materialize_with_eval(&locals, entry.controller(), owner, |expr| {
+                let source_object = match entry.kind() {
+                    StackKind::ActivatedAbility { source }
+                    | StackKind::TriggeredAbility { source } => Some(source.id()),
+                    _ => None,
+                };
+                let parts = parts.materialize_with_source_and_eval(
+                    &locals,
+                    entry.controller(),
+                    owner,
+                    source_object,
+                    |expr| {
                         self.resolve_value_expr(entry.controller(), expr)
                             .map_err(|_| crate::characteristics::CharacteristicInvariantError::NoEligibleComponent)
-                    })?;
+                    },
+                )?;
                 InstructionCut::Continuous(self.characteristics.add_effect(
                     entry.id(),
                     target,
@@ -1164,6 +1256,15 @@ impl EffectWindow {
                     }
                     _ => (ObjectDestination::Hand, ZoneReason::ReturnToOwnersHand),
                 };
+                if let TargetRef::Object(object) = target
+                    && let Some(lki) = self.capture_target_lki(object, &before.view().evaluated)
+                {
+                    self.resolution_cursor_mut()
+                        .ok_or(EffectError::WrongResolutionFrame)?
+                        .results
+                        .target_lki
+                        .insert(object, lki);
+                }
                 if instruction == Instruction::ExileTarget {
                     let TargetRef::Object(object) = target else {
                         return Err(EffectError::InconsistentProgram);

@@ -50,9 +50,13 @@ pub fn application(game: &GameState, effect: impl Into<DamageEffectId>) -> Damag
         | DamageEffectId::UntilEndOfTurn { .. }
         | DamageEffectId::ProtectionMulticolored
         | DamageEffectId::ProtectionSubtype(_)
+        | DamageEffectId::ProtectionFrom(_)
         | DamageEffectId::Protection(_)
         | DamageEffectId::Prevention(_) => DamageScope::Recipient(component.attempt().target),
-        DamageEffectId::Multiplier(_) => DamageScope::Component(component.attempt().id),
+        DamageEffectId::Multiplier(_)
+        | DamageEffectId::StaticModify(_, _)
+        | DamageEffectId::TemporaryStaticModify(_)
+        | DamageEffectId::TemporaryPrevention(_) => DamageScope::Component(component.attempt().id),
     };
     DamageApplication { effect, scope }
 }

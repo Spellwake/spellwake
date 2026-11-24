@@ -329,6 +329,8 @@ pub enum SubtypeFilter {
     Artifact(ArtifactSubtype),
     /// Object has this enchantment subtype (for example Saga, Curse).
     Enchantment(EnchantmentSubtype),
+    /// Object has this spell subtype (for example Arcane, Lesson, Adventure, Trap, Omen).
+    Spell(super::SpellSubtype),
     /// Object is an Aura enchantment.
     Aura,
 }
@@ -356,6 +358,7 @@ impl SubtypeFilter {
             | Self::NotLand(_)
             | Self::Artifact(_)
             | Self::Enchantment(_)
+            | Self::Spell(_)
             | Self::Aura => {}
         }
     }
@@ -388,7 +391,8 @@ impl SubtypeFilter {
             | Self::NotLand(_)
             | Self::Artifact(_)
             | Self::Enchantment(_)
-            | Self::Aura => Ok(()),
+            | Self::Aura
+            | Self::Spell(_) => Ok(()),
         }
     }
 }
@@ -410,8 +414,52 @@ pub enum ControllerFilter {
     OwnerOpponent,
     /// Controlled by the related player captured by a trigger (bound at trigger placement).
     RelatedPlayer,
+    /// Controlled by the targeted player of the resolving spell or ability.
+    TargetPlayer,
+    /// Controlled by the targeted opponent of the resolving spell or ability.
+    TargetOpponent,
     /// Controlled by this exact player.
     Player(SeatId),
+}
+
+/// Dynamic anchor for Copy-preserving stat comparisons on [`PowerFilter`], [`ToughnessFilter`],
+/// and [`ManaValueFilter`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DynamicStatAnchor {
+    ChosenX,
+    SourcePower,
+    SourceToughness,
+    SourceManaValue,
+    SourceCounters(crate::effects::CounterKind),
+    ControllerLife,
+    ControllerHandSize,
+    ControllerGraveyardCount,
+    ControllerControlledCount(CardType),
+    ControllerSubtypeCount(CreatureTypeId),
+    TriggerSubjectPower,
+    TriggerSubjectManaValue,
+}
+
+impl DynamicStatAnchor {
+    pub(crate) fn rewrite(&mut self, from: CreatureTypeId, to: CreatureTypeId) {
+        if let Self::ControllerSubtypeCount(kind) = self
+            && *kind == from
+        {
+            *kind = to;
+        }
+    }
+
+    pub(crate) fn validate_vocabulary(
+        self,
+        vocabulary: &CreatureTypeVocabulary,
+    ) -> Result<(), DefinitionError> {
+        if let Self::ControllerSubtypeCount(kind) = self
+            && vocabulary.label(kind).is_none()
+        {
+            return Err(DefinitionError::ForeignCreatureType);
+        }
+        Ok(())
+    }
 }
 
 /// Relation to the source of an activated or triggered ability.
@@ -448,6 +496,15 @@ pub enum PowerFilter {
     Equal(i16),
     /// Power is at most the announced X (bound at activation time).
     AtMostX,
+    /// Power equals the announced X (bound at cast/activation time).
+    EqualX,
+    /// Power is at least the announced X (bound at cast/activation time).
+    AtLeastX,
+    /// Power compared against a Copy-preserving dynamic world anchor.
+    CompareAnchor {
+        op: super::Comparison,
+        anchor: DynamicStatAnchor,
+    },
     /// Power is at most the number of creatures controlled by the acting player.
     AtMostControlledCreatureCount,
     /// Power OR toughness is at most `maximum`.
@@ -465,6 +522,17 @@ pub enum ToughnessFilter {
     AtMost(u16),
     /// Toughness equals `exact`.
     Equal(i16),
+    /// Toughness is at most the announced X.
+    AtMostX,
+    /// Toughness equals the announced X.
+    EqualX,
+    /// Toughness is at least the announced X.
+    AtLeastX,
+    /// Toughness compared against a Copy-preserving dynamic world anchor.
+    CompareAnchor {
+        op: super::Comparison,
+        anchor: DynamicStatAnchor,
+    },
 }
 
 /// Mana-value predicate on a permanent or card.
@@ -477,6 +545,15 @@ pub enum ManaValueFilter {
     Equal(u32),
     /// Mana value is at most the announced X (bound at cast/activation time).
     AtMostX,
+    /// Mana value equals the announced X (bound at cast/activation time).
+    EqualX,
+    /// Mana value is at least the announced X (bound at cast/activation time).
+    AtLeastX,
+    /// Mana value compared against a Copy-preserving dynamic world anchor.
+    CompareAnchor {
+        op: super::Comparison,
+        anchor: DynamicStatAnchor,
+    },
     Even,
     Odd,
 }
@@ -503,7 +580,7 @@ pub enum CombatFilter {
 
 /// Compact bitflags for less-frequent object predicates.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub struct ObjectFilterFlags(u16);
+pub struct ObjectFilterFlags(u32);
 
 impl ObjectFilterFlags {
     pub const EMPTY: Self = Self(0);
@@ -523,6 +600,14 @@ impl ObjectFilterFlags {
     pub const HISTORIC: Self = Self(1 << 12);
     /// Face-down permanent (morph, manifest, cloak, disguise, etc.).
     pub const FACE_DOWN: Self = Self(1 << 13);
+    /// Exiled with the ability source (imprint / linked exile / ability donor).
+    pub const EXILED_WITH_SELF: Self = Self(1 << 14);
+    /// Dealt damage by the ability source this turn.
+    pub const DEALT_DAMAGE_BY_SELF_THIS_TURN: Self = Self(1 << 15);
+    /// Put into a graveyard from the battlefield this turn.
+    pub const DIED_THIS_TURN: Self = Self(1 << 16);
+    /// Matches the color chosen as the ability source entered the battlefield.
+    pub const MATCHES_SOURCE_ENTRY_COLOR: Self = Self(1 << 17);
 
     #[must_use]
     pub const fn union(self, other: Self) -> Self {
@@ -718,6 +803,18 @@ impl ObjectClause {
     #[must_use]
     pub const fn of_related_player(mut self) -> Self {
         self.controller = ControllerFilter::RelatedPlayer;
+        self
+    }
+
+    #[must_use]
+    pub const fn of_target_player(mut self) -> Self {
+        self.controller = ControllerFilter::TargetPlayer;
+        self
+    }
+
+    #[must_use]
+    pub const fn of_target_opponent(mut self) -> Self {
+        self.controller = ControllerFilter::TargetOpponent;
         self
     }
 
@@ -1012,6 +1109,7 @@ impl ObjectClause {
             SubtypeFilter::NotLand(kind) => !p.current_land_subtypes.contains(&kind),
             SubtypeFilter::Artifact(kind) => p.current_artifact_subtypes.contains(&kind),
             SubtypeFilter::Enchantment(kind) => p.current_enchantment_subtypes.contains(&kind),
+            SubtypeFilter::Spell(kind) => p.current_spell_subtypes.contains(&kind),
             SubtypeFilter::Aura => {
                 matches!(
                     p.attachment_kind,
@@ -1068,8 +1166,8 @@ impl ObjectClause {
                         || pt.derived.toughness <= i64::from(max).into()
                 })
             }
-            PowerFilter::AtMostX => false,
-            PowerFilter::AtMostControlledCreatureCount => true,
+            PowerFilter::AtMostX | PowerFilter::EqualX | PowerFilter::AtLeastX => false,
+            PowerFilter::AtMostControlledCreatureCount | PowerFilter::CompareAnchor { .. } => true,
         };
         if !power_ok {
             return false;
@@ -1088,6 +1186,8 @@ impl ObjectClause {
                 .power_toughness
                 .as_ref()
                 .is_some_and(|pt| pt.derived.toughness == i64::from(exact).into()),
+            ToughnessFilter::AtMostX | ToughnessFilter::EqualX | ToughnessFilter::AtLeastX => false,
+            ToughnessFilter::CompareAnchor { .. } => true,
         };
         if !toughness_ok {
             return false;
@@ -1103,7 +1203,8 @@ impl ObjectClause {
             ManaValueFilter::Equal(exact) => {
                 mana_value().is_some_and(|value| value == i64::from(exact).into())
             }
-            ManaValueFilter::AtMostX => false,
+            ManaValueFilter::AtMostX | ManaValueFilter::EqualX | ManaValueFilter::AtLeastX => false,
+            ManaValueFilter::CompareAnchor { .. } => true,
             ManaValueFilter::Even => mana_value().is_some_and(|value| {
                 value.nonnegative_half_rounded_up() == value.nonnegative_half_rounded_down()
             }),
@@ -1316,6 +1417,22 @@ impl ObjectFilter {
         match self {
             Self::Clause(a) => Self::Clause(a.of_related_player()),
             Self::Either(a, b) => Self::Either(a.of_related_player(), b.of_related_player()),
+        }
+    }
+
+    #[must_use]
+    pub const fn of_target_player(self) -> Self {
+        match self {
+            Self::Clause(a) => Self::Clause(a.of_target_player()),
+            Self::Either(a, b) => Self::Either(a.of_target_player(), b.of_target_player()),
+        }
+    }
+
+    #[must_use]
+    pub const fn of_target_opponent(self) -> Self {
+        match self {
+            Self::Clause(a) => Self::Clause(a.of_target_opponent()),
+            Self::Either(a, b) => Self::Either(a.of_target_opponent(), b.of_target_opponent()),
         }
     }
 
@@ -1664,7 +1781,8 @@ impl ObjectFilter {
     /// True if every clause only matches damageable permanents (creatures and/or planeswalkers).
     #[must_use]
     pub const fn guarantees_damageable(self) -> bool {
-        const DAMAGEABLE: u16 = CardTypeMask::CREATURE.0 | CardTypeMask::PLANESWALKER.0;
+        const DAMAGEABLE: u16 =
+            CardTypeMask::CREATURE.0 | CardTypeMask::PLANESWALKER.0 | CardTypeMask::BATTLE.0;
         const fn ok(c: ObjectClause) -> bool {
             !c.any_types.is_empty() && (c.any_types.0 & !DAMAGEABLE) == 0
         }
@@ -1778,53 +1896,133 @@ impl ObjectFilter {
     /// True if any clause binds power to the announced X.
     #[must_use]
     pub const fn has_power_at_most_x(self) -> bool {
+        const fn has_x(c: ObjectClause) -> bool {
+            matches!(
+                c.power,
+                PowerFilter::AtMostX
+                    | PowerFilter::EqualX
+                    | PowerFilter::AtLeastX
+                    | PowerFilter::CompareAnchor {
+                        anchor: DynamicStatAnchor::ChosenX,
+                        ..
+                    }
+            ) || matches!(
+                c.toughness,
+                ToughnessFilter::AtMostX
+                    | ToughnessFilter::EqualX
+                    | ToughnessFilter::AtLeastX
+                    | ToughnessFilter::CompareAnchor {
+                        anchor: DynamicStatAnchor::ChosenX,
+                        ..
+                    }
+            )
+        }
         match self {
-            Self::Clause(a) => matches!(a.power, PowerFilter::AtMostX),
-            Self::Either(a, b) => {
-                matches!(a.power, PowerFilter::AtMostX) || matches!(b.power, PowerFilter::AtMostX)
-            }
+            Self::Clause(a) => has_x(a),
+            Self::Either(a, b) => has_x(a) || has_x(b),
         }
     }
 
-    /// Replace `PowerFilter::AtMostX` with a concrete bound.
+    /// Replace X-bound power/toughness predicates with a concrete bound.
     #[must_use]
-    pub const fn bind_power_at_most_x(self, maximum: u16) -> Self {
-        const fn bind(mut clause: ObjectClause, maximum: u16) -> ObjectClause {
-            if matches!(clause.power, PowerFilter::AtMostX) {
-                clause.power = PowerFilter::AtMost(maximum);
-            }
+    pub const fn bind_power_at_most_x(self, value: u16) -> Self {
+        const fn bind(mut clause: ObjectClause, value: u16) -> ObjectClause {
+            let signed = if value > i16::MAX as u16 {
+                i16::MAX
+            } else {
+                value as i16
+            };
+            clause.power = match clause.power {
+                PowerFilter::AtMostX => PowerFilter::AtMost(value),
+                PowerFilter::EqualX => PowerFilter::Equal(signed),
+                PowerFilter::AtLeastX => PowerFilter::AtLeast(signed),
+                PowerFilter::CompareAnchor {
+                    op,
+                    anchor: DynamicStatAnchor::ChosenX,
+                } => match op {
+                    super::Comparison::LessOrEqual => PowerFilter::AtMost(value),
+                    super::Comparison::Equal => PowerFilter::Equal(signed),
+                    super::Comparison::GreaterOrEqual => PowerFilter::AtLeast(signed),
+                    super::Comparison::Less => PowerFilter::AtMost(value.saturating_sub(1)),
+                    super::Comparison::Greater => PowerFilter::AtLeast(signed.saturating_add(1)),
+                    super::Comparison::NotEqual => clause.power,
+                },
+                other => other,
+            };
+            clause.toughness = match clause.toughness {
+                ToughnessFilter::AtMostX => ToughnessFilter::AtMost(value),
+                ToughnessFilter::EqualX => ToughnessFilter::Equal(signed),
+                ToughnessFilter::AtLeastX => ToughnessFilter::AtLeast(signed),
+                ToughnessFilter::CompareAnchor {
+                    op,
+                    anchor: DynamicStatAnchor::ChosenX,
+                } => match op {
+                    super::Comparison::LessOrEqual => ToughnessFilter::AtMost(value),
+                    super::Comparison::Equal => ToughnessFilter::Equal(signed),
+                    super::Comparison::GreaterOrEqual => ToughnessFilter::AtLeast(signed),
+                    super::Comparison::Less => ToughnessFilter::AtMost(value.saturating_sub(1)),
+                    super::Comparison::Greater => {
+                        ToughnessFilter::AtLeast(signed.saturating_add(1))
+                    }
+                    super::Comparison::NotEqual => clause.toughness,
+                },
+                other => other,
+            };
             clause
         }
         match self {
-            Self::Clause(a) => Self::Clause(bind(a, maximum)),
-            Self::Either(a, b) => Self::Either(bind(a, maximum), bind(b, maximum)),
+            Self::Clause(a) => Self::Clause(bind(a, value)),
+            Self::Either(a, b) => Self::Either(bind(a, value), bind(b, value)),
         }
     }
 
     /// True if any clause binds mana value to the announced X.
     #[must_use]
     pub const fn has_mana_value_at_most_x(self) -> bool {
+        const fn has_x(c: ObjectClause) -> bool {
+            matches!(
+                c.mana_value,
+                ManaValueFilter::AtMostX
+                    | ManaValueFilter::EqualX
+                    | ManaValueFilter::AtLeastX
+                    | ManaValueFilter::CompareAnchor {
+                        anchor: DynamicStatAnchor::ChosenX,
+                        ..
+                    }
+            )
+        }
         match self {
-            Self::Clause(a) => matches!(a.mana_value, ManaValueFilter::AtMostX),
-            Self::Either(a, b) => {
-                matches!(a.mana_value, ManaValueFilter::AtMostX)
-                    || matches!(b.mana_value, ManaValueFilter::AtMostX)
-            }
+            Self::Clause(a) => has_x(a),
+            Self::Either(a, b) => has_x(a) || has_x(b),
         }
     }
 
-    /// Replace `ManaValueFilter::AtMostX` with a concrete bound.
+    /// Replace X-bound mana value predicates with a concrete bound.
     #[must_use]
-    pub const fn bind_mana_value_at_most_x(self, maximum: u32) -> Self {
-        const fn bind(mut clause: ObjectClause, maximum: u32) -> ObjectClause {
-            if matches!(clause.mana_value, ManaValueFilter::AtMostX) {
-                clause.mana_value = ManaValueFilter::AtMost(maximum);
-            }
+    pub const fn bind_mana_value_at_most_x(self, value: u32) -> Self {
+        const fn bind(mut clause: ObjectClause, value: u32) -> ObjectClause {
+            clause.mana_value = match clause.mana_value {
+                ManaValueFilter::AtMostX => ManaValueFilter::AtMost(value),
+                ManaValueFilter::EqualX => ManaValueFilter::Equal(value),
+                ManaValueFilter::AtLeastX => ManaValueFilter::AtLeast(value),
+                ManaValueFilter::CompareAnchor {
+                    op,
+                    anchor: DynamicStatAnchor::ChosenX,
+                } => match op {
+                    super::Comparison::LessOrEqual => ManaValueFilter::AtMost(value),
+                    super::Comparison::Equal => ManaValueFilter::Equal(value),
+                    super::Comparison::GreaterOrEqual => ManaValueFilter::AtLeast(value),
+                    super::Comparison::Less => ManaValueFilter::AtMost(value.saturating_sub(1)),
+                    super::Comparison::Greater => ManaValueFilter::AtLeast(value.saturating_add(1)),
+                    super::Comparison::NotEqual => clause.mana_value,
+                },
+                other => other,
+            };
             clause
         }
         match self {
-            Self::Clause(a) => Self::Clause(bind(a, maximum)),
-            Self::Either(a, b) => Self::Either(bind(a, maximum), bind(b, maximum)),
+            Self::Clause(a) => Self::Clause(bind(a, value)),
+            Self::Either(a, b) => Self::Either(bind(a, value), bind(b, value)),
         }
     }
 
@@ -1837,6 +2035,39 @@ impl ObjectFilter {
                 matches!(a.controller, ControllerFilter::RelatedPlayer)
                     || matches!(b.controller, ControllerFilter::RelatedPlayer)
             }
+        }
+    }
+
+    /// True if any clause filters by the resolving spell or ability's targeted player/opponent.
+    #[must_use]
+    pub const fn has_target_player(self) -> bool {
+        const fn is_tp(c: ObjectClause) -> bool {
+            matches!(
+                c.controller,
+                ControllerFilter::TargetPlayer | ControllerFilter::TargetOpponent
+            )
+        }
+        match self {
+            Self::Clause(a) => is_tp(a),
+            Self::Either(a, b) => is_tp(a) || is_tp(b),
+        }
+    }
+
+    /// Bind `ControllerFilter::TargetPlayer` / `TargetOpponent` to a concrete player seat.
+    #[must_use]
+    pub const fn bind_target_player(self, seat: SeatId) -> Self {
+        const fn bind(mut c: ObjectClause, seat: SeatId) -> ObjectClause {
+            if matches!(
+                c.controller,
+                ControllerFilter::TargetPlayer | ControllerFilter::TargetOpponent
+            ) {
+                c.controller = ControllerFilter::Player(seat);
+            }
+            c
+        }
+        match self {
+            Self::Clause(a) => Self::Clause(bind(a, seat)),
+            Self::Either(a, b) => Self::Either(bind(a, seat), bind(b, seat)),
         }
     }
 
@@ -1933,11 +2164,23 @@ impl ObjectFilter {
 
     /// Rewrite printed creature-type words when a text-changing effect applies.
     pub(crate) fn rewrite_creature_type(&mut self, from: CreatureTypeId, to: CreatureTypeId) {
+        fn rewrite_clause(c: &mut ObjectClause, from: CreatureTypeId, to: CreatureTypeId) {
+            c.subtypes.rewrite(from, to);
+            if let PowerFilter::CompareAnchor { anchor, .. } = &mut c.power {
+                anchor.rewrite(from, to);
+            }
+            if let ToughnessFilter::CompareAnchor { anchor, .. } = &mut c.toughness {
+                anchor.rewrite(from, to);
+            }
+            if let ManaValueFilter::CompareAnchor { anchor, .. } = &mut c.mana_value {
+                anchor.rewrite(from, to);
+            }
+        }
         match self {
-            Self::Clause(a) => a.subtypes.rewrite(from, to),
+            Self::Clause(a) => rewrite_clause(a, from, to),
             Self::Either(a, b) => {
-                a.subtypes.rewrite(from, to);
-                b.subtypes.rewrite(from, to);
+                rewrite_clause(a, from, to);
+                rewrite_clause(b, from, to);
             }
         }
     }
@@ -1947,11 +2190,27 @@ impl ObjectFilter {
         self,
         vocabulary: &CreatureTypeVocabulary,
     ) -> Result<(), DefinitionError> {
+        fn check_clause(
+            c: ObjectClause,
+            vocabulary: &CreatureTypeVocabulary,
+        ) -> Result<(), DefinitionError> {
+            c.subtypes.validate_vocabulary(vocabulary)?;
+            if let PowerFilter::CompareAnchor { anchor, .. } = c.power {
+                anchor.validate_vocabulary(vocabulary)?;
+            }
+            if let ToughnessFilter::CompareAnchor { anchor, .. } = c.toughness {
+                anchor.validate_vocabulary(vocabulary)?;
+            }
+            if let ManaValueFilter::CompareAnchor { anchor, .. } = c.mana_value {
+                anchor.validate_vocabulary(vocabulary)?;
+            }
+            Ok(())
+        }
         match self {
-            Self::Clause(a) => a.subtypes.validate_vocabulary(vocabulary),
+            Self::Clause(a) => check_clause(a, vocabulary),
             Self::Either(a, b) => {
-                a.subtypes.validate_vocabulary(vocabulary)?;
-                b.subtypes.validate_vocabulary(vocabulary)
+                check_clause(a, vocabulary)?;
+                check_clause(b, vocabulary)
             }
         }
     }
@@ -1967,6 +2226,9 @@ impl ObjectFilter {
             ControllerFilter::NotYou => AffectedPlayers::EachOtherPlayer,
             ControllerFilter::Opponent => AffectedPlayers::EachOpponent,
             ControllerFilter::You => AffectedPlayers::One(super::ResolvingPlayer::Controller),
+            ControllerFilter::TargetPlayer | ControllerFilter::TargetOpponent => {
+                AffectedPlayers::One(super::ResolvingPlayer::TargetPlayer)
+            }
             _ => AffectedPlayers::EachPlayer,
         }
     }
@@ -2060,6 +2322,7 @@ impl ObjectFilter {
                 SubtypeFilter::NotLand(kind) => !spell.land_subtypes.contains(&kind),
                 SubtypeFilter::Artifact(kind) => spell.artifact_subtypes.contains(&kind),
                 SubtypeFilter::Enchantment(kind) => spell.enchantment_subtypes.contains(&kind),
+                SubtypeFilter::Spell(kind) => spell.spell_subtypes.contains(&kind),
                 SubtypeFilter::Aura => {
                     spell.types.contains(&CardType::Enchantment)
                         && spell.enchantment_subtypes.is_empty()
@@ -2116,7 +2379,9 @@ impl ObjectFilter {
                     .is_some_and(|seat| seat != controller),
                 ControllerFilter::OwnerYou => object.object.owner() == controller,
                 ControllerFilter::OwnerOpponent => object.object.owner() != controller,
-                ControllerFilter::RelatedPlayer => false,
+                ControllerFilter::RelatedPlayer
+                | ControllerFilter::TargetPlayer
+                | ControllerFilter::TargetOpponent => false,
                 ControllerFilter::Player(seat) => object.object.controller() == Some(seat),
             };
             if !controller_ok {
@@ -2197,6 +2462,7 @@ impl ObjectFilter {
                 SubtypeFilter::NotLand(kind) => !object.land_subtypes.contains(&kind),
                 SubtypeFilter::Artifact(kind) => object.artifact_subtypes.contains(&kind),
                 SubtypeFilter::Enchantment(kind) => object.enchantment_subtypes.contains(&kind),
+                SubtypeFilter::Spell(kind) => object.spell_subtypes.contains(&kind),
                 SubtypeFilter::Aura => false,
                 SubtypeFilter::ExceptChosenSlot(_)
                 | SubtypeFilter::MatchesChosenSlot(_)
@@ -2234,7 +2500,11 @@ impl ObjectFilter {
                         pt.power <= i64::from(max).into() || pt.toughness <= i64::from(max).into()
                     })
                 }
-                PowerFilter::AtMostX | PowerFilter::AtMostControlledCreatureCount => false,
+                PowerFilter::AtMostX
+                | PowerFilter::EqualX
+                | PowerFilter::AtLeastX
+                | PowerFilter::CompareAnchor { .. }
+                | PowerFilter::AtMostControlledCreatureCount => false,
             };
             if !power_ok {
                 return false;
@@ -2253,6 +2523,10 @@ impl ObjectFilter {
                     .current_power_toughness
                     .as_ref()
                     .is_some_and(|pt| pt.toughness == i64::from(exact).into()),
+                ToughnessFilter::AtMostX
+                | ToughnessFilter::EqualX
+                | ToughnessFilter::AtLeastX
+                | ToughnessFilter::CompareAnchor { .. } => false,
             }
         }
         match self {
@@ -2275,8 +2549,16 @@ pub enum EffectSubject {
     TriggeringAttackGroup,
     /// The exact permanent targeted in the triggering occurrence.
     TriggeringTarget,
+    /// Any object subject captured by the triggering occurrence (enters/dies/attacks/blocks/etc.).
+    TriggerSubject,
     /// The permanent that generated the resolving activated or triggered ability.
     AbilitySource,
+    /// The currently resolving permanent target(s) of this spell or ability.
+    TargetObject,
+    /// Tokens created earlier during this same resolution.
+    CreatedTokens,
+    /// Objects moved earlier during this same resolution.
+    LastMoved,
     /// Every battlefield permanent matching this composable filter at resolution.
     Matching(ObjectFilter),
 }

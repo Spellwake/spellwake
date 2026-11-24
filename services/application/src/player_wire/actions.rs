@@ -28,6 +28,9 @@ pub enum PlayerCastFace {
     SplitLeft,
     SplitRight,
     Disturb,
+    ModalBack,
+    Prototype,
+    Prepare,
 }
 /// Exact native mana vocabulary, independent of payment's payer/cost authority.
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
@@ -105,6 +108,31 @@ pub enum PlayerManaRestriction {
     CreatureSpellOfType,
     CreatureSpellOfTypeUncounterable,
     CreatureSpellOrAbilityOfType,
+    InstantOrSorcerySpell,
+    ArtifactSpell,
+    ArtifactAbility,
+    ArtifactSpellOrAnyAbility,
+    ActivatedAbility,
+    CastSpell,
+    NotSpellFromHand,
+    CostContainingX,
+    LegendarySpell,
+    MulticoloredSpell,
+    EnchantmentSpell,
+    CreatureSpellOrAbility,
+    ColoredSpellWithoutX,
+    InstantOrSorceryOrForetell,
+    SpellWithMinManaValue,
+    CreatureSpellWithMinManaValue,
+    HistoricSpell,
+    CreatureOrPlaneswalkerSpell,
+    CreatureAbility,
+    PermanentSpell,
+    SpellFromGraveyardOrExile,
+    EquipmentOrEquipAbility,
+    SpellWithMinManaValueOrX,
+    CreatureSpellWithMinManaValueOrX,
+    CreatureOrEnchantmentSpell,
 }
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -113,6 +141,8 @@ pub struct PlayerRestrictedManaSpend {
     pub restriction: PlayerManaRestriction,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub creature_type: Option<super::views::PlayerCreatureTypeLabel>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub min_mana_value: Option<u8>,
     pub amount: RulesCount,
 }
 /// Empty allocation represents an explicit zero payment; source checks actual cost.
@@ -154,7 +184,7 @@ impl PlayerPayment {
             && unique(
                 self.restricted_mana
                     .iter()
-                    .map(|x| (x.color, x.restriction, &x.creature_type)),
+                    .map(|x| (x.color, x.restriction, &x.creature_type, x.min_mana_value)),
             )
             && self.restricted_mana.iter().all(|item| {
                 item.amount.as_rules_integer().is_positive()
@@ -164,6 +194,14 @@ impl PlayerPayment {
                             PlayerManaRestriction::CreatureSpellOfType
                                 | PlayerManaRestriction::CreatureSpellOfTypeUncounterable
                                 | PlayerManaRestriction::CreatureSpellOrAbilityOfType
+                        ))
+                    && (item.min_mana_value.is_none()
+                        || matches!(
+                            item.restriction,
+                            PlayerManaRestriction::SpellWithMinManaValue
+                                | PlayerManaRestriction::CreatureSpellWithMinManaValue
+                                | PlayerManaRestriction::SpellWithMinManaValueOrX
+                                | PlayerManaRestriction::CreatureSpellWithMinManaValueOrX
                         ))
                     && self
                         .spend
@@ -399,6 +437,14 @@ pub enum PlayerChoice {
         object: Option<PlayerHandle>,
         battlefield: bool,
     },
+    Scry {
+        top: Vec<PlayerHandle>,
+        bottom: Vec<PlayerHandle>,
+    },
+    Surveil {
+        top: Vec<PlayerHandle>,
+        graveyard: Vec<PlayerHandle>,
+    },
     Ordering {
         ordered: Vec<PlayerHandle>,
     },
@@ -453,14 +499,14 @@ pub enum PlayerChoice {
     },
 }
 /// A named battlefield counter and an offered or chosen quantity.
-#[derive(Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct PlayerCounterQuantity {
     pub kind: PlayerCounterKind,
     pub count: u8,
 }
 
-#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum PlayerCounterKind {
     Defense,
@@ -486,12 +532,115 @@ pub enum PlayerCounterKind {
     Study,
     Eyeball,
     Slime,
+    Oil,
+    Level,
+    Spore,
+    Ki,
+    Soul,
+    Fuse,
+    Depletion,
+    Bounty,
+    Flood,
+    Flame,
+    Hour,
+    Brick,
+    Plague,
+    Doom,
+    Pressure,
+    Feather,
+    Fate,
+    Infection,
+    Ice,
+    Tide,
+    Growth,
+    Divinity,
+    Fungus,
+    Hit,
+    Gold,
+    Blood,
+    Cage,
+    Coin,
+    Credit,
+    Death,
+    Delay,
+    Devotion,
+    Egg,
+    Eon,
+    Fury,
+    Incubation,
+    Knowledge,
+    Luck,
+    Mine,
+    Music,
+    Muster,
+    Net,
+    Omen,
+    Ore,
+    Pain,
+    Petal,
+    Phylactery,
+    Pin,
+    Plot,
+    Prey,
+    Pupa,
+    Shell,
+    Silver,
+    Sleep,
+    Soot,
+    Stash,
+    Strife,
+    Task,
+    Tower,
+    Training,
+    Trap,
+    Treasure,
+    Valor,
+    Velocity,
+    Vitality,
+    Void,
+    Vortex,
+    Wage,
+    Winch,
+    Wind,
+    Wish,
+    Flying,
+    FirstStrike,
+    DoubleStrike,
+    Deathtouch,
+    Haste,
+    Hexproof,
+    Lifelink,
+    Menace,
+    Reach,
+    Shadow,
+    Trample,
+    Vigilance,
+    Stun,
+    Shield,
+    Finality,
+    PtDelta { power: i8, toughness: i8 },
+    Custom(String),
+}
+
+impl PlayerCounterKind {
+    pub(super) fn is_valid(&self) -> bool {
+        match self {
+            Self::Custom(label) => {
+                !label.is_empty()
+                    && label.len() <= 24
+                    && label.bytes().all(|b| b.is_ascii() && !b.is_ascii_control())
+            }
+            _ => true,
+        }
+    }
 }
 
 pub(super) fn counter_quantities(counters: &[PlayerCounterQuantity]) -> bool {
     list(counters)
-        && unique(counters.iter().map(|entry| entry.kind))
-        && counters.iter().all(|entry| entry.count > 0)
+        && unique(counters.iter().map(|entry| &entry.kind))
+        && counters
+            .iter()
+            .all(|entry| entry.count > 0 && entry.kind.is_valid())
 }
 
 impl PlayerChoice {
@@ -528,7 +677,11 @@ impl PlayerChoice {
     }
     pub(super) fn valid(&self) -> bool {
         if self.cast_face().is_some()
-            && (self.casts_adventure() || self.cast_face() == Some(PlayerCastFace::Disturb))
+            && (self.casts_adventure()
+                || matches!(
+                    self.cast_face(),
+                    Some(PlayerCastFace::Disturb | PlayerCastFace::Prepare)
+                ))
         {
             return false;
         }
@@ -627,6 +780,12 @@ impl PlayerChoice {
             Self::Target { target } => target.valid(),
             Self::Objects { objects } | Self::Ordering { ordered: objects } => {
                 list(objects) && unique(objects.iter())
+            }
+            Self::Scry { top, bottom } => {
+                list(top) && list(bottom) && unique(top.iter().chain(bottom.iter()))
+            }
+            Self::Surveil { top, graveyard } => {
+                list(top) && list(graveyard) && unique(top.iter().chain(graveyard.iter()))
             }
             Self::SearchWithEntryColors { objects, colors } => {
                 list(objects)
@@ -805,6 +964,9 @@ pub enum PlayerCastResource {
     Delve {
         source: PlayerHandle,
     },
+    ExtraCost {
+        source: PlayerHandle,
+    },
 }
 impl PlayerCastResource {
     pub(crate) fn source(&self) -> &PlayerHandle {
@@ -830,7 +992,8 @@ impl PlayerCastResource {
             | Self::ExileGraveyardCreatureForSpell { source }
             | Self::ExileGraveyardCardForSpell { source }
             | Self::ExileCreatureForReduction { source }
-            | Self::Delve { source } => source,
+            | Self::Delve { source }
+            | Self::ExtraCost { source } => source,
         }
     }
 }
@@ -1005,6 +1168,14 @@ pub enum PlayerAction {
         #[serde(deserialize_with = "crate::provider_json::optional_object")]
         payment: Option<PlayerPayment>,
     },
+    ActivateModalAbility {
+        source: PlayerHandle,
+        ability: PlayerHandle,
+        #[serde(deserialize_with = "crate::provider_json::objects")]
+        modes: Vec<PlayerCastMode>,
+        #[serde(deserialize_with = "crate::provider_json::optional_object")]
+        payment: Option<PlayerPayment>,
+    },
     ActivateMana {
         source: PlayerHandle,
         ability: PlayerHandle,
@@ -1164,6 +1335,11 @@ impl PlayerAction {
             } => {
                 list(targets)
                     && targets.iter().all(PlayerTarget::valid)
+                    && payment.as_ref().is_none_or(PlayerPayment::valid)
+            }
+            Self::ActivateModalAbility { modes, payment, .. } => {
+                list(modes)
+                    && modes.iter().all(PlayerCastMode::valid)
                     && payment.as_ref().is_none_or(PlayerPayment::valid)
             }
             Self::CastTargeted {

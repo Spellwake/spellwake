@@ -539,6 +539,9 @@ impl EffectWindow {
                 {
                     continue;
                 }
+                CastResource::ExtraCost(_) if !spell.printed_text.extra_cast_costs.is_empty() => {
+                    continue;
+                }
                 CastResource::Delve(_)
                     if spell.has_keyword(KeywordAbility::Delve)
                         && physical.card_id().is_some()
@@ -664,6 +667,9 @@ impl EffectWindow {
         let mut flashback_sacrifice_paid = false;
         let mut hand_exiles_paid = false;
         for (index, &resource) in resources.iter().enumerate() {
+            if matches!(resource, CastResource::ExtraCost(_)) {
+                continue;
+            }
             if matches!(resource, CastResource::ExileHandForAlternative(_)) {
                 if !hand_exiles_paid {
                     let before = self.rules_snapshot(turn)?;

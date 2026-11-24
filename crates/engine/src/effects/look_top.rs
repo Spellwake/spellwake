@@ -14,6 +14,7 @@ pub(super) struct LookTopWork {
     mana_value_life: Option<(RulesInteger, bool)>,
     exploring: Option<GameObject>,
     explore_nonland: bool,
+    remaining_explores: u8,
     domain: Vec<ObjectId>,
     eligible: Vec<ObjectId>,
     reveal: bool,
@@ -85,6 +86,85 @@ impl EffectWindow {
     pub(super) fn currently_revealed_look_top(&self, id: ObjectId) -> bool {
         matches!(&self.pending_work, Some(PendingWork::LookTop(work)) if (work.exploring.is_some() || work.mana_value_life.is_some() || work.battlefield_else_hand) && work.domain.first()==Some(&id))
     }
+    fn extra_explore_count(&self, source: &GameObject) -> Result<u8, EffectError> {
+        let evaluated = self.evaluated_characteristics()?;
+        let Some(src_view) = evaluated.get(source.id()) else {
+            return Ok(0);
+        };
+        let mut total: u16 = 1;
+        let excluded = BTreeSet::new();
+        let mut check_rule =
+            |ctrl: SeatId, ab: &crate::characteristics::StaticContinuousAbility| {
+                let crate::characteristics::StaticContinuousAbility::EventReplacement {
+                    event: crate::characteristics::ReplaceableEvent::Explore { filter },
+                    action:
+                        crate::characteristics::StaticReplacementAction::ModifyAmount { add, multiply },
+                    ..
+                } = ab
+                else {
+                    return;
+                };
+                let matches_ctrl = match filter {
+                    crate::program::ObjectFilter::Clause(c) => match c.controller {
+                        crate::program::ControllerFilter::Any => true,
+                        crate::program::ControllerFilter::You => src_view.controller == Some(ctrl),
+                        crate::program::ControllerFilter::Opponent => {
+                            src_view.controller.is_some_and(|s| s != ctrl)
+                        }
+                        _ => true,
+                    },
+                    crate::program::ObjectFilter::Either(_, _) => true,
+                };
+                if matches_ctrl
+                    && filter.matches_static_characteristics(src_view, &excluded, || {
+                        self.permanent_mana_value(source.id())
+                    })
+                {
+                    if let crate::program::ValueExpr::Literal(v) = add.as_ref()
+                        && let Some(u) = v.to_usize()
+                    {
+                        total = total.saturating_add(u16::try_from(u).unwrap_or(8));
+                    }
+                    if *multiply > 1 {
+                        total = total.saturating_mul(u16::from(*multiply));
+                    }
+                    total = total.min(8);
+                }
+            };
+        for perm in evaluated
+            .objects
+            .values()
+            .filter(|p| p.zone == ObjectZone::Battlefield)
+        {
+            let Some(ctrl) = perm.controller else {
+                continue;
+            };
+            for ab in perm
+                .printed_text
+                .continuous
+                .iter()
+                .chain(&perm.printed_text.additional_battlefield_abilities)
+            {
+                let active = perm.abilities.continuous == Some(ab.id())
+                    || perm
+                        .abilities
+                        .additional_battlefield_abilities
+                        .contains(&ab.id());
+                if active {
+                    check_rule(ctrl, ab);
+                }
+            }
+        }
+        for active in &self.temporary_rules {
+            if !active.consumed
+                && let crate::program::TemporaryRuleKind::TemporaryStatic(ab) = &active.rule
+            {
+                check_rule(active.controller, ab);
+            }
+        }
+        Ok(u8::try_from(total.saturating_sub(1)).unwrap_or(7))
+    }
+
     fn explore_counter(
         &mut self,
         source: &GameObject,
@@ -156,7 +236,9 @@ impl EffectWindow {
                     (1, Some(LookTopFilter::Land), false, false, true, false)
                 }
                 Instruction::MayRevealLibraryTop => (1, None, false, true, false, false),
-                Instruction::ExploreSource | Instruction::RevealTopHandLoseManaValue { .. } => {
+                Instruction::ExploreSource
+                | Instruction::ExploreSubject(_)
+                | Instruction::RevealTopHandLoseManaValue { .. } => {
                     (1, None, false, true, false, false)
                 }
                 Instruction::RevealUntilLandKind => (0, None, false, false, false, false),
@@ -167,11 +249,12 @@ impl EffectWindow {
         self.resolution_cursor()
             .ok_or(EffectError::WrongResolutionFrame)?;
         if *instruction == Instruction::MayRevealLibraryTop {
-            self.resolution_cursor_mut()
+            let results = &mut self
+                .resolution_cursor_mut()
                 .ok_or(EffectError::WrongResolutionFrame)?
-                .results
-                .revealed_top_types
-                .clear();
+                .results;
+            results.revealed_top_types.clear();
+            results.revealed_top_card = None;
         }
         let entry = self.window.resolving().ok_or(EffectError::WrongPhase)?;
         let exploring = if instruction == &Instruction::ExploreSource {
@@ -181,6 +264,55 @@ impl EffectWindow {
                 return Err(EffectError::InconsistentProgram);
             };
             Some(source.clone())
+        } else if let Instruction::ExploreSubject(subj) = instruction {
+            let resolved_id = match subj {
+                crate::program::MoveSubjectRef::AbilitySource => match entry.kind() {
+                    StackKind::ActivatedAbility { source }
+                    | StackKind::TriggeredAbility { source } => Some(source.id()),
+                    _ => None,
+                },
+                crate::program::MoveSubjectRef::TargetObject => self
+                    .instruction_target(entry)
+                    .ok()
+                    .and_then(|t| match t.choice().target {
+                        TargetRef::Object(id) => Some(id),
+                        _ => None,
+                    }),
+                crate::program::MoveSubjectRef::TriggeringObject => self
+                    .execution_bindings(entry.id())
+                    .and_then(|b| b.trigger.as_ref())
+                    .and_then(|t| t.causes.members().first())
+                    .and_then(|m| m.subject_object_id()),
+                crate::program::MoveSubjectRef::AttachedHost => match entry.kind() {
+                    StackKind::ActivatedAbility { source }
+                    | StackKind::TriggeredAbility { source } => match self.attached_to(source.id())
+                    {
+                        Some(TargetRef::Object(host)) => Some(host),
+                        _ => None,
+                    },
+                    _ => None,
+                },
+                crate::program::MoveSubjectRef::RevealedCard => None,
+                crate::program::MoveSubjectRef::CreatedTokens => self
+                    .resolution_cursor()
+                    .and_then(|c| c.last_created_tokens.first().copied()),
+                crate::program::MoveSubjectRef::LastMoved => {
+                    self.resolution_cursor().and_then(|c| {
+                        c.results
+                            .last_moved_objects
+                            .first()
+                            .copied()
+                            .or(c.results.returned_target_permanent)
+                    })
+                }
+                crate::program::MoveSubjectRef::RememberedFirst => {
+                    self.legal_linked_targets()?.map(|(a, _)| a)
+                }
+                crate::program::MoveSubjectRef::RememberedSecond => {
+                    self.legal_linked_targets()?.map(|(_, b)| b)
+                }
+            };
+            resolved_id.and_then(|id| self.window.cards().get(id).cloned())
         } else {
             None
         };
@@ -213,6 +345,10 @@ impl EffectWindow {
             .copied()
             .collect::<Vec<_>>();
         let choose_land_kind = matches!(instruction, Instruction::RevealUntilLandKind);
+        let extra_explores = match &exploring {
+            Some(source) => self.extra_explore_count(source)?,
+            None => 0,
+        };
         if domain.is_empty()
             && let Some(source) = &exploring
         {
@@ -220,8 +356,10 @@ impl EffectWindow {
                 .resolution_cursor()
                 .ok_or(EffectError::WrongResolutionFrame)?
                 .clone();
-            self.explore_counter(source, &cursor, append)?;
-            self.explored(source.clone(), player, &cursor, append)?;
+            for _ in 0..=extra_explores {
+                self.explore_counter(source, &cursor, append)?;
+                self.explored(source.clone(), player, &cursor, append)?;
+            }
         }
         if domain.is_empty() && !choose_land_kind {
             self.advance_instruction()?;
@@ -351,6 +489,7 @@ impl EffectWindow {
             reveal_only: *instruction == Instruction::MayRevealLibraryTop,
             exploring,
             explore_nonland,
+            remaining_explores: extra_explores,
             mana_value_life,
             library_owner,
             private_exile,
@@ -406,6 +545,35 @@ impl EffectWindow {
                 frozen: top,
                 top: &[],
                 bottom,
+                moves_application: &[],
+            },
+        )?;
+        self.window = window;
+        Ok(())
+    }
+    pub(super) fn top_remaining_looked_at(
+        &mut self,
+        player: SeatId,
+        entry: StackEntryId,
+        top_order: &[ObjectId],
+    ) -> Result<(), EffectError> {
+        if top_order.is_empty() {
+            return Ok(());
+        }
+        let top = self
+            .window
+            .cards()
+            .library(player)
+            .get(..top_order.len())
+            .ok_or(EffectError::InvalidLibraryPartition)?;
+        let (window, _) = self.window.record_library_top(
+            self.window.revision(),
+            entry,
+            crate::stack_window::LibraryTopCommit {
+                player,
+                frozen: top,
+                top: top_order,
+                bottom: &[],
                 moves_application: &[],
             },
         )?;
@@ -483,7 +651,7 @@ impl EffectWindow {
     pub(super) fn hand_entry_selection(
         &self,
     ) -> Result<Option<ResolutionSelectionFrame>, EffectError> {
-        let (chooser, types, maximum) = match self.current_instruction()? {
+        let (chooser, types, hand_filter, maximum) = match self.current_instruction()? {
             Instruction::PutHandPermanentsOntoBattlefield {
                 player,
                 types,
@@ -492,6 +660,18 @@ impl EffectWindow {
             } => (
                 self.resolving_player(*player)?,
                 Some(types),
+                None,
+                usize::from(*maximum),
+            ),
+            Instruction::PutHandPermanentFiltered {
+                player,
+                filter,
+                maximum,
+                ..
+            } => (
+                self.resolving_player(*player)?,
+                None,
+                Some(filter.as_ref()),
                 usize::from(*maximum),
             ),
             Instruction::ReturnOddGraveyardPermanentIfPaid { .. }
@@ -499,15 +679,18 @@ impl EffectWindow {
             | Instruction::PutLandFromExiledCohort => (
                 self.resolving_player(crate::program::ResolvingPlayer::Controller)?,
                 None,
+                None,
                 1,
             ),
             Instruction::PutTargetOwnedExiledLandsOntoBattlefield => (
                 self.resolving_player(crate::program::ResolvingPlayer::Controller)?,
                 None,
+                None,
                 usize::MAX,
             ),
             Instruction::PutEquipmentFromHandOrGraveyard => (
                 self.resolving_player(crate::program::ResolvingPlayer::Controller)?,
+                None,
                 None,
                 1,
             ),
@@ -587,6 +770,20 @@ impl EffectWindow {
                     Some(types) => {
                         card.zone == ObjectZone::Hand(chooser)
                             && !types.is_disjoint(&card.current_types)
+                    }
+                    None if hand_filter.is_some() => {
+                        let excluded = BTreeSet::new();
+                        card.zone == ObjectZone::Hand(chooser)
+                            && card
+                                .current_types
+                                .iter()
+                                .copied()
+                                .any(CardType::is_permanent)
+                            && hand_filter.is_some_and(|filter| {
+                                filter.matches_static_characteristics(card, &excluded, || {
+                                    self.copiable_program(card.object).map(Program::mana_value)
+                                })
+                            })
                     }
                     None => {
                         (card.zone == ObjectZone::Hand(chooser)
@@ -678,6 +875,7 @@ impl EffectWindow {
                         tapped: matches!(
                             self.current_instruction()?,
                             Instruction::PutHandPermanentsOntoBattlefield { tapped: true, .. }
+                                | Instruction::PutHandPermanentFiltered { tapped: true, .. }
                         ),
                         player: actor,
                         entry: frame.entry(),
@@ -948,6 +1146,7 @@ impl EffectWindow {
         if work.reveal_only {
             let mut append = RulesJournal::default();
             work.cursor.results.revealed_top_types.clear();
+            work.cursor.results.revealed_top_card = None;
             if let Some(&id) = selected.first() {
                 let before = next.rules_snapshot(None)?;
                 let object = next
@@ -963,6 +1162,7 @@ impl EffectWindow {
                     .ok_or(EffectError::InconsistentProgram)?
                     .current_types
                     .clone();
+                work.cursor.results.revealed_top_card = Some(id);
                 next.emit_from(
                     EventCause::Instruction {
                         entry: work.cursor.entry,
@@ -1218,7 +1418,114 @@ impl EffectWindow {
             )?;
         }
         if let Some(source) = work.exploring {
-            self.explored(source, work.player, &work.cursor, &mut append)?;
+            self.explored(source.clone(), work.player, &work.cursor, &mut append)?;
+            if work.remaining_explores > 0
+                && self
+                    .window
+                    .cards()
+                    .get(source.id())
+                    .is_some_and(|card| card.zone() == ObjectZone::Battlefield)
+            {
+                let remaining = work.remaining_explores - 1;
+                let domain: Vec<ObjectId> = self
+                    .window
+                    .cards()
+                    .library(work.library_owner)
+                    .iter()
+                    .take(1)
+                    .copied()
+                    .collect();
+                if domain.is_empty() {
+                    for _ in 0..=remaining {
+                        self.explore_counter(&source, &work.cursor, &mut append)?;
+                        self.explored(source.clone(), work.player, &work.cursor, &mut append)?;
+                    }
+                } else {
+                    let evaluated = self.evaluated_characteristics()?;
+                    let explore_nonland = evaluated
+                        .get(domain[0])
+                        .is_some_and(|card| !card.has_type(CardType::Land));
+                    let object = self
+                        .window
+                        .cards()
+                        .get(domain[0])
+                        .ok_or(EffectError::UnknownObject)?
+                        .clone();
+                    let before_rev = self.rules_snapshot(None)?;
+                    self.emit_from(
+                        EventCause::Instruction {
+                            entry: work.cursor.entry,
+                            instruction: work.cursor.instruction,
+                        },
+                        &before_rev,
+                        None,
+                        &mut append,
+                        |_, _, _| {
+                            Ok(vec![
+                                crate::occurrence::RulesOccurrence::LibraryCardRevealed { object },
+                            ])
+                        },
+                    )?;
+                    if explore_nonland {
+                        self.explore_counter(&source, &work.cursor, &mut append)?;
+                    }
+                    let mut next_work = LookTopWork {
+                        reveal_only: false,
+                        exploring: Some(source),
+                        explore_nonland,
+                        remaining_explores: remaining,
+                        mana_value_life: None,
+                        library_owner: work.library_owner,
+                        private_exile: false,
+                        cursor: work.cursor,
+                        player: work.player,
+                        domain: domain.clone(),
+                        eligible: domain,
+                        reveal: true,
+                        required: false,
+                        battlefield_tapped: false,
+                        battlefield_else_hand: false,
+                        planeswalkers: false,
+                        choose_land_kind: false,
+                        keep_remaining: explore_nonland,
+                        hand_limit: None,
+                        selected: vec![],
+                        graveyard_order: None,
+                        bottom: None,
+                        replacement: None,
+                    };
+                    if !explore_nonland {
+                        let id = next_work.domain[0];
+                        next_work.selected.push(id);
+                        next_work.bottom = Some(vec![]);
+                        next_work.replacement = Some(self.look_top_batch(&next_work)?);
+                        self.pending_work = Some(PendingWork::LookTop(Box::new(next_work)));
+                        return self.progress_look_top(
+                            journal,
+                            declarations,
+                            assignments,
+                            draws,
+                            append,
+                        );
+                    }
+                    self.pending_work = Some(PendingWork::LookTop(Box::new(next_work)));
+                    let frame = self
+                        .look_top_frame()
+                        .ok_or(EffectError::WrongLibraryTopFrame)?;
+                    return Ok(RuleProgress::new(
+                        self,
+                        RuleResult::Pending {
+                            checks: CheckJournal::default(),
+                            frame,
+                            journal,
+                            declarations,
+                            assignments,
+                            draws,
+                        },
+                        append,
+                    ));
+                }
+            }
         }
         if let Some((amount, gain)) = &work.mana_value_life
             && amount.is_positive()

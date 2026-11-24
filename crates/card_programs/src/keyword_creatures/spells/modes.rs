@@ -49,6 +49,12 @@ pub(super) fn compile(
         minimum,
         maximum,
         allow_repeat,
+        distinct_targets: false,
+        uniqueness: spellwake_engine::program::ModalUniqueness::None,
+        mode_costs: Vec::new(),
+        escalate_mana: None,
+        prefix: None,
+        suffix: None,
         additional,
     });
     if let Some(price) = entwine {

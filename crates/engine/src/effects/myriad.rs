@@ -129,21 +129,9 @@ impl EffectWindow {
                 .into_iter()
                 .filter(|&p| p != defending)
                 .collect();
-            let doublers =
-                self.evaluated_characteristics()?
-                    .controlled_rules(entry.controller(), |rule| {
-                        matches!(
-                            rule,
-                            crate::characteristics::StaticContinuousAbility::Modifier {
-                                rule:
-                                    crate::characteristics::StaticModifierRule::DoubleCreatedTokens,
-                                ..
-                            }
-                        )
-                    });
-            let per_opponent = 1usize
-                .checked_shl(u32::try_from(doublers).map_err(|_| EffectError::TokenCapacity)?)
-                .ok_or(EffectError::TokenCapacity)?;
+            let evaluated = self.evaluated_characteristics()?;
+            let per_opponent =
+                self.adjusted_token_count(&evaluated, entry.controller(), 1, None)?;
             *self.myriad_choices_mut(entry.id())? = Some(MyriadChoices {
                 opponents,
                 next: 0,

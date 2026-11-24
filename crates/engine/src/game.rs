@@ -194,6 +194,7 @@ pub enum RuleFrame {
     ReselectAttackDefender(crate::effects::AttackDefenderFrame),
     TokenDefender(crate::token::TokenDefenderFrame),
     TransformOrder(crate::day_night::TransformOrder),
+    UntapKeepTapped(crate::effects::UntapKeepTappedFrame),
     TimestampOrder(crate::token::TokenTimestampOrder),
     Checks(CheckDecision),
     Triggers(TriggerOrder),
@@ -203,6 +204,7 @@ pub enum RuleFrame {
     Damage(DamageDecision),
     ManaColor(ManaColorChoice),
     ResolutionManaColor(crate::effects::ResolutionManaColorChoice),
+    OptionIndex(crate::effects::OptionIndexFrame),
     RevealedPiles(crate::effects::PileChoiceFrame),
     PlaneswalkerType(crate::effects::PlaneswalkerTypeFrame),
     AttackDirection(crate::effects::AttackDirectionFrame),
@@ -236,6 +238,7 @@ impl RuleFrame {
             Self::ReselectAttackDefender(f) => f.chooser(),
             Self::TokenDefender(f) => f.chooser(),
             Self::TransformOrder(f) => f.chooser(),
+            Self::UntapKeepTapped(f) => f.chooser(),
             Self::TimestampOrder(f) => f.chooser(),
             Self::Checks(f) => f.chooser(),
             Self::Triggers(f) => f.chooser(),
@@ -245,6 +248,7 @@ impl RuleFrame {
             Self::Damage(f) => f.chooser(),
             Self::ManaColor(f) => f.chooser(),
             Self::ResolutionManaColor(f) => f.chooser(),
+            Self::OptionIndex(f) => f.chooser(),
             Self::Mutation(f) => f.chooser(),
             Self::RevealedPiles(f) => f.chooser(),
             Self::PlaneswalkerType(f) => f.chooser(),
@@ -292,6 +296,7 @@ impl RuleFrame {
             Self::CounterRemoval(f) => Some(EffectDecision::CounterRemoval(f.clone())),
             Self::CreatureType(f) => Some(EffectDecision::CreatureType(f.clone())),
             Self::ResolutionManaColor(f) => Some(EffectDecision::ResolutionManaColor(f.clone())),
+            Self::OptionIndex(f) => Some(EffectDecision::OptionIndex(f.clone())),
             Self::Mutation(f) => Some(EffectDecision::Mutation(f.clone())),
             Self::RevealedPiles(f) => Some(EffectDecision::RevealedPiles(f.clone())),
             Self::PlaneswalkerType(f) => Some(EffectDecision::PlaneswalkerType(f.clone())),
@@ -303,6 +308,7 @@ impl RuleFrame {
             }
             Self::LoyaltyRemoval(f) => Some(EffectDecision::LoyaltyRemoval(f.clone())),
             Self::TransformOrder(f) => Some(EffectDecision::TransformOrder(f.clone())),
+            Self::UntapKeepTapped(f) => Some(EffectDecision::UntapKeepTapped(f.clone())),
             Self::Opening(_) | Self::ManaColor(_) | Self::CounterReplacement(_) => None,
         }
     }
@@ -312,6 +318,7 @@ impl From<EffectDecision> for RuleFrame {
         match frame {
             EffectDecision::ManaColor(f) => Self::ManaColor(f),
             EffectDecision::ResolutionManaColor(f) => Self::ResolutionManaColor(f),
+            EffectDecision::OptionIndex(f) => Self::OptionIndex(f),
             EffectDecision::Mutation(f) => Self::Mutation(f),
             EffectDecision::RevealedPiles(f) => Self::RevealedPiles(f),
             EffectDecision::PlaneswalkerType(f) => Self::PlaneswalkerType(f),
@@ -338,6 +345,7 @@ impl From<EffectDecision> for RuleFrame {
             EffectDecision::TokenDefender(f) => Self::TokenDefender(f),
             EffectDecision::TimestampOrder(f) => Self::TimestampOrder(f),
             EffectDecision::TransformOrder(f) => Self::TransformOrder(f),
+            EffectDecision::UntapKeepTapped(f) => Self::UntapKeepTapped(f),
             EffectDecision::Checks(f) => Self::Checks(f),
             EffectDecision::Triggers(f) => Self::Triggers(f),
             EffectDecision::TriggerTarget(f) => Self::TriggerTarget(f),
@@ -507,6 +515,12 @@ pub enum GameCommand {
         source: ObjectId,
         ability: ActivatedAbilityId,
         target: TargetRef,
+        payment: Option<ManaPayment>,
+    },
+    ActivateModalAbility {
+        source: ObjectId,
+        ability: ActivatedAbilityId,
+        modes: Vec<crate::mana::CastMode>,
         payment: Option<ManaPayment>,
     },
     ActivateMana {
@@ -1283,6 +1297,15 @@ impl GameState {
                     next.execution.choose_transform_order(frame, objects)?;
                     next.pending = None;
                     None
+                } else if let RuleFrame::UntapKeepTapped(frame) = &pending.frame
+                    && self.pending_turn_work() == Some(TurnWork::Untap)
+                {
+                    let DecisionReply::UntapKeepTapped(objects) = choice else {
+                        return Err(EffectError::WrongDecisionKind.into());
+                    };
+                    next.execution.choose_untap_keep_tapped(frame, objects)?;
+                    next.pending = None;
+                    None
                 } else if let RuleFrame::Opening(frame) = &pending.frame {
                     next.reply_opening(frame, choice)?;
                     next.pending = None;
@@ -1503,7 +1526,8 @@ impl GameState {
                                     | crate::land::EntryChoice::Chapter(_)
                                     | crate::land::EntryChoice::CreatureType(_)
                                     | crate::land::EntryChoice::CardName(_)
-                                    | crate::land::EntryChoice::PayLife(_) => {
+                                    | crate::land::EntryChoice::PayLife(_)
+                                    | crate::land::EntryChoice::OptionIndex(_) => {
                                         return Err(EffectError::WrongDecisionKind.into());
                                     }
                                 }
@@ -2084,6 +2108,29 @@ impl GameState {
             }
             (
                 None,
+                GameCommand::ActivateModalAbility {
+                    source,
+                    ability,
+                    modes,
+                    payment,
+                },
+            ) => {
+                next.activate_for_input(
+                    input.actor,
+                    crate::activated::ActivationRequest {
+                        granting_effect: None,
+                        chosen_x: None,
+                        source,
+                        ability,
+                        origin: crate::activated::ActivationOrigin::Modal(modes),
+                    },
+                    payment,
+                    &mut facts,
+                )?;
+                None
+            }
+            (
+                None,
                 GameCommand::ActivateUntargetedAbility {
                     source,
                     ability,
@@ -2451,7 +2498,7 @@ impl GameState {
             (RuleFrame::DrawReplacement(_) | RuleFrame::ZoneReplacement(_), TurnWork::Draw) => {
                 self.execution.draw_decision() == frame.effect_decision()
             }
-            (RuleFrame::TransformOrder(_), TurnWork::Untap) => true,
+            (RuleFrame::TransformOrder(_) | RuleFrame::UntapKeepTapped(_), TurnWork::Untap) => true,
             (
                 RuleFrame::EntryChoice(_)
                 | RuleFrame::LinkedReturnOrder(_)
@@ -2812,8 +2859,11 @@ impl GameState {
                                 self.turn.as_ref().ok_or(GameError::UnexpectedKernelPhase)?;
                             let transition = self
                                 .execution
-                                .untap_on_turn(self.execution.revision(), turn)?;
-                            self.accept_execution(transition, facts);
+                                .untap_on_turn_with_choice(self.execution.revision(), turn)?;
+                            if let Some(frame) = self.accept_execution(transition, facts) {
+                                self.bind_decision(RuleFrame::UntapKeepTapped(frame))?;
+                                return Ok(self);
+                            }
                             WorkCompleted::Untap
                         }
                         TurnWork::Draw

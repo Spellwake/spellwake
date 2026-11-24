@@ -240,6 +240,9 @@ pub fn reply(value: &DecisionReply) -> Value {
         DecisionReply::CastRecovery(choice) => {
             json!({"tag":"CastRecovery","choice":format!("{choice:?}")})
         }
+        DecisionReply::OptionIndex(index) => {
+            json!({"tag":"OptionIndex","index":index})
+        }
         DecisionReply::ZoneReplacement(reply) => match reply {
             spellwake_engine::effects::ZoneReplacementReply::Devour(id) => {
                 json!({"tag":"Devour","object":id.map(opaque)})
@@ -495,12 +498,21 @@ pub fn reply(value: &DecisionReply) -> Value {
             spellwake_engine::land::EntryChoice::PayLife(pay) => {
                 json!({"tag":"EntryPayLife","pay":pay})
             }
+            spellwake_engine::land::EntryChoice::OptionIndex(index) => {
+                json!({"tag":"EntryOptionIndex","index":index})
+            }
         },
         DecisionReply::TokenAuraChoice(host) => {
             json!({"tag":"TokenAuraChoice","target":target(*host)})
         }
         DecisionReply::TokenEntryChoice(value) => {
             json!({"tag":"TokenEntryChoice","choice":format!("{value:?}")})
+        }
+        DecisionReply::UntapKeepTapped(objects) => {
+            json!({"tag":"UntapKeepTapped","objects":objects.iter().map(opaque).collect::<Vec<_>>()})
+        }
+        DecisionReply::OpeningBattlefield(objects) => {
+            json!({"tag":"OpeningBattlefield","objects":objects.iter().map(opaque).collect::<Vec<_>>()})
         }
     }
 }
@@ -524,6 +536,14 @@ pub fn input(value: &GameInput) -> Value {
             recipient,
         } => {
             json!({"tag":"ActivateManaForPlayer","source":opaque(source),"ability":mana_ref::view(*ability),"recipient":recipient.0})
+        }
+        GameCommand::ActivateModalAbility {
+            source,
+            ability,
+            modes,
+            ..
+        } => {
+            json!({"tag":"ActivateModalAbility","source":opaque(source),"ability":ability.0,"modes":modes.len()})
         }
         GameCommand::ActivateManaWithCostObjects {
             source,
@@ -1105,6 +1125,9 @@ pub fn seed_destination(value: spellwake_engine::object_identity::ObjectDestinat
     match value {
         ObjectDestination::LibraryTop => json!({"tag":"LibraryTop"}),
         ObjectDestination::LibraryBottom => json!({"tag":"LibraryBottom"}),
+        ObjectDestination::LibraryFromTop(offset) => {
+            json!({"tag":"LibraryFromTop","offset":offset})
+        }
         ObjectDestination::Hand => json!({"tag":"Hand"}),
         ObjectDestination::Graveyard => json!({"tag":"Graveyard"}),
         ObjectDestination::Battlefield { controller } => {
@@ -2081,6 +2104,9 @@ fn cast_resource(resource: spellwake_engine::mana::CastResource) -> Value {
         CastResource::TapForAlternative(card) => {
             json!({"tag":"TapForAlternative","card":opaque(card)})
         }
+        CastResource::ExtraCost(card) => {
+            json!({"tag":"ExtraCost","card":opaque(card)})
+        }
         CastResource::WebSlinging(card) => json!({"tag":"WebSlinging","card":opaque(card)}),
         CastResource::Bargain(card) => json!({"tag":"Bargain","card":opaque(card)}),
         CastResource::RevealColorlessCreature(card) => {
@@ -2185,6 +2211,9 @@ pub(crate) fn continuous_effect(value: &ResolvedContinuousEffect) -> Value {
 fn effect_instance(value: EffectInstanceKey) -> Value {
     match value {
         EffectInstanceKey::Emblem(id) => json!({"tag":"Emblem","id":id.sequence()}),
+        EffectInstanceKey::EmblemStatic { emblem, ability } => {
+            json!({"tag":"EmblemStatic","id":emblem.sequence(),"ability":ability.0})
+        }
         EffectInstanceKey::Inherited {
             source,
             ability,
@@ -2199,6 +2228,9 @@ fn effect_instance(value: EffectInstanceKey) -> Value {
         EffectInstanceKey::Resolved(id) => json!({"tag":"Resolved","id":opaque(id)}),
         EffectInstanceKey::Static { source, ability } => {
             json!({"tag":"Static","source":opaque(source),"ability":ability.0})
+        }
+        EffectInstanceKey::TemporaryStatic(id) => {
+            json!({"tag":"TemporaryStatic","id":id})
         }
     }
 }
@@ -2608,6 +2640,9 @@ fn frame_with_cards(value: &RuleFrame, cards: &GameObjects) -> Result<Value, Str
             } => {
                 json!({"tag":"Bottom","chooser":player.0,"count":count,"hand":hand.iter().map(opaque).collect::<Vec<_>>()})
             }
+            OpeningDecision::PregameBattlefield { player, eligible } => {
+                json!({"tag":"PregameBattlefield","chooser":player.0,"eligible":eligible.iter().map(opaque).collect::<Vec<_>>()})
+            }
         },
         RuleFrame::CounterReplacement(frame) => json!({
             "tag":"CounterReplacement","chooser":frame.chooser().0,"object":opaque(frame.object()),
@@ -2714,6 +2749,9 @@ fn frame_with_cards(value: &RuleFrame, cards: &GameObjects) -> Result<Value, Str
         RuleFrame::ResolutionManaColor(value) => {
             json!({"tag":"ResolutionManaColor","revision":value.revision().to_string(),"entry":opaque(value.entry()),"instruction":value.instruction(),"chooser":value.chooser().0,"colors":value.colors().iter().map(opaque).collect::<Vec<_>>()})
         }
+        RuleFrame::OptionIndex(value) => {
+            json!({"tag":"OptionIndex","revision":value.revision().to_string(),"chooser":value.chooser().0,"count":value.count()})
+        }
         RuleFrame::CreatureType(value) => creature_type_frame(value),
         RuleFrame::CastRecovery(value) => {
             json!({"tag":"CastRecovery","revision":value.revision().to_string(),"chooser":value.chooser().0,"spell":opaque(value.spell()),"life_cost":value.life_cost(),"mana_cost":program::cost(value.mana_cost())})
@@ -2815,6 +2853,9 @@ fn frame_with_cards(value: &RuleFrame, cards: &GameObjects) -> Result<Value, Str
                 json!({"tag":"AllocatePrevention","revision":value.revision().to_string(),"batch":opaque(value.batch()),"stage":value.stage().to_string(),"origin":damage_trace::damage_origin_view(*value.origin()),"chooser":value.chooser().0,"application":damage_trace::damage_application_view(value.application()),"capacity":value.capacity(),"required":value.required(),"eligible":value.eligible().iter().map(|domain|json!({"attempt":opaque(domain.attempt()),"source":damage_trace::damage_source_view(domain.source()),"amount":domain.amount()})).collect::<Vec<_>>()})
             }
         },
+        RuleFrame::UntapKeepTapped(f) => {
+            json!({"tag":"UntapKeepTapped","chooser":f.chooser().0,"objects":f.objects().iter().map(opaque).collect::<Vec<_>>()})
+        }
     })
 }
 
@@ -3260,8 +3301,14 @@ fn zone_instance(value: spellwake_engine::effects::ZoneEffectInstance) -> Value 
             CreatedZoneEffect::ShieldCounter => {
                 return json!({"source":opaque(value.source),"effect":"ShieldCounter"});
             }
+            CreatedZoneEffect::UmbraArmor { aura } => {
+                return json!({"source":opaque(value.source),"effect":"UmbraArmor","aura":opaque(aura)});
+            }
             CreatedZoneEffect::FinalityCounter => {
                 return json!({"source":opaque(value.source),"effect":"FinalityCounter"});
+            }
+            CreatedZoneEffect::TemporaryLeaveExile(id) => {
+                return json!({"source":opaque(value.source),"effect":"TemporaryLeaveExile","id":id});
             }
         };
         return json!({"source":opaque(value.source),"effect":kind,"entry":opaque(entry),"instruction":instruction});
@@ -3320,6 +3367,25 @@ pub fn resolution_selection_state(value: ResolutionSelectionState<'_>) -> Value 
         }
         ResolutionSelectionOperation::ReturnAnnouncedTargets { objects } => {
             json!({"tag":"ReturnAnnouncedTargets","objects":objects.iter().map(opaque).collect::<Vec<_>>()})
+        }
+        ResolutionSelectionOperation::ExileFromZone { zone, filter } => {
+            json!({"tag":"ExileFromZone","zone":format!("{zone:?}"),"filter":format!("{filter:?}")})
+        }
+        ResolutionSelectionOperation::TapOrUntapControlled { tap, filter } => {
+            json!({"tag":"TapOrUntapControlled","tap":tap,"filter":format!("{filter:?}")})
+        }
+        ResolutionSelectionOperation::Blight { amount } => {
+            json!({"tag":"Blight","amount":amount})
+        }
+        ResolutionSelectionOperation::CollectEvidence { minimum } => {
+            json!({"tag":"CollectEvidence","minimum":minimum})
+        }
+        ResolutionSelectionOperation::SelectZoneCards {
+            source_zone,
+            destination,
+            ..
+        } => {
+            json!({"tag":"SelectZoneCards","source_zone":format!("{source_zone:?}"),"destination":format!("{destination:?}")})
         }
         ResolutionSelectionOperation::ReturnSingle { object } => {
             json!({"tag":"ReturnSingle","object":opaque(object)})
@@ -3422,6 +3488,7 @@ pub fn resolution_selection_state(value: ResolutionSelectionState<'_>) -> Value 
             nonland_only,
             count,
             action,
+            ..
         } => {
             let mut row = json!({"tag":"RevealedHand","chooser":chooser.0,"minimum_mana_value":minimum_mana_value,"action":opaque(action)});
             if *nonland_only {
@@ -3910,6 +3977,15 @@ pub fn occurrence(value: &RulesOccurrence) -> Value {
         }
         RulesOccurrence::Mutated { permanent } => {
             json!({"tag":"Mutated","object":opaque(permanent)})
+        }
+        RulesOccurrence::ClassLevelReached { object, level } => {
+            json!({"tag":"ClassLevelReached","object":opaque(object),"level":level})
+        }
+        RulesOccurrence::CaseSolved { object } => {
+            json!({"tag":"CaseSolved","object":opaque(object)})
+        }
+        RulesOccurrence::PreparedSpellCast { source, entry } => {
+            json!({"tag":"PreparedSpellCast","source":opaque(source),"entry":opaque(entry)})
         }
         RulesOccurrence::Phased { objects, out } => {
             json!({"tag":"Phased","objects":objects.iter().map(opaque).collect::<Vec<_>>(),"out":out})
@@ -4438,6 +4514,37 @@ pub fn occurrence(value: &RulesOccurrence) -> Value {
             appearance: app,
         } => {
             json!({"tag":"PermanentTappedForMana","source":opaque(source),"actor":actor.0,"appearance":appearance(app)})
+        }
+        RulesOccurrence::StateConditionMet {
+            object,
+            definition,
+            grant,
+        } => {
+            json!({"tag":"StateConditionMet","object":opaque(object),"definition":opaque(definition),"grant":grant.map(opaque)})
+        }
+        RulesOccurrence::KeywordActionPerformed { player, action } => {
+            json!({"tag":"KeywordActionPerformed","player":player.0,"action":format!("{action:?}")})
+        }
+        RulesOccurrence::DoorUnlocked {
+            object,
+            player,
+            half,
+            fully_unlocked,
+        } => {
+            json!({"tag":"DoorUnlocked","object":opaque(object),"player":player.0,"half":format!("{half:?}"),"fully_unlocked":fully_unlocked})
+        }
+        RulesOccurrence::DieRolled {
+            player,
+            sides,
+            result,
+        } => {
+            json!({"tag":"DieRolled","player":player.0,"sides":sides,"result":result})
+        }
+        RulesOccurrence::VotesCast { options, counts } => {
+            json!({"tag":"VotesCast","options":options,"counts":counts})
+        }
+        RulesOccurrence::BecameMonstrous { object, count } => {
+            json!({"tag":"BecameMonstrous","object":opaque(object),"count":count})
         }
     }
 }

@@ -27,8 +27,14 @@ pub enum CreatedZoneEffect {
     },
     /// CR 122.1c shield counter replaces destruction with removing a shield counter.
     ShieldCounter,
+    /// CR 702.89 Umbra armor replaces destruction of enchanted permanent with removing damage and destroying the Aura.
+    UmbraArmor {
+        aura: ObjectId,
+    },
     /// CR 122.1h finality counter replaces moving from battlefield to graveyard with exile.
     FinalityCounter,
+    /// Duration-scoped temporary rule replacing any battlefield departure with exile.
+    TemporaryLeaveExile(u64),
 }
 /// Actual source incarnation plus its copiable definition-local identity.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -398,6 +404,7 @@ pub struct ZoneReplacementBatch {
     apnap: Vec<SeatId>,
     candidates: BTreeMap<ZoneEventKey, ZoneCandidate>,
     sources: BTreeMap<ZoneEffectInstance, ZoneReplacementSource>,
+    matching_subjects: BTreeSet<(ZoneEffectInstance, ObjectId)>,
     applied: BTreeMap<ZoneEventKey, BTreeSet<ZoneEffectInstance>>,
     optional: BTreeMap<ZoneApplication, ZoneOptionalAnswer>,
     history: Vec<ZoneReplacementStep>,
@@ -511,11 +518,25 @@ impl ZoneReplacementBatch {
             })
         })
     }
+    pub(super) fn umbra_armor_saves(&self) -> impl Iterator<Item = (ObjectId, ObjectId)> + '_ {
+        self.applied.iter().flat_map(|(event, effects)| {
+            effects
+                .iter()
+                .filter_map(move |effect| match effect.created {
+                    Some(CreatedZoneEffect::UmbraArmor { aura }) => Some((event.before(), aura)),
+                    _ => None,
+                })
+        })
+    }
     pub(super) fn saved_from_destruction(&self, object: ObjectId) -> bool {
-        self.regenerated(object) || self.shield_counter_saves().any(|id| id == object)
+        self.regenerated(object)
+            || self.shield_counter_saves().any(|id| id == object)
+            || self.umbra_armor_saves().any(|(id, _)| id == object)
     }
     pub(super) fn has_destruction_saves(&self) -> bool {
-        self.regenerations().next().is_some() || self.shield_counter_saves().next().is_some()
+        self.regenerations().next().is_some()
+            || self.shield_counter_saves().next().is_some()
+            || self.umbra_armor_saves().next().is_some()
     }
     pub(super) fn entry_controller(&self, object: ObjectId) -> Option<SeatId> {
         self.selected_controllers
@@ -553,7 +574,7 @@ impl ZoneReplacementBatch {
                 let donors = self
                     .copy_rules
                     .get(&object)
-                    .map_or(&[][..], |rule| self.copy_pool.domain(rule, player));
+                    .map_or_else(Vec::new, |rule| self.copy_pool.domain(rule, player));
                 let creature = self.copies.get(&object).map_or_else(
                     || self.eligible_nontoken_creatures.contains(&object),
                     |copy| {
@@ -751,7 +772,11 @@ impl ZoneReplacementBatch {
         }
         if matches!(
             source.instance.created,
-            Some(CreatedZoneEffect::Regenerate { .. } | CreatedZoneEffect::ShieldCounter)
+            Some(
+                CreatedZoneEffect::Regenerate { .. }
+                    | CreatedZoneEffect::ShieldCounter
+                    | CreatedZoneEffect::UmbraArmor { .. }
+            )
         ) {
             let destroyed = match candidate.reason {
                 ZoneReason::Destroyed => true,
@@ -782,7 +807,13 @@ impl ZoneReplacementBatch {
                 || (source.instance.created == Some(CreatedZoneEffect::Commander)
                     && candidate.current == PublicZoneDestination::Library)
                 || ((source.instance.unearth
-                    || source.instance.created == Some(CreatedZoneEffect::CorpseReturn))
+                    || matches!(
+                        source.instance.created,
+                        Some(
+                            CreatedZoneEffect::CorpseReturn
+                                | CreatedZoneEffect::TemporaryLeaveExile(_)
+                        )
+                    ))
                     && matches!(
                         candidate.current,
                         PublicZoneDestination::Hand
@@ -798,11 +829,15 @@ impl ZoneReplacementBatch {
                 ZoneObjectKind::Card => candidate.before.card_id().is_some(),
                 ZoneObjectKind::Token => candidate.before.is_token(),
             }
-            && match definition.subject {
+            && match &definition.subject {
                 ZoneReplacementSubject::AnyObject => true,
                 ZoneReplacementSubject::SourceSelf => {
                     candidate.before.id() == source.instance.source
                 }
+                ZoneReplacementSubject::Matching { .. }
+                | ZoneReplacementSubject::DamagedBySourceThisTurn => self
+                    .matching_subjects
+                    .contains(&(application.effect, candidate.before.id())),
             }
     }
     fn applications(&self) -> Option<(SeatId, Vec<ZoneApplication>)> {
@@ -1323,6 +1358,39 @@ impl EffectWindow {
                     },
                 );
             }
+            for aura in evaluated.objects.values().filter(|p| {
+                p.zone == ObjectZone::Battlefield
+                    && p.attached_to == Some(TargetRef::Object(before.id()))
+                    && p.has_keyword(KeywordAbility::UmbraArmor)
+            }) {
+                let instance = ZoneEffectInstance {
+                    source: before.id(),
+                    ability: ZoneReplacementAbilityId(0),
+                    unearth: false,
+                    madness: false,
+                    created: Some(CreatedZoneEffect::UmbraArmor { aura: aura.object }),
+                };
+                let definition = ZoneReplacementAbility {
+                    id: instance.ability,
+                    actions: ZoneActionPredicate::OneOf(BTreeSet::from([
+                        ZoneActionKind::StateBased,
+                        ZoneActionKind::EffectDestroy,
+                    ])),
+                    destination: PublicZoneDestination::Graveyard,
+                    replace_with: PublicZoneDestination::Battlefield,
+                    objects: ZoneObjectKind::Either,
+                    subject: ZoneReplacementSubject::SourceSelf,
+                    choice: ZoneReplacementChoice::Mandatory,
+                };
+                sources.insert(
+                    instance,
+                    ZoneReplacementSource {
+                        instance,
+                        before: before.clone(),
+                        definition,
+                    },
+                );
+            }
             if self
                 .counters_of_kind(before.id(), CounterKind::Finality)
                 .is_positive()
@@ -1351,6 +1419,40 @@ impl EffectWindow {
                         definition,
                     },
                 );
+            }
+            if before.zone() == ObjectZone::Battlefield {
+                for active in &self.temporary_rules {
+                    if matches!(
+                        active.rule,
+                        crate::program::TemporaryRuleKind::ExileIfLeavesBattlefield { .. }
+                    ) && active.resolved_objects.contains(&before.id())
+                    {
+                        let instance = ZoneEffectInstance {
+                            source: before.id(),
+                            ability: ZoneReplacementAbilityId(0),
+                            unearth: false,
+                            madness: false,
+                            created: Some(CreatedZoneEffect::TemporaryLeaveExile(active.id)),
+                        };
+                        let definition = ZoneReplacementAbility {
+                            id: instance.ability,
+                            actions: ZoneActionPredicate::Any,
+                            objects: ZoneObjectKind::Either,
+                            subject: ZoneReplacementSubject::SourceSelf,
+                            destination: PublicZoneDestination::Graveyard,
+                            replace_with: PublicZoneDestination::Exile,
+                            choice: ZoneReplacementChoice::Mandatory,
+                        };
+                        sources.insert(
+                            instance,
+                            ZoneReplacementSource {
+                                instance,
+                                before: before.clone(),
+                                definition,
+                            },
+                        );
+                    }
+                }
             }
             if before.is_unearthed() || before.has_corpse_return() {
                 let instance = ZoneEffectInstance {
@@ -1442,7 +1544,11 @@ impl EffectWindow {
             | ResolutionSelectionOperation::CopyDifferentlyNamedTokens
             | ResolutionSelectionOperation::Bolster { .. }
             | ResolutionSelectionOperation::Amass { .. }
-            | ResolutionSelectionOperation::Untap { .. } => {
+            | ResolutionSelectionOperation::Untap { .. }
+            | ResolutionSelectionOperation::TapOrUntapControlled { .. }
+            | ResolutionSelectionOperation::Blight { .. }
+            | ResolutionSelectionOperation::CollectEvidence { .. }
+            | ResolutionSelectionOperation::SelectZoneCards { .. } => {
                 return Err(EffectError::InconsistentSelectionWork);
             }
             ResolutionSelectionOperation::DestroyAnnouncedTargets { .. }
@@ -1453,6 +1559,7 @@ impl EffectWindow {
             | ResolutionSelectionOperation::ExileChosenGraveyardCards { .. }
             | ResolutionSelectionOperation::ExileLinkedTargets { .. }
             | ResolutionSelectionOperation::ExileChosen { .. }
+            | ResolutionSelectionOperation::ExileFromZone { .. }
             | ResolutionSelectionOperation::ExileFromHand { .. }
             | ResolutionSelectionOperation::ExileSingle { .. } => ZoneActionKind::EffectExile,
             ResolutionSelectionOperation::WholeGroup { destination, .. } => match destination {
@@ -1902,6 +2009,10 @@ impl EffectWindow {
                 Some(
                     Instruction::DestroyGroupWithoutRegeneration(_)
                         | Instruction::DestroyTargetWithoutRegeneration
+                        | Instruction::DestroySubject {
+                            no_regeneration: true,
+                            ..
+                        }
                         | Instruction::DestroyCapturedCombatCreature {
                             no_regeneration: true
                         }
@@ -1994,6 +2105,67 @@ impl EffectWindow {
                         .and_then(devour::multiplier)
                         .is_some()
                 }));
+        let mut matching_subjects = BTreeSet::new();
+        let empty_excluded = BTreeSet::new();
+        for (&instance, source) in &sources {
+            match &source.definition.subject {
+                ZoneReplacementSubject::Matching {
+                    filter,
+                    owner_relation,
+                } => {
+                    let Some(source_ctrl) = evaluated
+                        .get(instance.source)
+                        .and_then(|v| v.controller)
+                        .or(source.before.controller())
+                    else {
+                        continue;
+                    };
+                    let opponents = self
+                        .combat_rules
+                        .opponents(self.window.participants(), source_ctrl)?;
+                    for candidate in candidates.values() {
+                        let cid = candidate.before.id();
+                        let owner_ok = match owner_relation {
+                            None => true,
+                            Some(crate::program::PlayerRelation::Controller) => {
+                                candidate.before.owner() == source_ctrl
+                            }
+                            Some(crate::program::PlayerRelation::Opponent) => {
+                                opponents.contains(&candidate.before.owner())
+                            }
+                            Some(crate::program::PlayerRelation::AnyParticipant) => true,
+                        };
+                        if !owner_ok {
+                            continue;
+                        }
+                        let Some(view) = evaluated.get(cid) else {
+                            continue;
+                        };
+                        if self.matches_object_filter(
+                            **filter,
+                            view,
+                            source_ctrl,
+                            Some(instance.source),
+                            &empty_excluded,
+                            &evaluated,
+                        ) {
+                            matching_subjects.insert((instance, cid));
+                        }
+                    }
+                }
+                ZoneReplacementSubject::DamagedBySourceThisTurn => {
+                    if let Some(pairs) = &self.characteristics.creature_damage_pairs {
+                        for candidate in candidates.values() {
+                            let cid = candidate.before.id();
+                            if pairs.contains(&(instance.source, cid)) {
+                                matching_subjects.insert((instance, cid));
+                            }
+                        }
+                    }
+                }
+                ZoneReplacementSubject::AnyObject | ZoneReplacementSubject::SourceSelf => {}
+            }
+        }
         let mut batch = ZoneReplacementBatch {
             devour: devour::Devour::default(),
             copy_rules,
@@ -2015,6 +2187,7 @@ impl EffectWindow {
             apnap: self.window.apnap_players()?.collect(),
             candidates,
             sources,
+            matching_subjects,
             applied: BTreeMap::new(),
             optional: BTreeMap::new(),
             history: vec![],

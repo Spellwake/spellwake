@@ -51,6 +51,8 @@ pub enum EntryChoice {
     CardName(CardNameIndex),
     /// Optional life payment as this permanent enters (`true` = pay life to enter untapped).
     PayLife(bool),
+    /// Index into a fixed closed option set for an entry choice (e.g. card type, basic land type, odd/even, Khans/Dragons).
+    OptionIndex(u8),
 }
 
 /// Printed ability replacing the initial untapped status of the entering permanent.
@@ -63,12 +65,36 @@ pub enum EntryTap {
     Always,
     /// Enter tapped after choosing a color other than the excluded color.
     AlwaysChooseColorExcept(ManaType),
+    /// Choose any WUBRG color as this permanent enters, without changing its tapped status.
+    ChooseColor,
+    /// Choose any WUBRG color other than the excluded color as this permanent enters, without changing its tapped status.
+    ChooseColorExcept(ManaType),
     /// Choose a creature type as this permanent enters, without changing its tapped status.
     ChooseCreatureType,
     /// Choose a name using the source-qualified nonland card catalogue.
     ChooseNonlandCardName,
+    /// Choose an opponent as this permanent enters, without changing its tapped status.
+    ChooseOpponent,
+    /// Choose any player as this permanent enters, without changing its tapped status.
+    ChoosePlayer,
     /// Choose two distinct players before this permanent enters.
     ChooseTwoPlayers,
+    /// Choose a card type as this permanent enters.
+    ChooseCardType,
+    /// Choose a basic land type as this permanent enters.
+    ChooseBasicLandType,
+    /// Choose odd or even as this permanent enters.
+    ChooseOddOrEven,
+    /// Choose Khans or Dragons as this permanent enters.
+    ChooseKhansOrDragons,
+    /// CR 702.98 Unleash: optionally enter with a +1/+1 counter.
+    Unleash,
+    /// CR 702.136 Riot: choose a +1/+1 counter or haste on entry.
+    Riot,
+    /// CR 702.104 Tribute N: an opponent chooses to put N +1/+1 counters on this permanent as it enters.
+    Tribute(u8),
+    /// CR 712.12: choose front or back face when playing a double-faced land.
+    ChooseModalFace,
     /// Choose an opponent to protect an entering Siege (CR 310.12a).
     SiegeProtector,
     /// This permanent enters under a chosen opponent’s control.
@@ -84,6 +110,33 @@ pub enum EntryTap {
     UnlessPlayerLifeThirteenOrLess,
     /// Enters tapped unless its controller chooses to pay this much life (e.g. Shocklands).
     UnlessPayLife(u8),
+}
+
+impl EntryTap {
+    /// Closed option labels for option-indexed entry choices, if applicable.
+    #[must_use]
+    pub const fn option_labels(self) -> Option<&'static [&'static str]> {
+        match self {
+            Self::ChooseCardType => Some(&[
+                "Artifact",
+                "Battle",
+                "Creature",
+                "Enchantment",
+                "Instant",
+                "Land",
+                "Planeswalker",
+                "Sorcery",
+            ]),
+            Self::ChooseBasicLandType => Some(&["Plains", "Island", "Swamp", "Mountain", "Forest"]),
+            Self::ChooseOddOrEven => Some(&["Odd", "Even"]),
+            Self::ChooseKhansOrDragons => Some(&["Khans", "Dragons"]),
+            Self::Unleash => Some(&["No +1/+1 counter", "+1/+1 counter"]),
+            Self::Riot => Some(&["+1/+1 counter", "Haste"]),
+            Self::Tribute(_) => Some(&["Pay tribute", "Decline tribute"]),
+            Self::ChooseModalFace => Some(&["Front face", "Back face"]),
+            _ => None,
+        }
+    }
 }
 
 /// All land subtypes in the retained September 25, 2026 Comprehensive Rules.

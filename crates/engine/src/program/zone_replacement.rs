@@ -118,12 +118,19 @@ pub enum ZoneObjectKind {
     Either,
 }
 /// Bounded object relation to the actual replacement source.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ZoneReplacementSubject {
     /// Every eligible object.
     AnyObject,
     /// The source's exact incarnation.
     SourceSelf,
+    /// Objects matching an orthogonal [`super::ObjectFilter`] and optional owner relation.
+    Matching {
+        filter: Box<super::ObjectFilter>,
+        owner_relation: Option<super::PlayerRelation>,
+    },
+    /// Creatures dealt damage by the replacement source earlier this turn (CR 614.6).
+    DamagedBySourceThisTurn,
 }
 /// Optionality always belongs to the affected object controller or owner.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -151,22 +158,38 @@ pub struct ZoneReplacementAbility {
     /// Mandatory or affected-player optional application.
     pub choice: ZoneReplacementChoice,
 }
-pub(super) fn validate(program: &super::Program) -> Result<(), DefinitionError> {
+pub(super) fn validate(
+    program: &super::Program,
+    vocabulary: &spellwake_contracts::creature_types::CreatureTypeVocabulary,
+) -> Result<(), DefinitionError> {
     if program.zone_replacements.is_empty() {
         return Ok(());
     }
-    if !matches!(program.kind, ProgramKind::Permanent(_)) {
-        return Err(DefinitionError::UnsupportedZoneReplacementScope);
-    }
+    let is_permanent = matches!(program.kind, ProgramKind::Permanent(_));
     let mut ids = BTreeSet::new();
     for ability in &program.zone_replacements {
         if !ids.insert(ability.id) {
             return Err(DefinitionError::DuplicateAbility);
         }
+        if let ZoneReplacementSubject::Matching { filter, .. } = &ability.subject {
+            filter.validate_vocabulary(vocabulary)?;
+        }
+        if !is_permanent
+            && !(ability.subject == ZoneReplacementSubject::SourceSelf
+                && ability.destination == PublicZoneDestination::Graveyard
+                && matches!(
+                    ability.replace_with,
+                    PublicZoneDestination::Exile | PublicZoneDestination::Library
+                ))
+        {
+            return Err(DefinitionError::UnsupportedZoneReplacementScope);
+        }
         if ability.actions == ZoneActionPredicate::Any
-            && ability.subject == ZoneReplacementSubject::SourceSelf
             && ability.destination == PublicZoneDestination::Graveyard
-            && ability.replace_with == PublicZoneDestination::Exile
+            && matches!(
+                ability.replace_with,
+                PublicZoneDestination::Exile | PublicZoneDestination::Library
+            )
             && ability.choice == ZoneReplacementChoice::Mandatory
         {
             continue;
@@ -179,7 +202,9 @@ pub(super) fn validate(program: &super::Program) -> Result<(), DefinitionError> 
         }
         if ability.destination == PublicZoneDestination::Command
             || ability.replace_with == PublicZoneDestination::Command
-            || ability.replace_with == PublicZoneDestination::Library
+            || (ability.replace_with == PublicZoneDestination::Library
+                && !(ability.destination == PublicZoneDestination::Graveyard
+                    && ability.choice == ZoneReplacementChoice::Mandatory))
             || (ability.destination == PublicZoneDestination::Library
                 && !actions.iter().all(|action| {
                     matches!(

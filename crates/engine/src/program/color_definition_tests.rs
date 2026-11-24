@@ -53,7 +53,10 @@ fn color_definition_roundtrips_program_and_printed_text_including_colorless() {
             flashback_life: 0,
             additional_cast_costs: vec![],
             activation_restrictions: Default::default(),
+            activation_modes: Default::default(),
             activation_hybrid_symbols: Default::default(),
+            extra_activation_costs: Default::default(),
+            extra_cast_costs: Vec::new(),
             loyalty_costs: Default::default(),
             variable_loyalty_costs: Default::default(),
             face_up_abilities: Vec::new(),
@@ -65,6 +68,7 @@ fn color_definition_roundtrips_program_and_printed_text_including_colorless() {
             triggered: vec![],
             continuous: p.continuous.clone(),
             additional_battlefield_abilities: p.additional_battlefield_abilities.clone(),
+            static_conditions: p.static_conditions.clone(),
         };
         assert_eq!(
             codec::printed_text(&text)["continuous"],

@@ -1327,6 +1327,7 @@ fn cmm_darksteel_ingot_survives_destroy_but_can_be_sacrificed_and_adds_each_colo
                         any_types: Default::default(),
                         required_types: [CardType::Artifact].into(),
                         forbidden_types: BTreeSet::new(),
+                        object_filter: None,
                     },
                 },
             ),

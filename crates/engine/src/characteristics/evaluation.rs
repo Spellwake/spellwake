@@ -12,6 +12,11 @@ use std::collections::{BTreeMap, BTreeSet};
 #[derive(Clone, Copy)]
 enum InstanceOrigin<'a> {
     Emblem(&'a crate::emblem::Emblem),
+    EmblemStatic {
+        emblem: &'a crate::emblem::Emblem,
+        ability: &'a StaticContinuousAbility,
+    },
+    TemporaryStatic(&'a TemporaryBattlefieldStatic),
     Resolved(&'a ResolvedContinuousEffect),
     Static {
         source: ObjectId,
@@ -36,6 +41,18 @@ impl Instance<'_> {
                     CharacteristicBucket::Abilities | CharacteristicBucket::ModifyPT
                 )
             }
+            InstanceOrigin::EmblemStatic { ability, .. } => match ability {
+                StaticContinuousAbility::Battlefield { parts, .. } => {
+                    parts.0.iter().any(|part| part.bucket() == bucket)
+                }
+                _ => false,
+            },
+            InstanceOrigin::TemporaryStatic(temp) => match &temp.ability {
+                StaticContinuousAbility::Battlefield { parts, .. } => {
+                    parts.0.iter().any(|part| part.bucket() == bucket)
+                }
+                _ => false,
+            },
             InstanceOrigin::Resolved(effect) => {
                 effect.parts.0.iter().any(|part| part.bucket() == bucket)
             }
@@ -105,6 +122,7 @@ pub(crate) fn evaluate(
             && physical.face_down().is_none()
             && copy_timestamp.is_none()
             && let Some(front) = physical.card_id().and_then(|id| world.programs.get(&id))
+            && front.modal_back.is_none()
         {
             defined.mana_value = front.mana_value();
         }
@@ -236,6 +254,7 @@ pub(crate) fn evaluate(
                     .permanent()
                     .and_then(|permanent| permanent.entry_tap),
                 attack_requirement: program.attack_requirement,
+                additional_attack_requirements: program.additional_attack_requirements.clone(),
                 combat_limits: program.combat_limits,
                 entry_counter_abilities: !program.entry_counter_abilities.is_empty(),
                 face_up: (0..program.face_up_abilities.len()).collect(),
@@ -377,21 +396,64 @@ pub(crate) fn evaluate(
             },
         );
     }
+    let mut emblem_rules: Vec<(SeatId, StaticContinuousAbility)> = Vec::new();
     for emblem in world.state.emblems.values() {
         if !used_timestamps.insert(emblem.timestamp) {
             return Err(CharacteristicInvariantError::DuplicateTimestamp(
                 emblem.timestamp,
             ));
         }
-        let key = EffectInstanceKey::Emblem(emblem.id);
-        instances.insert(
-            key,
-            Instance {
+        match &emblem.definition {
+            crate::emblem::EmblemDefinition::Authored { continuous, .. } => {
+                for ability in continuous {
+                    if matches!(ability, StaticContinuousAbility::Battlefield { .. }) {
+                        let key = EffectInstanceKey::EmblemStatic {
+                            emblem: emblem.id,
+                            ability: ability.id(),
+                        };
+                        instances.insert(
+                            key,
+                            Instance {
+                                key,
+                                timestamp: emblem.timestamp,
+                                origin: InstanceOrigin::EmblemStatic { emblem, ability },
+                            },
+                        );
+                    } else {
+                        emblem_rules.push((emblem.controller, ability.clone()));
+                    }
+                }
+            }
+            _ => {
+                let key = EffectInstanceKey::Emblem(emblem.id);
+                instances.insert(
+                    key,
+                    Instance {
+                        key,
+                        timestamp: emblem.timestamp,
+                        origin: InstanceOrigin::Emblem(emblem),
+                    },
+                );
+            }
+        }
+    }
+    for temp in world.state.temporary_statics.values() {
+        if !used_timestamps.insert(temp.timestamp) {
+            return Err(CharacteristicInvariantError::DuplicateTimestamp(
+                temp.timestamp,
+            ));
+        }
+        if matches!(temp.ability, StaticContinuousAbility::Battlefield { .. }) {
+            let key = EffectInstanceKey::TemporaryStatic(temp.id);
+            instances.insert(
                 key,
-                timestamp: emblem.timestamp,
-                origin: InstanceOrigin::Emblem(emblem),
-            },
-        );
+                Instance {
+                    key,
+                    timestamp: temp.timestamp,
+                    origin: InstanceOrigin::TemporaryStatic(temp),
+                },
+            );
+        }
     }
     let mut trace = EvaluationTrace::default();
     let mut copies: Vec<_> = world
@@ -538,6 +600,17 @@ pub(crate) fn evaluate(
                     let difference = counters.plus_one.minus(&counters.minus_one);
                     pt.derived.power = pt.derived.power.plus(&difference);
                     pt.derived.toughness = pt.derived.toughness.plus(&difference);
+                    for (kind, counts) in &world.state.named_counters {
+                        if let crate::effects::CounterKind::PtDelta { power, toughness } = *kind
+                            && let Some(cnt) = counts.get(object)
+                            && cnt.is_positive()
+                        {
+                            let dp = cnt.times(&i64::from(power).into());
+                            let dt = cnt.times(&i64::from(toughness).into());
+                            pt.derived.power = pt.derived.power.plus(&dp);
+                            pt.derived.toughness = pt.derived.toughness.plus(&dt);
+                        }
+                    }
                     if counters.plus_one.is_positive() || counters.minus_one.is_positive() {
                         trace.counter_applications.push(CounterApplication {
                             object: *object,
@@ -549,6 +622,46 @@ pub(crate) fn evaluate(
                     }
                 }
             }
+        }
+    }
+    // Disable any conditional static battlefield rule whose StaticSourceCondition is not met.
+    let mut disabled_statics: Vec<(ObjectId, StaticAbilityId)> = Vec::new();
+    for o in objects.values() {
+        if o.zone != ObjectZone::Battlefield || o.printed_text.static_conditions.is_empty() {
+            continue;
+        }
+        for (id, cond) in &o.printed_text.static_conditions {
+            let met = o.controller.is_some_and(|ctrl| {
+                static_source_condition_met(cond, world, o.object, ctrl, &objects, &battlefield)
+            });
+            if !met {
+                disabled_statics.push((o.object, *id));
+            }
+        }
+    }
+    for (obj_id, static_id) in disabled_statics {
+        if let Some(o) = objects.get_mut(&obj_id) {
+            if o.abilities.continuous == Some(static_id) {
+                o.abilities.continuous = None;
+            }
+            o.abilities
+                .additional_battlefield_abilities
+                .retain(|id| *id != static_id);
+        }
+    }
+    // CR 701.52c Ring-bearer level 1: legendary and cannot be blocked by creatures with greater power.
+    for (&seat, &bearer_id) in &world.state.ring_bearer {
+        if world.state.ring_level.get(&seat).copied().unwrap_or(0) >= 1
+            && let Some(bearer) = objects.get_mut(&bearer_id)
+            && bearer.zone == ObjectZone::Battlefield
+            && bearer.controller == Some(seat)
+        {
+            bearer
+                .current_supertypes
+                .insert(crate::program::Supertype::Legendary);
+            bearer
+                .blocking_restrictions
+                .push(BlockingRestriction::CannotBeBlockedByGreaterPower);
         }
     }
     // Graveyard grants use each source's final controller and active ability roster.
@@ -629,6 +742,7 @@ pub(crate) fn evaluate(
         objects,
         trace,
         player_color_protection: world.state.player_color_protection.clone(),
+        emblem_rules,
     };
     let improvised: Vec<_> = evaluated
         .objects
@@ -922,6 +1036,10 @@ fn select_affected(
                 && selector
                     .forbidden_keyword
                     .is_none_or(|kw| !object.has_keyword(kw))
+                && selector
+                    .forbidden_keywords
+                    .iter()
+                    .all(|kw| !object.has_keyword(*kw))
                 && (!selector.any_counter || object.has_any_counter)
                 && (selector.min_power.is_none_or(|min| {
                     object
@@ -1149,6 +1267,73 @@ fn static_source_condition_met(
         SourceIsUntapped => objects
             .get(&source)
             .is_some_and(|o| o.tapped == Some(false)),
+        SourceClassLevelAtLeast(min) => {
+            world.state.class_levels.get(&source).copied().unwrap_or(1) >= *min
+        }
+        SourceIsSolved => world.state.solved_cases.contains(&source),
+        SourceEnteredThisTurn => world.state.entered_objects_this_turn.contains(&source),
+        SourcePaired => world.state.paired_creatures.contains_key(&source),
+        SourceIsPrepared => world.state.prepared.contains(&source),
+        NonlandPermanentsEnteredThisTurnAtLeast(min) => {
+            let total = world
+                .state
+                .permanents_entered_this_turn
+                .get(&controller)
+                .copied()
+                .unwrap_or(0);
+            let lands = world
+                .state
+                .entered_types_this_turn
+                .get(&controller)
+                .and_then(|by_type| by_type.get(&CardType::Land))
+                .copied()
+                .unwrap_or(0);
+            total.saturating_sub(lands) >= *min
+        }
+        AnyLibraryAtMost(max) => world.participants.iter().any(|&seat| {
+            objects
+                .values()
+                .filter(|c| c.zone == ObjectZone::Library(seat))
+                .count()
+                <= usize::from(*max)
+        }),
+        AnyPlayerHandCountAtMost(max) => world.participants.iter().any(|&seat| {
+            objects
+                .values()
+                .filter(|c| c.zone == ObjectZone::Hand(seat))
+                .count()
+                <= usize::from(*max)
+        }),
+        MostCommonPermanentColor { color, or_tied } => {
+            let mut counts = [0usize; 5];
+            let idx = |c: Color| match c {
+                Color::White => 0,
+                Color::Blue => 1,
+                Color::Black => 2,
+                Color::Red => 3,
+                Color::Green => 4,
+            };
+            for id in battlefield {
+                if let Some(perm) = objects.get(id) {
+                    for &c in &perm.current_colors {
+                        counts[idx(c)] += 1;
+                    }
+                }
+            }
+            let target = counts[idx(*color)];
+            let max_other = counts
+                .iter()
+                .enumerate()
+                .filter(|&(i, _)| i != idx(*color))
+                .map(|(_, &n)| n)
+                .max()
+                .unwrap_or(0);
+            if *or_tied {
+                target >= max_other
+            } else {
+                target > max_other
+            }
+        }
         ControllerHasCityBlessing => world.state.city_blessing.contains(&controller),
         ControllerGainedLifeThisTurn => world
             .state
@@ -1250,6 +1435,35 @@ fn static_source_condition_met(
                 world.name_rules,
             ) >= i64::from(*minimum).into()
         }
+        Eval(cond) => {
+            let ctx = super::WorldEvalCtx {
+                active_player: world.active_player,
+                participants: world.participants,
+                life: world.life,
+                combat: world.combat,
+                cards: world.cards,
+                programs: world.programs,
+                state: world.state,
+                objects,
+                source,
+                controller,
+                name_rules: world.name_rules,
+                trigger_subject: None,
+                related_player: None,
+                defending_player: None,
+            };
+            super::eval_world_condition(&ctx, cond)
+        }
+        RoomDoorUnlocked(half) => world
+            .state
+            .unlocked_doors
+            .get(&source)
+            .is_some_and(|doors| doors.is_unlocked(*half)),
+        RoomFullyUnlocked => world
+            .state
+            .unlocked_doors
+            .get(&source)
+            .is_some_and(|doors| doors.fully_unlocked()),
         Not(inner) => {
             !static_source_condition_met(inner, world, source, controller, objects, battlefield)
         }
@@ -1355,7 +1569,8 @@ fn numeric(
                         let val = match stat {
                             crate::program::ObjectStatKind::Power => &pt.derived.power,
                             crate::program::ObjectStatKind::Toughness => &pt.derived.toughness,
-                            crate::program::ObjectStatKind::ManaValue => return acc,
+                            crate::program::ObjectStatKind::ManaValue
+                            | crate::program::ObjectStatKind::Loyalty => return acc,
                         };
                         acc.plus(val)
                     })
@@ -1369,7 +1584,8 @@ fn numeric(
                             crate::program::ObjectStatKind::Toughness => {
                                 pt.derived.toughness.clone()
                             }
-                            crate::program::ObjectStatKind::ManaValue => 0.into(),
+                            crate::program::ObjectStatKind::ManaValue
+                            | crate::program::ObjectStatKind::Loyalty => 0.into(),
                         },
                     )
             }
@@ -1439,6 +1655,25 @@ fn numeric(
                 }
             };
             if active { bonus.clone() } else { 0.into() }
+        }
+        NumericExpression::Eval(expr) => {
+            let ctx = super::WorldEvalCtx {
+                active_player: world.active_player,
+                participants: world.participants,
+                life: world.life,
+                combat: world.combat,
+                cards: world.cards,
+                programs: world.programs,
+                state: world.state,
+                objects,
+                source,
+                controller,
+                name_rules: world.name_rules,
+                trigger_subject: None,
+                related_player: None,
+                defending_player: None,
+            };
+            super::eval_world_value_expr(&ctx, expr)
         }
     }
 }
@@ -1533,6 +1768,7 @@ fn static_subtype(
     operand: &StaticSubtypeOperand,
     source: ObjectId,
     objects: &BTreeMap<ObjectId, ObjectCharacteristics>,
+    vocabulary: &spellwake_contracts::creature_types::CreatureTypeVocabulary,
 ) -> BTreeSet<spellwake_contracts::creature_types::CreatureTypeId> {
     match operand {
         StaticSubtypeOperand::ImprintedCreatureTypes { keep } => {
@@ -1551,6 +1787,11 @@ fn static_subtype(
         StaticSubtypeOperand::SourceCurrentSubtypes => {
             objects[&source].current_creature_subtypes.clone()
         }
+        StaticSubtypeOperand::AllCreatureTypes => vocabulary
+            .members()
+            .iter()
+            .filter_map(|name| vocabulary.resolve_label(name))
+            .collect(),
     }
 }
 fn static_land_subtype(
@@ -1606,15 +1847,306 @@ fn generate(
             };
             (affected, operation)
         }
+        InstanceOrigin::EmblemStatic { emblem: _, ability }
+        | InstanceOrigin::TemporaryStatic(TemporaryBattlefieldStatic { ability, .. }) => {
+            let StaticContinuousAbility::Battlefield {
+                selector, parts, ..
+            } = ability
+            else {
+                return Err(CharacteristicInvariantError::NoEligibleComponent);
+            };
+            let (controller, sentinel) = match instance.origin {
+                InstanceOrigin::EmblemStatic { emblem, .. } => {
+                    (emblem.controller, ObjectId::SENTINEL)
+                }
+                InstanceOrigin::TemporaryStatic(temp) => (
+                    temp.controller,
+                    temp.source_object.unwrap_or(ObjectId::SENTINEL),
+                ),
+                _ => unreachable!(),
+            };
+            let affected = match bindings.get(&instance.key) {
+                Some(PassBinding::Processed(affected)) => affected.clone(),
+                _ if selector.source_condition.as_ref().is_some_and(|condition| {
+                    !static_source_condition_met(
+                        condition,
+                        world,
+                        sentinel,
+                        controller,
+                        objects,
+                        battlefield,
+                    )
+                }) =>
+                {
+                    BTreeSet::new()
+                }
+                _ => select_affected(
+                    selector,
+                    sentinel,
+                    controller,
+                    objects,
+                    battlefield,
+                    name_rules,
+                ),
+            };
+            let operation = if affected.is_empty() {
+                None
+            } else {
+                let mut resolved_parts = Vec::new();
+                for part in parts.0.iter().filter(|part| part.bucket() == bucket) {
+                    resolved_parts.push(match part {
+                        StaticPart::SetPTToOwnManaValue => {
+                            let generated = affected
+                                .iter()
+                                .map(|id| {
+                                    let value = &objects[id].defined.mana_value;
+                                    (
+                                        *id,
+                                        ResolvedPart::SetPT(PowerToughness {
+                                            power: value.clone(),
+                                            toughness: value.clone(),
+                                        }),
+                                    )
+                                })
+                                .collect();
+                            return Ok(GeneratedComponent {
+                                key: instance.key,
+                                bucket,
+                                present: true,
+                                affected,
+                                generated,
+                            });
+                        }
+                        StaticPart::ControlSourceController => ResolvedPart::Control(controller),
+                        StaticPart::Color(change) => {
+                            ResolvedPart::Color(change.map(|operand| match operand {
+                                StaticColorOperand::Literal(colors) => colors.clone(),
+                                StaticColorOperand::SourceCurrentColors => BTreeSet::new(),
+                            }))
+                        }
+                        StaticPart::Text(change) => ResolvedPart::Text(*change),
+                        StaticPart::Names(change) => {
+                            let resolve = |operand: &StaticNameOperand| match operand {
+                                StaticNameOperand::Literal(names) => names.clone(),
+                                StaticNameOperand::SourceCurrentNames => {
+                                    spellwake_contracts::names::ObjectNames::nameless()
+                                }
+                            };
+                            ResolvedPart::Names(match change {
+                                NameOperation::Set(names) => NameOperation::Set(resolve(names)),
+                                NameOperation::Add(names) => NameOperation::Add(resolve(names)),
+                            })
+                        }
+                        StaticPart::Type(change) => ResolvedPart::Type(TypeChange {
+                            land_subtypes: match &change.land_subtypes {
+                                SubtypeOperation::Keep => SubtypeOperation::Keep,
+                                SubtypeOperation::Remove(values) => {
+                                    SubtypeOperation::Remove(values.clone())
+                                }
+                                SubtypeOperation::Add(operand) => SubtypeOperation::Add(
+                                    static_land_subtype(operand, sentinel, objects),
+                                ),
+                                SubtypeOperation::Set(operand) => SubtypeOperation::Set(
+                                    static_land_subtype(operand, sentinel, objects),
+                                ),
+                            },
+                            supertypes: change.supertypes.clone(),
+                            types: change.types.clone(),
+                            subtypes: match &change.subtypes {
+                                SubtypeOperation::Keep => SubtypeOperation::Keep,
+                                SubtypeOperation::Remove(values) => {
+                                    SubtypeOperation::Remove(values.clone())
+                                }
+                                SubtypeOperation::Add(operand) => SubtypeOperation::Add(
+                                    static_subtype(operand, sentinel, objects, world.vocabulary),
+                                ),
+                                SubtypeOperation::Set(operand) => SubtypeOperation::Set(
+                                    static_subtype(operand, sentinel, objects, world.vocabulary),
+                                ),
+                            },
+                        }),
+                        StaticPart::TypeWithSubtypes {
+                            base: change,
+                            artifact_subtypes,
+                            enchantment_subtypes,
+                        } => ResolvedPart::TypeWithSubtypes {
+                            base: TypeChange {
+                                land_subtypes: match &change.land_subtypes {
+                                    SubtypeOperation::Keep => SubtypeOperation::Keep,
+                                    SubtypeOperation::Remove(values) => {
+                                        SubtypeOperation::Remove(values.clone())
+                                    }
+                                    SubtypeOperation::Add(operand) => SubtypeOperation::Add(
+                                        static_land_subtype(operand, sentinel, objects),
+                                    ),
+                                    SubtypeOperation::Set(operand) => SubtypeOperation::Set(
+                                        static_land_subtype(operand, sentinel, objects),
+                                    ),
+                                },
+                                supertypes: change.supertypes.clone(),
+                                types: change.types.clone(),
+                                subtypes: match &change.subtypes {
+                                    SubtypeOperation::Keep => SubtypeOperation::Keep,
+                                    SubtypeOperation::Remove(values) => {
+                                        SubtypeOperation::Remove(values.clone())
+                                    }
+                                    SubtypeOperation::Add(operand) => {
+                                        SubtypeOperation::Add(static_subtype(
+                                            operand,
+                                            sentinel,
+                                            objects,
+                                            world.vocabulary,
+                                        ))
+                                    }
+                                    SubtypeOperation::Set(operand) => {
+                                        SubtypeOperation::Set(static_subtype(
+                                            operand,
+                                            sentinel,
+                                            objects,
+                                            world.vocabulary,
+                                        ))
+                                    }
+                                },
+                            },
+                            artifact_subtypes: artifact_subtypes.clone(),
+                            enchantment_subtypes: enchantment_subtypes.clone(),
+                        },
+                        StaticPart::SetPT(pair) => ResolvedPart::SetPT(PowerToughness {
+                            power: numeric(
+                                world,
+                                &pair.power,
+                                sentinel,
+                                controller,
+                                objects,
+                                battlefield,
+                                name_rules,
+                            ),
+                            toughness: numeric(
+                                world,
+                                &pair.toughness,
+                                sentinel,
+                                controller,
+                                objects,
+                                battlefield,
+                                name_rules,
+                            ),
+                        }),
+                        StaticPart::ModifyPT(pair) => ResolvedPart::ModifyPT(PowerToughness {
+                            power: numeric(
+                                world,
+                                &pair.power,
+                                sentinel,
+                                controller,
+                                objects,
+                                battlefield,
+                                name_rules,
+                            ),
+                            toughness: numeric(
+                                world,
+                                &pair.toughness,
+                                sentinel,
+                                controller,
+                                objects,
+                                battlefield,
+                                name_rules,
+                            ),
+                        }),
+                        StaticPart::SwitchPT => ResolvedPart::SwitchPT,
+                        StaticPart::Abilities(change) => ResolvedPart::Abilities(change.clone()),
+                        StaticPart::GrantActivated(ability) => {
+                            ResolvedPart::GrantActivated(ability.clone())
+                        }
+                        StaticPart::GrantActivatedRestricted {
+                            ability,
+                            restriction,
+                        } => ResolvedPart::GrantActivatedRestricted {
+                            ability: ability.clone(),
+                            restriction: restriction.clone(),
+                        },
+                        StaticPart::GrantTrigger(ability) => {
+                            ResolvedPart::GrantTrigger(ability.clone())
+                        }
+                        StaticPart::GrantAnyColorMana => ResolvedPart::GrantAnyColorMana,
+                        StaticPart::GrantSubtypeProtection {
+                            types,
+                            creatures_only,
+                        } => {
+                            let qualities =
+                                static_subtype(types, sentinel, objects, world.vocabulary)
+                                    .into_iter()
+                                    .map(|subtype| {
+                                        KeywordAbility::ProtectionFromSubtype(SubtypeProtection {
+                                            subtype,
+                                            exclude_subtype: false,
+                                            creatures_only: *creatures_only,
+                                        })
+                                    });
+                            ResolvedPart::Abilities(AbilityChange::grant_keywords(qualities))
+                        }
+                        StaticPart::GrantProtectionChosenColor => {
+                            let kw =
+                                world
+                                    .state
+                                    .entry_color_choices
+                                    .get(&sentinel)
+                                    .map(|c| match c {
+                                        Color::White => KeywordAbility::ProtectionFromWhite,
+                                        Color::Blue => KeywordAbility::ProtectionFromBlue,
+                                        Color::Black => KeywordAbility::ProtectionFromBlack,
+                                        Color::Red => KeywordAbility::ProtectionFromRed,
+                                        Color::Green => KeywordAbility::ProtectionFromGreen,
+                                    });
+                            ResolvedPart::Abilities(AbilityChange::grant_keywords(kw))
+                        }
+                        StaticPart::GrantProtectionChosenPlayer => {
+                            let kw = world.state.chosen_entry_players.get(&sentinel).map(|pair| {
+                                KeywordAbility::ProtectionFrom(ProtectionFromQuality::Player(
+                                    pair[0],
+                                ))
+                            });
+                            ResolvedPart::Abilities(AbilityChange::grant_keywords(kw))
+                        }
+                        StaticPart::GrantFixedColorMana(color) => {
+                            ResolvedPart::GrantFixedColorMana(*color)
+                        }
+                        StaticPart::GrantMana(output) => ResolvedPart::GrantMana(output.clone()),
+                        StaticPart::BlockingRestriction(
+                            BlockingRestriction::CannotAttackSourceController,
+                        ) => ResolvedPart::BlockingRestriction(
+                            BlockingRestriction::CannotAttackPlayer(controller),
+                        ),
+                        StaticPart::BlockingRestriction(value) => {
+                            ResolvedPart::BlockingRestriction(value.clone())
+                        }
+                        StaticPart::InheritExiledCreatureAbilities
+                        | StaticPart::InheritCounteredCreatureAbilities => {
+                            return Err(CharacteristicInvariantError::NoEligibleComponent);
+                        }
+                    });
+                }
+                match resolved_parts.len() {
+                    0 => None,
+                    1 => resolved_parts.pop(),
+                    _ => Some(ResolvedPart::CompoundAbilities(resolved_parts)),
+                }
+            };
+            (affected, operation)
+        }
         InstanceOrigin::Resolved(effect) => {
             let affected: BTreeSet<_> =
                 effect.affected.intersection(battlefield).copied().collect();
-            let operation = effect
+            let mut matching: Vec<ResolvedPart> = effect
                 .parts
                 .0
                 .iter()
-                .find(|part| part.bucket() == bucket)
-                .cloned();
+                .filter(|part| part.bucket() == bucket)
+                .cloned()
+                .collect();
+            let operation = match matching.len() {
+                0 => None,
+                1 => matching.pop(),
+                _ => Some(ResolvedPart::CompoundAbilities(matching)),
+            };
             (affected, operation)
         }
         InstanceOrigin::Static { source, ability } => {
@@ -1658,16 +2190,29 @@ fn generate(
             )?;
             let affected = match bindings.get(&instance.key) {
                 Some(PassBinding::Processed(affected)) => affected.clone(),
-                _ if selector.source_condition.as_ref().is_some_and(|condition| {
-                    !static_source_condition_met(
-                        condition,
-                        world,
-                        source,
-                        controller,
-                        objects,
-                        battlefield,
-                    )
-                }) =>
+                _ if text
+                    .static_conditions
+                    .get(&ability.id())
+                    .is_some_and(|condition| {
+                        !static_source_condition_met(
+                            condition,
+                            world,
+                            source,
+                            controller,
+                            objects,
+                            battlefield,
+                        )
+                    })
+                    || selector.source_condition.as_ref().is_some_and(|condition| {
+                        !static_source_condition_met(
+                            condition,
+                            world,
+                            source,
+                            controller,
+                            objects,
+                            battlefield,
+                        )
+                    }) =>
                 {
                     BTreeSet::new()
                 }
@@ -1683,186 +2228,281 @@ fn generate(
             // Empty generated data is independent of unused numeric/source values.
             let operation = if affected.is_empty() {
                 None
-            } else if let Some(part) = parts.0.iter().find(|part| part.bucket() == bucket) {
-                Some(match part {
-                    StaticPart::SetPTToOwnManaValue => {
-                        let generated = affected
-                            .iter()
-                            .map(|id| {
-                                let value = &objects[id].defined.mana_value;
-                                (
-                                    *id,
-                                    ResolvedPart::SetPT(PowerToughness {
-                                        power: value.clone(),
-                                        toughness: value.clone(),
-                                    }),
-                                )
+            } else {
+                let mut resolved_parts = Vec::new();
+                for part in parts.0.iter().filter(|part| part.bucket() == bucket) {
+                    resolved_parts.push(match part {
+                        StaticPart::SetPTToOwnManaValue => {
+                            let generated = affected
+                                .iter()
+                                .map(|id| {
+                                    let value = &objects[id].defined.mana_value;
+                                    (
+                                        *id,
+                                        ResolvedPart::SetPT(PowerToughness {
+                                            power: value.clone(),
+                                            toughness: value.clone(),
+                                        }),
+                                    )
+                                })
+                                .collect();
+                            return Ok(GeneratedComponent {
+                                key: instance.key,
+                                bucket,
+                                present: true,
+                                affected,
+                                generated,
+                            });
+                        }
+                        StaticPart::ControlSourceController => ResolvedPart::Control(controller),
+                        StaticPart::Color(change) => {
+                            ResolvedPart::Color(change.map(|operand| match operand {
+                                StaticColorOperand::Literal(colors) => colors.clone(),
+                                StaticColorOperand::SourceCurrentColors => {
+                                    objects[&source].current_colors.clone()
+                                }
+                            }))
+                        }
+                        StaticPart::Text(change) => ResolvedPart::Text(*change),
+                        StaticPart::Names(change) => {
+                            let resolve = |operand: &StaticNameOperand| match operand {
+                                StaticNameOperand::Literal(names) => names.clone(),
+                                StaticNameOperand::SourceCurrentNames => {
+                                    objects[&source].current_names.clone()
+                                }
+                            };
+                            ResolvedPart::Names(match change {
+                                NameOperation::Set(names) => NameOperation::Set(resolve(names)),
+                                NameOperation::Add(names) => NameOperation::Add(resolve(names)),
                             })
-                            .collect();
-                        return Ok(GeneratedComponent {
-                            key: instance.key,
-                            bucket,
-                            present: true,
-                            affected,
-                            generated,
-                        });
-                    }
-                    StaticPart::ControlSourceController => ResolvedPart::Control(controller),
-                    StaticPart::Color(change) => {
-                        ResolvedPart::Color(change.map(|operand| match operand {
-                            StaticColorOperand::Literal(colors) => colors.clone(),
-                            StaticColorOperand::SourceCurrentColors => {
-                                objects[&source].current_colors.clone()
-                            }
-                        }))
-                    }
-                    StaticPart::Text(change) => ResolvedPart::Text(*change),
-                    StaticPart::Names(change) => {
-                        let resolve = |operand: &StaticNameOperand| match operand {
-                            StaticNameOperand::Literal(names) => names.clone(),
-                            StaticNameOperand::SourceCurrentNames => {
-                                objects[&source].current_names.clone()
-                            }
-                        };
-                        ResolvedPart::Names(match change {
-                            NameOperation::Set(names) => NameOperation::Set(resolve(names)),
-                            NameOperation::Add(names) => NameOperation::Add(resolve(names)),
-                        })
-                    }
-                    StaticPart::Type(change) => ResolvedPart::Type(TypeChange {
-                        land_subtypes: match &change.land_subtypes {
-                            SubtypeOperation::Keep => SubtypeOperation::Keep,
-                            SubtypeOperation::Remove(values) => {
-                                SubtypeOperation::Remove(values.clone())
-                            }
-                            SubtypeOperation::Add(operand) => {
-                                SubtypeOperation::Add(static_land_subtype(operand, source, objects))
-                            }
-                            SubtypeOperation::Set(operand) => {
-                                SubtypeOperation::Set(static_land_subtype(operand, source, objects))
-                            }
+                        }
+                        StaticPart::Type(change) => ResolvedPart::Type(TypeChange {
+                            land_subtypes: match &change.land_subtypes {
+                                SubtypeOperation::Keep => SubtypeOperation::Keep,
+                                SubtypeOperation::Remove(values) => {
+                                    SubtypeOperation::Remove(values.clone())
+                                }
+                                SubtypeOperation::Add(operand) => SubtypeOperation::Add(
+                                    static_land_subtype(operand, source, objects),
+                                ),
+                                SubtypeOperation::Set(operand) => SubtypeOperation::Set(
+                                    static_land_subtype(operand, source, objects),
+                                ),
+                            },
+                            supertypes: change.supertypes.clone(),
+                            types: change.types.clone(),
+                            subtypes: match &change.subtypes {
+                                SubtypeOperation::Keep => SubtypeOperation::Keep,
+                                SubtypeOperation::Remove(values) => {
+                                    SubtypeOperation::Remove(values.clone())
+                                }
+                                SubtypeOperation::Add(operand) => SubtypeOperation::Add(
+                                    static_subtype(operand, source, objects, world.vocabulary),
+                                ),
+                                SubtypeOperation::Set(operand) => SubtypeOperation::Set(
+                                    static_subtype(operand, source, objects, world.vocabulary),
+                                ),
+                            },
+                        }),
+                        StaticPart::TypeWithSubtypes {
+                            base: change,
+                            artifact_subtypes,
+                            enchantment_subtypes,
+                        } => ResolvedPart::TypeWithSubtypes {
+                            base: TypeChange {
+                                land_subtypes: match &change.land_subtypes {
+                                    SubtypeOperation::Keep => SubtypeOperation::Keep,
+                                    SubtypeOperation::Remove(values) => {
+                                        SubtypeOperation::Remove(values.clone())
+                                    }
+                                    SubtypeOperation::Add(operand) => SubtypeOperation::Add(
+                                        static_land_subtype(operand, source, objects),
+                                    ),
+                                    SubtypeOperation::Set(operand) => SubtypeOperation::Set(
+                                        static_land_subtype(operand, source, objects),
+                                    ),
+                                },
+                                supertypes: change.supertypes.clone(),
+                                types: change.types.clone(),
+                                subtypes: match &change.subtypes {
+                                    SubtypeOperation::Keep => SubtypeOperation::Keep,
+                                    SubtypeOperation::Remove(values) => {
+                                        SubtypeOperation::Remove(values.clone())
+                                    }
+                                    SubtypeOperation::Add(operand) => SubtypeOperation::Add(
+                                        static_subtype(operand, source, objects, world.vocabulary),
+                                    ),
+                                    SubtypeOperation::Set(operand) => SubtypeOperation::Set(
+                                        static_subtype(operand, source, objects, world.vocabulary),
+                                    ),
+                                },
+                            },
+                            artifact_subtypes: artifact_subtypes.clone(),
+                            enchantment_subtypes: enchantment_subtypes.clone(),
                         },
-                        supertypes: change.supertypes.clone(),
-                        types: change.types.clone(),
-                        subtypes: match &change.subtypes {
-                            SubtypeOperation::Keep => SubtypeOperation::Keep,
-                            SubtypeOperation::Remove(values) => {
-                                SubtypeOperation::Remove(values.clone())
-                            }
-                            SubtypeOperation::Add(operand) => {
-                                SubtypeOperation::Add(static_subtype(operand, source, objects))
-                            }
-                            SubtypeOperation::Set(operand) => {
-                                SubtypeOperation::Set(static_subtype(operand, source, objects))
-                            }
-                        },
-                    }),
-                    StaticPart::SetPT(pair) => ResolvedPart::SetPT(PowerToughness {
-                        power: numeric(
-                            world,
-                            &pair.power,
-                            source,
-                            controller,
-                            objects,
-                            battlefield,
-                            name_rules,
-                        ),
-                        toughness: numeric(
-                            world,
-                            &pair.toughness,
-                            source,
-                            controller,
-                            objects,
-                            battlefield,
-                            name_rules,
-                        ),
-                    }),
-                    StaticPart::ModifyPT(pair) => ResolvedPart::ModifyPT(PowerToughness {
-                        power: numeric(
-                            world,
-                            &pair.power,
-                            source,
-                            controller,
-                            objects,
-                            battlefield,
-                            name_rules,
-                        ),
-                        toughness: numeric(
-                            world,
-                            &pair.toughness,
-                            source,
-                            controller,
-                            objects,
-                            battlefield,
-                            name_rules,
-                        ),
-                    }),
-                    StaticPart::SwitchPT => ResolvedPart::SwitchPT,
-                    StaticPart::Abilities(change) => ResolvedPart::Abilities(change.clone()),
-                    StaticPart::InheritExiledCreatureAbilities => {
-                        let donors = world
-                            .state
-                            .ability_donors_in_exile
-                            .get(&source)
-                            .into_iter()
-                            .flatten()
-                            .filter_map(|id| objects.get(id))
-                            .filter(|card| card.zone == ObjectZone::Exile && card.is_creature());
-                        ResolvedPart::InheritedAbilities(Box::new(
-                            super::inheritance::inherit_activated_abilities(
+                        StaticPart::SetPT(pair) => ResolvedPart::SetPT(PowerToughness {
+                            power: numeric(
+                                world,
+                                &pair.power,
                                 source,
-                                ability.id(),
-                                donors,
-                            ),
-                        ))
-                    }
-                    StaticPart::InheritCounteredCreatureAbilities => {
-                        ResolvedPart::InheritedAbilities(Box::new(
-                            super::inheritance::countered_creature_abilities(
-                                source,
-                                ability.id(),
+                                controller,
                                 objects,
                                 battlefield,
+                                name_rules,
                             ),
-                        ))
-                    }
-                    StaticPart::GrantActivated(ability) => {
-                        ResolvedPart::GrantActivated(ability.clone())
-                    }
-                    StaticPart::GrantTrigger(ability) => {
-                        ResolvedPart::GrantTrigger(ability.clone())
-                    }
-                    StaticPart::GrantAnyColorMana => ResolvedPart::GrantAnyColorMana,
-                    StaticPart::GrantSubtypeProtection {
-                        types,
-                        creatures_only,
-                    } => {
-                        let qualities =
-                            static_subtype(types, source, objects)
+                            toughness: numeric(
+                                world,
+                                &pair.toughness,
+                                source,
+                                controller,
+                                objects,
+                                battlefield,
+                                name_rules,
+                            ),
+                        }),
+                        StaticPart::ModifyPT(pair) => ResolvedPart::ModifyPT(PowerToughness {
+                            power: numeric(
+                                world,
+                                &pair.power,
+                                source,
+                                controller,
+                                objects,
+                                battlefield,
+                                name_rules,
+                            ),
+                            toughness: numeric(
+                                world,
+                                &pair.toughness,
+                                source,
+                                controller,
+                                objects,
+                                battlefield,
+                                name_rules,
+                            ),
+                        }),
+                        StaticPart::SwitchPT => ResolvedPart::SwitchPT,
+                        StaticPart::Abilities(change) => ResolvedPart::Abilities(change.clone()),
+                        StaticPart::InheritExiledCreatureAbilities => {
+                            let donors = world
+                                .state
+                                .ability_donors_in_exile
+                                .get(&source)
                                 .into_iter()
-                                .map(|subtype| {
-                                    KeywordAbility::ProtectionFromSubtype(SubtypeProtection {
-                                        subtype,
-                                        exclude_subtype: false,
-                                        creatures_only: *creatures_only,
-                                    })
+                                .flatten()
+                                .filter_map(|id| objects.get(id))
+                                .filter(|card| {
+                                    card.zone == ObjectZone::Exile && card.is_creature()
                                 });
-                        ResolvedPart::Abilities(AbilityChange::grant_keywords(qualities))
-                    }
-                    StaticPart::GrantFixedColorMana(color) => {
-                        ResolvedPart::GrantFixedColorMana(*color)
-                    }
-                    StaticPart::BlockingRestriction(
-                        BlockingRestriction::BlockerPowerAtLeastSource,
-                    ) => ResolvedPart::BlockingRestriction(
-                        BlockingRestriction::BlockerPowerAtLeastPowerOf(source),
-                    ),
-                    StaticPart::BlockingRestriction(value) => {
-                        ResolvedPart::BlockingRestriction(value.clone())
-                    }
-                })
-            } else {
-                None
+                            ResolvedPart::InheritedAbilities(Box::new(
+                                super::inheritance::inherit_activated_abilities(
+                                    source,
+                                    ability.id(),
+                                    donors,
+                                ),
+                            ))
+                        }
+                        StaticPart::InheritCounteredCreatureAbilities => {
+                            ResolvedPart::InheritedAbilities(Box::new(
+                                super::inheritance::countered_creature_abilities(
+                                    source,
+                                    ability.id(),
+                                    objects,
+                                    battlefield,
+                                ),
+                            ))
+                        }
+                        StaticPart::GrantActivated(ability) => {
+                            ResolvedPart::GrantActivated(ability.clone())
+                        }
+                        StaticPart::GrantActivatedRestricted {
+                            ability,
+                            restriction,
+                        } => ResolvedPart::GrantActivatedRestricted {
+                            ability: ability.clone(),
+                            restriction: restriction.clone(),
+                        },
+                        StaticPart::GrantTrigger(ability) => {
+                            ResolvedPart::GrantTrigger(ability.clone())
+                        }
+                        StaticPart::GrantAnyColorMana => ResolvedPart::GrantAnyColorMana,
+                        StaticPart::GrantSubtypeProtection {
+                            types,
+                            creatures_only,
+                        } => {
+                            let qualities =
+                                static_subtype(types, source, objects, world.vocabulary)
+                                    .into_iter()
+                                    .map(|subtype| {
+                                        KeywordAbility::ProtectionFromSubtype(SubtypeProtection {
+                                            subtype,
+                                            exclude_subtype: false,
+                                            creatures_only: *creatures_only,
+                                        })
+                                    });
+                            ResolvedPart::Abilities(AbilityChange::grant_keywords(qualities))
+                        }
+                        StaticPart::GrantProtectionChosenColor => {
+                            let kw =
+                                world
+                                    .state
+                                    .entry_color_choices
+                                    .get(&source)
+                                    .map(|c| match c {
+                                        Color::White => KeywordAbility::ProtectionFromWhite,
+                                        Color::Blue => KeywordAbility::ProtectionFromBlue,
+                                        Color::Black => KeywordAbility::ProtectionFromBlack,
+                                        Color::Red => KeywordAbility::ProtectionFromRed,
+                                        Color::Green => KeywordAbility::ProtectionFromGreen,
+                                    });
+                            ResolvedPart::Abilities(AbilityChange::grant_keywords(kw))
+                        }
+                        StaticPart::GrantProtectionChosenPlayer => {
+                            let kw = world.state.chosen_entry_players.get(&source).map(|pair| {
+                                KeywordAbility::ProtectionFrom(ProtectionFromQuality::Player(
+                                    pair[0],
+                                ))
+                            });
+                            ResolvedPart::Abilities(AbilityChange::grant_keywords(kw))
+                        }
+                        StaticPart::GrantFixedColorMana(color) => {
+                            ResolvedPart::GrantFixedColorMana(*color)
+                        }
+                        StaticPart::GrantMana(output) => ResolvedPart::GrantMana(output.clone()),
+                        StaticPart::BlockingRestriction(
+                            BlockingRestriction::BlockerPowerAtLeastSource,
+                        ) => ResolvedPart::BlockingRestriction(
+                            BlockingRestriction::BlockerPowerAtLeastPowerOf(source),
+                        ),
+                        StaticPart::BlockingRestriction(BlockingRestriction::CannotBlockSource) => {
+                            ResolvedPart::BlockingRestriction(
+                                BlockingRestriction::CannotBlockObject(source),
+                            )
+                        }
+                        StaticPart::BlockingRestriction(BlockingRestriction::MustBlockSource) => {
+                            ResolvedPart::BlockingRestriction(BlockingRestriction::MustBlockObject(
+                                source,
+                            ))
+                        }
+                        StaticPart::BlockingRestriction(
+                            BlockingRestriction::CannotBeBlockedBySource,
+                        ) => ResolvedPart::BlockingRestriction(
+                            BlockingRestriction::CannotBeBlockedByObject(source),
+                        ),
+                        StaticPart::BlockingRestriction(
+                            BlockingRestriction::CannotAttackSourceController,
+                        ) => ResolvedPart::BlockingRestriction(
+                            BlockingRestriction::CannotAttackPlayer(controller),
+                        ),
+                        StaticPart::BlockingRestriction(value) => {
+                            ResolvedPart::BlockingRestriction(value.clone())
+                        }
+                    });
+                }
+                match resolved_parts.len() {
+                    0 => None,
+                    1 => resolved_parts.pop(),
+                    _ => Some(ResolvedPart::CompoundAbilities(resolved_parts)),
+                }
             };
             (affected, operation)
         }
@@ -1921,201 +2561,239 @@ fn apply(
         let Some(object) = objects.get_mut(object) else {
             continue;
         };
-        match operation {
-            // Fixed copy snapshots initialize the entire definition before
-            // static instances are collected. No later-layer generator emits one.
-            ResolvedPart::Copy(_) => unreachable!("copy part reached a later characteristic layer"),
-            ResolvedPart::Control(controller) => {
-                object.controller = Some(*controller);
-                object.controller_speed = speeds.get(controller).copied().unwrap_or(0);
+        apply_part(component.key, operation, object, speeds);
+    }
+}
+
+fn apply_part(
+    key: EffectInstanceKey,
+    operation: &ResolvedPart,
+    object: &mut ObjectCharacteristics,
+    speeds: &BTreeMap<SeatId, u8>,
+) {
+    match operation {
+        // Fixed copy snapshots initialize the entire definition before
+        // static instances are collected. No later-layer generator emits one.
+        ResolvedPart::Copy(_) => unreachable!("copy part reached a later characteristic layer"),
+        ResolvedPart::CompoundAbilities(parts) => {
+            for part in parts {
+                apply_part(key, part, object, speeds);
             }
-            ResolvedPart::Color(change) => match change {
-                ColorOperation::Set(colors) => object.current_colors = colors.clone(),
-                ColorOperation::Add(colors) => object.current_colors.extend(colors),
-                ColorOperation::Remove(colors) => object
-                    .current_colors
-                    .retain(|color| !colors.contains(color)),
-            },
-            ResolvedPart::Text(change) => super::text::apply(*change, object),
-            ResolvedPart::Names(change) => match change {
-                NameOperation::Set(names) => object.current_names = names.clone(),
-                NameOperation::Add(names) => object.current_names.add(names),
-            },
-            ResolvedPart::InheritedAbilities(abilities) => {
-                for (key, (definition, terms)) in &abilities.activated {
-                    object.granted_activated.insert(*key, definition.clone());
-                    object
-                        .inherited_activation_terms
-                        .insert(*key, terms.clone());
-                }
-                object.inherited_mana.extend(abilities.mana.clone());
+        }
+        ResolvedPart::Control(controller) => {
+            object.controller = Some(*controller);
+            object.controller_speed = speeds.get(controller).copied().unwrap_or(0);
+        }
+        ResolvedPart::Color(change) => match change {
+            ColorOperation::Set(colors) => object.current_colors = colors.clone(),
+            ColorOperation::Add(colors) => object.current_colors.extend(colors),
+            ColorOperation::Remove(colors) => object
+                .current_colors
+                .retain(|color| !colors.contains(color)),
+        },
+        ResolvedPart::Text(change) => super::text::apply(*change, object),
+        ResolvedPart::Names(change) => match change {
+            NameOperation::Set(names) => object.current_names = names.clone(),
+            NameOperation::Add(names) => object.current_names.add(names),
+        },
+        ResolvedPart::InheritedAbilities(abilities) => {
+            for (k, (definition, terms)) in &abilities.activated {
+                object.granted_activated.insert(*k, definition.clone());
+                object.inherited_activation_terms.insert(*k, terms.clone());
             }
-            ResolvedPart::GrantActivated(ability) => {
-                object
-                    .granted_activated
-                    .insert(component.key, (**ability).clone());
-            }
-            ResolvedPart::GrantTrigger(ability) => {
-                object
-                    .granted_triggers
-                    .insert(component.key, (**ability).clone());
-            }
-            ResolvedPart::GrantAnyColorMana => {
-                object.granted_any_color_mana.insert(component.key);
-            }
-            ResolvedPart::GrantFixedColorMana(color) => {
-                object.granted_fixed_mana.insert(component.key, *color);
-            }
-            ResolvedPart::BlockingRestriction(value) => {
-                object.blocking_restrictions.push(value.clone())
-            }
-            ResolvedPart::Abilities(change) => {
-                if change.removal == Some(AbilityRemoval::Flying) {
-                    object.keywords.remove(&KeywordAbility::Flying);
-                } else if let Some(
-                    removal @ (AbilityRemoval::Banding | AbilityRemoval::BandsWithOther),
-                ) = change.removal
-                {
-                    object.keywords.retain(|keyword| {
-                        !matches!(keyword, KeywordAbility::BandsWithOther(_))
-                            && !(removal == AbilityRemoval::Banding
-                                && *keyword == KeywordAbility::Banding)
-                    });
-                } else if let Some(removal) = change.removal {
-                    object.abilities.remove(removal);
-                    if removal == AbilityRemoval::All {
-                        object.intrinsic_mana.clear();
-                        object.granted_any_color_mana.clear();
-                        object.granted_fixed_mana.clear();
-                        object.inherited_mana.clear();
-                    }
-                    object.keywords.clear();
-                    object.toxic_value = None;
-                    object.granted_exalted.clear();
-                    object.granted_unblockable = false;
-                    object.granted_combat_keywords.clear();
-                    object.granted_triggers.clear();
-                    object.granted_activated.clear();
-                    object.inherited_activation_terms.clear();
-                }
-                object.granted_unblockable |= change.grants_unblockable;
-                if let Some(trigger) = &change.granted_trigger {
-                    object
-                        .granted_triggers
-                        .insert(component.key, (**trigger).clone());
-                }
-                object
-                    .suppressed_keywords
-                    .extend(&change.suppressed_keywords);
-                object.keywords.extend(&change.granted_keywords);
-                object
-                    .keywords
-                    .retain(|keyword| !object.suppressed_keywords.contains(keyword));
-                if let Some(amount) = &change.granted_toxic {
-                    object.toxic_value = Some(
-                        object
-                            .toxic_value
-                            .as_ref()
-                            .map_or_else(|| amount.clone(), |total| total.plus(amount)),
-                    );
-                }
-                if !change.granted_combat_keywords.is_empty() {
-                    object
-                        .granted_combat_keywords
-                        .insert(component.key, change.granted_combat_keywords.clone());
-                }
-                if change.granted_exalted != 0 {
-                    object
-                        .granted_exalted
-                        .insert(component.key, change.granted_exalted);
-                }
-            }
-            ResolvedPart::Type(change) => {
-                apply_type_operation(&change.supertypes, &mut object.current_supertypes);
-                apply_type_operation(&change.types, &mut object.current_types);
-                if !object.has_type(CardType::Instant) && !object.has_type(CardType::Sorcery) {
-                    object.current_spell_subtypes.clear();
-                }
-                if !object.has_type(CardType::Artifact) {
-                    object.current_artifact_subtypes.clear();
-                }
-                if !object.has_type(CardType::Enchantment) {
-                    object.current_enchantment_subtypes.clear();
-                }
-                if !object.carries_creature_subtypes() {
-                    object.current_creature_subtypes.clear();
-                }
-                if !object.has_type(CardType::Land) {
-                    object.current_land_subtypes.clear();
-                }
-                if !object.has_type(CardType::Planeswalker) {
-                    object.current_planeswalker_subtypes.clear();
-                }
-                apply_subtype_operation(&change.subtypes, &mut object.current_creature_subtypes);
-                // CR 305.7 removes availability, not the retained semantic text
-                // used by an already-started static effect (CR 613.6).
-                if object.has_type(CardType::Land)
-                    && matches!(&change.land_subtypes, SubtypeOperation::Set(kinds) if kinds.iter().any(|kind|kind.basic().is_some()))
-                {
-                    object.abilities.remove(AbilityRemoval::All);
+            object.inherited_mana.extend(abilities.mana.clone());
+        }
+        ResolvedPart::GrantActivated(ability) => {
+            object.granted_activated.insert(key, (**ability).clone());
+        }
+        ResolvedPart::GrantActivatedRestricted {
+            ability,
+            restriction,
+        } => {
+            object.granted_activated.insert(key, (**ability).clone());
+            object.inherited_activation_terms.insert(
+                key,
+                super::ActivationTerms {
+                    restriction: Some((**restriction).clone()),
+                    loyalty: None,
+                    variable_loyalty: false,
+                    origin: super::ActivationOriginPath::direct(ability.id, Some(key)),
+                },
+            );
+        }
+        ResolvedPart::GrantTrigger(ability) => {
+            object.granted_triggers.insert(key, (**ability).clone());
+        }
+        ResolvedPart::GrantAnyColorMana => {
+            object.granted_any_color_mana.insert(key);
+        }
+        ResolvedPart::GrantFixedColorMana(color) => {
+            object.granted_fixed_mana.insert(key, *color);
+        }
+        ResolvedPart::GrantMana(output) => {
+            object.inherited_mana.insert(key, (**output).clone());
+        }
+        ResolvedPart::BlockingRestriction(value) => {
+            object.blocking_restrictions.push(value.clone())
+        }
+        ResolvedPart::Abilities(change) => {
+            if change.removal == Some(AbilityRemoval::Flying) {
+                object.keywords.remove(&KeywordAbility::Flying);
+            } else if let Some(
+                removal @ (AbilityRemoval::Banding | AbilityRemoval::BandsWithOther),
+            ) = change.removal
+            {
+                object.keywords.retain(|keyword| {
+                    !matches!(keyword, KeywordAbility::BandsWithOther(_))
+                        && !(removal == AbilityRemoval::Banding
+                            && *keyword == KeywordAbility::Banding)
+                });
+            } else if let Some(removal) = change.removal {
+                object.abilities.remove(removal);
+                if removal == AbilityRemoval::All {
+                    object.intrinsic_mana.clear();
                     object.granted_any_color_mana.clear();
                     object.granted_fixed_mana.clear();
                     object.inherited_mana.clear();
-                    object.keywords.clear();
-                    object.toxic_value = None;
-                    object.granted_exalted.clear();
-                    object.granted_unblockable = false;
-                    object.granted_combat_keywords.clear();
-                    object.granted_triggers.clear();
-                    object.granted_activated.clear();
-                    object.inherited_activation_terms.clear();
                 }
-                apply_subtype_operation(&change.land_subtypes, &mut object.current_land_subtypes);
-                if !object.has_type(CardType::Land) {
-                    object.current_land_subtypes.clear();
+                object.keywords.clear();
+                object.toxic_value = None;
+                object.granted_exalted.clear();
+                object.granted_unblockable = false;
+                object.granted_combat_keywords.clear();
+                object.granted_triggers.clear();
+                object.granted_activated.clear();
+                object.inherited_activation_terms.clear();
+            }
+            object.granted_unblockable |= change.grants_unblockable;
+            if let Some(trigger) = &change.granted_trigger {
+                object.granted_triggers.insert(key, (**trigger).clone());
+            }
+            object
+                .suppressed_keywords
+                .extend(&change.suppressed_keywords);
+            object.keywords.extend(&change.granted_keywords);
+            object
+                .keywords
+                .retain(|keyword| !object.suppressed_keywords.contains(keyword));
+            if let Some(amount) = &change.granted_toxic {
+                object.toxic_value = Some(
+                    object
+                        .toxic_value
+                        .as_ref()
+                        .map_or_else(|| amount.clone(), |total| total.plus(amount)),
+                );
+            }
+            if !change.granted_combat_keywords.is_empty() {
+                object
+                    .granted_combat_keywords
+                    .insert(key, change.granted_combat_keywords.clone());
+            }
+            if change.granted_exalted != 0 {
+                object.granted_exalted.insert(key, change.granted_exalted);
+            }
+        }
+        ResolvedPart::Type(change) | ResolvedPart::TypeWithSubtypes { base: change, .. } => {
+            let extra_subtypes = match operation {
+                ResolvedPart::TypeWithSubtypes {
+                    artifact_subtypes,
+                    enchantment_subtypes,
+                    ..
+                } => Some((artifact_subtypes, enchantment_subtypes)),
+                _ => None,
+            };
+            apply_type_operation(&change.supertypes, &mut object.current_supertypes);
+            apply_type_operation(&change.types, &mut object.current_types);
+            if !object.has_type(CardType::Instant) && !object.has_type(CardType::Sorcery) {
+                object.current_spell_subtypes.clear();
+            }
+            if !object.has_type(CardType::Artifact) {
+                object.current_artifact_subtypes.clear();
+            }
+            if !object.has_type(CardType::Enchantment) {
+                object.current_enchantment_subtypes.clear();
+            }
+            if !object.carries_creature_subtypes() {
+                object.current_creature_subtypes.clear();
+            }
+            if !object.has_type(CardType::Land) {
+                object.current_land_subtypes.clear();
+            }
+            if !object.has_type(CardType::Planeswalker) {
+                object.current_planeswalker_subtypes.clear();
+            }
+            apply_subtype_operation(&change.subtypes, &mut object.current_creature_subtypes);
+            if let Some((art_sub, ench_sub)) = extra_subtypes {
+                if object.has_type(CardType::Artifact) {
+                    apply_subtype_operation(art_sub, &mut object.current_artifact_subtypes);
                 }
-                object.derive_intrinsic_mana();
-                // CR 205.3d is independent of whether a nonbattlefield object
-                // retains its printed PT box under CR 208.3.
-                if !object.carries_creature_subtypes() {
-                    object.current_creature_subtypes.clear();
-                }
-                if object.is_creature()
-                    || object.zone != ObjectZone::Battlefield && object.defined.printed_pt.is_some()
-                {
-                    if object.power_toughness.is_none() {
-                        object.power_toughness = Some(initial_pt(object.object, &object.defined));
-                    }
-                } else {
-                    object.power_toughness = None;
+                if object.has_type(CardType::Enchantment) {
+                    apply_subtype_operation(ench_sub, &mut object.current_enchantment_subtypes);
                 }
             }
-            ResolvedPart::SetPT(pair) => {
-                if let Some(pt) = object.power_toughness.as_mut() {
-                    pt.base = pair.clone();
-                    pt.derived = pair.clone();
-                    pt.applied_effects.push(component.key);
-                }
+            // CR 305.7 removes availability, not the retained semantic text
+            // used by an already-started static effect (CR 613.6).
+            if object.has_type(CardType::Land)
+                && matches!(&change.land_subtypes, SubtypeOperation::Set(kinds) if kinds.iter().any(|kind|kind.basic().is_some()))
+            {
+                object.abilities.remove(AbilityRemoval::All);
+                object.granted_any_color_mana.clear();
+                object.granted_fixed_mana.clear();
+                object.inherited_mana.clear();
+                object.keywords.clear();
+                object.toxic_value = None;
+                object.granted_exalted.clear();
+                object.granted_unblockable = false;
+                object.granted_combat_keywords.clear();
+                object.granted_triggers.clear();
+                object.granted_activated.clear();
+                object.inherited_activation_terms.clear();
             }
-            ResolvedPart::SetToughness(toughness) => {
-                if let Some(pt) = object.power_toughness.as_mut() {
-                    pt.base.toughness = toughness.clone();
-                    pt.derived.toughness = toughness.clone();
-                    pt.applied_effects.push(component.key);
-                }
+            apply_subtype_operation(&change.land_subtypes, &mut object.current_land_subtypes);
+            if !object.has_type(CardType::Land) {
+                object.current_land_subtypes.clear();
             }
-            ResolvedPart::ModifyPT(pair) => {
-                if let Some(pt) = object.power_toughness.as_mut() {
-                    pt.derived.power = pt.derived.power.plus(&pair.power);
-                    pt.derived.toughness = pt.derived.toughness.plus(&pair.toughness);
-                    pt.applied_effects.push(component.key);
-                }
+            object.derive_intrinsic_mana();
+            // CR 205.3d is independent of whether a nonbattlefield object
+            // retains its printed PT box under CR 208.3.
+            if !object.carries_creature_subtypes() {
+                object.current_creature_subtypes.clear();
             }
-            ResolvedPart::SwitchPT => {
-                if let Some(pt) = object.power_toughness.as_mut() {
-                    std::mem::swap(&mut pt.derived.power, &mut pt.derived.toughness);
-                    pt.applied_effects.push(component.key);
+            if object.is_creature()
+                || object.zone != ObjectZone::Battlefield && object.defined.printed_pt.is_some()
+            {
+                if object.power_toughness.is_none() {
+                    object.power_toughness = Some(initial_pt(object.object, &object.defined));
                 }
+            } else {
+                object.power_toughness = None;
+            }
+        }
+        ResolvedPart::SetPT(pair) => {
+            if let Some(pt) = object.power_toughness.as_mut() {
+                pt.base = pair.clone();
+                pt.derived = pair.clone();
+                pt.applied_effects.push(key);
+            }
+        }
+        ResolvedPart::SetToughness(toughness) => {
+            if let Some(pt) = object.power_toughness.as_mut() {
+                pt.base.toughness = toughness.clone();
+                pt.derived.toughness = toughness.clone();
+                pt.applied_effects.push(key);
+            }
+        }
+        ResolvedPart::ModifyPT(pair) => {
+            if let Some(pt) = object.power_toughness.as_mut() {
+                pt.derived.power = pt.derived.power.plus(&pair.power);
+                pt.derived.toughness = pt.derived.toughness.plus(&pair.toughness);
+                pt.applied_effects.push(key);
+            }
+        }
+        ResolvedPart::SwitchPT => {
+            if let Some(pt) = object.power_toughness.as_mut() {
+                std::mem::swap(&mut pt.derived.power, &mut pt.derived.toughness);
+                pt.applied_effects.push(key);
             }
         }
     }
