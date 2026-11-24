@@ -5,14 +5,20 @@ use crate::{characteristics::Color, occurrence::SupportedAppearance, stack_windo
 pub(super) struct ProtectionSource {
     colors: BTreeSet<Color>,
     pub creature_subtypes: BTreeSet<CreatureTypeId>,
+    pub card_types: BTreeSet<CardType>,
     pub is_creature: bool,
+    pub controller: Option<SeatId>,
+    pub is_ability: bool,
 }
 impl From<&ObjectCharacteristics> for ProtectionSource {
     fn from(source: &ObjectCharacteristics) -> Self {
         Self {
             colors: source.current_colors.clone(),
             creature_subtypes: source.current_creature_subtypes.clone(),
+            card_types: source.current_types.clone(),
             is_creature: source.is_creature(),
+            controller: source.controller,
+            is_ability: false,
         }
     }
 }
@@ -21,7 +27,10 @@ impl From<&CopiableSpellTraits> for ProtectionSource {
         Self {
             colors: source.colors.clone(),
             creature_subtypes: source.creature_subtypes.clone(),
+            card_types: source.card_types.clone(),
             is_creature: source.card_types.contains(&CardType::Creature),
+            controller: None,
+            is_ability: false,
         }
     }
 }
@@ -34,7 +43,10 @@ impl From<&Program> for ProtectionSource {
                 source.defined_colors()
             },
             creature_subtypes: source.creature_subtypes.clone(),
+            card_types: source.card_types.clone(),
             is_creature: source.has_type(CardType::Creature),
+            controller: None,
+            is_ability: false,
         }
     }
 }
@@ -120,9 +132,21 @@ impl EffectWindow {
         match target {
             TargetRef::Object(id) => current.get(id).is_some_and(|object| {
                 object.zone == ObjectZone::Battlefield
-                    && (object.protected_from_colors(&source.colors)
-                        || object
-                            .protected_from_subtypes(&source.creature_subtypes, source.is_creature))
+                    && (object.protected_from_source(
+                        &source.colors,
+                        &source.card_types,
+                        &source.creature_subtypes,
+                        source.is_creature,
+                        source.controller,
+                    ) || (source
+                        .controller
+                        .is_some_and(|ctrl| object.controller.is_some_and(|owner| owner != ctrl))
+                        && object.hexproof_from_source(
+                            &source.colors,
+                            &source.card_types,
+                            &source.creature_subtypes,
+                            source.is_ability,
+                        )))
             }),
             TargetRef::Player(player) => current
                 .player_protection_colors(player)
@@ -135,9 +159,9 @@ impl EffectWindow {
         entry: &StackEntry,
         current: &EvaluatedCharacteristics,
     ) -> ProtectionSource {
-        match entry.kind() {
+        let mut out = match entry.kind() {
             StackKind::ActivatedAbility { source } | StackKind::TriggeredAbility { source } => {
-                current
+                let mut s = current
                     .get(source.id())
                     .map(ProtectionSource::from)
                     .or_else(|| {
@@ -146,7 +170,10 @@ impl EffectWindow {
                             .map(|source| ProtectionSource {
                                 colors: source.colors.clone(),
                                 creature_subtypes: source.creature_subtypes.clone(),
+                                card_types: BTreeSet::new(),
                                 is_creature: source.was_creature,
+                                controller: None,
+                                is_ability: true,
                             })
                     })
                     .or_else(|| {
@@ -159,7 +186,9 @@ impl EffectWindow {
                             .base_program(&self.programs)
                             .map(ProtectionSource::from)
                     })
-                    .unwrap_or_default()
+                    .unwrap_or_default();
+                s.is_ability = true;
+                s
             }
             StackKind::CardSpell(_) | StackKind::SpellCopy { .. } => self
                 .window
@@ -177,7 +206,9 @@ impl EffectWindow {
                 colors: self.targeting_entry_colors(entry, current),
                 ..Default::default()
             },
-        }
+        };
+        out.controller = Some(entry.controller());
+        out
     }
 
     pub(super) fn waiting_protection_source(
@@ -194,13 +225,19 @@ impl EffectWindow {
                     .map(|source| ProtectionSource {
                         colors: source.colors.clone(),
                         creature_subtypes: source.creature_subtypes.clone(),
+                        card_types: BTreeSet::new(),
                         is_creature: source.was_creature,
+                        controller: None,
+                        is_ability: false,
                     })
             })
             .unwrap_or_else(|| ProtectionSource {
                 colors: source.colors.clone(),
                 creature_subtypes: source.creature_subtypes.clone(),
+                card_types: source.types.clone(),
                 is_creature: source.types.contains(&CardType::Creature),
+                controller: source.object.controller(),
+                is_ability: false,
             })
     }
 

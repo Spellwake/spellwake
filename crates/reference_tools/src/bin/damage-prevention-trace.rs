@@ -413,11 +413,15 @@ fn observe(
             | DamageEffectId::RemovePlusOneToPreventDamage(_, _)
             | DamageEffectId::ShieldCounter(_)
             | DamageEffectId::StaticDouble(_)
+            | DamageEffectId::StaticModify(_, _)
+            | DamageEffectId::TemporaryStaticModify(_)
+            | DamageEffectId::TemporaryPrevention(_)
             | DamageEffectId::DoubleDamageFromEquippedCreature(_)
             | DamageEffectId::DoubleDamageToEquippedCreature(_)
             | DamageEffectId::StaticHalfPrevention { .. }
             | DamageEffectId::ProtectionMulticolored
             | DamageEffectId::ProtectionSubtype(_)
+            | DamageEffectId::ProtectionFrom(_)
             | DamageEffectId::Protection(_)
             | DamageEffectId::UntilEndOfTurn { .. } => continue,
             DamageEffectId::Prevention(id) => id,

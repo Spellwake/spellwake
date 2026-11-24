@@ -6,6 +6,9 @@ use crate::{
     targets::{BoundTarget, TargetLegality},
 };
 
+/// Compiled instruction stream, mode ranges, and bound target choices for a modal selection.
+type ResolvedModeSelection = (Vec<Instruction>, Vec<SelectedMode>, Vec<TargetChoice>);
+
 /// The half-open instruction range belongs to one occurrence of one printed mode.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) struct SelectedMode {
@@ -19,6 +22,19 @@ pub(super) struct SelectedMode {
 }
 
 impl SelectedMode {
+    /// Adjust mode boundaries when an instruction at `at` is replaced by `inserted` instructions.
+    pub(super) fn shift_for_splice(&mut self, at: usize, inserted: usize) {
+        let adjust = |pos: usize| -> usize {
+            if pos > at {
+                pos.saturating_add(inserted).saturating_sub(1)
+            } else {
+                pos
+            }
+        };
+        self.start = adjust(self.start);
+        self.end = adjust(self.end);
+    }
+
     /// An instruction segment introduced by splice carries targets but has no chosen mode number.
     pub(super) fn splice(
         start: usize,
@@ -110,11 +126,13 @@ impl EffectWindow {
         } else {
             (usize::from(spec.minimum), usize::from(spec.maximum))
         };
-        self.compose_modes(
+        let (body, modes, targets) = self.compose_modes_with_wrap(
             &bodies,
             choices,
             bounds,
             spec.allow_repeat,
+            spec.prefix.as_deref(),
+            spec.suffix.as_deref(),
             |_, body, target| {
                 !Self::protected_target(
                     target,
@@ -122,15 +140,29 @@ impl EffectWindow {
                     current,
                 ) && self.legal_body_target_in(body, target, actor, current)
             },
-        )
+        )?;
+        if spec.distinct_targets
+            && targets
+                .iter()
+                .map(|choice| choice.target)
+                .collect::<BTreeSet<_>>()
+                .len()
+                != targets.len()
+        {
+            return Err(EffectError::IllegalTarget);
+        }
+        Ok((body, modes, targets))
     }
 
-    pub(super) fn compose_modes(
+    #[allow(clippy::too_many_arguments)]
+    pub(super) fn compose_modes_with_wrap(
         &self,
         bodies: &[&ExecutableBody],
         choices: &[CastMode],
         bounds: (usize, usize),
         allow_repeat: bool,
+        prefix: Option<&ExecutableBody>,
+        suffix: Option<&ExecutableBody>,
         legal: impl Fn(u8, &ExecutableBody, TargetRef) -> bool,
     ) -> Result<(ExecutableBody, Vec<SelectedMode>, Vec<TargetChoice>), EffectError> {
         if !(bounds.0..=bounds.1).contains(&choices.len()) {
@@ -145,10 +177,51 @@ impl EffectWindow {
         let mut modes = Vec::new();
         let mut instructions = Vec::new();
         let mut targets = Vec::new();
+        let append_shifted = |ops: &[Instruction], out: &mut Vec<Instruction>| {
+            let start = out.len();
+            for mut op in ops.iter().cloned() {
+                if let Ok(shift) = isize::try_from(start) {
+                    op.shift_jumps(shift, 0);
+                }
+                out.push(op);
+            }
+        };
+        if let Some(pre) = prefix {
+            append_shifted(&pre.instructions, &mut instructions);
+        }
         for choice in choices {
             let body = *bodies
                 .get(usize::from(choice.mode))
                 .ok_or(EffectError::InvalidCastResource)?;
+            if body
+                .instructions
+                .iter()
+                .any(|op| matches!(op, Instruction::FixedTargetClause(_)))
+            {
+                if choice.target.is_some() {
+                    return Err(EffectError::UnexpectedTarget);
+                }
+                let base_offset = instructions.len();
+                let next_target_id =
+                    u32::try_from(targets.len()).map_err(|_| EffectError::InconsistentProgram)?;
+                let next_clause_id =
+                    u32::try_from(modes.len()).map_err(|_| EffectError::InconsistentProgram)?;
+                let (expanded_ops, expanded_segments, expanded_targets) = self
+                    .expand_fixed_clauses_rebased(
+                        body,
+                        &choice.targets,
+                        base_offset,
+                        next_target_id,
+                        next_clause_id,
+                        choice.mode,
+                        true,
+                        |clause, target| legal(choice.mode, clause, target),
+                    )?;
+                instructions.extend(expanded_ops);
+                modes.extend(expanded_segments);
+                targets.extend(expanded_targets);
+                continue;
+            }
             let mut bound = Vec::new();
             let mut clause = None;
             if body.target == BodyTarget::None {
@@ -204,34 +277,7 @@ impl EffectWindow {
             let mut bound = bound.into_iter();
             let target = bound.next();
             let start = instructions.len();
-            for mut op in body.instructions.iter().cloned() {
-                // Local jump destinations include the end-of-mode sentinel.
-                match &mut op {
-                    Instruction::FlipCoin {
-                        lose_destination: destination,
-                    }
-                    | Instruction::BranchIfFalse { destination, .. }
-                    | Instruction::Jump { destination } => *destination += start,
-                    Instruction::OfferManaPayment {
-                        paid_destination,
-                        declined_destination,
-                        ..
-                    } => {
-                        *paid_destination += start;
-                        *declined_destination += start;
-                    }
-                    Instruction::OfferSourceCounters {
-                        placed_destination,
-                        declined_destination,
-                        ..
-                    } => {
-                        *placed_destination += start;
-                        *declined_destination += start;
-                    }
-                    _ => {}
-                }
-                instructions.push(op);
-            }
+            append_shifted(&body.instructions, &mut instructions);
             modes.push(SelectedMode {
                 printed: choice.mode,
                 reported: true,
@@ -242,6 +288,9 @@ impl EffectWindow {
                 target,
             });
         }
+        if let Some(post) = suffix {
+            append_shifted(&post.instructions, &mut instructions);
+        }
         Ok((
             ExecutableBody::new(BodyTarget::None, instructions),
             modes,
@@ -249,19 +298,23 @@ impl EffectWindow {
         ))
     }
 
-    pub(super) fn expand_fixed_clauses(
+    #[allow(clippy::too_many_arguments)]
+    fn expand_fixed_clauses_rebased(
         &self,
         body: &ExecutableBody,
         choices: &[TargetRef],
-        actor: SeatId,
-        current: &EvaluatedCharacteristics,
-        source: &ObjectCharacteristics,
-    ) -> Result<(ExecutableBody, Vec<SelectedMode>, Vec<TargetChoice>), EffectError> {
+        base_offset: usize,
+        next_target_id: u32,
+        next_clause_id: u32,
+        printed_mode: u8,
+        report_first: bool,
+        legal: impl Fn(&ExecutableBody, TargetRef) -> bool,
+    ) -> Result<ResolvedModeSelection, EffectError> {
         let copies_other = matches!(
             body.instructions.last(),
             Some(Instruction::CopyOtherTargetAsArtifact)
         );
-        let fights = body.instructions.last() == Some(&Instruction::FightFixedTargets);
+        let fights = body.instructions.contains(&Instruction::FightFixedTargets);
         if (copies_other || fights) && matches!(choices, [first, second] if first == second) {
             return Err(EffectError::IllegalTarget);
         }
@@ -274,60 +327,140 @@ impl EffectWindow {
                         | Instruction::DestroyFixedTargets
                         | Instruction::DestroyTargetAndAttachedEquipment
                         | Instruction::ExileUntilOtherTargetLeaves
-                        | Instruction::CreatureDealsPowerDamageToOther { .. }
                 )
-            );
+            )
+            || body
+                .instructions
+                .iter()
+                .any(|op| matches!(op, Instruction::CreatureDealsPowerDamageToOther { .. }));
         let mut choices = choices.iter();
         let mut instructions = Vec::new();
         let mut segments = Vec::new();
         let mut targets = Vec::new();
+        let mut old_to_new = Vec::with_capacity(body.instructions.len() + 1);
+        let mut outer_indices = Vec::new();
         for op in &body.instructions {
+            old_to_new.push(base_offset + instructions.len());
             if let Instruction::FixedTargetClause(clause) = op {
                 let target = *choices.next().ok_or(EffectError::TargetRequired)?;
-                if Self::protected_target(
-                    target,
-                    &super::protection::ProtectionSource::from(source),
-                    current,
-                ) || !self.legal_body_target_in(clause, target, actor, current)
-                {
+                if !legal(clause, target) {
                     return Err(EffectError::IllegalTarget);
                 }
-                let ordinal =
+                let local_ord =
                     u32::try_from(targets.len()).map_err(|_| EffectError::InvalidCastResource)?;
-                let id = TargetId(ordinal);
+                let id = TargetId(
+                    next_target_id
+                        .checked_add(local_ord)
+                        .ok_or(EffectError::InvalidCastResource)?,
+                );
+                let clause_id = TargetClauseId(
+                    next_clause_id
+                        .checked_add(local_ord)
+                        .ok_or(EffectError::InvalidCastResource)?,
+                );
                 targets.push(TargetChoice {
                     id,
-                    clause: TargetClauseId(ordinal),
+                    clause: clause_id,
                     target,
                 });
-                let start = instructions.len();
+                let start = base_offset + instructions.len();
                 if shared_action {
                     instructions.push(Instruction::Jump {
                         destination: start + 1,
                     });
                 } else {
-                    instructions.extend(clause.instructions.iter().cloned());
+                    let shift =
+                        isize::try_from(start).map_err(|_| EffectError::InconsistentProgram)?;
+                    for mut cloned in clause.instructions.iter().cloned() {
+                        cloned.shift_jumps(shift, 0);
+                        instructions.push(cloned);
+                    }
                 }
                 segments.push(SelectedMode {
-                    printed: 0,
-                    reported: false,
+                    printed: printed_mode,
+                    reported: report_first && segments.is_empty(),
                     clause: Some(TargetClause {
-                        id: TargetClauseId(ordinal),
+                        id: clause_id,
                         minimum: 1,
                         maximum: 1,
                     }),
                     extra_targets: vec![],
                     start,
-                    end: instructions.len(),
+                    end: base_offset + instructions.len(),
                     target: Some((id, clause.target)),
                 });
             } else {
+                outer_indices.push(instructions.len());
                 instructions.push(op.clone());
+            }
+        }
+        old_to_new.push(base_offset + instructions.len());
+        let remap = |dest: &mut usize| {
+            if let Some(&mapped) = old_to_new.get(*dest) {
+                *dest = mapped;
+            }
+        };
+        for idx in outer_indices {
+            match &mut instructions[idx] {
+                Instruction::FlipCoin {
+                    lose_destination: destination,
+                }
+                | Instruction::BranchIfFalse { destination, .. }
+                | Instruction::Jump { destination } => remap(destination),
+                Instruction::OfferManaPayment {
+                    paid_destination,
+                    declined_destination,
+                    ..
+                }
+                | Instruction::OfferDynamicManaPayment {
+                    paid_destination,
+                    declined_destination,
+                    ..
+                } => {
+                    remap(paid_destination);
+                    remap(declined_destination);
+                }
+                Instruction::OfferSourceCounters {
+                    placed_destination,
+                    declined_destination,
+                    ..
+                } => {
+                    remap(placed_destination);
+                    remap(declined_destination);
+                }
+                _ => {}
             }
         }
         if choices.next().is_some() {
             return Err(EffectError::UnexpectedTarget);
         }
+        Ok((instructions, segments, targets))
+    }
+
+    pub(super) fn expand_fixed_clauses(
+        &self,
+        body: &ExecutableBody,
+        choices: &[TargetRef],
+        actor: SeatId,
+        current: &EvaluatedCharacteristics,
+        source: &ObjectCharacteristics,
+    ) -> Result<(ExecutableBody, Vec<SelectedMode>, Vec<TargetChoice>), EffectError> {
+        let (instructions, segments, targets) = self.expand_fixed_clauses_rebased(
+            body,
+            choices,
+            0,
+            0,
+            0,
+            0,
+            false,
+            |clause, target| {
+                !Self::protected_target(
+                    target,
+                    &super::protection::ProtectionSource::from(source),
+                    current,
+                ) && self.legal_body_target_in(clause, target, actor, current)
+            },
+        )?;
         Ok((
             ExecutableBody::new(BodyTarget::None, instructions),
             segments,
@@ -335,21 +468,84 @@ impl EffectWindow {
         ))
     }
 
-    pub(super) fn legal_linked_targets(&self) -> Result<Option<(ObjectId, ObjectId)>, EffectError> {
+    pub(super) fn legal_linked_target_refs(
+        &self,
+    ) -> Result<Option<(ObjectId, TargetRef)>, EffectError> {
         let assessment = self
             .window
             .target_assessment()
             .ok_or(EffectError::WrongResolutionFrame)?;
-        let find = |id| {
-            assessment
-                .get(TargetId(id))
-                .filter(|row| row.legality == TargetLegality::Legal)
-                .and_then(|row| match row.choice.target {
-                    TargetRef::Object(object) => Some(object),
-                    _ => None,
-                })
+        let (first_id, second_id) = self
+            .resolution_cursor()
+            .and_then(|cursor| {
+                let modes = self.stack_modes(cursor.entry);
+                let mut prior = modes
+                    .iter()
+                    .filter(|mode| mode.end <= cursor.instruction)
+                    .filter_map(|mode| mode.target.map(|(tid, _)| tid))
+                    .rev();
+                let second = prior.next()?;
+                let first = prior.next()?;
+                Some((first, second))
+            })
+            .unwrap_or((TargetId(0), TargetId(1)));
+        let first = assessment
+            .get(first_id)
+            .filter(|row| row.legality == TargetLegality::Legal)
+            .and_then(|row| match row.choice.target {
+                TargetRef::Object(object) => Some(object),
+                _ => None,
+            });
+        let second = assessment
+            .get(second_id)
+            .filter(|row| row.legality == TargetLegality::Legal)
+            .map(|row| row.choice.target);
+        Ok(first.zip(second))
+    }
+
+    pub(super) fn legal_linked_targets(&self) -> Result<Option<(ObjectId, ObjectId)>, EffectError> {
+        let Some((first, TargetRef::Object(second))) = self.legal_linked_target_refs()? else {
+            return Ok(None);
         };
-        Ok(find(0).zip(find(1)))
+        Ok(Some((first, second)))
+    }
+
+    pub(super) fn legal_linked_player_and_object_targets(
+        &self,
+    ) -> Result<Option<(SeatId, ObjectId)>, EffectError> {
+        let assessment = self
+            .window
+            .target_assessment()
+            .ok_or(EffectError::WrongResolutionFrame)?;
+        let (first_id, second_id) = self
+            .resolution_cursor()
+            .and_then(|cursor| {
+                let modes = self.stack_modes(cursor.entry);
+                let mut prior = modes
+                    .iter()
+                    .filter(|mode| mode.end <= cursor.instruction)
+                    .filter_map(|mode| mode.target.map(|(tid, _)| tid))
+                    .rev();
+                let second = prior.next()?;
+                let first = prior.next()?;
+                Some((first, second))
+            })
+            .unwrap_or((TargetId(0), TargetId(1)));
+        let first = assessment
+            .get(first_id)
+            .filter(|row| row.legality == TargetLegality::Legal)
+            .and_then(|row| match row.choice.target {
+                TargetRef::Player(seat) => Some(seat),
+                _ => None,
+            });
+        let second = assessment
+            .get(second_id)
+            .filter(|row| row.legality == TargetLegality::Legal)
+            .and_then(|row| match row.choice.target {
+                TargetRef::Object(object) => Some(object),
+                _ => None,
+            });
+        Ok(first.zip(second))
     }
 
     pub(super) fn stack_modes(&self, entry: StackEntryId) -> &[SelectedMode] {
@@ -452,6 +648,11 @@ impl InstructionPayload {
                 | Instruction::BranchIfFalse { destination, .. }
                 | Instruction::Jump { destination } => rebase(destination),
                 Instruction::OfferManaPayment {
+                    paid_destination,
+                    declined_destination,
+                    ..
+                }
+                | Instruction::OfferDynamicManaPayment {
                     paid_destination,
                     declined_destination,
                     ..

@@ -75,6 +75,9 @@ impl EffectWindow {
                             | Instruction::SacrificeRandomUntilLand
                             | Instruction::ReturnRandomGraveyardCards { .. }
                             | Instruction::FlipCoin { .. }
+                            | Instruction::RollDie { .. }
+                            | Instruction::FlipCoins { .. }
+                            | Instruction::Discover { .. }
                             | Instruction::ShuffleOwnLibrary
                             | Instruction::ShufflePlayerLibrary(_)
                             | Instruction::ShuffleTargetIntoLibrary
@@ -313,6 +316,20 @@ impl EffectWindow {
         let Some(PendingWork::OptionalEffect(work)) = &self.pending_work else {
             return false;
         };
+        if work
+            .cursor
+            .revealed_piles
+            .as_ref()
+            .is_some_and(|piles| piles.pending_random_bottom.is_some())
+            || work
+                .cursor
+                .results
+                .discover_state
+                .as_ref()
+                .is_some_and(|d| d.awaiting_random_bottom)
+        {
+            return true;
+        }
         matches!(
             self.payloads
                 .get(&work.cursor.entry)
@@ -327,6 +344,8 @@ impl EffectWindow {
                     | Instruction::SacrificeRandomUntilLand
                     | Instruction::ReturnRandomGraveyardCards { .. }
                     | Instruction::FlipCoin { .. }
+                    | Instruction::RollDie { .. }
+                    | Instruction::FlipCoins { .. }
             )
         )
     }
@@ -337,9 +356,211 @@ impl EffectWindow {
         if !self.random_resolution_pending() {
             return Err(EffectError::WrongResolutionFrame.into());
         }
-        let Some(PendingWork::OptionalEffect(work)) = self.pending_work.take() else {
+        let Some(PendingWork::OptionalEffect(mut work)) = self.pending_work.take() else {
             return Err(EffectError::WrongResolutionFrame.into());
         };
+        if let Some(piles) = work.cursor.revealed_piles.as_mut()
+            && let Some(remainder) = piles.pending_random_bottom.take()
+        {
+            let (order, entropy) = tape.shuffled(remainder)?;
+            piles.bottom_order = Some(order);
+            self.pending_work = Some(PendingWork::Resolution(work.cursor));
+            return Ok((
+                self.progress_rules(
+                    DamageJournal::default(),
+                    vec![],
+                    vec![],
+                    DrawJournal::default(),
+                    RulesJournal::default(),
+                )?,
+                entropy,
+            ));
+        }
+        if work
+            .cursor
+            .results
+            .discover_state
+            .as_ref()
+            .is_some_and(|d| d.awaiting_random_bottom)
+        {
+            let remaining: Vec<ObjectId> = work
+                .cursor
+                .results
+                .discover_state
+                .as_ref()
+                .map(|d| {
+                    d.exiled
+                        .iter()
+                        .copied()
+                        .filter(|id| {
+                            self.window
+                                .cards()
+                                .get(*id)
+                                .is_some_and(|o| o.zone() == ObjectZone::Exile)
+                        })
+                        .collect()
+                })
+                .unwrap_or_default();
+            let (order, entropy) = tape.shuffled(remaining)?;
+            if let Some(d) = work.cursor.results.discover_state.as_mut() {
+                d.awaiting_random_bottom = false;
+                d.bottom_order = Some(order);
+            }
+            self.pending_work = Some(PendingWork::Resolution(work.cursor));
+            return Ok((
+                self.progress_rules(
+                    DamageJournal::default(),
+                    vec![],
+                    vec![],
+                    DrawJournal::default(),
+                    RulesJournal::default(),
+                )?,
+                entropy,
+            ));
+        }
+        if let Some(Instruction::RollDie { sides, count, .. }) = self
+            .payloads
+            .get(&work.cursor.entry)
+            .and_then(StackPayload::instructions)
+            .and_then(|ops| ops.get(work.cursor.instruction))
+            .cloned()
+        {
+            let player = work.chooser;
+            let cursor = work.cursor;
+            let controller = self
+                .window
+                .resolving()
+                .ok_or(EffectError::WrongResolutionFrame)?
+                .controller();
+            self.pending_work = Some(PendingWork::Resolution(cursor.clone()));
+            let raw_n = self.resolve_value_expr(controller, &count)?;
+            let n = if raw_n.is_positive() {
+                raw_n.to_usize().unwrap_or(1).min(64)
+            } else {
+                0
+            };
+            let side_count = usize::from(sides.get());
+            let mut entropy = tape.clone();
+            let mut rolls = Vec::with_capacity(n);
+            for _ in 0..n {
+                let (idx, next) = entropy.uniform_index(side_count)?;
+                entropy = next;
+                let value = u16::try_from(idx + 1).unwrap_or(sides.get());
+                rolls.push(value);
+            }
+            let cause = EventCause::Instruction {
+                entry: cursor.entry,
+                instruction: cursor.instruction,
+            };
+            let before = self.rules_snapshot(None)?;
+            let mut append = RulesJournal::default();
+            let occs: Vec<RulesOccurrence> = rolls
+                .iter()
+                .map(|&result| RulesOccurrence::DieRolled {
+                    player,
+                    sides: sides.get(),
+                    result,
+                })
+                .collect();
+            if !occs.is_empty() {
+                self.emit_from(cause, &before, None, &mut append, |_, _, _| Ok(occs))?;
+            }
+            if let Some(cur) = self.resolution_cursor_mut() {
+                cur.results.last_die_rolls = rolls;
+                cur.results.die_roll_ready = true;
+            }
+            return Ok((
+                self.progress_rules(
+                    DamageJournal::default(),
+                    vec![],
+                    vec![],
+                    DrawJournal::default(),
+                    append,
+                )?,
+                entropy,
+            ));
+        }
+        if let Some(Instruction::FlipCoins { mode, .. }) = self
+            .payloads
+            .get(&work.cursor.entry)
+            .and_then(StackPayload::instructions)
+            .and_then(|ops| ops.get(work.cursor.instruction))
+            .cloned()
+        {
+            let player = work.chooser;
+            let cursor = work.cursor;
+            let controller = self
+                .window
+                .resolving()
+                .ok_or(EffectError::WrongResolutionFrame)?
+                .controller();
+            self.pending_work = Some(PendingWork::Resolution(cursor.clone()));
+            let mut entropy = tape.clone();
+            let mut wins: usize = 0;
+            let mut occs = Vec::new();
+            match mode {
+                crate::program::CoinFlipMode::Single => {
+                    let (won, next) = entropy.flip_coin()?;
+                    entropy = next;
+                    if won {
+                        wins = 1;
+                    }
+                    occs.push(RulesOccurrence::CoinFlipped { player, won });
+                }
+                crate::program::CoinFlipMode::Count(expr) => {
+                    let raw_n = self.resolve_value_expr(controller, &expr)?;
+                    let n = if raw_n.is_positive() {
+                        raw_n.to_usize().unwrap_or(1).min(256)
+                    } else {
+                        0
+                    };
+                    for _ in 0..n {
+                        let (won, next) = entropy.flip_coin()?;
+                        entropy = next;
+                        if won {
+                            wins += 1;
+                        }
+                        occs.push(RulesOccurrence::CoinFlipped { player, won });
+                    }
+                }
+                crate::program::CoinFlipMode::UntilLose => {
+                    for _ in 0..256 {
+                        let (won, next) = entropy.flip_coin()?;
+                        entropy = next;
+                        occs.push(RulesOccurrence::CoinFlipped { player, won });
+                        if won {
+                            wins += 1;
+                        } else {
+                            break;
+                        }
+                    }
+                }
+            }
+            let cause = EventCause::Instruction {
+                entry: cursor.entry,
+                instruction: cursor.instruction,
+            };
+            let before = self.rules_snapshot(None)?;
+            let mut append = RulesJournal::default();
+            if !occs.is_empty() {
+                self.emit_from(cause, &before, None, &mut append, |_, _, _| Ok(occs))?;
+            }
+            if let Some(cur) = self.resolution_cursor_mut() {
+                cur.results.last_coin_flips_won = Some(RulesInteger::from_usize(wins));
+                cur.results.last_coin_flip_won = Some(wins > 0);
+                cur.results.coin_flip_ready = true;
+            }
+            return Ok((
+                self.progress_rules(
+                    DamageJournal::default(),
+                    vec![],
+                    vec![],
+                    DrawJournal::default(),
+                    append,
+                )?,
+                entropy,
+            ));
+        }
         if self
             .payloads
             .get(&work.cursor.entry)

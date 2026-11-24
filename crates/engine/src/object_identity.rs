@@ -25,6 +25,9 @@ pub struct CardId(pub u64);
 /// state, a stale incarnation cannot address a returned card.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub struct ObjectId(u64);
+impl ObjectId {
+    pub(crate) const SENTINEL: Self = Self(u64::MAX);
+}
 
 /// Opaque control-history identity within one registry and object incarnation.
 /// Its source is the registry's checked revision, not a game turn number.
@@ -84,17 +87,25 @@ impl OrderedZone {
 pub enum ObjectDestination {
     LibraryTop,
     LibraryBottom,
+    /// Zero-based index from the top of the owner's library (1 = second from the top).
+    LibraryFromTop(u8),
     Hand,
     Graveyard,
-    Battlefield { controller: SeatId },
-    Stack { controller: SeatId },
+    Battlefield {
+        controller: SeatId,
+    },
+    Stack {
+        controller: SeatId,
+    },
     Exile,
     Command,
 }
 impl ObjectDestination {
     fn placement(self, owner: SeatId) -> (ObjectZone, Option<SeatId>) {
         match self {
-            Self::LibraryTop | Self::LibraryBottom => (ObjectZone::Library(owner), None),
+            Self::LibraryTop | Self::LibraryBottom | Self::LibraryFromTop(_) => {
+                (ObjectZone::Library(owner), None)
+            }
             Self::Hand => (ObjectZone::Hand(owner), None),
             Self::Graveyard => (ObjectZone::Graveyard(owner), None),
             Self::Battlefield { controller } => (ObjectZone::Battlefield, Some(controller)),
@@ -111,6 +122,7 @@ impl ObjectDestination {
 pub enum ObjectOrigin {
     Card(CardId),
     PermanentSpellCopy { definition: Box<Program> },
+    SpellCopy { definition: Box<Program> },
     Token { definition: Box<Program> },
 }
 
@@ -122,6 +134,7 @@ pub struct GameObject {
     // arrivals. Receipts reconstructed from exact before/after objects keep this cut.
     other_arrivals: Option<std::sync::Arc<[ObjectId]>>,
     adventure: bool,
+    prototype: bool,
     split_half: Option<crate::program::SplitHalf>,
     transformed: bool,
     last_transformed_at: Option<u64>,
@@ -138,9 +151,38 @@ pub struct GameObject {
     face_down: Option<crate::face_down::FaceDownKind>,
 }
 impl GameObject {
+    /// Command-zone synthetic appearance anchor for an emblem's authored triggered abilities.
+    pub(crate) fn synthetic_emblem(controller: SeatId) -> Self {
+        Self {
+            combined: None,
+            other_arrivals: None,
+            adventure: false,
+            prototype: false,
+            split_half: None,
+            transformed: false,
+            last_transformed_at: None,
+            id: ObjectId::SENTINEL,
+            origin: ObjectOrigin::Token {
+                definition: Box::new(Program::enchantment(None)),
+            },
+            owner: controller,
+            zone: ObjectZone::Command,
+            controller: Some(controller),
+            default_controller: Some(controller),
+            tapped: None,
+            control_history: None,
+            corpse_return: false,
+            unearthed: false,
+            face_down: None,
+        }
+    }
     /// A transforming permanent retains its exact identity when changing face.
     pub fn transformed(&self) -> bool {
         self.transformed
+    }
+    /// Whether this object was cast using its prototype characteristics (CR 702.160).
+    pub fn prototype(&self) -> bool {
+        self.prototype
     }
     pub(crate) fn last_transformed_at(&self) -> Option<u64> {
         self.last_transformed_at
@@ -173,7 +215,9 @@ impl GameObject {
     pub fn card_id(&self) -> Option<CardId> {
         match self.origin {
             ObjectOrigin::Card(card) => Some(card),
-            ObjectOrigin::PermanentSpellCopy { .. } | ObjectOrigin::Token { .. } => None,
+            ObjectOrigin::PermanentSpellCopy { .. }
+            | ObjectOrigin::SpellCopy { .. }
+            | ObjectOrigin::Token { .. } => None,
         }
     }
     /// Immutable card provenance or the token's owned baseline definition.
@@ -183,6 +227,10 @@ impl GameObject {
     /// Whether this incarnation has token origin, independently of copy effects.
     pub fn is_token(&self) -> bool {
         matches!(self.origin, ObjectOrigin::Token { .. })
+    }
+    /// Whether this incarnation is a non-permanent spell copy created on the stack (CR 707.12).
+    pub fn is_spell_copy(&self) -> bool {
+        matches!(self.origin, ObjectOrigin::SpellCopy { .. })
     }
     /// Baseline before copy effects, from the sole definition belonging to this origin.
     pub(crate) fn base_program<'a>(
@@ -199,13 +247,16 @@ impl GameObject {
                     front.split.as_ref().map(|split| split.half(half))
                 } else if self.adventure {
                     front.adventure.as_deref()
+                } else if self.prototype {
+                    front.prototype.as_deref()
                 } else if self.transformed {
-                    front.reverse_face()
+                    front.back_face()
                 } else {
                     Some(front)
                 }
             }
             ObjectOrigin::PermanentSpellCopy { definition }
+            | ObjectOrigin::SpellCopy { definition }
             | ObjectOrigin::Token { definition } => Some(definition),
         }
     }
@@ -508,13 +559,46 @@ impl GameObjects {
             .current
             .get_mut(&id)
             .ok_or(ObjectIdentityError::UnknownObject)?;
-        if card.card_id().is_none()
-            || !matches!(
-                card.zone,
-                ObjectZone::Exile | ObjectZone::Graveyard(_) | ObjectZone::Stack
-            )
-        {
+        if card.card_id().is_none() || card.face_down.is_some() {
             return Err(ObjectIdentityError::NotCard);
+        }
+        card.transformed = true;
+        Ok(())
+    }
+    pub(crate) fn select_prototype(&mut self, id: ObjectId) -> Result<(), ObjectIdentityError> {
+        let object = self
+            .current
+            .get_mut(&id)
+            .ok_or(ObjectIdentityError::UnknownObject)?;
+        if object.card_id().is_none() || object.face_down.is_some() {
+            return Err(ObjectIdentityError::NotCard);
+        }
+        object.prototype = true;
+        Ok(())
+    }
+    pub(crate) fn preview_spell_copy(
+        &mut self,
+        id: ObjectId,
+        definition: Program,
+    ) -> Result<(), ObjectIdentityError> {
+        let object = self
+            .current
+            .get_mut(&id)
+            .ok_or(ObjectIdentityError::UnknownObject)?;
+        object.origin = ObjectOrigin::SpellCopy {
+            definition: Box::new(definition),
+        };
+        object.zone = ObjectZone::Stack;
+        object.tapped = None;
+        Ok(())
+    }
+    pub(crate) fn enter_transformed(&mut self, id: ObjectId) -> Result<(), ObjectIdentityError> {
+        let card = self
+            .current
+            .get_mut(&id)
+            .ok_or(ObjectIdentityError::UnknownObject)?;
+        if card.card_id().is_none() || card.zone != ObjectZone::Battlefield {
+            return Err(ObjectIdentityError::NotPermanent);
         }
         card.transformed = true;
         Ok(())
@@ -775,6 +859,14 @@ impl GameObjects {
                 .entry(OrderedZone::Library(owner))
                 .or_default()
                 .push(id),
+            ObjectDestination::LibraryFromTop(offset) => {
+                let library = self
+                    .ordered_zones
+                    .entry(OrderedZone::Library(owner))
+                    .or_default();
+                let index = usize::from(offset).min(library.len());
+                library.insert(index, id);
+            }
             ObjectDestination::Graveyard => self
                 .ordered_zones
                 .entry(OrderedZone::Graveyard(owner))
@@ -897,6 +989,7 @@ impl GameObjects {
             corpse_return: false,
             unearthed: false,
             adventure: false,
+            prototype: false,
             split_half: None,
             transformed: false,
             last_transformed_at: None,
@@ -948,6 +1041,49 @@ impl GameObjects {
                 corpse_return: false,
                 unearthed: false,
                 adventure: false,
+                prototype: false,
+                split_half: None,
+                transformed: false,
+                last_transformed_at: None,
+                face_down: None,
+            },
+        );
+        self.revision = revision;
+        self.next_identity = next;
+        Ok(id)
+    }
+    /// Create a non-permanent spell copy directly on the stack (CR 707.12, Prepare).
+    pub(crate) fn insert_spell_copy(
+        &mut self,
+        owner: SeatId,
+        definition: Program,
+    ) -> Result<ObjectId, ObjectIdentityError> {
+        if definition.permanent().is_some() {
+            return Err(ObjectIdentityError::InvalidTokenDefinition(
+                DefinitionError::InvalidInstruction,
+            ));
+        }
+        let revision = self.next_revision(self.revision)?;
+        let (id, next) = self.allocate_identity()?;
+        self.current.insert(
+            id,
+            GameObject {
+                id,
+                combined: None,
+                other_arrivals: None,
+                origin: ObjectOrigin::SpellCopy {
+                    definition: Box::new(definition),
+                },
+                owner,
+                zone: ObjectZone::Stack,
+                controller: Some(owner),
+                default_controller: Some(owner),
+                tapped: None,
+                control_history: None,
+                corpse_return: false,
+                unearthed: false,
+                adventure: false,
+                prototype: false,
                 split_half: None,
                 transformed: false,
                 last_transformed_at: None,
@@ -1082,6 +1218,7 @@ impl GameObjects {
                 corpse_return: false,
                 unearthed: false,
                 adventure: false,
+                prototype: false,
                 split_half: None,
                 transformed: false,
                 last_transformed_at: None,
@@ -1138,8 +1275,8 @@ impl GameObjects {
             return Err(ObjectIdentityError::StaleRevision);
         }
         if let Some(object) = self.get(object)
-            && object.is_token()
-            && object.zone() != ObjectZone::Battlefield
+            && ((object.is_token() && object.zone() != ObjectZone::Battlefield)
+                || (object.is_spell_copy() && object.zone() != ObjectZone::Stack))
         {
             return Ok(ZoneMoveOutcome::Unchanged {
                 object: object.clone(),
@@ -1182,6 +1319,9 @@ impl GameObjects {
             corpse_return: false,
             unearthed: false,
             adventure: false,
+            prototype: zone == ObjectZone::Battlefield
+                && before.zone == ObjectZone::Stack
+                && before.prototype,
             split_half: None,
             last_transformed_at: None,
             transformed: (zone == ObjectZone::Battlefield
@@ -1258,7 +1398,9 @@ impl GameObjects {
     ) -> Result<ObjectRemoval, ObjectIdentityError> {
         let revision = self.next_revision(expected)?;
         let object = self.get(object).ok_or(ObjectIdentityError::UnknownObject)?;
-        if !object.is_token() || object.zone() == ObjectZone::Battlefield {
+        if !((object.is_token() && object.zone() != ObjectZone::Battlefield)
+            || (object.is_spell_copy() && object.zone() != ObjectZone::Stack))
+        {
             return Err(ObjectIdentityError::NotDepartedToken);
         }
         let mut next = self.clone();

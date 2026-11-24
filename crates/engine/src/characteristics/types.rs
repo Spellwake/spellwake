@@ -121,7 +121,17 @@ pub struct StaticAbilityId(pub u64);
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ResolvedDuration {
     NoStatedDuration,
+    UntilEndOfCombat,
     UntilEndOfTurn,
+    /// Authored duration bound to the resolving controller's next turn start.
+    UntilControllerNextTurn,
+    /// Materialized duration expiring at the start of `player`'s first turn after `created_in_turn`.
+    UntilPlayerNextTurn {
+        player: SeatId,
+        created_in_turn: u64,
+    },
+    /// Authored duration bound to the resolving controller's next turn cleanup.
+    ThroughControllerNextTurn,
     /// Authored duration bound to the actual source and its current control history.
     WhileControllingAbilitySource,
     /// Retained duration for a specific incarnation that must stay under continuous control.
@@ -140,14 +150,31 @@ impl ResolvedDuration {
     pub(crate) fn expires_at_cleanup(self, active: SeatId, turn: u64) -> bool {
         match self {
             Self::NoStatedDuration
+            | Self::UntilControllerNextTurn
+            | Self::UntilPlayerNextTurn { .. }
+            | Self::ThroughControllerNextTurn
             | Self::WhileControllingAbilitySource
             | Self::WhileSourceControlled { .. } => false,
-            Self::UntilEndOfTurn => true,
+            Self::UntilEndOfTurn | Self::UntilEndOfCombat => true,
             Self::ThroughNextTurn {
                 player,
                 created_in_turn,
             } => player == active && turn > created_in_turn,
         }
+    }
+
+    pub(crate) fn expires_at_end_of_combat(self) -> bool {
+        matches!(self, Self::UntilEndOfCombat)
+    }
+
+    pub(crate) fn expires_at_turn_start(self, active: SeatId, turn: u64) -> bool {
+        matches!(
+            self,
+            Self::UntilPlayerNextTurn {
+                player,
+                created_in_turn,
+            } if player == active && turn > created_in_turn
+        )
     }
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -231,6 +258,27 @@ impl SubtypeProtection {
     }
 }
 
+/// A quality from which a permanent has conditional hexproof (CR 702.11e).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum HexproofQuality {
+    Color(Color),
+    Monocolored,
+    Multicolored,
+    CardType(CardType),
+    Subtype(CreatureTypeId),
+    ActivatedOrTriggeredAbility,
+}
+
+/// Additional orthogonal protection qualities beyond the 5 colors, multicolored, and subtypes (CR 702.16).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum ProtectionFromQuality {
+    Colorless,
+    Monocolored,
+    CardType(CardType),
+    Everything,
+    Player(crate::priority::SeatId),
+}
+
 /// Implemented static keywords. Unsupported keywords cannot enter this enum as
 /// arbitrary text or silently acquire partial behavior.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -253,6 +301,7 @@ pub enum KeywordAbility {
     ProtectionFromGreen,
     ProtectionFromMulticolored,
     ProtectionFromSubtype(SubtypeProtection),
+    ProtectionFrom(ProtectionFromQuality),
     /// This source's damage cannot be prevented.
     DamageCannotBePrevented,
     Retrace,
@@ -335,6 +384,10 @@ pub enum KeywordAbility {
     Shroud,
     /// Prevents opponents from targeting the permanent.
     Hexproof,
+    /// CR 702.11e: prevents opponents' spells/abilities with the matching quality from targeting this permanent.
+    HexproofFrom(HexproofQuality),
+    /// CR 702.89: if enchanted permanent would be destroyed, instead remove all damage from it and destroy this Aura.
+    UmbraArmor,
     /// Allows this spell to be cast whenever its controller could cast an instant.
     Flash,
     /// Restricts casting and nonmana activations while this spell is on the stack.
@@ -449,9 +502,13 @@ pub struct TypeChangeSpec {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum StaticSubtypeOperand {
     SourceEntryCreatureType,
-    ImprintedCreatureTypes { keep: BTreeSet<CreatureTypeId> },
+    ImprintedCreatureTypes {
+        keep: BTreeSet<CreatureTypeId>,
+    },
     Literal(BTreeSet<CreatureTypeId>),
     SourceCurrentSubtypes,
+    /// CR 205.3m: every creature type in the game vocabulary (e.g., Runed Stalactite, Maskwood Nexus).
+    AllCreatureTypes,
 }
 /// A land operand regenerated from the current scratch world in layer 4.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -542,6 +599,36 @@ pub enum BlockingRestriction {
     CanBlockAnyNumber,
     /// Creature can attack as though it didn't have defender (CR 702.3b).
     CanAttackAsThoughNoDefender,
+    /// Creature must block each combat if able (CR 509.1c).
+    MustBlockEachCombatIfAble,
+    /// Authored restriction: affected blocker cannot block the ability source.
+    CannotBlockSource,
+    /// Resolved restriction: affected blocker cannot block this exact attacking object.
+    CannotBlockObject(ObjectId),
+    /// Attacker cannot attack a defending player unless that player controls a matching permanent.
+    CannotAttackUnlessDefenderControls(crate::program::ObjectFilter),
+    /// Authored restriction: affected blocker must block the ability source if able (CR 509.1c).
+    MustBlockSource,
+    /// Resolved restriction: affected blocker must block this exact attacking object if able.
+    MustBlockObject(ObjectId),
+    /// Authored restriction: affected attacker cannot be blocked by the ability source.
+    CannotBeBlockedBySource,
+    /// Resolved restriction: affected attacker cannot be blocked by this exact blocking object.
+    CannotBeBlockedByObject(ObjectId),
+    /// Blocker can block only attackers matching this filter (CR 509.1b).
+    CanBlockOnlyMatching(crate::program::ObjectFilter),
+    /// Authored restriction: affected creature cannot attack the source controller or their planeswalkers.
+    CannotAttackSourceController,
+    /// Resolved restriction: affected creature cannot attack this player or their planeswalkers.
+    CannotAttackPlayer(SeatId),
+    /// Attacker cannot be blocked by creatures with greater power (CR 701.52c Ring-bearer level 1).
+    CannotBeBlockedByGreaterPower,
+    /// All defending creatures matching `filter` able to block this attacker must do so (CR 509.1c).
+    MustBeBlockedByAllMatching(crate::program::ObjectFilter),
+    /// Blocker cannot block more than `n` creatures each combat (CR 509.1b).
+    CannotBlockMoreThan(u8),
+    /// Attacker cannot be blocked by more than `n` creatures (CR 509.1b).
+    CannotBeBlockedByMoreThan(u8),
 }
 // Embeds `Copy` `BlockingRestriction` inline to avoid indirection in small resolved part lists.
 #[allow(clippy::large_enum_variant)]
@@ -554,16 +641,35 @@ pub enum ResolvedPart {
     Text(CreatureTypeTextChange),
     Names(NameOperation<ObjectNames>),
     Type(TypeChange),
+    TypeWithSubtypes {
+        base: TypeChange,
+        artifact_subtypes: SubtypeOperation<
+            BTreeSet<crate::program::ArtifactSubtype>,
+            crate::program::ArtifactSubtype,
+        >,
+        enchantment_subtypes: SubtypeOperation<
+            BTreeSet<crate::program::EnchantmentSubtype>,
+            crate::program::EnchantmentSubtype,
+        >,
+    },
     Color(ColorOperation<BTreeSet<Color>>),
     /// A layer-six effect granting one independently captured triggered ability.
     GrantTrigger(Box<TriggeredAbility>),
     GrantActivated(Box<crate::activated::ActivatedAbility>),
+    GrantActivatedRestricted {
+        ability: Box<crate::activated::ActivatedAbility>,
+        restriction: Box<crate::activated::ActivationRestriction>,
+    },
     InheritedAbilities(Box<super::InheritedAbilities>),
     /// Grant an independent tap ability that adds one mana of any color.
     GrantAnyColorMana,
     GrantFixedColorMana(crate::mana::ManaType),
+    /// Grant an independent tap mana ability producing any orthogonal `ManaOutput`.
+    GrantMana(Box<crate::mana::ManaOutput>),
     Abilities(AbilityChange),
     BlockingRestriction(BlockingRestriction),
+    /// Multiple Layer 6 ability parts bundled by characteristic evaluation for a single effect.
+    CompoundAbilities(Vec<ResolvedPart>),
     SetPT(PowerToughness),
     SetToughness(RulesInteger),
     ModifyPT(PowerToughness),
@@ -575,15 +681,18 @@ impl ResolvedPart {
             Self::Copy(_) => CharacteristicBucket::Copy,
             Self::Control(_) => CharacteristicBucket::Control,
             Self::Text(_) | Self::Names(_) => CharacteristicBucket::Text,
-            Self::Type(_) => CharacteristicBucket::Type,
+            Self::Type(_) | Self::TypeWithSubtypes { .. } => CharacteristicBucket::Type,
             Self::Color(_) => CharacteristicBucket::Color,
             Self::InheritedAbilities(_)
             | Self::GrantActivated(_)
+            | Self::GrantActivatedRestricted { .. }
             | Self::GrantTrigger(_)
             | Self::GrantAnyColorMana
             | Self::GrantFixedColorMana(_)
+            | Self::GrantMana(_)
             | Self::Abilities(_)
-            | Self::BlockingRestriction(_) => CharacteristicBucket::Abilities,
+            | Self::BlockingRestriction(_)
+            | Self::CompoundAbilities(_) => CharacteristicBucket::Abilities,
             Self::SetPT(_) | Self::SetToughness(_) => CharacteristicBucket::SetPT,
             Self::ModifyPT(_) => CharacteristicBucket::ModifyPT,
             Self::SwitchPT => CharacteristicBucket::SwitchPT,
@@ -598,7 +707,27 @@ pub enum ResolvedPartSpec {
     Text(CreatureTypeTextChangeSpec),
     Names(NameOperation<ObjectNames>),
     Type(TypeChangeSpec),
+    TypeWithSubtypes {
+        base: TypeChangeSpec,
+        artifact_subtypes: SubtypeOperation<
+            BTreeSet<crate::program::ArtifactSubtype>,
+            crate::program::ArtifactSubtype,
+        >,
+        enchantment_subtypes: SubtypeOperation<
+            BTreeSet<crate::program::EnchantmentSubtype>,
+            crate::program::EnchantmentSubtype,
+        >,
+    },
     Color(ColorOperation<BTreeSet<Color>>),
+    GrantTrigger(Box<TriggeredAbility>),
+    GrantActivated(Box<crate::activated::ActivatedAbility>),
+    GrantActivatedRestricted {
+        ability: Box<crate::activated::ActivatedAbility>,
+        restriction: Box<crate::activated::ActivationRestriction>,
+    },
+    GrantAnyColorMana,
+    GrantFixedColorMana(crate::mana::ManaType),
+    GrantMana(Box<crate::mana::ManaOutput>),
     Abilities(AbilityChange),
     BlockingRestriction(BlockingRestriction),
     SetPT(PowerToughness),
@@ -620,9 +749,16 @@ impl ResolvedPartSpec {
         match self {
             Self::Control(_) => CharacteristicBucket::Control,
             Self::Text(_) | Self::Names(_) => CharacteristicBucket::Text,
-            Self::Type(_) => CharacteristicBucket::Type,
+            Self::Type(_) | Self::TypeWithSubtypes { .. } => CharacteristicBucket::Type,
             Self::Color(_) => CharacteristicBucket::Color,
-            Self::Abilities(_) | Self::BlockingRestriction(_) => CharacteristicBucket::Abilities,
+            Self::GrantTrigger(_)
+            | Self::GrantActivated(_)
+            | Self::GrantActivatedRestricted { .. }
+            | Self::GrantAnyColorMana
+            | Self::GrantFixedColorMana(_)
+            | Self::GrantMana(_)
+            | Self::Abilities(_)
+            | Self::BlockingRestriction(_) => CharacteristicBucket::Abilities,
             Self::SetPT(_) | Self::SetPTExpr { .. } => CharacteristicBucket::SetPT,
             Self::ModifyPT(_) | Self::ModifyPTExpr { .. } => CharacteristicBucket::ModifyPT,
             Self::SwitchPT => CharacteristicBucket::SwitchPT,
@@ -709,6 +845,8 @@ pub struct PermanentSelector {
     pub required_keyword: Option<KeywordAbility>,
     /// Forbid a specific keyword ability on this recipient.
     pub forbidden_keyword: Option<KeywordAbility>,
+    /// Forbid every keyword ability in this set on this recipient (e.g., "without flying or islandwalk").
+    pub forbidden_keywords: BTreeSet<KeywordAbility>,
     /// Minimum number of Equipment currently attached to this recipient.
     pub equipped_by_at_least: u16,
     /// Require at least one Aura currently attached to this recipient.
@@ -754,6 +892,7 @@ impl Default for PermanentSelector {
             requires_flying: false,
             required_keyword: None,
             forbidden_keyword: None,
+            forbidden_keywords: BTreeSet::new(),
             plus_one_counter: false,
             minus_one_counter: false,
             minimum_plus_one_counters: 0,
@@ -808,6 +947,27 @@ pub enum StaticSourceCondition {
     },
     SourceIsTapped,
     SourceIsUntapped,
+    /// Active while this Class permanent's current level is at least the given level (CR 716).
+    SourceClassLevelAtLeast(u8),
+    /// Active while this Case permanent is solved (CR 719).
+    SourceIsSolved,
+    /// Active while this permanent entered the battlefield during the current turn.
+    SourceEnteredThisTurn,
+    /// Active while this permanent is currently paired with another creature via soulbond.
+    SourcePaired,
+    /// Active while this permanent is currently in the prepared state.
+    SourceIsPrepared,
+    /// Active while at least `minimum` nonland permanents entered under controller's control this turn (Celebration).
+    NonlandPermanentsEnteredThisTurnAtLeast(u16),
+    /// Active while any participant's library has at most `maximum` cards in it.
+    AnyLibraryAtMost(u16),
+    /// Active while any participant has at most `maximum` cards in hand.
+    AnyPlayerHandCountAtMost(u16),
+    /// Active while `color` is the most common color (or tied for most common when `or_tied`) among all permanents.
+    MostCommonPermanentColor {
+        color: Color,
+        or_tied: bool,
+    },
     ControllerHasCityBlessing,
     ControllerGainedLifeThisTurn,
     ControllerLostLifeThisTurn,
@@ -829,6 +989,12 @@ pub enum StaticSourceCondition {
         selector: Box<PermanentSelector>,
         minimum: u16,
     },
+    /// General world-evaluable condition expression evaluated against the current scratch world.
+    Eval(Box<crate::program::ResolutionCondition>),
+    /// Active while the given Room door half is unlocked on the source permanent (CR 709.5).
+    RoomDoorUnlocked(crate::program::SplitHalf),
+    /// Active while both Room doors are unlocked on the source permanent (CR 709.5).
+    RoomFullyUnlocked,
     Not(Box<StaticSourceCondition>),
     And(Box<StaticSourceCondition>, Box<StaticSourceCondition>),
     Or(Box<StaticSourceCondition>, Box<StaticSourceCondition>),
@@ -903,6 +1069,8 @@ pub enum NumericExpression {
         condition: StaticBonusCondition,
         bonus: RulesInteger,
     },
+    /// General world-evaluable numeric expression evaluated against the current scratch world.
+    Eval(Box<crate::program::ValueExpr>),
 }
 impl NumericExpression {
     /// Author an unadjusted exact permanent count; wire operands remain explicit.
@@ -926,6 +1094,13 @@ impl NumericExpression {
             | Self::AttachedAurasAndEquipment { .. }
             | Self::ConditionalBonus { .. } => Ok(()),
             Self::Count { selector, .. } => selector.validate(vocabulary),
+            Self::Eval(expr) => {
+                if !expr.is_world_evaluable() {
+                    return Err(CharacteristicDefinitionError::UnsupportedTypeOperation);
+                }
+                expr.validate_world_expr(vocabulary)
+                    .map_err(|_| CharacteristicDefinitionError::ForeignCreatureType)
+            }
         }
     }
 }
@@ -941,20 +1116,41 @@ pub enum StaticPart {
     Text(CreatureTypeTextChange),
     Names(NameOperation<StaticNameOperand>),
     Type(StaticTypeChange),
+    TypeWithSubtypes {
+        base: StaticTypeChange,
+        artifact_subtypes: SubtypeOperation<
+            BTreeSet<crate::program::ArtifactSubtype>,
+            crate::program::ArtifactSubtype,
+        >,
+        enchantment_subtypes: SubtypeOperation<
+            BTreeSet<crate::program::EnchantmentSubtype>,
+            crate::program::EnchantmentSubtype,
+        >,
+    },
     Color(ColorOperation<StaticColorOperand>),
     /// A layer-six effect granting one independently captured triggered ability.
     GrantTrigger(Box<TriggeredAbility>),
     GrantActivated(Box<crate::activated::ActivatedAbility>),
+    GrantActivatedRestricted {
+        ability: Box<crate::activated::ActivatedAbility>,
+        restriction: Box<crate::activated::ActivationRestriction>,
+    },
     InheritCounteredCreatureAbilities,
     InheritExiledCreatureAbilities,
     /// Grant an independent tap ability that adds one mana of any color.
     GrantAnyColorMana,
     GrantFixedColorMana(crate::mana::ManaType),
+    /// Grant an independent tap mana ability producing any orthogonal `ManaOutput`.
+    GrantMana(Box<crate::mana::ManaOutput>),
     /// Grant layer-six protection against each subtype selected by this operand.
     GrantSubtypeProtection {
         types: StaticSubtypeOperand,
         creatures_only: bool,
     },
+    /// Grant layer-six protection against the color chosen as the source entered the battlefield.
+    GrantProtectionChosenColor,
+    /// Grant layer-six protection against the player chosen as the source entered the battlefield (e.g. True-Name Nemesis).
+    GrantProtectionChosenPlayer,
     Abilities(AbilityChange),
     BlockingRestriction(BlockingRestriction),
     /// Set each recipient’s base power and toughness to its own mana value.
@@ -968,15 +1164,19 @@ impl StaticPart {
         match self {
             Self::ControlSourceController => CharacteristicBucket::Control,
             Self::Text(_) | Self::Names(_) => CharacteristicBucket::Text,
-            Self::Type(_) => CharacteristicBucket::Type,
+            Self::Type(_) | Self::TypeWithSubtypes { .. } => CharacteristicBucket::Type,
             Self::Color(_) => CharacteristicBucket::Color,
             Self::InheritCounteredCreatureAbilities
             | Self::InheritExiledCreatureAbilities
             | Self::GrantActivated(_)
+            | Self::GrantActivatedRestricted { .. }
             | Self::GrantTrigger(_)
             | Self::GrantAnyColorMana
             | Self::GrantFixedColorMana(_)
+            | Self::GrantMana(_)
             | Self::GrantSubtypeProtection { .. }
+            | Self::GrantProtectionChosenColor
+            | Self::GrantProtectionChosenPlayer
             | Self::Abilities(_)
             | Self::BlockingRestriction(_) => CharacteristicBucket::Abilities,
             Self::SetPT(_) | Self::SetPTToOwnManaValue => CharacteristicBucket::SetPT,
@@ -1038,7 +1238,7 @@ pub(super) fn validate_buckets(
 ) -> Result<(), CharacteristicDefinitionError> {
     let mut found = BTreeSet::new();
     for bucket in buckets {
-        if !found.insert(bucket) {
+        if !found.insert(bucket) && bucket != CharacteristicBucket::Abilities {
             return Err(CharacteristicDefinitionError::DuplicateBucket);
         }
     }
@@ -1105,7 +1305,7 @@ impl PermanentSelector {
     }
 }
 
-fn validate_static_source_condition(
+pub(crate) fn validate_static_source_condition(
     cond: &StaticSourceCondition,
     vocabulary: &CreatureTypeVocabulary,
 ) -> Result<(), CharacteristicDefinitionError> {
@@ -1123,6 +1323,14 @@ fn validate_static_source_condition(
                 return Err(CharacteristicDefinitionError::ContradictorySelector);
             }
             selector.validate(vocabulary)
+        }
+        StaticSourceCondition::Eval(cond) => {
+            cond.validate_world(vocabulary).map_err(|err| match err {
+                crate::program::DefinitionError::ForeignCreatureType => {
+                    CharacteristicDefinitionError::ForeignCreatureType
+                }
+                _ => CharacteristicDefinitionError::ContradictorySelector,
+            })
         }
         StaticSourceCondition::Not(inner) => validate_static_source_condition(inner, vocabulary),
         StaticSourceCondition::And(a, b) | StaticSourceCondition::Or(a, b) => {
@@ -1170,6 +1378,15 @@ impl ResolvedParts {
         {
             return Err(CharacteristicDefinitionError::MixedCopyParts);
         }
+        if self
+            .0
+            .iter()
+            .filter(|part| matches!(part, ResolvedPart::Abilities(_)))
+            .count()
+            > 1
+        {
+            return Err(CharacteristicDefinitionError::DuplicateBucket);
+        }
         validate_buckets(self.0.iter().map(ResolvedPart::bucket))
     }
 }
@@ -1179,6 +1396,15 @@ impl ResolvedPartsSpec {
         vocabulary: &CreatureTypeVocabulary,
         defined_slots: &BTreeSet<CreatureTypeSlot>,
     ) -> Result<(), CharacteristicDefinitionError> {
+        if self
+            .0
+            .iter()
+            .filter(|part| matches!(part, ResolvedPartSpec::Abilities(_)))
+            .count()
+            > 1
+        {
+            return Err(CharacteristicDefinitionError::DuplicateBucket);
+        }
         validate_buckets(self.0.iter().map(ResolvedPartSpec::bucket))?;
         for part in &self.0 {
             if matches!(
@@ -1186,6 +1412,7 @@ impl ResolvedPartsSpec {
                 ResolvedPartSpec::BlockingRestriction(
                     BlockingRestriction::BlockerPowerAtLeastSource
                         | BlockingRestriction::BlockerPowerAtLeastPowerOf(_)
+                        | BlockingRestriction::CannotBlockObject(_)
                 )
             ) {
                 return Err(CharacteristicDefinitionError::UnsupportedTypeOperation);
@@ -1197,6 +1424,19 @@ impl ResolvedPartsSpec {
             ) = part
             {
                 validate_subtypes(&BTreeSet::from([*kind]), vocabulary)?;
+            }
+            if let ResolvedPartSpec::BlockingRestriction(
+                BlockingRestriction::CannotBlockMatching(filter)
+                | BlockingRestriction::CannotBeBlockedByMatching(filter)
+                | BlockingRestriction::OnlyBlockedByMatching(filter)
+                | BlockingRestriction::CanBlockOnlyMatching(filter)
+                | BlockingRestriction::CannotAttackUnlessDefenderControls(filter)
+                | BlockingRestriction::MustBeBlockedByAllMatching(filter),
+            ) = part
+            {
+                filter
+                    .validate_vocabulary(vocabulary)
+                    .map_err(|_| CharacteristicDefinitionError::ForeignCreatureType)?;
             }
             if let ResolvedPartSpec::Abilities(change) = part {
                 if let Some(trigger) = &change.granted_trigger {
@@ -1219,7 +1459,58 @@ impl ResolvedPartsSpec {
                     }
                 }
             }
-            if let ResolvedPartSpec::Type(change) = part {
+            if let ResolvedPartSpec::GrantTrigger(trigger) = part {
+                trigger
+                    .validate_body(vocabulary)
+                    .map_err(|_| CharacteristicDefinitionError::InvalidKeywordGrant)?;
+            }
+            if let ResolvedPartSpec::GrantActivated(ability)
+            | ResolvedPartSpec::GrantActivatedRestricted { ability, .. } = part
+            {
+                if !ability.mana_cost.valid() {
+                    return Err(CharacteristicDefinitionError::InvalidKeywordGrant);
+                }
+                let body_context = match ability.source_cost {
+                    crate::activated::SourceCost::SacrificeSelected {
+                        filter:
+                            crate::activated::SelectedSacrificeFilter::Creature
+                            | crate::activated::SelectedSacrificeFilter::OtherCreature
+                            | crate::activated::SelectedSacrificeFilter::Subtype(_),
+                        count: 1,
+                        from_graveyard: false,
+                        ..
+                    }
+                    | crate::activated::SourceCost::PayLife {
+                        sacrifice:
+                            Some(
+                                crate::activated::SelectedSacrificeFilter::Creature
+                                | crate::activated::SelectedSacrificeFilter::OtherCreature,
+                            ),
+                        ..
+                    } => crate::program::BodyContext::SacrificedCreature,
+                    crate::activated::SourceCost::SacrificeSelected {
+                        filter: crate::activated::SelectedSacrificeFilter::Matching(filter),
+                        count: 1,
+                        from_graveyard: false,
+                        ..
+                    } if filter.guarantees_creature() => {
+                        crate::program::BodyContext::SacrificedCreature
+                    }
+                    crate::activated::SourceCost::SacrificeSelected {
+                        count: 1,
+                        from_graveyard: false,
+                        ..
+                    } => crate::program::BodyContext::SacrificedPermanent,
+                    _ => crate::program::BodyContext::ACTIVATED,
+                };
+                ability
+                    .body
+                    .validate_in(vocabulary, body_context)
+                    .map_err(|_| CharacteristicDefinitionError::InvalidKeywordGrant)?;
+            }
+            if let ResolvedPartSpec::Type(change)
+            | ResolvedPartSpec::TypeWithSubtypes { base: change, .. } = part
+            {
                 validate_battlefield_types(&change.types)?;
                 match &change.subtypes {
                     SubtypeOperation::Keep => {}
@@ -1265,6 +1556,29 @@ impl ResolvedPartsSpec {
         values: &BTreeMap<CreatureTypeSlot, CreatureTypeId>,
         resolving_controller: SeatId,
         target_owner: SeatId,
+        eval: F,
+    ) -> Result<ResolvedParts, CharacteristicInvariantError>
+    where
+        F: FnMut(&crate::program::ValueExpr) -> Result<RulesInteger, CharacteristicInvariantError>,
+    {
+        self.materialize_with_source_and_eval(
+            values,
+            resolving_controller,
+            target_owner,
+            None,
+            eval,
+        )
+    }
+    /// Materialize cursor locals, source-relative restrictions, and dynamic value expressions at resolution time (CR 611.2c).
+    ///
+    /// # Errors
+    /// Returns an invariant error when a required local, source object, or dynamic expression cannot be resolved.
+    pub fn materialize_with_source_and_eval<F>(
+        &self,
+        values: &BTreeMap<CreatureTypeSlot, CreatureTypeId>,
+        resolving_controller: SeatId,
+        target_owner: SeatId,
+        source_object: Option<ObjectId>,
         mut eval: F,
     ) -> Result<ResolvedParts, CharacteristicInvariantError>
     where
@@ -1301,8 +1615,81 @@ impl ResolvedPartsSpec {
                             }
                         },
                     }),
+                    ResolvedPartSpec::TypeWithSubtypes {
+                        base: change,
+                        artifact_subtypes,
+                        enchantment_subtypes,
+                    } => ResolvedPart::TypeWithSubtypes {
+                        base: TypeChange {
+                            land_subtypes: change.land_subtypes.clone(),
+                            supertypes: change.supertypes.clone(),
+                            types: change.types.clone(),
+                            subtypes: match &change.subtypes {
+                                SubtypeOperation::Keep => SubtypeOperation::Keep,
+                                SubtypeOperation::Remove(set) => {
+                                    SubtypeOperation::Remove(set.clone())
+                                }
+                                SubtypeOperation::Add(operand) => {
+                                    SubtypeOperation::Add(materialize_subtype(operand, values)?)
+                                }
+                                SubtypeOperation::Set(operand) => {
+                                    SubtypeOperation::Set(materialize_subtype(operand, values)?)
+                                }
+                            },
+                        },
+                        artifact_subtypes: artifact_subtypes.clone(),
+                        enchantment_subtypes: enchantment_subtypes.clone(),
+                    },
+                    ResolvedPartSpec::GrantTrigger(trigger) => {
+                        ResolvedPart::GrantTrigger(trigger.clone())
+                    }
+                    ResolvedPartSpec::GrantActivated(ability) => {
+                        ResolvedPart::GrantActivated(ability.clone())
+                    }
+                    ResolvedPartSpec::GrantActivatedRestricted {
+                        ability,
+                        restriction,
+                    } => ResolvedPart::GrantActivatedRestricted {
+                        ability: ability.clone(),
+                        restriction: restriction.clone(),
+                    },
+                    ResolvedPartSpec::GrantAnyColorMana => ResolvedPart::GrantAnyColorMana,
+                    ResolvedPartSpec::GrantFixedColorMana(color) => {
+                        ResolvedPart::GrantFixedColorMana(*color)
+                    }
+                    ResolvedPartSpec::GrantMana(output) => ResolvedPart::GrantMana(output.clone()),
                     ResolvedPartSpec::SetPT(pair) => ResolvedPart::SetPT(pair.clone()),
                     ResolvedPartSpec::Abilities(change) => ResolvedPart::Abilities(change.clone()),
+                    ResolvedPartSpec::BlockingRestriction(
+                        BlockingRestriction::CannotBlockSource,
+                    ) => {
+                        let source_id = source_object
+                            .ok_or(CharacteristicInvariantError::NoEligibleComponent)?;
+                        ResolvedPart::BlockingRestriction(BlockingRestriction::CannotBlockObject(
+                            source_id,
+                        ))
+                    }
+                    ResolvedPartSpec::BlockingRestriction(BlockingRestriction::MustBlockSource) => {
+                        let source_id = source_object
+                            .ok_or(CharacteristicInvariantError::NoEligibleComponent)?;
+                        ResolvedPart::BlockingRestriction(BlockingRestriction::MustBlockObject(
+                            source_id,
+                        ))
+                    }
+                    ResolvedPartSpec::BlockingRestriction(
+                        BlockingRestriction::CannotBeBlockedBySource,
+                    ) => {
+                        let source_id = source_object
+                            .ok_or(CharacteristicInvariantError::NoEligibleComponent)?;
+                        ResolvedPart::BlockingRestriction(
+                            BlockingRestriction::CannotBeBlockedByObject(source_id),
+                        )
+                    }
+                    ResolvedPartSpec::BlockingRestriction(
+                        BlockingRestriction::CannotAttackSourceController,
+                    ) => ResolvedPart::BlockingRestriction(
+                        BlockingRestriction::CannotAttackPlayer(resolving_controller),
+                    ),
                     ResolvedPartSpec::BlockingRestriction(value) => {
                         ResolvedPart::BlockingRestriction(value.clone())
                     }
@@ -1362,6 +1749,16 @@ pub struct ResolvedContinuousEffect {
     pub affected: BTreeSet<ObjectId>,
     pub parts: ResolvedParts,
     pub duration: ResolvedDuration,
+}
+/// Duration-scoped battlefield static ability installed by a resolving spell or ability (CR 611.2a).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TemporaryBattlefieldStatic {
+    pub id: u64,
+    pub controller: SeatId,
+    pub source_object: Option<ObjectId>,
+    pub timestamp: CharacteristicTimestamp,
+    pub duration: ResolvedDuration,
+    pub ability: StaticContinuousAbility,
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CharacteristicsError {
@@ -1452,6 +1849,7 @@ pub struct PrintedAbilityIdentity {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PrintedAbilityRoster {
     pub attack_requirement: Option<crate::program::AttackRequirement>,
+    pub additional_attack_requirements: Vec<crate::program::AttackRequirement>,
     pub combat_limits: crate::program::CombatDeclarationLimits,
     /// Surviving printed entry-status replacement.
     pub entry_tap: Option<crate::land::EntryTap>,
@@ -1470,6 +1868,24 @@ pub struct PrintedAbilityRoster {
     pub additional_battlefield_abilities: Vec<StaticAbilityId>,
 }
 impl PrintedAbilityRoster {
+    pub(crate) fn empty_emblem(source: ObjectId) -> Self {
+        Self {
+            attack_requirement: None,
+            additional_attack_requirements: Vec::new(),
+            combat_limits: crate::program::CombatDeclarationLimits::default(),
+            entry_tap: None,
+            entry_counter_abilities: false,
+            face_up: Vec::new(),
+            zone_replacements: Vec::new(),
+            source,
+            card: None,
+            mana: Vec::new(),
+            activated: Vec::new(),
+            triggered: Vec::new(),
+            continuous: None,
+            additional_battlefield_abilities: Vec::new(),
+        }
+    }
     pub(super) fn remove(&mut self, removal: AbilityRemoval) {
         match removal {
             AbilityRemoval::Banding | AbilityRemoval::BandsWithOther | AbilityRemoval::Flying => {
@@ -1479,6 +1895,7 @@ impl PrintedAbilityRoster {
             AbilityRemoval::NonMana => {}
         }
         self.attack_requirement = None;
+        self.additional_attack_requirements.clear();
         self.combat_limits = Default::default();
         self.entry_tap = None;
         self.entry_counter_abilities = false;
@@ -1488,6 +1905,14 @@ impl PrintedAbilityRoster {
         self.triggered.clear();
         self.continuous = None;
         self.additional_battlefield_abilities.clear();
+    }
+    /// Every surviving printed attack requirement on this permanent.
+    pub fn all_attack_requirements(
+        &self,
+    ) -> impl Iterator<Item = crate::program::AttackRequirement> + '_ {
+        self.attack_requirement
+            .into_iter()
+            .chain(self.additional_attack_requirements.iter().copied())
     }
     pub fn identities(&self) -> Vec<PrintedAbilityIdentity> {
         self.zone_replacements
@@ -1538,8 +1963,13 @@ pub struct PrintedText {
     pub face_up_abilities: Vec<crate::face_down::FaceUpAbility>,
     pub activation_restrictions:
         std::collections::BTreeMap<ActivatedAbilityId, crate::activated::ActivationRestriction>,
+    pub activation_modes:
+        std::collections::BTreeMap<ActivatedAbilityId, crate::program::SpellModes>,
     pub activation_hybrid_symbols:
         std::collections::BTreeMap<ActivatedAbilityId, Vec<crate::mana::HybridSymbol>>,
+    pub extra_activation_costs:
+        std::collections::BTreeMap<ActivatedAbilityId, Vec<crate::activated::ExtraActivationCost>>,
+    pub extra_cast_costs: Vec<crate::activated::ExtraActivationCost>,
     /// Printed loyalty costs for surviving activated abilities.
     pub loyalty_costs: std::collections::BTreeMap<ActivatedAbilityId, i32>,
     /// Activated loyalty costs whose value is announced as X.
@@ -1585,12 +2015,16 @@ pub struct PrintedText {
     pub triggered: Vec<TriggeredAbility>,
     pub continuous: Option<StaticContinuousAbility>,
     pub additional_battlefield_abilities: Vec<StaticContinuousAbility>,
+    pub static_conditions: std::collections::BTreeMap<StaticAbilityId, StaticSourceCondition>,
 }
 impl PrintedText {
-    pub(super) fn from_program(program: &Program) -> Self {
+    pub(crate) fn from_program(program: &Program) -> Self {
         Self {
             activation_restrictions: program.activation_restrictions.clone(),
+            activation_modes: program.activation_modes.clone(),
             activation_hybrid_symbols: program.activation_hybrid_symbols.clone(),
+            extra_activation_costs: program.extra_activation_costs.clone(),
+            extra_cast_costs: program.extra_cast_costs.clone(),
             loyalty_costs: program.loyalty_costs.clone(),
             variable_loyalty_costs: program.variable_loyalty_costs.clone(),
             face_up_abilities: program.face_up_abilities.clone(),
@@ -1624,6 +2058,7 @@ impl PrintedText {
             triggered: program.triggered.clone(),
             continuous: program.continuous.clone(),
             additional_battlefield_abilities: program.additional_battlefield_abilities.clone(),
+            static_conditions: program.static_conditions.clone(),
         }
     }
 }
@@ -1871,6 +2306,53 @@ impl ObjectCharacteristics {
         self.keywords.iter().any(|keyword| matches!(keyword,
             KeywordAbility::ProtectionFromSubtype(quality) if quality.matches(subtypes, is_creature)))
     }
+    /// Unified CR 702.16 protection check covering colors, multicolored, subtypes, card types,
+    /// colorless, monocolored, everything, and player qualities.
+    pub(crate) fn protected_from_source(
+        &self,
+        colors: &BTreeSet<Color>,
+        card_types: &BTreeSet<CardType>,
+        subtypes: &BTreeSet<CreatureTypeId>,
+        is_creature: bool,
+        controller: Option<SeatId>,
+    ) -> bool {
+        if self.protected_from_colors(colors) || self.protected_from_subtypes(subtypes, is_creature)
+        {
+            return true;
+        }
+        self.keywords.iter().any(|keyword| match keyword {
+            KeywordAbility::ProtectionFrom(ProtectionFromQuality::Colorless) => colors.is_empty(),
+            KeywordAbility::ProtectionFrom(ProtectionFromQuality::Monocolored) => colors.len() == 1,
+            KeywordAbility::ProtectionFrom(ProtectionFromQuality::CardType(ct)) => {
+                card_types.contains(ct)
+            }
+            KeywordAbility::ProtectionFrom(ProtectionFromQuality::Everything) => true,
+            KeywordAbility::ProtectionFrom(ProtectionFromQuality::Player(seat)) => {
+                controller == Some(*seat)
+            }
+            _ => false,
+        })
+    }
+    /// CR 702.11e: whether any `HexproofFrom` ability on this permanent blocks a source controlled by an opponent.
+    pub(crate) fn hexproof_from_source(
+        &self,
+        colors: &BTreeSet<Color>,
+        card_types: &BTreeSet<CardType>,
+        subtypes: &BTreeSet<CreatureTypeId>,
+        is_ability: bool,
+    ) -> bool {
+        self.keywords.iter().any(|keyword| match keyword {
+            KeywordAbility::HexproofFrom(HexproofQuality::Color(c)) => colors.contains(c),
+            KeywordAbility::HexproofFrom(HexproofQuality::Monocolored) => colors.len() == 1,
+            KeywordAbility::HexproofFrom(HexproofQuality::Multicolored) => colors.len() >= 2,
+            KeywordAbility::HexproofFrom(HexproofQuality::CardType(ct)) => card_types.contains(ct),
+            KeywordAbility::HexproofFrom(HexproofQuality::Subtype(st)) => subtypes.contains(st),
+            KeywordAbility::HexproofFrom(HexproofQuality::ActivatedOrTriggeredAbility) => {
+                is_ability
+            }
+            _ => false,
+        })
+    }
 
     /// Whether the current type line can retain this shared subtype family.
     pub fn carries_creature_subtypes(&self) -> bool {
@@ -1928,6 +2410,11 @@ pub enum EffectInstanceKey {
     },
     /// Persistent static effect supplied by a command-zone emblem.
     Emblem(crate::emblem::EmblemId),
+    /// One authored battlefield static ability supplied by a command-zone emblem.
+    EmblemStatic {
+        emblem: crate::emblem::EmblemId,
+        ability: StaticAbilityId,
+    },
     /// Characteristic-defining effect of a printed or copied keyword.
     PrintedKeyword {
         source: ObjectId,
@@ -1938,6 +2425,8 @@ pub enum EffectInstanceKey {
         source: ObjectId,
         ability: StaticAbilityId,
     },
+    /// Duration-scoped battlefield static ability installed by a resolving spell or ability.
+    TemporaryStatic(u64),
 }
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PassBinding {
@@ -2004,6 +2493,7 @@ pub struct EvaluatedCharacteristics {
     pub objects: BTreeMap<ObjectId, ObjectCharacteristics>,
     pub trace: EvaluationTrace,
     pub(crate) player_color_protection: BTreeMap<SeatId, BTreeSet<Color>>,
+    pub(crate) emblem_rules: Vec<(SeatId, StaticContinuousAbility)>,
 }
 impl EvaluatedCharacteristics {
     /// Active protection colors of this player at the evaluated cut.
@@ -2048,9 +2538,14 @@ impl EvaluatedCharacteristics {
 
     /// Whether an active Equipment prohibits sacrificing this permanent.
     pub fn sacrifice_prohibited(&self, object: ObjectId) -> bool {
-        self.get(object).is_some_and(ObjectCharacteristics::is_creature) && self.objects.values().any(|equipment| equipment.zone == ObjectZone::Battlefield
-            && equipment.abilities.attack_requirement == Some(crate::program::AttackRequirement::EquippedCannotAttackControllerOrBeSacrificed)
-            && equipment.attached_to == Some(crate::targets::TargetRef::Object(object)))
+        self.get(object).is_some_and(ObjectCharacteristics::is_creature)
+            && self.objects.values().any(|equipment| {
+                equipment.zone == ObjectZone::Battlefield
+                    && equipment.abilities.all_attack_requirements().any(|req| {
+                        req == crate::program::AttackRequirement::EquippedCannotAttackControllerOrBeSacrificed
+                    })
+                    && equipment.attached_to == Some(crate::targets::TargetRef::Object(object))
+            })
     }
 
     /// Distinct sources of a replicate grant in stable source/ability order.
@@ -2137,6 +2632,11 @@ impl EvaluatedCharacteristics {
         predicate: impl Fn(&StaticContinuousAbility) -> bool + Copy,
     ) -> usize {
         self.controlled_rule_sources(controller, predicate).count()
+            + self
+                .emblem_rules
+                .iter()
+                .filter(|(seat, ability)| *seat == controller && predicate(ability))
+                .count()
     }
 
     /// Threshold for lethal marked damage, including trample assignment, at this exact cut.
@@ -2145,27 +2645,16 @@ impl EvaluatedCharacteristics {
         creature: &ObjectCharacteristics,
     ) -> Option<RulesInteger> {
         let pt = &creature.power_toughness.as_ref()?.derived;
-        let power = self.objects.values().any(|source| {
-            source.zone == ObjectZone::Battlefield
-                && source.controller == creature.controller
-                && source
-                    .printed_text
-                    .continuous
-                    .iter()
-                    .chain(&source.printed_text.additional_battlefield_abilities)
-                    .any(|ability| {
-                        matches!(
-                            ability,
-                            StaticContinuousAbility::DamageRule {
-                                rule: StaticDamageRule::LethalUsesPower,
-                                ..
-                            }
-                        ) && (source.abilities.continuous == Some(ability.id())
-                            || source
-                                .abilities
-                                .additional_battlefield_abilities
-                                .contains(&ability.id()))
-                    })
+        let power = creature.controller.is_some_and(|ctrl| {
+            self.controlled_rules(ctrl, |ability| {
+                matches!(
+                    ability,
+                    StaticContinuousAbility::DamageRule {
+                        rule: StaticDamageRule::LethalUsesPower,
+                        ..
+                    }
+                )
+            }) > 0
         });
         Some(if power {
             pt.power.clone().max(1.into())

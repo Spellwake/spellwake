@@ -245,6 +245,7 @@ pub(super) fn spell(
                 ChooseRevealedHandCard {
                     minimum_mana_value: 0,
                     nonland_only: false,
+                    filter: None,
                     count: std::num::NonZeroU8::new(2)?,
                     action: spellwake_engine::program::ChosenHandAction::Discard,
                 },
@@ -440,6 +441,7 @@ pub(super) fn spell(
                 count: std::num::NonZeroU8::MIN,
                 minimum_mana_value: 0,
                 nonland_only: true,
+                filter: None,
                 action: spellwake_engine::program::ChosenHandAction::Exile,
             }],
         ),
@@ -479,8 +481,7 @@ pub(super) fn spell(
                     filter: spellwake_engine::program::PermanentTypeFilter {
                         any_types: Default::default(),
                         required_types: [spellwake_engine::program::CardType::Creature].into(),
-                        forbidden_types: Default::default(),
-                    },
+                        forbidden_types: Default::default(), object_filter: None },
                 },
                 GainControllerLife { amount: spellwake_engine::program::ValueExpr::object_stat(spellwake_engine::program::ValueObjectRef::LastSacrificedCreature, spellwake_engine::program::ObjectStatKind::Toughness) },
             ],

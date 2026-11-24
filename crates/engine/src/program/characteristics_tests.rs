@@ -611,12 +611,21 @@ fn cl_adm_codec_067() {
 fn cl_adm_targetless_022() {
     let mut value = permanent(&[CardType::Artifact], None);
     value.activated.push(choice_ability(true));
-    // MAP CL-ADM-TARGETLESS-022 assertion 1
-    assert_eq!(
-        value.validate(&vocabulary()),
-        Err(DefinitionError::TargetlessActivation)
+    // Targetless ChooseCreatureType activated abilities are admitted under CR 602.2.
+    assert_eq!(value.validate(&vocabulary()), Ok(()));
+
+    // A target-requiring instruction with BodyTarget::None is still rejected.
+    let mut bad = permanent(&[CardType::Artifact], None);
+    let mut ability = choice_ability(true);
+    ability.body = ExecutableBody::new(
+        BodyTarget::None,
+        vec![Instruction::Damage { amount: 1.into() }],
     );
-    // MAP CL-ADM-TARGETLESS-022 assertion 2: Program admission only.
+    bad.activated.push(ability);
+    assert_eq!(
+        bad.validate(&vocabulary()),
+        Err(DefinitionError::OperandFamily)
+    );
 }
 #[test]
 fn cl_adm_duplicate_030() {

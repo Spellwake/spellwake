@@ -68,6 +68,7 @@ fn family(input: &GameInput) -> (&'static str, Option<&'static str>) {
         GameCommand::ActivateEmblem { .. } => "activate-emblem",
         GameCommand::ActivatePermanentTargets { .. } => "activate-permanent-targets",
         GameCommand::ActivateLoyaltyX { .. } => "activate-loyalty-x",
+        GameCommand::ActivateModalAbility { .. } => "activate-modal-ability",
         GameCommand::ActivateAbility { .. } => "activate-ability",
         GameCommand::ActivateMana { .. } => "activate-mana",
         GameCommand::ActivateManaWithPayment { .. } => "activate-mana-with-payment",
@@ -151,6 +152,9 @@ fn family(input: &GameInput) -> (&'static str, Option<&'static str>) {
                     DecisionReply::Proliferate(_) => "proliferate",
                     DecisionReply::RemoveCounters(_) => "counter-removal",
                     DecisionReply::CreatureType(_) => "creature-type",
+                    DecisionReply::OptionIndex(_) => "option-index",
+                    DecisionReply::UntapKeepTapped(_) => "untap-keep-tapped",
+                    DecisionReply::OpeningBattlefield(_) => "opening-battlefield",
                 }),
             );
         }
@@ -635,71 +639,6 @@ fn fresh_initialization_replays_ordered_player_and_host_entropy_records() {
     assert!(restore_entropy(&restored, binding(&restored, viewer_a()), &saved[0].2).is_err());
 }
 
-// These composition controls establish refusal only, not a public library view
-// or codec. Display text is explicitly synthetic, with no source-card credit.
-struct LibraryBoundaryDisplay(spellwake_engine::game::GameContext);
-impl NativeDisplaySource for LibraryBoundaryDisplay {
-    fn scope(&self) -> NativeDisplayScope {
-        NativeDisplayScope::SourceOnly
-    }
-    fn context(&self) -> &spellwake_engine::game::GameContext {
-        &self.0
-    }
-    fn object(
-        &self,
-        _: &spellwake_engine::object_identity::GameObject,
-        _: &Program,
-    ) -> Result<NativeObjectDisplay, NativeProjectionError> {
-        Ok(NativeObjectDisplay {
-            definition_id: None,
-            printing_id: None,
-            characteristics: crate::player_wire::PlayerCharacteristics {
-                name: "Literal compatibility control".into(),
-                type_line: "Synthetic description".into(),
-                rules_text: "Not a qualified card".into(),
-                mana_cost: None,
-                printed_power: None,
-                printed_toughness: None,
-                printed_loyalty: None,
-                printed_defense: None,
-            },
-        })
-    }
-    fn ability(
-        &self,
-        _: &spellwake_engine::object_identity::GameObject,
-        _: &spellwake_engine::characteristics::ObjectCharacteristics,
-        _: NativeAbilityReference,
-    ) -> Result<String, NativeProjectionError> {
-        Ok("Synthetic ability".into())
-    }
-    fn stack(
-        &self,
-        _: &spellwake_engine::stack_window::StackEntry,
-        _: Option<&ExecutableBody>,
-        _: Option<&spellwake_engine::occurrence::ExecutionBindings>,
-    ) -> Result<String, NativeProjectionError> {
-        Ok("Synthetic stack entry".into())
-    }
-    fn token_preview(
-        &self,
-        _: &spellwake_engine::token::TokenEntryPreview,
-    ) -> Result<String, NativeProjectionError> {
-        Ok("Synthetic token".into())
-    }
-    fn trigger(
-        &self,
-        _: &spellwake_engine::occurrence::WaitingInstance,
-    ) -> Result<String, NativeProjectionError> {
-        Ok("Synthetic trigger".into())
-    }
-    fn prevention_attempt(
-        &self,
-        _: &spellwake_engine::effects::DamageAllocationDomain,
-    ) -> Result<String, NativeProjectionError> {
-        Ok("Synthetic prevention".into())
-    }
-}
 fn library_native_step(source: &GameState, actor: SeatId, command: GameCommand) -> GameState {
     let before = source.clone();
     let input = GameInput {
@@ -712,56 +651,9 @@ fn library_native_step(source: &GameState, actor: SeatId, command: GameCommand) 
     assert_eq!(source.advance(input).unwrap(), candidate);
     candidate.into_state()
 }
-fn library_public_refuses(source: &GameState) {
-    use spellwake_engine::effects::PendingWorkKind;
-    assert_eq!(
-        source.execution().pending_work_kind(),
-        Some(PendingWorkKind::LibraryTop)
-    );
-    let before = source.clone();
-    for viewer in [viewer_a(), viewer_b()] {
-        let mut view = scope(source, viewer);
-        let references = view.references.clone();
-        let metadata = NativeProjectionMetadata {
-            through_event_sequence: crate::amount::Amount::from(0u64),
-            deadline_at: None,
-            disclosure: NativeDisclosure::LiveParticipant,
-        };
-        assert!(matches!(
-            view.project(
-                &metadata,
-                &LibraryBoundaryDisplay(source.basis().context.clone())
-            ),
-            Err(NativeProjectionError::Bridge(
-                NativeBridgeError::Unsupported
-            ))
-        ));
-        assert!(view.references == references);
-        assert_eq!(source, &before);
-    }
-    let mut view = scope(source, viewer_a());
-    // Even trusted issuance of the actual decision does not grant a new public
-    // response grammar. In particular, owner order has an old frame shape.
-    let decision = view
-        .issue(NativeReference::Decision(
-            source.pending_decision().unwrap().id(),
-        ))
-        .unwrap();
-    let references = view.references.clone();
-    let action = PlayerAction::Choose {
-        decision,
-        response: PlayerChoice::Ordering { ordered: vec![] },
-    };
-    assert!(matches!(
-        view.translate_action(&action),
-        Err(NativeBridgeError::Unsupported)
-    ));
-    assert!(view.references == references);
-    assert_eq!(source, &before);
-}
 #[test]
-#[ignore = "requires explicitly supplied genuine vocabulary; public refusal composition only"]
-fn library_native_stages_explicitly_remain_unsupported_in_public_adapters() {
+#[ignore = "requires explicitly supplied genuine vocabulary; public adapter library-top composition"]
+fn library_native_stages_project_scry_and_surveil_and_refuse_mill_in_public_adapters() {
     use spellwake_engine::{
         effects::{LibraryActionKind, LibraryTopReply},
         program::ResolvingPlayer,
@@ -811,41 +703,69 @@ fn library_native_stages_explicitly_remain_unsupported_in_public_adapters() {
         );
         let passed = library_native_step(&cast, A, GameCommand::Pass);
         let mut pending = library_native_step(&passed, B, GameCommand::Pass);
-        library_public_refuses(&pending);
-        if let RuleFrame::LibraryTop(frame) = pending.pending_decision().unwrap().frame() {
-            let domain = frame.domain_top_first().to_vec();
-            let choice = if kind == LibraryActionKind::Scry {
-                LibraryTopReply::Scry {
-                    top_first: domain,
-                    bottom_top_first: vec![],
-                }
-            } else {
-                LibraryTopReply::Surveil {
-                    top_first: vec![],
-                    to_graveyard: domain,
-                }
-            };
-            let input = GameInput {
-                basis: pending.basis().clone(),
-                actor: A,
-                command: GameCommand::Reply {
-                    decision: pending.pending_decision().unwrap().id(),
-                    choice: DecisionReply::LibraryTop(choice),
-                },
-            };
-            assert_eq!(
-                family(&input),
-                ("reply", Some("library-top-native-unsupported"))
-            );
-            pending = library_native_step(&pending, A, input.command);
+        if kind == LibraryActionKind::Mill {
+            // Mill produces ResolutionGraveyardOrder which is now publicly supported.
+            if let Some(decision) = pending.pending_decision() {
+                let RuleFrame::ResolutionGraveyardOrder(frame) = decision.frame() else {
+                    panic!("actual library owner order")
+                };
+                let choice = DecisionReply::OrderResolutionGraveyard(frame.domain().to_vec());
+                let id = decision.id();
+                pending = library_native_step(
+                    &pending,
+                    A,
+                    GameCommand::Reply {
+                        decision: id,
+                        choice,
+                    },
+                );
+            }
+            assert!(pending.pending_decision().is_none());
+            assert!(pending.execution().resolution_state().is_none());
+            continue;
         }
+        // Scry and Surveil are now first-class public wire decisions.
+        let mut view = scope(&pending, viewer_a());
+        let projected = super::projection::project_test(&mut view).unwrap();
+        assert_eq!(projected.decisions.len(), 1);
+        let dec = &projected.decisions[0];
+        let expected_kind = if kind == LibraryActionKind::Scry {
+            crate::player_wire::DecisionKind::Scry
+        } else {
+            crate::player_wire::DecisionKind::Surveil
+        };
+        assert_eq!(dec.kind, expected_kind);
+        let crate::player_wire::PlayerDomain::LibraryTop { inspected } = &dec.domain else {
+            panic!("expected LibraryTop domain");
+        };
+        assert_eq!(inspected.len(), 2);
+        let handles: Vec<_> = inspected.iter().map(|opt| opt.handle.clone()).collect();
+        let response = if kind == LibraryActionKind::Scry {
+            PlayerChoice::Scry {
+                top: handles,
+                bottom: vec![],
+            }
+        } else {
+            PlayerChoice::Surveil {
+                top: vec![],
+                graveyard: handles,
+            }
+        };
+        let intent = command(
+            &view,
+            PlayerAction::Choose {
+                decision: dec.decision.clone(),
+                response,
+            },
+        );
+        let prepared = view.propose(&intent).unwrap();
+        pending = prepared.into_parts().3.into_state();
         if let Some(decision) = pending.pending_decision() {
             let RuleFrame::ResolutionGraveyardOrder(frame) = decision.frame() else {
                 panic!("actual library owner order")
             };
             let choice = DecisionReply::OrderResolutionGraveyard(frame.domain().to_vec());
             let id = decision.id();
-            library_public_refuses(&pending);
             pending = library_native_step(
                 &pending,
                 A,
@@ -857,5 +777,9 @@ fn library_native_stages_explicitly_remain_unsupported_in_public_adapters() {
         }
         assert!(pending.pending_decision().is_none());
         assert!(pending.execution().resolution_state().is_none());
+        let _ = LibraryTopReply::Scry {
+            top_first: vec![],
+            bottom_top_first: vec![],
+        };
     }
 }

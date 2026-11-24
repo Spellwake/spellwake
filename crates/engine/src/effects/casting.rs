@@ -42,6 +42,9 @@ impl EffectWindow {
         let disturb = if payment.disturb {
             if source.zone() != ObjectZone::Graveyard(actor)
                 || payment.adventure
+                || payment.modal_back
+                || payment.prototype
+                || payment.prepare
                 || payment.split_half.is_some()
                 || payment.use_alternative
                 || payment.alternative_cost_source.is_some()
@@ -57,12 +60,58 @@ impl EffectWindow {
         } else {
             None
         };
+        if (payment.modal_back || payment.prototype || payment.prepare)
+            && (siege
+                || payment.adventure
+                || payment.split_half.is_some()
+                || (usize::from(payment.modal_back)
+                    + usize::from(payment.prototype)
+                    + usize::from(payment.prepare)
+                    > 1))
+        {
+            return Err(EffectError::InvalidCastResource);
+        }
+        if payment.prepare
+            && (source.zone() != ObjectZone::Battlefield
+                || source.controller() != Some(actor)
+                || !self.characteristics.prepared.contains(&spell)
+                || resolving_cast.is_some()
+                || payment.use_alternative
+                || payment.alternative_cost_source.is_some())
+        {
+            return Err(EffectError::InvalidCastResource);
+        }
+        if payment.prototype
+            && (payment.use_alternative || payment.alternative_cost_source.is_some())
+        {
+            return Err(EffectError::InvalidCastResource);
+        }
         let definition = if let Some(disturb) = disturb {
             Some(&disturb.back)
         } else if siege {
             Some(
                 printed
                     .and_then(|front| front.siege_back.as_deref())
+                    .ok_or(EffectError::InvalidCastResource)?,
+            )
+        } else if payment.modal_back {
+            let back = printed
+                .and_then(|front| front.modal_back.as_deref())
+                .ok_or(EffectError::InvalidCastResource)?;
+            if back.has_type(CardType::Land) {
+                return Err(EffectError::NotCastableSpell);
+            }
+            Some(back)
+        } else if payment.prototype {
+            Some(
+                printed
+                    .and_then(|front| front.prototype.as_deref())
+                    .ok_or(EffectError::InvalidCastResource)?,
+            )
+        } else if payment.prepare {
+            Some(
+                printed
+                    .and_then(|front| front.prepare_spell.as_deref())
                     .ok_or(EffectError::InvalidCastResource)?,
             )
         } else if let Some((split, half)) = selected {
@@ -76,10 +125,23 @@ impl EffectWindow {
         } else {
             printed
         };
-        let proposed_cards = if siege || disturb.is_some() {
+        let proposed_cards = if siege || disturb.is_some() || payment.modal_back {
             let mut cards = self.window.cards().clone();
             cards
                 .select_reverse_spell(spell)
+                .map_err(StackWindowError::from)?;
+            Some(cards)
+        } else if payment.prototype {
+            let mut cards = self.window.cards().clone();
+            cards
+                .select_prototype(spell)
+                .map_err(StackWindowError::from)?;
+            Some(cards)
+        } else if payment.prepare {
+            let spell_def = definition.ok_or(EffectError::InvalidCastResource)?;
+            let mut cards = self.window.cards().clone();
+            cards
+                .preview_spell_copy(spell, spell_def.clone())
                 .map_err(StackWindowError::from)?;
             Some(cards)
         } else if let Some((_, half)) = selected {
@@ -313,6 +375,9 @@ impl EffectWindow {
         let current = if from_foretell
             || cast_bestowed
             || payment.adventure
+            || payment.modal_back
+            || payment.prototype
+            || payment.prepare
             || siege
             || disturb.is_some()
             || selected.is_some()
@@ -341,7 +406,7 @@ impl EffectWindow {
             self.evaluated_characteristics()?
         };
         let self_graveyard_permission = from_graveyard
-            && current
+            && (current
                 .get(spell)
                 .and_then(|card| card.printed_text.graveyard_self_cast)
                 .is_some_and(|permission| match permission {
@@ -353,7 +418,102 @@ impl EffectWindow {
                                 && permanent.current_creature_subtypes.contains(&kind)
                         })
                     }
-                });
+                })
+                || (payment.use_alternative
+                    && matches!(
+                        current
+                            .get(spell)
+                            .and_then(|c| c.printed_text.conditional_cost.as_ref()),
+                        Some(crate::program::ConditionalCastCost::Harmonize(_))
+                    ))
+                || current.get(spell).is_some_and(|card| {
+                    card.printed_text
+                        .continuous
+                        .iter()
+                        .chain(&card.printed_text.additional_battlefield_abilities)
+                        .any(|ab| {
+                            let crate::characteristics::StaticContinuousAbility::CastPermission {
+                                permission:
+                                    crate::characteristics::CastPermissionRule::GraveyardSelfConditional {
+                                        condition,
+                                    },
+                                ..
+                            } = ab
+                            else {
+                                return false;
+                            };
+                            let ctx = crate::characteristics::WorldEvalCtx {
+                                active_player: self.window.active_player(),
+                                participants: self.window.participants(),
+                                life: Some(&self.life),
+                                combat: self.combat.as_ref(),
+                                cards: self.window.cards(),
+                                programs: &self.programs,
+                                state: &self.characteristics,
+                                objects: &current.objects,
+                                source: spell,
+                                controller: actor,
+                                name_rules: &self.name_rules,
+                                trigger_subject: None,
+                                related_player: None,
+                                defending_player: None,
+                            };
+                            crate::characteristics::eval_world_condition(&ctx, condition)
+                        })
+                }));
+        let static_exile_cast_grant = source.zone() == ObjectZone::Exile
+            && current.get(spell).is_some_and(|spell_view| {
+                current.objects.values().any(|permanent| {
+                    permanent.zone == ObjectZone::Battlefield
+                        && permanent.controller == Some(actor)
+                        && permanent
+                            .printed_text
+                            .continuous
+                            .iter()
+                            .chain(&permanent.printed_text.additional_battlefield_abilities)
+                            .any(|ab| {
+                                let active = permanent.abilities.continuous == Some(ab.id())
+                                    || permanent
+                                        .abilities
+                                        .additional_battlefield_abilities
+                                        .contains(&ab.id());
+                                if !active {
+                                    return false;
+                                }
+                                let crate::characteristics::StaticContinuousAbility::CastPermission {
+                                    permission:
+                                        crate::characteristics::CastPermissionRule::ExileMatching {
+                                            filter,
+                                            linked_to_source,
+                                            ..
+                                        },
+                                    ..
+                                } = ab
+                                else {
+                                    return false;
+                                };
+                                let link_ok = !*linked_to_source
+                                    || self
+                                        .linked_exiles
+                                        .get(&permanent.object)
+                                        .is_some_and(|list| list.contains(&spell))
+                                    || self
+                                        .characteristics
+                                        .imprinted_cards
+                                        .get(&permanent.object)
+                                        .is_some_and(|list| list.contains(&spell));
+                                link_ok
+                                    && self.matches_object_filter(
+                                        **filter,
+                                        spell_view,
+                                        actor,
+                                        Some(permanent.object),
+                                        &BTreeSet::new(),
+                                        &current,
+                                    )
+                            })
+                })
+            });
         let graveyard_permission_candidates = if from_graveyard
             && !cast_graveyard_target
             && !via_escape
@@ -361,30 +521,68 @@ impl EffectWindow {
             && !via_flashback
             && graveyard_discard.is_none()
             && turn.is_some()
-            && self.window.active_player() == actor
         {
-            if current.get(spell).is_some_and(|card| card.is_creature()) {
-                current
-                    .objects
-                    .values()
-                    .filter_map(|permanent| match &permanent.printed_text.continuous {
-                        Some(crate::characteristics::StaticContinuousAbility::CastPermission {
+            let spell_view = current.get(spell);
+            let is_creature = spell_view.is_some_and(|card| card.is_creature());
+            let mut cands = Vec::new();
+            for permanent in current.objects.values() {
+                if permanent.zone != ObjectZone::Battlefield || permanent.controller != Some(actor)
+                {
+                    continue;
+                }
+                for ab in permanent
+                    .printed_text
+                    .continuous
+                    .iter()
+                    .chain(&permanent.printed_text.additional_battlefield_abilities)
+                {
+                    let active = permanent.abilities.continuous == Some(ab.id())
+                        || permanent
+                            .abilities
+                            .additional_battlefield_abilities
+                            .contains(&ab.id());
+                    if !active {
+                        continue;
+                    }
+                    match ab {
+                        crate::characteristics::StaticContinuousAbility::CastPermission {
                             id,
                             permission:
                                 crate::characteristics::CastPermissionRule::GraveyardCreatureCast,
-                        }) if permanent.zone == ObjectZone::Battlefield
-                            && permanent.controller == Some(actor)
-                            && permanent.abilities.continuous == Some(*id)
+                        } if is_creature
+                            && self.window.active_player() == actor
                             && !self.source_cast_uses.contains(&(permanent.object, *id)) =>
                         {
-                            Some((permanent.object, *id))
+                            cands.push((permanent.object, *id));
                         }
-                        _ => None,
-                    })
-                    .collect::<Vec<_>>()
-            } else {
-                vec![]
+                        crate::characteristics::StaticContinuousAbility::CastPermission {
+                            id,
+                            permission:
+                                crate::characteristics::CastPermissionRule::GraveyardMatching {
+                                    filter,
+                                    once_each_turn,
+                                    ..
+                                },
+                        } if (!*once_each_turn
+                            || !self.source_cast_uses.contains(&(permanent.object, *id)))
+                            && spell_view.is_some_and(|sv| {
+                                self.matches_object_filter(
+                                    **filter,
+                                    sv,
+                                    actor,
+                                    Some(permanent.object),
+                                    &BTreeSet::new(),
+                                    &current,
+                                )
+                            }) =>
+                        {
+                            cands.push((permanent.object, *id));
+                        }
+                        _ => {}
+                    }
+                }
             }
+            cands
         } else {
             vec![]
         };
@@ -409,20 +607,29 @@ impl EffectWindow {
             (Some(chosen), available) if available.contains(&chosen) => Some(chosen),
             _ => return Err(EffectError::InvalidCastResource),
         };
-        let from_free_exile =
-            turn.is_some() && self.may_cast_free_face(spell, actor, Some(program));
+        let (temp_zone_allowed, temp_zone_free, temp_zone_any_color, temp_zone_consumed_idx) =
+            if turn.is_some() {
+                self.temporary_zone_cast_grant(spell, actor, &current, Some(program))
+            } else {
+                (false, false, false, None)
+            };
+        let from_free_exile = turn.is_some()
+            && (self.may_cast_free_face(spell, actor, Some(program)) || temp_zone_free);
         if from_free_exile && (payment.use_alternative || payment.alternative_cost_source.is_some())
         {
             return Err(EffectError::InvalidCastResource);
         }
         let from_exile_permission = turn.is_some()
             && (self.play_exile_permission(spell, actor, !payment.adventure)
-                || self.may_cast_from_granted_exile(spell, actor));
+                || self.may_cast_from_granted_exile(spell, actor)
+                || static_exile_cast_grant);
         if source.zone() != ObjectZone::Hand(actor)
+            && !payment.prepare
             && resolving_parent.is_none()
             && !from_plot
             && !from_free_exile
             && !from_exile_permission
+            && !temp_zone_allowed
             && !(turn.is_some()
                 && self.window.cards().library(actor).first() == Some(&spell)
                 && self.library_top_access(&current, actor, actor).playable)
@@ -452,7 +659,7 @@ impl EffectWindow {
         self.check_split_second(&current)?;
         self.check_opponents_turn_restriction(actor, &current, None)?;
         if self.spells_cast_by_player.contains_key(&actor)
-            && current.objects.values().any(|object| {
+            && (current.objects.values().any(|object| {
                 object.has_battlefield_rule(|rule| {
                     matches!(
                         rule,
@@ -465,12 +672,135 @@ impl EffectWindow {
                     && object.has_battlefield_rule(|rule| {
                         matches!(rule, crate::characteristics::StaticContinuousAbility::Restriction { rule: crate::characteristics::StaticRestriction::EnchantedPlayerCastLimit, .. })
                     }))
-            })
+            }) || self.temporary_rules.iter().any(|active| {
+                matches!(
+                    &active.rule,
+                    crate::program::TemporaryRuleKind::TemporaryStatic(ab)
+                        if matches!(
+                            ab.as_ref(),
+                            crate::characteristics::StaticContinuousAbility::Restriction {
+                                rule: crate::characteristics::StaticRestriction::OneSpellPerTurn,
+                                ..
+                            }
+                        )
+                )
+            }))
         {
             return Err(EffectError::SpellCastLimitReached);
         }
         let current_spell = current.get(spell).ok_or(EffectError::InconsistentProgram)?;
         self.check_chosen_name_cast_restriction(current_spell, &current)?;
+        if self
+            .temporary_rules
+            .iter()
+            .any(|active| match &active.rule {
+                crate::program::TemporaryRuleKind::CantCastSpells { filter, .. } => {
+                    if !active.resolved_players.contains(&actor) {
+                        return false;
+                    }
+                    match filter {
+                        None => true,
+                        Some(f) => self.matches_object_filter(
+                            *f,
+                            current_spell,
+                            active.controller,
+                            active.source_object,
+                            &BTreeSet::new(),
+                            &current,
+                        ),
+                    }
+                }
+                crate::program::TemporaryRuleKind::TemporaryStatic(ab) => {
+                    let crate::characteristics::StaticContinuousAbility::Restriction {
+                        rule:
+                            crate::characteristics::StaticRestriction::ProhibitCasting {
+                                player,
+                                filter,
+                            },
+                        ..
+                    } = ab.as_ref()
+                    else {
+                        return false;
+                    };
+                    let player_matches = match player {
+                        crate::program::PlayerRelation::Controller => actor == active.controller,
+                        crate::program::PlayerRelation::Opponent => actor != active.controller,
+                        crate::program::PlayerRelation::AnyParticipant => true,
+                    };
+                    let aura_or_equip = current_spell.has_type(CardType::Enchantment)
+                        && matches!(
+                            program.permanent().and_then(|p| p.attachment),
+                            Some(crate::attachment::AttachmentKind::Aura(_))
+                        )
+                        || current_spell.has_type(CardType::Artifact)
+                            && matches!(
+                                program.permanent().and_then(|p| p.attachment),
+                                Some(crate::attachment::AttachmentKind::Equipment)
+                            );
+                    player_matches
+                        && filter.matches_characteristics(current_spell, aura_or_equip, None)
+                }
+                _ => false,
+            })
+        {
+            return Err(EffectError::SpellCastLimitReached);
+        }
+        if current.objects.values().any(|perm| {
+            if perm.zone != ObjectZone::Battlefield {
+                return false;
+            }
+            let Some(ctrl) = perm.controller else {
+                return false;
+            };
+            perm.printed_text
+                .continuous
+                .iter()
+                .chain(&perm.printed_text.additional_battlefield_abilities)
+                .any(|ab| {
+                    let active = perm.abilities.continuous == Some(ab.id())
+                        || perm
+                            .abilities
+                            .additional_battlefield_abilities
+                            .contains(&ab.id());
+                    if !active {
+                        return false;
+                    }
+                    let crate::characteristics::StaticContinuousAbility::Restriction {
+                        rule:
+                            crate::characteristics::StaticRestriction::ProhibitCasting {
+                                player,
+                                filter,
+                            },
+                        ..
+                    } = ab
+                    else {
+                        return false;
+                    };
+                    let player_matches = match player {
+                        crate::program::PlayerRelation::Controller => actor == ctrl,
+                        crate::program::PlayerRelation::Opponent => actor != ctrl,
+                        crate::program::PlayerRelation::AnyParticipant => true,
+                    };
+                    let aura_or_equip = current_spell.has_type(CardType::Enchantment)
+                        && matches!(
+                            program.permanent().and_then(|p| p.attachment),
+                            Some(crate::attachment::AttachmentKind::Aura(_))
+                        )
+                        || current_spell.has_type(CardType::Artifact)
+                            && matches!(
+                                program.permanent().and_then(|p| p.attachment),
+                                Some(crate::attachment::AttachmentKind::Equipment)
+                            );
+                    player_matches
+                        && filter.matches_characteristics(
+                            current_spell,
+                            aura_or_equip,
+                            perm.entry_creature_type,
+                        )
+                })
+        }) {
+            return Err(EffectError::SpellCastLimitReached);
+        }
         let mut alternative_life = false;
         let external_alternative = if let Some(source_id) = payment.alternative_cost_source {
             if turn.is_none()
@@ -554,18 +884,87 @@ impl EffectWindow {
         if returns.next().is_some() {
             return Err(EffectError::InvalidCastResource);
         }
-        let flash = sneak_defender.is_some() || current_spell.has_keyword(KeywordAbility::Flash)
+        let flash = sneak_defender.is_some()
+            || current_spell.has_keyword(KeywordAbility::Flash)
             || self.flash_through_cleanup.contains(&actor)
+            || self.temporary_rules.iter().any(|active| {
+                !active.consumed
+                    && active.resolved_players.contains(&actor)
+                    && matches!(
+                        &active.rule,
+                        crate::program::TemporaryRuleKind::FilteredFlash { filter, .. }
+                            if self.matches_object_filter(
+                                *filter,
+                                current_spell,
+                                active.controller,
+                                None,
+                                &BTreeSet::new(),
+                                &current,
+                            )
+                    )
+            })
             || current.objects.values().any(|source| {
-                source.zone == ObjectZone::Battlefield && matches!(&source.printed_text.continuous,
-                    Some(crate::characteristics::StaticContinuousAbility::CastPermission {
-                        id,
-                        permission: crate::characteristics::CastPermissionRule::Flash { any_player, matching },
+                source.zone == ObjectZone::Battlefield
+                && source
+                    .printed_text
+                    .continuous
+                    .iter()
+                    .chain(&source.printed_text.additional_battlefield_abilities)
+                    .any(|ab| {
+                        let active = source.abilities.continuous == Some(ab.id())
+                            || source
+                                .abilities
+                                .additional_battlefield_abilities
+                                .contains(&ab.id());
+                        active
+                            && matches!(
+                                ab,
+                                crate::characteristics::StaticContinuousAbility::CastPermission {
+                                    permission: crate::characteristics::CastPermissionRule::Flash {
+                                        any_player,
+                                        matching,
+                                    },
+                                    ..
+                                } if (*any_player || source.controller == Some(actor))
+                                    && matching.matches_characteristics(
+                                        current_spell,
+                                        false,
+                                        source.entry_creature_type,
+                                    )
+                            )
                     })
-                        if source.abilities.continuous == Some(*id)
-                            && (*any_player || source.controller == Some(actor))
-                            && matching.matches_characteristics(current_spell, false, source.entry_creature_type))
-            });
+            })
+            || self.temporary_rules.iter().any(|active| {
+                let crate::program::TemporaryRuleKind::TemporaryStatic(ab) = &active.rule else {
+                    return false;
+                };
+                matches!(
+                    ab.as_ref(),
+                    crate::characteristics::StaticContinuousAbility::CastPermission {
+                        permission: crate::characteristics::CastPermissionRule::Flash {
+                            any_player,
+                            matching,
+                        },
+                        ..
+                    } if (*any_player || active.controller == actor)
+                        && matching.matches_characteristics(current_spell, false, None)
+                )
+            })
+            || current_spell
+                .printed_text
+                .continuous
+                .iter()
+                .chain(&current_spell.printed_text.additional_battlefield_abilities)
+                .any(|ab| {
+                    matches!(
+                        ab,
+                        crate::characteristics::StaticContinuousAbility::Restriction {
+                            rule:
+                                crate::characteristics::StaticRestriction::FlashSacrificeAtCleanup,
+                            ..
+                        }
+                    )
+                });
         let spliced = self.prepare_splice(&payment.splice, actor, current_spell, &current)?;
         let mut mode_targets = Vec::new();
         let mut mode_clauses = Vec::new();
@@ -728,6 +1127,11 @@ impl EffectWindow {
         {
             return Err(EffectError::InvalidCastResource);
         }
+        if let Some(timing) = &program.cast_timing
+            && !self.cast_timing_satisfied(timing, source.id(), actor, turn)?
+        {
+            return Err(EffectError::InvalidCastResource);
+        }
         if payload
             .body()
             .is_some_and(|body| body.instructions == [Instruction::ReturnChosenXGraveyardCreatures])
@@ -747,6 +1151,14 @@ impl EffectWindow {
                 return Err(EffectError::InvalidCastResource);
             }
         }
+        if payload
+            .body()
+            .is_some_and(ExecutableBody::has_x_target_count)
+            && payment.chosen_x.clone().unwrap_or_else(|| 0.into())
+                != RulesInteger::from_usize(payment.permanent_targets.len())
+        {
+            return Err(EffectError::InvalidCastResource);
+        }
         let one_per_player = payload.body().is_some_and(|body| {
             body.instructions.first() == Some(&Instruction::ShuffleOnePermanentPerPlayer)
         });
@@ -761,6 +1173,7 @@ impl EffectWindow {
                 }
                 if payload.body().is_some_and(|body| {
                     body.instructions == [Instruction::ReturnChosenXGraveyardCreatures]
+                        || body.has_x_target_count()
                 }) {
                     (
                         payment.permanent_targets.len(),
@@ -1088,6 +1501,25 @@ impl EffectWindow {
                                 .is_some_and(|id| self.commanders.contains_key(&id))
                     })
                 }
+                ConditionalCastCost::Condition { condition, .. } => {
+                    let ctx = crate::characteristics::WorldEvalCtx {
+                        active_player: self.window.active_player(),
+                        participants: self.window.participants(),
+                        life: Some(&self.life),
+                        combat: self.combat.as_ref(),
+                        cards: self.window.cards(),
+                        programs: &self.programs,
+                        state: &self.characteristics,
+                        objects: &current.objects,
+                        source: spell,
+                        controller: actor,
+                        name_rules: &self.name_rules,
+                        trigger_subject: None,
+                        related_player: None,
+                        defending_player: None,
+                    };
+                    crate::characteristics::eval_world_condition(&ctx, condition)
+                }
                 ConditionalCastCost::Surge(_) => {
                     turn.is_some()
                         && self
@@ -1101,6 +1533,12 @@ impl EffectWindow {
                             .cast_history
                             .as_ref()
                             .is_some_and(|history| history.lost_life.iter().any(|p| *p != actor))
+                }
+                ConditionalCastCost::Awaken { .. }
+                | ConditionalCastCost::Impending { .. }
+                | ConditionalCastCost::Offering { .. } => true,
+                ConditionalCastCost::Harmonize(_) => {
+                    from_graveyard || source.zone() == ObjectZone::Hand(actor)
                 }
             };
             if via_flashback || !eligible {
@@ -1152,11 +1590,16 @@ impl EffectWindow {
         } else {
             program.x_mana_symbols
         };
+        let extra_cast_uses_x = program
+            .extra_cast_costs
+            .iter()
+            .any(crate::activated::ExtraActivationCost::uses_chosen_x);
         let chosen_x = if priced_x_symbols == 0
             && (!cast_for_miracle || program.x_mana_symbols == 0)
             && !program.graveyard_exile_x_cost
             && !variable_kicker
             && !life_price.is_some_and(ValueExpr::is_chosen_x)
+            && !extra_cast_uses_x
             || source.face_down().is_some()
         {
             if payment.chosen_x.is_some() {
@@ -1265,6 +1708,34 @@ impl EffectWindow {
                 *existing = existing.plus(amount);
             }
         }
+        if let ProgramKind::Spell(spell) = &program.kind
+            && let Some(spec) = &spell.modes
+        {
+            if !spec.mode_costs.is_empty() {
+                for choice in &payment.modes {
+                    let mode_price = spec
+                        .mode_costs
+                        .get(usize::from(choice.mode))
+                        .ok_or(EffectError::InvalidCastResource)?;
+                    cost.generic = cost.generic.plus(&mode_price.generic);
+                    for (&color, amount) in &mode_price.required {
+                        let existing = cost.required.entry(color).or_insert_with(|| 0.into());
+                        *existing = existing.plus(amount);
+                    }
+                }
+            }
+            if let Some(esc) = &spec.escalate_mana {
+                let extra = payment.modes.len().saturating_sub(1);
+                if extra > 0 {
+                    let times = RulesInteger::from_usize(extra);
+                    cost.generic = cost.generic.plus(&esc.generic.times(&times));
+                    for (&color, amount) in &esc.required {
+                        let existing = cost.required.entry(color).or_insert_with(|| 0.into());
+                        *existing = existing.plus(&amount.times(&times));
+                    }
+                }
+            }
+        }
         let aura_or_equipment = (enchant.is_some()
             && current_spell.has_type(CardType::Enchantment))
             || (current_spell.has_type(CardType::Artifact)
@@ -1327,6 +1798,51 @@ impl EffectWindow {
         }
         if let Some(discount) = emerge_discount {
             cost.generic = cost.generic.minus(&discount).max(0.into());
+        }
+        let mut consumed_temp_rules = Vec::new();
+        for (rule_idx, active) in self.temporary_rules.iter().enumerate() {
+            if active.consumed {
+                continue;
+            }
+            match &active.rule {
+                crate::program::TemporaryRuleKind::SpellCostReduction {
+                    filter,
+                    generic,
+                    next_only,
+                } if active.controller == actor
+                    && self.matches_object_filter(
+                        *filter,
+                        current_spell,
+                        actor,
+                        None,
+                        &BTreeSet::new(),
+                        &current,
+                    ) =>
+                {
+                    cost.generic = cost
+                        .generic
+                        .minus(&i64::from(*generic).into())
+                        .max(0.into());
+                    if *next_only {
+                        consumed_temp_rules.push(rule_idx);
+                    }
+                }
+                crate::program::TemporaryRuleKind::SpellCostIncrease {
+                    filter, generic, ..
+                } if active.resolved_players.contains(&actor)
+                    && self.matches_object_filter(
+                        *filter,
+                        current_spell,
+                        active.controller,
+                        None,
+                        &BTreeSet::new(),
+                        &current,
+                    ) =>
+                {
+                    cost.generic = cost.generic.plus(&i64::from(*generic).into());
+                }
+                _ => {}
+            }
         }
         for reduction in &current_spell.printed_text.cast_reductions {
             let discount = match reduction {
@@ -1400,6 +1916,28 @@ impl EffectWindow {
                         0.into()
                     }
                 }
+                crate::program::CastReduction::IfTargets { filter, discount } => {
+                    let matched = target
+                        .into_iter()
+                        .chain(payment.permanent_targets.iter().copied())
+                        .any(|t| {
+                            matches!(t, TargetRef::Object(id) if current.get(id).is_some_and(|obj| {
+                                self.matches_object_filter(
+                                    **filter,
+                                    obj,
+                                    actor,
+                                    None,
+                                    &BTreeSet::new(),
+                                    &current,
+                                )
+                            }))
+                        });
+                    if matched {
+                        i64::from(*discount).into()
+                    } else {
+                        0.into()
+                    }
+                }
                 crate::program::CastReduction::Undaunted => RulesInteger::from_usize(
                     self.window
                         .participants()
@@ -1407,6 +1945,9 @@ impl EffectWindow {
                         .filter(|&&seat| seat != actor)
                         .count(),
                 ),
+                crate::program::CastReduction::Dynamic(expr) => {
+                    self.resolve_value_expr_at(actor, expr, None)?
+                }
             };
             cost.generic = cost.generic.minus(&discount).max(0.into());
         }
@@ -1566,7 +2107,10 @@ impl EffectWindow {
             current_spell,
             actor,
         )?;
-        if let Some(any_type) = self.flexible_exile_mana(spell, actor) {
+        if let Some(any_type) = self
+            .flexible_exile_mana(spell, actor)
+            .or_else(|| temp_zone_any_color.then_some(false))
+        {
             // Only mana, after object-based payments and discount calculation, is flexible.
             // An explicit colorless requirement is still payable only with colorless mana.
             let colored: Vec<_> = unpaid_mana
@@ -1581,9 +2125,13 @@ impl EffectWindow {
                 }
             }
         }
-        let mut window =
+        let mut window = if payment.prepare {
             self.window
-                .admit_card_spell(self.window.revision(), actor, spell, resolving_parent)?;
+                .admit_prepared_spell_copy(self.window.revision(), actor, program.clone())?
+        } else {
+            self.window
+                .admit_card_spell(self.window.revision(), actor, spell, resolving_parent)?
+        };
         let entry = window
             .entries()
             .last()
@@ -1597,13 +2145,21 @@ impl EffectWindow {
             };
             window.select_split_half(*stacked, half)?;
         }
-        if siege || disturb.is_some() {
+        if siege || disturb.is_some() || payment.modal_back {
             let Some(StackKind::CardSpell(stacked)) =
                 window.entries().last().map(|entry| entry.kind())
             else {
                 return Err(EffectError::InconsistentProgram);
             };
             window.select_siege_back(*stacked)?;
+        }
+        if payment.prototype {
+            let Some(StackKind::CardSpell(stacked)) =
+                window.entries().last().map(|entry| entry.kind())
+            else {
+                return Err(EffectError::InconsistentProgram);
+            };
+            window.select_prototype_spell(*stacked)?;
         }
         if payment.adventure {
             window.select_adventure_spell(entry)?;
@@ -1707,6 +2263,17 @@ impl EffectWindow {
             window.mark_exile_cast(entry, crate::stack_window::ExileCast::JumpStart)?;
         }
         let mut next = self.clone();
+        if payment.prepare {
+            next.characteristics.prepared.remove(&spell);
+        }
+        if let Some(idx) = temp_zone_consumed_idx {
+            consumed_temp_rules.push(idx);
+        }
+        for rule_idx in consumed_temp_rules {
+            if let Some(active) = next.temporary_rules.get_mut(rule_idx) {
+                active.consumed = true;
+            }
+        }
         next.revision = revision;
         next.payloads.insert(entry, payload);
         if let Some(kind) = type_payment {
@@ -1779,13 +2346,20 @@ impl EffectWindow {
             turn,
             &mut append,
             |previous, current, controllers| {
-                let mut events = vec![zone_occurrence_at(
-                    previous,
-                    current,
-                    &movement,
-                    crate::occurrence::ZoneReason::CastAnnouncement,
-                    controllers,
-                )?];
+                let mut events = if payment.prepare {
+                    vec![crate::occurrence::RulesOccurrence::PreparedSpellCast {
+                        source: spell,
+                        entry,
+                    }]
+                } else {
+                    vec![zone_occurrence_at(
+                        previous,
+                        current,
+                        &movement,
+                        crate::occurrence::ZoneReason::CastAnnouncement,
+                        controllers,
+                    )?]
+                };
                 events.extend(spliced.iter().map(|addition| {
                     crate::occurrence::RulesOccurrence::HandCardRevealed {
                         object: addition.card.clone(),
@@ -1928,5 +2502,81 @@ impl EffectWindow {
             }
         }
         next.finish_cast_payment(prepared, turn, append)
+    }
+
+    pub(super) fn cast_timing_satisfied(
+        &self,
+        restriction: &crate::program::CastTimingRestriction,
+        source: ObjectId,
+        caster: SeatId,
+        turn: Option<&TurnScheduler>,
+    ) -> Result<bool, EffectError> {
+        use crate::program::CastTimingRestriction as R;
+        use crate::turn::{Phase, Step};
+        let step = turn.map(|s| s.position().step).or(self.current_step);
+        let active = self.window.active_player();
+        match restriction {
+            R::DuringCombat => Ok(step.is_some_and(|s| s.phase() == Phase::Combat)),
+            R::DuringCombatBeforeBlockers => Ok(matches!(
+                step,
+                Some(Step::BeginningCombat | Step::DeclareAttackers)
+            )),
+            R::BeforeCombatDamage => Ok(matches!(
+                step,
+                Some(
+                    Step::Untap
+                        | Step::Upkeep
+                        | Step::Draw
+                        | Step::PrecombatMain
+                        | Step::BeginningCombat
+                        | Step::DeclareAttackers
+                        | Step::DeclareBlockers
+                )
+            )),
+            R::DuringCombatAfterBlockers => Ok(matches!(
+                step,
+                Some(Step::DeclareBlockers | Step::CombatDamage | Step::EndCombat)
+            )),
+            R::DuringDeclareAttackers => Ok(step == Some(Step::DeclareAttackers)),
+            R::DuringDeclareBlockers => Ok(step == Some(Step::DeclareBlockers)),
+            R::DuringDeclareAttackersIfAttacked => Ok(step == Some(Step::DeclareAttackers)
+                && !self.characteristics.attacked_this_turn_players.is_empty()),
+            R::DuringCombatOnOpponentsTurn => {
+                Ok(active != caster && step.is_some_and(|s| s.phase() == Phase::Combat))
+            }
+            R::DuringYourTurn => Ok(active == caster),
+            R::DuringOpponentsTurn => Ok(active != caster),
+            R::DuringStep(expected) => Ok(step == Some(*expected)),
+            R::DuringOwnStep(expected) => Ok(active == caster && step == Some(*expected)),
+            R::DuringOpponentsStep(expected) => Ok(active != caster && step == Some(*expected)),
+            R::Condition(cond) => {
+                let evaluated = self.evaluated_characteristics()?;
+                let ctx = crate::characteristics::WorldEvalCtx {
+                    active_player: active,
+                    participants: self.window.participants(),
+                    life: Some(&self.life),
+                    combat: self.combat.as_ref(),
+                    cards: self.window.cards(),
+                    programs: &self.programs,
+                    state: &self.characteristics,
+                    objects: &evaluated.objects,
+                    source,
+                    controller: caster,
+                    name_rules: &self.name_rules,
+                    trigger_subject: None,
+                    related_player: None,
+                    defending_player: None,
+                };
+                Ok(crate::characteristics::eval_world_condition(&ctx, cond))
+            }
+            R::All(items) => {
+                for item in items {
+                    if !self.cast_timing_satisfied(item, source, caster, turn)? {
+                        return Ok(false);
+                    }
+                }
+                Ok(true)
+            }
+        }
     }
 }

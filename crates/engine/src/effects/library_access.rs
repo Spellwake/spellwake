@@ -76,7 +76,11 @@ impl EffectWindow {
                         ..
                     } if viewer == owner => {
                         access.playable |= match matching {
+                            LibraryTopPermission::All => true,
                             LibraryTopPermission::Land => card.has_type(CardType::Land),
+                            LibraryTopPermission::Creature => card.is_creature(),
+                            LibraryTopPermission::Artifact => card.has_type(CardType::Artifact),
+                            LibraryTopPermission::Nonland => !card.has_type(CardType::Land),
                             LibraryTopPermission::InstantOrSorcery => {
                                 card.has_type(CardType::Instant) || card.has_type(CardType::Sorcery)
                             }
@@ -92,6 +96,25 @@ impl EffectWindow {
                                     })
                             }
                         };
+                    }
+                    crate::characteristics::StaticContinuousAbility::CastPermission {
+                        permission:
+                            crate::characteristics::CastPermissionRule::PlayLibraryTopMatching {
+                                lands_allowed,
+                                filter,
+                            },
+                        ..
+                    } if viewer == owner => {
+                        let excluded = BTreeSet::new();
+                        access.playable |= (*lands_allowed && card.has_type(CardType::Land))
+                            || self.matches_object_filter(
+                                **filter,
+                                card,
+                                owner,
+                                Some(source.object),
+                                &excluded,
+                                evaluated,
+                            );
                     }
                     _ => {}
                 }
@@ -111,5 +134,74 @@ impl EffectWindow {
         Ok(self
             .library_top_access(&self.evaluated_characteristics()?, actor, actor)
             .playable)
+    }
+
+    pub(super) fn graveyard_land_play_permitted(
+        &self,
+        id: ObjectId,
+        actor: SeatId,
+    ) -> Result<bool, EffectError> {
+        let Some(card) = self.window.cards().get(id) else {
+            return Ok(false);
+        };
+        if card.zone() != ObjectZone::Graveyard(actor) {
+            return Ok(false);
+        }
+        let evaluated = self.evaluated_characteristics()?;
+        if !evaluated
+            .get(id)
+            .is_some_and(|view| view.has_type(CardType::Land))
+        {
+            return Ok(false);
+        }
+        if self.card_play_permissions.iter().any(|grant| {
+            grant.zone == super::CardPlayZone::Graveyard
+                && grant.object == id
+                && grant.player == actor
+                && !grant.cast_only
+        }) {
+            return Ok(true);
+        }
+        if let Some(view) = evaluated.get(id)
+            && self.temporary_rules.iter().any(|active| {
+                !active.consumed
+                    && active.resolved_players.contains(&actor)
+                    && matches!(
+                        &active.rule,
+                        crate::program::TemporaryRuleKind::ZoneCastPermission {
+                            zone: crate::program::SourceZoneFilter::Graveyard
+                                | crate::program::SourceZoneFilter::AnyGraveyard,
+                            cast_only: false,
+                            filter,
+                            ..
+                        } if filter.is_none_or(|f| {
+                            self.matches_object_filter(
+                                f,
+                                view,
+                                active.controller,
+                                None,
+                                &BTreeSet::new(),
+                                &evaluated,
+                            )
+                        })
+                    )
+            })
+        {
+            return Ok(true);
+        }
+        Ok(evaluated.objects.values().any(|source| {
+            source.zone == ObjectZone::Battlefield
+                && source.controller == Some(actor)
+                && source.has_battlefield_rule(|rule| {
+                    matches!(
+                        rule,
+                        crate::characteristics::StaticContinuousAbility::CastPermission {
+                            permission:
+                                crate::characteristics::CastPermissionRule::GraveyardLandPlay,
+                            ..
+                        }
+                    )
+                })
+        }))
     }
 }

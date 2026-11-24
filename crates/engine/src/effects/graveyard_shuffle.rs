@@ -32,6 +32,166 @@ impl EffectWindow {
         self.begin_shuffle(seat, false)
     }
 
+    pub(super) fn begin_subject_into_library_shuffle(
+        &mut self,
+        entry: &crate::stack_window::StackEntry,
+        subject: crate::program::EffectSubject,
+        zone: Option<crate::program::SourceZoneFilter>,
+    ) -> Result<(), EffectError> {
+        let resolved: Vec<ObjectId> = match (&subject, zone) {
+            (crate::program::EffectSubject::TargetObject, _) => {
+                let assessment = self
+                    .window
+                    .target_assessment()
+                    .ok_or(EffectError::WrongResolutionFrame)?;
+                assessment
+                    .results()
+                    .iter()
+                    .filter(|row| row.legality == TargetLegality::Legal)
+                    .filter_map(|row| match row.choice.target {
+                        TargetRef::Object(id) => Some(id),
+                        _ => None,
+                    })
+                    .collect()
+            }
+            (crate::program::EffectSubject::Matching(filter), Some(src_zone)) => {
+                let evaluated = self.evaluated_characteristics()?;
+                let controller = entry.controller();
+                let opponents = self.opponents_of(controller)?;
+                let excluded = BTreeSet::new();
+                let source_id = match entry.kind() {
+                    StackKind::ActivatedAbility { source }
+                    | StackKind::TriggeredAbility { source } => Some(source.id()),
+                    StackKind::CardSpell(card) => Some(*card),
+                    _ => None,
+                };
+                self.window
+                    .cards()
+                    .iter()
+                    .filter(|obj| {
+                        let zone_ok = match src_zone {
+                            crate::program::SourceZoneFilter::Hand => {
+                                obj.zone() == ObjectZone::Hand(controller)
+                            }
+                            crate::program::SourceZoneFilter::Graveyard => {
+                                obj.zone() == ObjectZone::Graveyard(controller)
+                            }
+                            crate::program::SourceZoneFilter::OpponentGraveyard => {
+                                matches!(obj.zone(), ObjectZone::Graveyard(p) if opponents.contains(&p))
+                            }
+                            crate::program::SourceZoneFilter::AnyGraveyard => {
+                                matches!(obj.zone(), ObjectZone::Graveyard(_))
+                            }
+                            crate::program::SourceZoneFilter::Exile => {
+                                obj.zone() == ObjectZone::Exile
+                            }
+                            crate::program::SourceZoneFilter::Battlefield => {
+                                obj.zone() == ObjectZone::Battlefield
+                                    && self.window.cards().phased_out_under(obj.id()).is_none()
+                            }
+                            crate::program::SourceZoneFilter::YourLibrary => {
+                                obj.zone() == ObjectZone::Library(controller)
+                            }
+                            crate::program::SourceZoneFilter::OpponentExile => {
+                                obj.zone() == ObjectZone::Exile && opponents.contains(&obj.owner())
+                            }
+                            crate::program::SourceZoneFilter::LinkedExile => {
+                                obj.zone() == ObjectZone::Exile
+                                    && source_id.is_some_and(|src| {
+                                        self.linked_exiles
+                                            .get(&src)
+                                            .is_some_and(|list| list.contains(&obj.id()))
+                                            || self
+                                                .characteristics
+                                                .imprinted_cards
+                                                .get(&src)
+                                                .is_some_and(|list| list.contains(&obj.id()))
+                                    })
+                            }
+                        };
+                        zone_ok
+                            && evaluated.get(obj.id()).is_some_and(|view| {
+                                self.matches_object_filter(
+                                    *filter,
+                                    view,
+                                    controller,
+                                    source_id,
+                                    &excluded,
+                                    &evaluated,
+                                )
+                            })
+                    })
+                    .map(GameObject::id)
+                    .collect()
+            }
+            _ => self.effect_group(entry, subject)?.into_iter().collect(),
+        };
+        let movable: Vec<ObjectId> = resolved
+            .into_iter()
+            .filter(|id| {
+                self.window.cards().get(*id).is_some_and(|obj| {
+                    obj.card_id().is_some()
+                        && (matches!(
+                            obj.zone(),
+                            ObjectZone::Hand(_) | ObjectZone::Graveyard(_) | ObjectZone::Exile
+                        ) || (obj.zone() == ObjectZone::Battlefield
+                            && self.window.cards().phased_out_under(*id).is_none()))
+                })
+            })
+            .collect();
+        if movable.is_empty() {
+            return self.advance_instruction();
+        }
+        let owners_set: BTreeSet<SeatId> = movable
+            .iter()
+            .filter_map(|id| self.window.cards().get(*id).map(GameObject::owner))
+            .collect();
+        let mut remaining_players: std::collections::VecDeque<SeatId> = self
+            .window
+            .apnap_players()
+            .map_err(EffectError::from)?
+            .filter(|seat| owners_set.contains(seat))
+            .collect();
+        let Some(first_player) = remaining_players.pop_front() else {
+            return self.advance_instruction();
+        };
+        let cursor = self
+            .resolution_cursor()
+            .ok_or(EffectError::WrongResolutionFrame)?
+            .clone();
+        let batch = self.begin_zone_replacements(zone_replacement::AuthorizedZoneBatch {
+            cause: EventCause::Instruction {
+                entry: cursor.entry,
+                instruction: cursor.instruction,
+            },
+            action: ZoneActionKind::EffectShuffleGraveyard,
+            intents: movable
+                .iter()
+                .map(|id| zone_replacement::ZoneMoveIntent {
+                    before: *id,
+                    reason: ZoneReason::ShuffleHandAndGraveyardIntoLibrary,
+                })
+                .collect(),
+        })?;
+        if !matches!(self.pending_work, Some(PendingWork::Resolution(_))) {
+            return Err(EffectError::WrongResolutionFrame);
+        }
+        self.pending_work = Some(PendingWork::GraveyardShuffle(Box::new(
+            GraveyardShuffleWork {
+                cursor,
+                batch,
+                player: first_player,
+                remaining_players,
+                collective: true,
+                ability_source: None,
+                objects: movable,
+                ready: false,
+                continue_reveals: false,
+            },
+        )));
+        Ok(())
+    }
+
     pub(super) fn begin_target_into_library_shuffle(
         &mut self,
         entry: &crate::stack_window::StackEntry,

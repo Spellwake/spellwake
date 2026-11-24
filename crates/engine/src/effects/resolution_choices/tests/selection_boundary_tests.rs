@@ -79,6 +79,7 @@ fn empty_selection_continues_the_same_body_without_prompts_or_selected_moves() {
                 any_types: Default::default(),
                 required_types: BTreeSet::from([CardType::Creature]),
                 forbidden_types: BTreeSet::new(),
+                object_filter: None,
             },
         },
         Instruction::Discard {

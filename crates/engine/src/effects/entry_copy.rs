@@ -11,6 +11,9 @@ pub(super) struct EntryCopyResult {
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub(super) struct EntryCopyPool {
     programs: BTreeMap<ObjectId, Arc<Program>>,
+    snapshots: BTreeMap<ObjectId, ObjectCharacteristics>,
+    all_battlefield: Vec<ObjectId>,
+    all_graveyard: Vec<ObjectId>,
     graves: Vec<ObjectId>,
     creatures: Vec<ObjectId>,
     controlled_creatures: BTreeMap<SeatId, Vec<ObjectId>>,
@@ -59,34 +62,39 @@ impl EntryCopyPool {
                 continue;
             };
             match card.zone {
-                ObjectZone::Graveyard(_) if card.is_creature() && object.card_id().is_some() => {
-                    pool.graves.push(object.id())
+                ObjectZone::Graveyard(_) if object.card_id().is_some() => {
+                    pool.all_graveyard.push(object.id());
+                    if card.is_creature() {
+                        pool.graves.push(object.id());
+                    }
                 }
-                ObjectZone::Battlefield
+                ObjectZone::Battlefield => {
+                    pool.all_battlefield.push(object.id());
                     if card.is_creature()
                         || card.has_type(CardType::Planeswalker)
                         || card.has_type(CardType::Artifact)
-                        || card.has_type(CardType::Enchantment) =>
-                {
-                    let controller = card.controller.ok_or(EffectError::InconsistentProgram)?;
-                    if card.is_creature() {
-                        pool.creatures.push(object.id());
-                        pool.controlled_creatures
-                            .entry(controller)
-                            .or_default()
-                            .push(object.id());
-                    }
-                    if card.has_type(CardType::Artifact) {
-                        pool.artifacts.push(object.id());
-                    }
-                    if card.has_type(CardType::Enchantment) {
-                        pool.enchantments.push(object.id());
-                    }
-                    if card.is_creature() || card.has_type(CardType::Planeswalker) {
-                        pool.controlled
-                            .entry(controller)
-                            .or_default()
-                            .push(object.id());
+                        || card.has_type(CardType::Enchantment)
+                    {
+                        let controller = card.controller.ok_or(EffectError::InconsistentProgram)?;
+                        if card.is_creature() {
+                            pool.creatures.push(object.id());
+                            pool.controlled_creatures
+                                .entry(controller)
+                                .or_default()
+                                .push(object.id());
+                        }
+                        if card.has_type(CardType::Artifact) {
+                            pool.artifacts.push(object.id());
+                        }
+                        if card.has_type(CardType::Enchantment) {
+                            pool.enchantments.push(object.id());
+                        }
+                        if card.is_creature() || card.has_type(CardType::Planeswalker) {
+                            pool.controlled
+                                .entry(controller)
+                                .or_default()
+                                .push(object.id());
+                        }
                     }
                 }
                 _ => continue,
@@ -95,6 +103,7 @@ impl EntryCopyPool {
                 .copiable_program(object.id())
                 .ok_or(EffectError::InconsistentProgram)?;
             pool.programs.insert(object.id(), Arc::new(donor.clone()));
+            pool.snapshots.insert(object.id(), card.clone());
         }
         for aura in current.objects.values().filter(|view| view.has_battlefield_rule(|rule| matches!(rule,
             crate::characteristics::StaticContinuousAbility::Modifier { rule: crate::characteristics::StaticModifierRule::EnterControlledCreaturesAsEnchantedCopy, .. }
@@ -145,19 +154,84 @@ impl EntryCopyPool {
         })
     }
 
-    pub(super) fn domain(&self, rule: &EntryCopyRule, controller: SeatId) -> &[ObjectId] {
+    pub(super) fn domain(&self, rule: &EntryCopyRule, controller: SeatId) -> Vec<ObjectId> {
         match rule {
-            EntryCopyRule::GraveyardCreature => &self.graves,
+            EntryCopyRule::GraveyardCreature => self.graves.clone(),
             EntryCopyRule::BattlefieldCreature
-            | EntryCopyRule::BattlefieldCreatureWithAbility(_) => &self.creatures,
+            | EntryCopyRule::BattlefieldCreatureWithAbility(_) => self.creatures.clone(),
             EntryCopyRule::ControlledCreature => self
                 .controlled_creatures
                 .get(&controller)
-                .map_or(&[], Vec::as_slice),
-            EntryCopyRule::BattlefieldArtifact => &self.artifacts,
-            EntryCopyRule::BattlefieldEnchantment => &self.enchantments,
-            EntryCopyRule::ControlledCreatureOrPlaneswalker => {
-                self.controlled.get(&controller).map_or(&[], Vec::as_slice)
+                .cloned()
+                .unwrap_or_default(),
+            EntryCopyRule::BattlefieldArtifact => self.artifacts.clone(),
+            EntryCopyRule::BattlefieldEnchantment => self.enchantments.clone(),
+            EntryCopyRule::ControlledCreatureOrPlaneswalker => self
+                .controlled
+                .get(&controller)
+                .cloned()
+                .unwrap_or_default(),
+            EntryCopyRule::Matching(spec) => {
+                let candidates = match spec.zone {
+                    crate::program::EntryCopyZone::Battlefield => &self.all_battlefield,
+                    crate::program::EntryCopyZone::OwnGraveyard
+                    | crate::program::EntryCopyZone::AnyGraveyard => &self.all_graveyard,
+                };
+                let excluded = BTreeSet::new();
+                let matches_clause =
+                    |clause: crate::program::ObjectClause, snap: &ObjectCharacteristics| {
+                        let ctrl_ok = match clause.controller {
+                            crate::program::ControllerFilter::Any => true,
+                            crate::program::ControllerFilter::You => {
+                                snap.controller == Some(controller)
+                            }
+                            crate::program::ControllerFilter::Opponent
+                            | crate::program::ControllerFilter::NotYou => {
+                                snap.controller.is_some_and(|s| s != controller)
+                            }
+                            crate::program::ControllerFilter::OwnerYou => snap.owner == controller,
+                            crate::program::ControllerFilter::OwnerOpponent => {
+                                snap.owner != controller
+                            }
+                            crate::program::ControllerFilter::Player(s) => {
+                                snap.controller == Some(s)
+                            }
+                            crate::program::ControllerFilter::RelatedPlayer
+                            | crate::program::ControllerFilter::TargetPlayer
+                            | crate::program::ControllerFilter::TargetOpponent => false,
+                        };
+                        if !ctrl_ok {
+                            return false;
+                        }
+                        if let Some(tok) = clause.token
+                            && snap.is_token != tok
+                        {
+                            return false;
+                        }
+                        clause.matches_static_characteristics(snap, &excluded, || {
+                            Some(snap.defined.mana_value.clone())
+                        })
+                    };
+                candidates
+                    .iter()
+                    .copied()
+                    .filter(|id| {
+                        let Some(snap) = self.snapshots.get(id) else {
+                            return false;
+                        };
+                        if spec.zone == crate::program::EntryCopyZone::OwnGraveyard
+                            && snap.zone != ObjectZone::Graveyard(controller)
+                        {
+                            return false;
+                        }
+                        match spec.filter {
+                            crate::program::ObjectFilter::Clause(a) => matches_clause(a, snap),
+                            crate::program::ObjectFilter::Either(a, b) => {
+                                matches_clause(a, snap) || matches_clause(b, snap)
+                            }
+                        }
+                    })
+                    .collect()
             }
         }
     }
@@ -197,6 +271,64 @@ impl EntryCopyPool {
                 .ok_or(EffectError::InconsistentProgram)?;
             ability.id = crate::activated::ActivatedAbilityId(next);
             definition.activated.push(ability);
+        }
+        if let EntryCopyRule::Matching(spec) = rule {
+            let def = Arc::make_mut(&mut definition);
+            if spec.nonlegendary {
+                def.supertypes.remove(&Supertype::Legendary);
+            }
+            def.card_types.extend(spec.extra_types.iter().copied());
+            def.creature_subtypes
+                .extend(spec.extra_creature_subtypes.iter().copied());
+            def.printed_keywords
+                .extend(spec.extra_keywords.iter().copied());
+            if let Some((kind, count)) = spec.extra_counters
+                && count > 0
+            {
+                let entry_counter = match kind {
+                    CounterKind::PlusOne => {
+                        crate::program::EntryCounterAbility::FixedPlusOne(i64::from(count).into())
+                    }
+                    CounterKind::MinusOne => {
+                        crate::program::EntryCounterAbility::FixedMinusOne(i64::from(count).into())
+                    }
+                    CounterKind::Charge => {
+                        crate::program::EntryCounterAbility::FixedCharge(i64::from(count).into())
+                    }
+                    CounterKind::Loyalty => {
+                        crate::program::EntryCounterAbility::FixedLoyalty(i64::from(count).into())
+                    }
+                    other => crate::program::EntryCounterAbility::FixedNamed {
+                        kind: other,
+                        amount: i64::from(count).into(),
+                    },
+                };
+                def.entry_counter_abilities.push(entry_counter);
+            }
+            if let Some(extra_act) = &spec.extra_activated {
+                let mut ability = (**extra_act).clone();
+                let next = def
+                    .activated
+                    .iter()
+                    .try_fold(0_u64, |candidate, a| {
+                        a.id.0.checked_add(1).map(|n| n.max(candidate))
+                    })
+                    .ok_or(EffectError::InconsistentProgram)?;
+                ability.id = crate::activated::ActivatedAbilityId(next);
+                def.activated.push(ability);
+            }
+            if let Some(extra_trig) = &spec.extra_triggered {
+                let mut trigger = (**extra_trig).clone();
+                let next = def
+                    .triggered
+                    .iter()
+                    .try_fold(0_u64, |candidate, t| {
+                        t.id.0.checked_add(1).map(|n| n.max(candidate))
+                    })
+                    .ok_or(EffectError::InconsistentProgram)?;
+                trigger.id = crate::program::TriggeredAbilityId(next);
+                def.triggered.push(trigger);
+            }
         }
         Ok(EntryCopyResult {
             definition,

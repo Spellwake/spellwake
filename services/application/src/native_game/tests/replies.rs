@@ -249,6 +249,7 @@ fn sacrifice_selection_and_resolution_graveyard_order_keep_native_identity_and_o
                 any_types: Default::default(),
                 required_types: BTreeSet::from([CardType::Creature]),
                 forbidden_types: BTreeSet::new(),
+                object_filter: None,
             },
         }],
         (2..=4)
@@ -1229,4 +1230,223 @@ fn storm_controller_selects_each_copy_target_through_player_actions() {
             2.into()
         );
     }
+}
+
+#[test]
+#[ignore = "requires explicitly supplied source-qualified creature vocabulary"]
+fn shockland_entry_pay_life_projects_and_translates_accept_and_decline() {
+    use crate::player_wire::{DecisionKind, PlayerDomain};
+    use spellwake_engine::{land::EntryTap, program::PermanentDefinition};
+
+    let mut shock = Program::land(BTreeSet::from([LandType::Forest, LandType::Island]), vec![]);
+    if let spellwake_engine::program::ProgramKind::Permanent(PermanentDefinition {
+        entry_tap,
+        ..
+    }) = &mut shock.kind
+    {
+        *entry_tap = Some(EntryTap::UnlessPayLife(2));
+    }
+    let source = main_state(vec![card(1, A, ObjectDestination::Hand, shock)]);
+    let played = bridged(&source, viewer_a(), |view| PlayerAction::PlayLand {
+        source: view
+            .issue(NativeReference::Object(object(&source, 1)))
+            .unwrap(),
+    });
+    assert!(matches!(
+        played.pending_decision().map(|d| d.frame()),
+        Some(RuleFrame::EntryChoice(_))
+    ));
+    let mut view = scope(&played, viewer_a());
+    let snap = super::projection::project_test(&mut view).unwrap();
+    assert_eq!(snap.decisions.len(), 1);
+    assert_eq!(snap.decisions[0].kind, DecisionKind::OptionalEffect);
+    let PlayerDomain::Options { options, .. } = &snap.decisions[0].domain else {
+        panic!("expected Options domain for Shockland entry");
+    };
+    assert_eq!(options.len(), 2);
+    assert!(options[0].label.contains("Pay 2 life"));
+
+    // Accept: enters untapped and loses 2 life.
+    let paid = reply(
+        &played,
+        |v| PlayerChoice::Option {
+            option: v.issue(NativeReference::EntryPayLife(true)).unwrap(),
+        },
+        DecisionReply::EntryChoice(spellwake_engine::land::EntryChoice::PayLife(true)),
+    );
+    assert_eq!(paid.execution().life_total(A), Some(&18.into()));
+    let land_id = object(&paid, 1);
+    assert_eq!(
+        paid.execution()
+            .window()
+            .cards()
+            .get(land_id)
+            .unwrap()
+            .tapped(),
+        Some(false)
+    );
+
+    // Decline: enters tapped and keeps 20 life.
+    let declined = reply(
+        &played,
+        |v| PlayerChoice::Option {
+            option: v.issue(NativeReference::EntryPayLife(false)).unwrap(),
+        },
+        DecisionReply::EntryChoice(spellwake_engine::land::EntryChoice::PayLife(false)),
+    );
+    assert_eq!(declined.execution().life_total(A), Some(&20.into()));
+    let land_id = object(&declined, 1);
+    assert_eq!(
+        declined
+            .execution()
+            .window()
+            .cards()
+            .get(land_id)
+            .unwrap()
+            .tapped(),
+        Some(true)
+    );
+}
+
+#[test]
+#[ignore = "requires explicitly supplied source-qualified creature vocabulary"]
+fn option_index_choice_bundle_projects_human_labels_and_translates_round_trip() {
+    use crate::player_wire::{DecisionKind, PlayerDomain};
+    use spellwake_engine::program::EffectManaYield;
+
+    let mut ww = BTreeMap::new();
+    ww.insert(ManaType::White, 2.into());
+    let mut bb = BTreeMap::new();
+    bb.insert(ManaType::Black, 2.into());
+    let spell = instant(
+        BodyTarget::None,
+        vec![Instruction::AddMana(EffectManaYield::ChoiceBundle {
+            options: vec![ww, bb],
+        })],
+    );
+    let source = main_state(vec![card(1, A, ObjectDestination::Hand, spell)]);
+    let cast = bridged(&source, viewer_a(), |v| PlayerAction::CastUntargeted {
+        source: v
+            .issue(NativeReference::Object(object(&source, 1)))
+            .unwrap(),
+        payment: None,
+    });
+    let pending = resolve(&cast);
+    let mut view = scope(&pending, viewer_a());
+    let snap = super::projection::project_test(&mut view).unwrap();
+    assert_eq!(snap.decisions.len(), 1);
+    assert_eq!(snap.decisions[0].kind, DecisionKind::Modes);
+    let PlayerDomain::Options { options, .. } = &snap.decisions[0].domain else {
+        panic!("expected Options domain for OptionIndex");
+    };
+    assert_eq!(options.len(), 2);
+    assert_eq!(options[0].label, "Add {W}{W}");
+    assert_eq!(options[1].label, "Add {B}{B}");
+
+    let done = reply(
+        &pending,
+        |v| PlayerChoice::Option {
+            option: v.issue(NativeReference::OptionIndex(1)).unwrap(),
+        },
+        DecisionReply::OptionIndex(1),
+    );
+    assert_eq!(
+        done.execution().unrestricted_mana(A, ManaType::Black),
+        2.into()
+    );
+}
+
+#[test]
+#[ignore = "requires explicitly supplied source-qualified creature vocabulary"]
+fn energy_counter_myriad_keyword_and_extended_counter_kinds_project_cleanly() {
+    use crate::player_wire::{PlayerCounterKind, PlayerKeyword};
+    use spellwake_engine::{
+        effects::CounterKind,
+        program::{
+            AttackTriggerMode, TriggerEvent, TriggerGrouping, TriggerSpec, TriggeredAbility,
+            TriggeredAbilityId,
+        },
+    };
+
+    // Extended PlayerCounterKind covers modern counter kinds without collapsing or failing.
+    for kind in [
+        CounterKind::Stun,
+        CounterKind::Shield,
+        CounterKind::Oil,
+        CounterKind::Finality,
+        CounterKind::Lore,
+        CounterKind::Defense,
+        CounterKind::Flying,
+        CounterKind::Indestructible,
+    ] {
+        let wire = PlayerCounterKind::try_from(kind).expect("extended wire counter kind");
+        let roundtrip: CounterKind = wire.into();
+        assert_eq!(roundtrip, kind);
+    }
+
+    // Energy counters appear on PlayerSeatView.counters and Myriad projects as Myriad (not Annihilator).
+    let mut myriad_creature = Program::creature(None, 2.into(), 2.into(), BTreeSet::new());
+    myriad_creature.triggered.push(TriggeredAbility {
+        id: TriggeredAbilityId(1),
+        condition: TriggerSpec::new(TriggerEvent::Attacks {
+            subject: spellwake_engine::program::ObjectFilter::self_object(),
+            mode: AttackTriggerMode::Individual {
+                capture_defender: true,
+            },
+        }),
+        grouping: TriggerGrouping::EachOccurrence,
+        body: ExecutableBody::new(BodyTarget::None, vec![Instruction::Myriad]),
+    });
+    let energy_spell = instant(
+        BodyTarget::None,
+        vec![Instruction::AddPlayerCounter {
+            players: AffectedPlayers::One(ResolvingPlayer::Controller),
+            kind: CounterKind::Energy,
+            amount: spellwake_engine::program::ValueExpr::Literal(3.into()),
+        }],
+    );
+    let source = main_state(vec![
+        card(1, A, ObjectDestination::Hand, energy_spell),
+        card(
+            2,
+            A,
+            ObjectDestination::Battlefield { controller: A },
+            myriad_creature,
+        ),
+    ]);
+    let cast = bridged(&source, viewer_a(), |v| PlayerAction::CastUntargeted {
+        source: v
+            .issue(NativeReference::Object(object(&source, 1)))
+            .unwrap(),
+        payment: None,
+    });
+    let done = resolve(&cast);
+    let mut view = scope(&done, viewer_a());
+    let snap = super::projection::project_test(&mut view).unwrap();
+    let seat_a = snap
+        .players
+        .iter()
+        .find(|s| s.seat_id == viewer_a())
+        .unwrap();
+    assert!(
+        seat_a
+            .counters
+            .iter()
+            .any(|c| c.name == "energy" && *c.count.as_rules_integer() == 3.into()),
+        "expected energy counter of 3 in seat view"
+    );
+    let bf_obj = snap
+        .visible_objects
+        .iter()
+        .find(|o| o.public_properties.is_some())
+        .unwrap();
+    let props = bf_obj.public_properties.as_ref().unwrap();
+    assert!(
+        props.keywords.contains(&PlayerKeyword::Myriad),
+        "expected Myriad keyword in public properties"
+    );
+    assert!(
+        !props.keywords.contains(&PlayerKeyword::Annihilator),
+        "Myriad must not project as Annihilator"
+    );
 }

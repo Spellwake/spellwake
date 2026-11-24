@@ -41,6 +41,7 @@ pub enum TriggerFromZone {
     Any,
     Graveyard,
     ControllerGraveyard,
+    OpponentGraveyard,
     Hand,
     Exile,
     Library,
@@ -154,7 +155,11 @@ pub enum DamageTriggerRecipient {
     Controller,
     EnchantedPlayer,
     PlayerOrPlaneswalker,
+    OpponentOrPlaneswalker,
+    ControllerOrPlaneswalker,
     Creature,
+    Battle,
+    SelfObject,
 }
 
 /// Counter-change trigger kind.
@@ -175,7 +180,7 @@ pub enum CounterTriggerKind {
 }
 
 /// State-triggered ability threshold (CR 603.8).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum StateThresholdKind {
     SourceCounters {
         kind: CounterKind,
@@ -186,6 +191,8 @@ pub enum StateThresholdKind {
         subtype: CreatureTypeId,
         minimum: u16,
     },
+    /// General world-evaluable state-trigger condition (CR 603.8).
+    Eval(Box<super::ResolutionCondition>),
 }
 
 /// Player-scoped action trigger.
@@ -210,6 +217,47 @@ pub enum PlayerTriggerAction {
     SagaFinalChapterResolved,
     /// Player targeted an opponent, anything an opponent controls, or a card in an opponent's graveyard (CR 700.13).
     CommittedCrime,
+    LandPlayed,
+    Proliferated,
+    Explored,
+    ShuffledLibrary,
+    SearchedLibrary,
+    FlippedCoin {
+        won: Option<bool>,
+    },
+    RolledDie {
+        exact: Option<u16>,
+    },
+    BecameMonarch,
+    GainedEnergy,
+    SpellCountered,
+    Investigated,
+    Connived,
+    Foraged,
+    CollectedEvidence,
+    Foretold,
+    Saddled,
+    Exerted,
+    Plotted,
+    Clashed,
+    Exhausted,
+    Evolved,
+    RingTemptsYou,
+    Expend(u16),
+    Populated,
+    Discovered,
+    Ventured,
+    CompletedDungeon,
+    ManifestedDread,
+    PaidLife,
+    GaveGift,
+    WonClash,
+    CopiedSpellOrAbility,
+    Enlisted,
+    Trained,
+    KickedSpell,
+    ScryToBottom,
+    Waterbended,
 }
 
 /// Status or physical-transition trigger on a permanent.
@@ -221,6 +269,13 @@ pub enum StatusTriggerKind {
     Transforms,
     Phased { out: bool },
     Mutated,
+    Crewed,
+    Exerted,
+    Explored,
+    Regenerated,
+    ClassLevelReached(u8),
+    CaseSolved,
+    BecomesMonstrous,
 }
 
 /// Keyword-owned trigger event with specialized rules semantics.
@@ -297,6 +352,14 @@ pub enum TriggerCondition {
     SourceIsTapped,
     SourceIsUntapped,
     SourceIsAttacking,
+    /// Source Class permanent is currently at least this level (CR 716).
+    SourceClassLevelAtLeast(u8),
+    /// Source Case permanent is currently solved (CR 719).
+    SourceIsSolved,
+    /// Source Case permanent is not yet solved (CR 719).
+    SourceIsUnsolved,
+    /// Source permanent is currently prepared.
+    SourceIsPrepared,
     ControllerGainedLifeThisTurn,
     ControllerLostLifeThisTurn,
     ControllerAttackedThisTurn,
@@ -326,9 +389,67 @@ pub enum TriggerCondition {
         filter: Box<ObjectFilter>,
         minimum: u8,
     },
+    /// General world-evaluable condition expression (also re-checked on resolution per CR 603.4).
+    Eval(Box<super::ResolutionCondition>),
     Not(Box<TriggerCondition>),
     And(Box<TriggerCondition>, Box<TriggerCondition>),
     Or(Box<TriggerCondition>, Box<TriggerCondition>),
+}
+
+impl TriggerCondition {
+    /// Rewrite printed creature-type words when a text-changing effect applies.
+    pub(crate) fn rewrite_creature_type(&mut self, from: CreatureTypeId, to: CreatureTypeId) {
+        match self {
+            Self::ControlsSubtype { kind, .. } => {
+                if *kind == from {
+                    *kind = to;
+                }
+            }
+            Self::ControlsMatching { filter, .. }
+            | Self::OpponentControlsMatching { filter, .. } => {
+                filter.rewrite_creature_type(from, to);
+            }
+            Self::SourceMatches(filter) | Self::GraveyardMatching { filter, .. } => {
+                filter.rewrite_creature_type(from, to);
+            }
+            Self::Eval(cond) => cond.rewrite_creature_type(from, to),
+            Self::Not(inner) => inner.rewrite_creature_type(from, to),
+            Self::And(a, b) | Self::Or(a, b) => {
+                a.rewrite_creature_type(from, to);
+                b.rewrite_creature_type(from, to);
+            }
+            _ => {}
+        }
+    }
+
+    /// Validate creature types and world-evaluable condition invariants.
+    pub(crate) fn validate_vocabulary(
+        &self,
+        vocabulary: &CreatureTypeVocabulary,
+    ) -> Result<(), DefinitionError> {
+        match self {
+            Self::ControlsSubtype { kind, .. } => {
+                if vocabulary.label(*kind).is_none() {
+                    return Err(DefinitionError::ForeignCreatureType);
+                }
+                Ok(())
+            }
+            Self::ControlsMatching { filter, .. }
+            | Self::OpponentControlsMatching { filter, .. } => {
+                filter.validate_vocabulary(vocabulary)
+            }
+            Self::SourceMatches(filter) | Self::GraveyardMatching { filter, .. } => {
+                filter.validate_vocabulary(vocabulary)
+            }
+            Self::Eval(cond) => cond.validate_trigger_world(vocabulary),
+            Self::Not(inner) => inner.validate_vocabulary(vocabulary),
+            Self::And(a, b) | Self::Or(a, b) => {
+                a.validate_vocabulary(vocabulary)?;
+                b.validate_vocabulary(vocabulary)
+            }
+            _ => Ok(()),
+        }
+    }
 }
 
 /// Core orthogonal trigger event replacing the flat 135-variant `OrdinaryCondition` enum.
@@ -391,6 +512,30 @@ pub enum TriggerEvent {
         recipient: DamageTriggerRecipient,
         combat_only: bool,
     },
+    /// Noncombat damage dealt by `source` to `recipient`.
+    DealsNoncombatDamage {
+        source: ObjectFilter,
+        recipient: DamageTriggerRecipient,
+    },
+    /// An activated ability of a permanent matching `source_filter` is activated by `player`.
+    AbilityActivated {
+        player: PlayerRelation,
+        source_filter: ObjectFilter,
+    },
+    /// An Aura or Equipment matching `subject` becomes attached to a permanent or player.
+    BecomesAttached {
+        subject: ObjectFilter,
+    },
+    /// An object matching `subject` is put into a library.
+    PutIntoLibrary {
+        subject: ObjectFilter,
+    },
+    /// A creature matching `subject` exploits a creature (CR 702.110).
+    Exploits {
+        subject: ObjectFilter,
+    },
+    /// Day becomes night or night becomes day (CR 730.2).
+    DayNightChanged,
     DealtDamage {
         subject: ObjectFilter,
         linked_player: bool,
@@ -430,6 +575,11 @@ pub enum TriggerEvent {
     ManualTabletopClaim {
         prompt: Box<str>,
         any_player_can_trigger: bool,
+    },
+    /// A Room door is unlocked (or becomes fully unlocked) on a permanent matching `subject` (CR 709.5).
+    DoorUnlocked {
+        subject: ObjectFilter,
+        fully_unlocked_only: bool,
     },
 }
 
@@ -486,8 +636,17 @@ impl TriggerEvent {
             | Self::DealtDamage { subject, .. }
             | Self::Targeted { subject, .. }
             | Self::CountersChanged { subject, .. }
-            | Self::StatusChanged { subject, .. } => subject.rewrite_creature_type(from, to),
-            Self::DealsDamage { source, .. } => source.rewrite_creature_type(from, to),
+            | Self::StatusChanged { subject, .. }
+            | Self::DoorUnlocked { subject, .. } => subject.rewrite_creature_type(from, to),
+            Self::DealsDamage { source, .. } | Self::DealsNoncombatDamage { source, .. } => {
+                source.rewrite_creature_type(from, to)
+            }
+            Self::AbilityActivated { source_filter, .. } => {
+                source_filter.rewrite_creature_type(from, to);
+            }
+            Self::BecomesAttached { subject }
+            | Self::PutIntoLibrary { subject }
+            | Self::Exploits { subject } => subject.rewrite_creature_type(from, to),
             Self::SpellCast { filter, .. } => filter.rewrite_creature_type(from, to),
             Self::Attacks { subject, mode } => {
                 subject.rewrite_creature_type(from, to);
@@ -511,6 +670,9 @@ impl TriggerEvent {
             Self::StateThreshold(StateThresholdKind::ControlledSubtype { subtype, .. }) => {
                 word(subtype);
             }
+            Self::StateThreshold(StateThresholdKind::Eval(cond)) => {
+                cond.rewrite_creature_type(from, to);
+            }
             Self::PlayerAction {
                 action:
                     PlayerTriggerAction::Sacrificed(filter)
@@ -529,6 +691,7 @@ impl TriggerEvent {
             | Self::PlayerLosesGame(_)
             | Self::Keyword(_)
             | Self::Planar(_)
+            | Self::DayNightChanged
             | Self::SchemeSetInMotion
             | Self::ManualTabletopClaim { .. } => {}
         }
@@ -557,8 +720,17 @@ impl TriggerEvent {
             | Self::DealtDamage { subject, .. }
             | Self::Targeted { subject, .. }
             | Self::CountersChanged { subject, .. }
-            | Self::StatusChanged { subject, .. } => subject.validate_vocabulary(vocabulary),
-            Self::DealsDamage { source, .. } => source.validate_vocabulary(vocabulary),
+            | Self::StatusChanged { subject, .. }
+            | Self::DoorUnlocked { subject, .. } => subject.validate_vocabulary(vocabulary),
+            Self::DealsDamage { source, .. } | Self::DealsNoncombatDamage { source, .. } => {
+                source.validate_vocabulary(vocabulary)
+            }
+            Self::AbilityActivated { source_filter, .. } => {
+                source_filter.validate_vocabulary(vocabulary)
+            }
+            Self::BecomesAttached { subject }
+            | Self::PutIntoLibrary { subject }
+            | Self::Exploits { subject } => subject.validate_vocabulary(vocabulary),
             Self::SpellCast { filter, .. } => filter.validate_vocabulary(vocabulary),
             Self::Attacks { subject, mode } => {
                 subject.validate_vocabulary(vocabulary)?;
@@ -584,6 +756,7 @@ impl TriggerEvent {
             Self::StateThreshold(StateThresholdKind::ControlledSubtype { subtype, .. }) => {
                 check(*subtype)
             }
+            Self::StateThreshold(StateThresholdKind::Eval(cond)) => cond.validate_world(vocabulary),
             Self::PlayerAction {
                 action:
                     PlayerTriggerAction::Sacrificed(filter)
@@ -606,6 +779,7 @@ impl TriggerEvent {
             | Self::PlayerLosesGame(_)
             | Self::Keyword(_)
             | Self::Planar(_)
+            | Self::DayNightChanged
             | Self::SchemeSetInMotion
             | Self::ManualTabletopClaim { .. } => Ok(()),
         }
@@ -785,7 +959,7 @@ impl TriggerSpec {
 
     /// State-triggered ability threshold (CR 603.8).
     #[must_use]
-    pub const fn state_threshold(kind: StateThresholdKind) -> Self {
+    pub fn state_threshold(kind: StateThresholdKind) -> Self {
         Self::new(TriggerEvent::StateThreshold(kind))
     }
 
@@ -848,6 +1022,9 @@ impl TriggerSpec {
     /// Rewrite printed creature-type words when a text-changing effect applies.
     pub(crate) fn rewrite_creature_type(&mut self, from: CreatureTypeId, to: CreatureTypeId) {
         self.event.rewrite_creature_type(from, to);
+        if let Some(cond) = &mut self.intervening_if {
+            cond.rewrite_creature_type(from, to);
+        }
     }
 
     /// Validate that every referenced creature subtype exists in `vocabulary`.
@@ -855,6 +1032,10 @@ impl TriggerSpec {
         &self,
         vocabulary: &CreatureTypeVocabulary,
     ) -> Result<(), DefinitionError> {
-        self.event.validate_vocabulary(vocabulary)
+        self.event.validate_vocabulary(vocabulary)?;
+        if let Some(cond) = &self.intervening_if {
+            cond.validate_vocabulary(vocabulary)?;
+        }
+        Ok(())
     }
 }

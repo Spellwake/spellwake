@@ -27,6 +27,19 @@ impl ManaType {
         Self::Green,
         Self::Colourless,
     ];
+
+    /// Corresponding MTG color for colored mana types, or `None` for colorless.
+    #[must_use]
+    pub const fn color(self) -> Option<crate::characteristics::Color> {
+        match self {
+            Self::White => Some(crate::characteristics::Color::White),
+            Self::Blue => Some(crate::characteristics::Color::Blue),
+            Self::Black => Some(crate::characteristics::Color::Black),
+            Self::Red => Some(crate::characteristics::Color::Red),
+            Self::Green => Some(crate::characteristics::Color::Green),
+            Self::Colourless => None,
+        }
+    }
 }
 
 /// An object selected to pay a printed casting cost.
@@ -76,6 +89,8 @@ pub enum CastResource {
     DiscardForSpell(crate::object_identity::ObjectId),
     /// Creature sacrificed as a mandatory additional cost to cast the spell.
     SacrificeForSpell(crate::object_identity::ObjectId),
+    /// Object selected to satisfy a composable `Program::extra_cast_costs` requirement.
+    ExtraCost(crate::object_identity::ObjectId),
 }
 impl CastResource {
     /// Exact incarnation selected to pay this cost.
@@ -98,7 +113,8 @@ impl CastResource {
             | Self::Sneak(id)
             | Self::Bargain(id)
             | Self::Retrace(id)
-            | Self::JumpStart(id) => id,
+            | Self::JumpStart(id)
+            | Self::ExtraCost(id) => id,
             Self::SacrificeForSpell(id)
             | Self::DiscardForSpell(id)
             | Self::FlashbackSacrifice(id) => id,
@@ -114,11 +130,12 @@ pub struct CastMode {
     pub target: Option<crate::targets::TargetRef>,
 }
 
-/// The second way to pay a colored hybrid or Phyrexian symbol.
+/// The second way to pay a colored hybrid, twobrid, or Phyrexian symbol.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum HybridAlternative {
     Mana(ManaType),
     TwoLife,
+    TwoGeneric,
 }
 
 /// A printed symbol whose first color is included in the base mana cost.
@@ -174,6 +191,12 @@ pub struct CastingPayment {
     pub split_half: Option<crate::program::SplitHalf>,
     /// Cast the reverse face from your graveyard for its disturb cost.
     pub disturb: bool,
+    /// Cast the back face of a modal double-faced card (CR 712.11).
+    pub modal_back: bool,
+    /// Cast a prototype card using its prototyped characteristics (CR 702.160).
+    pub prototype: bool,
+    /// Cast a copy of a prepared battlefield permanent's spell face, unpreparing it.
+    pub prepare: bool,
     /// Additional cost index and the positive number of times it is paid.
     pub additional: BTreeMap<usize, RulesInteger>,
     pub mana: Option<ManaPayment>,
@@ -218,6 +241,7 @@ impl ManaCost {
                     *amount = amount.plus(&1.into());
                 }
                 HybridAlternative::TwoLife => life = life.plus(&2.into()),
+                HybridAlternative::TwoGeneric => self.generic = self.generic.plus(&2.into()),
             }
         }
         Some(life)
@@ -225,34 +249,29 @@ impl ManaCost {
 
     /// Count each distinct payment once when an ability asks for a chosen card's mana cost.
     pub(crate) fn hybrid_prices(&self, symbols: &[HybridSymbol]) -> Vec<(Self, RulesInteger)> {
-        let mut prices =
-            std::collections::BTreeSet::from([(RulesInteger::from(0), self.required.clone())]);
+        let mut prices = std::collections::BTreeSet::from([(
+            RulesInteger::from(0),
+            self.generic.clone(),
+            self.required.clone(),
+        )]);
         for symbol in symbols {
             let alternatives = prices
                 .iter()
-                .filter_map(|(life, required)| {
+                .filter_map(|(life, generic, required)| {
                     let mut cost = Self {
-                        generic: self.generic.clone(),
+                        generic: generic.clone(),
                         required: required.clone(),
                     };
                     let additional_life =
                         cost.choose_hybrid(std::slice::from_ref(symbol), &[HybridSide::Second])?;
-                    Some((life.plus(&additional_life), cost.required))
+                    Some((life.plus(&additional_life), cost.generic, cost.required))
                 })
                 .collect::<Vec<_>>();
             prices.extend(alternatives);
         }
         prices
             .into_iter()
-            .map(|(life, required)| {
-                (
-                    Self {
-                        generic: self.generic.clone(),
-                        required,
-                    },
-                    life,
-                )
-            })
+            .map(|(life, generic, required)| (Self { generic, required }, life))
             .collect()
     }
 
@@ -295,6 +314,89 @@ pub struct ManaSpend {
     pub mana_type: ManaType,
     pub amount: RulesInteger,
 }
+/// Provenance and payment summary recorded when a spell is cast (CR 601.2h, 400.7a).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CastManaSummary {
+    pub total_mana: RulesInteger,
+    pub colors_spent: BTreeSet<crate::characteristics::Color>,
+    pub mana_by_type: BTreeMap<ManaType, RulesInteger>,
+    pub snow_mana: RulesInteger,
+    pub treasure_mana: RulesInteger,
+    pub creature_mana: RulesInteger,
+    pub cast_from_exile: bool,
+    pub cast_from_graveyard: bool,
+    pub cast_from_outside_hand: bool,
+    pub cast_during_own_main: bool,
+    pub bargained: bool,
+    pub gift_promised: bool,
+    pub cleaved: bool,
+    pub evidence_collected: bool,
+    pub paid_alternative: bool,
+    pub squad_count: u8,
+}
+impl Default for CastManaSummary {
+    fn default() -> Self {
+        Self {
+            total_mana: 0.into(),
+            colors_spent: BTreeSet::new(),
+            mana_by_type: BTreeMap::new(),
+            snow_mana: 0.into(),
+            treasure_mana: 0.into(),
+            creature_mana: 0.into(),
+            cast_from_exile: false,
+            cast_from_graveyard: false,
+            cast_from_outside_hand: false,
+            cast_during_own_main: false,
+            bargained: false,
+            gift_promised: false,
+            cleaved: false,
+            evidence_collected: false,
+            paid_alternative: false,
+            squad_count: 0,
+        }
+    }
+}
+impl CastManaSummary {
+    pub(crate) fn record_spend(
+        &mut self,
+        spend: &[ManaSpend],
+        snow: RulesInteger,
+        treasure: RulesInteger,
+        creature: RulesInteger,
+    ) {
+        for unit in spend {
+            if !unit.amount.is_positive() {
+                continue;
+            }
+            self.total_mana = self.total_mana.plus(&unit.amount);
+            let slot = self
+                .mana_by_type
+                .entry(unit.mana_type)
+                .or_insert_with(|| 0.into());
+            *slot = slot.plus(&unit.amount);
+            if let Some(color) = match unit.mana_type {
+                ManaType::White => Some(crate::characteristics::Color::White),
+                ManaType::Blue => Some(crate::characteristics::Color::Blue),
+                ManaType::Black => Some(crate::characteristics::Color::Black),
+                ManaType::Red => Some(crate::characteristics::Color::Red),
+                ManaType::Green => Some(crate::characteristics::Color::Green),
+                ManaType::Colourless => None,
+            } {
+                self.colors_spent.insert(color);
+            }
+        }
+        if snow.is_positive() {
+            self.snow_mana = self.snow_mana.plus(&snow);
+        }
+        if treasure.is_positive() {
+            self.treasure_mana = self.treasure_mana.plus(&treasure);
+        }
+        if creature.is_positive() {
+            self.creature_mana = self.creature_mana.plus(&creature);
+        }
+    }
+}
+
 /// A rule restricting which spells may be paid for with a floating mana unit.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum ManaRestriction {
@@ -312,12 +414,39 @@ pub enum ManaRestriction {
     /// The exact creature spell this mana pays for cannot be countered.
     CreatureSpellOfTypeUncounterable(Option<spellwake_contracts::creature_types::CreatureTypeId>),
     CreatureSpellOrAbilityOfType(Option<spellwake_contracts::creature_types::CreatureTypeId>),
+    InstantOrSorcerySpell,
+    ArtifactSpell,
+    ArtifactAbility,
+    ArtifactSpellOrAnyAbility,
+    ActivatedAbility,
+    CastSpell,
+    NotSpellFromHand,
+    CostContainingX,
+    LegendarySpell,
+    MulticoloredSpell,
+    EnchantmentSpell,
+    CreatureSpellOrAbility,
+    ColoredSpellWithoutX,
+    InstantOrSorceryOrForetell,
+    SpellWithMinManaValue(u8),
+    CreatureSpellWithMinManaValue(u8),
+    HistoricSpell,
+    CreatureOrPlaneswalkerSpell,
+    CreatureAbility,
+    PermanentSpell,
+    SpellFromGraveyardOrExile,
+    EquipmentOrEquipAbility,
+    SpellWithMinManaValueOrX(u8),
+    CreatureSpellWithMinManaValueOrX(u8),
+    CreatureOrEnchantmentSpell,
 }
 impl ManaRestriction {
     fn valid_authored(self, vocabulary: &CreatureTypeVocabulary) -> bool {
         match self {
-            Self::CreatureSpellOfType(_)
-            | Self::CreatureSpellOrAbilityOfType(_)
+            Self::CreatureSpellOfType(Some(kind))
+            | Self::CreatureSpellOrAbilityOfType(Some(kind)) => vocabulary.label(kind).is_some(),
+            Self::CreatureSpellOfType(None)
+            | Self::CreatureSpellOrAbilityOfType(None)
             | Self::CreatureSpellOfTypeUncounterable(_) => false,
             Self::ColorlessEldraziSpellOrAbility => vocabulary.resolve_label("Eldrazi").is_some(),
             _ => true,
@@ -391,6 +520,8 @@ pub enum ManaSpendEffect {
     CommanderEntryCounters,
     SharedCommanderTypeScry,
     RetainUntilCleanup,
+    /// CR 702.189 (Firebending): unspent mana persists across combat steps until combat ends.
+    RetainUntilEndOfCombat,
 }
 
 /// Public metadata for units with a spending effect. The identifier belongs only to this game.
@@ -483,6 +614,8 @@ pub enum ManaOutputModifier {
     SpendEffect(ManaSpendEffect),
     /// Apply a side effect alongside producing mana.
     SideEffect(ManaSideEffect),
+    /// Activation timing or board-state restriction on this mana ability (CR 605.3a).
+    ActivationCondition(Box<crate::activated::ActivationRestriction>),
 }
 
 /// Counter-driven mana production modes.
@@ -641,6 +774,17 @@ impl ManaOutput {
         self.with_modifier(ManaOutputModifier::SideEffect(effect))
     }
 
+    /// Wrap this mana output with an activation timing or condition restriction.
+    #[must_use]
+    pub fn with_activation_condition(
+        self,
+        restriction: crate::activated::ActivationRestriction,
+    ) -> Self {
+        self.with_modifier(ManaOutputModifier::ActivationCondition(Box::new(
+            restriction,
+        )))
+    }
+
     /// Whether this entry represents a triggered mana ability rather than an activated one.
     #[must_use]
     pub fn is_triggered(&self) -> bool {
@@ -791,12 +935,17 @@ impl ManaOutput {
                         ManaOutputRestriction::Fixed(rule) => rule.valid_authored(vocabulary),
                         ManaOutputRestriction::ChosenCreatureType(_) => true,
                     },
-                    ManaOutputModifier::SpendEffect(effect) => {
-                        *effect != ManaSpendEffect::RetainUntilCleanup
-                    }
+                    ManaOutputModifier::SpendEffect(effect) => !matches!(
+                        effect,
+                        ManaSpendEffect::RetainUntilCleanup
+                            | ManaSpendEffect::RetainUntilEndOfCombat
+                    ),
                     ManaOutputModifier::SideEffect(
                         ManaSideEffect::GainLife(n) | ManaSideEffect::DamageController(n),
                     ) => n.is_positive(),
+                    ManaOutputModifier::ActivationCondition(restriction) => {
+                        restriction.validate(vocabulary).is_ok()
+                    }
                 };
                 modifier_ok && output.valid(vocabulary)
             }

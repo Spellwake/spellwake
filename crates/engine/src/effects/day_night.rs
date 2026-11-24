@@ -33,13 +33,14 @@ impl EffectWindow {
         let Some(current) = self.window.cards().get(id) else {
             return Ok(None);
         };
+        let Some(front) = current.card_id().and_then(|card| self.programs.get(&card)) else {
+            return Ok(None);
+        };
+        let can_flip = front.flip_back.is_some() && !current.transformed();
         if current.zone() != ObjectZone::Battlefield
             || current.face_down().is_some()
             || current.last_transformed_at() != source.last_transformed_at()
-            || current
-                .card_id()
-                .and_then(|card| self.programs.get(&card))
-                .is_none_or(|front| front.reverse_face().is_none() && front.disturb.is_none())
+            || (front.reverse_face().is_none() && front.disturb.is_none() && !can_flip)
         {
             return Ok(None);
         }
@@ -47,9 +48,10 @@ impl EffectWindow {
         let Some(view) = evaluated.get(id) else {
             return Ok(None);
         };
-        if view.has_keyword(KeywordAbility::Daybound)
-            || view.has_keyword(KeywordAbility::Nightbound)
-            || Self::transform_prohibited(&evaluated, view)
+        if !can_flip
+            && (view.has_keyword(KeywordAbility::Daybound)
+                || view.has_keyword(KeywordAbility::Nightbound)
+                || Self::transform_prohibited(&evaluated, view))
         {
             return Ok(None);
         }
@@ -284,7 +286,16 @@ impl EffectWindow {
                 .ok_or(EffectError::InconsistentProgram)?;
             let has_day = current.has_keyword(KeywordAbility::Daybound);
             let has_night = current.has_keyword(KeywordAbility::Nightbound);
-            day |= has_day;
+            let becomes_day = current.has_battlefield_rule(|rule| {
+                matches!(
+                    rule,
+                    crate::characteristics::StaticContinuousAbility::Modifier {
+                        rule: crate::characteristics::StaticModifierRule::BecomesDayIfNeither,
+                        ..
+                    }
+                )
+            });
+            day |= has_day || becomes_day;
             night |= has_night;
             if object.face_down().is_none()
                 && !Self::transform_prohibited(evaluated, current)
