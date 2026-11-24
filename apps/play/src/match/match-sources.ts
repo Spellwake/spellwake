@@ -20,6 +20,15 @@ export type MatchChatEntry = {
 export type MatchConnectionState =
   "connecting" | "live" | "reconnecting" | "ended";
 
+/** How a finished game came out for the person looking at it. */
+export type GameResult = {
+  outcome: "won" | "lost" | "draw" | "no-result";
+  /** Why the game ended, where the game says. */
+  reason: string | null;
+  /** The seats that won, for the final standings. */
+  winnerSeatIds: readonly string[];
+};
+
 export type MatchSource =
   | { status: SourceGap | "idle" }
   | {
@@ -39,6 +48,8 @@ export type MatchSource =
        */
       castOffers?: readonly CastOffer[];
       connectionState: MatchConnectionState;
+      /** Set once the game is over. Absent or null while it is being played. */
+      result?: GameResult | null;
       commandPending: boolean;
       commandError: string | null;
       dismissCommandError: () => void;

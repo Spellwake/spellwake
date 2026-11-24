@@ -9,6 +9,12 @@ import {
 import { useAccount } from "../auth/AccountProvider";
 import { ownerBearer } from "../data/account";
 import { scryfallImage } from "../data/scryfall-images";
+import {
+  gameResult,
+  gameRow,
+  looksFinished,
+  type GameRow,
+} from "./game-result";
 import type {
   MatchActionCommand,
   MatchChatEntry,
@@ -45,19 +51,26 @@ export function useConnectedMatch(
   onLeave: () => void,
 ): MatchSource {
   const { state, services } = useAccount();
-  const owner =
-    state.status === "ready" && state.session.accountId
-      ? { ...state.session, accountId: state.session.accountId }
-      : null;
+  // Kept the same from one render to the next: the live connection below
+  // restarts whenever the owner or the game it follows changes.
+  const session = state.status === "ready" ? state.session : null;
+  const owner = useMemo(
+    () =>
+      session?.accountId ? { ...session, accountId: session.accountId } : null,
+    [session],
+  );
 
-  const directTarget: ActiveGameTarget | null =
-    isUuid(params.gameId) && isUuid(params.contextId)
-      ? {
-          matchId: isUuid(params.matchId) ? params.matchId : null,
-          gameId: params.gameId,
-          contextId: params.contextId,
-        }
-      : null;
+  const directTarget = useMemo(
+    (): ActiveGameTarget | null =>
+      isUuid(params.gameId) && isUuid(params.contextId)
+        ? {
+            matchId: isUuid(params.matchId) ? params.matchId : null,
+            gameId: params.gameId,
+            contextId: params.contextId,
+          }
+        : null,
+    [params.gameId, params.contextId, params.matchId],
+  );
 
   // Resolve from room handoff when arriving from Lobby.
   const roomHandoff = useQuery<RoomGameHandoff | null>({
@@ -145,9 +158,53 @@ export function useConnectedMatch(
   const [commandError, setCommandError] = useState<string | null>(null);
   const cursorRef = useRef<PlayerCursor | null>(null);
 
+  // The game's stream only carries the table. How a game came out is in the
+  // match's own record, read once the table shows there is something to read.
+  const tableLooksFinished = snapshot !== null && looksFinished(snapshot);
+  const finishedGame = useQuery<GameRow | null>({
+    queryKey: [
+      "match-game-result",
+      owner?.accountId,
+      target?.matchId,
+      target?.gameId,
+    ],
+    enabled: !!owner && !!services && !!target?.matchId && snapshot !== null,
+    refetchInterval: (query) =>
+      query.state.data
+        ? false
+        : tableLooksFinished || connectionState !== "live"
+          ? 2000
+          : 12000,
+    queryFn: async ({ signal }) => {
+      if (!owner || !services || !target?.matchId) return null;
+      const res = await services.api.matchGames(
+        await ownerBearer(services, owner),
+        target.matchId,
+        null,
+        10,
+        signal,
+      );
+      if (res.status !== "success" || !Array.isArray(res.data["items"]))
+        return null;
+      const row = gameRow(res.data["items"], target.gameId);
+      return row && row.state !== "reserved" && row.state !== "active"
+        ? row
+        : null;
+    },
+  });
+  const result = useMemo(
+    () =>
+      finishedGame.data && snapshot
+        ? gameResult(finishedGame.data, snapshot)
+        : null,
+    [finishedGame.data, snapshot],
+  );
+  const finished = result !== null;
+
   // Initial view load + live SSE stream with automatic reconnect.
   useEffect(() => {
-    if (!owner || !services || !target) return;
+    // A finished game has nothing more to send.
+    if (!owner || !services || !target || finished) return;
     const abort = new AbortController();
     let stopped = false;
     setConnectionState("connecting");
@@ -227,7 +284,7 @@ export function useConnectedMatch(
       stopped = true;
       abort.abort();
     };
-  }, [owner, services, target]);
+  }, [owner, services, target, finished]);
 
   // Resolve seat usernames from match seats.
   const seatsQuery = useQuery({
@@ -327,7 +384,8 @@ export function useConnectedMatch(
   const chatQuery = useQuery({
     queryKey: ["match-chat", owner?.accountId, target?.matchId],
     enabled: !!owner && !!services && !!target?.matchId,
-    refetchInterval: connectionState === "live" ? 3000 : false,
+    // A last word after the game still arrives.
+    refetchInterval: connectionState === "live" || finished ? 3000 : false,
     queryFn: async ({ signal }): Promise<MatchChatEntry[]> => {
       if (!owner || !services || !target?.matchId) return [];
       const res = await services.api.matchChat(
@@ -480,6 +538,7 @@ export function useConnectedMatch(
     seatNames,
     artByPrintingId: artQueries,
     connectionState,
+    result,
     commandPending,
     commandError,
     dismissCommandError: () => setCommandError(null),

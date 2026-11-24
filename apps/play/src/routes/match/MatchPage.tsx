@@ -58,6 +58,7 @@ import { MatchStack, useStackReading } from "./stack";
 import { ConcedeConfirmation, MatchSettings, TableChat } from "./TablePanels";
 import { hasUnseen } from "../../match/table-panels";
 import { MatchTable } from "./MatchTable";
+import { GameEndBand, GameEndPanel } from "./GameEnd";
 import * as table from "./match-table.css";
 import * as s from "./match.css";
 
@@ -576,6 +577,10 @@ function useLowerDock(): { trayHeight: number; clearBottom: number } {
 function LiveMatch({ source }: { source: ReadyMatch }): ReactElement {
   const dock = useLowerDock();
   const { snapshot, seatNames, artByPrintingId } = source;
+  // Once the game is over nothing more is asked or offered at this table.
+  const result = source.result ?? null;
+  // The band lifts so the finished table can be seen.
+  const [resultRaised, setResultRaised] = useState(true);
 
   const [view, setView] = useState<TableView>({
     kind: "seat",
@@ -671,13 +676,16 @@ function LiveMatch({ source }: { source: ReadyMatch }): ReactElement {
 
   const hasPriority =
     !watching &&
+    !result &&
     (snapshot.turn?.prioritySeatIds.includes(snapshot.viewerSeatId) ?? false);
   const isViewerTurn =
     snapshot.turn?.activeSeatIds.includes(snapshot.viewerSeatId) ?? false;
 
-  const activeDecision = snapshot.decisions.find((d) =>
-    d.respondingSeatIds.includes(snapshot.viewerSeatId),
-  );
+  const activeDecision = result
+    ? undefined
+    : snapshot.decisions.find((d) =>
+        d.respondingSeatIds.includes(snapshot.viewerSeatId),
+      );
 
   const combat = useCombat(activeDecision ?? null, source);
 
@@ -796,6 +804,9 @@ function LiveMatch({ source }: { source: ReadyMatch }): ReactElement {
 
   // The dot clears only once the newest message has been on screen.
   const unreadChat = !chatOpen && hasUnseen(source.chat.messages, chatSeen);
+  // The chat and the band want the same part of a small screen. The chat is
+  // the one being used, so the result waits in the turn panel beside it.
+  const bandShown = result !== null && resultRaised && !chatOpen;
 
   return (
     <>
@@ -824,7 +835,11 @@ function LiveMatch({ source }: { source: ReadyMatch }): ReactElement {
                   unreadChat ? "Table chat, unread messages" : "Table chat"
                 }
                 aria-expanded={chatOpen}
-                onClick={() => setChatOpen((current) => !current)}
+                onClick={() => {
+                  // Opening the chat lifts the band for good.
+                  if (!chatOpen && result) setResultRaised(false);
+                  setChatOpen(!chatOpen);
+                }}
               >
                 <MessageCircle size={ICON} aria-hidden="true" />
               </button>
@@ -865,7 +880,8 @@ function LiveMatch({ source }: { source: ReadyMatch }): ReactElement {
           const name = seatNames.get(player.seatId) ?? "Player";
           const out = player.eliminated;
           const takingTurn =
-            snapshot.turn?.activeSeatIds.includes(player.seatId) ?? false;
+            !result &&
+            (snapshot.turn?.activeSeatIds.includes(player.seatId) ?? false);
           return (
             <span
               key={player.seatId}
@@ -920,19 +936,24 @@ function LiveMatch({ source }: { source: ReadyMatch }): ReactElement {
             className={frame.hudButton}
             aria-label="Leave table"
             // A player who is out has nothing left to concede.
-            onClick={() => (watching ? source.onLeave() : setLeaveOpen(true))}
+            onClick={() =>
+              watching || result ? source.onLeave() : setLeaveOpen(true)
+            }
           >
             <LogOut size={ICON} aria-hidden="true" />
           </button>
         }
         side={
           <>
-            <TurnPhaseDisplay
-              turnLabel={turnLabel}
-              phase={phaseInfo.phase}
-              phaseLabel={phaseInfo.label}
-            />
-            {source.connectionState !== "live" && (
+            {/* The turn it ended on is no longer anyone's turn. */}
+            {!result && (
+              <TurnPhaseDisplay
+                turnLabel={turnLabel}
+                phase={phaseInfo.phase}
+                phaseLabel={phaseInfo.label}
+              />
+            )}
+            {source.connectionState !== "live" && !result && (
               <span className={s.statusBadge} role="status">
                 {source.connectionState === "reconnecting"
                   ? "Reconnecting…"
@@ -941,7 +962,7 @@ function LiveMatch({ source }: { source: ReadyMatch }): ReactElement {
                     : "Connecting…"}
               </span>
             )}
-            {viewerPlayer && viewerPlayer.manaPool.length > 0 && (
+            {!result && viewerPlayer && viewerPlayer.manaPool.length > 0 && (
               <div className={s.manaBar} aria-label="Mana pool">
                 <Sparkles size={14} aria-hidden="true" />
                 {viewerPlayer.manaPool.map((m) => (
@@ -953,7 +974,11 @@ function LiveMatch({ source }: { source: ReadyMatch }): ReactElement {
               </div>
             )}
             {damage && <DamageSources sources={damage.sources} />}
-            {watching ? (
+            {result ? (
+              !bandShown && (
+                <GameEndPanel result={result} onLeave={source.onLeave} />
+              )
+            ) : watching ? (
               <p className={s.watching}>Watching</p>
             ) : declaring ? (
               <MatchActions
@@ -986,7 +1011,7 @@ function LiveMatch({ source }: { source: ReadyMatch }): ReactElement {
               />
             )}
             <div className={s.sideDecisions}>
-              {source.chooseOpening && (
+              {source.chooseOpening && !result && (
                 <div className={s.decisionCard}>
                   <p className={s.decisionTitle}>Choose play or draw</p>
                   <div className={s.decisionRow}>
@@ -1106,6 +1131,14 @@ function LiveMatch({ source }: { source: ReadyMatch }): ReactElement {
           follow={follow}
           clearBottom={dock.clearBottom}
         />
+        {result && (
+          <GameEndBand
+            open={bandShown}
+            result={result}
+            onView={() => setResultRaised(false)}
+            onLeave={source.onLeave}
+          />
+        )}
         <TableChat
           open={chatOpen}
           messages={source.chat.messages}
@@ -1123,7 +1156,7 @@ function LiveMatch({ source }: { source: ReadyMatch }): ReactElement {
         open={settingsOpen}
         onClose={() => setSettingsOpen(false)}
         onConcede={
-          watching
+          watching || result
             ? undefined
             : () => {
                 setSettingsOpen(false);

@@ -6,9 +6,39 @@ import {
   previewSnapshot,
   type PreviewScene,
 } from "../../match/preview-table";
+import type { GameResult } from "../../match/match-sources";
 import { MatchPage } from "../match/MatchPage";
 
 const noop = (): void => undefined;
+
+/** `?end=` finishes the game for the viewer: won, lost, draw or none. */
+function previewResult(
+  end: string | null,
+  viewer: string,
+  others: readonly string[],
+): GameResult | null {
+  if (end === "won")
+    return {
+      outcome: "won",
+      reason: "Every other player is out.",
+      winnerSeatIds: [viewer],
+    };
+  if (end === "lost")
+    return {
+      outcome: "lost",
+      reason: "Your life reached 0.",
+      winnerSeatIds: others.slice(0, 1),
+    };
+  if (end === "draw")
+    return { outcome: "draw", reason: null, winnerSeatIds: [] };
+  if (end === "none")
+    return {
+      outcome: "no-result",
+      reason: "The game could not be finished.",
+      winnerSeatIds: [],
+    };
+  return null;
+}
 
 const SCENES: readonly PreviewScene[] = [
   "attack",
@@ -43,6 +73,13 @@ export function MatchTableProbe(): ReactElement {
       ? source
       : {
           ...source,
+          result: previewResult(
+            params.get("end"),
+            source.snapshot.viewerSeatId,
+            source.snapshot.players
+              .map((player) => player.seatId)
+              .filter((seat) => seat !== source.snapshot.viewerSeatId),
+          ),
           ...(refused
             ? { chat: { ...source.chat, send: () => Promise.resolve(false) } }
             : {}),
