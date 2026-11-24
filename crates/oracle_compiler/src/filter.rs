@@ -37,6 +37,177 @@ pub fn parse_object_filter(phrase: &str, vocab: &Vocabulary) -> Result<ObjectFil
         let mut changed = false;
 
         const ZONE_SUFFIXES: &[(&str, ZoneFilter)] = &[
+            // Multi-zone suffixes MUST precede shorter single-zone suffixes.
+            (
+                " you own in exile and in your graveyard",
+                ZoneFilter::YourGraveyardOrExile,
+            ),
+            (
+                " from your graveyard or from exile",
+                ZoneFilter::YourGraveyardOrExile,
+            ),
+            (
+                " from exile or from your graveyard",
+                ZoneFilter::YourGraveyardOrExile,
+            ),
+            (
+                " in your graveyard or in exile",
+                ZoneFilter::YourGraveyardOrExile,
+            ),
+            (
+                " in exile or in your graveyard",
+                ZoneFilter::YourGraveyardOrExile,
+            ),
+            (
+                " in your graveyard and in exile",
+                ZoneFilter::YourGraveyardOrExile,
+            ),
+            (
+                " in exile and in your graveyard",
+                ZoneFilter::YourGraveyardOrExile,
+            ),
+            (
+                " from your graveyard or exile",
+                ZoneFilter::YourGraveyardOrExile,
+            ),
+            (
+                " from exile or your graveyard",
+                ZoneFilter::YourGraveyardOrExile,
+            ),
+            (
+                " in your graveyard or exile",
+                ZoneFilter::YourGraveyardOrExile,
+            ),
+            (
+                " in exile or your graveyard",
+                ZoneFilter::YourGraveyardOrExile,
+            ),
+            (
+                " in your graveyard and exile",
+                ZoneFilter::YourGraveyardOrExile,
+            ),
+            (
+                " from any graveyard or from exile",
+                ZoneFilter::AnyGraveyardOrExile,
+            ),
+            (
+                " from exile or from any graveyard",
+                ZoneFilter::AnyGraveyardOrExile,
+            ),
+            (
+                " from a graveyard or from exile",
+                ZoneFilter::AnyGraveyardOrExile,
+            ),
+            (
+                " from exile or from a graveyard",
+                ZoneFilter::AnyGraveyardOrExile,
+            ),
+            (
+                " in any graveyard or in exile",
+                ZoneFilter::AnyGraveyardOrExile,
+            ),
+            (
+                " in exile or in any graveyard",
+                ZoneFilter::AnyGraveyardOrExile,
+            ),
+            (
+                " in a graveyard or in exile",
+                ZoneFilter::AnyGraveyardOrExile,
+            ),
+            (
+                " in exile or in a graveyard",
+                ZoneFilter::AnyGraveyardOrExile,
+            ),
+            (
+                " from any graveyard or exile",
+                ZoneFilter::AnyGraveyardOrExile,
+            ),
+            (
+                " from exile or any graveyard",
+                ZoneFilter::AnyGraveyardOrExile,
+            ),
+            (
+                " from a graveyard or exile",
+                ZoneFilter::AnyGraveyardOrExile,
+            ),
+            (
+                " from exile or a graveyard",
+                ZoneFilter::AnyGraveyardOrExile,
+            ),
+            (
+                " in any graveyard or exile",
+                ZoneFilter::AnyGraveyardOrExile,
+            ),
+            (
+                " in exile or any graveyard",
+                ZoneFilter::AnyGraveyardOrExile,
+            ),
+            (" in a graveyard or exile", ZoneFilter::AnyGraveyardOrExile),
+            (" in exile or a graveyard", ZoneFilter::AnyGraveyardOrExile),
+            (
+                " from your hand or from your graveyard",
+                ZoneFilter::YourHandOrGraveyard,
+            ),
+            (
+                " from your graveyard or from your hand",
+                ZoneFilter::YourHandOrGraveyard,
+            ),
+            (
+                " in your hand or in your graveyard",
+                ZoneFilter::YourHandOrGraveyard,
+            ),
+            (
+                " in your graveyard or in your hand",
+                ZoneFilter::YourHandOrGraveyard,
+            ),
+            (
+                " from your hand or your graveyard",
+                ZoneFilter::YourHandOrGraveyard,
+            ),
+            (
+                " from your graveyard or your hand",
+                ZoneFilter::YourHandOrGraveyard,
+            ),
+            (
+                " in your hand or your graveyard",
+                ZoneFilter::YourHandOrGraveyard,
+            ),
+            (
+                " in your graveyard or your hand",
+                ZoneFilter::YourHandOrGraveyard,
+            ),
+            (
+                " from your hand and/or graveyard",
+                ZoneFilter::YourHandOrGraveyard,
+            ),
+            (
+                " from your graveyard and/or hand",
+                ZoneFilter::YourHandOrGraveyard,
+            ),
+            (
+                " in your hand and/or graveyard",
+                ZoneFilter::YourHandOrGraveyard,
+            ),
+            (
+                " in your graveyard and/or hand",
+                ZoneFilter::YourHandOrGraveyard,
+            ),
+            (
+                " from your hand or graveyard",
+                ZoneFilter::YourHandOrGraveyard,
+            ),
+            (
+                " from your graveyard or hand",
+                ZoneFilter::YourHandOrGraveyard,
+            ),
+            (
+                " in your hand or graveyard",
+                ZoneFilter::YourHandOrGraveyard,
+            ),
+            (
+                " in your graveyard or hand",
+                ZoneFilter::YourHandOrGraveyard,
+            ),
             (
                 " from your opponents' graveyards",
                 ZoneFilter::OpponentsGraveyards,
@@ -46,11 +217,23 @@ pub fn parse_object_filter(phrase: &str, vocab: &Vocabulary) -> Result<ObjectFil
                 ZoneFilter::OpponentsGraveyards,
             ),
             (
+                " from each opponent's graveyard",
+                ZoneFilter::OpponentsGraveyards,
+            ),
+            (
+                " in each opponent's graveyard",
+                ZoneFilter::OpponentsGraveyards,
+            ),
+            (
+                " from opponents' graveyards",
+                ZoneFilter::OpponentsGraveyards,
+            ),
+            (" in opponents' graveyards", ZoneFilter::OpponentsGraveyards),
+            (
                 " from an opponent's graveyard",
                 ZoneFilter::OpponentGraveyard,
             ),
             (" in an opponent's graveyard", ZoneFilter::OpponentGraveyard),
-            (" in opponents' graveyards", ZoneFilter::OpponentsGraveyards),
             (
                 " from that player's graveyard",
                 ZoneFilter::ThatPlayerGraveyard,
@@ -58,6 +241,10 @@ pub fn parse_object_filter(phrase: &str, vocab: &Vocabulary) -> Result<ObjectFil
             (
                 " in that player's graveyard",
                 ZoneFilter::ThatPlayerGraveyard,
+            ),
+            (
+                " from target player's graveyard",
+                ZoneFilter::TargetPlayerGraveyard,
             ),
             (
                 " in target player's graveyard",
@@ -79,34 +266,34 @@ pub fn parse_object_filter(phrase: &str, vocab: &Vocabulary) -> Result<ObjectFil
                 " from the chosen player's graveyard",
                 ZoneFilter::ThatPlayerGraveyard,
             ),
-            (" from your graveyard or from exile", ZoneFilter::Exile),
-            (" from a graveyard or from exile", ZoneFilter::Exile),
-            (" from your graveyard or exile", ZoneFilter::Exile),
-            (" from a graveyard or exile", ZoneFilter::Exile),
+            (" from all players' graveyards", ZoneFilter::AllGraveyards),
+            (" in all players' graveyards", ZoneFilter::AllGraveyards),
+            (" from each player's graveyard", ZoneFilter::AllGraveyards),
+            (" in each player's graveyard", ZoneFilter::AllGraveyards),
             (" you cast from your graveyard", ZoneFilter::YourGraveyard),
             (" you cast from exile", ZoneFilter::Exile),
             (" cast from your graveyard", ZoneFilter::YourGraveyard),
+            (" cast from any graveyard", ZoneFilter::AnyGraveyard),
             (" cast from a graveyard", ZoneFilter::AnyGraveyard),
             (" cast from exile", ZoneFilter::Exile),
             (
                 " that were put into your graveyard from your library this turn",
                 ZoneFilter::YourGraveyard,
             ),
-            (" you own in exile and in your graveyard", ZoneFilter::Exile),
-            (" in exile and in your graveyard", ZoneFilter::Exile),
             (" from your graveyard", ZoneFilter::YourGraveyard),
             (" in your graveyard", ZoneFilter::YourGraveyard),
             (" from their graveyard", ZoneFilter::ThatPlayerGraveyard),
             (" in their graveyard", ZoneFilter::ThatPlayerGraveyard),
+            (" from any player's graveyard", ZoneFilter::AnyGraveyard),
+            (" in any player's graveyard", ZoneFilter::AnyGraveyard),
             (" from a player's graveyard", ZoneFilter::AnyGraveyard),
             (" in a player's graveyard", ZoneFilter::AnyGraveyard),
             (" in its owner's graveyard", ZoneFilter::AnyGraveyard),
             (" from its owner's graveyard", ZoneFilter::AnyGraveyard),
+            (" from any graveyard", ZoneFilter::AnyGraveyard),
+            (" in any graveyard", ZoneFilter::AnyGraveyard),
             (" from a graveyard", ZoneFilter::AnyGraveyard),
             (" in a graveyard", ZoneFilter::AnyGraveyard),
-            (" in any graveyard", ZoneFilter::AnyGraveyard),
-            (" from your hand or graveyard", ZoneFilter::YourGraveyard),
-            (" from your graveyard or hand", ZoneFilter::YourGraveyard),
             (" from all graveyards", ZoneFilter::AllGraveyards),
             (" in all graveyards", ZoneFilter::AllGraveyards),
             (" in graveyards", ZoneFilter::AllGraveyards),
@@ -131,25 +318,39 @@ pub fn parse_object_filter(phrase: &str, vocab: &Vocabulary) -> Result<ObjectFil
             (" from among those cards", ZoneFilter::YourLibrary),
             (" from among them", ZoneFilter::YourLibrary),
             (" from it", ZoneFilter::YourHand),
-            (" from outside the game", ZoneFilter::Exile),
+            (" from outside the game", ZoneFilter::OutsideTheGame),
+            (" outside the game", ZoneFilter::OutsideTheGame),
             (" your opponents own in exile", ZoneFilter::Exile),
             (" an opponent owns in exile", ZoneFilter::Exile),
             (" you own in exile", ZoneFilter::Exile),
+            (" from the chosen player's hand", ZoneFilter::ThatPlayerHand),
+            (" in the chosen player's hand", ZoneFilter::ThatPlayerHand),
+            (" from that player's hand", ZoneFilter::ThatPlayerHand),
+            (" in that player's hand", ZoneFilter::ThatPlayerHand),
             (" from your hand", ZoneFilter::YourHand),
-            (" from their hand", ZoneFilter::YourHand),
             (" in your hand", ZoneFilter::YourHand),
+            (" from their hand", ZoneFilter::ThatPlayerHand),
+            (" in their hand", ZoneFilter::ThatPlayerHand),
             (" from your library", ZoneFilter::YourLibrary),
             (" in your library", ZoneFilter::YourLibrary),
             (" from exile", ZoneFilter::Exile),
             (" in exile", ZoneFilter::Exile),
-            (" from the command zone", ZoneFilter::Exile),
+            (" from the command zone", ZoneFilter::CommandZone),
+            (" in the command zone", ZoneFilter::CommandZone),
             (
                 " with the greatest power among creatures on the battlefield",
                 ZoneFilter::Battlefield,
             ),
+            (" from the battlefield", ZoneFilter::Battlefield),
             (" on the battlefield", ZoneFilter::Battlefield),
+            (" from the stack", ZoneFilter::Stack),
             (" on the stack", ZoneFilter::Stack),
         ];
+        if let Some(prefix) = s.strip_suffix(" with the same name as another card in their hand") {
+            flt.flags = flt.flags.union(ObjectFilterFlags::MATCHES_NAMED_AGENDA);
+            s = prefix.trim().to_string();
+            continue;
+        }
         if let Some(prefix) = s
             .strip_suffix(" that aren't on the battlefield")
             .or_else(|| s.strip_suffix(" that isn't on the battlefield"))
@@ -206,56 +407,21 @@ pub fn parse_object_filter(phrase: &str, vocab: &Vocabulary) -> Result<ObjectFil
             continue;
         }
 
+        if let Some(prefix) = s.strip_suffix(" dealt damage this turn by a spider you controlled") {
+            flt.flags = flt.flags.union(ObjectFilterFlags::DEALT_DAMAGE_THIS_TURN);
+            s = prefix.trim().to_string();
+            continue;
+        }
+
         const CTRL_SUFFIXES: &[(&str, ControllerRelation)] = &[
-            (" your opponents control", ControllerRelation::Opponents),
-            (" each opponent controls", ControllerRelation::Opponents),
-            (" your team controls", ControllerRelation::YourTeam),
-            (" your opponents don't control", ControllerRelation::You),
-            (" you cast but don't own", ControllerRelation::You),
-            (
-                " target opponent controls",
-                ControllerRelation::TargetOpponent,
-            ),
-            (" target player controls", ControllerRelation::TargetPlayer),
-            (" that player controls", ControllerRelation::ThatPlayer),
-            (" that opponent controls", ControllerRelation::Opponent),
-            (" you both own and control", ControllerRelation::You),
-            (" target player owns", ControllerRelation::OwnerThatPlayer),
             (
                 " that opponent or that planeswalker's controller controls",
                 ControllerRelation::ThatPlayer,
             ),
             (
-                " defending player controls",
-                ControllerRelation::DefendingPlayer,
+                " you cast from anywhere other than your hand",
+                ControllerRelation::You,
             ),
-            (
-                " its controller controls",
-                ControllerRelation::ItsController,
-            ),
-            (" under your control", ControllerRelation::You),
-            (" under an opponent's control", ControllerRelation::Opponent),
-            (
-                " controlled by defending player",
-                ControllerRelation::DefendingPlayer,
-            ),
-            (" controlled by that player", ControllerRelation::ThatPlayer),
-            (" an opponent controls", ControllerRelation::Opponent),
-            (" you don't control", ControllerRelation::NotYou),
-            (" opponents control", ControllerRelation::Opponents),
-            (" they control", ControllerRelation::ThatPlayer),
-            (" they protect", ControllerRelation::ThatPlayer),
-            (" you own or control", ControllerRelation::You),
-            (" you control", ControllerRelation::You),
-            (" enchanted player controls", ControllerRelation::ThatPlayer),
-            (" enchanted player casts", ControllerRelation::ThatPlayer),
-            (" that player casts", ControllerRelation::ThatPlayer),
-            (" you control but don't own", ControllerRelation::You),
-            (" an opponent owns", ControllerRelation::OwnerOpponent),
-            (" your opponents own", ControllerRelation::OwnerOpponent),
-            (" that player owns", ControllerRelation::OwnerThatPlayer),
-            (" they own", ControllerRelation::OwnerThatPlayer),
-            (" you don't own", ControllerRelation::OwnerOpponent),
             (
                 " you own that aren't on the battlefield",
                 ControllerRelation::OwnerYou,
@@ -264,17 +430,214 @@ pub fn parse_object_filter(phrase: &str, vocab: &Vocabulary) -> Result<ObjectFil
                 " you own that isn't on the battlefield",
                 ControllerRelation::OwnerYou,
             ),
-            (" you own but don't control", ControllerRelation::OwnerYou),
-            (" you own", ControllerRelation::OwnerYou),
-            (" you cast from exile", ControllerRelation::You),
-            (" you cast from your graveyard", ControllerRelation::You),
             (
-                " you cast from anywhere other than your hand",
-                ControllerRelation::You,
+                " controlled by the defending player",
+                ControllerRelation::DefendingPlayer,
             ),
+            (
+                " controlled by defending player",
+                ControllerRelation::DefendingPlayer,
+            ),
+            (
+                " under defending player's control",
+                ControllerRelation::DefendingPlayer,
+            ),
+            (
+                " the defending player controlled",
+                ControllerRelation::DefendingPlayer,
+            ),
+            (
+                " the defending player controls",
+                ControllerRelation::DefendingPlayer,
+            ),
+            (
+                " controlled by target opponent",
+                ControllerRelation::TargetOpponent,
+            ),
+            (
+                " under target opponent's control",
+                ControllerRelation::TargetOpponent,
+            ),
+            (
+                " controlled by target player",
+                ControllerRelation::TargetPlayer,
+            ),
+            (
+                " under target player's control",
+                ControllerRelation::TargetPlayer,
+            ),
+            (
+                " controlled by your opponents",
+                ControllerRelation::Opponents,
+            ),
+            (
+                " under your opponents' control",
+                ControllerRelation::Opponents,
+            ),
+            (" controlled by an opponent", ControllerRelation::Opponent),
+            (" controlled by that opponent", ControllerRelation::Opponent),
+            (" under an opponent's control", ControllerRelation::Opponent),
+            (" controlled by that player", ControllerRelation::ThatPlayer),
+            (
+                " under that player's control",
+                ControllerRelation::ThatPlayer,
+            ),
+            (
+                " controlled by its controller",
+                ControllerRelation::ItsController,
+            ),
+            (
+                " under its controller's control",
+                ControllerRelation::ItsController,
+            ),
+            (" controlled by your team", ControllerRelation::YourTeam),
+            (" controlled by opponents", ControllerRelation::Opponents),
+            (" controlled by them", ControllerRelation::ThatPlayer),
+            (" under their control", ControllerRelation::ThatPlayer),
+            (" controlled by you", ControllerRelation::You),
+            (" under your control", ControllerRelation::You),
+            (
+                " owned by your opponents",
+                ControllerRelation::OwnerOpponent,
+            ),
+            (" owned by an opponent", ControllerRelation::OwnerOpponent),
+            (
+                " owned by target player",
+                ControllerRelation::OwnerThatPlayer,
+            ),
+            (" owned by that player", ControllerRelation::OwnerThatPlayer),
+            (" owned by opponents", ControllerRelation::OwnerOpponent),
+            (" owned by them", ControllerRelation::OwnerThatPlayer),
+            (" owned by you", ControllerRelation::OwnerYou),
+            (" your opponents don't control", ControllerRelation::You),
+            (" you both owned and controlled", ControllerRelation::You),
+            (" you both own and control", ControllerRelation::You),
+            (" you controlled but didn't own", ControllerRelation::You),
+            (" you control but don't own", ControllerRelation::You),
+            (
+                " you owned but didn't control",
+                ControllerRelation::OwnerYou,
+            ),
+            (" you own but don't control", ControllerRelation::OwnerYou),
+            (" you cast from your graveyard", ControllerRelation::You),
+            (" you cast but don't own", ControllerRelation::You),
+            (" you cast from exile", ControllerRelation::You),
+            (
+                " the chosen player controlled",
+                ControllerRelation::ThatPlayer,
+            ),
+            (
+                " the chosen player controls",
+                ControllerRelation::ThatPlayer,
+            ),
+            (
+                " the chosen player owned",
+                ControllerRelation::OwnerThatPlayer,
+            ),
+            (
+                " the chosen player owns",
+                ControllerRelation::OwnerThatPlayer,
+            ),
+            (
+                " defending player controlled",
+                ControllerRelation::DefendingPlayer,
+            ),
+            (
+                " defending player controls",
+                ControllerRelation::DefendingPlayer,
+            ),
+            (
+                " defending player casts",
+                ControllerRelation::DefendingPlayer,
+            ),
+            (
+                " defending player cast",
+                ControllerRelation::DefendingPlayer,
+            ),
+            (
+                " enchanted player controlled",
+                ControllerRelation::ThatPlayer,
+            ),
+            (" enchanted player controls", ControllerRelation::ThatPlayer),
+            (" enchanted player casts", ControllerRelation::ThatPlayer),
+            (
+                " target opponent controlled",
+                ControllerRelation::TargetOpponent,
+            ),
+            (
+                " target opponent controls",
+                ControllerRelation::TargetOpponent,
+            ),
+            (" target opponent casts", ControllerRelation::TargetOpponent),
+            (" target opponent cast", ControllerRelation::TargetOpponent),
+            (
+                " target player controlled",
+                ControllerRelation::TargetPlayer,
+            ),
+            (" target player controls", ControllerRelation::TargetPlayer),
+            (" target player owned", ControllerRelation::OwnerThatPlayer),
+            (" target player owns", ControllerRelation::OwnerThatPlayer),
+            (" target player casts", ControllerRelation::TargetPlayer),
+            (" target player cast", ControllerRelation::TargetPlayer),
+            (" your opponents controlled", ControllerRelation::Opponents),
+            (" your opponents control", ControllerRelation::Opponents),
+            (" each opponent controlled", ControllerRelation::Opponents),
+            (" each opponent controls", ControllerRelation::Opponents),
+            (" each opponent casts", ControllerRelation::Opponents),
+            (" each opponent cast", ControllerRelation::Opponents),
+            (" each opponent owns", ControllerRelation::OwnerOpponent),
+            (" your opponents owned", ControllerRelation::OwnerOpponent),
+            (" your opponents own", ControllerRelation::OwnerOpponent),
             (" your opponents cast", ControllerRelation::Opponents),
+            (" that opponent controlled", ControllerRelation::Opponent),
+            (" that opponent controls", ControllerRelation::Opponent),
+            (" an opponent controlled", ControllerRelation::Opponent),
+            (" an opponent controls", ControllerRelation::Opponent),
+            (" an opponent owned", ControllerRelation::OwnerOpponent),
+            (" an opponent owns", ControllerRelation::OwnerOpponent),
             (" an opponent casts", ControllerRelation::Opponent),
+            (" an opponent cast", ControllerRelation::Opponent),
+            (
+                " its controller controlled",
+                ControllerRelation::ItsController,
+            ),
+            (
+                " its controller controls",
+                ControllerRelation::ItsController,
+            ),
+            (" its controller casts", ControllerRelation::ItsController),
+            (" its controller cast", ControllerRelation::ItsController),
+            (" that player controlled", ControllerRelation::ThatPlayer),
+            (" that player controls", ControllerRelation::ThatPlayer),
+            (" that player protects", ControllerRelation::ThatPlayer),
+            (" that player owned", ControllerRelation::OwnerThatPlayer),
+            (" that player owns", ControllerRelation::OwnerThatPlayer),
+            (" that player casts", ControllerRelation::ThatPlayer),
+            (" that player cast", ControllerRelation::ThatPlayer),
+            (" your team controlled", ControllerRelation::YourTeam),
+            (" your team controls", ControllerRelation::YourTeam),
+            (" opponents controlled", ControllerRelation::Opponents),
+            (" opponents control", ControllerRelation::Opponents),
+            (" opponents owned", ControllerRelation::OwnerOpponent),
+            (" opponents own", ControllerRelation::OwnerOpponent),
             (" opponents cast", ControllerRelation::Opponents),
+            (" you owned or controlled", ControllerRelation::You),
+            (" you own or control", ControllerRelation::You),
+            (" you didn't control", ControllerRelation::NotYou),
+            (" you don't control", ControllerRelation::NotYou),
+            (" you didn't own", ControllerRelation::OwnerOpponent),
+            (" you don't own", ControllerRelation::OwnerOpponent),
+            (" they controlled", ControllerRelation::ThatPlayer),
+            (" they protected", ControllerRelation::ThatPlayer),
+            (" they control", ControllerRelation::ThatPlayer),
+            (" they protect", ControllerRelation::ThatPlayer),
+            (" they owned", ControllerRelation::OwnerThatPlayer),
+            (" they own", ControllerRelation::OwnerThatPlayer),
+            (" they cast", ControllerRelation::ThatPlayer),
+            (" you controlled", ControllerRelation::You),
+            (" you control", ControllerRelation::You),
+            (" you owned", ControllerRelation::OwnerYou),
+            (" you own", ControllerRelation::OwnerYou),
             (" you cast", ControllerRelation::You),
             (" players cast", ControllerRelation::ThatPlayer),
         ];
@@ -2904,11 +3267,20 @@ pub fn parse_player_ref(phrase: &str) -> Option<PlayerRefAst> {
         "you" => Some(PlayerRefAst::You),
         "target player" => Some(PlayerRefAst::TargetPlayer),
         "target opponent" => Some(PlayerRefAst::TargetOpponent),
-        "each player" => Some(PlayerRefAst::EachPlayer),
-        "each opponent" => Some(PlayerRefAst::EachOpponent),
-        "each other opponent" => Some(PlayerRefAst::EachOtherOpponent),
-        "each other player" => Some(PlayerRefAst::EachOtherPlayer),
-        "an opponent" | "an opponent chosen at random" => Some(PlayerRefAst::AnyOpponent),
+        "each player" | "all players" => Some(PlayerRefAst::EachPlayer),
+        "each opponent" | "opponents" | "all opponents" | "all of your opponents" => {
+            Some(PlayerRefAst::EachOpponent)
+        }
+        "each other opponent" | "each of your other opponents" | "your other opponents" => {
+            Some(PlayerRefAst::EachOtherOpponent)
+        }
+        "each other player" | "each player other than you" | "all other players" => {
+            Some(PlayerRefAst::EachOtherPlayer)
+        }
+        "an opponent"
+        | "an opponent chosen at random"
+        | "one of your opponents"
+        | "another opponent" => Some(PlayerRefAst::AnyOpponent),
         "a player" | "any player" | "a player of your choice" | "each friend" | "each foe" => {
             Some(PlayerRefAst::AnyPlayer)
         }
@@ -2919,7 +3291,7 @@ pub fn parse_player_ref(phrase: &str) -> Option<PlayerRefAst> {
         | "that permanent's controller or that player"
         | "that player or that planeswalker's controller" => Some(PlayerRefAst::ThatPlayer),
         "defending player" | "the defending player" => Some(PlayerRefAst::DefendingPlayer),
-        "active player" | "the active player" | "the attacking player" => {
+        "active player" | "the active player" | "the attacking player" | "attacking player" => {
             Some(PlayerRefAst::ActivePlayer)
         }
         "each player other than target player" => Some(PlayerRefAst::EachOtherPlayer),
@@ -2931,12 +3303,51 @@ pub fn parse_player_ref(phrase: &str) -> Option<PlayerRefAst> {
         | "the creature's controller"
         | "that creature's or spell's controller"
         | "that permanent's controller"
+        | "the permanent's controller"
         | "that land's controller"
         | "the land's controller"
         | "that artifact's controller"
+        | "the artifact's controller"
         | "that enchantment's controller"
+        | "the enchantment's controller"
+        | "that planeswalker's controller"
+        | "the planeswalker's controller"
+        | "that battle's controller"
+        | "that token's controller"
+        | "that aura's controller"
+        | "that equipment's controller"
+        | "that card's controller"
+        | "that object's controller"
         | "that spell's controller"
-        | "the controller of that spell" => Some(PlayerRefAst::ThatObjectController),
+        | "the spell's controller"
+        | "the ability's controller"
+        | "that spell's or ability's controller"
+        | "that permanent's or spell's controller"
+        | "the sacrificed creature's controller"
+        | "the sacrificed permanent's controller"
+        | "the destroyed creature's controller"
+        | "the destroyed permanent's controller"
+        | "the exiled permanent's controller"
+        | "the exiled creature's controller"
+        | "the targeted creature's controller"
+        | "the blocked creature's controller"
+        | "the attacking creature's controller"
+        | "the blocking creature's controller"
+        | "enchanted land's controller"
+        | "enchanted enchantment's controller"
+        | "enchanted planeswalker's controller"
+        | "fortified land's controller"
+        | "the controller of that spell"
+        | "the controller of that permanent"
+        | "the controller of that creature"
+        | "the controller of that artifact"
+        | "the controller of that enchantment"
+        | "the controller of that land"
+        | "the controller of that planeswalker"
+        | "the controller of that ability"
+        | "the controller of that spell or ability"
+        | "the controller of the countered spell"
+        | "the controller of that countered spell" => Some(PlayerRefAst::ThatObjectController),
         "each opponent with no cards in hand" => Some(PlayerRefAst::EachOpponent),
         "each player ~ attacked this turn" => Some(PlayerRefAst::EachPlayer),
         "the player to your right" | "the player to your left" => Some(PlayerRefAst::AnyOpponent),
@@ -2956,9 +3367,49 @@ pub fn parse_player_ref(phrase: &str) -> Option<PlayerRefAst> {
         | "that source's controller"
         | "that spell or ability's controller" => Some(PlayerRefAst::ThatObjectController),
         "the exiled card's owner"
+        | "their owner"
+        | "~'s owner"
         | "that creature's owner"
         | "that permanent's owner"
-        | "that card's owner" => Some(PlayerRefAst::ItsOwner),
+        | "that card's owner"
+        | "that spell's owner"
+        | "that artifact's owner"
+        | "that enchantment's owner"
+        | "that land's owner"
+        | "that planeswalker's owner"
+        | "that battle's owner"
+        | "that aura's owner"
+        | "that equipment's owner"
+        | "that object's owner"
+        | "the creature's owner"
+        | "the permanent's owner"
+        | "the card's owner"
+        | "the spell's owner"
+        | "the land's owner"
+        | "the artifact's owner"
+        | "the enchantment's owner"
+        | "the planeswalker's owner"
+        | "the exiled permanent's owner"
+        | "the exiled creature's owner"
+        | "the discarded card's owner"
+        | "the revealed card's owner"
+        | "the milled card's owner"
+        | "the sacrificed creature's owner"
+        | "the sacrificed permanent's owner"
+        | "enchanted creature's owner"
+        | "enchanted permanent's owner"
+        | "enchanted land's owner"
+        | "enchanted artifact's owner"
+        | "equipped creature's owner"
+        | "the owner of that card"
+        | "the owner of that permanent"
+        | "the owner of that creature"
+        | "the owner of that spell"
+        | "the owner of that artifact"
+        | "the owner of that enchantment"
+        | "the owner of that land"
+        | "the owner of that planeswalker"
+        | "the owner of the exiled card" => Some(PlayerRefAst::ItsOwner),
         "players" => Some(PlayerRefAst::EachPlayer),
         "your opponents"
         | "each of your opponents"
@@ -3079,6 +3530,7 @@ pub fn parse_subject_or_target(phrase: &str, vocab: &Vocabulary) -> Result<Subje
         | "the revealed cards"
         | "the chosen creature"
         | "the chosen card"
+        | "the last chosen card"
         | "the chosen cards"
         | "the chosen player"
         | "the other chosen player"
@@ -3095,6 +3547,10 @@ pub fn parse_subject_or_target(phrase: &str, vocab: &Vocabulary) -> Result<Subje
         | "an opponent with the most life among your opponents"
         | "the creature it's attached to"
         | "the permanent it's attached to"
+        | "the land it's attached to"
+        | "the artifact it's attached to"
+        | "the creature ~ is attached to"
+        | "the permanent ~ is attached to"
         | "its controller"
         | "its owner"
         | "two of them at random"
@@ -3159,8 +3615,14 @@ pub fn parse_subject_or_target(phrase: &str, vocab: &Vocabulary) -> Result<Subje
         | "enchanted land"
         | "enchanted artifact"
         | "enchanted enchantment"
+        | "enchanted planeswalker"
+        | "enchanted battle"
+        | "enchanted vehicle"
+        | "enchanted equipment"
+        | "enchanted aura"
         | "fortified land"
-        | "equipped creature" => return Ok(SubjectRefAst::AttachedHost(low)),
+        | "equipped creature"
+        | "equipped permanent" => return Ok(SubjectRefAst::AttachedHost(low)),
         "any target"
         | "any other target"
         | "another target"
@@ -3188,12 +3650,14 @@ pub fn parse_subject_or_target(phrase: &str, vocab: &Vocabulary) -> Result<Subje
         {
             return Ok(SubjectRefAst::AnyTarget);
         }
-        "target player or planeswalker" | "up to one target player or planeswalker" => {
+        "target player or planeswalker"
+        | "target planeswalker or player"
+        | "up to one target player or planeswalker" => {
             return Ok(SubjectRefAst::TargetPlayerOrPlaneswalker {
                 opponent_only: false,
             });
         }
-        "target opponent or planeswalker" => {
+        "target opponent or planeswalker" | "target planeswalker or opponent" => {
             return Ok(SubjectRefAst::TargetPlayerOrPlaneswalker {
                 opponent_only: true,
             });
@@ -3244,7 +3708,24 @@ pub fn parse_subject_or_target(phrase: &str, vocab: &Vocabulary) -> Result<Subje
     ] {
         if let Some((left, right)) = low.split_once(needle) {
             let l = left.trim();
-            let r_full = format!("{keep_prefix}{}", right.trim());
+            let r_trim = right.trim();
+            if needle == " and/or "
+                && !(r_trim.starts_with("target ")
+                    || r_trim.starts_with("up to ")
+                    || r_trim.starts_with("another target ")
+                    || r_trim.starts_with("each ")
+                    || r_trim.starts_with("all ")
+                    || r_trim.starts_with("any ")
+                    || r_trim.starts_with("a ")
+                    || r_trim.starts_with("an ")
+                    || r_trim.starts_with("your ")
+                    || r_trim.starts_with("their ")
+                    || r_trim.starts_with("its ")
+                    || parse_player_ref(r_trim).is_some())
+            {
+                continue;
+            }
+            let r_full = format!("{keep_prefix}{r_trim}");
             if !l.is_empty()
                 && let (Ok(ls), Ok(rs)) = (
                     parse_subject_or_target(l, vocab),
@@ -6045,16 +6526,34 @@ pub fn parse_condition(phrase: &str, vocab: &Vocabulary) -> Result<ConditionAst,
         });
     }
 
-    // "you win" / "you lose" / "you win the flip" / "you win the clash"
+    // "you win" / "you lose" / "you win the/a flip" / "you win the/a clash"
     if matches!(
         low.as_str(),
-        "you win" | "you win the flip" | "you win the clash" | "you won the flip"
+        "you win"
+            | "you won"
+            | "you win the flip"
+            | "you win a flip"
+            | "you won the flip"
+            | "you won a flip"
+            | "you win the clash"
+            | "you win a clash"
+            | "you won the clash"
+            | "you won a clash"
     ) {
         return Ok(ConditionAst::WonContest);
     }
     if matches!(
         low.as_str(),
-        "you lose" | "you lose the flip" | "you lose the clash"
+        "you lose"
+            | "you lost"
+            | "you lose the flip"
+            | "you lose a flip"
+            | "you lost the flip"
+            | "you lost a flip"
+            | "you lose the clash"
+            | "you lose a clash"
+            | "you lost the clash"
+            | "you lost a clash"
     ) {
         return Ok(ConditionAst::Not(Box::new(ConditionAst::WonContest)));
     }
@@ -6068,23 +6567,87 @@ pub fn parse_condition(phrase: &str, vocab: &Vocabulary) -> Result<ConditionAst,
         return Ok(ConditionAst::TargetsFilter(Box::new(flt)));
     }
 
-    // "you attacked with creatures with total power N or greater this combat"
-    if let Some(after) = low.strip_prefix("you attacked with ")
-        && let Some((flt_raw, rhs)) = after.split_once(" with total power ")
-        && let Some(n_tok) = rhs
-            .strip_suffix(" or greater this combat")
-            .or_else(|| rhs.strip_suffix(" or greater"))
-        && let (Ok(flt), Some(n)) = (
-            parse_object_filter(flt_raw, vocab),
-            parse_number_word(n_tok),
-        )
-    {
-        return Ok(ConditionAst::TotalStatCompare {
-            filter: Box::new(flt),
-            stat: StatKind::Power,
-            op: CompareOp::Ge,
-            value: n,
-        });
+    let parse_total_stat_cmp = |rhs: &str| -> Option<(CompareOp, i32)> {
+        let trimmed = rhs
+            .strip_suffix(" this combat")
+            .or_else(|| rhs.strip_suffix(" this turn"))
+            .unwrap_or(rhs)
+            .trim();
+        if let Some(n_tok) = trimmed
+            .strip_suffix(" or greater")
+            .or_else(|| trimmed.strip_suffix(" or more"))
+        {
+            return parse_number_word(n_tok).map(|n| (CompareOp::Ge, n));
+        }
+        if let Some(n_tok) = trimmed
+            .strip_suffix(" or less")
+            .or_else(|| trimmed.strip_suffix(" or fewer"))
+        {
+            return parse_number_word(n_tok).map(|n| (CompareOp::Le, n));
+        }
+        if let Some(n_tok) = trimmed.strip_prefix("greater than ") {
+            return parse_number_word(n_tok).map(|n| (CompareOp::Gt, n));
+        }
+        if let Some(n_tok) = trimmed
+            .strip_prefix("less than ")
+            .or_else(|| trimmed.strip_prefix("fewer than "))
+        {
+            return parse_number_word(n_tok).map(|n| (CompareOp::Lt, n));
+        }
+        let eq_tok = trimmed
+            .strip_prefix("equal to ")
+            .or_else(|| trimmed.strip_prefix("exactly "))
+            .unwrap_or(trimmed);
+        parse_number_word(eq_tok).map(|n| (CompareOp::Eq, n))
+    };
+
+    // "you attacked with <flt> with total power/toughness/mana value <cmp> [this combat/turn]"
+    if let Some(after) = low.strip_prefix("you attacked with ") {
+        for (marker, stat) in [
+            (" with total power ", StatKind::Power),
+            (" with total toughness ", StatKind::Toughness),
+            (" with total mana value ", StatKind::ManaValue),
+        ] {
+            if let Some((flt_raw, rhs)) = after.split_once(marker)
+                && let (Ok(flt), Some((op, value))) = (
+                    parse_object_filter(flt_raw, vocab),
+                    parse_total_stat_cmp(rhs),
+                )
+            {
+                return Ok(ConditionAst::TotalStatCompare {
+                    filter: Box::new(flt),
+                    stat,
+                    op,
+                    value,
+                });
+            }
+        }
+    }
+
+    // "you control <flt> with total power/toughness/mana value <cmp>"
+    if let Some(after) = low.strip_prefix("you control ") {
+        for (marker, stat) in [
+            (" with total power ", StatKind::Power),
+            (" with total toughness ", StatKind::Toughness),
+            (" with total mana value ", StatKind::ManaValue),
+        ] {
+            if let Some((flt_raw, rhs)) = after.split_once(marker)
+                && let (Ok(mut flt), Some((op, value))) = (
+                    parse_object_filter(flt_raw, vocab),
+                    parse_total_stat_cmp(rhs),
+                )
+            {
+                if flt.controller.is_none() {
+                    flt.controller = Some(ControllerRelation::You);
+                }
+                return Ok(ConditionAst::TotalStatCompare {
+                    filter: Box::new(flt),
+                    stat,
+                    op,
+                    value,
+                });
+            }
+        }
     }
 
     // "<player> discarded a card this turn" / "<player> drew a card this turn" / "<player> lost life this turn"
@@ -6108,31 +6671,53 @@ pub fn parse_condition(phrase: &str, vocab: &Vocabulary) -> Result<ConditionAst,
         }
     }
 
-    // "you have N or more opponents"
+    // "you have N or more/fewer opponents" / "you have more/fewer than N opponents" / "you have exactly N opponents"
     if let Some(after) = low.strip_prefix("you have ")
-        && let Some(cnt_raw) = after.strip_suffix(" or more opponents")
-        && let Some(n) = parse_number_word(cnt_raw)
+        && let Some(cnt_part) = after.strip_suffix(" opponents")
     {
-        return Ok(ConditionAst::OpponentCountCompare {
-            op: CompareOp::Ge,
-            value: u16::try_from(n.max(0)).unwrap_or(2),
-        });
+        let parsed = if let Some(tok) = cnt_part.strip_suffix(" or more") {
+            parse_number_word(tok).map(|n| (CompareOp::Ge, n))
+        } else if let Some(tok) = cnt_part.strip_suffix(" or fewer") {
+            parse_number_word(tok).map(|n| (CompareOp::Le, n))
+        } else if let Some(tok) = cnt_part.strip_prefix("more than ") {
+            parse_number_word(tok).map(|n| (CompareOp::Gt, n))
+        } else if let Some(tok) = cnt_part.strip_prefix("fewer than ") {
+            parse_number_word(tok).map(|n| (CompareOp::Lt, n))
+        } else if let Some(tok) = cnt_part.strip_prefix("exactly ") {
+            parse_number_word(tok).map(|n| (CompareOp::Eq, n))
+        } else {
+            None
+        };
+        if let Some((op, n)) = parsed {
+            return Ok(ConditionAst::OpponentCountCompare {
+                op,
+                value: u16::try_from(n.max(0)).unwrap_or(2),
+            });
+        }
     }
 
-    // "<filter> have total power/toughness N or greater"
-    if let Some((flt_raw, rhs)) = low.split_once(" have total power ")
-        && let Some(n_tok) = rhs.strip_suffix(" or greater")
-        && let (Ok(flt), Some(n)) = (
-            parse_object_filter(flt_raw, vocab),
-            parse_number_word(n_tok),
-        )
-    {
-        return Ok(ConditionAst::TotalStatCompare {
-            filter: Box::new(flt),
-            stat: StatKind::Power,
-            op: CompareOp::Ge,
-            value: n,
-        });
+    // "<filter> have/had total power/toughness/mana value <cmp>"
+    for (marker, stat) in [
+        (" have total power ", StatKind::Power),
+        (" had total power ", StatKind::Power),
+        (" have total toughness ", StatKind::Toughness),
+        (" had total toughness ", StatKind::Toughness),
+        (" have total mana value ", StatKind::ManaValue),
+        (" had total mana value ", StatKind::ManaValue),
+    ] {
+        if let Some((flt_raw, rhs)) = low.split_once(marker)
+            && let (Ok(flt), Some((op, value))) = (
+                parse_object_filter(flt_raw, vocab),
+                parse_total_stat_cmp(rhs),
+            )
+        {
+            return Ok(ConditionAst::TotalStatCompare {
+                filter: Box::new(flt),
+                stat,
+                op,
+                value,
+            });
+        }
     }
 
     // "<player> has/have N or more/less life" / "<player> has/have N or more/fewer/no cards in hand" / "<player> has/have N or more cards in their graveyard"
@@ -8016,52 +8601,8 @@ pub fn parse_mana_spec(phrase: &str, vocab: &Vocabulary) -> Result<ManaSpecAst, 
             "chosen_color".to_string(),
         ]));
     }
-    if low == "one mana of the chosen color"
-        || low == "one mana of that color"
-        || low == "one mana of any of the exiled cards' colors"
-    {
+    if low == "one mana of the chosen color" || low == "one mana of that color" {
         return Ok(ManaSpecAst::ChosenColor);
-    }
-    // "<val> mana of that type/color" / "<val> mana of the chosen color" (Incubation Druid, Radiant Lotus)
-    if let Some(cnt_raw) = low
-        .strip_suffix(" mana of that type")
-        .or_else(|| low.strip_suffix(" mana of that color"))
-        .or_else(|| low.strip_suffix(" mana of the chosen color"))
-        && let Ok(amount) = parse_value_expr(cnt_raw, vocab)
-    {
-        return Ok(ManaSpecAst::AnyColor {
-            amount: Box::new(amount),
-            single_color: true,
-        });
-    }
-    // "one mana of any color among <flt>" (Mox Amber, Plaza of Heroes, The Grey Havens)
-    if let Some(flt_raw) = low.strip_prefix("one mana of any color among ")
-        && parse_object_filter(flt_raw, vocab).is_ok()
-    {
-        return Ok(ManaSpecAst::AnyColor {
-            amount: Box::new(ValueExprAst::Const(1)),
-            single_color: true,
-        });
-    }
-    // "one mana of any color that a <flt> could produce" (Gond Gate, Exotic Orchard variants)
-    if let Some(rest) = low.strip_prefix("one mana of any color that ")
-        && let Some(flt_raw) = rest.strip_suffix(" could produce")
-        && parse_object_filter(flt_raw, vocab).is_ok()
-    {
-        return Ok(ManaSpecAst::AnyLandCouldProduce {
-            controller: ControllerRelation::You,
-        });
-    }
-    if let Some((sym, fe_raw)) = raw.split_once(" for each ")
-        && is_mana_sequence(sym.trim())
-        && fe_raw
-            .to_ascii_lowercase()
-            .contains("counter removed this way")
-    {
-        return Ok(ManaSpecAst::ScaledSymbol {
-            symbol: sym.trim().to_string(),
-            amount: Box::new(ValueExprAst::PriorResult),
-        });
     }
     if low == "one mana of any color in your commander's color identity" {
         return Ok(ManaSpecAst::CommanderColorIdentity);
@@ -8078,6 +8619,17 @@ pub fn parse_mana_spec(phrase: &str, vocab: &Vocabulary) -> Result<ManaSpecAst, 
     {
         return Ok(ManaSpecAst::AnyLandCouldProduce {
             controller: ControllerRelation::Opponent,
+        });
+    }
+    if let Some((sym, fe_raw)) = raw.split_once(" for each ")
+        && is_mana_sequence(sym.trim())
+        && fe_raw
+            .to_ascii_lowercase()
+            .contains("counter removed this way")
+    {
+        return Ok(ManaSpecAst::ScaledSymbol {
+            symbol: sym.trim().to_string(),
+            amount: Box::new(ValueExprAst::PriorResult),
         });
     }
     if let Some((amt_raw, syms_raw)) = raw.split_once(" mana in any combination of ")

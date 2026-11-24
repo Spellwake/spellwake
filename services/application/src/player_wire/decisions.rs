@@ -343,6 +343,8 @@ pub enum PlayerDomain {
         minimum: u8,
         maximum: u8,
         distinct_targets: bool,
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        allow_repeat: bool,
         #[serde(deserialize_with = "crate::provider_json::objects")]
         modes: Vec<PlayerImpulseMode>,
     },
@@ -437,6 +439,10 @@ pub enum PlayerDomain {
         inspected: Vec<String>,
         #[serde(deserialize_with = "crate::provider_json::objects")]
         eligible: Vec<PlayerOption>,
+    },
+    LibraryTop {
+        #[serde(deserialize_with = "crate::provider_json::objects")]
+        inspected: Vec<PlayerOption>,
     },
     Options {
         #[serde(deserialize_with = "crate::provider_json::objects")]
@@ -744,6 +750,7 @@ impl PlayerDomain {
                         .iter()
                         .all(|option| inspected.contains(&option.label))
             }
+            Self::LibraryTop { inspected } => options(inspected) && !inspected.is_empty(),
             Self::Options { options: xs, query } => {
                 options(xs) && (!xs.is_empty() || query.is_some())
             }
@@ -945,6 +952,7 @@ impl PlayerDomain {
             | Self::ReboundCast { .. }
             | Self::SuspendedCast { .. } => kind == K::OptionalEffect,
             Self::LibrarySearch { .. } => kind == K::LibrarySearch,
+            Self::LibraryTop { .. } => matches!(kind, K::Scry | K::Surveil),
             Self::Options { .. } => matches!(
                 kind,
                 K::PlaneswalkerType
@@ -1044,12 +1052,13 @@ impl PlayerDomain {
                     minimum,
                     maximum,
                     distinct_targets,
+                    allow_repeat,
                     modes,
                 },
                 PlayerChoice::TriggerModes { modes: chosen },
             ) => {
                 (usize::from(*minimum)..=usize::from(*maximum)).contains(&chosen.len())
-                    && unique(chosen.iter().map(|choice| choice.mode))
+                    && (*allow_repeat || unique(chosen.iter().map(|choice| choice.mode)))
                     && (!*distinct_targets
                         || unique(
                             chosen
@@ -1373,6 +1382,20 @@ impl PlayerDomain {
             ) => object.as_ref().map_or(!required && !battlefield, |id| {
                 eligible.iter().any(|option| &option.handle == id)
             }),
+            (Self::LibraryTop { inspected }, PlayerChoice::Scry { top, bottom }) => {
+                top.len() + bottom.len() == inspected.len()
+                    && top
+                        .iter()
+                        .chain(bottom.iter())
+                        .all(|id| inspected.iter().any(|option| &option.handle == id))
+            }
+            (Self::LibraryTop { inspected }, PlayerChoice::Surveil { top, graveyard }) => {
+                top.len() + graveyard.len() == inspected.len()
+                    && top
+                        .iter()
+                        .chain(graveyard.iter())
+                        .all(|id| inspected.iter().any(|option| &option.handle == id))
+            }
             (Self::Options { options, query }, PlayerChoice::Option { option }) => {
                 options.iter().any(|x| x.handle == *option)
                     || (query.is_some() && extra_options.contains(option))

@@ -116,6 +116,13 @@ type Case = {
     | "match-settings"
     | "match-concede"
     | "match-watch-chat"
+    | "match-end"
+    | "match-end-view"
+    | "match-end-chat"
+    | "league-history"
+    | "match-series"
+    | "match-series-next"
+    | "match-series-leave"
     /** Casting: waiting for a target, a player targeted, a paused payment, and a creature. */
     | "match-cast-target"
     | "match-cast-player"
@@ -477,6 +484,23 @@ const cases: Case[] = [
         ["/probe/table", "match-concede"],
         ["/probe/table?state=watching", undefined],
         ["/probe/table?state=watching", "match-watch-chat"],
+        // The end of a game: each way it can come out, the finished table
+        // behind the lifted band, and a last word in chat.
+        ["/probe/table?end=won", "match-end"],
+        ["/probe/table?end=lost", "match-end"],
+        ["/probe/table?end=draw", "match-end"],
+        ["/probe/table?end=none", "match-end"],
+        ["/probe/table?end=won", "match-end-view"],
+        ["/probe/table?end=won", "match-end-chat"],
+        // One game of a best of three: what the next game waits on, starting
+        // it, leaving between games, and the match decided.
+        ["/probe/table?end=won&series=deciding", "match-series"],
+        ["/probe/table?end=lost&series=stuck", "match-series"],
+        ["/probe/table?end=won&series=untimed", "match-series"],
+        ["/probe/table?end=won&series=waiting", "match-series"],
+        ["/probe/table?end=lost&series=over", "match-series"],
+        ["/probe/table?end=won&series=deciding", "match-series-next"],
+        ["/probe/table?end=won&series=deciding", "match-series-leave"],
       ] as const
     ).map(([path, state]) => ({
       viewport,
@@ -551,6 +575,24 @@ const cases: Case[] = [
       art: "dark",
       decks: "six",
       path,
+    })),
+  ),
+  // League · History on every screen: the list read to its end, no matches,
+  // slow reads and a failed read.
+  ...viewports.flatMap((viewport): Case[] =>
+    (
+      [
+        ["/league/history", "league-history"],
+        ["/league/history?history=empty", "league-history"],
+        ["/league/history?history=slow", "league-history"],
+        ["/league/history?history=failed", "league-history"],
+      ] as const
+    ).map(([path, state]) => ({
+      viewport,
+      art: "dark",
+      decks: "six",
+      path,
+      state,
     })),
   ),
   ...(
@@ -1624,6 +1666,118 @@ async function run(browser: Browser, test: Case): Promise<Finding[]> {
     await page.waitForTimeout(500);
   }
   if (
+    state === "match-series" ||
+    state === "match-series-next" ||
+    state === "match-series-leave"
+  ) {
+    const query = new URLSearchParams(test.path.split("?")[1]);
+    const kind = query.get("series") ?? "";
+    const band = page.getByRole("dialog", {
+      name: query.get("end") === "won" ? "You won" : "You lost",
+      exact: true,
+    });
+    await band.waitFor();
+    const nextGame = band.getByRole("button", { name: "Next game" });
+    const leave = band.getByRole("button", { name: "Leave table" });
+    if (kind === "over") {
+      // The match is decided: its score, and the way out.
+      await band.getByText("Match over · 1–2").waitFor();
+      await leave.waitFor();
+      await expect(nextGame).toHaveCount(0);
+    } else {
+      await band
+        .getByText(
+          query.get("end") === "won"
+            ? "Game 1 · You lead 1–0"
+            : "Game 1 · You trail 0–1",
+        )
+        .waitFor();
+      // Between games the band never offers to leave the table.
+      await expect(leave).toHaveCount(0);
+      if (kind === "waiting") {
+        await band.getByText("Waiting for the next game…").waitFor();
+        await expect(nextGame).toHaveCount(0);
+      } else {
+        await nextGame.waitFor();
+        await band
+          .getByText(
+            kind === "untimed"
+              ? "The next game starts when everyone is ready."
+              : /Next game in \d:\d\d/,
+          )
+          .waitFor();
+        if (kind === "stuck")
+          await band.getByText(/That didn’t go through\./).waitFor();
+      }
+    }
+    if (state === "match-series-next") {
+      // Lifted, the same answer is offered where the turn's actions were.
+      await band.getByRole("button", { name: "View table" }).click();
+      await band.waitFor({ state: "detached" });
+      const kept = page.getByRole("group", { name: "Game result" });
+      await kept.getByText(/Next game in \d:\d\d/).waitFor();
+      await kept.getByRole("button", { name: "Next game" }).click();
+      await kept.getByText("Waiting for the next game…").waitFor();
+      await expect(kept.getByRole("button")).toHaveCount(0);
+    }
+    if (state === "match-series-leave") {
+      await page.getByRole("button", { name: "Leave table" }).click();
+      const confirm = page.getByRole("dialog", { name: "Leave match?" });
+      await confirm.waitFor();
+      await confirm.getByRole("button", { name: "Stay at table" }).click();
+      await confirm.waitFor({ state: "hidden" });
+      await band.waitFor();
+    }
+    await page.waitForTimeout(1400);
+  }
+  if (
+    state === "match-end" ||
+    state === "match-end-view" ||
+    state === "match-end-chat"
+  ) {
+    const title =
+      { won: "You won", lost: "You lost", draw: "Draw", none: "No result" }[
+        new URLSearchParams(test.path.split("?")[1]).get("end") ?? ""
+      ] ?? "";
+    const band = page.getByRole("dialog", { name: title, exact: true });
+    await band.waitFor();
+    // Nothing more is offered at a finished table, and no turn is anyone's.
+    await expect(page.getByRole("button", { name: "Next" })).toHaveCount(0);
+    await expect(page.getByText(/turn · T\d/)).toHaveCount(0);
+    if (state === "match-end-view") {
+      await band.getByRole("button", { name: "View table" }).click();
+      await band.waitFor({ state: "detached" });
+      const kept = page.getByRole("group", { name: "Game result" });
+      await kept.getByText(title, { exact: true }).waitFor();
+      await kept.getByRole("button", { name: "Leave table" }).waitFor();
+      // The game is over: settings no longer offer to concede it.
+      await page.getByRole("button", { name: "Settings", exact: true }).click();
+      const settings = page.getByRole("dialog", { name: "Settings" });
+      await settings.waitFor();
+      await expect(
+        settings.getByRole("button", { name: "Concede", exact: true }),
+      ).toHaveCount(0);
+      await page.keyboard.press("Escape");
+      await settings.waitFor({ state: "hidden" });
+    }
+    if (state === "match-end-chat") {
+      // Opening the chat lifts the band; the result waits in the turn panel.
+      await page.getByRole("button", { name: /^Table chat/ }).click();
+      await band.waitFor({ state: "detached" });
+      await page
+        .getByRole("group", { name: "Game result" })
+        .getByRole("button", { name: "Leave table" })
+        .waitFor();
+      const chat = page.getByRole("region", { name: "Table chat" });
+      const box = chat.getByRole("textbox");
+      await box.fill("Good game");
+      await box.press("Enter");
+      await chat.getByText("Good game").waitFor();
+    }
+    // The band and what it holds have arrived.
+    await page.waitForTimeout(1400);
+  }
+  if (
     state === "match-cast-target" ||
     state === "match-cast-player" ||
     state === "match-cast-pay" ||
@@ -2008,6 +2162,34 @@ async function run(browser: Browser, test: Case): Promise<Finding[]> {
     await page.locator('[data-match-table="overview"]').waitFor();
     await page.waitForTimeout(1200);
   }
+  if (state === "league-history") {
+    const kind = new URLSearchParams(test.path.split("?")[1]).get("history");
+    const table = page.getByRole("table", { name: "Match history" });
+    await table.waitFor();
+    if (kind === "empty") {
+      await table.getByText("No matches yet").waitFor();
+    } else if (kind === "failed") {
+      // A list that could not be read says so; it does not claim there are none.
+      await page.getByText("Couldn’t load your matches.").waitFor();
+      await expect(table.getByText("No matches yet")).toHaveCount(0);
+    } else {
+      const rows = table.getByRole("rowgroup").getByRole("row");
+      await expect(rows.first()).toBeVisible();
+      if (kind === "slow") {
+        // Two matches are still being read; the rest already show.
+        expect(await rows.count()).toBeGreaterThanOrEqual(6);
+        await expect(rows.first()).toContainText("Sam and 2 others");
+      } else {
+        // Newest first, and the oldest are shown as the end comes into view.
+        await expect(rows.first()).toContainText("Won");
+        await expect(rows.first()).toContainText("Alex");
+        await expect(rows.first()).toContainText("Today");
+        await rows.last().scrollIntoViewIfNeeded();
+        await expect(rows).toHaveCount(10);
+      }
+    }
+    await page.waitForTimeout(900);
+  }
   if (state === "league-scrolled") {
     await page
       .getByRole("table", { name: /standings$/ })
@@ -2196,7 +2378,7 @@ const caseName = (test: Case): string =>
     test.path === BUILDER_PATH
       ? "builder"
       : test.path
-          .split(/[/?=]/)
+          .split(/[/?=&]/)
           .filter((part) => part && part !== "state")
           .join("-"),
     `art-${test.art}`,

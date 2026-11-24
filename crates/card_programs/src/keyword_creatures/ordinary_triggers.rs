@@ -238,7 +238,7 @@ pub(super) fn compile(
                 return None;
             }
             triggers.push((condition, ExecutableBody::with_triggered_modes(spellwake_engine::program::TriggeredModes {
-                minimum, maximum, distinct_targets, options: modes,
+                minimum, maximum, distinct_targets, allow_repeat: false, uniqueness: spellwake_engine::program::ModalUniqueness::None, prefix: None, suffix: None, options: modes,
             })));
         } else if let Some(effect) = line.strip_prefix("Magecraft — Whenever you cast or copy an instant or sorcery spell, ") {
             triggers.push((spellwake_engine::program::TriggerSpec::new(spellwake_engine::program::TriggerEvent::SpellCast { caster: spellwake_engine::program::TriggerPlayerScope::Relation(spellwake_engine::program::PlayerRelation::Controller), filter: spellwake_engine::program::SpellFilter::instant_or_sorcery(), self_cast: false, include_copy: true, min_mana_value: None }), body(effect, &card.name, vocabulary)?));
@@ -2152,6 +2152,7 @@ pub(super) fn body(
                     any_types: Default::default(),
                     required_types: BTreeSet::new(),
                     forbidden_types: BTreeSet::new(),
+                    object_filter: None,
                 },
             }],
         ));
@@ -2498,6 +2499,7 @@ pub(super) fn body(
                     any_types: Default::default(),
                     required_types: BTreeSet::from([CardType::Creature]),
                     forbidden_types: BTreeSet::new(),
+                    object_filter: None,
                 },
             }],
         )
@@ -2568,6 +2570,7 @@ fn modal_body(
         required_types: [CardType::Creature].into(),
         any_types: BTreeSet::new(),
         forbidden_types: BTreeSet::new(),
+        object_filter: None,
     };
     let (target, ops) = match effect {
         "Put a +1/+1 counter on each creature you control. Those creatures gain vigilance until end of turn." => {

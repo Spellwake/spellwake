@@ -191,6 +191,14 @@ fn choice<'a>(value: &'a PlayerChoice, out: &mut BTreeSet<&'a PlayerHandle>) {
                 target(&entry.target, out);
             }
         }
+        PlayerChoice::Scry { top, bottom } => {
+            out.extend(top);
+            out.extend(bottom);
+        }
+        PlayerChoice::Surveil { top, graveyard } => {
+            out.extend(top);
+            out.extend(graveyard);
+        }
         PlayerChoice::CounterRemoval { .. }
         | PlayerChoice::RedeclareKeepingMana {}
         | PlayerChoice::RedeclareReversingMana { .. }
@@ -279,6 +287,23 @@ pub(super) fn handles(value: &PlayerAction) -> BTreeSet<&PlayerHandle> {
             out.insert(ability);
             for value in targets {
                 target(value, &mut out);
+            }
+        }
+        PlayerAction::ActivateModalAbility {
+            source,
+            ability,
+            modes,
+            ..
+        } => {
+            out.insert(source);
+            out.insert(ability);
+            for m in modes {
+                if let Some(value) = &m.target {
+                    target(value, &mut out);
+                }
+                for value in &m.targets {
+                    target(value, &mut out);
+                }
             }
         }
         PlayerAction::ActivateAbility {

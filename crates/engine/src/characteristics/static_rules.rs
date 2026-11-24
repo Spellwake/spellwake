@@ -26,7 +26,11 @@ pub enum SpellDiscount {
 /// Which kinds of cards a permission lets its controller play from their library.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LibraryTopPermission {
+    All,
     Land,
+    Creature,
+    Artifact,
+    Nonland,
     InstantOrSorcery,
     ArtifactOrColorlessSpell,
     CreatureOfSourceEntryType,
@@ -95,8 +99,15 @@ pub enum CastPermissionRule {
     SeeLibraryTop { public: bool },
     /// Play qualifying cards from the top of controller's library.
     PlayLibraryTop(LibraryTopPermission),
+    /// Play qualifying cards matching an orthogonal object filter from the top of controller's library.
+    PlayLibraryTopMatching {
+        lands_allowed: bool,
+        filter: Box<crate::program::ObjectFilter>,
+    },
     /// Once per turn, cast a creature spell from controller's graveyard.
     GraveyardCreatureCast,
+    /// Play land cards from controller's graveyard (Crucible of Worlds).
+    GraveyardLandPlay,
     /// Creature cards of `subtype` in controller's graveyard have encore.
     GraveyardSubtypeEncore(CreatureTypeId),
     /// Spells of `subtype` cast by controller have replicate.
@@ -110,23 +121,104 @@ pub enum CastPermissionRule {
     AdditionalLandPlays(NonZeroU8),
     /// Controlled spells with any listed card type cannot be countered.
     ControllerSpellsCannotBeCountered(BTreeSet<CardType>),
+    /// Controlled spells matching `SpellFilter` cannot be countered.
+    ControllerSpellsCannotBeCounteredFiltered(Box<SpellFilter>),
+    /// Cast qualifying spells (and optionally play lands) matching `filter` from controller's graveyard.
+    GraveyardMatching {
+        lands_allowed: bool,
+        filter: Box<crate::program::ObjectFilter>,
+        once_each_turn: bool,
+    },
+    /// Self-permission to cast this card from its owner's graveyard when `condition` holds.
+    GraveyardSelfConditional {
+        condition: Box<crate::program::ResolutionCondition>,
+    },
+    /// Cast qualifying cards matching `filter` from exile (optionally linked to this source).
+    ExileMatching {
+        filter: Box<crate::program::ObjectFilter>,
+        linked_to_source: bool,
+        free: bool,
+        any_color: bool,
+    },
+}
+
+/// Which damage recipients a generalized [`StaticDamageRule::ModifyDamage`] matches.
+// Kept inline so `StaticDamageRecipient` remains `Copy` alongside zero-allocation `ObjectFilter`.
+#[allow(clippy::large_enum_variant)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StaticDamageRecipient {
+    Any,
+    Opponents,
+    OpponentOrOpponentPermanent,
+    Controller,
+    ControllerOrControlledPermanent,
+    ControllerOrControlledCreatures,
+    ControlledCreatures,
+    Creatures,
+    OpponentCreatures,
+    Players,
+    SelfObject,
+    AttachedHost,
+    MatchingPermanent(crate::program::ObjectFilter),
+}
+
+/// Whether a generalized [`StaticDamageRule::ModifyDamage`] matches combat, noncombat, or any damage.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StaticDamageKind {
+    Any,
+    CombatOnly,
+    NoncombatOnly,
+}
+
+/// Replacement operation applied by [`StaticDamageRule::ModifyDamage`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum StaticDamageOp {
+    Add(u8),
+    /// Dynamic additive damage modifier evaluated from world state (CR 614.1, e.g. Fated Firepower).
+    AddExpr(Box<crate::program::ValueExpr>),
+    Subtract(u8),
+    CapAt(u8),
+    Multiply(u8),
+    PreventAll,
+    PreventUpTo(u8),
+    ReplaceWithMinusOneCounters,
+}
+
+/// Destination recipient for generalized damage redirection (CR 614.9).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DamageRedirectTarget {
+    AbilitySource,
+    AttachedHost,
+    Controller,
+    TargetObject,
+    DamageSourceController,
 }
 
 /// Static damage prevention, doubling, replacement, or lethality rule.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum StaticDamageRule {
     /// Prevent noncombat damage to controller and other controlled permanents.
     PreventNoncombat,
     /// Prevent all combat damage dealt by or to source.
     PreventSourceCombat,
+    /// Prevent all combat damage that would be dealt to source (incoming only).
+    PreventIncomingCombatToSource,
     /// Prevent combat damage to attacking artifact creatures controlled by source's controller.
     PreventCombatToAttackingArtifacts,
     /// Prevent damage dealt by (and if `combat_only`, dealt to) enchanted creature.
     PreventEnchantedCreature { combat_only: bool },
     /// Prevent combat damage to source and exile that many cards from controller's library.
     PreventIncomingCombatAndExile,
-    /// Prevent incoming damage to source by removing +1/+1 counters.
+    /// Prevent incoming damage to source by removing one +1/+1 counter (Phantom cycle).
     PreventIncomingRemovePlusOne,
+    /// Prevent incoming damage to source by removing that many +1/+1 counters.
+    PreventIncomingRemoveNPlusOne,
+    /// Redirect damage that would be dealt to controller (and optionally other controlled permanents) to source.
+    RedirectPlayerDamageToSource { include_other_permanents: bool },
+    /// Redirect damage that would be dealt to controller to the permanent this Aura/Equipment is attached to.
+    RedirectPlayerDamageToEnchanted,
+    /// Damage that would reduce controller's life total below `floor` reduces it to `floor` instead.
+    MinimumLifeTotal { floor: u8, require_creature: bool },
     /// Prevent half of incoming damage rounded up.
     PreventHalfIncoming,
     /// Double damage dealt to opponents.
@@ -139,6 +231,68 @@ pub enum StaticDamageRule {
     ReplaceSubtypeCombatWithMill(CreatureTypeId),
     /// Positive marked damage is lethal against power instead of toughness for controlled creatures.
     LethalUsesPower,
+    /// Damage can't be prevented while this permanent is on the battlefield.
+    DamageCannotBePrevented,
+    /// Generalized static damage replacement or modification rule (CR 614.1, 616.1).
+    ModifyDamage {
+        source: Option<crate::program::ObjectFilter>,
+        source_controller: crate::program::PlayerRelation,
+        recipient: StaticDamageRecipient,
+        kind: StaticDamageKind,
+        op: StaticDamageOp,
+    },
+    /// Generalized static damage redirection rule (CR 614.9).
+    RedirectDamage {
+        source: Option<crate::program::ObjectFilter>,
+        from: StaticDamageRecipient,
+        to: DamageRedirectTarget,
+        combat_only: bool,
+    },
+}
+
+/// Event kind intercepted by [`StaticContinuousAbility::EventReplacement`] (CR 614.1).
+// Kept inline so `ReplaceableEvent` remains `Copy` alongside zero-allocation `ObjectFilter`.
+#[allow(clippy::large_enum_variant)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ReplaceableEvent {
+    Draw {
+        player: crate::program::AffectedPlayers,
+    },
+    LifeGain {
+        player: crate::program::AffectedPlayers,
+    },
+    LifeLoss {
+        player: crate::program::AffectedPlayers,
+    },
+    Mill {
+        player: crate::program::AffectedPlayers,
+    },
+    Explore {
+        filter: crate::program::ObjectFilter,
+    },
+    Scry {
+        player: crate::program::AffectedPlayers,
+    },
+    ExtraTurn {
+        player: crate::program::AffectedPlayers,
+    },
+}
+
+/// Replacement transformation applied by [`StaticContinuousAbility::EventReplacement`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum StaticReplacementAction {
+    /// Modify the numeric count of the event: `(raw + add) * multiply`.
+    ModifyAmount {
+        add: Box<crate::program::ValueExpr>,
+        multiply: u8,
+    },
+    /// Skip / prevent the event entirely (e.g. skip extra turn, prevent life loss).
+    Skip,
+    /// Replace the event with an executable body (optionally prompting the affected player).
+    ReplaceWithBody {
+        optional: bool,
+        body: Box<crate::program::ExecutableBody>,
+    },
 }
 
 /// Static draw replacement, draw limit, or hand-size rule.
@@ -146,10 +300,25 @@ pub enum StaticDamageRule {
 pub enum StaticDrawRule {
     OpponentsAtMostOne,
     EmptyDrawWins,
+    /// Instead of drawing from an empty library, put `amount` counters of `kind` on source.
+    EmptyDrawPutCounters {
+        kind: crate::effects::CounterKind,
+        amount: u8,
+    },
+    /// Modify the number of cards controller draws (Teferi's Ageless Insight, Thought Reflection, Phial of Galadriel).
+    ModifyDraw {
+        add: u8,
+        multiply: u8,
+        skip_first_draw_step: bool,
+        require_empty_hand: bool,
+    },
     SplitOpponentsMultipleDraw,
     ReplaceWithLandKind,
     SkipControllerDrawStep,
+    PlayersCannotDraw,
+    OpponentsCannotDraw,
     NoMaximumHandSize,
+    AllPlayersNoMaximumHandSize,
 }
 
 /// Static untap-step modification rule.
@@ -161,6 +330,8 @@ pub enum StaticUntapRule {
     EnchantedCreatureUntapsOnlyForMonarch,
     EnchantedCreatureSkipsUntap,
     SourceSkipsUntap,
+    /// CR 502.3: Controller may choose not to untap this permanent during their untap step.
+    MayChooseNotToUntapSource,
 }
 
 /// Static prohibition, cast limit, targeting restriction, or transform restriction.
@@ -188,6 +359,17 @@ pub enum StaticRestriction {
     OneSpellPerTurn,
     /// Creatures entering the battlefield don't cause abilities to trigger (Torpor Orb).
     SuppressEntersTriggers,
+    /// Players matching `player` cannot cast spells matching `filter`.
+    ProhibitCasting {
+        player: crate::program::PlayerRelation,
+        filter: Box<SpellFilter>,
+    },
+    /// Matching permanents enter the battlefield untapped.
+    EnterUntapped(Box<PermanentSelector>),
+    /// Matching permanents cannot enter the battlefield from non-cast sources.
+    ProhibitEntering(Box<PermanentSelector>),
+    /// Controller may cast this spell as though it had flash; if cast any time a sorcery couldn't be cast, sacrifice it at the beginning of the next cleanup step.
+    FlashSacrificeAtCleanup,
 }
 
 /// Static battlefield replacement, doubling, mana retention, or structural modifier.
@@ -203,9 +385,49 @@ pub enum StaticModifierRule {
         kind: crate::effects::CounterKind,
         count: u8,
     },
+    /// Modify counters placed on matching permanents (Hardened Scales, Benevolent Hydra, Branching Evolution).
+    ModifyCounters {
+        selector: Box<PermanentSelector>,
+        counter_kind: Option<crate::effects::CounterKind>,
+        add: u8,
+        multiply: u8,
+    },
+    /// Modify the number of tokens created by players matching `controller` (Anointed Procession, Ojer Taq, Primal Vigor).
+    ModifyTokens {
+        controller: crate::program::PlayerRelation,
+        add: u8,
+        multiply: u8,
+    },
+    /// Modify the number of tokens with `subtype` created by players matching `controller` (Xorn, Peregrin Took).
+    ModifyTokenSubtype {
+        subtype: crate::program::ArtifactSubtype,
+        controller: crate::program::PlayerRelation,
+        add: u8,
+        multiply: u8,
+    },
+    /// Halve (rounded down) counters placed on opponents or permanents opponents control (Vorinclex).
+    HalveOpponentCounters,
+    /// Modify or invert life gained by players matching `player` (Boon Reflection, Angel of Vitality, Tainted Remedy).
+    ModifyLifeGain {
+        player: crate::program::PlayerRelation,
+        add: u8,
+        multiply: u8,
+        lose_instead: bool,
+    },
+    /// Conditionally modify life gained by players matching `player` (Phial of Galadriel).
+    ConditionalModifyLifeGain {
+        condition: Box<crate::program::ResolutionCondition>,
+        player: crate::program::PlayerRelation,
+        add: u8,
+        multiply: u8,
+    },
+    /// If it is neither day nor night as this permanent enters / is on battlefield, it becomes day.
+    BecomesDayIfNeither,
     ExtraEntryLoyalty,
     TwiceLoyaltyPerTurn,
     AdditionalCreatureDeathTrigger,
+    /// Generalized CR 603.2d trigger multiplier (Panharmonicon, Teysa, Isshin, Yarok, Roaming Throne, etc.).
+    AdditionalTrigger(Box<TriggerMultiplierRule>),
     EnterControlledCreaturesAsEnchantedCopy,
     EnterControlledCreaturesAsSourceCopy,
     IgnoreLegendForSubtype(CreatureTypeId),
@@ -218,7 +440,89 @@ pub enum StaticModifierRule {
     AdditionalBlockWhileMonarch,
 }
 
+/// Event predicate matched by a generalized trigger multiplier (CR 603.2d).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TriggerMultiplierEvent {
+    /// Any non-mana triggered ability of a matching permanent (Roaming Throne, Delney, Annie Joins Up).
+    Any,
+    /// A permanent matching `ObjectFilter` enters the battlefield (Panharmonicon, Yarok, Elesh Norn MoM).
+    Enters(crate::program::ObjectFilter),
+    /// A permanent matching `ObjectFilter` dies (Teysa Karlov, Drivnod).
+    Dies(crate::program::ObjectFilter),
+    /// A permanent matching `ObjectFilter` leaves the battlefield (Gandalf the White).
+    LeavesBattlefield(crate::program::ObjectFilter),
+    /// A creature matching `ObjectFilter` attacks (Isshin, Wulfgar).
+    Attacks(crate::program::ObjectFilter),
+    /// Casting or copying a spell matching `SpellFilter` (Veyran).
+    SpellCastOrCopy(crate::program::SpellFilter),
+    /// Dealing combat or any damage (Felix Five-Boots).
+    DealsDamage {
+        combat_only: bool,
+        to_player_only: bool,
+    },
+    /// Disjunction of multiplier cause events (Gandalf the White: enters OR leaves).
+    AnyOf(Vec<TriggerMultiplierEvent>),
+}
+
+impl TriggerMultiplierEvent {
+    pub(crate) fn rewrite_creature_type(&mut self, from: CreatureTypeId, to: CreatureTypeId) {
+        match self {
+            Self::Any | Self::DealsDamage { .. } => {}
+            Self::Enters(f) | Self::Dies(f) | Self::LeavesBattlefield(f) | Self::Attacks(f) => {
+                f.rewrite_creature_type(from, to)
+            }
+            Self::SpellCastOrCopy(f) => f.rewrite_creature_type(from, to),
+            Self::AnyOf(items) => {
+                for item in items {
+                    item.rewrite_creature_type(from, to);
+                }
+            }
+        }
+    }
+
+    pub(crate) fn validate(
+        &self,
+        vocabulary: &CreatureTypeVocabulary,
+    ) -> Result<(), CharacteristicDefinitionError> {
+        match self {
+            Self::Any | Self::DealsDamage { .. } => Ok(()),
+            Self::Enters(f) | Self::Dies(f) | Self::LeavesBattlefield(f) | Self::Attacks(f) => f
+                .validate_vocabulary(vocabulary)
+                .map_err(|_| CharacteristicDefinitionError::ForeignCreatureType),
+            Self::SpellCastOrCopy(f) => f
+                .validate_vocabulary(vocabulary)
+                .map_err(|_| CharacteristicDefinitionError::ForeignCreatureType),
+            Self::AnyOf(items) => {
+                if items.is_empty() {
+                    return Err(CharacteristicDefinitionError::EmptyParts);
+                }
+                for item in items {
+                    item.validate(vocabulary)?;
+                }
+                Ok(())
+            }
+        }
+    }
+}
+
+/// Orthogonal CR 603.2d trigger multiplier specification.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TriggerMultiplierRule {
+    /// Additive extra triggers (typically 1 for "triggers an additional time").
+    pub additional: u8,
+    /// Cause event that must trigger the ability.
+    pub event: TriggerMultiplierEvent,
+    /// Optional filter on the permanent whose ability triggered.
+    pub triggering_source: Option<PermanentSelector>,
+    /// True for "another triggered ability" / non-self (Roaming Throne, Harmonic Prodigy).
+    pub exclude_self: bool,
+    /// True for death-trigger doublers (Teysa Karlov, Drivnod) where sacrifice triggers do not double.
+    pub exclude_sacrifice_triggers: bool,
+}
+
 /// Orthogonal static continuous ability replacing the flat 69-variant enum.
+// `DamageRule` and `EventReplacement` store `Copy` filter specs inline; kept unboxed to preserve existing value ownership.
+#[allow(clippy::large_enum_variant)]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum StaticContinuousAbility {
     /// Ordinary continuous effects generated by a battlefield source.
@@ -272,6 +576,13 @@ pub enum StaticContinuousAbility {
         id: StaticAbilityId,
         agenda: AgendaSpec,
     },
+    /// Generalized event replacement rule (CR 614.1a: draw, life gain/loss, mill, explore, scry, extra turns).
+    EventReplacement {
+        id: StaticAbilityId,
+        event: ReplaceableEvent,
+        condition: Option<Box<crate::characteristics::StaticSourceCondition>>,
+        action: StaticReplacementAction,
+    },
 }
 
 impl StaticContinuousAbility {
@@ -288,7 +599,8 @@ impl StaticContinuousAbility {
             | Self::UntapRule { id, .. }
             | Self::Restriction { id, .. }
             | Self::Modifier { id, .. }
-            | Self::CommandZoneActive { id, .. } => *id,
+            | Self::CommandZoneActive { id, .. }
+            | Self::EventReplacement { id, .. } => *id,
         }
     }
 
@@ -304,7 +616,8 @@ impl StaticContinuousAbility {
             | Self::UntapRule { id, .. }
             | Self::Restriction { id, .. }
             | Self::Modifier { id, .. }
-            | Self::CommandZoneActive { id, .. } => *id = new_id,
+            | Self::CommandZoneActive { id, .. }
+            | Self::EventReplacement { id, .. } => *id = new_id,
         }
         self
     }
@@ -314,7 +627,10 @@ impl StaticContinuousAbility {
     pub(crate) fn requires_permanent(&self) -> bool {
         match self {
             Self::CharacteristicDefining { .. } | Self::CommandZoneActive { .. } => false,
-            Self::Battlefield { .. } | Self::UntapRule { .. } | Self::DamageRule { .. } => true,
+            Self::Battlefield { .. }
+            | Self::UntapRule { .. }
+            | Self::DamageRule { .. }
+            | Self::EventReplacement { .. } => true,
             Self::CostModifier { modifier, .. } => !matches!(
                 modifier,
                 SpellCostModifier::SubtypeDiscountFromCommandOrBattlefield { .. }
@@ -323,10 +639,15 @@ impl StaticContinuousAbility {
             Self::CastPermission { permission, .. } => !matches!(
                 permission,
                 CastPermissionRule::GraveyardCreatureCast
+                    | CastPermissionRule::GraveyardSelfConditional { .. }
                     | CastPermissionRule::ColorlessHandSpellsHaveCascade { .. }
                     | CastPermissionRule::ControllerSpellsCannotBeCountered(_)
+                    | CastPermissionRule::ControllerSpellsCannotBeCounteredFiltered(_)
             ),
-            Self::DrawRule { rule, .. } => matches!(rule, StaticDrawRule::NoMaximumHandSize),
+            Self::DrawRule { rule, .. } => matches!(
+                rule,
+                StaticDrawRule::NoMaximumHandSize | StaticDrawRule::AllPlayersNoMaximumHandSize
+            ),
             Self::Restriction { rule, .. } => !matches!(
                 rule,
                 StaticRestriction::ProhibitLifeAndCreatureCosts
@@ -340,7 +661,7 @@ impl StaticContinuousAbility {
 
     /// Whether this static ability is admitted in `Program::additional_battlefield_abilities`.
     #[must_use]
-    pub(crate) fn allowed_as_additional(&self) -> bool {
+    pub fn allowed_as_additional(&self) -> bool {
         matches!(
             self,
             Self::Battlefield { .. }
@@ -348,22 +669,31 @@ impl StaticContinuousAbility {
                 | Self::CastPermission {
                     permission: CastPermissionRule::Flash { .. }
                         | CastPermissionRule::GraveyardCreatureCast
+                        | CastPermissionRule::GraveyardLandPlay
                         | CastPermissionRule::SubtypeSpellsHaveReplicate(_)
                         | CastPermissionRule::GraveyardSubtypeEncore(_)
                         | CastPermissionRule::SeeLibraryTop { .. }
                         | CastPermissionRule::PlayLibraryTop(_)
+                        | CastPermissionRule::PlayLibraryTopMatching { .. }
                         | CastPermissionRule::AdditionalLandPlays(_)
-                        | CastPermissionRule::ControllerSpellsCannotBeCountered(_),
+                        | CastPermissionRule::ControllerSpellsCannotBeCountered(_)
+                        | CastPermissionRule::ControllerSpellsCannotBeCounteredFiltered(_)
+                        | CastPermissionRule::GraveyardMatching { .. }
+                        | CastPermissionRule::GraveyardSelfConditional { .. }
+                        | CastPermissionRule::ExileMatching { .. },
                     ..
                 }
-                | Self::DamageRule {
-                    rule: StaticDamageRule::PreventHalfIncoming,
-                    ..
-                }
+                | Self::DamageRule { .. }
+                | Self::EventReplacement { .. }
                 | Self::DrawRule {
                     rule: StaticDrawRule::NoMaximumHandSize
+                        | StaticDrawRule::AllPlayersNoMaximumHandSize
                         | StaticDrawRule::OpponentsAtMostOne
-                        | StaticDrawRule::SkipControllerDrawStep,
+                        | StaticDrawRule::SkipControllerDrawStep
+                        | StaticDrawRule::ModifyDraw { .. }
+                        | StaticDrawRule::EmptyDrawPutCounters { .. }
+                        | StaticDrawRule::PlayersCannotDraw
+                        | StaticDrawRule::OpponentsCannotDraw,
                     ..
                 }
                 | Self::UntapRule { .. }
@@ -382,7 +712,11 @@ impl StaticContinuousAbility {
                         | StaticRestriction::RestrictGraveyardAndLibrary
                         | StaticRestriction::ControllerHasHexproof
                         | StaticRestriction::OneSpellPerTurn
-                        | StaticRestriction::SuppressEntersTriggers,
+                        | StaticRestriction::SuppressEntersTriggers
+                        | StaticRestriction::ProhibitCasting { .. }
+                        | StaticRestriction::EnterUntapped(_)
+                        | StaticRestriction::ProhibitEntering(_)
+                        | StaticRestriction::FlashSacrificeAtCleanup,
                     ..
                 }
                 | Self::Modifier {
@@ -395,7 +729,17 @@ impl StaticContinuousAbility {
                         | StaticModifierRule::AdditionalSelfPlusOneCounter
                         | StaticModifierRule::OtherCreaturesEnterWithSourceCounters
                         | StaticModifierRule::OthersEnterWithCounters { .. }
-                        | StaticModifierRule::ExtraEntryLoyalty,
+                        | StaticModifierRule::ModifyCounters { .. }
+                        | StaticModifierRule::HalveOpponentCounters
+                        | StaticModifierRule::ModifyTokens { .. }
+                        | StaticModifierRule::ModifyTokenSubtype { .. }
+                        | StaticModifierRule::ModifyLifeGain { .. }
+                        | StaticModifierRule::ConditionalModifyLifeGain { .. }
+                        | StaticModifierRule::RetainMana(_)
+                        | StaticModifierRule::BecomesDayIfNeither
+                        | StaticModifierRule::ExtraEntryLoyalty
+                        | StaticModifierRule::AdditionalCreatureDeathTrigger
+                        | StaticModifierRule::AdditionalTrigger(_),
                     ..
                 }
         )
@@ -421,25 +765,94 @@ impl StaticContinuousAbility {
                 CastPermissionRule::Flash { matching, .. } => {
                     matching.rewrite_creature_type(change.from, change.to);
                 }
+                CastPermissionRule::ControllerSpellsCannotBeCounteredFiltered(matching) => {
+                    matching.rewrite_creature_type(change.from, change.to);
+                }
+                CastPermissionRule::PlayLibraryTopMatching { filter, .. }
+                | CastPermissionRule::GraveyardMatching { filter, .. }
+                | CastPermissionRule::ExileMatching { filter, .. } => {
+                    filter.rewrite_creature_type(change.from, change.to);
+                }
+                CastPermissionRule::GraveyardSelfConditional { condition } => {
+                    condition.rewrite_creature_type(change.from, change.to);
+                }
                 CastPermissionRule::SubtypeSpellsHaveReplicate(subtype)
                 | CastPermissionRule::GraveyardSubtypeEncore(subtype) => word(subtype),
                 _ => {}
             },
-            Self::DamageRule {
-                rule: StaticDamageRule::ReplaceSubtypeCombatWithMill(subtype),
-                ..
-            } => word(subtype),
-            Self::Restriction {
-                rule: StaticRestriction::PreventControlledTransform { subtype, except },
-                ..
-            } => {
-                word(subtype);
-                word(except);
+            Self::DamageRule { rule, .. } => match rule {
+                StaticDamageRule::ReplaceSubtypeCombatWithMill(subtype) => word(subtype),
+                StaticDamageRule::ModifyDamage {
+                    source,
+                    recipient,
+                    op,
+                    ..
+                } => {
+                    if let Some(filter) = source {
+                        filter.rewrite_creature_type(change.from, change.to);
+                    }
+                    if let StaticDamageRecipient::MatchingPermanent(filter) = recipient {
+                        filter.rewrite_creature_type(change.from, change.to);
+                    }
+                    if let StaticDamageOp::AddExpr(expr) = op {
+                        expr.rewrite_creature_type(change.from, change.to);
+                    }
+                }
+                StaticDamageRule::RedirectDamage { source, from, .. } => {
+                    if let Some(filter) = source {
+                        filter.rewrite_creature_type(change.from, change.to);
+                    }
+                    if let StaticDamageRecipient::MatchingPermanent(filter) = from {
+                        filter.rewrite_creature_type(change.from, change.to);
+                    }
+                }
+                _ => {}
+            },
+            Self::EventReplacement { event, action, .. } => {
+                if let ReplaceableEvent::Explore { filter } = event {
+                    filter.rewrite_creature_type(change.from, change.to);
+                }
+                match action {
+                    StaticReplacementAction::ModifyAmount { add, .. } => {
+                        add.rewrite_creature_type(change.from, change.to);
+                    }
+                    StaticReplacementAction::ReplaceWithBody { body, .. } => {
+                        crate::characteristics::text::rewrite_executable_body(body, change);
+                    }
+                    StaticReplacementAction::Skip => {}
+                }
             }
-            Self::Modifier {
-                rule: StaticModifierRule::IgnoreLegendForSubtype(subtype),
-                ..
-            } => word(subtype),
+            Self::Restriction { rule, .. } => match rule {
+                StaticRestriction::PreventControlledTransform { subtype, except } => {
+                    word(subtype);
+                    word(except);
+                }
+                StaticRestriction::ProhibitCasting { filter, .. } => {
+                    filter.rewrite_creature_type(change.from, change.to);
+                }
+                _ => {}
+            },
+            Self::Modifier { rule, .. } => match rule {
+                StaticModifierRule::IgnoreLegendForSubtype(subtype) => word(subtype),
+                StaticModifierRule::ConditionalModifyLifeGain { condition, .. } => {
+                    condition.rewrite_creature_type(change.from, change.to);
+                }
+                StaticModifierRule::AdditionalTrigger(mult) => {
+                    mult.event.rewrite_creature_type(change.from, change.to);
+                    if let Some(sel) = &mut mult.triggering_source {
+                        if let Some(st) = &mut sel.creature_subtype {
+                            word(st);
+                        }
+                        if let Some(st) = &mut sel.forbidden_creature_subtype {
+                            word(st);
+                        }
+                        if sel.any_creature_subtypes.remove(&change.from) {
+                            sel.any_creature_subtypes.insert(change.to);
+                        }
+                    }
+                }
+                _ => {}
+            },
             _ => {}
         }
     }
@@ -477,6 +890,23 @@ impl StaticContinuousAbility {
                         .validate_vocabulary(vocabulary)
                         .map_err(|_| CharacteristicDefinitionError::ForeignCreatureType);
                 }
+                CastPermissionRule::ControllerSpellsCannotBeCounteredFiltered(matching) => {
+                    return matching
+                        .validate_vocabulary(vocabulary)
+                        .map_err(|_| CharacteristicDefinitionError::ForeignCreatureType);
+                }
+                CastPermissionRule::PlayLibraryTopMatching { filter, .. }
+                | CastPermissionRule::GraveyardMatching { filter, .. }
+                | CastPermissionRule::ExileMatching { filter, .. } => {
+                    return filter
+                        .validate_vocabulary(vocabulary)
+                        .map_err(|_| CharacteristicDefinitionError::ForeignCreatureType);
+                }
+                CastPermissionRule::GraveyardSelfConditional { condition } => {
+                    return condition
+                        .validate_world(vocabulary)
+                        .map_err(|_| CharacteristicDefinitionError::ForeignCreatureType);
+                }
                 CastPermissionRule::SubtypeSpellsHaveReplicate(subtype)
                 | CastPermissionRule::GraveyardSubtypeEncore(subtype) => {
                     return validate_subtypes(&BTreeSet::from([*subtype]), vocabulary);
@@ -490,16 +920,111 @@ impl StaticContinuousAbility {
                 CastPermissionRule::SeeLibraryTop { .. }
                 | CastPermissionRule::PlayLibraryTop(_)
                 | CastPermissionRule::GraveyardCreatureCast
+                | CastPermissionRule::GraveyardLandPlay
                 | CastPermissionRule::ColorlessHandSpellsHaveCascade { .. }
                 | CastPermissionRule::AdditionalLandPlays(_) => return Ok(()),
             },
             Self::DamageRule { rule, .. } => {
-                if let StaticDamageRule::ReplaceSubtypeCombatWithMill(subtype) = rule {
-                    validate_subtypes(&BTreeSet::from([*subtype]), vocabulary)?;
+                match rule {
+                    StaticDamageRule::ReplaceSubtypeCombatWithMill(subtype) => {
+                        validate_subtypes(&BTreeSet::from([*subtype]), vocabulary)?;
+                    }
+                    StaticDamageRule::ModifyDamage {
+                        source,
+                        recipient,
+                        op,
+                        ..
+                    } => {
+                        if let Some(filter) = source {
+                            filter
+                                .validate_vocabulary(vocabulary)
+                                .map_err(|_| CharacteristicDefinitionError::ForeignCreatureType)?;
+                        }
+                        if let StaticDamageRecipient::MatchingPermanent(filter) = recipient {
+                            filter
+                                .validate_vocabulary(vocabulary)
+                                .map_err(|_| CharacteristicDefinitionError::ForeignCreatureType)?;
+                        }
+                        if let StaticDamageOp::AddExpr(expr) = op {
+                            expr.validate_world_condition(vocabulary)
+                                .map_err(|_| CharacteristicDefinitionError::ForeignCreatureType)?;
+                        }
+                        if matches!(
+                            op,
+                            StaticDamageOp::Add(0)
+                                | StaticDamageOp::Subtract(0)
+                                | StaticDamageOp::Multiply(0 | 1)
+                                | StaticDamageOp::PreventUpTo(0)
+                        ) {
+                            return Err(CharacteristicDefinitionError::EmptyParts);
+                        }
+                    }
+                    StaticDamageRule::RedirectDamage { source, from, .. } => {
+                        if let Some(filter) = source {
+                            filter
+                                .validate_vocabulary(vocabulary)
+                                .map_err(|_| CharacteristicDefinitionError::ForeignCreatureType)?;
+                        }
+                        if let StaticDamageRecipient::MatchingPermanent(filter) = from {
+                            filter
+                                .validate_vocabulary(vocabulary)
+                                .map_err(|_| CharacteristicDefinitionError::ForeignCreatureType)?;
+                        }
+                    }
+                    StaticDamageRule::MinimumLifeTotal { floor: 0, .. } => {
+                        return Err(CharacteristicDefinitionError::EmptyParts);
+                    }
+                    _ => {}
                 }
                 return Ok(());
             }
-            Self::DrawRule { .. } | Self::CommandZoneActive { .. } => {
+            Self::EventReplacement {
+                event,
+                condition,
+                action,
+                ..
+            } => {
+                if let ReplaceableEvent::Explore { filter } = event {
+                    filter
+                        .validate_vocabulary(vocabulary)
+                        .map_err(|_| CharacteristicDefinitionError::ForeignCreatureType)?;
+                }
+                if let Some(cond) = condition {
+                    crate::characteristics::validate_static_source_condition(cond, vocabulary)?;
+                }
+                match action {
+                    StaticReplacementAction::ModifyAmount { add, multiply } => {
+                        if *multiply == 0 {
+                            return Err(CharacteristicDefinitionError::EmptyParts);
+                        }
+                        add.validate_world_condition(vocabulary)
+                            .map_err(|_| CharacteristicDefinitionError::ForeignCreatureType)?;
+                    }
+                    StaticReplacementAction::Skip => {}
+                    StaticReplacementAction::ReplaceWithBody { body, .. } => {
+                        body.validate_in(vocabulary, crate::program::BodyContext::ACTIVATED)
+                            .map_err(|_| CharacteristicDefinitionError::InvalidKeywordGrant)?;
+                    }
+                }
+                return Ok(());
+            }
+            Self::DrawRule { rule, .. } => {
+                match rule {
+                    StaticDrawRule::ModifyDraw { add, multiply, .. }
+                        if *multiply == 0 || (*add == 0 && *multiply == 1) =>
+                    {
+                        return Err(CharacteristicDefinitionError::EmptyParts);
+                    }
+                    StaticDrawRule::EmptyDrawPutCounters { kind, amount }
+                        if *amount == 0 || !kind.is_permanent() =>
+                    {
+                        return Err(CharacteristicDefinitionError::EmptyParts);
+                    }
+                    _ => {}
+                }
+                return Ok(());
+            }
+            Self::CommandZoneActive { .. } => {
                 return Ok(());
             }
             Self::UntapRule { rule, .. } => {
@@ -509,6 +1034,11 @@ impl StaticContinuousAbility {
                 return Ok(());
             }
             Self::Restriction { rule, .. } => match rule {
+                StaticRestriction::ProhibitCasting { filter, .. } => {
+                    return filter
+                        .validate_vocabulary(vocabulary)
+                        .map_err(|_| CharacteristicDefinitionError::ForeignCreatureType);
+                }
                 StaticRestriction::ProhibitCastingChosenName(names) => {
                     if names.options().is_empty() {
                         return Err(CharacteristicDefinitionError::EmptyParts);
@@ -522,7 +1052,9 @@ impl StaticContinuousAbility {
                     return Ok(());
                 }
                 StaticRestriction::OthersEnterTapped(selector)
-                | StaticRestriction::PreventMatchingActivations(selector) => {
+                | StaticRestriction::PreventMatchingActivations(selector)
+                | StaticRestriction::EnterUntapped(selector)
+                | StaticRestriction::ProhibitEntering(selector) => {
                     return selector.validate(vocabulary);
                 }
                 _ => return Ok(()),
@@ -537,10 +1069,62 @@ impl StaticContinuousAbility {
                         kind,
                         count,
                     } => {
-                        if *count == 0 || !crate::effects::CounterKind::PERMANENT.contains(kind) {
+                        if *count == 0 || !kind.is_permanent() {
                             return Err(CharacteristicDefinitionError::EmptyParts);
                         }
                         selector.validate(vocabulary)?;
+                    }
+                    StaticModifierRule::ModifyCounters {
+                        selector,
+                        counter_kind,
+                        add,
+                        multiply,
+                    } => {
+                        if *multiply == 0
+                            || (*add == 0 && *multiply == 1)
+                            || counter_kind.is_some_and(|k| !k.is_permanent())
+                        {
+                            return Err(CharacteristicDefinitionError::EmptyParts);
+                        }
+                        selector.validate(vocabulary)?;
+                    }
+                    StaticModifierRule::ModifyTokens { add, multiply, .. }
+                    | StaticModifierRule::ModifyTokenSubtype { add, multiply, .. } => {
+                        if *multiply == 0 || (*add == 0 && *multiply == 1) {
+                            return Err(CharacteristicDefinitionError::EmptyParts);
+                        }
+                    }
+                    StaticModifierRule::ModifyLifeGain {
+                        add,
+                        multiply,
+                        lose_instead,
+                        ..
+                    } => {
+                        if *multiply == 0 || (!*lose_instead && *add == 0 && *multiply == 1) {
+                            return Err(CharacteristicDefinitionError::EmptyParts);
+                        }
+                    }
+                    StaticModifierRule::ConditionalModifyLifeGain {
+                        condition,
+                        add,
+                        multiply,
+                        ..
+                    } => {
+                        if *multiply == 0 || (*add == 0 && *multiply == 1) {
+                            return Err(CharacteristicDefinitionError::EmptyParts);
+                        }
+                        condition
+                            .validate_world(vocabulary)
+                            .map_err(|_| CharacteristicDefinitionError::ForeignCreatureType)?;
+                    }
+                    StaticModifierRule::AdditionalTrigger(mult) => {
+                        if mult.additional == 0 {
+                            return Err(CharacteristicDefinitionError::EmptyParts);
+                        }
+                        mult.event.validate(vocabulary)?;
+                        if let Some(sel) = &mult.triggering_source {
+                            sel.validate(vocabulary)?;
+                        }
                     }
                     _ => {}
                 }
@@ -588,6 +1172,15 @@ impl StaticContinuousAbility {
         {
             return Err(CharacteristicDefinitionError::UnsupportedTypeOperation);
         }
+        if parts
+            .0
+            .iter()
+            .filter(|part| matches!(part, StaticPart::Abilities(_)))
+            .count()
+            > 1
+        {
+            return Err(CharacteristicDefinitionError::DuplicateBucket);
+        }
         validate_buckets(parts.0.iter().map(StaticPart::bucket))?;
         for part in &parts.0 {
             if let StaticPart::GrantSubtypeProtection {
@@ -608,7 +1201,8 @@ impl StaticContinuousAbility {
             }
             match part {
                 StaticPart::BlockingRestriction(
-                    BlockingRestriction::BlockerPowerAtLeastPowerOf(_),
+                    BlockingRestriction::BlockerPowerAtLeastPowerOf(_)
+                    | BlockingRestriction::CannotBlockObject(_),
                 ) => {
                     return Err(CharacteristicDefinitionError::UnsupportedTypeOperation);
                 }
@@ -622,13 +1216,22 @@ impl StaticContinuousAbility {
                 StaticPart::BlockingRestriction(
                     BlockingRestriction::CannotBlockMatching(filter)
                     | BlockingRestriction::CannotBeBlockedByMatching(filter)
-                    | BlockingRestriction::OnlyBlockedByMatching(filter),
+                    | BlockingRestriction::OnlyBlockedByMatching(filter)
+                    | BlockingRestriction::CanBlockOnlyMatching(filter)
+                    | BlockingRestriction::CannotAttackUnlessDefenderControls(filter)
+                    | BlockingRestriction::MustBeBlockedByAllMatching(filter),
                 ) => {
                     filter
                         .validate_vocabulary(vocabulary)
                         .map_err(|_| CharacteristicDefinitionError::ForeignCreatureType)?;
                 }
-                StaticPart::GrantActivated(ability) => {
+                StaticPart::GrantActivated(ability)
+                | StaticPart::GrantActivatedRestricted { ability, .. } => {
+                    if let StaticPart::GrantActivatedRestricted { restriction, .. } = part {
+                        restriction
+                            .validate(vocabulary)
+                            .map_err(|_| CharacteristicDefinitionError::InvalidKeywordGrant)?;
+                    }
                     let is_grantor_sac = matches!(
                         ability.source_cost,
                         crate::activated::SourceCost::SacrificeSelected {
@@ -682,7 +1285,7 @@ impl StaticContinuousAbility {
                     }
                     let body_context = match ability.source_cost {
                         crate::activated::SourceCost::Counter { kind, .. }
-                            if !crate::effects::CounterKind::PERMANENT.contains(&kind) =>
+                            if !kind.is_permanent() =>
                         {
                             return Err(CharacteristicDefinitionError::InvalidKeywordGrant);
                         }
@@ -697,7 +1300,8 @@ impl StaticContinuousAbility {
                         crate::activated::SourceCost::SacrificeSelected {
                             filter:
                                 crate::activated::SelectedSacrificeFilter::Creature
-                                | crate::activated::SelectedSacrificeFilter::OtherCreature,
+                                | crate::activated::SelectedSacrificeFilter::OtherCreature
+                                | crate::activated::SelectedSacrificeFilter::Subtype(_),
                             count: 1,
                             from_graveyard: false,
                             ..
@@ -710,6 +1314,14 @@ impl StaticContinuousAbility {
                                 ),
                             ..
                         } => crate::program::BodyContext::SacrificedCreature,
+                        crate::activated::SourceCost::SacrificeSelected {
+                            filter: crate::activated::SelectedSacrificeFilter::Matching(filter),
+                            count: 1,
+                            from_graveyard: false,
+                            ..
+                        } if filter.guarantees_creature() => {
+                            crate::program::BodyContext::SacrificedCreature
+                        }
                         crate::activated::SourceCost::SacrificeSelected {
                             count: 1,
                             from_graveyard: false,
@@ -730,14 +1342,16 @@ impl StaticContinuousAbility {
                 StaticPart::Text(change) => {
                     validate_subtypes(&BTreeSet::from([change.from, change.to]), vocabulary)?;
                 }
-                StaticPart::Type(change) => {
+                StaticPart::Type(change) | StaticPart::TypeWithSubtypes { base: change, .. } => {
                     validate_battlefield_types(&change.types)?;
                     match &change.subtypes {
                         SubtypeOperation::Keep
                         | SubtypeOperation::Add(StaticSubtypeOperand::SourceCurrentSubtypes)
                         | SubtypeOperation::Set(StaticSubtypeOperand::SourceCurrentSubtypes)
                         | SubtypeOperation::Add(StaticSubtypeOperand::SourceEntryCreatureType)
-                        | SubtypeOperation::Set(StaticSubtypeOperand::SourceEntryCreatureType) => {}
+                        | SubtypeOperation::Set(StaticSubtypeOperand::SourceEntryCreatureType)
+                        | SubtypeOperation::Add(StaticSubtypeOperand::AllCreatureTypes)
+                        | SubtypeOperation::Set(StaticSubtypeOperand::AllCreatureTypes) => {}
                         SubtypeOperation::Remove(values)
                         | SubtypeOperation::Add(StaticSubtypeOperand::Literal(values))
                         | SubtypeOperation::Add(StaticSubtypeOperand::ImprintedCreatureTypes {
@@ -764,9 +1378,12 @@ impl StaticContinuousAbility {
                 | StaticPart::Abilities(_)
                 | StaticPart::GrantFixedColorMana(_)
                 | StaticPart::GrantAnyColorMana
+                | StaticPart::GrantMana(_)
                 | StaticPart::GrantSubtypeProtection { .. }
                 | StaticPart::BlockingRestriction(_)
                 | StaticPart::SetPTToOwnManaValue
+                | StaticPart::GrantProtectionChosenColor
+                | StaticPart::GrantProtectionChosenPlayer
                 | StaticPart::SwitchPT => {}
             }
         }

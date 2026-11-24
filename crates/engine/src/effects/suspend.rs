@@ -547,6 +547,11 @@ impl EffectWindow {
         {
             return Ok(None);
         }
+        if let Some(timing) = &program.cast_timing
+            && !self.cast_timing_satisfied(timing, card.id(), caster, None)?
+        {
+            return Ok(None);
+        }
         if matches!(&program.kind, ProgramKind::Spell(spell) if spell.body.instructions == [Instruction::ReturnChosenXGraveyardCreatures])
             && (!self
                 .combat_rules
@@ -658,7 +663,7 @@ impl EffectWindow {
             None
         };
         let permanent_targets = if ability != ExileCastAbility::Impulse
-            && matches!(&program.kind, ProgramKind::Spell(spell) if spell.body.instructions == [Instruction::ReturnChosenXGraveyardCreatures])
+            && matches!(&program.kind, ProgramKind::Spell(spell) if spell.body.instructions == [Instruction::ReturnChosenXGraveyardCreatures] || spell.body.has_x_target_count())
         {
             // Without paying its mana cost X must be zero, so the spell has no targets.
             Some(ExilePermanentTargets {

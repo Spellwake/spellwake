@@ -57,6 +57,16 @@ impl GameState {
         facts.draw_journal.append(draws);
         Ok(())
     }
+    fn opening_pregame_eligible(&self, player: SeatId) -> Vec<ObjectId> {
+        self.opening_hand(player)
+            .into_iter()
+            .filter(|&id| {
+                self.execution
+                    .copiable_program(id)
+                    .is_some_and(|p| p.opening_hand_battlefield)
+            })
+            .collect()
+    }
     fn opening_decision(&self) -> Result<OpeningDecision, GameError> {
         let opening = self.opening.as_ref().ok_or(OpeningError::NotOpening)?;
         match &opening.stage {
@@ -77,6 +87,16 @@ impl GameState {
                     player,
                     count: opening.charged(player),
                     hand: self.opening_hand(player),
+                })
+            }
+            OpeningStage::PregameBattlefield { cursor, .. } => {
+                let player = *self
+                    .opening_order()?
+                    .get(*cursor)
+                    .ok_or(OpeningError::WrongStage)?;
+                Ok(OpeningDecision::PregameBattlefield {
+                    player,
+                    eligible: self.opening_pregame_eligible(player),
                 })
             }
             _ => Err(OpeningError::WrongStage.into()),
@@ -142,6 +162,22 @@ impl GameState {
                     return Err(OpeningError::WrongStage.into());
                 }
             }
+            (
+                OpeningDecision::PregameBattlefield { player, eligible },
+                DecisionReply::OpeningBattlefield(selected),
+            ) => {
+                let chosen: BTreeSet<_> = selected.iter().copied().collect();
+                if chosen.len() != selected.len() || !chosen.iter().all(|id| eligible.contains(id))
+                {
+                    return Err(OpeningError::InvalidBottom.into());
+                }
+                let opening = self.opening.as_mut().ok_or(OpeningError::NotOpening)?;
+                if let OpeningStage::PregameBattlefield { pending, .. } = &mut opening.stage {
+                    *pending = Some((*player, selected));
+                } else {
+                    return Err(OpeningError::WrongStage.into());
+                }
+            }
             _ => return Err(OpeningError::WrongReply.into()),
         }
         Ok(())
@@ -172,7 +208,10 @@ impl GameState {
                     }
                     if requested.is_empty() {
                         self.opening.as_mut().ok_or(OpeningError::NotOpening)?.stage =
-                            OpeningStage::Complete;
+                            OpeningStage::PregameBattlefield {
+                                cursor: 0,
+                                pending: None,
+                            };
                         continue;
                     }
                     // Bracket the complete simultaneous return cohort with actual receipts.
@@ -262,6 +301,40 @@ impl GameState {
                             cursor: 0,
                             requested: vec![],
                         };
+                }
+                OpeningStage::PregameBattlefield { cursor, pending } => {
+                    if let Some((player, selected)) = pending {
+                        if !selected.is_empty() {
+                            let transition = self.execution.opening_enter_battlefield(
+                                self.execution.revision(),
+                                player,
+                                &selected,
+                            )?;
+                            self.accept_execution(transition, facts);
+                        }
+                        self.opening.as_mut().ok_or(OpeningError::NotOpening)?.stage =
+                            OpeningStage::PregameBattlefield {
+                                cursor: cursor + 1,
+                                pending: None,
+                            };
+                        continue;
+                    }
+                    let order = self.opening_order()?;
+                    let Some(&player) = order.get(cursor) else {
+                        self.opening.as_mut().ok_or(OpeningError::NotOpening)?.stage =
+                            OpeningStage::Complete;
+                        continue;
+                    };
+                    if self.opening_pregame_eligible(player).is_empty() {
+                        self.opening.as_mut().ok_or(OpeningError::NotOpening)?.stage =
+                            OpeningStage::PregameBattlefield {
+                                cursor: cursor + 1,
+                                pending: None,
+                            };
+                        continue;
+                    }
+                    self.bind_decision(RuleFrame::Opening(self.opening_decision()?))?;
+                    return Ok(());
                 }
                 OpeningStage::Complete => {
                     if self.turn.is_some() {

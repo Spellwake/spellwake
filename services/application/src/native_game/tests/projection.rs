@@ -18,11 +18,9 @@ mod mutate;
 mod ninja;
 mod stored_view;
 
+// Test-only call recorder enum; keeping variants unboxed simplifies test assertions.
+#[allow(clippy::large_enum_variant)]
 #[derive(Clone, PartialEq, Eq)]
-#[allow(
-    clippy::large_enum_variant,
-    reason = "The short-lived projection fixture captures exact value inputs for comparison."
-)]
 enum DisplayCall {
     Object(GameObject, Program),
     Ability(GameObject, ObjectCharacteristics, NativeAbilityReference),
@@ -302,6 +300,13 @@ fn capture(snapshot: &PlayerSnapshot) {
         file.write_all(&bytes).unwrap();
     }
 }
+pub(super) fn project_test(
+    view: &mut NativeScope<'_>,
+) -> Result<PlayerSnapshot, NativeProjectionError> {
+    let display = Display::default();
+    view.project(&metadata(), &display)
+}
+
 pub(super) fn verify_view(view: &mut NativeScope<'_>, original: Option<&PlayerCommand>) {
     let source = view.source;
     let before = source.clone();
@@ -1130,6 +1135,16 @@ fn assert_display_trace(snapshot: &PlayerSnapshot, view: &NativeScope<'_>, displ
                             .clone(),
                     ));
                 }
+            }
+            RuleFrame::EntryChoice(frame) => {
+                let obj = source
+                    .execution()
+                    .window()
+                    .cards()
+                    .get(frame.object())
+                    .unwrap();
+                let prog = source.execution().copiable_program(frame.object()).unwrap();
+                expected.push(DisplayCall::Object(obj.clone(), prog.clone()));
             }
             RuleFrame::Damage(DamageDecision::Allocation(frame)) => {
                 for attempt in frame.eligible() {

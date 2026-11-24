@@ -572,6 +572,15 @@ fn reply(fixture: &Fixture, history: &History, value: &DecisionReply) -> Result<
         DecisionReply::SplitMana(_) => {
             return Err("historical scope excludes split mana allocation".into());
         }
+        DecisionReply::OptionIndex(_) => {
+            return Err("historical scope excludes option-index selection".into());
+        }
+        DecisionReply::UntapKeepTapped(_) | DecisionReply::OpeningBattlefield(_) => {
+            return Err(
+                "historical scope excludes untap-keep-tapped and opening-battlefield choices"
+                    .into(),
+            );
+        }
         DecisionReply::ManaColor(v) => ReplyView::ManaColor {
             mana_type: mana_type(*v),
         },
@@ -639,6 +648,7 @@ pub(super) fn input(
             GameCommand::ActivateWithCostObjects { .. }
             | GameCommand::ActivateEmblem { .. }
             | GameCommand::ActivatePermanentTargets { .. }
+            | GameCommand::ActivateModalAbility { .. }
             | GameCommand::ActivateGranted { .. } => {
                 return Err(
                     "ordinary predecessor projection excludes granted activated abilities".into(),
@@ -1230,6 +1240,9 @@ fn decision(
                     count: *count,
                     exact_hand: refs(hand)?,
                 },
+                OpeningDecision::PregameBattlefield { .. } => {
+                    return Err("historical scope excludes pregame battlefield choices".into());
+                }
             },
         },
         RuleFrame::Checks(v) => FrameView::Checks {
@@ -1339,6 +1352,12 @@ fn decision(
         }
         RuleFrame::CreatureType(_) => {
             return Err("ordinary fixture recipe has no creature type decision policy".into());
+        }
+        RuleFrame::OptionIndex(_) => {
+            return Err("ordinary fixture recipe has no option index decision policy".into());
+        }
+        RuleFrame::UntapKeepTapped(_) => {
+            return Err("ordinary fixture recipe has no untap keep-tapped decision policy".into());
         }
         RuleFrame::ManaColor(_) => {
             if fixture.case.observation_contract().observation_scope
@@ -2111,7 +2130,10 @@ pub(super) fn facts(
                                 from_graveyard: true,
                                 ..
                             }
-                            | SourceCost::GraveyardSelf { unearth: false } => {
+                            | SourceCost::GraveyardSelf { unearth: false }
+                            | SourceCost::GraveyardDiscard { .. }
+                            | SourceCost::GraveyardExileOther { .. }
+                            | SourceCost::GraveyardPayLife { .. } => {
                                 return Err(
                                     "historical scope excludes graveyard-source activation".into(),
                                 );

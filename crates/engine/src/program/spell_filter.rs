@@ -19,6 +19,10 @@ pub enum SpellCastZoneFilter {
     OwnLibrary,
     /// Cast directly from a graveyard.
     Graveyard,
+    /// Cast directly from exile.
+    Exile,
+    /// Cast directly from a player's hand.
+    Hand,
     /// Not cast from its owner's hand (including copies never cast).
     NotOwnersHand,
 }
@@ -203,6 +207,20 @@ impl SpellFilter {
         self
     }
 
+    /// Restrict to spells cast directly from exile.
+    #[must_use]
+    pub const fn from_exile(mut self) -> Self {
+        self.cast_zone = SpellCastZoneFilter::Exile;
+        self
+    }
+
+    /// Restrict to spells cast directly from a player's hand.
+    #[must_use]
+    pub const fn from_hand(mut self) -> Self {
+        self.cast_zone = SpellCastZoneFilter::Hand;
+        self
+    }
+
     /// Restrict to spells not cast from their owner's hand (including copies).
     #[must_use]
     pub const fn not_from_owners_hand(mut self) -> Self {
@@ -314,6 +332,11 @@ impl SpellFilter {
                 }
                 SubtypeFilter::Enchantment(kind) => {
                     if !spell.current_enchantment_subtypes.contains(&kind) {
+                        return false;
+                    }
+                }
+                SubtypeFilter::Spell(kind) => {
+                    if !spell.current_spell_subtypes.contains(&kind) {
                         return false;
                     }
                 }

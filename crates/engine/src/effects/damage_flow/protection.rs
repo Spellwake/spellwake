@@ -93,6 +93,46 @@ impl EffectWindow {
                         DamageSource::Emblem { .. } => None,
                     }
                 };
+            let (source_card_types, source_controller): (BTreeSet<CardType>, Option<SeatId>) =
+                if let Some(reflection) = self.current_damage_reflection(&attempt.source) {
+                    (
+                        reflection.card_types.clone(),
+                        match &reflection.source {
+                            DamageSource::Emblem { controller, .. }
+                            | DamageSource::Object { controller, .. }
+                            | DamageSource::SpellCopy { controller, .. } => Some(*controller),
+                        },
+                    )
+                } else {
+                    match &attempt.source {
+                        DamageSource::Object { object, controller } => {
+                            let cts = evaluated
+                                .get(object.id())
+                                .map(|source| source.current_types.clone())
+                                .or_else(|| {
+                                    self.departed_damage_sources
+                                        .get(&object.id())
+                                        .map(|source| source.card_types.clone())
+                                })
+                                .or_else(|| {
+                                    object
+                                        .base_program(&self.programs)
+                                        .map(|p| p.card_types.clone())
+                                })
+                                .unwrap_or_default();
+                            (cts, Some(*controller))
+                        }
+                        DamageSource::SpellCopy { entry, controller } => (
+                            self.stack_copiable_card_types(*entry)
+                                .cloned()
+                                .unwrap_or_default(),
+                            Some(*controller),
+                        ),
+                        DamageSource::Emblem { controller, .. } => {
+                            (BTreeSet::new(), Some(*controller))
+                        }
+                    }
+                };
             for keyword in &target.keywords {
                 if let KeywordAbility::ProtectionFromSubtype(quality) = keyword
                     && source_types
@@ -105,6 +145,31 @@ impl EffectWindow {
                         })
                         .or_default()
                         .push(attempt.id);
+                } else if let KeywordAbility::ProtectionFrom(quality) = keyword {
+                    let matched = match quality {
+                        crate::characteristics::ProtectionFromQuality::Colorless => {
+                            colors.is_empty()
+                        }
+                        crate::characteristics::ProtectionFromQuality::Monocolored => {
+                            colors.len() == 1
+                        }
+                        crate::characteristics::ProtectionFromQuality::CardType(ct) => {
+                            source_card_types.contains(ct)
+                        }
+                        crate::characteristics::ProtectionFromQuality::Everything => true,
+                        crate::characteristics::ProtectionFromQuality::Player(seat) => {
+                            source_controller == Some(*seat)
+                        }
+                    };
+                    if matched {
+                        applications
+                            .entry(DamageApplication {
+                                effect: DamageEffectId::ProtectionFrom(*quality),
+                                scope: DamageScope::Recipient(attempt.target),
+                            })
+                            .or_default()
+                            .push(attempt.id);
+                    }
                 }
             }
             if colors.len() >= 2 && target.has_keyword(KeywordAbility::ProtectionFromMulticolored) {

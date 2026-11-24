@@ -29,6 +29,8 @@ pub enum TokenRecipients {
     EachOpponent,
     /// A single resolving participant (such as target player, target opponent, or target permanent's controller).
     Player(crate::program::ResolvingPlayer),
+    /// Each controller of a permanent destroyed/moved by the preceding group destruction/move instruction.
+    DestroyedPermanentControllers,
 }
 
 /// The ordered resolution phases of a multiplayer token offer.

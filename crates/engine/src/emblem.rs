@@ -41,6 +41,12 @@ pub enum EmblemDefinition {
         power_toughness: PowerToughness,
         keywords: BTreeSet<KeywordAbility>,
     },
+    /// General authored emblem with orthogonal static and triggered abilities.
+    Authored {
+        label: String,
+        continuous: Vec<crate::characteristics::StaticContinuousAbility>,
+        triggered: Vec<crate::program::TriggeredAbility>,
+    },
 }
 /// Retained emblem with an independent timestamp for continuous-effect ordering.
 #[derive(Debug, Clone, PartialEq, Eq)]

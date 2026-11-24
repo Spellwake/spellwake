@@ -30,6 +30,7 @@ pub enum ZoneView {
 pub enum GameObjectOriginView {
     Card { card_id: u64 },
     PermanentSpellCopy { definition: Value },
+    SpellCopy { definition: Value },
     Token { definition: Value },
 }
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -64,6 +65,9 @@ pub fn game_object_view(object: &GameObject) -> GameObjectView {
                     definition: program::view(definition),
                 }
             }
+            ObjectOrigin::SpellCopy { definition } => GameObjectOriginView::SpellCopy {
+                definition: program::view(definition),
+            },
             ObjectOrigin::Token { definition } => GameObjectOriginView::Token {
                 definition: program::view(definition),
             },
@@ -245,6 +249,7 @@ pub enum EffectIdentityView {
     EmblemCap { emblem: String, source: String },
     ProtectionMulticolored,
     ProtectionSubtype { subtype: u16, creatures_only: bool },
+    ProtectionFrom { quality: String },
     Protection { color: String },
     Prevention { id: String },
     Multiplier { id: String },
@@ -263,12 +268,19 @@ pub fn damage_effect_view(effect: DamageEffectId) -> EffectIdentityView {
             source: format!("{source:?}"),
         },
         DamageEffectId::StaticDouble(source)
+        | DamageEffectId::StaticModify(source, _)
         | DamageEffectId::DoubleDamageFromEquippedCreature(source)
         | DamageEffectId::DoubleDamageToEquippedCreature(source) => {
             EffectIdentityView::StaticDouble {
                 source: format!("{source:?}"),
             }
         }
+        DamageEffectId::TemporaryStaticModify(id) => EffectIdentityView::StaticDouble {
+            source: format!("temp_static:{id}"),
+        },
+        DamageEffectId::TemporaryPrevention(id) => EffectIdentityView::StaticPrevention {
+            source: format!("temp_prevent:{id}"),
+        },
         DamageEffectId::StaticHalfPrevention { permanent, source } => {
             EffectIdentityView::StaticHalfPrevention {
                 permanent: format!("{permanent:?}"),
@@ -301,6 +313,9 @@ pub fn damage_effect_view(effect: DamageEffectId) -> EffectIdentityView {
         DamageEffectId::ProtectionSubtype(quality) => EffectIdentityView::ProtectionSubtype {
             subtype: quality.subtype.ordinal(),
             creatures_only: quality.creatures_only,
+        },
+        DamageEffectId::ProtectionFrom(quality) => EffectIdentityView::ProtectionFrom {
+            quality: format!("{quality:?}"),
         },
         DamageEffectId::ProtectionMulticolored => EffectIdentityView::ProtectionMulticolored,
         DamageEffectId::Protection(color) => EffectIdentityView::Protection {
@@ -603,6 +618,9 @@ pub fn protection_view(value: &spellwake_engine::damage::ProtectionPrevention) -
         }
         spellwake_engine::damage::ProtectionQuality::Subtype(quality) => {
             record["quality"] = serde_json::json!({"subtype":quality.subtype.ordinal(),"creatures_only":quality.creatures_only})
+        }
+        spellwake_engine::damage::ProtectionQuality::From(quality) => {
+            record["quality"] = serde_json::json!(format!("{quality:?}"))
         }
     }
     record

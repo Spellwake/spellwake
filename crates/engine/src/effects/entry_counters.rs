@@ -20,7 +20,8 @@ pub(super) fn definition_or_token_matches(
             })
             .flat_map(|b| &b.instructions)
             .any(|op| match op {
-                Instruction::CreateTokenAndAttach { definition } => {
+                Instruction::CreateTokenAndAttach { definition }
+                | Instruction::CreateAuraTokenAttached { definition, .. } => {
                     definition_or_token_matches(definition.program(), matches)
                 }
                 Instruction::CreateTokens { creations } => creations
@@ -100,6 +101,15 @@ impl EffectWindow {
                 };
                 tapped = match rule {
                     EntryTap::ReadAhead { .. } => false,
+                    EntryTap::Tribute(_) => {
+                        if matches!(
+                            self.entry_choices.get(&object).copied(),
+                            Some(crate::land::EntryChoice::OptionIndex(0))
+                        ) {
+                            self.characteristics.tribute_paid.insert(object);
+                        }
+                        false
+                    }
                     EntryTap::Always => true,
                     EntryTap::AlwaysChooseColorExcept(excluded) => {
                         let chosen = self
@@ -110,6 +120,80 @@ impl EffectWindow {
                             return Err(EffectError::IllegalEntryColor);
                         }
                         true
+                    }
+                    EntryTap::ChooseColor => {
+                        let chosen = self
+                            .entry_color_choices
+                            .get(&object)
+                            .ok_or(EffectError::EntryColorChoiceRequired)?;
+                        if *chosen == ManaType::Colourless {
+                            return Err(EffectError::IllegalEntryColor);
+                        }
+                        false
+                    }
+                    EntryTap::ChooseColorExcept(excluded) => {
+                        let chosen = self
+                            .entry_color_choices
+                            .get(&object)
+                            .ok_or(EffectError::EntryColorChoiceRequired)?;
+                        if *chosen == excluded || *chosen == ManaType::Colourless {
+                            return Err(EffectError::IllegalEntryColor);
+                        }
+                        false
+                    }
+                    EntryTap::ChooseOpponent => {
+                        let Some(crate::land::EntryChoice::Opponent(player)) =
+                            self.entry_choices.get(&object).copied()
+                        else {
+                            return Err(EffectError::SelectionRequired);
+                        };
+                        if !opponents()?.contains(&player) {
+                            return Err(EffectError::IllegalTarget);
+                        }
+                        false
+                    }
+                    EntryTap::ChoosePlayer => {
+                        let Some(crate::land::EntryChoice::Opponent(player)) =
+                            self.entry_choices.get(&object).copied()
+                        else {
+                            return Err(EffectError::SelectionRequired);
+                        };
+                        if !previous.window.participants().contains(&player) {
+                            return Err(EffectError::IllegalTarget);
+                        }
+                        false
+                    }
+                    EntryTap::ChooseCardType
+                    | EntryTap::ChooseBasicLandType
+                    | EntryTap::ChooseOddOrEven
+                    | EntryTap::ChooseKhansOrDragons
+                    | EntryTap::Unleash
+                    | EntryTap::Riot => {
+                        let Some(crate::land::EntryChoice::OptionIndex(idx)) =
+                            self.entry_choices.get(&object).copied()
+                        else {
+                            return Err(EffectError::SelectionRequired);
+                        };
+                        if !rule
+                            .option_labels()
+                            .is_some_and(|labels| usize::from(idx) < labels.len())
+                        {
+                            return Err(EffectError::IllegalTarget);
+                        }
+                        false
+                    }
+                    EntryTap::ChooseModalFace => {
+                        if let Some(crate::land::EntryChoice::OptionIndex(idx)) =
+                            self.entry_choices.get(&object).copied()
+                        {
+                            if idx >= 2 {
+                                return Err(EffectError::IllegalTarget);
+                            }
+                            if idx == 1 {
+                                self.window.enter_transformed(object)?;
+                            }
+                        }
+                        false
                     }
                     EntryTap::ChosenOpponentControls => {
                         if let Some(crate::land::EntryChoice::Opponent(player)) =
@@ -271,6 +355,35 @@ impl EffectWindow {
                 };
             }
         }
+        if !tapped
+            && let Some(cond) = self
+                .copiable_program(object)
+                .and_then(|p| p.entry_tap_unless.as_deref())
+                .cloned()
+            && let Some(current) = self.current_characteristics(object)?
+            && let Some(controller) = current.controller
+        {
+            let previous = before.view();
+            let ctx = crate::characteristics::WorldEvalCtx {
+                active_player: previous.window.active_player(),
+                participants: previous.window.participants(),
+                life: Some(previous.life),
+                combat: self.combat.as_ref(),
+                cards: previous.cards,
+                programs: &self.programs,
+                state: &self.characteristics,
+                objects: &previous.evaluated.objects,
+                source: object,
+                controller,
+                name_rules: &self.name_rules,
+                trigger_subject: None,
+                related_player: None,
+                defending_player: None,
+            };
+            if !crate::characteristics::eval_world_condition(&ctx, &cond) {
+                tapped = true;
+            }
+        }
         if !tapped {
             let previous = before.view();
             let has_others_tapped_rule = previous.evaluated.objects.values().any(|perm| {
@@ -287,17 +400,32 @@ impl EffectWindow {
                             }
                         )
                     })
+            }) || self.temporary_rules.iter().any(|active| {
+                matches!(
+                    &active.rule,
+                    crate::program::TemporaryRuleKind::TemporaryStatic(ab)
+                        if matches!(
+                            ab.as_ref(),
+                            crate::characteristics::StaticContinuousAbility::Restriction {
+                                rule: crate::characteristics::StaticRestriction::OthersEnterTapped(
+                                    _
+                                ),
+                                ..
+                            }
+                        )
+                )
             });
             if has_others_tapped_rule {
                 let evaluated_now = self.evaluated_characteristics()?;
-                tapped = previous.evaluated.objects.values().any(|perm| {
-                    if perm.zone != ObjectZone::Battlefield || perm.object == object {
-                        return false;
-                    }
-                    let Some(perm_ctrl) = perm.controller else {
-                        return false;
-                    };
-                    perm.printed_text
+                tapped =
+                    previous.evaluated.objects.values().any(|perm| {
+                        if perm.zone != ObjectZone::Battlefield || perm.object == object {
+                            return false;
+                        }
+                        let Some(perm_ctrl) = perm.controller else {
+                            return false;
+                        };
+                        perm.printed_text
                         .continuous
                         .iter()
                         .chain(&perm.printed_text.additional_battlefield_abilities)
@@ -331,7 +459,131 @@ impl EffectWindow {
                                 false
                             }
                         })
+                    })
+                        || self.temporary_rules.iter().any(|active| {
+                            let crate::program::TemporaryRuleKind::TemporaryStatic(ab) =
+                                &active.rule
+                            else {
+                                return false;
+                            };
+                            let crate::characteristics::StaticContinuousAbility::Restriction {
+                                rule:
+                                    crate::characteristics::StaticRestriction::OthersEnterTapped(
+                                        selector,
+                                    ),
+                                ..
+                            } = ab.as_ref()
+                            else {
+                                return false;
+                            };
+                            let src = active.source_object.unwrap_or(object);
+                            crate::characteristics::selector_matches_permanent(
+                                self.window.cards(),
+                                &evaluated_now,
+                                src,
+                                active.controller,
+                                selector,
+                                object,
+                                &self.name_rules,
+                            )
+                        });
+            }
+        }
+        if tapped {
+            let previous = before.view();
+            let has_enter_untapped_rule = previous.evaluated.objects.values().any(|perm| {
+                perm.zone == ObjectZone::Battlefield
+                    && perm.has_battlefield_rule(|rule| {
+                        matches!(
+                            rule,
+                            crate::characteristics::StaticContinuousAbility::Restriction {
+                                rule: crate::characteristics::StaticRestriction::EnterUntapped(_),
+                                ..
+                            }
+                        )
+                    })
+            }) || self.temporary_rules.iter().any(|active| {
+                matches!(
+                    &active.rule,
+                    crate::program::TemporaryRuleKind::TemporaryStatic(ab)
+                        if matches!(
+                            ab.as_ref(),
+                            crate::characteristics::StaticContinuousAbility::Restriction {
+                                rule: crate::characteristics::StaticRestriction::EnterUntapped(_),
+                                ..
+                            }
+                        )
+                )
+            });
+            if has_enter_untapped_rule {
+                let evaluated_now = self.evaluated_characteristics()?;
+                let forced_untapped = previous.evaluated.objects.values().any(|perm| {
+                    if perm.zone != ObjectZone::Battlefield {
+                        return false;
+                    }
+                    let Some(perm_ctrl) = perm.controller else {
+                        return false;
+                    };
+                    perm.printed_text
+                        .continuous
+                        .iter()
+                        .chain(&perm.printed_text.additional_battlefield_abilities)
+                        .any(|ability| {
+                            let active = perm.abilities.continuous == Some(ability.id())
+                                || perm
+                                    .abilities
+                                    .additional_battlefield_abilities
+                                    .contains(&ability.id());
+                            if !active {
+                                return false;
+                            }
+                            if let crate::characteristics::StaticContinuousAbility::Restriction {
+                                rule:
+                                    crate::characteristics::StaticRestriction::EnterUntapped(
+                                        selector,
+                                    ),
+                                ..
+                            } = ability
+                            {
+                                crate::characteristics::selector_matches_permanent(
+                                    self.window.cards(),
+                                    &evaluated_now,
+                                    perm.object,
+                                    perm_ctrl,
+                                    selector,
+                                    object,
+                                    &self.name_rules,
+                                )
+                            } else {
+                                false
+                            }
+                        })
+                }) || self.temporary_rules.iter().any(|active| {
+                    let crate::program::TemporaryRuleKind::TemporaryStatic(ab) = &active.rule
+                    else {
+                        return false;
+                    };
+                    let crate::characteristics::StaticContinuousAbility::Restriction {
+                        rule: crate::characteristics::StaticRestriction::EnterUntapped(selector),
+                        ..
+                    } = ab.as_ref()
+                    else {
+                        return false;
+                    };
+                    let src = active.source_object.unwrap_or(object);
+                    crate::characteristics::selector_matches_permanent(
+                        self.window.cards(),
+                        &evaluated_now,
+                        src,
+                        active.controller,
+                        selector,
+                        object,
+                        &self.name_rules,
+                    )
                 });
+                if forced_untapped {
+                    tapped = false;
+                }
             }
         }
         if tapped {
@@ -386,6 +638,12 @@ impl EffectWindow {
             placement.plus_one = placement.plus_one.plus(&RulesInteger::from_usize(count));
         }
         self.apply_entry_status(object, before)?;
+        if self
+            .copiable_program(object)
+            .is_some_and(|program| program.enters_prepared)
+        {
+            self.characteristics.prepared.insert(object);
+        }
         let controller = self
             .current_characteristics(object)?
             .and_then(|current| current.controller)
@@ -409,6 +667,36 @@ impl EffectWindow {
                     .map(crate::stack_window::StackEntry::id)
             })
             .unwrap_or_else(StackEntryId::entry_replacement_creator);
+        if let Some(entry_tap) = self
+            .copiable_program(object)
+            .and_then(|p| p.permanent())
+            .and_then(|p| p.entry_tap)
+        {
+            match (entry_tap, self.entry_choices.get(&object).copied()) {
+                (
+                    crate::land::EntryTap::Unleash,
+                    Some(crate::land::EntryChoice::OptionIndex(1)),
+                )
+                | (crate::land::EntryTap::Riot, Some(crate::land::EntryChoice::OptionIndex(0))) => {
+                    placement.plus_one = placement.plus_one.plus(&1.into());
+                }
+                (crate::land::EntryTap::Riot, Some(crate::land::EntryChoice::OptionIndex(1))) => {
+                    self.characteristics.add_effect_for_objects(
+                        grant_entry,
+                        BTreeSet::from([object]),
+                        crate::characteristics::ResolvedParts(vec![
+                            crate::characteristics::ResolvedPart::Abilities(
+                                crate::characteristics::AbilityChange::grant_keywords([
+                                    KeywordAbility::Haste,
+                                ]),
+                            ),
+                        ]),
+                        crate::characteristics::ResolvedDuration::NoStatedDuration,
+                    )?;
+                }
+                _ => {}
+            }
+        }
         let previous = before.view();
         if let Some(entrant) = self.current_characteristics(object)? {
             let current_eval = self.evaluated_characteristics()?;
@@ -759,8 +1047,35 @@ impl EffectWindow {
                             charge = charge.plus(&color_count);
                         }
                     }
+                    EntryCounterAbility::Amplify(n) => {
+                        let shared = previous
+                            .evaluated
+                            .objects
+                            .values()
+                            .filter(|card| {
+                                card.zone == ObjectZone::Hand(controller)
+                                    && card.object != object
+                                    && card.is_creature()
+                                    && !card
+                                        .current_creature_subtypes
+                                        .is_disjoint(&current.current_creature_subtypes)
+                            })
+                            .count();
+                        if shared > 0 {
+                            placement.plus_one = placement.plus_one.plus(
+                                &RulesInteger::from_usize(shared)
+                                    .times(&RulesInteger::from(i64::from(*n))),
+                            );
+                        }
+                    }
                 }
             }
+        }
+        if let Some(current) = self.current_characteristics(object)?
+            && let Some(crate::land::EntryTap::Tribute(n)) = current.abilities.entry_tap
+            && self.characteristics.tribute_paid.contains(&object)
+        {
+            placement.plus_one = placement.plus_one.plus(&RulesInteger::from(i64::from(n)));
         }
         self.apply_fading_vanishing_entry(object, &multiplier)?;
         if placement.valid_placement() {

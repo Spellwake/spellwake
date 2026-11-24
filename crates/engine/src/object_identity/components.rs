@@ -153,6 +153,7 @@ impl GameObjects {
         if on_top {
             additional.insert(0, std::mem::replace(&mut new_host.origin, origin));
             new_host.transformed = incoming.transformed;
+            new_host.prototype = incoming.prototype;
             new_host.face_down = incoming.face_down;
         } else {
             additional.push(origin);

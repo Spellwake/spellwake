@@ -202,23 +202,40 @@ impl EffectWindow {
         if cursor.entry != entry.id() || cursor.instruction != instruction {
             return Err(EffectError::InconsistentProgram);
         }
-        let owner = match self.current_instruction()? {
-            Instruction::ExileRelatedTopForPlay | Instruction::ExileRelatedTopForCastThisTurn => {
-                self.resolving_player(crate::program::ResolvingPlayer::UniqueRelatedPlayer)?
-            }
-            Instruction::ExileTargetUntilNonlandForFreeCast => {
-                self.resolving_player(crate::program::ResolvingPlayer::TargetPlayer)?
-            }
-            _ => entry.controller(),
+        let (owners, face_down_viewer, play_permission) = match self.current_instruction()? {
+            Instruction::ExileRelatedTopForPlay | Instruction::ExileRelatedTopForCastThisTurn => (
+                vec![self.resolving_player(crate::program::ResolvingPlayer::UniqueRelatedPlayer)?],
+                None,
+                Some(entry.controller()),
+            ),
+            Instruction::ExileTargetUntilNonlandForFreeCast => (
+                vec![self.resolving_player(crate::program::ResolvingPlayer::TargetPlayer)?],
+                None,
+                Some(entry.controller()),
+            ),
+            Instruction::ExileTopPlay {
+                library_owner,
+                face_down,
+                grant_play,
+                ..
+            } => (
+                self.selection_players(*library_owner, entry.controller(), Some(&cursor))?,
+                (*face_down).then_some(entry.controller()),
+                (*grant_play).then_some(entry.controller()),
+            ),
+            _ => (vec![entry.controller()], None, Some(entry.controller())),
         };
-        let objects = self
-            .window
-            .cards()
-            .library(owner)
-            .iter()
-            .take(count)
-            .copied()
-            .collect::<Vec<_>>();
+        let mut objects = Vec::new();
+        for owner in owners {
+            objects.extend(
+                self.window
+                    .cards()
+                    .library(owner)
+                    .iter()
+                    .take(count)
+                    .copied(),
+            );
+        }
         if objects.is_empty() {
             return Ok(false);
         }
@@ -230,8 +247,8 @@ impl EffectWindow {
             ImpulseReplacementWork {
                 cursor,
                 objects,
-                play_permission: Some(entry.controller()),
-                face_down_viewer: None,
+                play_permission,
+                face_down_viewer,
                 bottom_from_exile: false,
                 return_to_hand: false,
                 graveyard_orders: BTreeMap::new(),
@@ -461,25 +478,33 @@ impl EffectWindow {
                 .filter(|entry| entry.id() == work.cursor.entry)
                 .ok_or(EffectError::WrongResolutionFrame)?
                 .controller();
-            let (window, movements) = if work.return_to_hand || work.bottom_from_exile {
-                self.window.record_linked_return_moves(&moves)?
-            } else {
-                {
-                    let owner = self
-                        .window
-                        .cards()
-                        .get(work.objects[0])
-                        .ok_or(EffectError::UnknownObject)?
-                        .owner();
-                    self.window.record_library_search_moves(
-                        self.window.revision(),
-                        work.cursor.entry,
-                        owner,
-                        player,
-                        &moves,
-                    )?
-                }
-            };
+            let multi_owner = work.objects.first().is_some_and(|first| {
+                let first_owner = self.window.cards().get(*first).map(GameObject::owner);
+                work.objects
+                    .iter()
+                    .skip(1)
+                    .any(|id| self.window.cards().get(*id).map(GameObject::owner) != first_owner)
+            });
+            let (window, movements) =
+                if work.return_to_hand || work.bottom_from_exile || multi_owner {
+                    self.window.record_linked_return_moves(&moves)?
+                } else {
+                    {
+                        let owner = self
+                            .window
+                            .cards()
+                            .get(work.objects[0])
+                            .ok_or(EffectError::UnknownObject)?
+                            .owner();
+                        self.window.record_library_search_moves(
+                            self.window.revision(),
+                            work.cursor.entry,
+                            owner,
+                            player,
+                            &moves,
+                        )?
+                    }
+                };
             self.window = window;
             movements
         };
@@ -565,8 +590,15 @@ impl EffectWindow {
                     duration,
                     cast_only,
                     free,
+                    any_color,
                     ..
-                }) => Some((*duration, *cast_only, *free)),
+                }) => Some((*duration, *cast_only, *free, *any_color)),
+                _ => None,
+            };
+            let exile_source = match entry.kind() {
+                StackKind::TriggeredAbility { source } | StackKind::ActivatedAbility { source } => {
+                    Some(source.id())
+                }
                 _ => None,
             };
             let until_nonland = self
@@ -581,12 +613,21 @@ impl EffectWindow {
                     if per_type {
                         continue;
                     }
-                    if let Some((duration, cast_only, free)) = exile_top_play {
+                    if let Some((duration, cast_only, free, any_color_mana)) = exile_top_play {
                         if cast_only
                             && self
                                 .copiable_program(movement.after.id())
                                 .is_some_and(|program| program.has_type(CardType::Land))
                         {
+                            continue;
+                        }
+                        if duration == crate::program::ImpulsePlayDuration::UntilNextFromSource
+                            && let Some(source) = exile_source
+                        {
+                            self.exile_play_until_next.insert(source, permission);
+                            if free {
+                                self.free_exiled_cards.insert(permission);
+                            }
                             continue;
                         }
                         let mapped_duration = match duration {
@@ -600,7 +641,8 @@ impl EffectWindow {
                                     CardPlayDuration::ThroughNextOwnTurn(player)
                                 }
                             }
-                            crate::program::ImpulsePlayDuration::WhileExiled => {
+                            crate::program::ImpulsePlayDuration::WhileExiled
+                            | crate::program::ImpulsePlayDuration::UntilNextFromSource => {
                                 CardPlayDuration::WhileInZone
                             }
                         };
@@ -609,7 +651,9 @@ impl EffectWindow {
                             object: permission.0,
                             player,
                             duration: mapped_duration,
-                            any_color: false,
+                            any_color: any_color_mana,
+                            free,
+                            cast_only,
                         });
                         if free {
                             self.free_exiled_cards.insert(permission);
@@ -625,6 +669,8 @@ impl EffectWindow {
                                 player,
                                 duration: CardPlayDuration::ThroughTurn,
                                 any_color: false,
+                                free: true,
+                                cast_only: true,
                             });
                             self.free_exiled_cards.insert(permission);
                         }
@@ -635,6 +681,8 @@ impl EffectWindow {
                             player,
                             duration: CardPlayDuration::ThroughTurn,
                             any_color: false,
+                            free: true,
+                            cast_only: false,
                         });
                         self.free_exiled_cards.insert(permission);
                     } else if free_noncreature {
@@ -648,6 +696,8 @@ impl EffectWindow {
                             player,
                             duration: CardPlayDuration::WhileInZone,
                             any_color: true,
+                            free: false,
+                            cast_only: false,
                         });
                     } else if let Some(source) = linked_source {
                         self.exile_play_until_next.insert(source, permission);
@@ -658,6 +708,8 @@ impl EffectWindow {
                             player,
                             duration: CardPlayDuration::ThroughTurn,
                             any_color: false,
+                            free: false,
+                            cast_only: false,
                         });
                     }
                 }
@@ -795,7 +847,10 @@ impl EffectWindow {
                     .checked_add(1)
                     .ok_or(EffectError::InconsistentProgram)?;
             }
-        } else if work.play_permission.is_some() || work.return_to_hand {
+        } else if work.play_permission.is_some()
+            || work.return_to_hand
+            || matches!(operation, Some(Instruction::ExileTopPlay { .. }))
+        {
             work.cursor.instruction = work
                 .cursor
                 .instruction

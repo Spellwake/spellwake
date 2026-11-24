@@ -219,6 +219,9 @@ impl EffectWindow {
             if !entry.kicker_choices().is_empty() {
                 self.characteristics.kicked.insert(movement.after.id());
             }
+            self.characteristics
+                .cast_summaries
+                .insert(movement.after.id(), entry.cast_summary().clone());
             if entry.paid_conditional_cost()
                 && self.copiable_program(movement.after.id()).is_some_and(|p| {
                     matches!(
@@ -318,6 +321,17 @@ impl EffectWindow {
                 self.characteristics
                     .attach(movement.after.id(), bound.choice().target, true)?;
             }
+        }
+        if completion == crate::occurrence::EntryCompletion::Resolved
+            && let StackKind::ActivatedAbility { source } | StackKind::TriggeredAbility { source } =
+                entry.kind()
+        {
+            let count = self
+                .characteristics
+                .ability_resolutions_by_source_this_turn
+                .entry(source.id())
+                .or_insert(0);
+            *count = count.saturating_add(1);
         }
         let reason = if matches!(destination, Some(ObjectDestination::Battlefield { .. })) {
             ZoneReason::PermanentResolution
@@ -558,6 +572,36 @@ impl EffectWindow {
                 .ok_or(EffectError::InconsistentProgram)?;
             self.record_mana_lots(appearance, recipient, &produced, effect)?;
         }
+        let was_snow = sacrificed_source
+            .as_ref()
+            .map(|source| source.was_snow)
+            .unwrap_or_else(|| {
+                before.evaluated.get(source).is_some_and(|object| {
+                    object
+                        .current_supertypes
+                        .contains(&crate::program::Supertype::Snow)
+                })
+            });
+        let was_treasure = sacrificed_source
+            .as_ref()
+            .map(|source| source.was_treasure)
+            .unwrap_or_else(|| {
+                before.evaluated.get(source).is_some_and(|object| {
+                    object
+                        .current_artifact_subtypes
+                        .contains(&crate::program::ArtifactSubtype::Treasure)
+                })
+            });
+        let was_creature = sacrificed_source
+            .as_ref()
+            .map(|source| source.was_creature)
+            .unwrap_or_else(|| {
+                before
+                    .evaluated
+                    .get(source)
+                    .is_some_and(|object| object.is_creature())
+            });
+        self.record_mana_source_traits(recipient, &produced, was_snow, was_treasure, was_creature);
         let production = self.credit_mana(
             source,
             ability,
@@ -717,7 +761,16 @@ impl EffectWindow {
             &payment.restricted_mana,
             Some(&payment.from_lots),
         )?;
+        let (spent_snow, spent_treasure, spent_creature) =
+            self.consume_mana_source_traits(payment.payer, &payment.spend);
         if casting {
+            self.window.record_cast_mana_summary(
+                payment.source,
+                &payment.spend,
+                spent_snow,
+                spent_treasure,
+                spent_creature,
+            )?;
             self.floating_mana.remember_cast(payment.source, spent);
             if let Some(StackPayload::Instructions(payload)) =
                 self.payloads.get_mut(&payment.source)
@@ -775,6 +828,237 @@ impl EffectWindow {
         // Its preceding after-result remains exact for the next unchanged before-cut.
         let context = self.rules_snapshot(None)?;
         let mut amount = amount;
+        if amount.is_positive() && !matches!(origin, DrawOrigin::Opening) {
+            let opponents = self
+                .combat_rules
+                .opponents(self.window.participants(), player)?;
+            let draw_prohibited = context.evaluated.objects.values().any(|perm| {
+                perm.zone == ObjectZone::Battlefield
+                    && perm.has_battlefield_rule(|rule| match rule {
+                        crate::characteristics::StaticContinuousAbility::DrawRule {
+                            rule: crate::characteristics::StaticDrawRule::PlayersCannotDraw,
+                            ..
+                        } => true,
+                        crate::characteristics::StaticContinuousAbility::DrawRule {
+                            rule: crate::characteristics::StaticDrawRule::OpponentsCannotDraw,
+                            ..
+                        } => perm.controller.is_some_and(|c| opponents.contains(&c)),
+                        _ => false,
+                    })
+            });
+            if draw_prohibited {
+                amount = 0.into();
+            }
+        }
+        if amount.is_positive() && !matches!(origin, DrawOrigin::Opening) {
+            // Apply StaticDrawRule::ModifyDraw (Teferi's Ageless Insight, Thought Reflection, Phial of Galadriel).
+            let hand_empty = self
+                .window
+                .cards()
+                .iter()
+                .all(|obj| obj.zone() != ObjectZone::Hand(player));
+            let is_first_draw_step = matches!(origin, DrawOrigin::Turn { .. })
+                && !self.cards_drawn_this_turn.contains_key(&player);
+            let mut total_add = 0i64;
+            let mut factors: Vec<u8> = Vec::new();
+            let mut skip_first_any = false;
+            let mut skip_draw = false;
+            let opponents = self
+                .combat_rules
+                .opponents(self.window.participants(), player)?;
+            for perm in context
+                .evaluated
+                .objects
+                .values()
+                .filter(|p| p.zone == ObjectZone::Battlefield)
+            {
+                let Some(perm_ctrl) = perm.controller else {
+                    continue;
+                };
+                for ability in perm
+                    .printed_text
+                    .continuous
+                    .iter()
+                    .chain(&perm.printed_text.additional_battlefield_abilities)
+                {
+                    let active = perm.abilities.continuous == Some(ability.id())
+                        || perm
+                            .abilities
+                            .additional_battlefield_abilities
+                            .contains(&ability.id());
+                    if !active {
+                        continue;
+                    }
+                    match ability {
+                        crate::characteristics::StaticContinuousAbility::DrawRule {
+                            rule:
+                                crate::characteristics::StaticDrawRule::ModifyDraw {
+                                    add,
+                                    multiply,
+                                    skip_first_draw_step,
+                                    require_empty_hand,
+                                },
+                            ..
+                        } if perm_ctrl == player => {
+                            if *require_empty_hand && !hand_empty {
+                                continue;
+                            }
+                            if *skip_first_draw_step && is_first_draw_step {
+                                if amount <= 1.into() {
+                                    continue;
+                                }
+                                skip_first_any = true;
+                            }
+                            total_add = total_add.saturating_add(i64::from(*add));
+                            if *multiply > 1 {
+                                factors.push(*multiply);
+                            }
+                        }
+                        crate::characteristics::StaticContinuousAbility::EventReplacement {
+                            event: crate::characteristics::ReplaceableEvent::Draw { player: rel },
+                            condition,
+                            action,
+                            ..
+                        } => {
+                            let applies = match rel {
+                                crate::program::AffectedPlayers::One(
+                                    crate::program::ResolvingPlayer::Controller,
+                                ) => player == perm_ctrl,
+                                crate::program::AffectedPlayers::EachOpponent
+                                | crate::program::AffectedPlayers::EachOtherPlayer => {
+                                    opponents.contains(&perm_ctrl)
+                                }
+                                crate::program::AffectedPlayers::EachPlayer
+                                | crate::program::AffectedPlayers::One(_) => true,
+                            };
+                            if !applies {
+                                continue;
+                            }
+                            let ctx = crate::characteristics::WorldEvalCtx {
+                                active_player: self.window.active_player(),
+                                participants: self.window.participants(),
+                                life: Some(&self.life),
+                                combat: self.combat.as_ref(),
+                                cards: self.window.cards(),
+                                programs: &self.programs,
+                                state: &self.characteristics,
+                                objects: &context.evaluated.objects,
+                                source: perm.object,
+                                controller: perm_ctrl,
+                                name_rules: &self.name_rules,
+                                trigger_subject: None,
+                                related_player: None,
+                                defending_player: None,
+                            };
+                            let cond_ok = condition.as_deref().is_none_or(|cond| match cond {
+                                crate::characteristics::StaticSourceCondition::Eval(rc) => {
+                                    crate::characteristics::eval_world_condition(&ctx, rc)
+                                }
+                                _ => true,
+                            });
+                            if !cond_ok {
+                                continue;
+                            }
+                            match action {
+                                crate::characteristics::StaticReplacementAction::ModifyAmount {
+                                    add,
+                                    multiply,
+                                } => {
+                                    let val =
+                                        crate::characteristics::eval_world_value_expr(&ctx, add);
+                                    if val.is_positive()
+                                        && let Some(u) = val.to_usize()
+                                    {
+                                        total_add = total_add
+                                            .saturating_add(i64::try_from(u).unwrap_or(i64::MAX));
+                                    }
+                                    if *multiply > 1 {
+                                        factors.push(*multiply);
+                                    }
+                                }
+                                crate::characteristics::StaticReplacementAction::Skip => {
+                                    skip_draw = true;
+                                }
+                                crate::characteristics::StaticReplacementAction::ReplaceWithBody {
+                                    ..
+                                } => {}
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            for active in &self.temporary_rules {
+                if active.consumed {
+                    continue;
+                }
+                if let crate::program::TemporaryRuleKind::TemporaryStatic(ab) = &active.rule
+                    && let crate::characteristics::StaticContinuousAbility::EventReplacement {
+                        event: crate::characteristics::ReplaceableEvent::Draw { player: rel },
+                        action,
+                        ..
+                    } = ab.as_ref()
+                {
+                    let applies = match rel {
+                        crate::program::AffectedPlayers::One(
+                            crate::program::ResolvingPlayer::Controller,
+                        ) => player == active.controller,
+                        crate::program::AffectedPlayers::EachOpponent
+                        | crate::program::AffectedPlayers::EachOtherPlayer => {
+                            opponents.contains(&active.controller)
+                        }
+                        crate::program::AffectedPlayers::EachPlayer
+                        | crate::program::AffectedPlayers::One(_) => true,
+                    };
+                    if !applies {
+                        continue;
+                    }
+                    match action {
+                        crate::characteristics::StaticReplacementAction::ModifyAmount {
+                            add,
+                            multiply,
+                        } => {
+                            if let crate::program::ValueExpr::Literal(v) = add.as_ref()
+                                && let Some(u) = v.to_usize()
+                            {
+                                total_add =
+                                    total_add.saturating_add(i64::try_from(u).unwrap_or(i64::MAX));
+                            }
+                            if *multiply > 1 {
+                                factors.push(*multiply);
+                            }
+                        }
+                        crate::characteristics::StaticReplacementAction::Skip => {
+                            skip_draw = true;
+                        }
+                        crate::characteristics::StaticReplacementAction::ReplaceWithBody {
+                            ..
+                        } => {}
+                    }
+                }
+            }
+            if skip_draw {
+                amount = 0.into();
+            } else if total_add != 0 || !factors.is_empty() {
+                if skip_first_any {
+                    let mut rest = amount.minus(&1.into());
+                    if total_add != 0 {
+                        rest = rest.plus(&RulesInteger::from(total_add)).max(0.into());
+                    }
+                    for f in factors {
+                        rest = rest.times(&RulesInteger::from(i64::from(f)));
+                    }
+                    amount = rest.plus(&1.into());
+                } else {
+                    if total_add != 0 {
+                        amount = amount.plus(&RulesInteger::from(total_add)).max(0.into());
+                    }
+                    for f in factors {
+                        amount = amount.times(&RulesInteger::from(i64::from(f)));
+                    }
+                }
+            }
+        }
         if amount.is_positive() {
             let capped = self
                 .combat_rules
@@ -892,6 +1176,57 @@ impl EffectWindow {
                         // The first impossible draw is replaced. Later draws never occur.
                         journal.events.pop();
                         self.won_by_effect = Some((player, source));
+                    } else if matches!(journal.events.last(), Some(DrawEvent::EmptyLibrary { .. }))
+                        && let Some((source, kind, count)) = before_evaluated
+                            .objects
+                            .values()
+                            .filter(|p| {
+                                p.zone == ObjectZone::Battlefield && p.controller == Some(player)
+                            })
+                            .find_map(|p| {
+                                p.printed_text
+                                    .continuous
+                                    .iter()
+                                    .chain(&p.printed_text.additional_battlefield_abilities)
+                                    .find_map(|ab| {
+                                        let active = p.abilities.continuous == Some(ab.id())
+                                            || p.abilities
+                                                .additional_battlefield_abilities
+                                                .contains(&ab.id());
+                                        if !active {
+                                            return None;
+                                        }
+                                        if let crate::characteristics::StaticContinuousAbility::DrawRule {
+                                            rule:
+                                                crate::characteristics::StaticDrawRule::EmptyDrawPutCounters {
+                                                    kind,
+                                                    amount,
+                                                },
+                                            ..
+                                        } = ab
+                                        {
+                                            Some((p.object, *kind, *amount))
+                                        } else {
+                                            None
+                                        }
+                                    })
+                            })
+                    {
+                        journal.events.pop();
+                        self.window = window;
+                        if kind == CounterKind::PlusOne {
+                            let added = PowerToughnessCounters {
+                                plus_one: i64::from(count).into(),
+                                minus_one: 0.into(),
+                            };
+                            let _ = self.characteristics.place_counters(source, &added);
+                        } else if let Some(map) =
+                            self.characteristics.named_permanent_counters_mut(kind)
+                        {
+                            let entry = map.entry(source).or_insert_with(|| 0.into());
+                            *entry = entry.plus(&i64::from(count).into());
+                        }
+                        return Ok(journal);
                     }
                     if let Some(DrawEvent::EmptyLibrary { player, attempts }) =
                         journal.events.last()
@@ -1271,6 +1606,7 @@ impl EffectWindow {
                         .map(|pt| pt.power.clone()),
                     was_creature: appearance.types.contains(&CardType::Creature),
                     creature_subtypes: appearance.creature_subtypes.clone(),
+                    card_types: appearance.types.clone(),
                     colors: appearance.colors.clone(),
                     object: appearance.object.clone(),
                     keywords,
@@ -1694,6 +2030,32 @@ impl EffectWindow {
                             grant,
                         }
                     }
+                    TriggerEvent::StateThreshold(StateThresholdKind::Eval(ref cond)) => {
+                        let ctx = crate::characteristics::WorldEvalCtx {
+                            active_player: self.window.active_player(),
+                            participants: self.window.participants(),
+                            life: Some(&self.life),
+                            combat: self.combat.as_ref(),
+                            cards: self.window.cards(),
+                            programs: &self.programs,
+                            state: &self.characteristics,
+                            objects: &evaluated.objects,
+                            source: object,
+                            controller,
+                            name_rules: &self.name_rules,
+                            trigger_subject: None,
+                            related_player: None,
+                            defending_player: None,
+                        };
+                        if !crate::characteristics::eval_world_condition(&ctx, cond) {
+                            continue;
+                        }
+                        RulesOccurrence::StateConditionMet {
+                            object,
+                            definition: definition.id,
+                            grant,
+                        }
+                    }
                     _ => continue,
                 };
                 let pending = self.triggers.waiting().values().any(|waiting| {
@@ -1870,23 +2232,70 @@ impl EffectWindow {
             match value {
                 RulesOccurrence::ZoneChange(change) => {
                     if change.before.object.zone() == ObjectZone::Battlefield
+                        && matches!(change.after.object.zone(), ObjectZone::Graveyard(_))
+                    {
+                        self.characteristics
+                            .died_this_turn
+                            .insert(change.after.object.id());
+                    }
+                    if change.before.object.zone() == ObjectZone::Battlefield
                         && change.before.is_creature()
                         && matches!(change.after.object.zone(), ObjectZone::Graveyard(_))
                     {
                         self.creatures_died_this_turn =
                             self.creatures_died_this_turn.plus(&1.into());
+                        self.characteristics.creatures_died_this_turn_count = self
+                            .characteristics
+                            .creatures_died_this_turn_count
+                            .saturating_add(1);
+                        if let Some(ctrl) = change.before.object.controller() {
+                            let count = self
+                                .characteristics
+                                .controlled_creatures_died_this_turn
+                                .entry(ctrl)
+                                .or_insert(0);
+                            *count = count.saturating_add(1);
+                        }
                     }
                     if change.after.object.zone() == ObjectZone::Battlefield
                         && change.before.object.zone() != ObjectZone::Battlefield
-                        && change.after.is_creature()
-                        && let Some(ctrl) = change.after.object.controller()
                     {
-                        let count = self
-                            .characteristics
-                            .creatures_entered_this_turn
-                            .entry(ctrl)
-                            .or_insert(0);
-                        *count = count.saturating_add(1);
+                        self.characteristics
+                            .entered_objects_this_turn
+                            .insert(change.after.object.id());
+                        if let Some(ctrl) = change.after.object.controller() {
+                            let entered = self
+                                .characteristics
+                                .permanents_entered_this_turn
+                                .entry(ctrl)
+                                .or_insert(0);
+                            *entered = entered.saturating_add(1);
+                            let by_type = self
+                                .characteristics
+                                .entered_types_this_turn
+                                .entry(ctrl)
+                                .or_default();
+                            for &kind in &change.after.types {
+                                let entry = by_type.entry(kind).or_insert(0);
+                                *entry = entry.saturating_add(1);
+                            }
+                            if change.after.is_creature() {
+                                let count = self
+                                    .characteristics
+                                    .creatures_entered_this_turn
+                                    .entry(ctrl)
+                                    .or_insert(0);
+                                *count = count.saturating_add(1);
+                            }
+                            if change.reason == crate::occurrence::ZoneReason::LandPlay {
+                                let count = self
+                                    .characteristics
+                                    .lands_played_this_turn
+                                    .entry(ctrl)
+                                    .or_insert(0);
+                                *count = count.saturating_add(1);
+                            }
+                        }
                     }
                     if change.before.object.zone() == ObjectZone::Battlefield
                         && change.after.object.zone() != ObjectZone::Battlefield
@@ -1896,6 +2305,25 @@ impl EffectWindow {
                             .characteristics
                             .permanents_left_battlefield_this_turn
                             .entry(ctrl)
+                            .or_insert(0);
+                        *count = count.saturating_add(1);
+                        if !change.before.types.contains(&CardType::Land) {
+                            let nonland = self
+                                .characteristics
+                                .nonland_permanents_left_battlefield_this_turn
+                                .entry(ctrl)
+                                .or_insert(0);
+                            *nonland = nonland.saturating_add(1);
+                        }
+                    }
+                    if let ObjectZone::Graveyard(owner) = change.before.object.zone()
+                        && change.after.object.zone() != ObjectZone::Graveyard(owner)
+                        && change.before.object.card_id().is_some()
+                    {
+                        let count = self
+                            .characteristics
+                            .cards_left_graveyard_this_turn
+                            .entry(owner)
                             .or_insert(0);
                         *count = count.saturating_add(1);
                     }
@@ -1966,22 +2394,67 @@ impl EffectWindow {
                     }
                 },
                 RulesOccurrence::CastCompleted(cast) => {
+                    let ctrl = cast.controller();
                     let count = self
                         .characteristics
                         .spells_cast_this_turn
-                        .entry(cast.controller())
+                        .entry(ctrl)
                         .or_insert(0);
                     *count = count.saturating_add(1);
+                    let by_type = self
+                        .characteristics
+                        .cast_spell_types_this_turn
+                        .entry(ctrl)
+                        .or_default();
+                    for &kind in &cast.spell().types {
+                        let entry = by_type.entry(kind).or_insert(0);
+                        *entry = entry.saturating_add(1);
+                    }
+                    if !cast.spell().is_creature() {
+                        let noncreature = self
+                            .characteristics
+                            .noncreature_spells_cast_this_turn
+                            .entry(ctrl)
+                            .or_insert(0);
+                        *noncreature = noncreature.saturating_add(1);
+                    }
+                    if cast
+                        .spell()
+                        .cast_origin
+                        .is_some_and(|(_, from_hand)| from_hand)
+                    {
+                        let from_hand_count = self
+                            .characteristics
+                            .spells_cast_from_hand_this_turn
+                            .entry(ctrl)
+                            .or_insert(0);
+                        *from_hand_count = from_hand_count.saturating_add(1);
+                    }
                 }
                 RulesOccurrence::AttackersDeclared { selected, .. } => {
                     for attack in selected {
+                        self.characteristics
+                            .attacked_objects_this_turn
+                            .insert(attack.attacker);
                         if let Some(ctrl) = before
                             .evaluated
                             .get(attack.attacker)
                             .and_then(|o| o.controller)
                         {
                             self.characteristics.attacked_this_turn_players.insert(ctrl);
+                            self.characteristics
+                                .attacking_creatures_this_turn
+                                .entry(ctrl)
+                                .or_default()
+                                .insert(attack.attacker);
                         }
+                    }
+                }
+                RulesOccurrence::BlockersDeclared { selected, .. } => {
+                    for pair in selected {
+                        self.characteristics
+                            .blocked_objects_this_turn
+                            .insert(pair.blocker);
                     }
                 }
                 RulesOccurrence::CardDrawOrdinal { player, .. } => {
@@ -2006,8 +2479,68 @@ impl EffectWindow {
                             .insert(*controller);
                     }
                 }
-                RulesOccurrence::TokenCreated { creator, .. } => {
+                RulesOccurrence::TokenCreated { creator, after } => {
                     self.token_creators_this_turn.insert(*creator);
+                    let tok_count = self
+                        .characteristics
+                        .tokens_created_this_turn
+                        .entry(*creator)
+                        .or_insert(0);
+                    *tok_count = tok_count.saturating_add(1);
+                    self.characteristics
+                        .entered_objects_this_turn
+                        .insert(after.object.id());
+                    if let Some(ctrl) = after.object.controller() {
+                        let entered = self
+                            .characteristics
+                            .permanents_entered_this_turn
+                            .entry(ctrl)
+                            .or_insert(0);
+                        *entered = entered.saturating_add(1);
+                        let by_type = self
+                            .characteristics
+                            .entered_types_this_turn
+                            .entry(ctrl)
+                            .or_default();
+                        for &kind in &after.types {
+                            let entry = by_type.entry(kind).or_insert(0);
+                            *entry = entry.saturating_add(1);
+                        }
+                        if after.is_creature() {
+                            let count = self
+                                .characteristics
+                                .creatures_entered_this_turn
+                                .entry(ctrl)
+                                .or_insert(0);
+                            *count = count.saturating_add(1);
+                        }
+                    }
+                }
+                RulesOccurrence::DamageDealt { damage, kind, .. }
+                    if damage.amount.is_positive() =>
+                {
+                    match damage.target {
+                        crate::damage::DamageRecipient::Player(player) => {
+                            self.characteristics
+                                .players_dealt_damage_this_turn
+                                .insert(player);
+                            if *kind == crate::damage::DamageKind::Noncombat {
+                                self.characteristics
+                                    .players_dealt_noncombat_damage_this_turn
+                                    .insert(player);
+                            }
+                        }
+                        crate::damage::DamageRecipient::Creature(id)
+                        | crate::damage::DamageRecipient::Planeswalker(id)
+                        | crate::damage::DamageRecipient::Battle(id) => {
+                            let total = self
+                                .characteristics
+                                .object_damage_taken_this_turn
+                                .entry(id)
+                                .or_insert_with(|| 0.into());
+                            *total = total.plus(&damage.amount);
+                        }
+                    }
                 }
                 _ => {}
             }

@@ -3,6 +3,7 @@ import { Scale, Swords, Trophy } from "lucide-react";
 import {
   CardsIcon,
   DecksIcon,
+  HistoryIcon,
   ListingsIcon,
   PacksIcon,
   PredictionsIcon,
@@ -73,6 +74,7 @@ export const destinations: readonly Destination[] = [
         label: "Standings",
         icon: <StandingsIcon />,
       },
+      { path: "/league/history", label: "History", icon: <HistoryIcon /> },
     ],
   },
 ];

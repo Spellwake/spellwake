@@ -93,17 +93,25 @@ impl EffectWindow {
                 reason: ZoneReason::SacrificeCost,
             }],
         })?;
-        let was_artifact = next
+        let source_view = next
             .current_characteristics(source.id())?
-            .is_some_and(|view| view.has_type(CardType::Artifact));
-        let names = next
-            .current_characteristics(source.id())?
-            .ok_or(EffectError::InconsistentProgram)?
-            .current_names;
+            .ok_or(EffectError::InconsistentProgram)?;
+        let was_artifact = source_view.has_type(CardType::Artifact);
+        let was_snow = source_view
+            .current_supertypes
+            .contains(&crate::program::Supertype::Snow);
+        let was_treasure = source_view
+            .current_artifact_subtypes
+            .contains(&crate::program::ArtifactSubtype::Treasure);
+        let was_creature = source_view.is_creature();
+        let names = source_view.current_names;
         let source_tap = SacrificedManaSource {
             tapped: tap,
             was_land,
             was_artifact,
+            was_snow,
+            was_treasure,
+            was_creature,
             names,
         };
         let source = next

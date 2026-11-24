@@ -52,6 +52,201 @@ impl EffectWindow {
         self.trigger_entrant_definition(trigger)
     }
 
+    pub(super) fn adjusted_token_count(
+        &self,
+        current: &EvaluatedCharacteristics,
+        creator: SeatId,
+        base: usize,
+        token_program: Option<&Program>,
+    ) -> Result<usize, EffectError> {
+        if base == 0 {
+            return Ok(0);
+        }
+        let mut doublers = current.controlled_rules(creator, |ability| {
+            matches!(
+                ability,
+                crate::characteristics::StaticContinuousAbility::Modifier {
+                    rule: crate::characteristics::StaticModifierRule::DoubleCreatedTokens,
+                    ..
+                }
+            )
+        });
+        let mut total_add = 0usize;
+        let mut factors: Vec<usize> = Vec::new();
+        for active in &self.temporary_rules {
+            let crate::program::TemporaryRuleKind::TemporaryStatic(ability) = &active.rule else {
+                continue;
+            };
+            match ability.as_ref() {
+                crate::characteristics::StaticContinuousAbility::Modifier {
+                    rule: crate::characteristics::StaticModifierRule::DoubleCreatedTokens,
+                    ..
+                } if active.controller == creator => {
+                    doublers = doublers.saturating_add(1);
+                }
+                crate::characteristics::StaticContinuousAbility::Modifier {
+                    rule:
+                        crate::characteristics::StaticModifierRule::ModifyTokens {
+                            controller,
+                            add,
+                            multiply,
+                        },
+                    ..
+                } => {
+                    let applies = match controller {
+                        crate::program::PlayerRelation::Controller => creator == active.controller,
+                        crate::program::PlayerRelation::Opponent => self
+                            .combat_rules
+                            .opponents(self.window.participants(), active.controller)?
+                            .contains(&creator),
+                        crate::program::PlayerRelation::AnyParticipant => true,
+                    };
+                    if applies {
+                        total_add = total_add
+                            .checked_add(usize::from(*add))
+                            .ok_or(EffectError::TokenCapacity)?;
+                        if *multiply > 1 {
+                            factors.push(usize::from(*multiply));
+                        }
+                    }
+                }
+                crate::characteristics::StaticContinuousAbility::Modifier {
+                    rule:
+                        crate::characteristics::StaticModifierRule::ModifyTokenSubtype {
+                            subtype,
+                            controller,
+                            add,
+                            multiply,
+                        },
+                    ..
+                } => {
+                    let subtype_ok =
+                        token_program.is_some_and(|p| p.artifact_subtypes.contains(subtype));
+                    let applies = subtype_ok
+                        && match controller {
+                            crate::program::PlayerRelation::Controller => {
+                                creator == active.controller
+                            }
+                            crate::program::PlayerRelation::Opponent => self
+                                .combat_rules
+                                .opponents(self.window.participants(), active.controller)?
+                                .contains(&creator),
+                            crate::program::PlayerRelation::AnyParticipant => true,
+                        };
+                    if applies {
+                        total_add = total_add
+                            .checked_add(usize::from(*add))
+                            .ok_or(EffectError::TokenCapacity)?;
+                        if *multiply > 1 {
+                            factors.push(usize::from(*multiply));
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+        for source in current
+            .objects
+            .values()
+            .filter(|perm| perm.zone == ObjectZone::Battlefield)
+        {
+            let Some(source_ctrl) = source.controller else {
+                continue;
+            };
+            for ability in source
+                .printed_text
+                .continuous
+                .iter()
+                .chain(&source.printed_text.additional_battlefield_abilities)
+            {
+                let active = source.abilities.continuous == Some(ability.id())
+                    || source
+                        .abilities
+                        .additional_battlefield_abilities
+                        .contains(&ability.id());
+                if !active {
+                    continue;
+                }
+                match ability {
+                    crate::characteristics::StaticContinuousAbility::Modifier {
+                        rule:
+                            crate::characteristics::StaticModifierRule::ModifyTokens {
+                                controller,
+                                add,
+                                multiply,
+                            },
+                        ..
+                    } => {
+                        let applies = match controller {
+                            crate::program::PlayerRelation::Controller => creator == source_ctrl,
+                            crate::program::PlayerRelation::Opponent => self
+                                .combat_rules
+                                .opponents(self.window.participants(), source_ctrl)?
+                                .contains(&creator),
+                            crate::program::PlayerRelation::AnyParticipant => true,
+                        };
+                        if applies {
+                            total_add = total_add
+                                .checked_add(usize::from(*add))
+                                .ok_or(EffectError::TokenCapacity)?;
+                            if *multiply > 1 {
+                                factors.push(usize::from(*multiply));
+                            }
+                        }
+                    }
+                    crate::characteristics::StaticContinuousAbility::Modifier {
+                        rule:
+                            crate::characteristics::StaticModifierRule::ModifyTokenSubtype {
+                                subtype,
+                                controller,
+                                add,
+                                multiply,
+                            },
+                        ..
+                    } => {
+                        let subtype_ok =
+                            token_program.is_some_and(|p| p.artifact_subtypes.contains(subtype));
+                        let applies = subtype_ok
+                            && match controller {
+                                crate::program::PlayerRelation::Controller => {
+                                    creator == source_ctrl
+                                }
+                                crate::program::PlayerRelation::Opponent => self
+                                    .combat_rules
+                                    .opponents(self.window.participants(), source_ctrl)?
+                                    .contains(&creator),
+                                crate::program::PlayerRelation::AnyParticipant => true,
+                            };
+                        if applies {
+                            total_add = total_add
+                                .checked_add(usize::from(*add))
+                                .ok_or(EffectError::TokenCapacity)?;
+                            if *multiply > 1 {
+                                factors.push(usize::from(*multiply));
+                            }
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
+        let mut count = base
+            .checked_add(total_add)
+            .ok_or(EffectError::TokenCapacity)?;
+        let multiplier = 1usize
+            .checked_shl(u32::try_from(doublers).map_err(|_| EffectError::TokenCapacity)?)
+            .ok_or(EffectError::TokenCapacity)?;
+        count = count
+            .checked_mul(multiplier)
+            .ok_or(EffectError::TokenCapacity)?;
+        for factor in factors {
+            count = count
+                .checked_mul(factor)
+                .ok_or(EffectError::TokenCapacity)?;
+        }
+        Ok(count)
+    }
+
     pub(super) fn trigger_entrant_definition(
         &self,
         trigger: &crate::occurrence::TriggerBinding,
@@ -156,6 +351,21 @@ impl EffectWindow {
                     });
                 }
             }
+            if creation.recipients == TokenRecipients::DestroyedPermanentControllers {
+                let mut counts: BTreeMap<SeatId, usize> = BTreeMap::new();
+                if let Some(cursor) = self.resolution_cursor() {
+                    for &seat in &cursor.results.last_moved_controllers {
+                        *counts.entry(seat).or_insert(0) += 1;
+                    }
+                }
+                for (creator, mult) in counts {
+                    let total = count.saturating_mul(mult);
+                    if total > 0 {
+                        groups.push((creator, total, definition.clone(), creation.enters_tapped));
+                    }
+                }
+                continue;
+            }
             let prior_controller =
                 if creation.recipients == TokenRecipients::CombatDamageSourceController {
                     self.combat_damage_source_controller()?
@@ -188,6 +398,7 @@ impl EffectWindow {
                         TokenRecipients::Controller => *seat == controller,
                         TokenRecipients::EachPlayer => true,
                         TokenRecipients::EachOpponent => *seat != controller,
+                        TokenRecipients::DestroyedPermanentControllers => false,
                     }
                 })
             {
@@ -214,6 +425,10 @@ impl EffectWindow {
             || matches!(
                 self.current_instruction()?,
                 Instruction::CreateAttackingTokens { .. }
+                    | Instruction::CreateTokenCopy {
+                        attacking: true,
+                        ..
+                    }
             );
         let defenders = if enters_attacking
             && self.window.active_participant() == Some(controller)
@@ -234,25 +449,11 @@ impl EffectWindow {
                         .token_aura_domain(definition, *creator, &current)
                         .is_none_or(|hosts| !hosts.is_empty()))
         });
-        for (creator, count, _, _) in &mut groups {
+        for (creator, count, definition, _) in &mut groups {
             if *count == 0 {
                 continue;
             }
-            let doublers = current.controlled_rules(*creator, |ability| {
-                matches!(
-                    ability,
-                    crate::characteristics::StaticContinuousAbility::Modifier {
-                        rule: crate::characteristics::StaticModifierRule::DoubleCreatedTokens,
-                        ..
-                    }
-                )
-            });
-            let multiplier = 1usize
-                .checked_shl(u32::try_from(doublers).map_err(|_| EffectError::TokenCapacity)?)
-                .ok_or(EffectError::TokenCapacity)?;
-            *count = count
-                .checked_mul(multiplier)
-                .ok_or(EffectError::TokenCapacity)?;
+            *count = self.adjusted_token_count(&current, *creator, *count, Some(definition))?;
         }
         let total = groups.iter().try_fold(0usize, |sum, (_, count, _, _)| {
             sum.checked_add(*count).ok_or(EffectError::TokenCapacity)
@@ -537,7 +738,7 @@ impl EffectWindow {
                         .get(&member.member)
                         .is_none_or(|used| !used.contains(rule))
                 })
-                .map(|rule| work.copy_pool.domain(rule, chooser).to_vec())
+                .map(|rule| work.copy_pool.domain(rule, chooser))
                 .unwrap_or_default();
             let battlefield_donors = if member.definition.has_type(CardType::Creature) {
                 work.copy_pool
@@ -714,10 +915,21 @@ impl EffectWindow {
             let eligible_reveals = match rule {
                 crate::land::EntryTap::ReadAhead { .. }
                 | crate::land::EntryTap::AlwaysChooseColorExcept(_)
+                | crate::land::EntryTap::ChooseColor
+                | crate::land::EntryTap::ChooseColorExcept(_)
                 | crate::land::EntryTap::ChooseCreatureType
                 | crate::land::EntryTap::ChooseNonlandCardName
-                | crate::land::EntryTap::SiegeProtector
+                | crate::land::EntryTap::ChooseOpponent
+                | crate::land::EntryTap::ChoosePlayer
                 | crate::land::EntryTap::ChooseTwoPlayers
+                | crate::land::EntryTap::ChooseCardType
+                | crate::land::EntryTap::ChooseBasicLandType
+                | crate::land::EntryTap::ChooseOddOrEven
+                | crate::land::EntryTap::ChooseKhansOrDragons
+                | crate::land::EntryTap::Unleash
+                | crate::land::EntryTap::Riot
+                | crate::land::EntryTap::Tribute(_)
+                | crate::land::EntryTap::SiegeProtector
                 | crate::land::EntryTap::UnlessPayLife(_) => Vec::new(),
                 crate::land::EntryTap::UnlessRevealHandLandType(a, b) => {
                     let evaluated = self.evaluated_characteristics()?;
@@ -738,6 +950,14 @@ impl EffectWindow {
                         .collect()
                 }
                 _ => continue,
+            };
+            let chooser = if matches!(rule, crate::land::EntryTap::Tribute(_)) {
+                self.opponents_of(chooser)
+                    .ok()
+                    .and_then(|ops| ops.first().copied())
+                    .unwrap_or(chooser)
+            } else {
+                chooser
             };
             return Ok(Some(crate::token::TokenEntryChoiceFrame {
                 revision: self.revision,
@@ -777,9 +997,12 @@ impl EffectWindow {
                 crate::land::EntryChoice::Opponent(seat),
             ) if self.opponents_of(actor)?.contains(&seat) => {}
             (
-                crate::land::EntryTap::AlwaysChooseColorExcept(excluded),
+                crate::land::EntryTap::AlwaysChooseColorExcept(excluded)
+                | crate::land::EntryTap::ChooseColorExcept(excluded),
                 crate::land::EntryChoice::Color(color),
             ) if color != excluded && color != ManaType::Colourless => {}
+            (crate::land::EntryTap::ChooseColor, crate::land::EntryChoice::Color(color))
+                if color != ManaType::Colourless => {}
             (
                 crate::land::EntryTap::ReadAhead { final_chapter },
                 crate::land::EntryChoice::Chapter(n),
@@ -792,8 +1015,16 @@ impl EffectWindow {
                 crate::land::EntryTap::ChooseNonlandCardName,
                 crate::land::EntryChoice::CardName(index),
             ) if frame.card_names().get(index.0).is_some() => {}
-            (crate::land::EntryTap::SiegeProtector, crate::land::EntryChoice::Opponent(player))
-                if self.opponents_of(actor)?.contains(&player) => {}
+            (
+                crate::land::EntryTap::SiegeProtector | crate::land::EntryTap::ChooseOpponent,
+                crate::land::EntryChoice::Opponent(player),
+            ) if self.opponents_of(actor)?.contains(&player) => {}
+            (crate::land::EntryTap::ChoosePlayer, crate::land::EntryChoice::Opponent(player))
+                if self.window.participants().contains(&player) => {}
+            (rule, crate::land::EntryChoice::OptionIndex(idx))
+                if rule
+                    .option_labels()
+                    .is_some_and(|labels| usize::from(idx) < labels.len()) => {}
             (
                 crate::land::EntryTap::ChooseTwoPlayers,
                 crate::land::EntryChoice::Players(players),
@@ -1153,13 +1384,17 @@ impl EffectWindow {
             match choice {
                 crate::land::EntryChoice::Color(color) => {
                     self.entry_color_choices.insert(id, color);
+                    if let Some(c) = color.color() {
+                        self.characteristics.entry_color_choices.insert(id, c);
+                    }
                 }
                 reveal @ (crate::land::EntryChoice::Players(_)
                 | crate::land::EntryChoice::Opponent(_)
                 | crate::land::EntryChoice::Reveal(_)
                 | crate::land::EntryChoice::Chapter(_)
                 | crate::land::EntryChoice::CardName(_)
-                | crate::land::EntryChoice::PayLife(_)) => {
+                | crate::land::EntryChoice::PayLife(_)
+                | crate::land::EntryChoice::OptionIndex(_)) => {
                     self.entry_choices.insert(id, reveal);
                 }
                 crate::land::EntryChoice::CreatureType(kind) => {
@@ -1316,11 +1551,134 @@ impl EffectWindow {
                 }
             }
         }
+        if let Some(Instruction::CreateAuraTokenAttached { host, .. }) = self
+            .stack_body(entry)
+            .and_then(|body| body.instructions.get(instruction))
+            .cloned()
+        {
+            let entry_obj = self.window.resolving().filter(|e| e.id() == entry).cloned();
+            let host_target = entry_obj.as_ref().and_then(|resolving| match host {
+                crate::program::MoveSubjectRef::TargetObject => self
+                    .instruction_target(resolving)
+                    .ok()
+                    .map(|t| t.choice().target),
+                crate::program::MoveSubjectRef::AbilitySource => match resolving.kind() {
+                    StackKind::ActivatedAbility { source }
+                    | StackKind::TriggeredAbility { source } => {
+                        Some(TargetRef::Object(source.id()))
+                    }
+                    _ => None,
+                },
+                crate::program::MoveSubjectRef::TriggeringObject => self
+                    .execution_bindings(entry)
+                    .and_then(|b| b.trigger.as_ref())
+                    .and_then(|t| t.causes.members().first())
+                    .and_then(|m| m.subject_object_id())
+                    .map(TargetRef::Object),
+                crate::program::MoveSubjectRef::AttachedHost => match resolving.kind() {
+                    StackKind::ActivatedAbility { source }
+                    | StackKind::TriggeredAbility { source } => self.attached_to(source.id()),
+                    _ => None,
+                },
+                crate::program::MoveSubjectRef::RevealedCard => None,
+                crate::program::MoveSubjectRef::CreatedTokens => self
+                    .resolution_cursor()
+                    .and_then(|c| c.last_created_tokens.first().copied())
+                    .map(TargetRef::Object),
+                crate::program::MoveSubjectRef::LastMoved => self
+                    .resolution_cursor()
+                    .and_then(|c| {
+                        c.results
+                            .last_moved_objects
+                            .first()
+                            .copied()
+                            .or(c.results.returned_target_permanent)
+                    })
+                    .map(TargetRef::Object),
+                crate::program::MoveSubjectRef::RememberedFirst => self
+                    .legal_linked_targets()
+                    .ok()
+                    .flatten()
+                    .map(|(a, _)| TargetRef::Object(a)),
+                crate::program::MoveSubjectRef::RememberedSecond => self
+                    .legal_linked_targets()
+                    .ok()
+                    .flatten()
+                    .map(|(_, b)| TargetRef::Object(b)),
+            });
+            if let Some(target) = host_target {
+                for token in &objects {
+                    let cut = self.rules_snapshot(None)?;
+                    if let Some(change) = self.attach_if_legal(entry, token.id(), target)? {
+                        self.emit_from(
+                            crate::occurrence::EventCause::Instruction { entry, instruction },
+                            &cut,
+                            None,
+                            append,
+                            |_, _, _| Ok(vec![change]),
+                        )?;
+                    }
+                }
+            }
+        }
+        if let Some(&Instruction::CreateTokenCopy {
+            sacrifice_at_end_step,
+            exile_at_end_step,
+            ..
+        }) = self
+            .stack_body(entry)
+            .and_then(|body| body.instructions.get(instruction))
+            && (sacrifice_at_end_step || exile_at_end_step)
+            && !objects.is_empty()
+        {
+            let ids: Vec<ObjectId> = objects.iter().map(GameObject::id).collect();
+            let resolving = self.window.resolving().cloned();
+            if let Some(resolving) = resolving {
+                let snapshot = self.rules_snapshot(None)?;
+                let source_id = match resolving.kind() {
+                    StackKind::CardSpell(id) => Some(*id),
+                    StackKind::ActivatedAbility { source }
+                    | StackKind::TriggeredAbility { source } => Some(source.id()),
+                    _ => None,
+                };
+                let appearance = source_id
+                    .and_then(|sid| {
+                        snapshot
+                            .view()
+                            .appearance(sid)
+                            .or_else(|| self.departed_reflexive_sources.get(&sid).cloned())
+                    })
+                    .or_else(|| {
+                        self.execution_bindings(entry)
+                            .and_then(|b| b.trigger.as_ref())
+                            .map(|t| t.source.clone())
+                    });
+                if let Some(app) = appearance {
+                    if sacrifice_at_end_step {
+                        self.triggers.delay_sacrifice(
+                            app.clone(),
+                            resolving.controller(),
+                            crate::turn::Step::End,
+                            ids.clone(),
+                        );
+                    }
+                    if exile_at_end_step {
+                        self.triggers.delay_exile(
+                            app,
+                            resolving.controller(),
+                            crate::turn::Step::End,
+                            ids,
+                        );
+                    }
+                }
+            }
+        }
         if matches!(
             self.stack_body(entry)
                 .and_then(|body| body.instructions.get(instruction + 1)),
             Some(
                 Instruction::ScheduleCreatedTokenExile(_)
+                    | Instruction::ScheduleCreatedTokenSacrifice
                     | Instruction::GrantNewTokensHaste
                     | Instruction::EquipNewToken
                     | Instruction::RegisterTokenLinkedExile

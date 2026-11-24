@@ -68,7 +68,9 @@ impl EffectWindow {
             .ok_or(EffectError::WrongResolutionFrame)?;
         if matches!(
             instruction,
-            Instruction::BranchIfFalse { .. } | Instruction::Jump { .. }
+            Instruction::BranchIfFalse { .. }
+                | Instruction::Jump { .. }
+                | Instruction::RepeatLoop { .. }
         ) && (self.window.resolving() != Some(entry)
             || self.resolution_cursor().map(|cursor| cursor.entry) != Some(entry.id()))
         {
@@ -116,9 +118,102 @@ impl EffectWindow {
                         next: *destination,
                     });
             }
+            Instruction::RepeatLoop { count, body } => {
+                let iterations = self
+                    .resolve_value_expr(entry.controller(), count)?
+                    .max(0.into())
+                    .min(RulesInteger::from_usize(256))
+                    .to_usize()
+                    .ok_or(EffectError::InconsistentProgram)?;
+                let body_len = body.instructions.len();
+                let inserted = iterations.saturating_mul(body_len);
+                let mut unrolled = Vec::with_capacity(inserted);
+                for k in 0..iterations {
+                    let base = isize::try_from(from + k * body_len)
+                        .map_err(|_| EffectError::InconsistentProgram)?;
+                    for op in &body.instructions {
+                        let mut cloned = op.clone();
+                        cloned.shift_jumps(base, 0);
+                        unrolled.push(cloned);
+                    }
+                }
+                let Some(StackPayload::Instructions(payload)) = self.payloads.get_mut(&entry.id())
+                else {
+                    return Err(EffectError::InconsistentProgram);
+                };
+                let delta =
+                    isize::try_from(inserted).map_err(|_| EffectError::InconsistentProgram)? - 1;
+                for op in &mut payload.body.instructions {
+                    op.shift_jumps(delta, from + 1);
+                }
+                payload.body.instructions.splice(from..=from, unrolled);
+                for mode in &mut payload.modes {
+                    mode.shift_for_splice(from, inserted);
+                }
+            }
             Instruction::OptionalSequence { .. }
             | Instruction::OptionalEffect { .. }
             | Instruction::OfferManaPayment { .. }
+            | Instruction::OfferDynamicManaPayment { .. }
+            | Instruction::PayLife { .. }
+            | Instruction::PayEnergy { .. }
+            | Instruction::ExileFromZone { .. }
+            | Instruction::MoveSubject { .. }
+            | Instruction::SelectZoneCardsToZone { .. }
+            | Instruction::ChooseOption { .. }
+            | Instruction::DealDamageFrom { .. }
+            | Instruction::DivideDamageAmongTargets { .. }
+            | Instruction::GainControlOfPermanent { .. }
+            | Instruction::GiveFixedTargetControl { .. }
+            | Instruction::BecomeCopy { .. }
+            | Instruction::BecomeCopyFixedTargets { .. }
+            | Instruction::DoublePowerToughnessSubject { .. }
+            | Instruction::DoubleCountersOnSubject { .. }
+            | Instruction::ShuffleSubjectIntoLibrary { .. }
+            | Instruction::WinGame(_)
+            | Instruction::LoseGame(_)
+            | Instruction::DistributeCountersAmongTargets { .. }
+            | Instruction::RollDie { .. }
+            | Instruction::FlipCoins { .. }
+            | Instruction::ChooseValue { .. }
+            | Instruction::ChooseOptionForPlayers { .. }
+            | Instruction::Vote { .. }
+            | Instruction::Incubate { .. }
+            | Instruction::Connive { .. }
+            | Instruction::ConniveFinalize { .. }
+            | Instruction::Discover { .. }
+            | Instruction::Clash { .. }
+            | Instruction::RingTemptsYou
+            | Instruction::VentureIntoDungeon { .. }
+            | Instruction::TakeInitiative { .. }
+            | Instruction::UnlockDoor { .. }
+            | Instruction::Behold { .. }
+            | Instruction::ManifestDread
+            | Instruction::Monstrosity { .. }
+            | Instruction::Fight { .. }
+            | Instruction::Exchange(_)
+            | Instruction::CopyStackObject { .. }
+            | Instruction::ExileGroupFromZone { .. }
+            | Instruction::SacrificeSubject { .. }
+            | Instruction::DestroyChosen { .. }
+            | Instruction::CastLinkedFaceDownFree
+            | Instruction::Ripple(_)
+            | Instruction::Demonstrate
+            | Instruction::Enlist
+            | Instruction::AttachPermanent { .. }
+            | Instruction::SkipNextUntap { .. }
+            | Instruction::RequireCombatAction { .. }
+            | Instruction::CreateTemporaryRule { .. }
+            | Instruction::DestroySubject { .. }
+            | Instruction::GrantCardPlayPermission { .. }
+            | Instruction::CreateTokenCopy { .. }
+            | Instruction::CreateAuraTokenAttached { .. }
+            | Instruction::ExploreSubject(_)
+            | Instruction::ScheduleDelayedEventTrigger { .. }
+            | Instruction::TapOrUntapControlled { .. }
+            | Instruction::ExertAbilitySource
+            | Instruction::CollectEvidence { .. }
+            | Instruction::Blight { .. }
             | Instruction::ModifyAnyNumberOfPermanents { .. }
             | Instruction::AffectPermanentTargets { .. }
             | Instruction::MillEachPlayer(_)
@@ -170,6 +265,8 @@ impl EffectWindow {
             | Instruction::AddPlayerCounter { .. }
             | Instruction::ExileTopPlay { .. }
             | Instruction::LookTopChoose { .. }
+            | Instruction::MoveGraveyardGroup { .. }
+            | Instruction::PutHandPermanentFiltered { .. }
             | Instruction::RevealUntilMatch { .. }
             | Instruction::ControlManaSourceThroughNextTurn
             | Instruction::GrantControllerFlashUntilCleanup
@@ -212,6 +309,8 @@ impl EffectWindow {
             | Instruction::AdditionalCombat { .. }
             | Instruction::AdditionalCombatAfterUntappingAttackers
             | Instruction::TakeExtraTurn
+            | Instruction::DisallowDamagePreventionThisTurn
+            | Instruction::GrantNoMaxHandSizeRestOfGame
             | Instruction::PreventDamageThisTurn(_)
             | Instruction::MoveGroup { .. }
             | Instruction::PutTargetInLibrary(_)
@@ -247,6 +346,9 @@ impl EffectWindow {
             | Instruction::ClearSourceCounters(_)
             | Instruction::TransformSource
             | Instruction::TransformSourceAndAttachToTarget
+            | Instruction::AdvanceClassLevel(_)
+            | Instruction::SolveSourceCase
+            | Instruction::BecomePreparedSource
             | Instruction::TransformSubtype(_)
             | Instruction::UntapAbilitySource
             | Instruction::TapAbilitySource
@@ -298,6 +400,8 @@ impl EffectWindow {
             | Instruction::CopyOtherTargetAsArtifact
             | Instruction::FixedTargetClause(_)
             | Instruction::ExileResolvingSpell
+            | Instruction::ReturnResolvingSpellToHand
+            | Instruction::Ascend
             | Instruction::DestroyFixedTargets
             | Instruction::DestroyTargetAndAttachedEquipment
             | Instruction::ReturnFixedTargets
@@ -539,6 +643,7 @@ impl EffectWindow {
             | Instruction::Surveil { .. }
             | Instruction::Mill { .. }
             | Instruction::DrawTargetPlayer { .. }
+            | Instruction::DrawPlayer { .. }
             | Instruction::DrawHighestEntrantController
             | Instruction::DrawRelatedPlayer
             | Instruction::DrawCombatDamageSourceController

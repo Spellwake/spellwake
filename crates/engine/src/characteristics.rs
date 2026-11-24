@@ -20,11 +20,15 @@ mod text;
 pub(crate) use text::rewrite_program as rewrite_program_creature_types;
 mod types;
 mod world;
+mod world_eval;
 
 pub use colors::{Color, ColorFilter, ColorOperation, StaticColorOperand};
 pub(crate) use evaluation::{count_permanents, evaluate, selector_matches_permanent};
 pub use static_rules::*;
 pub use types::*;
+pub(crate) use world_eval::{
+    WorldEvalCtx, compute_party_size, eval_world_condition, eval_world_value_expr,
+};
 
 use crate::priority::SeatId;
 pub use crate::program::CardType;
@@ -34,6 +38,44 @@ use crate::{
 };
 use spellwake_contracts::RulesInteger;
 use std::collections::{BTreeMap, BTreeSet};
+
+/// Unlocked door state for a Duskmourn Room enchantment on the battlefield (CR 709.5).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct RoomDoors {
+    pub left: bool,
+    pub right: bool,
+}
+
+impl RoomDoors {
+    #[must_use]
+    pub const fn is_unlocked(self, half: crate::program::SplitHalf) -> bool {
+        match half {
+            crate::program::SplitHalf::Left => self.left,
+            crate::program::SplitHalf::Right => self.right,
+        }
+    }
+
+    #[must_use]
+    pub const fn fully_unlocked(self) -> bool {
+        self.left && self.right
+    }
+}
+
+/// Canonical constructed dungeons (CR 309).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum DungeonId {
+    LostMineOfPhandelver,
+    DungeonOfTheMadMage,
+    TombOfAnnihilation,
+    Undercity,
+}
+
+/// Per-player dungeon venture progress (CR 309, 701.46).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct DungeonProgress {
+    pub active: Option<(DungeonId, u8)>,
+    pub completed: u16,
+}
 
 /// Nested canonical state under EffectWindow, never a final-stat cache.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -83,6 +125,30 @@ pub(crate) struct CharacteristicState {
     pub(crate) cards_drawn_this_turn_counts: BTreeMap<SeatId, u16>,
     pub(crate) descended_this_turn: BTreeSet<SeatId>,
     pub(crate) committed_crime_this_turn: BTreeSet<SeatId>,
+    pub(crate) entered_types_this_turn: BTreeMap<SeatId, BTreeMap<CardType, u16>>,
+    pub(crate) permanents_entered_this_turn: BTreeMap<SeatId, u16>,
+    pub(crate) cast_spell_types_this_turn: BTreeMap<SeatId, BTreeMap<CardType, u16>>,
+    pub(crate) noncreature_spells_cast_this_turn: BTreeMap<SeatId, u16>,
+    pub(crate) spells_cast_from_hand_this_turn: BTreeMap<SeatId, u16>,
+    pub(crate) lands_played_this_turn: BTreeMap<SeatId, u16>,
+    pub(crate) cards_left_graveyard_this_turn: BTreeMap<SeatId, u16>,
+    pub(crate) nonland_permanents_left_battlefield_this_turn: BTreeMap<SeatId, u16>,
+    pub(crate) creatures_died_this_turn_count: u16,
+    pub(crate) controlled_creatures_died_this_turn: BTreeMap<SeatId, u16>,
+    pub(crate) tokens_created_this_turn: BTreeMap<SeatId, u16>,
+    pub(crate) attacking_creatures_this_turn: BTreeMap<SeatId, BTreeSet<ObjectId>>,
+    pub(crate) attacked_objects_this_turn: BTreeSet<ObjectId>,
+    pub(crate) blocked_objects_this_turn: BTreeSet<ObjectId>,
+    pub(crate) entered_objects_this_turn: BTreeSet<ObjectId>,
+    /// Graveyard object incarnations that died (moved battlefield -> graveyard) this turn.
+    pub(crate) died_this_turn: BTreeSet<ObjectId>,
+    /// Card names chosen via `ResolutionChoiceDomain::CardName` linked to a source permanent.
+    pub(crate) named_cards: BTreeMap<ObjectId, String>,
+    pub(crate) activated_sources_this_turn: BTreeMap<ObjectId, u16>,
+    pub(crate) ability_resolutions_by_source_this_turn: BTreeMap<ObjectId, u16>,
+    pub(crate) players_dealt_damage_this_turn: BTreeSet<SeatId>,
+    pub(crate) players_dealt_noncombat_damage_this_turn: BTreeSet<SeatId>,
+    pub(crate) object_damage_taken_this_turn: BTreeMap<ObjectId, RulesInteger>,
     /// Actual damage pairs retained until cleanup when a definition uses that history.
     pub(crate) creature_damage_pairs: Option<BTreeSet<(ObjectId, ObjectId)>>,
     pub(crate) vow_counters: BTreeMap<ObjectId, RulesInteger>,
@@ -96,6 +162,7 @@ pub(crate) struct CharacteristicState {
     pub(crate) imprinted_cards: BTreeMap<ObjectId, Vec<ObjectId>>,
     pub(crate) ability_donors_in_exile: BTreeMap<ObjectId, Vec<ObjectId>>,
     pub(crate) chosen_entry_players: BTreeMap<ObjectId, [crate::priority::SeatId; 2]>,
+    pub(crate) entry_color_choices: BTreeMap<ObjectId, Color>,
     pub(crate) indestructible_counters: BTreeMap<ObjectId, RulesInteger>,
     indestructible_grants: BTreeMap<ObjectId, ContinuousEffectId>,
     keyword_counter_grants: BTreeMap<(ObjectId, crate::effects::CounterKind), ContinuousEffectId>,
@@ -113,12 +180,37 @@ pub(crate) struct CharacteristicState {
     pub(crate) extra_loyalty_activations: BTreeMap<SeatId, RulesInteger>,
     pub(crate) extra_loyalty_used: BTreeMap<(ObjectId, SeatId), RulesInteger>,
     pub(crate) emblems: BTreeMap<crate::emblem::EmblemId, crate::emblem::Emblem>,
+    pub(crate) no_max_hand_size_players: BTreeSet<SeatId>,
     next_emblem: u64,
     pub(crate) time_counters: BTreeMap<ObjectId, spellwake_contracts::RulesInteger>,
     pub(crate) fade: BTreeMap<ObjectId, spellwake_contracts::RulesInteger>,
     pub(crate) age: BTreeMap<ObjectId, spellwake_contracts::RulesInteger>,
     pub(crate) renowned: BTreeSet<ObjectId>,
+    /// Current Class level for Class enchantments on the battlefield (absent defaults to level 1, CR 716).
+    pub(crate) class_levels: BTreeMap<ObjectId, u8>,
+    /// Cases on the battlefield that have been solved (CR 719).
+    pub(crate) solved_cases: BTreeSet<ObjectId>,
+    /// Battlefield permanents currently in the prepared state.
+    pub(crate) prepared: BTreeSet<ObjectId>,
     pub(crate) end_step_casts: BTreeMap<ObjectId, crate::program::EndStepCast>,
+    /// Cast provenance and mana-spent summary carried from spell resolution onto the battlefield permanent (CR 400.7a).
+    pub(crate) cast_summaries: BTreeMap<ObjectId, crate::mana::CastManaSummary>,
+    /// Ring temptation level (0..=4) per player (CR 701.52).
+    pub(crate) ring_level: BTreeMap<SeatId, u8>,
+    /// Current Ring-bearer creature per player (CR 701.52).
+    pub(crate) ring_bearer: BTreeMap<SeatId, ObjectId>,
+    /// Game-wide initiative designation (CR 725).
+    pub(crate) initiative: Option<SeatId>,
+    /// Per-player dungeon venture progress (CR 309).
+    pub(crate) dungeons: BTreeMap<SeatId, DungeonProgress>,
+    /// Unlocked doors for Room enchantments on the battlefield (CR 709.5).
+    pub(crate) unlocked_doors: BTreeMap<ObjectId, RoomDoors>,
+    /// Battlefield permanents exerted this turn (CR 701.39).
+    pub(crate) exerted_objects_this_turn: BTreeSet<ObjectId>,
+    /// Battlefield permanents that are currently monstrous (CR 701.31).
+    pub(crate) monstrous: BTreeSet<ObjectId>,
+    /// Battlefield permanents whose tribute was paid on entry (CR 702.104).
+    pub(crate) tribute_paid: BTreeSet<ObjectId>,
     pub(crate) evoked: BTreeSet<ObjectId>,
     pub(crate) kicked: BTreeSet<ObjectId>,
     pub(crate) bestowed_spells: BTreeSet<ObjectId>,
@@ -128,6 +220,8 @@ pub(crate) struct CharacteristicState {
     next_timestamp: u64,
     object_timestamps: BTreeMap<ObjectId, CharacteristicTimestamp>,
     resolved: BTreeMap<ContinuousEffectId, ResolvedContinuousEffect>,
+    pub(crate) temporary_statics: BTreeMap<u64, TemporaryBattlefieldStatic>,
+    next_temp_static: u64,
     counters: BTreeMap<ObjectId, PowerToughnessCounters>,
     next_world_tenure: u64,
     world_tenures: BTreeMap<ObjectId, WorldTenure>,
@@ -149,6 +243,7 @@ impl Default for CharacteristicState {
             upkeep_cuts: None,
             speed: BTreeMap::new(),
             city_blessing: BTreeSet::new(),
+            no_max_hand_size_players: BTreeSet::new(),
             player_color_protection: BTreeMap::new(),
             experience: BTreeMap::new(),
             player_counters: BTreeMap::new(),
@@ -165,6 +260,28 @@ impl Default for CharacteristicState {
             cards_drawn_this_turn_counts: BTreeMap::new(),
             descended_this_turn: BTreeSet::new(),
             committed_crime_this_turn: BTreeSet::new(),
+            entered_types_this_turn: BTreeMap::new(),
+            permanents_entered_this_turn: BTreeMap::new(),
+            cast_spell_types_this_turn: BTreeMap::new(),
+            noncreature_spells_cast_this_turn: BTreeMap::new(),
+            spells_cast_from_hand_this_turn: BTreeMap::new(),
+            lands_played_this_turn: BTreeMap::new(),
+            cards_left_graveyard_this_turn: BTreeMap::new(),
+            nonland_permanents_left_battlefield_this_turn: BTreeMap::new(),
+            creatures_died_this_turn_count: 0,
+            controlled_creatures_died_this_turn: BTreeMap::new(),
+            tokens_created_this_turn: BTreeMap::new(),
+            attacking_creatures_this_turn: BTreeMap::new(),
+            attacked_objects_this_turn: BTreeSet::new(),
+            blocked_objects_this_turn: BTreeSet::new(),
+            entered_objects_this_turn: BTreeSet::new(),
+            died_this_turn: BTreeSet::new(),
+            named_cards: BTreeMap::new(),
+            activated_sources_this_turn: BTreeMap::new(),
+            ability_resolutions_by_source_this_turn: BTreeMap::new(),
+            players_dealt_damage_this_turn: BTreeSet::new(),
+            players_dealt_noncombat_damage_this_turn: BTreeSet::new(),
+            object_damage_taken_this_turn: BTreeMap::new(),
             creature_damage_pairs: None,
             vow_counters: BTreeMap::new(),
             vow_protected_players: BTreeMap::new(),
@@ -176,6 +293,7 @@ impl Default for CharacteristicState {
             imprinted_cards: BTreeMap::new(),
             ability_donors_in_exile: BTreeMap::new(),
             chosen_entry_players: BTreeMap::new(),
+            entry_color_choices: BTreeMap::new(),
             indestructible_counters: BTreeMap::new(),
             indestructible_grants: BTreeMap::new(),
             keyword_counter_grants: BTreeMap::new(),
@@ -198,7 +316,19 @@ impl Default for CharacteristicState {
             time_counters: BTreeMap::new(),
             fade: BTreeMap::new(),
             renowned: BTreeSet::new(),
+            class_levels: BTreeMap::new(),
+            solved_cases: BTreeSet::new(),
+            prepared: BTreeSet::new(),
             end_step_casts: BTreeMap::new(),
+            cast_summaries: BTreeMap::new(),
+            ring_level: BTreeMap::new(),
+            ring_bearer: BTreeMap::new(),
+            initiative: None,
+            dungeons: BTreeMap::new(),
+            unlocked_doors: BTreeMap::new(),
+            exerted_objects_this_turn: BTreeSet::new(),
+            monstrous: BTreeSet::new(),
+            tribute_paid: BTreeSet::new(),
             evoked: BTreeSet::new(),
             kicked: BTreeSet::new(),
             bestowed_spells: BTreeSet::new(),
@@ -208,6 +338,8 @@ impl Default for CharacteristicState {
             next_timestamp: 1,
             object_timestamps: BTreeMap::new(),
             resolved: BTreeMap::new(),
+            temporary_statics: BTreeMap::new(),
+            next_temp_static: 1,
             counters: BTreeMap::new(),
             next_world_tenure: 1,
             world_tenures: BTreeMap::new(),
@@ -712,14 +844,63 @@ impl CharacteristicState {
         self.expire_effects_matching(|duration| duration.expires_at_cleanup(active, turn))
     }
 
+    pub(crate) fn expire_at_end_of_combat(&mut self) -> Vec<ContinuousEffectId> {
+        self.expire_effects_matching(ResolvedDuration::expires_at_end_of_combat)
+    }
+
+    pub(crate) fn expire_at_turn_start(
+        &mut self,
+        active: crate::priority::SeatId,
+        turn: u64,
+    ) -> Vec<ContinuousEffectId> {
+        self.expire_effects_matching(|duration| duration.expires_at_turn_start(active, turn))
+    }
+
     pub(crate) fn expire_at_skipped_turns(
         &mut self,
         skipped: &BTreeSet<SeatId>,
     ) -> Vec<ContinuousEffectId> {
         self.expire_effects_matching(|duration| {
-            matches!(duration, ResolvedDuration::ThroughNextTurn { player, .. }
-            if skipped.contains(&player))
+            matches!(
+                duration,
+                ResolvedDuration::ThroughNextTurn { player, .. }
+                    | ResolvedDuration::UntilPlayerNextTurn { player, .. }
+                if skipped.contains(&player)
+            )
         })
+    }
+
+    /// Register a duration-scoped battlefield static ability (CR 611.2a).
+    pub(crate) fn add_temporary_static(
+        &mut self,
+        controller: SeatId,
+        source_object: Option<ObjectId>,
+        duration: ResolvedDuration,
+        ability: StaticContinuousAbility,
+    ) -> Result<u64, CharacteristicsError> {
+        let id = self.next_temp_static;
+        let next_id = id
+            .checked_add(1)
+            .ok_or(CharacteristicsError::EffectIdentityExhausted)?;
+        let timestamp = CharacteristicTimestamp(self.next_timestamp);
+        let next_ts = self
+            .next_timestamp
+            .checked_add(1)
+            .ok_or(CharacteristicsError::TimestampExhausted)?;
+        self.next_temp_static = next_id;
+        self.next_timestamp = next_ts;
+        self.temporary_statics.insert(
+            id,
+            TemporaryBattlefieldStatic {
+                id,
+                controller,
+                source_object,
+                timestamp,
+                duration,
+                ability,
+            },
+        );
+        Ok(id)
     }
 
     fn expire_effects_matching(
@@ -734,6 +915,8 @@ impl CharacteristicState {
             }
             !ended
         });
+        self.temporary_statics
+            .retain(|_, temp| !ends(temp.duration));
         expired
     }
 
@@ -744,27 +927,32 @@ impl CharacteristicState {
         evaluated: &EvaluatedCharacteristics,
     ) -> Vec<ContinuousEffectId> {
         let mut expired = Vec::new();
-        self.resolved.retain(|id, effect| {
+        let still_ok = |duration: ResolvedDuration| -> bool {
             let ResolvedDuration::WhileSourceControlled {
                 source,
                 controller,
                 epoch,
-            } = effect.duration
+            } = duration
             else {
                 return true;
             };
-            let still_controlled = cards.get(source).is_some_and(|card| {
+            cards.get(source).is_some_and(|card| {
                 card.zone() == crate::object_identity::ObjectZone::Battlefield
                     && card.control_epoch() == Some(epoch)
             }) && evaluated.get(source).is_some_and(|object| {
                 object.controller == Some(controller)
                     && object.zone == crate::object_identity::ObjectZone::Battlefield
-            });
-            if !still_controlled {
+            })
+        };
+        self.resolved.retain(|id, effect| {
+            let keep = still_ok(effect.duration);
+            if !keep {
                 expired.push(*id);
             }
-            still_controlled
+            keep
         });
+        self.temporary_statics
+            .retain(|_, temp| still_ok(temp.duration));
         expired
     }
 
@@ -843,6 +1031,8 @@ impl CharacteristicState {
             .retain(|source, _| live.contains(source));
         self.chosen_entry_players
             .retain(|source, _| live.contains(source));
+        self.entry_color_choices
+            .retain(|source, _| live.contains(source));
         self.indestructible_counters
             .retain(|object, _| live.contains(object));
         self.indestructible_grants
@@ -894,9 +1084,18 @@ impl CharacteristicState {
         });
         self.end_step_casts
             .retain(|object, _| live.contains(object));
+        self.cast_summaries.retain(|object, _| {
+            live.contains(object) || self.entered_objects_this_turn.contains(object)
+        });
         self.kicked.retain(|object| live.contains(object));
         self.evoked.retain(|object| live.contains(object));
         self.saddled.retain(|object| live.contains(object));
+        self.ring_bearer.retain(|_, object| live.contains(object));
+        self.unlocked_doors
+            .retain(|object, _| live.contains(object));
+        self.monstrous.retain(|object| live.contains(object));
+        self.exerted_objects_this_turn
+            .retain(|object| live.contains(object));
         self.exhausted
             .retain(|(object, _, _, _)| live.contains(object));
         self.counters.retain(|object, _| live.contains(object));
