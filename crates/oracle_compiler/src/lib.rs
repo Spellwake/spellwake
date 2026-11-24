@@ -12,6 +12,7 @@ pub mod preprocess;
 pub mod vocab;
 pub mod wave_e6;
 pub mod wave_e7;
+pub mod wave_e8;
 
 use std::error::Error;
 use std::fmt;
@@ -2191,6 +2192,11 @@ mod tests {
 
         let mut total = 0usize;
         let mut strict = 0usize;
+        let mut cards_with_structured_rule = 0usize;
+        let mut structured_rule_nodes = 0usize;
+        let mut cards_with_game_state_flag = 0usize;
+        let mut structured_by_kind: HashMap<String, Vec<String>> = HashMap::new();
+        let mut purity_dump: Vec<String> = Vec::new();
         let mut by_bucket: HashMap<String, Vec<String>> = HashMap::new();
         let mut by_stage: HashMap<String, usize> = HashMap::new();
         let mut dump_lines: Vec<String> = Vec::new();
@@ -2247,7 +2253,42 @@ mod tests {
             );
             if ast.strictly_compiled {
                 strict += 1;
-            } else {
+            }
+            if let Ok(json) = serde_json::to_string(&ast) {
+                if json.contains("\"GameStateFlag\"") {
+                    cards_with_game_state_flag += 1;
+                }
+                if json.contains("\"StructuredRule\"") {
+                    cards_with_structured_rule += 1;
+                    let mut search_from = 0usize;
+                    while let Some(pos) =
+                        json[search_from..].find("\"StructuredRule\":{\"kind\":\"")
+                    {
+                        structured_rule_nodes += 1;
+                        let start = search_from + pos + "\"StructuredRule\":{\"kind\":\"".len();
+                        let kind = json[start..]
+                            .split_once('"')
+                            .map_or("unknown", |(k, _)| k)
+                            .to_string();
+                        let text_marker = ",\"text\":\"";
+                        let text = json[start..]
+                            .find(text_marker)
+                            .and_then(|tp| {
+                                let ts = start + tp + text_marker.len();
+                                json[ts..].split_once("\"}").map(|(t, _)| t)
+                            })
+                            .unwrap_or("")
+                            .to_string();
+                        structured_by_kind
+                            .entry(kind.clone())
+                            .or_default()
+                            .push(raw.name.clone());
+                        purity_dump.push(format!("StructuredRule\t{kind}\t{}\t{text}", raw.name));
+                        search_from = start;
+                    }
+                }
+            }
+            if !ast.strictly_compiled {
                 for face in &ast.faces {
                     for fail in &face.failures {
                         *by_stage.entry(fail.stage.clone()).or_insert(0) += 1;
@@ -2277,11 +2318,18 @@ mod tests {
         if let Ok(dump_path) = std::env::var("SPELLWAKE_AST_FAIL_DUMP") {
             let _ = std::fs::write(&dump_path, dump_lines.join("\n"));
         }
+        if let Ok(purity_path) = std::env::var("SPELLWAKE_AST_PURITY_DUMP") {
+            let _ = std::fs::write(&purity_path, purity_dump.join("\n"));
+        }
 
         let failed = total.saturating_sub(strict);
         eprintln!(
             "=== FAST STAGE 1 AST AUDIT: {strict} / {total} ({:.2}%), {failed} incomplete ===",
             (strict as f64 / total.max(1) as f64) * 100.0
+        );
+        eprintln!(
+            "AST purity: StructuredRule={structured_rule_nodes} nodes across {cards_with_structured_rule} cards ({} distinct kinds), GameStateFlag={cards_with_game_state_flag} cards",
+            structured_by_kind.len()
         );
         let mut stage_sorted: Vec<(String, usize)> = by_stage.into_iter().collect();
         stage_sorted.sort_by_key(|e| std::cmp::Reverse(e.1));
@@ -2848,5 +2896,340 @@ mod tests {
             "Wild Endeavor: {:?}",
             wild.faces[0].failures
         );
+    }
+
+    #[test]
+    fn pass_e8_compositional_and_zero_structured_rules() {
+        let members: Vec<String> = [
+            "Goblin",
+            "Artificer",
+            "Dragon",
+            "Avatar",
+            "Human",
+            "Wizard",
+            "Beast",
+            "Bird",
+            "Cleric",
+            "Rogue",
+            "Warrior",
+            "Soldier",
+            "Zombie",
+            "Hydra",
+            "Angel",
+            "Elf",
+            "Dinosaur",
+            "Phoenix",
+            "Dog",
+            "Spirit",
+            "Eldrazi",
+            "Shapeshifter",
+            "Construct",
+            "Phyrexian",
+            "Horror",
+            "Warlock",
+            "Giant",
+            "Fish",
+            "Knight",
+            "Vampire",
+        ]
+        .into_iter()
+        .map(str::to_string)
+        .collect();
+        let vocab = Vocabulary::from_creature_members(&members);
+        let compile = |name: &str, type_line: &str, oracle_text: &str| {
+            compile_card(
+                &CardInput {
+                    oracle_id: "test-e8",
+                    name,
+                    layout: "normal",
+                    faces: vec![FaceInput {
+                        name,
+                        type_line,
+                        oracle_text,
+                    }],
+                },
+                &vocab,
+            )
+        };
+
+        // 1. Hypothetical unseen future cards proving compositional generalization
+        let unseen_cards: &[(&str, &str, &str, &[&str])] = &[
+            (
+                "Enchantment Welder",
+                "Creature \u{2014} Human Artificer",
+                "{T}: Choose target enchantment a player controls and target enchantment card in that player's graveyard. If both targets are still legal as this ability resolves, that player simultaneously sacrifices the enchantment and returns the enchantment card to the battlefield.",
+                &["\"AllTargetsLegal\"", "\"Simultaneous\""],
+            ),
+            (
+                "Blue Chain Veil",
+                "Legendary Artifact",
+                "{3}, {T}: For each blue planeswalker you control, you may activate one of its loyalty abilities once this turn as though none of its loyalty abilities have been activated this turn.",
+                &["\"ForEachObject\""],
+            ),
+            (
+                "Guild Artificer",
+                "Legendary Creature \u{2014} Human Artificer",
+                "When Guild Artificer enters, reveal the top seven cards of your library. For each color pair, choose an artifact card that's exactly those colors from among them. Put the chosen cards into your hand and the rest on the bottom of your library in a random order.",
+                &["\"ForEachCategory\"", "\"ColorPair\""],
+            ),
+            (
+                "Sands of Enchantments",
+                "Artifact",
+                "At the beginning of each player's upkeep, that player simultaneously untaps each tapped enchantment and planeswalker they control and taps each untapped enchantment and planeswalker they control.",
+                &["\"Simultaneous\""],
+            ),
+            (
+                "Triple Power Instant",
+                "Instant",
+                "Triple target creature's power until end of turn.",
+                &["\"DoubleStatOrCounters\"", "\"triple_power\""],
+            ),
+            (
+                "Creature Firebombers",
+                "Creature \u{2014} Giant Warrior",
+                "When Creature Firebombers enters, each player sacrifices all creatures they control except for two.",
+                &["\"SacrificeAllExcept\""],
+            ),
+            (
+                "Red Soul Burn",
+                "Sorcery",
+                "Red Soul Burn deals X damage to any target. You gain life equal to the damage dealt, but not more life than the player's life total before the damage was dealt, the planeswalker's loyalty before the damage was dealt, or the creature's toughness.",
+                &["\"DealDamage\"", "\"ChangeLife\"", "\"TargetPreDamageCap\""],
+            ),
+            (
+                "Power Timesifter",
+                "Artifact",
+                "At the beginning of each upkeep, each player exiles the top card of their library. The player who exiled the card with the greatest power takes an extra turn after this one. If two or more players' cards are tied for greatest, the tied players repeat this process until the tie is broken.",
+                &["\"ExtraTurn\"", "\"RepeatProcessExt\""],
+            ),
+            (
+                "Enchantment Reins",
+                "Instant",
+                "Target opponent and you exchange control of all enchantments you each control until end of turn.",
+                &["\"ExchangeAllControlled\""],
+            ),
+            (
+                "Draw-Step Paradox",
+                "Enchantment \u{2014} Aura",
+                "Enchant player\nAt the beginning of enchanted player's first draw step each turn, that player gets an additional draw step after this step.",
+                &["\"AdditionalStep\"", "\"DrawStep\""],
+            ),
+            (
+                "Main Phase Silence",
+                "Sorcery",
+                "Target opponent skips all main phases of their next turn.",
+                &["\"SkipAllPhasesNextTurn\""],
+            ),
+            (
+                "Oath of Artifacts",
+                "Enchantment",
+                "At the beginning of each player's upkeep, that player chooses target player whose graveyard has fewer artifact cards in it than their graveyard does and is their opponent.",
+                &["\"ChooseFromGroup\""],
+            ),
+            (
+                "Artifact Terror",
+                "Creature \u{2014} Dragon",
+                "Spells your opponents cast that target an artifact you control cost an additional 4 life to cast.",
+                &["\"AdditionalActivationCost\"", "\"PayLife\""],
+            ),
+            (
+                "Dice Hydra",
+                "Creature \u{2014} Hydra",
+                "As Dice Hydra enters, roll X d8. It enters with a number of +1/+1 counters on it equal to the total of those results.",
+                &[
+                    "\"AsEntersAction\"",
+                    "\"sides\":8",
+                    "\"EntersWithCounters\"",
+                ],
+            ),
+            (
+                "Goblin Scion",
+                "Creature \u{2014} Goblin",
+                "Each Goblin you control has haste if it's red, deathtouch if it's black, and flying if it's blue.",
+                &["\"Compound\"", "\"GrantKeywords\""],
+            ),
+            (
+                "Boast Doubler",
+                "Enchantment",
+                "Each boast ability of creatures you control can be activated an additional time.",
+                &["\"ActivationLimitOverride\"", "\"extra_times\":1"],
+            ),
+        ];
+
+        for (name, tl, ot, expected_tokens) in unseen_cards {
+            let compiled = compile(name, tl, ot);
+            assert!(
+                compiled.strictly_compiled,
+                "Unseen card {name} failed: {:?}",
+                compiled.faces[0].failures
+            );
+            let json = serde_json::to_string(&compiled).unwrap_or_default();
+            assert!(
+                !json.contains("\"StructuredRule\""),
+                "Unseen card {name} emitted StructuredRule: {json}"
+            );
+            assert!(
+                !json.contains("\"GameStateFlag\""),
+                "Unseen card {name} emitted GameStateFlag: {json}"
+            );
+            for tok in *expected_tokens {
+                assert!(
+                    json.contains(tok),
+                    "Unseen card {name} missing expected AST token {tok}: {json}"
+                );
+            }
+        }
+
+        // 2. Former E5_STRUCTURED_RULES & E3/E4_STATIC_EXACTS staples compile strictly with zero catch-alls
+        let former_catchall_staples: &[(&str, &str, &str)] = &[
+            (
+                "Karn Liberated",
+                "Legendary Planeswalker \u{2014} Karn",
+                "\u{2212}14: Restart the game, leaving in exile all non-Aura permanent cards exiled with Karn Liberated. Then put those cards onto the battlefield under your control.",
+            ),
+            (
+                "Jace, the Mind Sculptor",
+                "Legendary Planeswalker \u{2014} Jace",
+                "\u{2212}12: Exile all cards from target player's library, then that player shuffles their hand into their library.",
+            ),
+            (
+                "Once Upon a Time",
+                "Instant",
+                "If this spell is the first spell you've cast this game, you may cast it without paying its mana cost.\nLook at the top five cards of your library. You may reveal a creature or land card from among them and put it into your hand. Put the rest on the bottom of your library in a random order.",
+            ),
+            (
+                "Approach of the Second Sun",
+                "Sorcery",
+                "If this spell was cast from your hand and you've cast another spell named Approach of the Second Sun this game, you win the game. Otherwise, put Approach of the Second Sun into its owner's library seventh from the top and you gain 7 life.",
+            ),
+            (
+                "Long-Term Plans",
+                "Instant",
+                "Search your library for a card, then shuffle and put that card third from the top.",
+            ),
+            (
+                "Reins of Power",
+                "Instant",
+                "Untap all creatures you control and all creatures target opponent controls. You and that opponent each gain control of all creatures the other controls until end of turn. Those creatures gain haste until end of turn.",
+            ),
+            (
+                "Sands of Time",
+                "Artifact",
+                "Each player skips their untap step.\nAt the beginning of each player's upkeep, that player simultaneously untaps each tapped artifact, creature, and land they control and taps each untapped artifact, creature, and land they control.",
+            ),
+            (
+                "Tifa's Limit Break",
+                "Instant",
+                "Tiered (Choose one additional cost.)\n\u{2022} Somersault \u{2014} {0} \u{2014} Target creature gets +2/+2 until end of turn.\n\u{2022} Meteor Strikes \u{2014} {2} \u{2014} Double target creature's power and toughness until end of turn.\n\u{2022} Final Heaven \u{2014} {6}{G} \u{2014} Triple target creature's power and toughness until end of turn.",
+            ),
+            (
+                "Terror of the Peaks",
+                "Creature \u{2014} Dragon",
+                "Flying\nSpells your opponents cast that target Terror of the Peaks cost an additional 3 life to cast.",
+            ),
+            (
+                "Jetmir, Nexus of Revels",
+                "Legendary Creature \u{2014} Cat Demon",
+                "Creatures you control get +1/+0 and have vigilance as long as you control three or more creatures.\nCreatures you control also get +1/+0 and have trample as long as you control six or more creatures.\nCreatures you control also get +1/+0 and have double strike as long as you control nine or more creatures.",
+            ),
+            (
+                "On Serra's Wings",
+                "Enchantment \u{2014} Aura",
+                "Enchant creature\nEnchanted creature is legendary, gets +1/+1, and has flying, vigilance, and lifelink.",
+            ),
+            (
+                "Scion of Draco",
+                "Artifact Creature \u{2014} Dragon",
+                "Flying\nEach creature you control has vigilance if it's white, hexproof if it's blue, lifelink if it's black, first strike if it's red, and trample if it's green.",
+            ),
+            (
+                "Arcades, the Strategist",
+                "Legendary Creature \u{2014} Elder Dragon",
+                "Flying, vigilance\nEach creature you control with defender assigns combat damage equal to its toughness rather than its power and can attack as though it didn't have defender.",
+            ),
+            (
+                "Winter, Misanthropic Guide",
+                "Legendary Creature \u{2014} Human Warlock",
+                "As long as there are four or more card types among cards in your graveyard, each opponent's maximum hand size is equal to seven minus the number of those card types.",
+            ),
+            (
+                "Trinisphere",
+                "Artifact",
+                "As long as Trinisphere is untapped, each spell that would cost less than three mana to cast costs three mana to cast.",
+            ),
+            (
+                "K'rrik, Son of Yawgmoth",
+                "Legendary Creature \u{2014} Phyrexian Horror Minion",
+                "Lifelink\nFor each {B} in a cost, you may pay 2 life rather than pay that mana.",
+            ),
+            (
+                "Opposition Agent",
+                "Creature \u{2014} Human Rogue",
+                "Flash\nYou control your opponents while they're searching their libraries.\nWhile an opponent is searching their library, they exile each card they find. You may play those cards for as long as they remain exiled, and you may spend mana as though it were mana of any color to cast them.",
+            ),
+            (
+                "Neverwinter Hydra",
+                "Creature \u{2014} Hydra",
+                "Trample, ward {4}\nAs Neverwinter Hydra enters, roll X d6. It enters with a number of +1/+1 counters on it equal to the total of those results.",
+            ),
+            (
+                "Deadpool, Trading Card",
+                "Legendary Creature \u{2014} Mutant Mercenary Hero",
+                "As Deadpool enters, you may exchange his text box and another creature's.",
+            ),
+            (
+                "Firestorm Phoenix",
+                "Creature \u{2014} Phoenix",
+                "Flying\nIf Firestorm Phoenix would die, return it to its owner's hand instead. Until that player's next turn, that player plays with that card revealed in their hand and can't play it.",
+            ),
+            (
+                "Cultist of the Absolute",
+                "Legendary Enchantment \u{2014} Background",
+                "Commander creatures you own get +3/+3 and have flying, deathtouch, \"Ward\u{2014}Pay 3 life,\" and \"At the beginning of your upkeep, sacrifice a creature.\"",
+            ),
+            (
+                "Oath of Teferi",
+                "Legendary Enchantment",
+                "You may activate the loyalty abilities of planeswalkers you control twice each turn rather than only once.",
+            ),
+            (
+                "Teferi, Master of Time",
+                "Legendary Planeswalker \u{2014} Teferi",
+                "You may activate loyalty abilities of Teferi, Master of Time on any player's turn any time you could cast an instant.",
+            ),
+            (
+                "Mycosynth Lattice",
+                "Artifact",
+                "All permanents are artifacts in addition to their other types.\nAll cards that aren't on the battlefield, spells, and permanents are colorless.\nPlayers may spend mana as though it were mana of any color.",
+            ),
+            (
+                "Drought",
+                "Enchantment",
+                "Spells cost an additional \"Sacrifice a Swamp\" to cast for each black mana symbol in their mana costs.\nActivated abilities cost an additional \"Sacrifice a Swamp\" to activate for each black mana symbol in their activation costs.",
+            ),
+            (
+                "Shalai, Voice of Plenty",
+                "Legendary Creature \u{2014} Angel",
+                "Flying\nYou, planeswalkers you control, and other creatures you control have hexproof.",
+            ),
+        ];
+
+        for (name, tl, ot) in former_catchall_staples {
+            let compiled = compile(name, tl, ot);
+            assert!(
+                compiled.strictly_compiled,
+                "Former catch-all staple {name} failed: {:?}",
+                compiled.faces[0].failures
+            );
+            let json = serde_json::to_string(&compiled).unwrap_or_default();
+            assert!(
+                !json.contains("\"StructuredRule\""),
+                "Staple {name} emitted StructuredRule: {json}"
+            );
+            assert!(
+                !json.contains("\"GameStateFlag\""),
+                "Staple {name} emitted GameStateFlag: {json}"
+            );
+        }
     }
 }

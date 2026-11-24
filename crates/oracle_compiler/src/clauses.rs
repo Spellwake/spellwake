@@ -8584,6 +8584,13 @@ pub fn parse_atomic_effect(
         }]);
     }
 
+    // Simultaneous execution combinator before generic ", and "/" and " splitters so multi-type filters don't exhaust PARSE_OPS
+    if (low.starts_with("simultaneously") || low.contains(" simultaneously "))
+        && let Some(sim) = crate::wave_e7::parse_simultaneous_effect(&low, vocab)
+    {
+        return Ok(sim);
+    }
+
     // Compound ", and " split (outside quotes) BEFORE plain " and " so trailing commas never break the left half!
     if low.contains(", and ") && !s.contains('"') {
         let parts = split_top_level(s, ", and ");
@@ -13857,6 +13864,44 @@ fn try_parse_misc_actions(
             });
         }
     }
+    // Compositional "<player> taps/tap <subj>" (Sands of Time and future player-scoped tap effects)
+    if let Some((who_raw, rest)) = low.split_once(" taps ").or_else(|| low.split_once(" tap "))
+        && !who_raw.trim().is_empty()
+        && let Ok(subj) = parse_subject_or_target(rest.trim(), vocab)
+    {
+        if let Some(player) = parse_player_ref(who_raw.trim()) {
+            let act = InstructionAst::TapPermanent {
+                subject: Box::new(subj),
+                any_number: false,
+            };
+            return Some(
+                if matches!(
+                    player,
+                    PlayerRefAst::EachPlayer
+                        | PlayerRefAst::EachOpponent
+                        | PlayerRefAst::EachOtherOpponent
+                        | PlayerRefAst::EachOtherPlayer
+                ) {
+                    InstructionAst::ForEachPlayer {
+                        player,
+                        body: vec![act],
+                    }
+                } else {
+                    act
+                },
+            );
+        } else if let Ok(players_subj) = parse_subject_or_target(who_raw.trim(), vocab)
+            && matches!(players_subj, SubjectRefAst::PlayerMatching { .. })
+        {
+            return Some(InstructionAst::ForEachSubjectPlayer {
+                players: Box::new(players_subj),
+                body: vec![InstructionAst::TapPermanent {
+                    subject: Box::new(subj),
+                    any_number: false,
+                }],
+            });
+        }
+    }
     if let Some(rest) = low.strip_prefix("remove ")
         && let Some(subj_raw) = rest.strip_suffix(" from combat")
         && let Ok(subj) = parse_subject_or_target(subj_raw, vocab)
@@ -13887,6 +13932,39 @@ fn try_parse_misc_actions(
     {
         return Some(ins);
     }
+    // Compositional "<player> untaps/untap <subj>" (Sands of Time, Curse of Bounty, and future player-scoped untap effects)
+    if let Some((who_raw, rest)) = low
+        .split_once(" untaps ")
+        .or_else(|| low.split_once(" untap "))
+        && !who_raw.trim().is_empty()
+        && let Some(act) = parse_untap_permanent_instruction(rest.trim(), vocab)
+    {
+        if let Some(player) = parse_player_ref(who_raw.trim()) {
+            return Some(
+                if matches!(
+                    player,
+                    PlayerRefAst::EachPlayer
+                        | PlayerRefAst::EachOpponent
+                        | PlayerRefAst::EachOtherOpponent
+                        | PlayerRefAst::EachOtherPlayer
+                ) {
+                    InstructionAst::ForEachPlayer {
+                        player,
+                        body: vec![act],
+                    }
+                } else {
+                    act
+                },
+            );
+        } else if let Ok(players_subj) = parse_subject_or_target(who_raw.trim(), vocab)
+            && matches!(players_subj, SubjectRefAst::PlayerMatching { .. })
+        {
+            return Some(InstructionAst::ForEachSubjectPlayer {
+                players: Box::new(players_subj),
+                body: vec![act],
+            });
+        }
+    }
     if let Some((who_raw, rest)) = low
         .split_once(" shuffles ")
         .or_else(|| low.split_once(" shuffle "))
@@ -13898,6 +13976,14 @@ fn try_parse_misc_actions(
             return Some(InstructionAst::WheelShuffleHandAndGraveyard {
                 player,
                 draw: Box::new(ValueExprAst::Const(0)),
+            });
+        }
+        if matches!(
+            rest,
+            "their hand into their library" | "your hand into your library"
+        ) {
+            return Some(InstructionAst::ShuffleIntoLibrary {
+                subject: Box::new(SubjectRefAst::Anaphora("their hand".to_string())),
             });
         }
         if let Some(subj_raw) = rest
@@ -14022,6 +14108,15 @@ fn try_parse_misc_actions(
             subject: Box::new(subj),
         });
     }
+    if let Some(subj_raw) = low
+        .strip_suffix(" phases in")
+        .or_else(|| low.strip_suffix(" phase in"))
+        && let Ok(subj) = parse_subject_or_target(subj_raw, vocab)
+    {
+        return Some(InstructionAst::PhaseIn {
+            subject: Box::new(subj),
+        });
+    }
     if let Some((a_raw, b_raw)) = low
         .split_once(" fights ")
         .or_else(|| low.split_once(" fight "))
@@ -14116,7 +14211,11 @@ fn try_parse_misc_actions(
             duration: DurationAst::Permanent,
         });
     }
-    if let Some(after) = snlow.strip_prefix("double ") {
+    if let Some((mult_prefix, after)) = snlow
+        .strip_prefix("double ")
+        .map(|r| ("", r))
+        .or_else(|| snlow.strip_prefix("triple ").map(|r| ("triple_", r)))
+    {
         if let Some(subj_raw) = after
             .strip_prefix("the power and toughness of ")
             .or_else(|| after.strip_prefix("the power of "))
@@ -14132,7 +14231,7 @@ fn try_parse_misc_actions(
             };
             return Some(InstructionAst::DoubleStatOrCounters {
                 subject: Box::new(subj),
-                kind: kind.to_string(),
+                kind: format!("{mult_prefix}{kind}"),
                 duration: dur.clone(),
             });
         }
@@ -14146,7 +14245,7 @@ fn try_parse_misc_actions(
             {
                 return Some(InstructionAst::DoubleStatOrCounters {
                     subject: Box::new(subj),
-                    kind: kind.to_string(),
+                    kind: format!("{mult_prefix}{kind}"),
                     duration: dur.clone(),
                 });
             }
@@ -14157,7 +14256,7 @@ fn try_parse_misc_actions(
         ) {
             return Some(InstructionAst::DoubleStatOrCounters {
                 subject: Box::new(SubjectRefAst::Anaphora("it".to_string())),
-                kind: after.trim_start_matches("its ").to_string(),
+                kind: format!("{mult_prefix}{}", after.trim_start_matches("its ")),
                 duration: dur.clone(),
             });
         }
@@ -22295,9 +22394,24 @@ fn parse_wave_e5_effects(
         .or_else(|| nd_low.split_once(" and lose all creature types"))
         && let Ok(mut base) = parse_atomic_effect(pt_side.trim(), vocab)
     {
-        base.push(InstructionAst::StructuredRule {
-            kind: "lose_all_creature_types".to_string(),
-            text: s.to_string(),
+        let subj = pt_side
+            .split_once(" gets ")
+            .or_else(|| pt_side.split_once(" get "))
+            .and_then(|(sr, _)| parse_subject_or_target(sr.trim(), vocab).ok())
+            .unwrap_or_else(|| SubjectRefAst::Anaphora("it".to_string()));
+        base.push(InstructionAst::TemporaryStatic {
+            static_ability: Box::new(StaticAbilityAst::ContinuousLayerEffect {
+                subject: Box::new(subj),
+                set_types: Some("lose_all_creature_types".to_string()),
+                additive_types: false,
+                base_pt: None,
+                set_colors: None,
+                grant_keywords: Vec::new(),
+                lose_keywords: Vec::new(),
+                lose_all_abilities: false,
+                condition: None,
+            }),
+            duration: dur.clone(),
         });
         return Some(base);
     }
@@ -22332,34 +22446,101 @@ fn parse_wave_e5_effects(
             duration: dur.clone(),
         }]);
     }
-    // E5.5: Tiered Limit Break (`{6}{G} — ...`, `{1} — ...`) & Ability-word prefixed effect (`Dash Attack — ...`)
+    // E5.5: Tiered Limit Break (`{6}{G} — ...`, `{1} — ...`) and ability-word prefixed modal effect (`Dash Attack — ...`)
     if let Some((lhs, rhs)) = s.split_once(" \u{2014} ")
         && !lhs.is_empty()
         && !rhs.is_empty()
-        && (is_mana_sequence(lhs.trim()) || lhs.trim() == "Dash Attack")
     {
-        return Some(vec![InstructionAst::StructuredRule {
-            kind: format!("prefixed_mode:{}", lhs.trim()),
-            text: rhs.trim().to_string(),
-        }]);
+        let lhs_trim = lhs.trim();
+        let rhs_trim = rhs.trim();
+        if is_mana_sequence(lhs_trim)
+            && let Ok(cost) = parse_cost_list(lhs_trim, vocab)
+        {
+            let (body, fails) = parse_effect_body(rhs_trim, vocab);
+            if fails.is_empty() && !body.is_empty() {
+                return Some(vec![InstructionAst::SpreeMode { cost, body }]);
+            }
+        } else if lhs_trim == "Dash Attack" {
+            let (body, fails) = parse_effect_body(rhs_trim, vocab);
+            if fails.is_empty() && !body.is_empty() {
+                return Some(body);
+            }
+        }
     }
-    // E5.6: Exile replacement as it resolves ("exile that card [with ... counters on it] instead of putting it into your graveyard as it resolves")
-    if low.starts_with("exile that card ")
-        && low.ends_with(" instead of putting it into your graveyard as it resolves")
+    // E5.6: Exile replacement as it resolves ("exile that card [with N <kind> counters on it] instead of putting it into your graveyard as it resolves")
+    if let Some(mid) = low
+        .strip_prefix("exile that card")
+        .and_then(|r| r.strip_suffix(" instead of putting it into your graveyard as it resolves"))
     {
-        return Some(vec![InstructionAst::StructuredRule {
-            kind: "exile_on_resolve_replacement".to_string(),
-            text: s.to_string(),
+        let mid_trim = mid.trim();
+        let instead_ins = if mid_trim.is_empty() {
+            InstructionAst::Exile {
+                actor: None,
+                subject: Box::new(SubjectRefAst::Anaphora("that card".to_string())),
+                random: false,
+                face_down: false,
+                into_pile: false,
+            }
+        } else if let Some(after_with) = mid_trim.strip_prefix("with ")
+            && let Some(cnt_and_kind) = after_with
+                .strip_suffix(" counters on it")
+                .or_else(|| after_with.strip_suffix(" counter on it"))
+            && let Some((cnt_tok, kind_raw)) = cnt_and_kind.split_once(' ')
+        {
+            let cnt_val = if matches!(cnt_tok, "a" | "an") {
+                ValueExprAst::Const(1)
+            } else if let Some(n) = parse_number_word(cnt_tok) {
+                ValueExprAst::Const(n)
+            } else {
+                ValueExprAst::Const(1)
+            };
+            InstructionAst::ExileWithCounters {
+                subject: Box::new(SubjectRefAst::Anaphora("that card".to_string())),
+                counter_kind: kind_raw.trim().to_string(),
+                count: Box::new(cnt_val),
+                face_down: false,
+            }
+        } else {
+            InstructionAst::Exile {
+                actor: None,
+                subject: Box::new(SubjectRefAst::Anaphora("that card".to_string())),
+                random: false,
+                face_down: false,
+                into_pile: false,
+            }
+        };
+        return Some(vec![InstructionAst::TemporaryReplacement {
+            replacement: Box::new(ReplacementEffectAst::EventInstead {
+                subject_or_event: "that card".to_string(),
+                would: "be_put_into_graveyard_as_it_resolves".to_string(),
+                instead: "exile_on_resolve".to_string(),
+                instead_body: Some(vec![instead_ins]),
+            }),
+            duration: DurationAst::UntilEndOfTurn,
         }]);
     }
     // E5.7: Reveal top N cards and put all of them with that name into your hand (Wood Sage, Desperate Research)
-    if low.starts_with("reveal the top ")
-        && low.ends_with(" and put all of them with that name into your hand")
+    if let Some(after_top) = low.strip_prefix("reveal the top ")
+        && let Some((cnt_part, tail)) = after_top.split_once(" cards of your library and ")
+        && tail == "put all of them with that name into your hand"
+        && let Ok(cnt) = parse_value_expr(cnt_part.trim(), vocab)
     {
-        return Some(vec![InstructionAst::StructuredRule {
-            kind: "reveal_top_named_to_hand".to_string(),
-            text: s.to_string(),
-        }]);
+        let named_flt = ObjectFilterAst {
+            any_card: true,
+            named: Some(NameFilterAst::SameAsReferenced),
+            ..Default::default()
+        };
+        return Some(vec![
+            InstructionAst::LookTopLibrary {
+                reveal: true,
+                library: "your".to_string(),
+                count: Box::new(cnt),
+            },
+            InstructionAst::MoveZone {
+                subject: Box::new(SubjectRefAst::All(Box::new(named_flt))),
+                to: "your hand".to_string(),
+            },
+        ]);
     }
     // E5.8: Look at top N and separate into a face-down pile and a face-up pile (Riddles in the Dark, Curator of Destinies)
     if low.starts_with("look at the top ")
@@ -22368,802 +22549,94 @@ fn parse_wave_e5_effects(
         return Some(vec![InstructionAst::SeparateIntoPiles {
             chooser: PlayerRefAst::You,
             pile_count: 2,
-            face_down_piles: 0,
+            face_down_piles: 1,
         }]);
     }
-    // E5.9: Generalized "If target spell has only one target and that target is ..., change that spell's target to another creature" (Meddle, Quicksilver Dragon)
-    if low.starts_with("if target spell has only one target and that target is ")
-        && low.ends_with(", change that spell's target to another creature")
+    // E5.9: Generalized "If target spell has only one target and that target is <subj>, change that spell's target to <new_tgt>" (Meddle, Quicksilver Dragon)
+    if let Some(after) = low.strip_prefix("if target spell has only one target and that target is ")
+        && let Some((cur_tgt_raw, new_tgt_raw)) =
+            after.split_once(", change that spell's target to ")
+        && let (Ok(cur_tgt), Ok(new_tgt)) = (
+            parse_subject_or_target(cur_tgt_raw.trim(), vocab),
+            parse_subject_or_target(new_tgt_raw.trim(), vocab),
+        )
     {
-        return Some(vec![InstructionAst::StructuredRule {
-            kind: "conditional_single_target_redirect".to_string(),
-            text: s.to_string(),
+        let target_cond = match cur_tgt {
+            SubjectRefAst::Group(flt) => ConditionAst::MatchesFilter {
+                subject: Box::new(SubjectRefAst::Anaphora("that target".to_string())),
+                filter: flt,
+            },
+            other => ConditionAst::TargetsFilter(Box::new(ObjectFilterAst {
+                any_spell: true,
+                predicates: vec![crate::ast::FilterPredicateAst::TargetsSubject(Box::new(
+                    other,
+                ))],
+                ..Default::default()
+            })),
+        };
+        return Some(vec![InstructionAst::IfCondition {
+            condition: Box::new(ConditionAst::And(
+                Box::new(ConditionAst::Marker(GameMarker::SingleTarget)),
+                Box::new(target_cond),
+            )),
+            then_body: vec![InstructionAst::ChangeTargets {
+                target: Box::new(SubjectRefAst::TargetObject {
+                    filter: Box::new(ObjectFilterAst {
+                        any_spell: true,
+                        ..Default::default()
+                    }),
+                    count: crate::ast::TargetCountAst::Exact(1),
+                }),
+                new_target: Some(Box::new(new_tgt)),
+                must_target: None,
+                single_target_only: true,
+            }],
         }]);
     }
-    // E5.10: Generalized "If you do, repeat this process except that opponent can't choose a card already chosen for ~" (Forgotten Lore, Shrouded Lore)
-    if low.starts_with("if you do, repeat this process except ") {
-        return Some(vec![InstructionAst::StructuredRule {
-            kind: "repeat_process_except".to_string(),
-            text: s.to_string(),
-        }]);
+    // E5.10: Generalized "If you do, repeat this process except <restriction>" (Forgotten Lore, Shrouded Lore)
+    if let Some(except_raw) = low.strip_prefix("if you do, repeat this process except ") {
+        return Some(vec![InstructionAst::IfPreviousSucceeded(vec![
+            InstructionAst::RepeatProcessExt {
+                times: None,
+                for_list: Vec::new(),
+                until: Some(format!("except:{}", except_raw.trim())),
+            },
+        ])]);
     }
-    // E5.11: Generalized "Each player with exactly 13 life loses the game, then each player gains/loses 1 life" (Triskaidekaphobia)
-    if low.starts_with("each player with exactly 13 life loses the game, then ") {
-        return Some(vec![InstructionAst::StructuredRule {
-            kind: "conditional_lose_game_then".to_string(),
-            text: s.to_string(),
-        }]);
-    }
-    // E5.12: Verified lossless structured effect rules across iconic MTG cards (100% preserved semantics, always fail-closed in lowering)
-    const E5_STRUCTURED_RULES: &[(&str, &str)] = &[
-        (
-            "copy a card you exiled with cards named ~",
-            "copy_exiled_card",
-        ),
-        (
-            "you may copy an instant or sorcery card in it",
-            "copy_card_in_zone",
-        ),
-        (
-            "exile an instant or sorcery card from each graveyard",
-            "exile_each_graveyard",
-        ),
-        (
-            "otherwise, reveal the aura card and put it into your hand",
-            "otherwise_reveal_to_hand",
-        ),
-        (
-            "when it dies under your control this turn, draw two cards",
-            "delayed_dies_trigger",
-        ),
-        (
-            "target opponent skips all combat phases of their next turn",
-            "skip_combat_phases",
-        ),
-        (
-            "that player gets an additional upkeep step after this step",
-            "additional_upkeep",
-        ),
-        (
-            "count the number of +1/+1 counters on creatures you control",
-            "count_counters",
-        ),
-        (
-            "its controller adds one mana of any type that land produced",
-            "add_same_type_mana",
-        ),
-        (
-            "the owners of those cards shuffle them into their libraries",
-            "shuffle_into_library",
-        ),
-        (
-            "the player who has the most cards in hand gains control of ~",
-            "gain_control_superlative",
-        ),
-        (
-            "you gain control of that creature if it regenerates this way",
-            "gain_control_on_regen",
-        ),
-        (
-            "add two mana of any one color and two mana of any other color",
-            "add_two_colors_mana",
-        ),
-        (
-            "add one mana of any color chosen as you drafted cards named ~",
-            "add_draft_color_mana",
-        ),
-        (
-            "they can't attack you or planeswalkers you control that combat",
-            "combat_restriction",
-        ),
-        (
-            "~ deals 1 damage to any target that was dealt damage this turn",
-            "damage_filtered_target",
-        ),
-        (
-            "it gains haste until end of turn if it exploited that creature",
-            "conditional_grant_kw",
-        ),
-        (
-            "each player sacrifices all lands they control except for three",
-            "sacrifice_all_except_n",
-        ),
-        (
-            "shards you control become copies of it until the next end step",
-            "tokens_become_copies",
-        ),
-        (
-            "put that many cards from the top of your library into your hand",
-            "put_top_to_hand",
-        ),
-        (
-            "target player activates a mana ability of each land they control",
-            "force_mana_abilities",
-        ),
-        (
-            "target opponent chooses one of the top two cards of your graveyard",
-            "choose_top_graveyard",
-        ),
-        (
-            "if you do, sacrifice it unless you pay its mana cost reduced by {2}",
-            "flash_payment",
-        ),
-        (
-            "create a token that's a copy of a card you exiled with cards named ~",
-            "create_copy_exiled",
-        ),
-        (
-            "then you may exile a creature or planeswalker card from each graveyard",
-            "exile_each_graveyard",
-        ),
-        (
-            "non-wall creatures the active player controls attack this turn if able",
-            "must_attack_filtered",
-        ),
-        (
-            "destroy target land with an activated ability that isn't a mana ability",
-            "destroy_filtered",
-        ),
-        (
-            "only the controller of the enchanted creature may activate this ability",
-            "activation_restriction",
-        ),
-        (
-            "exile target creature that's attacking you or a planeswalker you control",
-            "exile_attacking",
-        ),
-        (
-            "leave the chosen cards in your graveyard and put the rest into your hand",
-            "leave_and_put_rest",
-        ),
-        (
-            "target player puts the bottom card of their library into their graveyard",
-            "mill_from_bottom",
-        ),
-        (
-            "when the targeted creature leaves the battlefield this turn, sacrifice ~",
-            "delayed_ltb_trigger",
-        ),
-        (
-            "simultaneously untap all tapped creatures and tap all untapped creatures",
-            "simultaneous_tap_untap",
-        ),
-        (
-            "exile all noncreature, nonland cards from that player's hand and graveyard",
-            "exile_hand_and_graveyard",
-        ),
-        (
-            "create a treasure token and manifest the top card of that player's library",
-            "token_and_manifest",
-        ),
-        (
-            "that player gains 1 life for each basic land type among lands they control",
-            "domain_life_gain",
-        ),
-        (
-            "each opponent exiles a card from their hand until ~ leaves the battlefield",
-            "exile_hand_until_ltb",
-        ),
-        (
-            "each player exiles all but the bottom six cards of their library face down",
-            "exile_all_but_bottom_n",
-        ),
-        (
-            "it's goaded for the rest of the game and it gains \"~ can't be sacrificed.\"",
-            "permanent_goad_and_cant_sac",
-        ),
-        (
-            "target player loses 2 life plus 2 life for each spirit sacrificed this way",
-            "scaled_life_loss",
-        ),
-        (
-            "~ deals damage equal to the excess to any target other than that permanent",
-            "excess_damage_redirect",
-        ),
-        (
-            "an opponent guesses whether the top card of your library is the chosen kind",
-            "guess_top_card",
-        ),
-        (
-            "destroy target planeswalker that was activated this turn or tapped creature",
-            "destroy_disjunctive",
-        ),
-        (
-            "exile the top card of each player's library with a collection counter on it",
-            "exile_top_with_counter",
-        ),
-        (
-            "its activated abilities can't be activated for as long as it remains tapped",
-            "cant_activate_while_tapped",
-        ),
-        (
-            "when ~ becomes untapped or leaves the battlefield, that permanent phases in",
-            "delayed_phase_in",
-        ),
-        (
-            "activate no more times each turn than the number of snow swamps you control",
-            "activation_limit_dynamic",
-        ),
-        (
-            "this cost is reduced by {2} for each basic land type among lands you control",
-            "domain_cost_reduction",
-        ),
-        (
-            "target player draws a card for each basic land type among lands they control",
-            "domain_draw",
-        ),
-        (
-            "~ deals 4 damage to target player who attacked this turn and 4 damage to you",
-            "symmetric_damage",
-        ),
-        (
-            "target opponent chooses a permanent they control at random and sacrifices it",
-            "random_sacrifice",
-        ),
-        (
-            "restart the game, leaving in exile all non-aura permanent cards exiled with ~",
-            "restart_game",
-        ),
-        (
-            "distribute up to two art stickers among one or two nonland permanents you own",
-            "distribute_stickers",
-        ),
-        (
-            "roll a d20 for each player being attacked and ignore all but the highest roll",
-            "roll_d20_keep_highest",
-        ),
-        (
-            "then if ~ has seven or more ember counters on it, remove them and transform ~",
-            "counter_threshold_transform",
-        ),
-        (
-            "you draw cards and lose life equal to the number of counters removed this way",
-            "draw_and_lose_life_equal",
-        ),
-        (
-            "choose a creature you control, then draw cards equal to its total toxic value",
-            "draw_equal_toxic",
-        ),
-        (
-            "you gain 3 life plus an additional 3 life for each additional {1}{g} you paid",
-            "scaled_life_gain",
-        ),
-        (
-            "distribute three +1/+1 counters among one, two, or three creatures you control",
-            "distribute_counters",
-        ),
-        (
-            "any number of target opponents each discard their hands, then draw seven cards",
-            "wheel_target_opponents",
-        ),
-        (
-            "exile the pile of an opponent's choice and return the other to the battlefield",
-            "pile_exile_and_return",
-        ),
-        (
-            "each opponent attacking that player untaps all nonland permanents they control",
-            "untap_attacking_opponents",
-        ),
-        (
-            "if you didn't create a token this way, create a 1/1 green insect creature token",
-            "if_no_token_create",
-        ),
-        (
-            "exile cards from the top of your library equal to the damage prevented this way",
-            "exile_top_equal_prevented",
-        ),
-        (
-            "if that equipment was attached to a creature, ~ deals 2 damage to that creature",
-            "if_attached_deal_damage",
-        ),
-        (
-            "each opponent secretly chooses silence or snitch, then the choices are revealed",
-            "secret_choice_reveal",
-        ),
-        (
-            "1/2 human rogue with haste and \"when ~ enters, it deals 1 damage to any target.\"",
-            "token_characteristics_mode",
-        ),
-        (
-            "then if it has three or more ritual counters on it, remove them and transform it",
-            "counter_threshold_transform",
-        ),
-        (
-            "the active player adds {c}{c} for each of your opponents who lost life this turn",
-            "add_mana_per_opponent_lost_life",
-        ),
-        (
-            "tap up to x target creatures, where x is the number of u's in name stickers on ~",
-            "tap_x_sticker_vowels",
-        ),
-        (
-            "if you don't, that player sacrifices all but that many permanents of their choice",
-            "sacrifice_all_but_n",
-        ),
-        (
-            "you can't lose the game this turn and your opponents can't win the game this turn",
-            "cant_lose_or_win",
-        ),
-        (
-            "if one or more of them entered from exile or was cast from exile, you draw a card",
-            "if_entered_from_exile",
-        ),
-        (
-            "counter target activated ability from an artifact, creature, enchantment, or land",
-            "counter_activated_ability",
-        ),
-        (
-            "search your library for a card, then shuffle and put that card third from the top",
-            "search_third_from_top",
-        ),
-        (
-            "if you gain control of a creature this way, tap it, and it's attacking that player",
-            "gain_control_tapped_attacking",
-        ),
-        (
-            "draw a card, then another player of your choice may gain control of that permanent",
-            "draw_then_donate",
-        ),
-        (
-            "exile target creature that's attacking you if it's controlled by the chosen player",
-            "exile_chosen_player_attacker",
-        ),
-        (
-            "for any number of opponents, destroy target nonland permanent that player controls",
-            "destroy_per_opponent",
-        ),
-        (
-            "destroy two target nonblack creatures unless either one is a color the other isn't",
-            "destroy_same_colors",
-        ),
-        (
-            "exile four of them at random, then put the rest on top of your library in any order",
-            "exile_random_put_rest_top",
-        ),
-        (
-            "target player loses life equal to the damage already dealt to that player this turn",
-            "lose_life_equal_damage_taken",
-        ),
-        (
-            "~ deals damage to target creature equal to the damage already dealt to it this turn",
-            "deal_damage_equal_damage_taken",
-        ),
-        (
-            "each land of the first chosen type becomes the second chosen type until end of turn",
-            "change_land_type",
-        ),
-        (
-            "the ring tempts you, then each player mills cards equal to your ring-bearer's power",
-            "ring_tempts_then_mill",
-        ),
-        (
-            "attach target aura attached to a creature or land to another permanent of that type",
-            "move_aura_same_type",
-        ),
-        (
-            "if one or more permanents were sacrificed to activate it, you may copy that ability",
-            "copy_sacrificed_ability",
-        ),
-        (
-            "exile target nonland card in a graveyard that was put there from anywhere this turn",
-            "exile_card_put_in_gy_this_turn",
-        ),
-        (
-            "if a player is dealt damage this way, they can't gain life for the rest of the game",
-            "permanent_cant_gain_life",
-        ),
-        (
-            "remove up to five counters from target artifact, creature, planeswalker, or opponent",
-            "remove_counters_multi_target",
-        ),
-        (
-            "manifest one of those cards, then put the other on the top or bottom of your library",
-            "manifest_one_put_other",
-        ),
-        (
-            "if they match, sacrifice ~ and put all cards exiled with it into their owners' hands",
-            "if_match_return_exiled",
-        ),
-        (
-            "target player discards two cards, then draws as many cards as they discarded this way",
-            "discard_then_draw_equal",
-        ),
-        (
-            "starting with you, each player separates all permanents they control into three piles",
-            "separate_three_piles",
-        ),
-        (
-            "destroy target creature that blocked or was blocked by a legendary creature this turn",
-            "destroy_blocked_legendary",
-        ),
-        (
-            "if it entered from your library or was cast from your library, draw two cards instead",
-            "if_from_library_draw_two",
-        ),
-        (
-            "if target plains is tapped for mana, it produces colorless mana instead of white mana",
-            "replace_mana_production",
-        ),
-        (
-            "target creature you control fights target creature the opponent to your left controls",
-            "fight_left_opponent",
-        ),
-        (
-            "each player creates a 1/1 black rat creature token for each 1 life they paid this way",
-            "create_tokens_per_life_paid",
-        ),
-        (
-            "that player chooses target player who has more life than they do and is their opponent",
-            "choose_higher_life_opponent",
-        ),
-        (
-            "put a +1/+1 counter on each creature you control that didn't attack or enter this turn",
-            "counters_didnt_attack_or_enter",
-        ),
-        (
-            "its base power and toughness become equal to ~'s power and toughness until end of turn",
-            "set_base_pt_equal_self",
-        ),
-        (
-            "target player adds three mana of the chosen color for each artifact sacrificed this way",
-            "add_mana_per_artifact_sacrificed",
-        ),
-        (
-            "if they don't, return ~ to the battlefield under your control as a non-aura enchantment",
-            "return_as_non_aura",
-        ),
-        (
-            "each player chooses a party from among creatures they control, then sacrifices the rest",
-            "choose_party_sac_rest",
-        ),
-        (
-            "if fewer than two cards were discarded this way, you draw cards equal to the difference",
-            "draw_discard_shortfall",
-        ),
-        (
-            "gain control of target creature that player controls for as long as they're the monarch",
-            "gain_control_while_monarch",
-        ),
-        (
-            "if you chose a creature this way, exile each creature not chosen by any player this way",
-            "exile_unchosen_creatures",
-        ),
-        (
-            "its controller looks at the top card of that opponent's library and exiles it face down",
-            "look_and_exile_face_down",
-        ),
-        (
-            "when you cast a spell with the chosen name for the first time this turn, draw two cards",
-            "delayed_cast_chosen_name",
-        ),
-        (
-            "put a +1/+1 counter on that token for each permanent you own that your opponents control",
-            "counters_per_donated_permanent",
-        ),
-        (
-            "if you didn't put the revealed card onto the battlefield this way, put it into your hand",
-            "if_not_bf_put_in_hand",
-        ),
-        (
-            "you destroy four lands you control, then target opponent destroys four lands they control",
-            "symmetric_destroy_lands",
-        ),
-        (
-            "put two time counters on each permanent with a time counter on it and each suspended card",
-            "add_time_counters_all",
-        ),
-        (
-            "~ deals half x damage, rounded down, to any target, and half x damage, rounded up, to you",
-            "split_half_x_damage",
-        ),
-        (
-            "if they do, that player can't attack you or permanents you control during their next turn",
-            "cant_attack_next_turn",
-        ),
-        (
-            "destroy target artifact if its mana value is equal to the amount of unspent mana you have",
-            "destroy_if_mv_eq_unspent",
-        ),
-        (
-            "that player looks at the top three cards of your library, then puts them back in any order",
-            "opponent_look_top_reorder",
-        ),
-        (
-            "put a +1/+1 counter on target creature you control that doesn't have a +1/+1 counter on it",
-            "counter_on_uncountered",
-        ),
-        (
-            "choose creatures you control one at a time until each creature you control has been chosen",
-            "order_creatures_you_control",
-        ),
-        (
-            "each opponent chooses a creature with the greatest mana value among creatures they control",
-            "choose_greatest_mv_creature",
-        ),
-        (
-            "simultaneously, all phased-out creatures phase in and all creatures with phasing phase out",
-            "simultaneous_phase_swap",
-        ),
-        (
-            "attach all auras enchanting target permanent to another permanent with the same controller",
-            "move_all_auras_same_controller",
-        ),
-        (
-            "each opponent sacrifices a tenth of the creatures they control of their choice, rounded up",
-            "sacrifice_one_tenth",
-        ),
-        (
-            "the base power and toughness of each creature that dealt damage to it this turn become 0/2",
-            "set_base_pt_damaged_self",
-        ),
-        (
-            "if that player discards a card this way, ~ deals 1 damage to each creature and each player",
-            "if_discarded_deal_all",
-        ),
-        (
-            "that player loses the game if they own three or more exiled cards with hit counters on them",
-            "lose_game_hit_counters",
-        ),
-        (
-            "~ deals x damage to each creature with flying and 1 additional damage to each blue creature",
-            "damage_flying_and_blue",
-        ),
-        (
-            "draw a card for each creature type noted for target permanent you control named ~'s journal",
-            "draw_per_noted_type",
-        ),
-        (
-            "if ~ is the first spell you've cast this game, you may cast it without paying its mana cost",
-            "free_if_first_spell_game",
-        ),
-        (
-            "exile up to one other target creature from the battlefield or creature card from a graveyard",
-            "exile_bf_or_gy",
-        ),
-        (
-            "then that creature gets +1/+1 until end of turn and fights target creature you don't control",
-            "pump_and_fight",
-        ),
-        (
-            "~ deals 1 damage to each nonblack creature and an additional 1 damage to each green creature",
-            "damage_nonblack_and_green",
-        ),
-        (
-            "destroy target nonland permanent of that player's choice that one of your opponents controls",
-            "destroy_opponent_permanent_chosen",
-        ),
-        (
-            "if you do, attacking doesn't cause creatures you control to tap this combat if ~ is untapped",
-            "conditional_vigilance_combat",
-        ),
-        (
-            "manifest a number of cards from the top of your library equal to the number of counters on it",
-            "manifest_equal_counters",
-        ),
-        (
-            "you and that opponent each gain control of all creatures the other controls until end of turn",
-            "swap_all_creatures_eot",
-        ),
-        (
-            "if two cards that share a card type were milled this way, draw a card and repeat this process",
-            "if_shared_type_milled_repeat",
-        ),
-        (
-            "whenever a creature dealt damage by that creature dies this turn, its controller loses 2 life",
-            "delayed_damaged_dies_trigger",
-        ),
-        (
-            "x target blocked creatures assign their combat damage this turn as though they weren't blocked",
-            "assign_damage_unblocked",
-        ),
-        (
-            "if ~ was cast from your hand and you've cast another spell named ~ this game, you win the game",
-            "approach_win_game",
-        ),
-        (
-            "exile up to x other target creatures from the battlefield and/or creature cards from graveyards",
-            "exile_x_bf_or_gy",
-        ),
-        (
-            "that player chooses target player who has more cards in hand than they do and is their opponent",
-            "choose_more_cards_opponent",
-        ),
-        (
-            "another target creature with an art sticker on it gets +2/+0 and gains menace until end of turn",
-            "pump_art_sticker_creature",
-        ),
-        (
-            "its controller chooses target permanent another player controls that shares a card type with it",
-            "choose_shared_type_permanent",
-        ),
-        (
-            "draw a card if you had two or more creatures enter the battlefield under your control this turn",
-            "draw_if_two_creatures_entered",
-        ),
-        (
-            "it deals 4 damage to another target battle or opponent and 1 damage to up to one target creature",
-            "split_damage_battle_and_creature",
-        ),
-        (
-            "put a flying counter on any creature you control if a creature card in your graveyard has flying",
-            "counter_if_gy_has_kw",
-        ),
-        (
-            "if you do, ~ has base power and base toughness each equal to the number of cards exiled this way",
-            "base_pt_equal_exiled",
-        ),
-        (
-            "if that opponent reveals exactly the chosen number of cards of the chosen color, you draw a card",
-            "if_revealed_exact_draw",
-        ),
-        (
-            "for as long as that attraction is on the battlefield, whenever you visit it, copy the exiled card",
-            "for_as_long_as_visit_copy",
-        ),
-        (
-            "put a +1/+1 counter on ~ for each creature that left the battlefield under your control this turn",
-            "counters_per_creature_ltb",
-        ),
-        (
-            "an opponent chooses from among them a creature card, a land card, and a noncreature, nonland card",
-            "opponent_chooses_three_types",
-        ),
-        (
-            "if you control one or more other creatures that spell could target, choose one of those creatures",
-            "choose_other_legal_target",
-        ),
-        (
-            "if you do, it enters with a finality counter on it and is a vampire in addition to its other types",
-            "enters_finality_vampire",
-        ),
-        (
-            "if you didn't draw cards this way, you may put a creature card from your hand onto the battlefield",
-            "if_no_draw_put_creature",
-        ),
-        (
-            "put a +1/+1 counter on it for each land you had enter the battlefield under your control this turn",
-            "counters_per_land_entered",
-        ),
-        (
-            "creatures your opponents control block this turn if able, and you choose how those creatures block",
-            "opponents_must_block_you_choose",
-        ),
-        (
-            "whenever that creature is dealt damage by an attacking creature this turn, you gain that much life",
-            "delayed_damage_gain_life",
-        ),
-        (
-            "you choose from it a nonland card with mana value 3 or less and a card with mana value 4 or greater",
-            "choose_mv_split_from_hand",
-        ),
-        (
-            "only the player ~ is attacking may activate this ability and only during the declare attackers step",
-            "defending_player_declare_attackers_only",
-        ),
-        (
-            "each opponent exiles a card from their hand and may play that card for as long as it remains exiled",
-            "opponents_exile_hand_playable",
-        ),
-        (
-            "then if ~ is your ring-bearer and the ring has tempted you two or more times this game, draw a card",
-            "ring_bearer_tempt_draw",
-        ),
-        (
-            "return a card at random from your graveyard to your hand, then reorder your graveyard as you choose",
-            "return_random_reorder_gy",
-        ),
-        (
-            "add an amount of mana of that color equal to the number of creatures you control of the chosen type",
-            "add_mana_per_chosen_type",
-        ),
-        (
-            "you and target player exchange control of the creature you each control with the greatest mana value",
-            "exchange_greatest_mv_creatures",
-        ),
-        (
-            "if that opponent's speed is greater than each other player's speed, reduce that opponent's speed by 1",
-            "reduce_highest_speed",
-        ),
-        (
-            "then that player reveals their hand and exiles all cards with that name from their hand and graveyard",
-            "reveal_hand_exile_named_hand_gy",
-        ),
-        (
-            "exile all cards from target player's library, then that player shuffles their hand into their library",
-            "exile_library_shuffle_hand",
-        ),
-        (
-            "if a creature dealt damage by ~ this turn died, put that card onto the battlefield under your control",
-            "reanimate_damaged_creature",
-        ),
-        (
-            "it deals 1 damage to each creature that doesn't have first strike, double strike, vigilance, or haste",
-            "damage_without_combat_kws",
-        ),
-        (
-            "until end of turn, whenever a player gains life, that player loses 2 life for each 1 life they gained",
-            "false_cure_trigger",
-        ),
-        (
-            "if exactly three colors of mana were spent to activate this ability, put a +1/+1 counter on it instead",
-            "if_three_colors_counter",
-        ),
-        (
-            "you may have creatures you control assign their combat damage this turn as though they weren't blocked",
-            "all_creatures_assign_unblocked",
-        ),
-        (
-            "that player sacrifices a creature of their choice that they controlled since the beginning of the turn",
-            "sac_controlled_since_turn_start",
-        ),
-        (
-            "whenever a player attacks you with one or more creatures, that player gets twice that many rad counters",
-            "delayed_attack_rad_counters",
-        ),
-        (
-            "that player returns the cards they exiled this way to their hand and puts the rest into their graveyard",
-            "return_exiled_rest_gy",
-        ),
-        (
-            "each player gains control of a nonland permanent of your choice controlled by the player to their right",
-            "rotate_nonland_permanents",
-        ),
-        (
-            "you may have defending player play with their hand revealed for as long as ~ remains on the battlefield",
-            "defending_player_revealed_hand",
-        ),
-        (
-            "each player chooses from the lands they control a land of each basic land type, then sacrifices the rest",
-            "global_ruin",
-        ),
-        (
-            "destroy each nonland permanent with mana value x whose controller was dealt combat damage by ~ this turn",
-            "steel_hellkite_destroy",
-        ),
-        (
-            "target player draws two cards, then ~ deals damage to that player equal to the number of cards they've drawn this turn",
-            "cerebral_vortex",
-        ),
-        (
-            "if a noncreature permanent under your control was destroyed this turn by a spell or ability an opponent controlled, you may pay {g} rather than pay ~'s mana cost",
-            "cobra_trap_alt_cost",
-        ),
-        (
-            "ignore this effect for each creature the player didn't control continuously since the beginning of the turn",
-            "ignore_summoning_sick",
-        ),
-        (
-            "for each kind of counter on permanents you control, you may put your choice of a +1/+1 counter or a counter of that kind on ~",
-            "counter_kind_choice",
-        ),
-        (
-            "choose a creature card with mana value 1 in your graveyard, then do the same for creature cards with mana value 2 and 3",
-            "choose_mv_1_2_3",
-        ),
-        (
-            "whenever that creature deals combat damage this turn, if ~ was kicked, you gain life equal to that damage",
-            "kicked_delayed_lifelink",
-        ),
-        (
-            "if they don't, you may put a creature card with equal or lesser toughness from your hand onto the battlefield",
-            "if_not_put_creature_le_toughness",
-        ),
-        (
-            "return to your hand all enchantments you both own and control, all auras you own attached to permanents you control, and all auras you own attached to attacking creatures your opponents control",
-            "remove_enchantments_return",
-        ),
-    ];
-    for &(pat, kind) in E5_STRUCTURED_RULES {
-        if low == pat {
-            return Some(vec![InstructionAst::StructuredRule {
-                kind: kind.to_string(),
-                text: s.to_string(),
-            }]);
+    // E5.11: Generalized "Each player with exactly N life loses the game, then <tail>" (Triskaidekaphobia)
+    if let Some(after) = low.strip_prefix("each player with exactly ")
+        && let Some((n_raw, tail)) = after.split_once(" life loses the game, then ")
+        && let Ok(n) = n_raw.trim().parse::<i32>()
+    {
+        let (mut rest_ins, fails) = parse_effect_body(tail.trim(), vocab);
+        if fails.is_empty() && !rest_ins.is_empty() {
+            let mut out = vec![InstructionAst::ForEachSubjectPlayer {
+                players: Box::new(SubjectRefAst::PlayerMatching {
+                    player: PlayerRefAst::EachPlayer,
+                    condition: Box::new(ConditionAst::LifeCompare {
+                        player: PlayerRefAst::ThatPlayer,
+                        op: CompareOp::Eq,
+                        value: n,
+                    }),
+                }),
+                body: vec![InstructionAst::LoseGame {
+                    player: PlayerRefAst::ThatPlayer,
+                }],
+            }];
+            out.append(&mut rest_ins);
+            return Some(out);
         }
     }
 
+    // Run compositional Wave E7 and Wave E8 parsers (zero StructuredRule catch-alls).
+    if let Some(body) = crate::wave_e7::parse_wave_e7_effects(s, low, s_nodur, dur, vocab) {
+        return Some(body);
+    }
+    if let Some(body) = crate::wave_e8::parse_wave_e8_effects(s, low, s_nodur, dur, vocab) {
+        return Some(body);
+    }
+
     crate::wave_e6::parse_wave_e6_effects(s, low, s_nodur, dur, vocab)
-        .or_else(|| crate::wave_e7::parse_wave_e7_effects(s, low, s_nodur, dur, vocab))
 }
 
 #[inline(never)]
@@ -24037,78 +23510,11 @@ fn parse_wave_e3_statics(s: &str, low: &str, vocab: &Vocabulary) -> Option<Stati
             },
         ));
     }
-    // E3-S10: Toughness-based crew/saddle/station & combat/rule statics
-    const E3_STATIC_EXACTS: &[&str] = &[
-        "space sculptor",
-        "no more than two creatures can block each combat",
-        "note the mana value of each card as it's put into exile",
-        "as you create your deck, circle two of the colors below",
-        "you may plot nonland cards from the top of your library",
-        "the first card you foretell each turn costs {0} to foretell",
-        "you may look at an additional two cards each time you surveil",
-        "room abilities of dungeons you own trigger an additional time",
-        "basic lands of the first chosen type are the second chosen type",
-        "the attacking player chooses how each creature blocks each combat",
-        "you control your opponents while they're searching their libraries",
-        "you draw cards from the bottom of your library rather than the top",
-        "tapped creatures you control can block as though they were untapped",
-        "for each {b} in a cost, you may pay 2 life rather than pay that mana",
-        "once each turn, you may pay {1} to reroll one or more dice you rolled",
-        "black and/or red permanents and spells are colorless sources of damage",
-        "a player losing unspent mana causes that player to lose that much life",
-        "players can cast spells and activate abilities only during their own turns",
-        "spells your opponents cast that target ~ cost an additional 3 life to cast",
-        "your devotion to each color and each combination of colors is increased by one",
-        "lethal damage dealt to creatures you control is determined by their power rather than their toughness",
-        "all instances of color words in the text of spells and permanents are changed to the chosen color word",
-        "you may activate the loyalty abilities of planeswalkers you control twice each turn rather than only once",
-        "as long as ~ is untapped, each spell that would cost less than three mana to cast costs three mana to cast",
-        "as a historic permanent you control enters, it becomes a 7/7 dinosaur creature in addition to its other types",
-        "nonlegendary creatures enchanted player controls have base power and toughness 3/3 and lose all creature types",
-        "all cards that aren't on the battlefield, spells, and permanents are the chosen color in addition to their other colors",
-        "spend only colored mana on x",
-        "its activated abilities can't be activated unless they're mana abilities",
-        "three or more creature cards were put into graveyards from anywhere this turn",
-        "three or more sources you controlled dealt damage this turn",
-        "you, planeswalkers you control, and other creatures you control have hexproof",
-        "equipment named sword of kaldra, ~, and helm of kaldra have indestructible",
-        "auras attached to permanents you control have umbra armor",
-        "creature spells you cast gain offspring {2} as you cast them",
-        "each spell you cast that's exactly three colors has replicate {3}",
-        "each creature card in your graveyard that's a cleric, rogue, warrior, and/or wizard has unearth {1}{b}",
-        "craft with a dinosaur, a merfolk, a pirate, and a vampire {4}",
-        "devour x, where x is the number of creatures devoured this way",
-        "~ has soulshift x, where x is the number of spirits you control",
-        "for each basic land type among lands you control, ~ has landwalk of that type",
-        "~ attacks a player you noted for cards named ~ each combat if able",
-        "each creature gets +1/+1 for each other creature on the battlefield that shares at least one creature type with it",
-        "rather than pay the mana cost for a spell, its controller may discard a card that shares a color with that spell",
-        "rather than pay {2} for each previous time you've cast ~ from the command zone this game, pay 2 life that many times",
-        "you may cast ~ from your graveyard if you pay {1} more to cast it for each other creature card in your graveyard",
-        "activated abilities cost an additional \"sacrifice a swamp\" to activate for each black mana symbol in their activation costs",
-        "any time you could mulligan and ~ is in your hand, you may exile all the cards from your hand, then draw that many cards",
-        "you may assign ~'s combat damage divided as you choose among defending player and/or any number of creatures they control",
-        "rather than the attacking player, you assign the combat damage of each creature attacking you",
-        "you can divide that creature's combat damage as you choose among any of the creatures blocking it",
-        "~ enters with a +1/+1 counter on it plus an additional +1/+1 counter on it for each other creature you control",
-        "for each kind of counter on ~, each other dinosaur you control enters with a counter of that kind on it",
-        "~'s power and toughness are each equal to half the highest life total among your opponents, rounded up",
-        "~'s power and toughness are each equal to the number of colors among the exiled cards used to craft it",
-        "equipped creature gets +1/+1 and has all names of nonlegendary creature cards in addition to its name",
-        "equipped creature gets +1/+1 and has all abilities of ability stickers on ~",
-        "creatures you control also get +1/+0 and have trample as long as you control six or more creatures",
-        "creatures you control also get +1/+0 and have double strike as long as you control nine or more creatures",
-        "after you roll a die, you may remove a +1/+1 counter from ~",
-        "after you roll a die, you may pay 1 life",
-        "increase or decrease the result by 1",
-        "as ~ enters, you may exchange his text box and another creature's",
-        "as ~ enters, you may exchange ~'s text box and another creature's",
-    ];
-    if (low.contains(" using its toughness rather than its power")
+    // E3-S10: Toughness-based crew/saddle/station statics
+    if low.contains(" using its toughness rather than its power")
         && (low.contains("crews vehicles")
             || low.contains("saddles mounts")
-            || low.contains("stations permanents")))
-        || E3_STATIC_EXACTS.contains(&low)
+            || low.contains("stations permanents"))
     {
         return Some(StaticOrReplacement::Static(
             StaticAbilityAst::RuleOrCombatRestriction {
@@ -24255,97 +23661,7 @@ fn parse_wave_e4_statics(s: &str, low: &str, vocab: &Vocabulary) -> Option<Stati
             },
         ));
     }
-    // E4-S9: Remaining verified single-sentence static rules
-    const E4_STATIC_EXACTS: &[&str] = &[
-        "all cards that aren't on the battlefield, spells, and permanents are colorless",
-        "planeswalkers' loyalty abilities you activate cost an additional +1 to activate",
-        "creatures you control can boast twice during each of your turns rather than once",
-        "as an additional cost to cast ~, sacrifice half the lands you control, rounded up",
-        "elemental permanent spells you cast from your hand gain evoke {4} as you cast them",
-        "each power-up ability of permanents you control can be activated an additional time",
-        "each other samurai creature you control gets +1/+1 for each point of bushido it has",
-        "foretelling cards from your hand costs {1} less and can be done on any player's turn",
-        "if ~'s power is negative, he assigns combat damage as though his power were positive",
-        "if ~'s power is negative, he assigns combat damage as though ~'s power were positive",
-        "enchanted creature is legendary, gets +1/+1, and has flying, vigilance, and lifelink",
-        "~ gets +x/+x, where x is the greatest number of stored results on it of the same value",
-        "planeswalkers you control aren't put into their owners' graveyards for having 0 loyalty",
-        "except for creatures named ~ and artifact creatures, creatures you control can't attack",
-        "if an opponent would face a villainous choice, they face that choice an additional time",
-        "each instant and sorcery card in your graveyard that's exactly two colors has jump-start",
-        "activated abilities of nontoken rebels cost an additional \"sacrifice a land\" to activate",
-        "spells with the chosen names can't be cast and lands with the chosen names can't be played",
-        "the first spell you cast each turn that mana from a treasure was spent to cast has cascade",
-        "creatures with landwalk abilities can be blocked as though they didn't have those abilities",
-        "as you cascade, you may put a land card from among the exiled cards onto the battlefield tapped",
-        "you may activate loyalty abilities of ~ on any player's turn any time you could cast an instant",
-        "each creature card in your graveyard has the chosen creature type in addition to its other types",
-        "basic lands each player controls have shroud as long as that player controls three or fewer lands",
-        "each non-human creature you control gets +1/+1 for each of its creature types, to a maximum of 10",
-        "~ has first strike and trample as long as an instant card and a sorcery card are in your graveyard",
-        "as long as ~ has an ice counter on it, prevent all combat damage it would deal and it has defender",
-        "if you control a forest, rather than pay ~'s mana cost, you may have each other player gain 5 life",
-        "if ~ is unblocked, you may have it assign its combat damage to a creature defending player controls",
-        "as long as ~ is tapped, it's a human citizen with base power and toughness 1/1 and can't be blocked",
-        "target creature gains flying until end of turn, or until any player rolls a 1, whichever comes first",
-        "as long as ~ is attacking, prevent all damage deserts would deal to ~ and to creatures banded with ~",
-        "spells cost an additional \"sacrifice a swamp\" to cast for each black mana symbol in their mana costs",
-        "equipped creature has reach, \"{2}, {t}: tap target artifact or creature,\" and \"{8}, {t}: discover 10.\"",
-        "the first time you flip one or more coins each turn, those coins come up heads and you win those flips",
-        "players can't cast spells or play lands with a name originally printed in the arabian nights expansion",
-        "each land with an activated ability that isn't a mana ability doesn't untap during its controller's untap step",
-        "each player may look at cards they exiled with ~, and they may play lands and cast spells from among those cards",
-        "equipped creature has ward {1}, it can't be blocked, and its name and creature type are the last chosen name and creature type",
-        "if an effect causes you to discard a card, discard it, but you may put it on top of your library instead of into your graveyard",
-        "as long as the top card of your graveyard is a creature card, ~ has the full text of that card and has the text \"{2}: discard a card.\"",
-        "for each 1 damage that would be dealt to ~, if it has a +1/+1 counter on it, remove a +1/+1 counter from it and prevent that 1 damage",
-        "as long as you control one or more creatures with a name you noted for cards named ~, ~ and those creatures get +1/+1 and have lifelink",
-        "creatures can't attack a player unless that player cast a spell or put a nontoken permanent onto the battlefield during their last turn",
-        "once during each of your turns, you may cast an enchantment spell by paying life equal to its mana value rather than paying its mana cost",
-        "if a creature is attacking you and you control a forest and a plains, you may cast ~ without paying its mana cost and as though it had flash",
-        "commander creatures you own get +3/+3 and have flying, deathtouch, \"ward\u{2014}pay 3 life,\" and \"at the beginning of your upkeep, sacrifice a creature.\"",
-        "each creature you control has vigilance if it's white, hexproof if it's blue, lifelink if it's black, first strike if it's red, and trample if it's green",
-        "each creature you control with defender assigns combat damage equal to its toughness rather than its power and can attack as though it didn't have defender",
-        "equipped creature has lifelink if you control a cleric, deathtouch if you control a rogue, haste if you control a warrior, and flying if you control a wizard",
-        "during your turn, spells you cast from your hand with mana value x or less have cascade, where x is the total amount of life your opponents have lost this turn",
-        "white creatures get +1/+1 as long as the chosen color is the most common color among nontoken permanents the chosen player controls but isn't tied for most common",
-        "as long as there are four or more card types among cards in your graveyard, each opponent's maximum hand size is equal to seven minus the number of those card types",
-        "if a spell or ability an opponent controls causes you to discard a card, you may reveal that card and put it on top of your library instead of putting it anywhere else",
-        "~ escapes with \"whenever ~ deals combat damage to a player, you may cast an artifact, instant, or sorcery spell from among cards exiled with ~ without paying its mana cost.\"",
-        "once each turn, you may play a card from exile with a collection counter on it if it was exiled by an ability you controlled, and you may spend mana as though it were mana of any color to cast it",
-        "~ has trample as long as you control a beast, haste as long as you control a goblin, first strike as long as you control a soldier, flying as long as you control a wizard, and \"{b}: regenerate ~\" as long as you control a zombie",
-        "enchanted permanent can't attack, block, or crew vehicles",
-        "during your turn, ~'s power and toughness are each equal to 2 plus the number of swamps your opponents control",
-        "during turns other than yours, ~'s power and toughness are each 2",
-        "as long as ~ isn't attacking, its power and toughness are each equal to the number of forests you control",
-        "as long as ~ is attacking, its power and toughness are each equal to the number of forests defending player controls",
-        "as long as a card exiled with ~ is a creature card, ~ has the power, toughness, and creature types of the last creature card exiled with it",
-        "while an opponent is searching their library, they exile each card they find",
-        "if a creature card with flying was exiled with ~'s delve ability, ~ has flying",
-        "as ~ enters, each opponent reveals their hand",
-        "you choose the name of a nonland card revealed this way",
-        "as ~ enters, roll x d6",
-        "it enters with a number of +1/+1 counters on it equal to the total of those results",
-        "as ~ enters, choose a creature you control it could be attached to",
-        "if you do, it enters attached to that creature",
-        "as an additional cost to cast creature spells, you may pay any amount of mana",
-        "if you do, that creature enters with that many additional +1/+1 counters on it",
-        "if ~ would die, return it to its owner's hand instead",
-        "until that player's next turn, that player plays with that card revealed in their hand and can't play it",
-        "+1, and you may activate ~'s loyalty ability two more times this turn",
-        "\u{2212}1, then return a card with mana value 2 or less from your graveyard to your hand",
-    ];
-    if E4_STATIC_EXACTS.contains(&low) {
-        return Some(StaticOrReplacement::Static(
-            StaticAbilityAst::RuleOrCombatRestriction {
-                subject: None,
-                rule: s.to_string(),
-                filter: None,
-                condition: None,
-            },
-        ));
-    }
-
     crate::wave_e6::parse_wave_e6_statics(s, low, vocab)
         .or_else(|| crate::wave_e7::parse_wave_e7_statics(s, low, vocab))
+        .or_else(|| crate::wave_e8::parse_wave_e8_statics(s, low, vocab))
 }

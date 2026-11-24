@@ -374,6 +374,28 @@ pub enum FilterPredicateAst {
     SameNameAsSplicedOnto(Box<SubjectRefAst>),
     /// Matches permanents of the Nth type from a prior ordered type choice (`Rite of Ruin`).
     NthChosenType(u8),
+    /// Matches permanents that do not have a specific kind of counter (`Coiling Stalker`).
+    WithoutCounterKind(String),
+    /// Matches permanents that did not enter the battlefield this turn (`The Fifth Doctor`).
+    DidNotEnterThisTurn,
+    /// Matches creatures that blocked or were blocked by objects matching `other` (`You Cannot Pass!`).
+    BlockedOrBlockedBy {
+        other: Box<ObjectFilterAst>,
+        #[serde(default)]
+        this_turn: bool,
+    },
+    /// Matches permanents whose controller was dealt combat damage by the source this turn (`Steel Hellkite`).
+    ControllerDealtCombatDamageBySelfThisTurn,
+    /// Matches cards put into their current zone from anywhere this turn (`Reenact the Crime`).
+    PutIntoZoneThisTurn,
+    /// Matches permanents with a sticker of the specified kind (`Proficient Pyrodancer`).
+    HasStickerKind(String),
+    /// Matches permanents whose loyalty or activated ability was activated this turn (`Cut Short`).
+    ActivatedThisTurn,
+    /// Matches a set of targets that must have pairwise different controllers (`Cloud's Limit Break`).
+    DifferentControllers,
+    /// Matches a permanent controlled by the same player as the referenced permanent (`Glamer Spinners`).
+    WithSameControllerAs(Box<SubjectRefAst>),
     StateQualification(String),
 }
 
@@ -740,6 +762,31 @@ pub enum ValueExprAst {
     },
     /// Pre-damage cap of the damaged target: player life total before damage, planeswalker loyalty before damage, or creature toughness (`Drain Life`, `Soul Burn`).
     TargetPreDamageCap,
+    /// Total damage already dealt to the referenced permanent or player this turn (`Final Punishment`, `Whipkeeper`).
+    DamageDealtToSubjectThisTurn(Box<SubjectRefAst>),
+    /// Amount of damage prevented during the current resolution (`Bone Mask`).
+    DamagePreventedThisWay,
+    /// Number of counters removed during the current resolution (`Eventide's Shadow`).
+    CountersRemovedThisWay,
+    /// Total toxic value of a referenced creature (`Goliath Hatchery`).
+    TotalToxicValue(Box<SubjectRefAst>),
+    /// Total amount of unspent mana currently in a player's mana pool (`Glissa Sunseeker`).
+    UnspentManaAmount(PlayerRefAst),
+    /// Count of a specific letter in name stickers on the referenced permanent (`Make a _____ Splash`).
+    StickerLetterCount {
+        subject: Box<SubjectRefAst>,
+        letter: char,
+    },
+    /// Number of basic land types among lands a specific player controls (`Allied Strategies`, `Collapsing Borders`).
+    DomainCountFor(PlayerRefAst),
+    /// Number of cards exiled during the current resolution (`Trench Gorger`).
+    CardsExiledThisWay,
+    /// Amount of life paid by a player during the current resolution (`Plague of Vermin`).
+    LifePaidThisWay(PlayerRefAst),
+    /// Number of creature types noted for a referenced permanent (`Volo, Itinerant Scholar`).
+    NotedTypesCount(Box<SubjectRefAst>),
+    /// Number of times an additional cost was paid (`Taste of Paradise`).
+    AdditionalCostPaidCount(String),
     /// Opt-in tabletop honor-system integer input (e.g. bystander number, dexterity count).
     ManualTabletopNumber {
         prompt: String,
@@ -1026,6 +1073,58 @@ pub enum GameMarker {
         subject: Box<SubjectRefAst>,
         scope: Box<ObjectFilterAst>,
         allow_tie: bool,
+    },
+    /// The spell is the first spell its controller has cast this game (`Once Upon a Time`).
+    FirstSpellCastThisGame,
+    /// You have cast another spell with the same name as the source this game (`Approach of the Second Sun`).
+    CastAnotherNamedThisGame,
+    /// Referenced object entered from or was cast from `zone` (`Extraordinary Journey`, `Fblthp, the Lost`).
+    EnteredOrCastFromZone(ZoneFilter),
+    /// Referenced player's speed is strictly greater than each other player's speed (`Spikeshell Harrier`).
+    SpeedGreaterThanEachOther(PlayerRefAst),
+    /// Player has the greatest or least value of a player statistic (`Sokenzan Renegade`).
+    PlayerHasExtremePlayerStat {
+        player: PlayerRefAst,
+        stat: PlayerStatKind,
+        greatest: bool,
+    },
+    /// Referenced player revealed the exact chosen number of cards of the chosen color (`Scrying Glass`).
+    RevealedExactCountAndColor {
+        player: PlayerRefAst,
+    },
+    /// At least `min_count` cards milled this way share a card type (`The Tale of Tamiyo`).
+    MilledCardsShareCardType {
+        min_count: u8,
+    },
+    /// One or more permanents were sacrificed to activate the referenced ability (`Ashnod the Uncaring`).
+    PermanentSacrificedToActivate,
+    /// Exact number of colors of mana spent to activate the current ability (`Paragon of Modernity`).
+    ColorsSpentToActivateExact(u8),
+    /// A matching permanent under your control was destroyed this turn by an opponent's spell or ability (`Cobra Trap`).
+    PermanentsDestroyedByOpponentThisTurn {
+        filter: Box<ObjectFilterAst>,
+    },
+    /// The referenced creature exploited the referenced creature (`Silumgar Scavenger`).
+    ExploitedCreature,
+    /// The referenced attachment was attached to a matching permanent (`Unforge`).
+    WasAttachedTo {
+        subject: Box<SubjectRefAst>,
+        host_filter: Box<ObjectFilterAst>,
+    },
+    /// The referenced creature regenerated via the current shield (`Debt of Loyalty`).
+    SourceRegeneratedThisWay,
+    /// The Ring has tempted you at least `min_times` times this game (`Frodo, Adventurous Hobbit`).
+    RingTemptedMinTimesThisGame(u8),
+    /// The referenced creature is your Ring-bearer (`Frodo, Adventurous Hobbit`).
+    SubjectIsRingBearer(Box<SubjectRefAst>),
+    /// Hidden chosen values matched (`Expert-Level Safe`).
+    HiddenValuesMatched,
+    /// Either of two targets has a color the other does not (`Dead Ringers`).
+    EitherHasColorOtherDoesnt,
+    /// `attacker` is currently attacking `defender` (`Curse of Bounty`).
+    PlayerAttackingPlayer {
+        attacker: PlayerRefAst,
+        defender: PlayerRefAst,
     },
 }
 
@@ -2101,6 +2200,10 @@ pub enum InstructionAst {
     PhaseOut {
         subject: Box<SubjectRefAst>,
     },
+    /// CR 702.26 phase phased-out permanent(s) back in (`Time and Tide`, `The Pandorica`).
+    PhaseIn {
+        subject: Box<SubjectRefAst>,
+    },
     Fight {
         a: Box<SubjectRefAst>,
         b: Box<SubjectRefAst>,
@@ -2682,6 +2785,115 @@ pub enum InstructionAst {
         controller: Box<SubjectRefAst>,
         controlled: Box<SubjectRefAst>,
     },
+    /// CR 724 restart the game, optionally leaving matching exiled cards in exile (`Karn Liberated`).
+    RestartGame {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        leave_in_exile: Option<Box<ObjectFilterAst>>,
+    },
+    /// Reorder a zone in any order or at random (`Fossil Find`, `Tahngarth's Glare`).
+    ReorderZone {
+        player: PlayerRefAst,
+        zone: ZoneFilter,
+        #[serde(default)]
+        random: bool,
+    },
+    /// Grant a player additional step(s) after the current step (`Paradox Haze`).
+    AdditionalStep {
+        player: PlayerRefAst,
+        step: TurnStepAst,
+        count: u8,
+    },
+    /// Skip all instances of a named phase on a player's next turn (`Empty City Ruse`).
+    SkipAllPhasesNextTurn {
+        player: PlayerRefAst,
+        phase: String,
+    },
+    /// Force a player to activate a mana ability of each matching permanent (`Pygmy Hippo`, `Drain Power`).
+    ActivateManaAbilities {
+        player: PlayerRefAst,
+        filter: Box<ObjectFilterAst>,
+    },
+    /// Modify a player's speed by a signed delta (`Spikeshell Harrier`).
+    ModifyPlayerSpeed {
+        player: PlayerRefAst,
+        delta: i8,
+    },
+    /// Sacrifice all matching permanents except `keep` of controller's choice (`Keldon Firebombers`, `Choice of Damnations`).
+    SacrificeAllExcept {
+        player: PlayerRefAst,
+        filter: Box<ObjectFilterAst>,
+        keep: Box<ValueExprAst>,
+    },
+    /// Exile all cards from a player's library except the bottom `keep` cards (`Doomsday Excruciator`).
+    ExileAllExceptBottom {
+        player: PlayerRefAst,
+        keep: Box<ValueExprAst>,
+        #[serde(default)]
+        face_down: bool,
+    },
+    /// A player guesses a hidden property of a referenced object (`Gollum, Scheming Guide`).
+    GuessCardProperty {
+        guesser: PlayerRefAst,
+        subject: Box<SubjectRefAst>,
+        property: String,
+    },
+    /// Distribute stickers among targets (`Roxi, Publicist to the Stars`).
+    DistributeStickers {
+        sticker_kind: String,
+        count: Box<ValueExprAst>,
+        #[serde(default)]
+        up_to: bool,
+        targets: Box<SubjectRefAst>,
+    },
+    /// Ignore the enclosing effect for permanents matching `filter` (`Siren's Call`).
+    IgnoreEffectFor {
+        filter: Box<ObjectFilterAst>,
+    },
+    /// Put a referenced card into a player's library at a specific 1-based position from the top (`Long-Term Plans`).
+    PutInLibraryAtPosition {
+        player: PlayerRefAst,
+        subject: Box<SubjectRefAst>,
+        from_top: u8,
+    },
+    /// Explicitly count matching objects or counters into `PriorResult` (`Rumbling Ruin`).
+    CountObjects {
+        filter: Box<ObjectFilterAst>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        counter_kind: Option<String>,
+    },
+    /// Players secretly choose among fixed options and reveal simultaneously (`Prisoner's Dilemma`).
+    SecretChoiceAndReveal {
+        players: PlayerRefAst,
+        options: Vec<String>,
+    },
+    /// Order all matching permanents sequentially (`Starlight Spectacular`).
+    OrderGroup {
+        player: PlayerRefAst,
+        filter: Box<ObjectFilterAst>,
+    },
+    /// Two players exchange control of all matching permanents they control (`Reins of Power`).
+    ExchangeAllControlled {
+        left: PlayerRefAst,
+        right: PlayerRefAst,
+        filter: Box<ObjectFilterAst>,
+        duration: DurationAst,
+    },
+    /// Replace mana produced by a permanent when tapped for mana (`Quarum Trench Gnomes`).
+    ReplaceManaProduction {
+        subject: Box<SubjectRefAst>,
+        replace_with: ManaSpecAst,
+        duration: DurationAst,
+    },
+    /// Reduce the enclosing cost by `delta` for each unit of `per` (`Draco`).
+    DynamicCostReduction {
+        delta: String,
+        per: Box<ValueExprAst>,
+    },
+    /// Exchange the text boxes of two permanents (`Exchange of Words`, `Deadpool, Trading Card`).
+    ExchangeTextBoxes {
+        left: Box<SubjectRefAst>,
+        right: Box<SubjectRefAst>,
+    },
     /// Lossless structured effect rule preserving full semantics for specialized Magic rules (`Karn Liberated`, `Global Ruin`, `Feather`, `Invert`, etc.).
     StructuredRule {
         kind: String,
@@ -2990,6 +3202,51 @@ pub enum StaticAbilityAst {
         subject: Box<SubjectRefAst>,
         counter_kind: String,
         max: i32,
+    },
+    /// Additional cost to activate matching activated or loyalty abilities (`Drought`, `Brutal Suppression`, `Carth the Lion`).
+    AdditionalActivationCost {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        subject: Option<Box<SubjectRefAst>>,
+        cost: CostAtomAst,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        per: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        condition: Option<Box<ConditionAst>>,
+    },
+    /// Override activation frequency or instant-speed timing for an ability category (`Oath of Teferi`, `Teferi, Master of Time`, `Birgi`, `Wonder Man`).
+    ActivationLimitOverride {
+        ability_kind: String,
+        subject: Box<SubjectRefAst>,
+        extra_times: u8,
+        #[serde(default)]
+        instant_speed: bool,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        condition: Option<Box<ConditionAst>>,
+    },
+    /// Override combat damage assignment or lethal-damage determination (`Arcades`, `Zilortha`, `Defensive Formation`, `Butcher Orgg`, `Cunning Giant`, `Loot`).
+    CombatDamageAssignmentRule {
+        subject: Box<SubjectRefAst>,
+        rule: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        condition: Option<Box<ConditionAst>>,
+    },
+    /// Static die-roll adjustment or reroll ability (`Night Shift of the Living Dead`, `Xenosquirrels`, `Monitor Monitor`).
+    DieRollModifier {
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        cost: Vec<CostAtomAst>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        delta: Option<i8>,
+        #[serde(default)]
+        reroll: bool,
+        #[serde(default)]
+        once_each_turn: bool,
+    },
+    /// Dynamic maximum hand size static (`Winter, Misanthropic Guide`).
+    ModifyMaximumHandSize {
+        player: PlayerRefAst,
+        size: Box<ValueExprAst>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        condition: Option<Box<ConditionAst>>,
     },
     /// Opt-in tabletop honor-system continuous rule (e.g. attire / social condition).
     ManualTabletopStatic {
