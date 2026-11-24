@@ -515,6 +515,8 @@ pub enum StaticSubtypeOperand {
 pub enum StaticLandSubtypeOperand {
     Literal(BTreeSet<LandType>),
     SourceCurrentLandSubtypes,
+    /// Basic land type chosen via [`crate::land::EntryTap::ChooseBasicLandType`] as the source entered.
+    SourceEntryBasicLandType,
 }
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StaticTypeChange {
@@ -629,6 +631,10 @@ pub enum BlockingRestriction {
     CannotBlockMoreThan(u8),
     /// Attacker cannot be blocked by more than `n` creatures (CR 509.1b).
     CannotBeBlockedByMoreThan(u8),
+    /// Creature assigns no combat damage (CR 510.1a).
+    AssignNoCombatDamage,
+    /// Permanent cannot be regenerated (CR 701.19c).
+    CannotBeRegenerated,
 }
 // Embeds `Copy` `BlockingRestriction` inline to avoid indirection in small resolved part lists.
 #[allow(clippy::large_enum_variant)]
@@ -787,6 +793,12 @@ pub enum CombatSelector {
     Blocking,
     AttackingOrBlocking,
     OutsideCombat,
+    Blocked,
+    Unblocked,
+    BlockingSource,
+    BlockedBySource,
+    BlockingOrBlockedBySource,
+    NotAttacking,
 }
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PermanentSelector {

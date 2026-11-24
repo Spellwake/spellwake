@@ -1781,6 +1781,124 @@ fn lower_face(
 
     // Lower replacement effects
     for rep in &face_ast.replacements {
+        if let ReplacementEffectAst::AsEntersAction(ins) = rep
+            && let [InstructionAst::Modal { choice, modes }] = ins.as_slice()
+            && modes.len() >= 2
+        {
+            let entry_tap = match choice
+                .trim()
+                .trim_end_matches('.')
+                .to_ascii_lowercase()
+                .as_str()
+            {
+                "khans or dragons" => EntryTap::ChooseKhansOrDragons,
+                "odd or even" => EntryTap::ChooseOddOrEven,
+                "abzan or mardu" => EntryTap::ChooseOptions(&["Abzan", "Mardu"]),
+                "temur or sultai" => EntryTap::ChooseOptions(&["Temur", "Sultai"]),
+                "sultai or abzan" => EntryTap::ChooseOptions(&["Sultai", "Abzan"]),
+                "mardu or jeskai" => EntryTap::ChooseOptions(&["Mardu", "Jeskai"]),
+                "jeskai or temur" => EntryTap::ChooseOptions(&["Jeskai", "Temur"]),
+                "brotherhood or enclave" => EntryTap::ChooseOptions(&["Brotherhood", "Enclave"]),
+                "mirran or phyrexian" => EntryTap::ChooseOptions(&["Mirran", "Phyrexian"]),
+                "ncr or legion" => EntryTap::ChooseOptions(&["NCR", "Legion"]),
+                "flavorful or bland" => EntryTap::ChooseOptions(&["Flavorful", "Bland"]),
+                "believe or doubt" => EntryTap::ChooseOptions(&["Believe", "Doubt"]),
+                _ => return Err("oracle:unsupported-replacement"),
+            };
+            let ProgramKind::Permanent(def) = &mut program.kind else {
+                return Err("oracle:replacement-on-spell");
+            };
+            if def.entry_tap.replace(entry_tap).is_some() {
+                return Err("oracle:duplicate-entry-tap");
+            }
+            for (idx, mode) in modes.iter().enumerate() {
+                let idx_u8 = u8::try_from(idx).map_err(|_| "oracle:unsupported-replacement")?;
+                if let Some(gf) = mode.granted.as_deref() {
+                    if !gf.spell_effects.is_empty() {
+                        return Err("oracle:unsupported-replacement");
+                    }
+                    lower_gated_section(
+                        face_ast,
+                        &gf.keywords,
+                        &gf.statics,
+                        &gf.abilities,
+                        &gf.replacements,
+                        GatedSectionMode::EntryOption(idx_u8),
+                        &mut program,
+                        vocabulary,
+                        &mut ids,
+                    )?;
+                } else {
+                    let synthesized_abilities = match mode.body.as_slice() {
+                        [
+                            InstructionAst::DelayedTrigger {
+                                step,
+                                scope,
+                                body: trig_body,
+                            },
+                            rest @ ..,
+                        ] => {
+                            let whose = match scope {
+                                spellwake_oracle_compiler::ast::DelayedStepScope::YourNext
+                                | spellwake_oracle_compiler::ast::DelayedStepScope::EachOfYour => {
+                                    "you"
+                                }
+                                spellwake_oracle_compiler::ast::DelayedStepScope::EachOpponents => {
+                                    "each opponent"
+                                }
+                                spellwake_oracle_compiler::ast::DelayedStepScope::EachPlayers
+                                | spellwake_oracle_compiler::ast::DelayedStepScope::Each
+                                | spellwake_oracle_compiler::ast::DelayedStepScope::Next => {
+                                    "each player"
+                                }
+                                _ => return Err("oracle:unsupported-replacement"),
+                            };
+                            let mut full_body = trig_body.clone();
+                            full_body.extend_from_slice(rest);
+                            vec![AbilityAst::Triggered {
+                                ability_word: mode.label.clone(),
+                                trigger: TriggerSpecAst {
+                                    events: vec![TriggerEventAst::StepBegan {
+                                        step: *step,
+                                        whose: whose.to_string(),
+                                    }],
+                                    intervening_if: None,
+                                },
+                                body: full_body,
+                            }]
+                        }
+                        [
+                            InstructionAst::DelayedEventTrigger {
+                                trigger,
+                                body: trig_body,
+                            },
+                            rest @ ..,
+                        ] => {
+                            let mut full_body = trig_body.clone();
+                            full_body.extend_from_slice(rest);
+                            vec![AbilityAst::Triggered {
+                                ability_word: mode.label.clone(),
+                                trigger: trigger.clone(),
+                                body: full_body,
+                            }]
+                        }
+                        _ => return Err("oracle:unsupported-replacement"),
+                    };
+                    lower_gated_section(
+                        face_ast,
+                        &[],
+                        &[],
+                        &synthesized_abilities,
+                        &[],
+                        GatedSectionMode::EntryOption(idx_u8),
+                        &mut program,
+                        vocabulary,
+                        &mut ids,
+                    )?;
+                }
+            }
+            continue;
+        }
         lower_replacement(rep, &mut program, vocabulary, &mut ids)?;
     }
 
@@ -2097,6 +2215,7 @@ enum GatedSectionMode {
     LevelerBand(StaticSourceCondition),
     ClassLevel(u8),
     CaseSolved,
+    EntryOption(u8),
 }
 
 fn strip_cleave_brackets(raw: &str) -> Result<String, &'static str> {
@@ -2226,10 +2345,8 @@ fn lower_gated_section(
     vocabulary: &CreatureTypeVocabulary,
     ids: &mut LoweringIds,
 ) -> Result<(), &'static str> {
-    if !replacements.is_empty() {
-        return Err("oracle:gated-section-replacement");
-    }
-    if keywords.is_empty() && statics.is_empty() && abilities.is_empty() {
+    if keywords.is_empty() && statics.is_empty() && abilities.is_empty() && replacements.is_empty()
+    {
         return Ok(());
     }
     let mut scratch = Program::new(
@@ -2242,8 +2359,12 @@ fn lower_gated_section(
     scratch.enchantment_subtypes = program.enchantment_subtypes.clone();
     scratch.planeswalker_subtypes = program.planeswalker_subtypes.clone();
     scratch.supertypes = program.supertypes.clone();
+    let baseline_kind = scratch.kind.clone();
     for (idx, kw) in keywords.iter().enumerate() {
         lower_keyword(kw, idx, face_ast, &mut scratch, vocabulary, ids, false)?;
+    }
+    for rep in replacements {
+        lower_replacement(rep, &mut scratch, vocabulary, ids)?;
     }
     for st in statics {
         lower_static(st, &mut scratch, vocabulary, ids, false)?;
@@ -2251,7 +2372,10 @@ fn lower_gated_section(
     for ab in abilities {
         lower_ability(ab, &mut scratch, vocabulary, ids)?;
     }
-    if !scratch.zone_replacements.is_empty()
+    if scratch.kind != baseline_kind
+        || scratch.entry_copy.is_some()
+        || scratch.entry_tap_unless.is_some()
+        || !scratch.zone_replacements.is_empty()
         || !scratch.cast_reductions.is_empty()
         || !scratch.entry_counter_abilities.is_empty()
         || scratch.cannot_be_countered
@@ -2267,6 +2391,7 @@ fn lower_gated_section(
         GatedSectionMode::LevelerBand(c) => c.clone(),
         GatedSectionMode::ClassLevel(lvl) => StaticSourceCondition::SourceClassLevelAtLeast(*lvl),
         GatedSectionMode::CaseSolved => StaticSourceCondition::SourceIsSolved,
+        GatedSectionMode::EntryOption(idx) => StaticSourceCondition::EntryOptionChosen(*idx),
     };
     if !scratch.printed_keywords.is_empty() {
         push_static_ability(
@@ -2379,19 +2504,24 @@ fn lower_gated_section(
                 )?;
             }
         }
-        GatedSectionMode::ClassLevel(_) | GatedSectionMode::CaseSolved => {
+        GatedSectionMode::ClassLevel(_)
+        | GatedSectionMode::CaseSolved
+        | GatedSectionMode::EntryOption(_) => {
             if !scratch.mana.is_empty() {
                 return Err("oracle:gated-section-mana");
             }
             let (trig_cond, act_res) = match mode {
                 GatedSectionMode::ClassLevel(lvl) => (
                     TriggerCondition::SourceClassLevelAtLeast(lvl),
-                    ActivationRestriction::MinClassLevel(lvl),
+                    Some(ActivationRestriction::MinClassLevel(lvl)),
                 ),
                 GatedSectionMode::CaseSolved => (
                     TriggerCondition::SourceIsSolved,
-                    ActivationRestriction::SourceIsSolved,
+                    Some(ActivationRestriction::SourceIsSolved),
                 ),
+                GatedSectionMode::EntryOption(idx) => {
+                    (TriggerCondition::SourceEntryOption(idx), None)
+                }
                 GatedSectionMode::LevelerBand(_) => unreachable!(),
             };
             for mut tr in scratch.triggered {
@@ -2414,6 +2544,9 @@ fn lower_gated_section(
                 program.triggered.push(tr);
             }
             for ab in scratch.activated {
+                let Some(act_res) = act_res.clone() else {
+                    return Err("oracle:unsupported-gated-section-feature");
+                };
                 let ab_id = ab.id;
                 if let Some(m) = scratch.activation_modes.remove(&ab_id) {
                     program.activation_modes.insert(ab_id, m);
@@ -2426,7 +2559,7 @@ fn lower_gated_section(
                 }
                 let merged_res = combine_activation_restrictions(
                     scratch.activation_restrictions.remove(&ab_id),
-                    act_res.clone(),
+                    act_res,
                 );
                 program.activation_restrictions.insert(ab_id, merged_res);
                 program.activated.push(ab);

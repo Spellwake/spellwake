@@ -949,6 +949,7 @@ fn select_affected(
     objects: &BTreeMap<ObjectId, ObjectCharacteristics>,
     battlefield: &BTreeSet<ObjectId>,
     name_rules: &NameRules,
+    combat: Option<&crate::combat::CombatState>,
 ) -> BTreeSet<ObjectId> {
     if let Some(subtype) = selector.controlled_creatures_and_typed_tokens {
         return objects
@@ -1032,6 +1033,31 @@ fn select_affected(
                     CombatSelector::Blocking => object.blocking,
                     CombatSelector::AttackingOrBlocking => object.attacking || object.blocking,
                     CombatSelector::OutsideCombat => !object.attacking && !object.blocking,
+                    CombatSelector::Blocked => combat.is_some_and(|c| {
+                        c.attacker(*id).is_some_and(|a| {
+                            a.block_status() == crate::combat::BlockStatus::Blocked
+                        })
+                    }),
+                    CombatSelector::Unblocked => combat.is_some_and(|c| {
+                        c.attacker(*id).is_some_and(|a| {
+                            a.block_status() == crate::combat::BlockStatus::Unblocked
+                        })
+                    }),
+                    CombatSelector::BlockingSource => combat.is_some_and(|c| {
+                        c.blocker(*id)
+                            .is_some_and(|b| b.attackers().contains(&source))
+                    }),
+                    CombatSelector::BlockedBySource => combat.is_some_and(|c| {
+                        c.blocker(source)
+                            .is_some_and(|b| b.attackers().contains(id))
+                    }),
+                    CombatSelector::BlockingOrBlockedBySource => combat.is_some_and(|c| {
+                        c.blocker(*id)
+                            .is_some_and(|b| b.attackers().contains(&source))
+                            || c.blocker(source)
+                                .is_some_and(|b| b.attackers().contains(id))
+                    }),
+                    CombatSelector::NotAttacking => !object.attacking,
                 })
                 && (!selector.requires_untapped || object.tapped == Some(false))
                 && (!selector.requires_tapped || object.tapped == Some(true))
@@ -1440,6 +1466,7 @@ fn static_source_condition_met(
                 objects,
                 battlefield,
                 world.name_rules,
+                world.combat,
             ) >= i64::from(*minimum).into()
         }
         OpponentControlsMatching { selector, minimum } => {
@@ -1454,6 +1481,7 @@ fn static_source_condition_met(
                 objects,
                 battlefield,
                 world.name_rules,
+                world.combat,
             ) >= i64::from(*minimum).into()
         }
         Eval(cond) => {
@@ -1534,6 +1562,7 @@ fn numeric(
             objects,
             battlefield,
             name_rules,
+            world.combat,
         )
         .times(multiplier)
         .plus(offset),
@@ -1705,6 +1734,7 @@ fn count_matching(
     objects: &BTreeMap<ObjectId, ObjectCharacteristics>,
     battlefield: &BTreeSet<ObjectId>,
     name_rules: &NameRules,
+    combat: Option<&crate::combat::CombatState>,
 ) -> RulesInteger {
     select_affected(
         selector,
@@ -1713,6 +1743,7 @@ fn count_matching(
         objects,
         battlefield,
         name_rules,
+        combat,
     )
     .iter()
     .fold(0.into(), |count: RulesInteger, _| count.plus(&1.into()))
@@ -1739,6 +1770,7 @@ pub(crate) fn count_permanents(
         &evaluated.objects,
         &battlefield,
         name_rules,
+        None,
     )
 }
 /// Whether a battlefield `selector` hosted by `source` (`controller`) matches `candidate`.
@@ -1763,6 +1795,7 @@ pub(crate) fn selector_matches_permanent(
         &evaluated.objects,
         &battlefield,
         name_rules,
+        None,
     )
     .contains(&candidate)
 }
@@ -1819,11 +1852,23 @@ fn static_land_subtype(
     operand: &StaticLandSubtypeOperand,
     source: ObjectId,
     objects: &BTreeMap<ObjectId, ObjectCharacteristics>,
+    state: &super::CharacteristicState,
 ) -> BTreeSet<crate::land::LandType> {
     match operand {
         StaticLandSubtypeOperand::Literal(value) => value.clone(),
         StaticLandSubtypeOperand::SourceCurrentLandSubtypes => {
             objects[&source].current_land_subtypes.clone()
+        }
+        StaticLandSubtypeOperand::SourceEntryBasicLandType => {
+            let chosen = match state.entry_option_choices.get(&source).copied() {
+                Some(0) => Some(crate::land::LandType::Plains),
+                Some(1) => Some(crate::land::LandType::Island),
+                Some(2) => Some(crate::land::LandType::Swamp),
+                Some(3) => Some(crate::land::LandType::Mountain),
+                Some(4) => Some(crate::land::LandType::Forest),
+                _ => None,
+            };
+            chosen.into_iter().collect()
         }
     }
 }
@@ -1908,6 +1953,7 @@ fn generate(
                     objects,
                     battlefield,
                     name_rules,
+                    world.combat,
                 ),
             };
             let operation = if affected.is_empty() {
@@ -1965,10 +2011,10 @@ fn generate(
                                     SubtypeOperation::Remove(values.clone())
                                 }
                                 SubtypeOperation::Add(operand) => SubtypeOperation::Add(
-                                    static_land_subtype(operand, sentinel, objects),
+                                    static_land_subtype(operand, sentinel, objects, world.state),
                                 ),
                                 SubtypeOperation::Set(operand) => SubtypeOperation::Set(
-                                    static_land_subtype(operand, sentinel, objects),
+                                    static_land_subtype(operand, sentinel, objects, world.state),
                                 ),
                             },
                             supertypes: change.supertypes.clone(),
@@ -1997,12 +2043,22 @@ fn generate(
                                     SubtypeOperation::Remove(values) => {
                                         SubtypeOperation::Remove(values.clone())
                                     }
-                                    SubtypeOperation::Add(operand) => SubtypeOperation::Add(
-                                        static_land_subtype(operand, sentinel, objects),
-                                    ),
-                                    SubtypeOperation::Set(operand) => SubtypeOperation::Set(
-                                        static_land_subtype(operand, sentinel, objects),
-                                    ),
+                                    SubtypeOperation::Add(operand) => {
+                                        SubtypeOperation::Add(static_land_subtype(
+                                            operand,
+                                            sentinel,
+                                            objects,
+                                            world.state,
+                                        ))
+                                    }
+                                    SubtypeOperation::Set(operand) => {
+                                        SubtypeOperation::Set(static_land_subtype(
+                                            operand,
+                                            sentinel,
+                                            objects,
+                                            world.state,
+                                        ))
+                                    }
                                 },
                                 supertypes: change.supertypes.clone(),
                                 types: change.types.clone(),
@@ -2244,6 +2300,7 @@ fn generate(
                     objects,
                     battlefield,
                     name_rules,
+                    world.combat,
                 ),
             };
             // Empty generated data is independent of unused numeric/source values.
@@ -2304,10 +2361,10 @@ fn generate(
                                     SubtypeOperation::Remove(values.clone())
                                 }
                                 SubtypeOperation::Add(operand) => SubtypeOperation::Add(
-                                    static_land_subtype(operand, source, objects),
+                                    static_land_subtype(operand, source, objects, world.state),
                                 ),
                                 SubtypeOperation::Set(operand) => SubtypeOperation::Set(
-                                    static_land_subtype(operand, source, objects),
+                                    static_land_subtype(operand, source, objects, world.state),
                                 ),
                             },
                             supertypes: change.supertypes.clone(),
@@ -2337,10 +2394,10 @@ fn generate(
                                         SubtypeOperation::Remove(values.clone())
                                     }
                                     SubtypeOperation::Add(operand) => SubtypeOperation::Add(
-                                        static_land_subtype(operand, source, objects),
+                                        static_land_subtype(operand, source, objects, world.state),
                                     ),
                                     SubtypeOperation::Set(operand) => SubtypeOperation::Set(
-                                        static_land_subtype(operand, source, objects),
+                                        static_land_subtype(operand, source, objects, world.state),
                                     ),
                                 },
                                 supertypes: change.supertypes.clone(),

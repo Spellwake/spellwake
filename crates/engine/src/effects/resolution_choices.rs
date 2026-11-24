@@ -737,6 +737,147 @@ impl EffectWindow {
                     _ => return Err(EffectError::InvalidResolvingPlayer),
                 }
             }
+            ResolvingPlayer::AttachedHostController => {
+                let src = match entry.kind() {
+                    StackKind::ActivatedAbility { source, .. }
+                    | StackKind::TriggeredAbility { source, .. } => source.id(),
+                    _ => return Err(EffectError::InvalidResolvingPlayer),
+                };
+                match self.attached_to(src) {
+                    Some(TargetRef::Player(seat)) => seat,
+                    Some(TargetRef::Object(host)) => self
+                        .evaluated_characteristics()?
+                        .get(host)
+                        .and_then(|view| view.controller)
+                        .or_else(|| self.window.cards().get(host).map(GameObject::owner))
+                        .ok_or(EffectError::InvalidResolvingPlayer)?,
+                    _ => {
+                        // Fall back to captured trigger attachment LKI when source left battlefield.
+                        let lki_host = self
+                            .execution_bindings(entry.id())
+                            .and_then(|b| b.trigger.as_ref())
+                            .and_then(|t| t.source.attached_to);
+                        match lki_host {
+                            Some(TargetRef::Player(seat)) => seat,
+                            Some(TargetRef::Object(host)) => self
+                                .evaluated_characteristics()?
+                                .get(host)
+                                .and_then(|view| view.controller)
+                                .or_else(|| self.window.cards().get(host).map(GameObject::owner))
+                                .ok_or(EffectError::InvalidResolvingPlayer)?,
+                            _ => return Err(EffectError::InvalidResolvingPlayer),
+                        }
+                    }
+                }
+            }
+            ResolvingPlayer::TriggerSubjectController => {
+                let binding = self
+                    .execution_bindings(entry.id())
+                    .and_then(|b| b.trigger.as_ref())
+                    .ok_or(EffectError::InvalidResolvingPlayer)?;
+                let member = binding
+                    .causes
+                    .members()
+                    .first()
+                    .ok_or(EffectError::InvalidResolvingPlayer)?;
+                let from_related = match &member.related {
+                    crate::occurrence::TriggerRelated::ZoneChange { before, after } => {
+                        if before.object.zone() == ObjectZone::Battlefield
+                            && after.object.zone() != ObjectZone::Battlefield
+                        {
+                            before.object.controller().or(Some(before.object.owner()))
+                        } else {
+                            after
+                                .object
+                                .controller()
+                                .or_else(|| before.object.controller())
+                                .or(Some(after.object.owner()))
+                        }
+                    }
+                    crate::occurrence::TriggerRelated::StatusChange(sc) => {
+                        sc.after.controller().or_else(|| sc.before.controller())
+                    }
+                    crate::occurrence::TriggerRelated::TokenCreated { creator, after } => {
+                        after.object.controller().or(Some(*creator))
+                    }
+                    crate::occurrence::TriggerRelated::Discard { player, .. } => Some(*player),
+                    crate::occurrence::TriggerRelated::SpellCast(cast) => Some(cast.controller()),
+                    crate::occurrence::TriggerRelated::CardDrawn { player }
+                    | crate::occurrence::TriggerRelated::PlayerLost(player) => Some(*player),
+                    _ => None,
+                };
+                if let Some(seat) = from_related {
+                    seat
+                } else if let Some(subject_id) = member.subject_object_id() {
+                    self.evaluated_characteristics()?
+                        .get(subject_id)
+                        .and_then(|view| view.controller)
+                        .or_else(|| self.window.cards().get(subject_id).map(GameObject::owner))
+                        .or(member.related_player)
+                        .ok_or(EffectError::InvalidResolvingPlayer)?
+                } else {
+                    member
+                        .related_player
+                        .ok_or(EffectError::InvalidResolvingPlayer)?
+                }
+            }
+            ResolvingPlayer::TriggerSubjectOwner => {
+                let binding = self
+                    .execution_bindings(entry.id())
+                    .and_then(|b| b.trigger.as_ref())
+                    .ok_or(EffectError::InvalidResolvingPlayer)?;
+                let member = binding
+                    .causes
+                    .members()
+                    .first()
+                    .ok_or(EffectError::InvalidResolvingPlayer)?;
+                let from_related = match &member.related {
+                    crate::occurrence::TriggerRelated::ZoneChange { before, .. } => {
+                        Some(before.object.owner())
+                    }
+                    crate::occurrence::TriggerRelated::StatusChange(sc) => Some(sc.after.owner()),
+                    crate::occurrence::TriggerRelated::TokenCreated { after, .. } => {
+                        Some(after.object.owner())
+                    }
+                    crate::occurrence::TriggerRelated::Discard { before, .. } => {
+                        Some(before.object.owner())
+                    }
+                    crate::occurrence::TriggerRelated::SpellCast(cast) => {
+                        Some(cast.spell().object.owner())
+                    }
+                    _ => None,
+                };
+                if let Some(seat) = from_related {
+                    seat
+                } else if let Some(subject_id) = member.subject_object_id() {
+                    self.window
+                        .cards()
+                        .get(subject_id)
+                        .map(GameObject::owner)
+                        .or(member.related_player)
+                        .ok_or(EffectError::InvalidResolvingPlayer)?
+                } else {
+                    member
+                        .related_player
+                        .ok_or(EffectError::InvalidResolvingPlayer)?
+                }
+            }
+            ResolvingPlayer::SourceChosenPlayer => {
+                let src = match entry.kind() {
+                    StackKind::ActivatedAbility { source, .. }
+                    | StackKind::TriggeredAbility { source, .. } => source.id(),
+                    _ => return Err(EffectError::InvalidResolvingPlayer),
+                };
+                self.characteristics
+                    .entry_player_choices
+                    .get(&src)
+                    .copied()
+                    .or_else(|| match self.entry_choices.get(&src) {
+                        Some(crate::land::EntryChoice::Opponent(seat)) => Some(*seat),
+                        _ => None,
+                    })
+                    .ok_or(EffectError::InvalidResolvingPlayer)?
+            }
             ResolvingPlayer::DefendingPlayer => {
                 let combat = self
                     .combat

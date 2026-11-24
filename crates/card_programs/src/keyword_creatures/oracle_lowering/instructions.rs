@@ -229,6 +229,7 @@ pub(super) fn lower_resolving_player_in_context(
             | BodyTarget::SingleOpponentOrPlaneswalker
             | BodyTarget::SingleCreatureOrPlayer
             | BodyTarget::SingleAnyTarget => Ok(ResolvingPlayer::TargetController),
+            _ if in_trigger => Ok(ResolvingPlayer::TriggerSubjectController),
             _ => Err("oracle:unsupported-its-controller"),
         },
         PlayerRefAst::ItsOwner => match builder.target {
@@ -241,7 +242,9 @@ pub(super) fn lower_resolving_player_in_context(
             | BodyTarget::FilteredAnyGraveyardCard { .. }
             | BodyTarget::AnyGraveyardCard
             | BodyTarget::AnyGraveyardCreature
+            | BodyTarget::AnyGraveyardCreatureOrPlaneswalker
             | BodyTarget::SingleSpell(_) => Ok(ResolvingPlayer::TargetOwner),
+            _ if in_trigger => Ok(ResolvingPlayer::TriggerSubjectOwner),
             _ => Err("oracle:unsupported-its-owner"),
         },
         PlayerRefAst::ActivePlayer => Ok(ResolvingPlayer::ActivePlayer),
@@ -257,9 +260,43 @@ pub(super) fn lower_resolving_player_in_context(
             | BodyTarget::SingleOpponentOrPlaneswalker
             | BodyTarget::SingleCreatureOrPlayer
             | BodyTarget::SingleAnyTarget => Ok(ResolvingPlayer::TargetController),
-            _ if in_trigger => Ok(ResolvingPlayer::UniqueRelatedPlayer),
+            _ if in_trigger => Ok(ResolvingPlayer::TriggerSubjectController),
             _ => Err("oracle:unbound-that-player"),
         },
+        PlayerRefAst::ThatPlayerOrPlaneswalkerController => match builder.target {
+            BodyTarget::SinglePlayer | BodyTarget::SingleOpponent => {
+                Ok(ResolvingPlayer::TargetPlayer)
+            }
+            BodyTarget::SinglePlayerOrPlaneswalker
+            | BodyTarget::SingleOpponentOrPlaneswalker
+            | BodyTarget::SinglePlaneswalker
+            | BodyTarget::SingleCreatureOrPlayer
+            | BodyTarget::SingleAnyTarget
+            | BodyTarget::SinglePermanent
+            | BodyTarget::FilteredPermanent(_) => Ok(ResolvingPlayer::TargetController),
+            _ if in_trigger => Ok(ResolvingPlayer::TriggerSubjectController),
+            _ => Err("oracle:unsupported-resolving-player"),
+        },
+        PlayerRefAst::ChosenPlayer => {
+            if matches!(
+                builder.target,
+                BodyTarget::SinglePlayer | BodyTarget::SingleOpponent
+            ) {
+                Ok(ResolvingPlayer::TargetPlayer)
+            } else if builder.instructions.iter().any(|op| {
+                matches!(
+                    op,
+                    Instruction::ChooseValue {
+                        domain: spellwake_engine::program::ResolutionChoiceDomain::Player { .. },
+                        ..
+                    }
+                )
+            }) {
+                Ok(ResolvingPlayer::ChosenPlayer)
+            } else {
+                Ok(ResolvingPlayer::SourceChosenPlayer)
+            }
+        }
         _ => Err("oracle:unsupported-resolving-player"),
     }
 }
@@ -326,6 +363,11 @@ fn bind_instruction_value_expr_targets(
         InstructionAst::ChangeLife { delta, .. } => bind(delta, builder),
         InstructionAst::DealDamage { amount, .. } => bind(amount, builder),
         InstructionAst::ModifyPT { scale: Some(s), .. } => bind(s, builder),
+        InstructionAst::BindX { x_expr, .. } => bind(x_expr, builder),
+        InstructionAst::AddMana {
+            mana: ManaSpecAst::AnyColor { amount, .. },
+            ..
+        } => bind(amount, builder),
         _ => Ok(()),
     }
 }
@@ -8563,26 +8605,26 @@ pub(super) fn lower_instruction(
             count,
         } => {
             let ck_low = counter_kind.trim().to_ascii_lowercase();
-            let kind = if ck_low.is_empty() || ck_low == "any" {
+            let kind = if matches!(
+                ck_low.as_str(),
+                "" | "any" | "a" | "counter" | "a counter" | "counters" | "all"
+            ) {
                 None
             } else {
                 Some(parse_counter_kind(&ck_low).ok_or("oracle:unsupported-counter-kind")?)
             };
             let target_self = is_self_pronoun(subject, builder, self_pronoun_valid);
-            let amt = if *all {
-                if !target_self {
-                    return Err("oracle:unsupported-remove-counters");
-                }
-                ValueExpr::CounterCount {
-                    subject: spellwake_engine::program::CounterSubjectRef::AbilitySource,
-                    kind,
-                }
-            } else if let Some(c) = count {
-                lower_value_expr(resolve_x(c, bound_x), vocabulary)?
-            } else {
-                ValueExpr::literal(1)
-            };
             if target_self {
+                let amt = if *all {
+                    ValueExpr::CounterCount {
+                        subject: spellwake_engine::program::CounterSubjectRef::AbilitySource,
+                        kind,
+                    }
+                } else if let Some(c) = count {
+                    lower_value_expr(resolve_x(c, bound_x), vocabulary)?
+                } else {
+                    ValueExpr::literal(1)
+                };
                 builder
                     .instructions
                     .push(Instruction::RemoveCountersFromPermanent {
@@ -8599,6 +8641,16 @@ pub(super) fn lower_instruction(
             {
                 let bt = lower_battlefield_body_target(filter, vocabulary)?;
                 builder.bind_target(bt)?;
+                let amt = if *all {
+                    ValueExpr::CounterCount {
+                        subject: spellwake_engine::program::CounterSubjectRef::TargetObject,
+                        kind,
+                    }
+                } else if let Some(c) = count {
+                    lower_value_expr(resolve_x(c, bound_x), vocabulary)?
+                } else {
+                    ValueExpr::literal(1)
+                };
                 builder
                     .instructions
                     .push(Instruction::RemoveCountersFromPermanent {
@@ -8847,14 +8899,105 @@ pub(super) fn lower_instruction(
                 }
                 return Ok(());
             }
-            if low == "next_spell_cant_be_countered" {
+            if low == "next_spell_cant_be_countered"
+                || matches!(low.as_str(), "can't be countered" | "cant_be_countered")
+            {
+                let flt = match subject.as_ref() {
+                    SubjectRefAst::All(f) | SubjectRefAst::Each(f) | SubjectRefAst::Group(f)
+                        if f.zone.is_none() =>
+                    {
+                        Some(lower_object_filter(f, vocabulary)?)
+                    }
+                    _ => None,
+                };
                 builder.instructions.push(Instruction::CreateTemporaryRule {
                     rule: Box::new(TemporaryRuleKind::CantBeCountered {
-                        filter: None,
+                        filter: flt,
                         controller_only: true,
                     }),
                     duration: dur,
                 });
+                return Ok(());
+            }
+            if matches!(low.as_str(), "cant_play_lands" | "can't play lands") {
+                let rel = match subject.as_ref() {
+                    SubjectRefAst::Player(PlayerRefAst::You) => PlayerRelation::Controller,
+                    SubjectRefAst::Player(
+                        PlayerRefAst::EachOpponent | PlayerRefAst::AnyOpponent,
+                    ) => PlayerRelation::Opponent,
+                    SubjectRefAst::Player(PlayerRefAst::EachPlayer | PlayerRefAst::AnyPlayer) => {
+                        PlayerRelation::AnyParticipant
+                    }
+                    _ => return Err("oracle:unsupported-combat-mod"),
+                };
+                builder.instructions.push(Instruction::CreateTemporaryRule {
+                    rule: Box::new(TemporaryRuleKind::TemporaryStatic(Box::new(
+                        StaticContinuousAbility::Restriction {
+                            id: ids.static_id(),
+                            rule: StaticRestriction::CantPlayLands(rel),
+                        },
+                    ))),
+                    duration: dur,
+                });
+                return Ok(());
+            }
+            if matches!(
+                low.as_str(),
+                "all creature types"
+                    | "gains all creature types"
+                    | "gain all creature types"
+                    | "has all creature types"
+                    | "have all creature types"
+                    | "is every creature type"
+                    | "are every creature type"
+            ) {
+                let mut all_subtypes = BTreeSet::new();
+                for ord in 0..vocabulary.len() {
+                    if let Ok(ordinal) = u16::try_from(ord)
+                        && let Some(ct) = vocabulary.resolve_member(vocabulary.id(), ordinal)
+                    {
+                        all_subtypes.insert(ct);
+                    }
+                }
+                let type_part = ResolvedPartSpec::Type(TypeChangeSpec {
+                    supertypes: TypeOperation::Keep,
+                    types: TypeOperation::Keep,
+                    subtypes: SubtypeOperation::Add(InstructionSubtypeOperand::Literal(
+                        all_subtypes,
+                    )),
+                    land_subtypes: SubtypeOperation::Keep,
+                });
+                return emit_resolved_parts_for_subject(
+                    subject,
+                    ResolvedPartsSpec(vec![type_part]),
+                    dur,
+                    builder,
+                    vocabulary,
+                    in_trigger,
+                    self_pronoun_valid,
+                );
+            }
+            if let Some(type_part) = parse_type_removal_part(&low, vocabulary) {
+                return emit_resolved_parts_for_subject(
+                    subject,
+                    ResolvedPartsSpec(vec![type_part]),
+                    dur,
+                    builder,
+                    vocabulary,
+                    in_trigger,
+                    self_pronoun_valid,
+                );
+            }
+            if low.contains(
+                "reselect which player or permanent target attacking creature is attacking",
+            ) || low == "reselect_attack_defender"
+            {
+                builder.bind_target(BodyTarget::FilteredPermanent(
+                    ObjectFilter::creature().attacking(),
+                ))?;
+                builder
+                    .instructions
+                    .push(Instruction::ReselectAttackDefender);
                 return Ok(());
             }
             if let Some(kws_raw) = low.strip_prefix("cant_have:") {
@@ -14933,7 +15076,7 @@ fn parse_next_time_damage_source(
     Some((Some(ObjectFilter::Clause(clause)), source_chosen_color))
 }
 
-fn bind_filter_player_target(
+pub(super) fn bind_filter_player_target(
     builder: &mut BodyBuilder,
     filter: &ObjectFilter,
 ) -> Result<(), &'static str> {
@@ -16162,6 +16305,12 @@ fn try_lower_temp_battlefield_static(
         Some(CombatSelector::Attacking) => CombatFilter::Attacking,
         Some(CombatSelector::Blocking) => CombatFilter::Blocking,
         Some(CombatSelector::AttackingOrBlocking) => CombatFilter::AttackingOrBlocking,
+        Some(CombatSelector::Blocked) => CombatFilter::Blocked,
+        Some(CombatSelector::Unblocked) => CombatFilter::Unblocked,
+        Some(CombatSelector::BlockingSource) => CombatFilter::BlockingSource,
+        Some(CombatSelector::BlockedBySource) => CombatFilter::BlockedBySource,
+        Some(CombatSelector::BlockingOrBlockedBySource) => CombatFilter::BlockingOrBlockedBySource,
+        Some(CombatSelector::NotAttacking) => CombatFilter::NotAttacking,
         Some(CombatSelector::OutsideCombat) => return None,
     };
     if *requires_tapped {

@@ -356,6 +356,7 @@ impl EffectWindow {
                     | EntryTap::ChooseBasicLandType
                     | EntryTap::ChooseOddOrEven
                     | EntryTap::ChooseKhansOrDragons
+                    | EntryTap::ChooseOptions(_)
                     | EntryTap::Unleash
                     | EntryTap::Riot => {
                         let Some(crate::land::EntryChoice::OptionIndex(idx)) =

@@ -5884,7 +5884,7 @@ impl EffectWindow {
                     .entry_option_choices
                     .insert(record.after.id(), idx);
             }
-            if let Some(choice @ crate::land::EntryChoice::Opponent(_)) = choice {
+            if let Some(choice @ crate::land::EntryChoice::Opponent(seat)) = choice {
                 if !matches!(
                     next.copiable_program(record.after.id())
                         .and_then(Program::permanent)
@@ -5899,6 +5899,9 @@ impl EffectWindow {
                     return Err(EffectError::InconsistentProgram);
                 }
                 next.entry_choices.insert(record.after.id(), choice);
+                next.characteristics
+                    .entry_player_choices
+                    .insert(record.after.id(), seat);
             }
             next.characteristics
                 .register_battlefield_entry(record.after.id())?;
@@ -6046,6 +6049,7 @@ impl EffectWindow {
             | EntryTap::ChooseBasicLandType
             | EntryTap::ChooseOddOrEven
             | EntryTap::ChooseKhansOrDragons
+            | EntryTap::ChooseOptions(_)
             | EntryTap::Unleash
             | EntryTap::Riot
             | EntryTap::Tribute(_)
@@ -7018,6 +7022,9 @@ impl EffectWindow {
             {
                 self.entry_choices
                     .insert(new, crate::land::EntryChoice::Opponent(controller));
+                self.characteristics
+                    .entry_player_choices
+                    .insert(new, controller);
             } else {
                 self.window.set_entering_controller(new, controller)?;
             }
@@ -7042,6 +7049,8 @@ impl EffectWindow {
                 | crate::land::EntryChoice::OptionIndex(_)) => {
                     if let crate::land::EntryChoice::OptionIndex(idx) = reveal {
                         self.characteristics.entry_option_choices.insert(new, idx);
+                    } else if let crate::land::EntryChoice::Opponent(seat) = reveal {
+                        self.characteristics.entry_player_choices.insert(new, seat);
                     }
                     self.entry_choices.insert(new, reveal);
                 }

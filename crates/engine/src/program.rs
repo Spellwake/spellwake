@@ -434,6 +434,14 @@ pub enum ResolvingPlayer {
     DefendingPlayer,
     /// The player chosen earlier during this resolution (via `Instruction::ChooseValue`).
     ChosenPlayer,
+    /// The current controller of the permanent to which the ability source is attached.
+    AttachedHostController,
+    /// The current or last-known controller of the triggering object.
+    TriggerSubjectController,
+    /// The owner of the triggering object.
+    TriggerSubjectOwner,
+    /// The player chosen as the ability source entered (via `EntryTap::ChoosePlayer` / `ChooseOpponent`).
+    SourceChosenPlayer,
 }
 impl ResolvingPlayer {
     fn validate(
@@ -633,8 +641,15 @@ impl ResolvingPlayer {
                 _ => Err(DefinitionError::ResolvingPlayerTarget),
             },
             Self::ActivePlayer | Self::DefendingPlayer | Self::ChosenPlayer => Ok(None),
-            Self::EnchantedPlayer => {
+            Self::EnchantedPlayer | Self::AttachedHostController | Self::SourceChosenPlayer => {
                 if context.has_source() {
+                    Ok(None)
+                } else {
+                    Err(DefinitionError::UnboundResolvingPlayer)
+                }
+            }
+            Self::TriggerSubjectController | Self::TriggerSubjectOwner => {
+                if matches!(context, BodyContext::TriggerBound { .. }) {
                     Ok(None)
                 } else {
                     Err(DefinitionError::UnboundResolvingPlayer)
@@ -6019,7 +6034,7 @@ impl ExecutableBody {
                 ))
                 && self
                     .permanent_target_bounds()
-                    .is_none_or(|bounds| bounds == (1, 1));
+                    .is_none_or(|bounds| bounds == (1, 1) || bounds == (0, 1));
             facts.has_object_or_spell_target = !matches!(
                 self.target,
                 BodyTarget::None | BodyTarget::SinglePlayer | BodyTarget::SingleOpponent
@@ -8967,6 +8982,25 @@ impl ExecutableBody {
                                         | Instruction::Ripple(_)
                                         | Instruction::Demonstrate
                                         | Instruction::Enlist
+                                        | Instruction::CreateArmyIfAbsent { .. }
+                                        | Instruction::Amass { .. }
+                                        | Instruction::ReturnToOwnersHand
+                                        | Instruction::ExileTarget
+                                        | Instruction::SearchLibrary { .. }
+                                        | Instruction::AddMana(_)
+                                        | Instruction::RemoveCountersFromPermanent { .. }
+                                        | Instruction::PutCountersOnControlledCreatures
+                                        | Instruction::ExileGraveyardTarget
+                                        | Instruction::CounterSpell
+                                        | Instruction::CounterSpellToLibrary { .. }
+                                )
+                                || matches!(
+                                    op,
+                                    Instruction::AffectPermanentTargets {
+                                        minimum: m2,
+                                        maximum: x2,
+                                        ..
+                                    } if m2 == minimum && x2 == maximum
                                 )
                         });
                     let single_target_in_sequence = (*minimum, *maximum) == (1, 1)
@@ -8984,6 +9018,8 @@ impl ExecutableBody {
                                 | PermanentTargetAction::ReturnToHand
                                 | PermanentTargetAction::RequireCombatAction(_)
                                 | PermanentTargetAction::MoveTo(_)
+                                | PermanentTargetAction::Modify { .. }
+                                | PermanentTargetAction::ModifyWithPartner { .. }
                         )
                         && self.instructions.iter().all(|op| {
                             !matches!(op, Instruction::FixedTargetClause(_))
@@ -9389,28 +9425,40 @@ impl ExecutableBody {
                             None
                         }
                         DamageRecipientsRef::Group(group) => {
+                            let mut grp_fam = None;
                             if let DamageGroup::Filtered(f) = group {
                                 f.validate_vocabulary(vocabulary)
                                     .map_err(|_| DefinitionError::InvalidInstruction)?;
+                                if f.has_target_player() {
+                                    grp_fam = Some(OperandFamily::Player);
+                                }
                             } else if let DamageGroup::FilteredAndPlayers { filter, players } =
                                 group
                             {
                                 filter
                                     .validate_vocabulary(vocabulary)
                                     .map_err(|_| DefinitionError::InvalidInstruction)?;
+                                if filter.has_target_player() {
+                                    grp_fam = Some(OperandFamily::Player);
+                                }
                                 if let AffectedPlayers::One(p) = players {
-                                    p.validate(
+                                    let pf = p.validate(
                                         context,
                                         self.target,
                                         facts.definitely_exiled_target,
                                     )?;
+                                    grp_fam = merge_family(grp_fam, pf)?;
                                 }
                             } else if let DamageGroup::AffectedPlayers(AffectedPlayers::One(p)) =
                                 group
                             {
-                                p.validate(context, self.target, facts.definitely_exiled_target)?;
+                                grp_fam = p.validate(
+                                    context,
+                                    self.target,
+                                    facts.definitely_exiled_target,
+                                )?;
                             }
-                            None
+                            grp_fam
                         }
                     };
                     if family.is_none() {
@@ -15872,6 +15920,11 @@ impl Program {
                     || self.has_type(CardType::Land) && value.casting_cost.is_some()
                 {
                     return Err(DefinitionError::CastingCost);
+                }
+                if let Some(crate::land::EntryTap::ChooseOptions(labels)) = value.entry_tap
+                    && (labels.len() < 2 || labels.len() > usize::from(u8::MAX))
+                {
+                    return Err(DefinitionError::InvalidInstruction);
                 }
                 if matches!(
                     value.entry_tap,

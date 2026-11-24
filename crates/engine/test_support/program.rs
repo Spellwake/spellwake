@@ -2146,12 +2146,13 @@ impl<T, RawMember> SubtypeOperationWire<T, RawMember> {
 enum LandOperand {
     Literal { types: Vec<String> },
     SourceCurrentLandSubtypes {},
+    SourceEntryBasicLandType {},
 }
 impl LandOperand {
     fn literal(self) -> Result<BTreeSet<LandType>, String> {
         match self {
             Self::Literal { types } => land_types(types),
-            Self::SourceCurrentLandSubtypes {} => {
+            Self::SourceCurrentLandSubtypes {} | Self::SourceEntryBasicLandType {} => {
                 Err("live land operand in a resolved effect".into())
             }
         }
@@ -2162,6 +2163,7 @@ impl LandOperand {
             Self::SourceCurrentLandSubtypes {} => {
                 StaticLandSubtypeOperand::SourceCurrentLandSubtypes
             }
+            Self::SourceEntryBasicLandType {} => StaticLandSubtypeOperand::SourceEntryBasicLandType,
         })
     }
 }
@@ -2669,6 +2671,8 @@ fn blocking_restriction(value: &BlockingRestriction) -> Value {
         BlockingRestriction::CannotBeBlockedByMoreThan(n) => {
             json!({"tag":"CannotBeBlockedByMoreThan","max":n})
         }
+        BlockingRestriction::AssignNoCombatDamage => json!({"tag":"AssignNoCombatDamage"}),
+        BlockingRestriction::CannotBeRegenerated => json!({"tag":"CannotBeRegenerated"}),
     };
     json!({"tag":"BlockingRestriction", "restriction":restriction})
 }
@@ -8580,6 +8584,9 @@ fn static_land_operand(value: &StaticLandSubtypeOperand) -> Value {
         StaticLandSubtypeOperand::SourceCurrentLandSubtypes => {
             json!({"tag":"SourceCurrentLandSubtypes"})
         }
+        StaticLandSubtypeOperand::SourceEntryBasicLandType => {
+            json!({"tag":"SourceEntryBasicLandType"})
+        }
     }
 }
 fn static_operand(value: &StaticSubtypeOperand) -> Value {
@@ -13837,6 +13844,10 @@ mod tests {
                 | ResolvingPlayer::TargetOwner
                 | ResolvingPlayer::ActivePlayer
                 | ResolvingPlayer::EnchantedPlayer
+                | ResolvingPlayer::AttachedHostController
+                | ResolvingPlayer::TriggerSubjectController
+                | ResolvingPlayer::TriggerSubjectOwner
+                | ResolvingPlayer::SourceChosenPlayer
                 | ResolvingPlayer::DefendingPlayer
                 | ResolvingPlayer::ChosenPlayer => {
                     unreachable!("role is not in this fixed fixture")
@@ -13860,6 +13871,10 @@ mod tests {
                 | ResolvingPlayer::TargetOwner
                 | ResolvingPlayer::ActivePlayer
                 | ResolvingPlayer::EnchantedPlayer
+                | ResolvingPlayer::AttachedHostController
+                | ResolvingPlayer::TriggerSubjectController
+                | ResolvingPlayer::TriggerSubjectOwner
+                | ResolvingPlayer::SourceChosenPlayer
                 | ResolvingPlayer::DefendingPlayer
                 | ResolvingPlayer::ChosenPlayer => {
                     unreachable!("role is not in this fixed fixture")
@@ -14147,6 +14162,10 @@ mod tests {
                         | ResolvingPlayer::TargetOwner
                         | ResolvingPlayer::ActivePlayer
                         | ResolvingPlayer::EnchantedPlayer
+                        | ResolvingPlayer::AttachedHostController
+                        | ResolvingPlayer::TriggerSubjectController
+                        | ResolvingPlayer::TriggerSubjectOwner
+                        | ResolvingPlayer::SourceChosenPlayer
                         | ResolvingPlayer::DefendingPlayer
                         | ResolvingPlayer::ChosenPlayer,
                     ) => unreachable!("role is not in this fixed fixture"),

@@ -792,7 +792,15 @@ impl ZoneReplacementBatch {
             let prohibited = matches!(
                 source.instance.created,
                 Some(CreatedZoneEffect::Regenerate { .. })
-            ) && self.regeneration_prohibited;
+            ) && (self.regeneration_prohibited
+                || self
+                    .evaluated
+                    .get(candidate.before.id())
+                    .is_some_and(|view| {
+                        view.blocking_restrictions.contains(
+                            &crate::characteristics::BlockingRestriction::CannotBeRegenerated,
+                        )
+                    }));
             if prohibited || !destroyed {
                 return false;
             }

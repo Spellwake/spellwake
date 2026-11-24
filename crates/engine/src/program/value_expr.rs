@@ -692,6 +692,8 @@ impl ValueExpr {
                 ResolvingPlayer::Controller
                     | ResolvingPlayer::ActivePlayer
                     | ResolvingPlayer::EnchantedPlayer
+                    | ResolvingPlayer::AttachedHostController
+                    | ResolvingPlayer::SourceChosenPlayer
             )
         };
         let world_filter =
@@ -816,6 +818,10 @@ impl ValueExpr {
                 ResolvingPlayer::Controller
                     | ResolvingPlayer::ActivePlayer
                     | ResolvingPlayer::EnchantedPlayer
+                    | ResolvingPlayer::AttachedHostController
+                    | ResolvingPlayer::TriggerSubjectController
+                    | ResolvingPlayer::TriggerSubjectOwner
+                    | ResolvingPlayer::SourceChosenPlayer
                     | ResolvingPlayer::UniqueRelatedPlayer
                     | ResolvingPlayer::DefendingPlayer
                     | ResolvingPlayer::TargetController
@@ -1184,12 +1190,39 @@ impl ValueExpr {
                     }
                     _ => Err(DefinitionError::OperandFamily),
                 },
-                ResolvingPlayer::TargetController | ResolvingPlayer::TargetOwner => match target {
+                ResolvingPlayer::TargetController => match target {
                     BodyTarget::SingleCreature
                     | BodyTarget::SinglePermanent
                     | BodyTarget::SinglePlaneswalker
                     | BodyTarget::FilteredPermanent(_) => Ok(Some(OperandFamily::Permanent)),
+                    BodyTarget::SinglePlayer | BodyTarget::SingleOpponent => {
+                        Ok(Some(OperandFamily::Player))
+                    }
+                    BodyTarget::SingleSpell(_) => Ok(Some(OperandFamily::Spell)),
                     BodyTarget::SingleAnyTarget
+                    | BodyTarget::SingleCreatureOrPlayer
+                    | BodyTarget::SinglePlayerOrPlaneswalker
+                    | BodyTarget::SingleOpponentOrPlaneswalker => {
+                        Ok(Some(OperandFamily::DamageRecipient))
+                    }
+                    _ => Err(DefinitionError::OperandFamily),
+                },
+                ResolvingPlayer::TargetOwner => match target {
+                    BodyTarget::SingleCreature
+                    | BodyTarget::SinglePermanent
+                    | BodyTarget::SinglePlaneswalker
+                    | BodyTarget::FilteredPermanent(_) => Ok(Some(OperandFamily::Permanent)),
+                    BodyTarget::SingleOwnGraveyardCard
+                    | BodyTarget::AnyGraveyardCard
+                    | BodyTarget::AnyGraveyardCreature
+                    | BodyTarget::AnyGraveyardCreatureOrPlaneswalker
+                    | BodyTarget::FilteredOwnGraveyardCard(_)
+                    | BodyTarget::FilteredAnyGraveyardCard { .. } => {
+                        Ok(Some(OperandFamily::GraveyardCard))
+                    }
+                    BodyTarget::SingleSpell(_) => Ok(Some(OperandFamily::Spell)),
+                    BodyTarget::SingleAnyTarget
+                    | BodyTarget::SingleCreatureOrPlayer
                     | BodyTarget::SinglePlayerOrPlaneswalker
                     | BodyTarget::SingleOpponentOrPlaneswalker => {
                         Ok(Some(OperandFamily::DamageRecipient))
@@ -1258,8 +1291,10 @@ impl ValueExpr {
                     Ok(Some(OperandFamily::DamageRecipient))
                 }
                 BodyTarget::SingleSpell(_) => Ok(Some(OperandFamily::Spell)),
-                BodyTarget::AnyGraveyardCard
+                BodyTarget::SingleOwnGraveyardCard
+                | BodyTarget::AnyGraveyardCard
                 | BodyTarget::AnyGraveyardCreature
+                | BodyTarget::AnyGraveyardCreatureOrPlaneswalker
                 | BodyTarget::FilteredOwnGraveyardCard(_)
                 | BodyTarget::FilteredAnyGraveyardCard { .. } => {
                     Ok(Some(OperandFamily::GraveyardCard))
@@ -1785,6 +1820,10 @@ impl ValueExpr {
                             | ResolvingPlayer::UniqueRelatedPlayer
                             | ResolvingPlayer::ActivePlayer
                             | ResolvingPlayer::EnchantedPlayer
+                            | ResolvingPlayer::AttachedHostController
+                            | ResolvingPlayer::TriggerSubjectController
+                            | ResolvingPlayer::TriggerSubjectOwner
+                            | ResolvingPlayer::SourceChosenPlayer
                             | ResolvingPlayer::DefendingPlayer
                             | ResolvingPlayer::ChosenPlayer
                     ) {

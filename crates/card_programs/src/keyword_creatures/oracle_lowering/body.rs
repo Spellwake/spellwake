@@ -8147,6 +8147,115 @@ pub(super) fn lower_instruction_seq(
             i += 1;
             continue;
         }
+        // Fuse `Target player sacrifices a creature, then gains life equal to that creature's ...`
+        // (e.g. Devour Flesh) so both clauses share the single player target rather than splitting.
+        if i + 1 < ins.len()
+            && let InstructionAst::Sacrifice {
+                player: sac_player @ (PlayerRefAst::TargetPlayer | PlayerRefAst::TargetOpponent),
+                ..
+            } = &ins[i]
+            && let InstructionAst::ChangeLife {
+                player: life_player,
+                delta,
+                gain,
+            } = &ins[i + 1]
+            && life_player == sac_player
+            && matches!(
+                delta.as_ref(),
+                ValueExprAst::ObjectStat {
+                    subject,
+                    ..
+                } if matches!(subject.as_ref(), SubjectRefAst::Anaphora(_))
+            )
+        {
+            lower_instruction(
+                &ins[i],
+                builder,
+                vocabulary,
+                ids,
+                in_trigger,
+                self_pronoun_valid,
+                bound_x,
+            )?;
+            let rewritten = InstructionAst::ChangeLife {
+                player: PlayerRefAst::ThatPlayer,
+                delta: delta.clone(),
+                gain: *gain,
+            };
+            lower_instruction(
+                &rewritten,
+                builder,
+                vocabulary,
+                ids,
+                in_trigger,
+                self_pronoun_valid,
+                bound_x,
+            )?;
+            i += 2;
+            continue;
+        }
+        // Fuse soulbond partner boost: `Target creature gets +P/+T until end of turn.
+        // If it's paired with a creature, that creature also gets +P/+T until end of turn.` (Joint Assault)
+        if i + 1 < ins.len()
+            && let InstructionAst::ModifyPT {
+                subject: subj1,
+                dx: dx1,
+                dy: dy1,
+                duration: dur1,
+                scale: None,
+            } = &ins[i]
+            && let SubjectRefAst::TargetObject {
+                filter,
+                count: TargetCountAst::Exact(1),
+            } = subj1.as_ref()
+            && filter.zone.is_none()
+            && let InstructionAst::IfCondition {
+                condition,
+                then_body,
+            } = &ins[i + 1]
+            && matches!(
+                condition.as_ref(),
+                ConditionAst::Marker(GameMarker::PairedWithAnotherCreature)
+            )
+            && let [
+                InstructionAst::ModifyPT {
+                    subject: subj2,
+                    dx: dx2,
+                    dy: dy2,
+                    duration: dur2,
+                    scale: None,
+                },
+            ] = then_body.as_slice()
+            && matches!(subj2.as_ref(), SubjectRefAst::Anaphora(_))
+            && dx1 == dx2
+            && dy1 == dy2
+            && dur1 == dur2
+            && let (Ok(p), Ok(t), Ok(dur)) = (
+                dx1.trim().parse::<i64>(),
+                dy1.trim().parse::<i64>(),
+                lower_duration(dur1),
+            )
+        {
+            let bt = lower_battlefield_body_target(filter, vocabulary)?;
+            builder.bind_target(bt)?;
+            builder
+                .instructions
+                .push(Instruction::AffectPermanentTargets {
+                    minimum: 1,
+                    maximum: 1,
+                    action: PermanentTargetAction::ModifyWithPartner {
+                        parts: ResolvedPartsSpec(vec![ResolvedPartSpec::ModifyPT(
+                            PowerToughness {
+                                power: p.into(),
+                                toughness: t.into(),
+                            },
+                        )]),
+                        duration: dur,
+                    },
+                });
+            i += 2;
+            continue;
+        }
         // Desugar [base_slice, <replace_carrier>] (+ optional Otherwise)
         // into BranchIfFalse(cond -> base_start) + [OptionalSequence] + alt_ops + Jump(end) + base_ops (+ else_ops).
         // Handles IfPreviousSucceeded/IfPreviousFailed, IfCondition (including Optional([ReplaceEffect(...)])),
@@ -13463,8 +13572,10 @@ pub(super) fn lower_animate_or_set_pt(
             Ok(())
         }
         SubjectRefAst::All(f) | SubjectRefAst::Each(f) | SubjectRefAst::Group(f) => {
+            let obj = lower_object_filter(f, vocabulary)?;
+            bind_filter_player_target(builder, &obj)?;
             builder.instructions.push(Instruction::ChangeGroup {
-                group: Box::new(EffectSubject::Matching(lower_object_filter(f, vocabulary)?)),
+                group: Box::new(EffectSubject::Matching(obj)),
                 parts: spec,
                 duration: dur,
             });

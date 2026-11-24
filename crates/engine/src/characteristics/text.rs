@@ -48,7 +48,10 @@ fn static_subtype(change: CreatureTypeTextChange, value: &mut StaticSubtypeOpera
         | StaticSubtypeOperand::AllCreatureTypes => {}
     }
 }
-fn static_source_condition(change: CreatureTypeTextChange, cond: &mut StaticSourceCondition) {
+pub(crate) fn static_source_condition(
+    change: CreatureTypeTextChange,
+    cond: &mut StaticSourceCondition,
+) {
     match cond {
         StaticSourceCondition::ControllerControlsSubtype(kind)
         | StaticSourceCondition::OpponentControlsSubtype(kind) => word(change, kind),

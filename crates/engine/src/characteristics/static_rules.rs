@@ -853,7 +853,15 @@ impl StaticContinuousAbility {
                 }
                 _ => {}
             },
-            Self::EventReplacement { event, action, .. } => {
+            Self::EventReplacement {
+                event,
+                condition,
+                action,
+                ..
+            } => {
+                if let Some(cond) = condition {
+                    crate::characteristics::text::static_source_condition(change, cond);
+                }
                 if let ReplaceableEvent::Explore { filter } = event {
                     filter.rewrite_creature_type(change.from, change.to);
                 }

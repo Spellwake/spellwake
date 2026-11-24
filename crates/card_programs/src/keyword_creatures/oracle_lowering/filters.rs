@@ -201,7 +201,27 @@ pub(super) fn lower_filter_to_permanent_selector(
             sel.combat_role =
                 Some(spellwake_engine::characteristics::CombatSelector::AttackingOrBlocking);
         }
-        _ => return Err("oracle:selector-combat-unsupported"),
+        Some(CombatState::Blocked) => {
+            sel.combat_role = Some(spellwake_engine::characteristics::CombatSelector::Blocked);
+        }
+        Some(CombatState::Unblocked) => {
+            sel.combat_role = Some(spellwake_engine::characteristics::CombatSelector::Unblocked);
+        }
+        Some(CombatState::BlockingSelf) => {
+            sel.combat_role =
+                Some(spellwake_engine::characteristics::CombatSelector::BlockingSource);
+        }
+        Some(CombatState::BlockedBySelf) => {
+            sel.combat_role =
+                Some(spellwake_engine::characteristics::CombatSelector::BlockedBySource);
+        }
+        Some(CombatState::BlockingOrBlockedBySelf) => {
+            sel.combat_role =
+                Some(spellwake_engine::characteristics::CombatSelector::BlockingOrBlockedBySource);
+        }
+        Some(CombatState::NotAttacking) => {
+            sel.combat_role = Some(spellwake_engine::characteristics::CombatSelector::NotAttacking);
+        }
     }
     let mut any_types_set = card_type_mask_to_set(f.any_types)?;
     if any_types_set.len() == 1 {
@@ -429,11 +449,15 @@ pub(super) fn apply_selector_condition(
             )
             && matches!(filter.controller, None | Some(ControllerRelation::You)) =>
         {
-            let ct = vocabulary
-                .resolve_label(&filter.subtypes[0])
-                .ok_or("oracle:cond-unknown-subtype")?;
-            sel.source_condition = Some(StaticSourceCondition::ControllerControlsSubtype(ct));
-            Ok(())
+            if let Some(ct) = vocabulary.resolve_label(&filter.subtypes[0]) {
+                sel.source_condition = Some(StaticSourceCondition::ControllerControlsSubtype(ct));
+                return Ok(());
+            }
+            if let Some(sc) = lower_static_source_condition(cond, vocabulary) {
+                sel.source_condition = Some(sc);
+                return Ok(());
+            }
+            Err("oracle:cond-unknown-subtype")
         }
         ConditionAst::ControlsCount {
             player: PlayerRefAst::You,
@@ -532,11 +556,15 @@ pub(super) fn apply_selector_condition(
                 },
             ) =>
         {
-            let ct = vocabulary
-                .resolve_label(&filter.subtypes[0])
-                .ok_or("oracle:cond-unknown-subtype")?;
-            sel.source_condition = Some(StaticSourceCondition::OpponentControlsSubtype(ct));
-            Ok(())
+            if let Some(ct) = vocabulary.resolve_label(&filter.subtypes[0]) {
+                sel.source_condition = Some(StaticSourceCondition::OpponentControlsSubtype(ct));
+                return Ok(());
+            }
+            if let Some(sc) = lower_static_source_condition(cond, vocabulary) {
+                sel.source_condition = Some(sc);
+                return Ok(());
+            }
+            Err("oracle:cond-unknown-subtype")
         }
         ConditionAst::IsYourTurn => {
             sel.source_condition = Some(StaticSourceCondition::ControllersTurn);
@@ -976,8 +1004,16 @@ fn try_specialized_static_source_condition(
             && filter.token.is_none()
             && filter.flags.is_empty() =>
         {
-            let ct = vocabulary.resolve_label(&filter.subtypes[0])?;
-            Some(StaticSourceCondition::ControllerControlsSubtype(ct))
+            if let Some(ct) = vocabulary.resolve_label(&filter.subtypes[0]) {
+                Some(StaticSourceCondition::ControllerControlsSubtype(ct))
+            } else if let Ok(selector) = lower_filter_to_permanent_selector(filter, vocabulary) {
+                Some(StaticSourceCondition::ControlsMatching {
+                    selector: Box::new(selector),
+                    minimum: 1,
+                })
+            } else {
+                None
+            }
         }
         ConditionAst::ControlsCount {
             player: PlayerRefAst::AnyOpponent | PlayerRefAst::EachOpponent,
@@ -993,8 +1029,16 @@ fn try_specialized_static_source_condition(
             && filter.token.is_none()
             && filter.flags.is_empty() =>
         {
-            let ct = vocabulary.resolve_label(&filter.subtypes[0])?;
-            Some(StaticSourceCondition::OpponentControlsSubtype(ct))
+            if let Some(ct) = vocabulary.resolve_label(&filter.subtypes[0]) {
+                Some(StaticSourceCondition::OpponentControlsSubtype(ct))
+            } else if let Ok(selector) = lower_filter_to_permanent_selector(filter, vocabulary) {
+                Some(StaticSourceCondition::OpponentControlsMatching {
+                    selector: Box::new(selector),
+                    minimum: 1,
+                })
+            } else {
+                None
+            }
         }
         ConditionAst::ControlsCount {
             player: PlayerRefAst::You,

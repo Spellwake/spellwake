@@ -1027,6 +1027,7 @@ impl EffectWindow {
                 | crate::land::EntryTap::ChooseBasicLandType
                 | crate::land::EntryTap::ChooseOddOrEven
                 | crate::land::EntryTap::ChooseKhansOrDragons
+                | crate::land::EntryTap::ChooseOptions(_)
                 | crate::land::EntryTap::Unleash
                 | crate::land::EntryTap::Riot
                 | crate::land::EntryTap::Tribute(_)
@@ -1474,6 +1475,9 @@ impl EffectWindow {
             {
                 self.entry_choices
                     .insert(id, crate::land::EntryChoice::Opponent(controller));
+                self.characteristics
+                    .entry_player_choices
+                    .insert(id, controller);
             } else {
                 self.window.set_entering_controller(id, controller)?;
             }
@@ -1498,6 +1502,8 @@ impl EffectWindow {
                 | crate::land::EntryChoice::OptionIndex(_)) => {
                     if let crate::land::EntryChoice::OptionIndex(idx) = reveal {
                         self.characteristics.entry_option_choices.insert(id, idx);
+                    } else if let crate::land::EntryChoice::Opponent(seat) = reveal {
+                        self.characteristics.entry_player_choices.insert(id, seat);
                     }
                     self.entry_choices.insert(id, reveal);
                 }

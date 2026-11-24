@@ -99,14 +99,24 @@ fn resolve_world_player(ctx: &WorldEvalCtx<'_>, role: ResolvingPlayer) -> Option
             Some(TargetRef::Player(seat)) => Some(*seat),
             _ => None,
         },
+        ResolvingPlayer::AttachedHostController => match ctx.state.attachments.get(&ctx.source) {
+            Some(TargetRef::Player(seat)) => Some(*seat),
+            Some(TargetRef::Object(host)) => ctx.objects.get(host).and_then(|o| o.controller),
+            _ => None,
+        },
         ResolvingPlayer::UniqueRelatedPlayer => ctx.related_player,
         ResolvingPlayer::DefendingPlayer => ctx.defending_player,
-        ResolvingPlayer::TargetController => ctx
+        ResolvingPlayer::TargetController | ResolvingPlayer::TriggerSubjectController => ctx
             .trigger_subject
-            .and_then(|id| ctx.objects.get(&id).and_then(|o| o.controller)),
-        ResolvingPlayer::TargetOwner => ctx
+            .and_then(|id| ctx.objects.get(&id).and_then(|o| o.controller))
+            .or(ctx.related_player),
+        ResolvingPlayer::TargetOwner | ResolvingPlayer::TriggerSubjectOwner => ctx
             .trigger_subject
-            .and_then(|id| ctx.objects.get(&id).map(|o| o.owner)),
+            .and_then(|id| ctx.objects.get(&id).map(|o| o.owner))
+            .or(ctx.related_player),
+        ResolvingPlayer::SourceChosenPlayer => {
+            ctx.state.entry_player_choices.get(&ctx.source).copied()
+        }
         _ => None,
     }
 }

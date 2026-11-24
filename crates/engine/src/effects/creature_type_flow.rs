@@ -1192,8 +1192,12 @@ impl EffectWindow {
                         .window
                         .resolving()
                         .ok_or(EffectError::WrongResolutionFrame)?;
-                    let TargetRef::Object(id) = self.instruction_target(entry)?.choice().target
-                    else {
+                    let bound = match self.instruction_target(entry) {
+                        Ok(bound) => bound,
+                        Err(_) if entry.targets().targets().is_empty() => return Ok(0.into()),
+                        Err(err) => return Err(err),
+                    };
+                    let TargetRef::Object(id) = bound.choice().target else {
                         return Err(EffectError::InconsistentProgram);
                     };
                     if let Some(stats) = self
@@ -1224,7 +1228,12 @@ impl EffectWindow {
                         .window
                         .resolving()
                         .ok_or(EffectError::WrongResolutionFrame)?;
-                    match self.instruction_target(entry)?.choice().target {
+                    let bound = match self.instruction_target(entry) {
+                        Ok(bound) => bound,
+                        Err(_) if entry.targets().targets().is_empty() => return Ok(0.into()),
+                        Err(err) => return Err(err),
+                    };
+                    match bound.choice().target {
                         TargetRef::Object(id) => self
                             .copiable_program(id)
                             .map(Program::mana_value)
@@ -1255,8 +1264,12 @@ impl EffectWindow {
                         .window
                         .resolving()
                         .ok_or(EffectError::WrongResolutionFrame)?;
-                    let TargetRef::Object(id) = self.instruction_target(entry)?.choice().target
-                    else {
+                    let bound = match self.instruction_target(entry) {
+                        Ok(bound) => bound,
+                        Err(_) if entry.targets().targets().is_empty() => return Ok(0.into()),
+                        Err(err) => return Err(err),
+                    };
+                    let TargetRef::Object(id) = bound.choice().target else {
                         return Err(EffectError::InconsistentProgram);
                     };
                     Ok(self.counters_of_kind(id, CounterKind::Loyalty))

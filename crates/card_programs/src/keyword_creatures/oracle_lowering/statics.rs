@@ -248,7 +248,13 @@ pub(super) fn lower_static(
                     apply_selector_condition(sel, cond, vocabulary)?;
                 }
             }
-            let type_part = parse_static_type_part(type_or_subtype, *additive, vocabulary)?;
+            let entry_tap = program.permanent().and_then(|p| p.entry_tap);
+            let type_part = parse_static_type_part_with_entry(
+                type_or_subtype,
+                *additive,
+                entry_tap,
+                vocabulary,
+            )?;
             for selector in selectors {
                 push_static_ability(
                     program,
@@ -278,9 +284,15 @@ pub(super) fn lower_static(
                     apply_selector_condition(sel, cond, vocabulary)?;
                 }
             }
+            let entry_tap = program.permanent().and_then(|p| p.entry_tap);
             let mut parts = Vec::new();
             if let Some(desc) = set_types {
-                parts.push(parse_static_type_part(desc, *additive_types, vocabulary)?);
+                parts.push(parse_static_type_part_with_entry(
+                    desc,
+                    *additive_types,
+                    entry_tap,
+                    vocabulary,
+                )?);
             }
             if let Some(color_str) = set_colors {
                 let mut colors = BTreeSet::new();
@@ -1160,9 +1172,6 @@ pub(super) fn lower_static(
             counter_kind,
             condition,
         } => {
-            if condition.is_some() {
-                return Err("oracle:unsupported-static-cond");
-            }
             let kind = match counter_kind.as_deref() {
                 None => None,
                 Some(raw) => {
@@ -1187,7 +1196,7 @@ pub(super) fn lower_static(
                         }
                         _ => return Err("oracle:unsupported-static"),
                     };
-                    push_static_ability(
+                    push_conditional_static(
                         program,
                         StaticContinuousAbility::Restriction {
                             id: ids.static_id(),
@@ -1197,12 +1206,14 @@ pub(super) fn lower_static(
                                 counter_kind: kind,
                             },
                         },
+                        condition.as_deref(),
+                        vocabulary,
                     )
                 }
                 _ => {
                     let selectors = lower_permanent_selectors(subject, vocabulary)?;
                     for sel in selectors {
-                        push_static_ability(
+                        push_conditional_static(
                             program,
                             StaticContinuousAbility::Restriction {
                                 id: ids.static_id(),
@@ -1212,6 +1223,8 @@ pub(super) fn lower_static(
                                     counter_kind: kind,
                                 },
                             },
+                            condition.as_deref(),
+                            vocabulary,
                         )?;
                     }
                     Ok(())
@@ -3056,7 +3069,7 @@ fn lower_alternative_cast_cost(
 ) -> Result<(), &'static str> {
     // Case 1: alternative cost for matching spells you cast (e.g. Rooftop Storm).
     if let Some(spell_filter) = for_spells {
-        if condition.is_some() || is_spell {
+        if is_spell {
             return Err("oracle:unsupported-alternative-cast-cost");
         }
         let is_free_cost = cost.is_empty()
@@ -3081,12 +3094,14 @@ fn lower_alternative_cast_cost(
             )
             && let Some(ct) = vocabulary.resolve_label(&spell_filter.subtypes[0])
         {
-            return push_static_ability(
+            return push_conditional_static(
                 program,
                 StaticContinuousAbility::CostModifier {
                     id: ids.static_id(),
                     modifier: SpellCostModifier::FreeSubtypeCreatureSpells(ct),
                 },
+                condition,
+                vocabulary,
             );
         }
         return Err("oracle:unsupported-alternative-cast-cost");
@@ -4462,6 +4477,15 @@ pub(super) fn parse_static_type_part(
     additive: bool,
     vocabulary: &CreatureTypeVocabulary,
 ) -> Result<StaticPart, &'static str> {
+    parse_static_type_part_with_entry(raw, additive, None, vocabulary)
+}
+
+pub(super) fn parse_static_type_part_with_entry(
+    raw: &str,
+    additive: bool,
+    entry_tap: Option<EntryTap>,
+    vocabulary: &CreatureTypeVocabulary,
+) -> Result<StaticPart, &'static str> {
     let mut clean = raw
         .replace(" in addition to its other types", "")
         .replace(" in addition to their other types", "")
@@ -4469,6 +4493,44 @@ pub(super) fn parse_static_type_part(
         .replace(" in addition to their other creature types", "")
         .replace(" in addition to its other land types", "")
         .replace(" in addition to their other land types", "");
+    let low_entry = clean.trim().to_ascii_lowercase();
+    if matches!(
+        low_entry.as_str(),
+        "the chosen basic land type"
+            | "chosen basic land type"
+            | "the chosen land type"
+            | "chosen land type"
+    ) || (matches!(low_entry.as_str(), "the chosen type" | "chosen type")
+        && entry_tap == Some(EntryTap::ChooseBasicLandType))
+    {
+        return Ok(StaticPart::Type(StaticTypeChange {
+            supertypes: TypeOperation::Keep,
+            types: TypeOperation::Keep,
+            subtypes: SubtypeOperation::Keep,
+            land_subtypes: if additive {
+                SubtypeOperation::Add(StaticLandSubtypeOperand::SourceEntryBasicLandType)
+            } else {
+                SubtypeOperation::Set(StaticLandSubtypeOperand::SourceEntryBasicLandType)
+            },
+        }));
+    }
+    if matches!(
+        low_entry.as_str(),
+        "the chosen creature type" | "chosen creature type"
+    ) || (matches!(low_entry.as_str(), "the chosen type" | "chosen type")
+        && entry_tap == Some(EntryTap::ChooseCreatureType))
+    {
+        return Ok(StaticPart::Type(StaticTypeChange {
+            supertypes: TypeOperation::Keep,
+            types: TypeOperation::Keep,
+            subtypes: if additive {
+                SubtypeOperation::Add(StaticSubtypeOperand::SourceEntryCreatureType)
+            } else {
+                SubtypeOperation::Set(StaticSubtypeOperand::SourceEntryCreatureType)
+            },
+            land_subtypes: SubtypeOperation::Keep,
+        }));
+    }
     let low_clean = clean.to_ascii_lowercase();
     let all_creature_types =
         low_clean.contains("all creature types") || low_clean.contains("every creature type");
@@ -5515,6 +5577,15 @@ pub(super) fn lower_blocking_restriction(rule: &str) -> Option<BlockingRestricti
         | "cant_attack_or_block_if" => Some(BlockingRestriction::CannotAttackOrBlock),
         "can't attack alone" | "cant_attack_alone" | "cantattackalone" => {
             Some(BlockingRestriction::CannotAttackAlone)
+        }
+        "assigns no combat damage" | "assign no combat damage" | "assign_no_combat_damage" => {
+            Some(BlockingRestriction::AssignNoCombatDamage)
+        }
+        "can't be regenerated" | "cannot be regenerated" | "cant_be_regenerated" => {
+            Some(BlockingRestriction::CannotBeRegenerated)
+        }
+        "must_block:it" | "must block it" | "must block ~" => {
+            Some(BlockingRestriction::MustBlockSource)
         }
         "can't block alone" | "cant_block_alone" | "cantblockalone" => {
             Some(BlockingRestriction::CannotBlockAlone)
