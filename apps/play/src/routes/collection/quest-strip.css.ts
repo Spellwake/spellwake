@@ -4,14 +4,26 @@ import { TOUCH_TARGET, touch } from "../../components/shell/glass.css";
 
 const phone = ':root[data-device="phone"] &';
 
-/** Concept: today's quests in one slim row above the decks. */
+const compact = ':root[data-shell="compact"] &';
+const wide = ':root:not([data-shell="compact"]) &';
+
+/** Concept: today's quests in one slim row under the decks. */
 export const strip = style({
+  flexShrink: 0,
   display: "flex",
   alignItems: "stretch",
   gap: "16px",
-  margin: "30px 0 4px",
   selectors: {
-    [phone]: { flexDirection: "column", gap: "8px", margin: "26px 0 0" },
+    // Along the bottom edge of a wide screen, with a rule between it and the decks.
+    '&[data-place="edge"]': {
+      padding: "14px 0 18px",
+      borderTop: `1px solid ${t.color.fieldEdge}`,
+    },
+    [`${compact}[data-place="edge"]`]: { display: "none" },
+    // At the end of the deck list, clear of the dock that floats over it.
+    '&[data-place="list"]': { margin: "0 0 150px" },
+    [`${wide}[data-place="list"]`]: { display: "none" },
+    [phone]: { flexDirection: "column", gap: "8px" },
   },
 });
 export const heading = style({

@@ -62,18 +62,22 @@ function Quest({
 }
 
 /**
- * Today's quests above the decks: what each asks, how far along it is and
- * what it pays, with one swap a day. It shows nothing until there is
- * something to show.
+ * Today's quests under the decks: what each asks, how far along it is and
+ * what it pays, with one swap a day. On a wide screen it stays along the
+ * bottom edge; where the dock floats over the page it ends the deck list
+ * instead. It shows nothing until there is something to show.
  */
 export function QuestStrip({
   source,
+  place,
 }: {
   source: QuestsSource;
+  /** Each place shows on the screens it is for and is absent on the others. */
+  place: "edge" | "list";
 }): ReactElement | null {
   if (source.status !== "ready" || source.quests.length === 0) return null;
   return (
-    <section className={s.strip} aria-label="Daily quests">
+    <section className={s.strip} data-place={place} aria-label="Daily quests">
       <h2 className={s.heading}>Daily quests</h2>
       <ul className={s.list}>
         {source.quests.map((quest) => (

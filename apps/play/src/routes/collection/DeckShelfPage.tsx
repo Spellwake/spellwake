@@ -186,7 +186,6 @@ export function DeckShelfPage({
           aria-label="Deck library"
           tabIndex={0}
         >
-          {quests && <QuestStrip source={quests} />}
           <div className={s.grid}>
             {visible.map((deck, index) => (
               <motion.article
@@ -240,6 +239,8 @@ export function DeckShelfPage({
               </motion.article>
             ))}
           </div>
+          {/* Where the dock floats over the page, the quests end the list. */}
+          {quests && <QuestStrip source={quests} place="list" />}
         </div>
       ) : (
         <div className={s.center}>
@@ -287,6 +288,8 @@ export function DeckShelfPage({
               ]
         }
       />
+      {/* On a wide screen the quests stay along the bottom edge, under the decks. */}
+      {quests && <QuestStrip source={quests} place="edge" />}
       {playing &&
         play({
           deck: playing,
