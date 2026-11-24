@@ -116,6 +116,9 @@ type Case = {
     | "match-settings"
     | "match-concede"
     | "match-watch-chat"
+    | "match-end"
+    | "match-end-view"
+    | "match-end-chat"
     /** Casting: waiting for a target, a player targeted, a paused payment, and a creature. */
     | "match-cast-target"
     | "match-cast-player"
@@ -477,6 +480,14 @@ const cases: Case[] = [
         ["/probe/table", "match-concede"],
         ["/probe/table?state=watching", undefined],
         ["/probe/table?state=watching", "match-watch-chat"],
+        // The end of a game: each way it can come out, the finished table
+        // behind the lifted band, and a last word in chat.
+        ["/probe/table?end=won", "match-end"],
+        ["/probe/table?end=lost", "match-end"],
+        ["/probe/table?end=draw", "match-end"],
+        ["/probe/table?end=none", "match-end"],
+        ["/probe/table?end=won", "match-end-view"],
+        ["/probe/table?end=won", "match-end-chat"],
       ] as const
     ).map(([path, state]) => ({
       viewport,
@@ -1622,6 +1633,53 @@ async function run(browser: Browser, test: Case): Promise<Finding[]> {
     await chat.getByText("Chat is read-only.").waitFor();
     await expect(chat.getByRole("textbox")).toHaveCount(0);
     await page.waitForTimeout(500);
+  }
+  if (
+    state === "match-end" ||
+    state === "match-end-view" ||
+    state === "match-end-chat"
+  ) {
+    const title =
+      { won: "You won", lost: "You lost", draw: "Draw", none: "No result" }[
+        new URLSearchParams(test.path.split("?")[1]).get("end") ?? ""
+      ] ?? "";
+    const band = page.getByRole("dialog", { name: title, exact: true });
+    await band.waitFor();
+    // Nothing more is offered at a finished table, and no turn is anyone's.
+    await expect(page.getByRole("button", { name: "Next" })).toHaveCount(0);
+    await expect(page.getByText(/turn · T\d/)).toHaveCount(0);
+    if (state === "match-end-view") {
+      await band.getByRole("button", { name: "View table" }).click();
+      await band.waitFor({ state: "detached" });
+      const kept = page.getByRole("group", { name: "Game result" });
+      await kept.getByText(title, { exact: true }).waitFor();
+      await kept.getByRole("button", { name: "Leave table" }).waitFor();
+      // The game is over: settings no longer offer to concede it.
+      await page.getByRole("button", { name: "Settings", exact: true }).click();
+      const settings = page.getByRole("dialog", { name: "Settings" });
+      await settings.waitFor();
+      await expect(
+        settings.getByRole("button", { name: "Concede", exact: true }),
+      ).toHaveCount(0);
+      await page.keyboard.press("Escape");
+      await settings.waitFor({ state: "hidden" });
+    }
+    if (state === "match-end-chat") {
+      // Opening the chat lifts the band; the result waits in the turn panel.
+      await page.getByRole("button", { name: /^Table chat/ }).click();
+      await band.waitFor({ state: "detached" });
+      await page
+        .getByRole("group", { name: "Game result" })
+        .getByRole("button", { name: "Leave table" })
+        .waitFor();
+      const chat = page.getByRole("region", { name: "Table chat" });
+      const box = chat.getByRole("textbox");
+      await box.fill("Good game");
+      await box.press("Enter");
+      await chat.getByText("Good game").waitFor();
+    }
+    // The band and what it holds have arrived.
+    await page.waitForTimeout(1400);
   }
   if (
     state === "match-cast-target" ||

@@ -5,8 +5,10 @@ const portraitPhone =
   ':root[data-shell="compact"][data-orientation="portrait"] &';
 const landscapePhone =
   ':root[data-shell="compact"][data-orientation="landscape"] &';
+// Only a win is gold. Every other ending reads in the table's plain ink.
+const notWon = '&:not([data-outcome="won"])';
 
-/** The result where the turn's actions were: it says how the game came out and offers the way out. */
+/** The result where the turn's actions were, once the band has been lifted. */
 export const panel = style({
   alignSelf: "stretch",
   boxSizing: "border-box",
@@ -18,12 +20,17 @@ export const panel = style({
   flexDirection: "column",
   gap: "10px",
   textAlign: "center",
+  color: t.color.gold,
+  selectors: {
+    [notWon]: { borderColor: t.color.fieldEdge, color: t.color.ink },
+    // It takes the keyboard so the result is read out; it is not a control.
+    "&:focus": { outline: "none" },
+  },
 });
 export const panelTitle = style({
   margin: 0,
   fontSize: "34px",
   lineHeight: 1.1,
-  color: t.color.gold,
   selectors: { [landscapePhone]: { fontSize: "26px" } },
 });
 export const reason = style({
@@ -31,36 +38,6 @@ export const reason = style({
   fontSize: t.font.hint,
   lineHeight: 1.25,
   color: t.color.muted,
-});
-
-/** Every seat's final standing, inside the result dialog. */
-export const standings = style({
-  margin: 0,
-  padding: 0,
-  listStyle: "none",
-  display: "flex",
-  flexDirection: "column",
-  gap: "8px",
-});
-export const standing = style({
-  display: "flex",
-  justifyContent: "space-between",
-  alignItems: "baseline",
-  gap: "16px",
-  padding: "10px 14px",
-  borderRadius: t.size.radius,
-  border: `1px solid ${t.color.fieldEdge}`,
-  background: t.color.field,
-  fontSize: t.font.small,
-  color: t.color.ink,
-  selectors: {
-    '&[data-won="true"]': { borderColor: t.color.goldEdge },
-  },
-});
-export const standingNote = style({
-  fontSize: t.font.hint,
-  color: t.color.muted,
-  whiteSpace: "nowrap",
 });
 
 /** The table dims behind the band so the result reads first. */
@@ -76,6 +53,7 @@ export const band = style({
   zIndex: 1,
   insetInline: 0,
   top: "50%",
+  transform: "translateY(-50%)",
   boxSizing: "border-box",
   padding: "34px 24px 30px",
   display: "flex",
@@ -83,12 +61,26 @@ export const band = style({
   alignItems: "center",
   gap: "12px",
   textAlign: "center",
+  color: t.color.gold,
+  selectors: {
+    [notWon]: { color: t.color.ink },
+    "&:focus": { outline: "none" },
+    [portraitPhone]: { top: "38%", padding: "26px 16px 22px" },
+    [landscapePhone]: { padding: "16px 16px 14px", gap: "8px" },
+  },
+});
+/** The band's own surface. It opens from the middle; what it holds does not stretch with it. */
+export const bandSurface = style({
+  position: "absolute",
+  inset: 0,
+  zIndex: -1,
   borderBlock: `1px solid ${t.color.goldEdge}`,
   background: "linear-gradient(180deg, #171a20fa, #101319fc)",
   boxShadow: "0 18px 46px #000a",
   selectors: {
-    [portraitPhone]: { top: "38%", padding: "26px 16px 22px" },
-    [landscapePhone]: { padding: "16px 16px 14px", gap: "8px" },
+    [`${band}:not([data-outcome="won"]) &`]: {
+      borderBlockColor: t.color.fieldEdge,
+    },
   },
 });
 export const bandTitle = style({
@@ -97,9 +89,10 @@ export const bandTitle = style({
   lineHeight: 1,
   fontWeight: 400,
   letterSpacing: "0.04em",
-  color: t.color.gold,
-  textShadow: "0 2px 14px #f3e2b733",
+  // Wide letters as it arrives must not wrap or push the band's edges.
+  whiteSpace: "nowrap",
   selectors: {
+    [`${band}[data-outcome="won"] &`]: { textShadow: "0 2px 14px #f3e2b733" },
     [portraitPhone]: { fontSize: "48px" },
     [landscapePhone]: { fontSize: "38px" },
   },
@@ -108,6 +101,11 @@ export const bandRule = style({
   width: "min(360px, 60%)",
   height: "1px",
   background: `linear-gradient(90deg, transparent, ${t.color.goldEdge}, transparent)`,
+  selectors: {
+    [`${band}:not([data-outcome="won"]) &`]: {
+      background: `linear-gradient(90deg, transparent, ${t.color.fieldEdge}, transparent)`,
+    },
+  },
 });
 export const bandActions = style({
   display: "flex",

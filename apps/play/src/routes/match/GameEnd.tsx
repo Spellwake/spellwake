@@ -1,6 +1,6 @@
-import type { ReactElement } from "react";
-import { motion } from "motion/react";
-import { ActionButton, Dialog, useAllowsControlMotion } from "@spellwake/ui";
+import { useEffect, useId, useRef, type ReactElement } from "react";
+import { AnimatePresence, motion } from "motion/react";
+import { ActionButton, useAllowsControlMotion } from "@spellwake/ui";
 import type { GameResult } from "../../match/match-sources";
 import * as s from "./game-end.css";
 
@@ -11,16 +11,24 @@ const TITLE: Record<GameResult["outcome"], string> = {
   "no-result": "No result",
 };
 
-/** A seat as the result lists it. */
-export type Standing = {
-  seatId: string;
-  name: string;
-  /** "20 life", or "Out" for a seat that left the game. */
-  note: string;
-  won: boolean;
-};
+// The table's one curve: everything decelerates into place.
+const EASE = [0.22, 1, 0.36, 1] as const;
+const LEAVE = [0.7, 0, 0.84, 0] as const;
 
-/** The result in the turn panel, where the turn's actions were. */
+/** Text a person is typing into keeps the keyboard when the result arrives. */
+function typing(): boolean {
+  const active = document.activeElement;
+  return (
+    active instanceof HTMLInputElement ||
+    active instanceof HTMLTextAreaElement ||
+    (active instanceof HTMLElement && active.isContentEditable)
+  );
+}
+
+/**
+ * The result where the turn's actions were, once the band has been lifted to
+ * look at the finished table.
+ */
 export function GameEndPanel({
   result,
   onLeave,
@@ -28,8 +36,20 @@ export function GameEndPanel({
   result: GameResult;
   onLeave: () => void;
 }): ReactElement {
+  const panel = useRef<HTMLDivElement>(null);
+  // The band that held the keyboard is gone; the result keeps it.
+  useEffect(() => {
+    if (!typing()) panel.current?.focus({ preventScroll: true });
+  }, []);
   return (
-    <div className={s.panel} role="status">
+    <div
+      ref={panel}
+      className={s.panel}
+      role="group"
+      aria-label="Game result"
+      data-outcome={result.outcome}
+      tabIndex={-1}
+    >
       <p className={s.panelTitle}>{TITLE[result.outcome]}</p>
       {result.reason && <p className={s.reason}>{result.reason}</p>}
       <ActionButton emphasis="primary" onClick={onLeave}>
@@ -39,99 +59,127 @@ export function GameEndPanel({
   );
 }
 
-/** The result as a dialog over the table, with every seat's final standing. */
-export function GameEndDialog({
+/**
+ * The result as a band across the table, which dims behind it. It arrives
+ * once, when the game ends, and lifts to leave the finished table in view.
+ */
+export function GameEndBand({
   open,
   result,
-  standings,
   onView,
   onLeave,
 }: {
   open: boolean;
-  result: GameResult;
-  standings: readonly Standing[];
-  /** Closes the dialog and leaves the finished table in view. */
-  onView: () => void;
-  onLeave: () => void;
-}): ReactElement {
-  return (
-    <Dialog
-      open={open}
-      title={TITLE[result.outcome]}
-      {...(result.reason ? { subtitle: result.reason } : {})}
-      size="compact"
-      onClose={onView}
-      actions={
-        <>
-          <ActionButton onClick={onView}>View table</ActionButton>
-          <ActionButton emphasis="primary" onClick={onLeave}>
-            Leave table
-          </ActionButton>
-        </>
-      }
-    >
-      <ul className={s.standings}>
-        {standings.map((seat) => (
-          <li key={seat.seatId} className={s.standing} data-won={seat.won}>
-            <span>{seat.name}</span>
-            <span className={s.standingNote}>
-              {seat.won ? "Winner · " : ""}
-              {seat.note}
-            </span>
-          </li>
-        ))}
-      </ul>
-    </Dialog>
-  );
-}
-
-/** The result as a band across the table, which dims behind it. */
-export function GameEndBand({
-  result,
-  onView,
-  onLeave,
-}: {
   result: GameResult;
   /** Lifts the band and leaves the finished table in view. */
   onView: () => void;
   onLeave: () => void;
 }): ReactElement {
   const animate = useAllowsControlMotion();
+  const title = useId();
+  const reason = useId();
+  const band = useRef<HTMLElement>(null);
+  // The result is read out, and View table is one Tab away. Focus rests on the
+  // band, not on a button, so a key already on its way down leaves nothing.
+  useEffect(() => {
+    if (open && !typing()) band.current?.focus({ preventScroll: true });
+  }, [open]);
+
+  const settle = (delay: number, duration = 0.56) =>
+    animate ? { duration, delay, ease: EASE } : { duration: 0 };
+  const lift = (duration: number) =>
+    animate ? { duration, ease: LEAVE } : { duration: 0 };
+  const rise = {
+    initial: animate ? { opacity: 0, y: 8 } : false,
+    animate: { opacity: 1, y: 0 },
+    exit: { opacity: 0, transition: lift(0.14) },
+  } as const;
+
   return (
-    <>
-      <motion.div
-        className={s.scrim}
-        aria-hidden="true"
-        initial={animate ? { opacity: 0 } : false}
-        animate={{ opacity: 1 }}
-        transition={{ duration: 0.5, ease: "easeOut" }}
-      />
-      <motion.section
-        className={s.band}
-        role="status"
-        aria-label="Game result"
-        style={{ y: "-50%" }}
-        initial={animate ? { opacity: 0, scaleY: 0.2 } : false}
-        animate={{ opacity: 1, scaleY: 1 }}
-        transition={{ duration: 0.42, ease: [0.2, 0.8, 0.2, 1] }}
-      >
-        <motion.h2
-          className={s.bandTitle}
-          initial={animate ? { opacity: 0, letterSpacing: "0.22em" } : false}
-          animate={{ opacity: 1, letterSpacing: "0.04em" }}
-          transition={{ duration: 0.7, delay: 0.18, ease: [0.2, 0.8, 0.2, 1] }}
+    <AnimatePresence>
+      {open && (
+        <motion.div
+          key="scrim"
+          className={s.scrim}
+          aria-hidden="true"
+          initial={animate ? { opacity: 0 } : false}
+          animate={{ opacity: 1, transition: settle(0, 0.7) }}
+          exit={{ opacity: 0, transition: lift(0.3) }}
+        />
+      )}
+      {open && (
+        <motion.section
+          key="band"
+          ref={band}
+          className={s.band}
+          role="dialog"
+          aria-labelledby={title}
+          {...(result.reason ? { "aria-describedby": reason } : {})}
+          data-outcome={result.outcome}
+          tabIndex={-1}
+          onKeyDown={(event) => {
+            if (event.key !== "Escape") return;
+            event.stopPropagation();
+            onView();
+          }}
+          // The surface closes last, after what it holds has gone.
+          exit={{ opacity: 1, transition: lift(0.3) }}
         >
-          {TITLE[result.outcome]}
-        </motion.h2>
-        <span className={s.bandRule} aria-hidden="true" />
-        {result.reason && <p className={s.reason}>{result.reason}</p>}
-        <div className={s.bandActions}>
-          <ActionButton onClick={onView}>View table</ActionButton>
-          <ActionButton emphasis="primary" onClick={onLeave}>
-            Leave table
-          </ActionButton>
-        </div>
-      </motion.section>
-    </>
+          <motion.span
+            className={s.bandSurface}
+            aria-hidden="true"
+            initial={animate ? { opacity: 0, scaleY: 0 } : false}
+            animate={{ opacity: 1, scaleY: 1, transition: settle(0, 0.5) }}
+            exit={{
+              opacity: 0,
+              scaleY: 0,
+              transition: animate
+                ? { duration: 0.24, delay: 0.06, ease: LEAVE }
+                : { duration: 0 },
+            }}
+          />
+          <motion.h2
+            id={title}
+            className={s.bandTitle}
+            initial={animate ? { opacity: 0, letterSpacing: "0.24em" } : false}
+            animate={{
+              opacity: 1,
+              letterSpacing: "0.04em",
+              transition: settle(0.16, 0.84),
+            }}
+            exit={{ opacity: 0, transition: lift(0.14) }}
+          >
+            {TITLE[result.outcome]}
+          </motion.h2>
+          <motion.span
+            className={s.bandRule}
+            aria-hidden="true"
+            initial={animate ? { opacity: 0, scaleX: 0 } : false}
+            animate={{ opacity: 1, scaleX: 1, transition: settle(0.34, 0.7) }}
+            exit={{ opacity: 0, transition: lift(0.14) }}
+          />
+          {result.reason && (
+            <motion.p
+              id={reason}
+              className={s.reason}
+              {...rise}
+              transition={settle(0.48)}
+            >
+              {result.reason}
+            </motion.p>
+          )}
+          <motion.div
+            className={s.bandActions}
+            {...rise}
+            transition={settle(0.58)}
+          >
+            <ActionButton onClick={onView}>View table</ActionButton>
+            <ActionButton emphasis="primary" onClick={onLeave}>
+              Leave table
+            </ActionButton>
+          </motion.div>
+        </motion.section>
+      )}
+    </AnimatePresence>
   );
 }

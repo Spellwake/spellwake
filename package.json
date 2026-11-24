@@ -20,7 +20,7 @@
     "play:dev": "bun run --cwd apps/play dev",
     "play:build": "bun run --cwd apps/play build",
     "play:check": "bun run --cwd apps/play check",
-    "play:test": "bun test ./benchmarks/browser-rendering/src/*.test.ts ./apps/play/src/collection/data/*.test.ts ./apps/play/src/data/*.test.ts ./packages/deck-box/src/*.test.ts ./packages/booster-pack/src/*.test.ts",
+    "play:test": "bun test ./benchmarks/browser-rendering/src/*.test.ts ./apps/play/src/collection/data/*.test.ts ./apps/play/src/data/*.test.ts ./apps/play/src/match/*.test.ts ./packages/deck-box/src/*.test.ts ./packages/booster-pack/src/*.test.ts",
     "play:verify": "bun run play:check && bun run play:test && bun run play:build",
     "play:qualify-frame": "bun apps/play/scripts/qualify-frame.ts",
     "play:qualify-account": "bun apps/play/scripts/qualify-account.ts",

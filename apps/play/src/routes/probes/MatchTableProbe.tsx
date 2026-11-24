@@ -7,11 +7,10 @@ import {
   type PreviewScene,
 } from "../../match/preview-table";
 import type { GameResult } from "../../match/match-sources";
-import { MatchPage, type EndLook } from "../match/MatchPage";
+import { MatchPage } from "../match/MatchPage";
 
 const noop = (): void => undefined;
 
-const END_LOOKS: readonly EndLook[] = ["panel", "dialog", "band"];
 /** `?end=` finishes the game for the viewer: won, lost, draw or none. */
 function previewResult(
   end: string | null,
@@ -67,7 +66,6 @@ export function MatchTableProbe(): ReactElement {
   );
   // `?chat=refused` makes the table refuse every message, to show that line.
   // `?pay=paused` makes every cast pause for payment, as a manual game would.
-  const endLook = END_LOOKS.find((look) => look === params.get("endLook"));
   const refused = params.get("chat") === "refused";
   const paused = params.get("pay") === "paused";
   const shown =
@@ -94,5 +92,5 @@ export function MatchTableProbe(): ReactElement {
               }
             : {}),
         };
-  return <MatchPage source={shown} {...(endLook ? { endLook } : {})} />;
+  return <MatchPage source={shown} />;
 }
