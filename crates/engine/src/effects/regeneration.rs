@@ -140,6 +140,36 @@ impl EffectWindow {
                 });
             }
         }
+        // CR 702.89a: Umbra armor replaces destruction of the enchanted permanent with
+        // removing all damage marked on it and destroying the Aura.
+        let umbra_saves: Vec<(ObjectId, ObjectId)> = batch.umbra_armor_saves().collect();
+        for (object, aura) in umbra_saves {
+            self.damage.remove(&object);
+            self.deathtouch_damage.remove(&object);
+            let can_destroy_aura = self
+                .evaluated_characteristics()?
+                .get(aura)
+                .is_some_and(|p| {
+                    p.zone == ObjectZone::Battlefield
+                        && !p.has_keyword(KeywordAbility::Indestructible)
+                });
+            if can_destroy_aura {
+                let before_move = self.rules_snapshot(None)?;
+                let (window, moved) = self.window.destroy_umbra_aura(aura)?;
+                self.window = window;
+                self.characteristics.attachments.remove(&aura);
+                if let Some(movement) = moved {
+                    let after_move = self.rules_snapshot(None)?;
+                    occurrences.push(super::occurrence_flow::zone_occurrence_at(
+                        &before_move.view(),
+                        &after_move.view(),
+                        &movement,
+                        crate::occurrence::ZoneReason::Destroyed,
+                        &[],
+                    )?);
+                }
+            }
+        }
         Ok(occurrences)
     }
 }

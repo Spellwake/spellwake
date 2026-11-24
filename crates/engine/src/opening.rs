@@ -20,11 +20,17 @@ pub enum OpeningDecision {
         count: usize,
         hand: Vec<ObjectId>,
     },
+    PregameBattlefield {
+        player: SeatId,
+        eligible: Vec<ObjectId>,
+    },
 }
 impl OpeningDecision {
     pub fn chooser(&self) -> SeatId {
         match self {
-            Self::Declare { player, .. } | Self::Bottom { player, .. } => *player,
+            Self::Declare { player, .. }
+            | Self::Bottom { player, .. }
+            | Self::PregameBattlefield { player, .. } => *player,
         }
     }
 }
@@ -38,6 +44,10 @@ pub(crate) enum OpeningStage {
         cohort: Vec<SeatId>,
         cursor: usize,
         selected: BTreeMap<SeatId, Vec<ObjectId>>,
+    },
+    PregameBattlefield {
+        cursor: usize,
+        pending: Option<(SeatId, Vec<ObjectId>)>,
     },
     Complete,
 }
@@ -97,6 +107,14 @@ impl OpeningState {
                     cohort.remove(index);
                 }
                 selected.remove(&player);
+            }
+            OpeningStage::PregameBattlefield { cursor, pending } => {
+                if order_index < *cursor {
+                    *cursor -= 1;
+                }
+                if pending.as_ref().is_some_and(|(seat, _)| *seat == player) {
+                    *pending = None;
+                }
             }
             OpeningStage::Complete => return Err(OpeningError::WrongStage),
         }

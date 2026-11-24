@@ -75,6 +75,8 @@ pub(super) fn keyword(value: spellwake_engine::characteristics::KeywordAbility) 
         KeywordAbility::Haste => PlayerKeyword::Haste,
         KeywordAbility::Bargain => PlayerKeyword::Bargain,
         KeywordAbility::Partner => PlayerKeyword::Partner,
+        KeywordAbility::ChooseABackground => PlayerKeyword::ChooseABackground,
+        KeywordAbility::DoctorsCompanion => PlayerKeyword::DoctorsCompanion,
         KeywordAbility::BandsWithOther(
             spellwake_engine::combat::BandQuality::LegendaryCreatures,
         ) => PlayerKeyword::BandsWithOtherLegendaryCreatures,
@@ -118,7 +120,9 @@ pub(super) fn keyword(value: spellwake_engine::characteristics::KeywordAbility) 
         KeywordAbility::ProtectionFromBlack => PlayerKeyword::ProtectionFromBlack,
         KeywordAbility::ProtectionFromRed => PlayerKeyword::ProtectionFromRed,
         KeywordAbility::DamageCannotBePrevented => PlayerKeyword::DamageCannotBePrevented,
-        KeywordAbility::ProtectionFromSubtype(_) => PlayerKeyword::ProtectionFromCreatureSubtype,
+        KeywordAbility::ProtectionFromSubtype(_) | KeywordAbility::ProtectionFrom(_) => {
+            PlayerKeyword::ProtectionFromCreatureSubtype
+        }
         KeywordAbility::ProtectionFromMulticolored => PlayerKeyword::ProtectionFromMulticolored,
         KeywordAbility::ProtectionFromGreen => PlayerKeyword::ProtectionFromGreen,
         KeywordAbility::Retrace => PlayerKeyword::Retrace,
@@ -132,13 +136,13 @@ pub(super) fn keyword(value: spellwake_engine::characteristics::KeywordAbility) 
         KeywordAbility::DoubleStrike => PlayerKeyword::DoubleStrike,
         KeywordAbility::Shroud => PlayerKeyword::Shroud,
         KeywordAbility::Hexproof => PlayerKeyword::Hexproof,
+        KeywordAbility::HexproofFrom(_) => PlayerKeyword::HexproofFrom,
+        KeywordAbility::UmbraArmor => PlayerKeyword::UmbraArmor,
         KeywordAbility::Flash => PlayerKeyword::Flash,
         KeywordAbility::SplitSecond => PlayerKeyword::SplitSecond,
         KeywordAbility::Changeling => PlayerKeyword::Changeling,
         KeywordAbility::StartYourEngines => PlayerKeyword::StartYourEngines,
         KeywordAbility::Devoid => PlayerKeyword::Devoid,
-        KeywordAbility::ChooseABackground => PlayerKeyword::ChooseABackground,
-        KeywordAbility::DoctorsCompanion => PlayerKeyword::DoctorsCompanion,
     }
 }
 pub(super) fn phase(value: spellwake_engine::turn::Phase) -> PlayerPhase {

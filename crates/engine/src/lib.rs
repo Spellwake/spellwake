@@ -14,6 +14,7 @@ pub mod combat;
 pub mod damage;
 pub mod day_night;
 pub mod draw;
+pub mod dungeon;
 pub mod emblem;
 pub mod game;
 pub mod land;

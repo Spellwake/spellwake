@@ -18,10 +18,8 @@ pub struct PlayerTerminal {
     rename_all_fields = "camelCase",
     deny_unknown_fields
 )]
-#[allow(
-    clippy::large_enum_variant,
-    reason = "Keep the existing value constructors shared by the projector and its consumers."
-)]
+// Keep public wire change variants unboxed to preserve serde representation and callers.
+#[allow(clippy::large_enum_variant)]
 pub enum PlayerPublicChange {
     Life {
         #[serde(deserialize_with = "crate::identifiers::uuid")]

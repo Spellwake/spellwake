@@ -178,7 +178,7 @@ fn shared_meld_preflights_every_dated_pair_and_validates_its_compilable_componen
         let family = inventory
             .meld_set(row.oracle_id.as_deref().unwrap())
             .unwrap();
-        let compiled = crate::keyword_creatures::meld::compile(row, inventory, &vocabulary);
+        let compiled = crate::keyword_creatures::meld::compile(row, inventory, &vocabulary, true);
         if let Some(program) = &compiled {
             program
                 .validate(&vocabulary)

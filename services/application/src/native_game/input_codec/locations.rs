@@ -237,6 +237,12 @@ pub(super) enum Location {
     CardName {
         index: NativeRevision,
     },
+    EntryPayLife {
+        pay: bool,
+    },
+    OptionIndex {
+        index: NativeRevision,
+    },
 }
 impl Location {
     pub(super) fn encode(
@@ -456,6 +462,10 @@ impl Location {
             },
             NativeReference::CreatureType(value) => Self::CreatureType {
                 index: u64::from(value.ordinal()).into(),
+            },
+            NativeReference::EntryPayLife(pay) => Self::EntryPayLife { pay },
+            NativeReference::OptionIndex(index) => Self::OptionIndex {
+                index: u64::from(index).into(),
             },
         })
     }
@@ -682,6 +692,10 @@ impl Location {
                     .ok_or(NativeCodecError::InvalidRecord)?;
                 NativeReference::CreatureType(member)
             }
+            Self::EntryPayLife { pay } => NativeReference::EntryPayLife(*pay),
+            Self::OptionIndex { index } => NativeReference::OptionIndex(
+                u8::try_from(index.get()).map_err(|_| NativeCodecError::InvalidRecord)?,
+            ),
         })
     }
 }

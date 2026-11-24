@@ -30,12 +30,20 @@ impl BlockersDecision {
             .unwrap_or(0)
     }
 
+    pub(super) fn must_block_pair(&self, blocker: ObjectId, attacker: ObjectId) -> usize {
+        self.must_block_pairs
+            .get(&(blocker, attacker))
+            .copied()
+            .unwrap_or(0)
+    }
+
     fn unconstrained_score(&self, blocker: ObjectId) -> usize {
         let mut scores = self
             .legal_attackers(blocker)
             .iter()
             .map(|&attacker| {
                 self.blocked_attacker_requirement(attacker)
+                    + self.must_block_pair(blocker, attacker)
                     + usize::from(self.require_at_least_one_block.contains(&attacker))
             })
             .collect::<Vec<_>>();
@@ -50,6 +58,7 @@ impl BlockersDecision {
     pub(super) fn maximum_block_requirement_score(&self) -> usize {
         if self.block_requirements.is_empty()
             && self.blocked_attacker_requirements.is_empty()
+            && self.must_block_pairs.is_empty()
             && self.require_at_least_one_block.is_empty()
         {
             return 0;
@@ -93,7 +102,8 @@ impl BlockersDecision {
             let mut assignments = BTreeMap::from([((vec![0; minimums.len()], 0), 0)]);
             for &attacker in self.legal_attackers(blocker) {
                 let group = constrained.get(&attacker).copied();
-                let score = self.blocked_attacker_requirement(attacker);
+                let score = self.blocked_attacker_requirement(attacker)
+                    + self.must_block_pair(blocker, attacker);
                 if group.is_none() && score == 0 && self.block_requirement(blocker) == 0 {
                     continue;
                 }

@@ -5,8 +5,7 @@ use crate::{
 };
 use serde::Serialize;
 use spellwake_engine::{
-    checks::CheckDecision, effects::PendingWorkKind, game::RuleFrame, priority::PriorityPhase,
-    stack_window::WindowPhase,
+    effects::PendingWorkKind, game::RuleFrame, priority::PriorityPhase, stack_window::WindowPhase,
 };
 
 #[derive(Clone, Copy)]
@@ -18,9 +17,17 @@ pub(super) enum Waiting {
 }
 /// Keep clock eligibility aligned with the maintained public decision families.
 pub(super) fn supported_wait(source: &GameState) -> Result<(), NativeBridgeError> {
-    let searching = matches!(source.pending_decision().map(|decision|decision.frame()), Some(RuleFrame::LibraryTop(frame)) if frame.kind() == spellwake_engine::effects::LibraryChoiceKind::Search);
-    if (source.execution().pending_work_kind() == Some(PendingWorkKind::LibraryTop) && !searching)
-        || source.execution().has_check_replacement_work()
+    let library_supported = matches!(
+        source.pending_decision().map(|decision| decision.frame()),
+        Some(RuleFrame::LibraryTop(_) | RuleFrame::ResolutionGraveyardOrder(_))
+    );
+    let check_supported = matches!(
+        source.pending_decision().map(|decision| decision.frame()),
+        Some(RuleFrame::Checks(_) | RuleFrame::ZoneReplacement(_))
+    );
+    if (source.execution().pending_work_kind() == Some(PendingWorkKind::LibraryTop)
+        && !library_supported)
+        || (source.execution().has_check_replacement_work() && !check_supported)
     {
         return Err(NativeBridgeError::Unsupported);
     }
@@ -47,18 +54,6 @@ pub(super) fn waiting(
             .ok_or(NativeBridgeError::InvalidBinding)
     };
     if let Some(decision) = source.pending_decision() {
-        // Clock eligibility must not charge a chooser for an unsupported frame.
-        // Public projection separately checks the viewer before its frame map.
-        if matches!(
-            decision.frame(),
-            RuleFrame::Checks(CheckDecision::CleanupSelect(_))
-        ) {
-            return Err(NativeBridgeError::Unsupported);
-        }
-        if matches!(decision.frame(), RuleFrame::LibraryTop(frame) if frame.kind() != spellwake_engine::effects::LibraryChoiceKind::Search)
-        {
-            return Err(NativeBridgeError::Unsupported);
-        }
         if decision.basis() != source.basis() {
             return Err(NativeBridgeError::InvalidBinding);
         }

@@ -220,6 +220,13 @@ impl EffectWindow {
                             | Instruction::RevealHandAndBottomPiles
                             | Instruction::RevealDividePiles
                             | Instruction::RevealOpponentChoosesCreature
+                            | Instruction::ChooseValue {
+                                domain: crate::program::ResolutionChoiceDomain::Player {
+                                    opponents_only: true,
+                                },
+                                ..
+                            }
+                            | Instruction::Clash { .. }
                     )
                     || self
                         .combat_rules
@@ -366,6 +373,11 @@ impl EffectWindow {
                                     }
                                     | crate::program::EffectManaYield::Choice { colors, .. },
                                 ) => colors == &bound.colors,
+                                Instruction::AddMana(
+                                    crate::program::EffectManaYield::LandProducible { .. }
+                                    | crate::program::EffectManaYield::CommanderIdentity { .. }
+                                    | crate::program::EffectManaYield::DistinctColors { .. },
+                                ) => !bound.colors.is_empty(),
                                 Instruction::GrantProtectionChosenColor(_) => {
                                     bound.colors == mana_domains::colored_mana()
                                 }
@@ -378,6 +390,36 @@ impl EffectWindow {
                     }
                     _ => return Err(EffectError::WrongDecisionKind),
                 }
+                next.progress_rules(
+                    DamageJournal::default(),
+                    vec![],
+                    vec![],
+                    DrawJournal::default(),
+                    RulesJournal::default(),
+                )
+            }
+            EffectDecision::OptionIndex(bound) => {
+                let revision = self.next_revision(expected)?;
+                let DecisionReply::OptionIndex(chosen) = reply else {
+                    return Err(EffectError::WrongDecisionKind);
+                };
+                let cursor = self
+                    .resolution_cursor()
+                    .ok_or(EffectError::WrongResolutionFrame)?;
+                if bound.revision != self.revision
+                    || bound.entry != cursor.entry
+                    || bound.instruction != cursor.instruction
+                    || bound.chooser != actor
+                    || chosen >= bound.count
+                    || cursor.chosen_option_index.is_some()
+                {
+                    return Err(EffectError::WrongResolutionFrame);
+                }
+                let mut next = self.clone();
+                next.revision = revision;
+                next.resolution_cursor_mut()
+                    .ok_or(EffectError::WrongResolutionFrame)?
+                    .chosen_option_index = Some(chosen);
                 next.progress_rules(
                     DamageJournal::default(),
                     vec![],
@@ -1086,11 +1128,20 @@ impl EffectWindow {
                 match choice {
                     crate::land::EntryChoice::Players(_)
                     | crate::land::EntryChoice::CardName(_)
-                    | crate::land::EntryChoice::PayLife(_) => {
+                    | crate::land::EntryChoice::PayLife(_)
+                    | crate::land::EntryChoice::OptionIndex(_) => {
                         next.resolution_entry_choices.insert(bound.object, choice);
                     }
                     crate::land::EntryChoice::Opponent(_) => {
-                        return Err(EffectError::WrongDecisionKind);
+                        if matches!(
+                            bound.rule,
+                            crate::land::EntryTap::ChooseOpponent
+                                | crate::land::EntryTap::ChoosePlayer
+                        ) {
+                            next.resolution_entry_choices.insert(bound.object, choice);
+                        } else {
+                            return Err(EffectError::WrongDecisionKind);
+                        }
                     }
                     crate::land::EntryChoice::Color(color) => {
                         work.colors.push((bound.object, color))
@@ -1246,6 +1297,7 @@ impl EffectWindow {
                     RulesJournal::default(),
                 )
             }
+            EffectDecision::UntapKeepTapped(_) => Err(EffectError::WrongPhase),
             EffectDecision::TimestampOrder(bound) => {
                 let DecisionReply::TimestampOrder(order) = reply else {
                     return Err(EffectError::WrongDecisionKind);

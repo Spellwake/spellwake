@@ -157,6 +157,7 @@ fn spell(name: &str, rules: &str, vocabulary: &CreatureTypeVocabulary) -> Option
                     count: std::num::NonZeroU8::MIN,
                     nonland_only: false,
                     minimum_mana_value: 4,
+                    filter: None,
                     action: spellwake_engine::program::ChosenHandAction::Exile,
                 }],
             )
@@ -182,6 +183,7 @@ fn spell(name: &str, rules: &str, vocabulary: &CreatureTypeVocabulary) -> Option
                                 any_types: BTreeSet::new(),
                                 required_types: [CardType::Creature].into(),
                                 forbidden_types: BTreeSet::new(),
+                                object_filter: None,
                             },
                         },
                     ),
@@ -1350,6 +1352,7 @@ fn creature(
                 count: std::num::NonZeroU8::MIN,
                     nonland_only: false,
                     minimum_mana_value: 0,
+                    filter: None,
                     action: spellwake_engine::program::ChosenHandAction::Discard,
                 }],
             ));
@@ -1742,8 +1745,7 @@ fn creature(
                         filter: PermanentTypeFilter {
                             any_types: BTreeSet::new(),
                             required_types: BTreeSet::new(),
-                            forbidden_types: BTreeSet::new(),
-                        },
+                            forbidden_types: BTreeSet::new(), object_filter: None },
                     }],
                 )],
             )
@@ -1834,6 +1836,12 @@ fn rain_of_thorns(cost: ManaCost) -> Program {
             minimum: 1,
             maximum: 3,
             allow_repeat: false,
+            distinct_targets: false,
+            uniqueness: spellwake_engine::program::ModalUniqueness::None,
+            mode_costs: Vec::new(),
+            escalate_mana: None,
+            prefix: None,
+            suffix: None,
             additional: vec![enchantment, land],
         });
     }

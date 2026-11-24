@@ -672,6 +672,7 @@ fn crystalline_sliver_grants_shroud_to_noncreature_slivers_and_both_players() {
                     any_types: Default::default(),
                     required_types: [CardType::Creature].into(),
                     forbidden_types: BTreeSet::new(),
+                    object_filter: None,
                 },
             }],
         ),

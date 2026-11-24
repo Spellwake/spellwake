@@ -211,13 +211,21 @@ impl Program {
             .extend(lower.cast_reductions.iter().cloned());
         result.combat_limits.one_attacker |= lower.combat_limits.one_attacker;
         result.combat_limits.one_blocker |= lower.combat_limits.one_blocker;
-        if lower.attack_requirement.is_some() {
-            if result.attack_requirement.is_some()
-                && result.attack_requirement != lower.attack_requirement
+        if let Some(req) = lower.attack_requirement {
+            if result.attack_requirement.is_none() {
+                result.attack_requirement = Some(req);
+            } else if result.attack_requirement != Some(req)
+                && !result.additional_attack_requirements.contains(&req)
             {
-                return Err(EffectError::InconsistentProgram);
+                result.additional_attack_requirements.push(req);
             }
-            result.attack_requirement = lower.attack_requirement;
+        }
+        for &req in &lower.additional_attack_requirements {
+            if result.attack_requirement != Some(req)
+                && !result.additional_attack_requirements.contains(&req)
+            {
+                result.additional_attack_requirements.push(req);
+            }
         }
         for ability in &lower.triggered {
             let mut ability = ability.clone();

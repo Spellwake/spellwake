@@ -85,18 +85,23 @@ impl EffectWindow {
         for object in current.objects.values().filter(|object| {
             object.zone == ObjectZone::Battlefield && object.controller == Some(player)
         }) {
-            if let Some(AttackRequirement::PayPerAttacker {
-                protect_player,
-                symbol,
-            }) = object.abilities.attack_requirement
-                && (protect_player || matches!(target, TargetRef::Object(_)))
-            {
-                match symbol {
-                    crate::program::AttackCostSymbol::OneGeneric => {
-                        cost.generic = cost.generic.plus(&1.into())
-                    }
-                    crate::program::AttackCostSymbol::WhitePhyrexian => {
-                        cost.white_phyrexian = cost.white_phyrexian.plus(&1.into())
+            for req in object.abilities.all_attack_requirements() {
+                if let AttackRequirement::PayPerAttacker {
+                    protect_player,
+                    symbol,
+                } = req
+                    && (protect_player || matches!(target, TargetRef::Object(_)))
+                {
+                    match symbol {
+                        crate::program::AttackCostSymbol::OneGeneric => {
+                            cost.generic = cost.generic.plus(&1.into())
+                        }
+                        crate::program::AttackCostSymbol::Generic(n) => {
+                            cost.generic = cost.generic.plus(&i64::from(n).into())
+                        }
+                        crate::program::AttackCostSymbol::WhitePhyrexian => {
+                            cost.white_phyrexian = cost.white_phyrexian.plus(&1.into())
+                        }
                     }
                 }
             }
@@ -124,57 +129,64 @@ impl EffectWindow {
             .filter(|p| p.zone == ObjectZone::Battlefield)
         {
             single_attacker |= p.abilities.combat_limits.one_attacker;
-            match p.abilities.attack_requirement {
-                Some(AttackRequirement::LimitAttacksAtTappedController)
-                    if self
-                        .window
-                        .cards()
-                        .get(p.object)
-                        .and_then(GameObject::tapped)
-                        == Some(true) =>
-                {
-                    if let Some(controller) = p.controller
-                        && frame.defenders().contains(&controller)
+            for req in p.abilities.all_attack_requirements() {
+                match req {
+                    AttackRequirement::LimitAttacksAtTappedController
+                        if self
+                            .window
+                            .cards()
+                            .get(p.object)
+                            .and_then(GameObject::tapped)
+                            == Some(true) =>
                     {
-                        frame.capped_defenders.insert(controller);
+                        if let Some(controller) = p.controller
+                            && frame.defenders().contains(&controller)
+                        {
+                            frame.capped_defenders.insert(controller);
+                        }
                     }
-                }
 
-                Some(AttackRequirement::FlyingCannotAttackController) => {
-                    if let Some(seat) = p.controller {
-                        protected_from_flying.insert(seat);
+                    AttackRequirement::FlyingCannotAttackController => {
+                        if let Some(seat) = p.controller {
+                            protected_from_flying.insert(seat);
+                        }
                     }
-                }
-                Some(
                     AttackRequirement::EnchantedCannotAttackOrBlockController
-                    | AttackRequirement::EquippedCannotAttackControllerOrBeSacrificed,
-                ) => {
-                    if let (Some(seat), Some(TargetRef::Object(host))) =
-                        (p.controller, p.attached_to)
-                    {
-                        protected_from_enchanted.insert((host, seat));
+                    | AttackRequirement::EquippedCannotAttackControllerOrBeSacrificed
+                    | AttackRequirement::AttachedCannotAttackController => {
+                        if let (Some(seat), Some(TargetRef::Object(host))) =
+                            (p.controller, p.attached_to)
+                        {
+                            protected_from_enchanted.insert((host, seat));
+                        }
                     }
-                }
-                Some(AttackRequirement::AllCreaturesAttack) => everyone_attacks += 1,
-                Some(AttackRequirement::EnchantedPlayerCreaturesAttack)
-                    if p.attached_to == Some(TargetRef::Player(self.window.active_player())) =>
-                {
-                    everyone_attacks += 1;
-                }
+                    AttackRequirement::SourceCannotAttackController => {
+                        if let Some(seat) = p.controller {
+                            protected_from_enchanted.insert((p.object, seat));
+                        }
+                    }
+                    AttackRequirement::AllCreaturesAttack => everyone_attacks += 1,
+                    AttackRequirement::EnchantedPlayerCreaturesAttack
+                        if p.attached_to
+                            == Some(TargetRef::Player(self.window.active_player())) =>
+                    {
+                        everyone_attacks += 1;
+                    }
 
-                Some(AttackRequirement::AttachedCreatureAttacks) => {
-                    if let Some(TargetRef::Object(host)) = p.attached_to {
-                        *attached_attack_requirements.entry(host).or_insert(0usize) += 1;
+                    AttackRequirement::AttachedCreatureAttacks => {
+                        if let Some(TargetRef::Object(host)) = p.attached_to {
+                            *attached_attack_requirements.entry(host).or_insert(0usize) += 1;
+                        }
                     }
-                }
-                Some(AttackRequirement::EnchantedCreatureIsGoaded) => {
-                    if let (Some(TargetRef::Object(host)), Some(controller)) =
-                        (p.attached_to, p.controller)
-                    {
-                        goaders.entry(host).or_default().insert(controller);
+                    AttackRequirement::EnchantedCreatureIsGoaded => {
+                        if let (Some(TargetRef::Object(host)), Some(controller)) =
+                            (p.attached_to, p.controller)
+                        {
+                            goaders.entry(host).or_default().insert(controller);
+                        }
                     }
+                    _ => {}
                 }
-                _ => {}
             }
         }
         let targets: Vec<_> = frame
@@ -216,11 +228,23 @@ impl EffectWindow {
             }
         }
         for attacker in frame.eligible_attackers().to_vec() {
-            let own_rule = current
+            let own_rules: Vec<AttackRequirement> = current
                 .get(attacker)
                 .ok_or(EffectError::InconsistentProgram)?
                 .abilities
-                .attack_requirement;
+                .all_attack_requirements()
+                .collect();
+            let own_rule = own_rules
+                .iter()
+                .copied()
+                .find(|r| {
+                    matches!(
+                        r,
+                        AttackRequirement::SourceAttacks
+                            | AttackRequirement::SourceAttacksExceptOwner
+                    )
+                })
+                .or_else(|| own_rules.first().copied());
             let owner = self
                 .window
                 .cards()
@@ -259,7 +283,31 @@ impl EffectWindow {
                     .vow_protected_players
                     .get(&attacker)
                     .is_some_and(|seats| seats.contains(&defending_player));
+                let missing_required_defender_permanent = current.get(attacker).is_some_and(|att| {
+                    let excluded = BTreeSet::new();
+                    att.blocking_restrictions.iter().any(|rule| match rule {
+                        crate::characteristics::BlockingRestriction::CannotAttackPlayer(
+                            protected_seat,
+                        ) => *protected_seat == defending_player,
+                        crate::characteristics::BlockingRestriction::CannotAttackUnlessDefenderControls(
+                            filter,
+                        ) => !current.objects.values().any(|perm| {
+                            perm.zone == ObjectZone::Battlefield
+                                && perm.controller == Some(defending_player)
+                                && self.matches_object_filter(
+                                    *filter,
+                                    perm,
+                                    defending_player,
+                                    Some(attacker),
+                                    &excluded,
+                                    current,
+                                )
+                        }),
+                        _ => false,
+                    })
+                });
                 if vow_protects_defender
+                    || missing_required_defender_permanent
                     || !allowed_directional_defenders.contains(&defending_player)
                     || (own_rule == Some(AttackRequirement::SourceAttacksExceptOwner)
                         && defending_player == owner)

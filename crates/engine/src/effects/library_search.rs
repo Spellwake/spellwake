@@ -269,20 +269,36 @@ impl EffectWindow {
         if enters {
             let evaluated = self.evaluated_characteristics()?;
             for &id in &eligible {
-                if let Some(crate::land::EntryTap::AlwaysChooseColorExcept(excluded)) = self
+                match self
                     .copiable_program(id)
                     .and_then(Program::permanent)
                     .and_then(|value| value.entry_tap)
                 {
-                    entry_colors.insert(
-                        id,
-                        crate::mana::ManaType::ALL
-                            .into_iter()
-                            .filter(|color| {
-                                *color != crate::mana::ManaType::Colourless && *color != excluded
-                            })
-                            .collect(),
-                    );
+                    Some(
+                        crate::land::EntryTap::AlwaysChooseColorExcept(excluded)
+                        | crate::land::EntryTap::ChooseColorExcept(excluded),
+                    ) => {
+                        entry_colors.insert(
+                            id,
+                            crate::mana::ManaType::ALL
+                                .into_iter()
+                                .filter(|color| {
+                                    *color != crate::mana::ManaType::Colourless
+                                        && *color != excluded
+                                })
+                                .collect(),
+                        );
+                    }
+                    Some(crate::land::EntryTap::ChooseColor) => {
+                        entry_colors.insert(
+                            id,
+                            crate::mana::ManaType::ALL
+                                .into_iter()
+                                .filter(|color| *color != crate::mana::ManaType::Colourless)
+                                .collect(),
+                        );
+                    }
+                    _ => {}
                 }
                 if let Some(crate::land::EntryTap::UnlessRevealHandLandType(a, b)) = self
                     .copiable_program(id)
@@ -482,6 +498,9 @@ impl EffectWindow {
             let entering = current.id();
             if let Some(color) = colors.get(&id) {
                 next.entry_color_choices.insert(entering, *color);
+                if let Some(c) = color.color() {
+                    next.characteristics.entry_color_choices.insert(entering, c);
+                }
             }
             if let Some(reveal) = reveals.get(&id) {
                 next.entry_choices
@@ -1027,7 +1046,9 @@ impl EffectWindow {
                 continue;
             };
             let chosen = match rule {
-                crate::land::EntryTap::AlwaysChooseColorExcept(_) => {
+                crate::land::EntryTap::AlwaysChooseColorExcept(_)
+                | crate::land::EntryTap::ChooseColor
+                | crate::land::EntryTap::ChooseColorExcept(_) => {
                     work.colors.iter().any(|(id, _)| *id == object)
                 }
                 crate::land::EntryTap::ReadAhead { .. } => {
@@ -1284,6 +1305,9 @@ impl EffectWindow {
                     }
                     if let Some(color) = colors.get(&movement.before.id()) {
                         self.entry_color_choices.insert(id, *color);
+                        if let Some(c) = color.color() {
+                            self.characteristics.entry_color_choices.insert(id, c);
+                        }
                     }
                     if let Some((_, number)) = chapters
                         .iter()
@@ -1444,8 +1468,17 @@ impl EffectWindow {
                 .copiable_program(object)
                 .and_then(Program::permanent)
                 .and_then(|value| value.entry_tap);
-            if !matches!(rule, Some(crate::land::EntryTap::AlwaysChooseColorExcept(excluded)) if color != crate::mana::ManaType::Colourless && color != excluded)
-            {
+            let color_ok = match rule {
+                Some(
+                    crate::land::EntryTap::AlwaysChooseColorExcept(excluded)
+                    | crate::land::EntryTap::ChooseColorExcept(excluded),
+                ) => color != crate::mana::ManaType::Colourless && color != excluded,
+                Some(crate::land::EntryTap::ChooseColor) => {
+                    color != crate::mana::ManaType::Colourless
+                }
+                _ => false,
+            };
+            if !color_ok {
                 return Err(EffectError::IllegalEntryColor);
             }
         }

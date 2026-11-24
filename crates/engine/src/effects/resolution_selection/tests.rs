@@ -45,6 +45,7 @@ fn sacrifice(players: AffectedPlayers, amount: RulesInteger) -> Instruction {
             any_types: Default::default(),
             required_types: BTreeSet::from([CardType::Creature]),
             forbidden_types: BTreeSet::new(),
+            object_filter: None,
         },
     }
 }
@@ -834,6 +835,7 @@ fn counted_amount_is_frozen_once_under_resolving_controller_for_every_affected_p
                     any_types: Default::default(),
                     required_types: BTreeSet::from([CardType::Creature]),
                     forbidden_types: BTreeSet::new(),
+                    object_filter: None,
                 },
             },
         ],
@@ -1068,6 +1070,7 @@ fn current_evaluated_type_filter_is_independent_of_printed_types_and_zone_contro
                 any_types: Default::default(),
                 required_types: BTreeSet::from([CardType::Creature]),
                 forbidden_types: BTreeSet::from([CardType::Artifact]),
+                object_filter: None,
             },
         }],
         vec![A, B],

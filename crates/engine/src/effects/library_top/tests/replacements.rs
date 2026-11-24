@@ -560,15 +560,15 @@ fn mill_chain_reevaluates_each_lineage_once_with_optional_history_separate() {
         ),
     ]);
     assert_eq!(codec::decode(codec::view(&p), &v).unwrap(), p);
+    p.zone_replacements[0].actions = ZoneActionPredicate::Any;
+    assert_eq!(p.validate(&v), Ok(()));
     for unsupported in [
-        None,
-        Some(ZoneActionKind::Mill),
-        Some(ZoneActionKind::Surveil),
-        Some(ZoneActionKind::Draw),
+        ZoneActionKind::Mill,
+        ZoneActionKind::Surveil,
+        ZoneActionKind::Draw,
     ] {
-        p.zone_replacements[0].actions = unsupported.map_or(ZoneActionPredicate::Any, |action| {
-            ZoneActionPredicate::OneOf(BTreeSet::from([ZoneActionKind::EffectMill, action]))
-        });
+        p.zone_replacements[0].actions =
+            ZoneActionPredicate::OneOf(BTreeSet::from([ZoneActionKind::EffectMill, unsupported]));
         assert_eq!(
             p.validate(&v),
             Err(DefinitionError::UnsupportedZoneReplacementScope)

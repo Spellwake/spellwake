@@ -261,27 +261,82 @@ impl EffectWindow {
             let ActivationOrigin::SelectedCost { objects, .. } = &origin else {
                 return Err(EffectError::InvalidCastResource);
             };
-            let BodyTarget::FilteredPermanent(filter) = selected.body.target else {
-                return Err(EffectError::InconsistentProgram);
-            };
-            if !filter.has_power_at_most_x() {
-                return Err(EffectError::InconsistentProgram);
-            }
             let count = objects.len();
             selected_tap_count = Some(RulesInteger::from_usize(count));
-            bound_ability = selected.clone();
-            bound_ability.body.target = BodyTarget::FilteredPermanent(
-                filter.bind_power_at_most_x(u16::try_from(count).unwrap_or(u16::MAX)),
-            );
-            &bound_ability
+            if let BodyTarget::FilteredPermanent(filter) = selected.body.target
+                && filter.has_power_at_most_x()
+            {
+                bound_ability = selected.clone();
+                bound_ability.body.target = BodyTarget::FilteredPermanent(
+                    filter.bind_power_at_most_x(u16::try_from(count).unwrap_or(u16::MAX)),
+                );
+                &bound_ability
+            } else {
+                selected
+            }
         } else {
             selected
         };
-        let fixed_activation = if selected
-            .body
-            .instructions
-            .iter()
-            .any(|op| matches!(op, Instruction::FixedTargetClause(_)))
+        let modal_activation = if let Some(spec) =
+            current.printed_text.activation_modes.get(&selected.id)
+        {
+            let ActivationOrigin::Modal(chosen_modes) = &origin else {
+                return Err(EffectError::InvalidCastResource);
+            };
+            let bodies = std::iter::once(&selected.body)
+                .chain(&spec.additional)
+                .collect::<Vec<_>>();
+            let (body, segments, choices) = self.compose_modes_with_wrap(
+                &bodies,
+                chosen_modes,
+                (usize::from(spec.minimum), usize::from(spec.maximum)),
+                spec.allow_repeat,
+                spec.prefix.as_deref(),
+                spec.suffix.as_deref(),
+                |_, mode_body, target| {
+                    let bound = mode_body.target.with_ability_source(source);
+                    let legal_target = if bound == mode_body.target {
+                        self.legal_body_target_in(mode_body, target, actor, &evaluated)
+                    } else {
+                        self.legal_target_kind_in(bound, target, actor, &evaluated)
+                    };
+                    !(matches!(mode_body.target, BodyTarget::FilteredPermanent(filter) if filter.excludes_ability_source())
+                        && target == TargetRef::Object(source))
+                        && !Self::protected_target(
+                            target,
+                            &protection::ProtectionSource::from(current),
+                            &evaluated,
+                        )
+                        && legal_target
+                },
+            )?;
+            let mut extra_cost = ManaCost::free();
+            if !spec.mode_costs.is_empty() {
+                for c in chosen_modes {
+                    let price = spec
+                        .mode_costs
+                        .get(usize::from(c.mode))
+                        .ok_or(EffectError::InvalidCastResource)?;
+                    extra_cost.generic = extra_cost.generic.plus(&price.generic);
+                    for (&color, amt) in &price.required {
+                        let slot = extra_cost.required.entry(color).or_insert_with(|| 0.into());
+                        *slot = slot.plus(amt);
+                    }
+                }
+            }
+            Some((body, segments, choices, extra_cost))
+        } else {
+            if matches!(origin, ActivationOrigin::Modal(_)) {
+                return Err(EffectError::InvalidCastResource);
+            }
+            None
+        };
+        let fixed_activation = if modal_activation.is_none()
+            && selected
+                .body
+                .instructions
+                .iter()
+                .any(|op| matches!(op, Instruction::FixedTargetClause(_)))
         {
             let ActivationOrigin::PermanentTargets(targets) = &origin else {
                 return Err(EffectError::TargetRequired);
@@ -290,7 +345,15 @@ impl EffectWindow {
         } else {
             None
         };
-        if (variable_loyalty || selected.source_cost.generic_x_symbols().is_some())
+        let extra_activation_costs: &[crate::activated::ExtraActivationCost] = current
+            .printed_text
+            .extra_activation_costs
+            .get(&selected.id)
+            .map_or(&[], Vec::as_slice);
+        let extra_uses_x = extra_activation_costs
+            .iter()
+            .any(crate::activated::ExtraActivationCost::uses_chosen_x);
+        if (variable_loyalty || selected.source_cost.generic_x_symbols().is_some() || extra_uses_x)
             != chosen_x.is_some()
             || chosen_x.as_ref().is_some_and(|x| x < &0.into())
         {
@@ -516,9 +579,19 @@ impl EffectWindow {
                 _ => return Err(EffectError::UnknownActivatedAbility),
             }
         } else if returned_attacker.is_none() {
-            if selected.source_cost.is_from_graveyard() {
+            let extra_from_gy = extra_activation_costs
+                .iter()
+                .any(crate::activated::ExtraActivationCost::is_from_graveyard);
+            let extra_from_hand = extra_activation_costs
+                .iter()
+                .any(crate::activated::ExtraActivationCost::is_from_hand);
+            if selected.source_cost.is_from_graveyard() || extra_from_gy {
                 if card.zone() != ObjectZone::Graveyard(actor) {
                     return Err(EffectError::NotAbilitySource);
+                }
+            } else if extra_from_hand {
+                if card.zone() != ObjectZone::Hand(actor) {
+                    return Err(EffectError::NotOwnHand);
                 }
             } else if !restriction.as_ref().is_some_and(|r| r.is_any_player())
                 || card.zone() != ObjectZone::Battlefield
@@ -527,7 +600,11 @@ impl EffectWindow {
             }
             match (&origin, selected.body.target) {
                 (ActivationOrigin::SelectedCost { target, objects }, body_target) => {
-                    if selected.body.permanent_target_bounds().is_some() {
+                    if selected
+                        .body
+                        .permanent_target_bounds()
+                        .is_some_and(|bounds| bounds != (1, 1))
+                    {
                         return Err(EffectError::InconsistentProgram);
                     }
                     if (body_target == BodyTarget::None) != target.is_none() {
@@ -736,6 +813,7 @@ impl EffectWindow {
                                 return Err(EffectError::InvalidCastResource);
                             }
                         }
+                        _ if !extra_activation_costs.is_empty() => {}
                         _ => return Err(EffectError::InvalidCastResource),
                     }
                 }
@@ -786,10 +864,17 @@ impl EffectWindow {
                 (_, _) if selected.source_cost.power_cost().is_some() => {
                     return Err(EffectError::InvalidPowerContributors);
                 }
+                (ActivationOrigin::Modal(_), _) if modal_activation.is_some() => {}
                 (ActivationOrigin::PermanentTargets(_), _) if fixed_activation.is_some() => {}
                 (ActivationOrigin::PermanentTargets(targets), _)
                     if selected.body.permanent_target_bounds().is_some() =>
                 {
+                    if selected.body.has_x_target_count()
+                        && chosen_x.clone().unwrap_or_else(|| 0.into())
+                            != RulesInteger::from_usize(targets.len())
+                    {
+                        return Err(EffectError::InvalidCastResource);
+                    }
                     let (min, max) = selected
                         .body
                         .permanent_target_bounds()
@@ -852,7 +937,12 @@ impl EffectWindow {
             None
         };
         self.validate_attach_activation(&selected.body, source, actor, turn, target, &evaluated)?;
-        if selected.source_cost.taps_source() || selected.source_cost.untaps_source() {
+        if selected.source_cost.taps_source()
+            || selected.source_cost.untaps_source()
+            || extra_activation_costs
+                .iter()
+                .any(|c| c.taps_source() || c.untaps_source())
+        {
             Self::validate_creature_tap_history(card, current)?;
         }
         if let Some(energy_cost) = selected.source_cost.energy_cost() {
@@ -869,17 +959,24 @@ impl EffectWindow {
         {
             return Err(EffectError::IllegalTarget);
         }
-        if let Some(target) = target
-            && ((matches!(selected.body.target, BodyTarget::FilteredPermanent(filter) if filter.excludes_ability_source())
+        if let Some(target) = target {
+            let bound_target = selected.body.target.with_ability_source(source);
+            let legal_target = if bound_target == selected.body.target {
+                self.legal_body_target_in(&selected.body, target, actor, &evaluated)
+            } else {
+                self.legal_target_kind_in(bound_target, target, actor, &evaluated)
+            };
+            if (matches!(selected.body.target, BodyTarget::FilteredPermanent(filter) if filter.excludes_ability_source())
                 && target == TargetRef::Object(source))
                 || Self::protected_target(
                     target,
                     &protection::ProtectionSource::from(current),
                     &evaluated,
                 )
-                || !self.legal_body_target_in(&selected.body, target, actor, &evaluated))
-        {
-            return Err(EffectError::IllegalTarget);
+                || !legal_target
+            {
+                return Err(EffectError::IllegalTarget);
+            }
         }
         let quoted = if let Some(symbols) = selected.source_cost.generic_x_symbols() {
             let mut cost = selected.mana_cost.clone();
@@ -915,6 +1012,17 @@ impl EffectWindow {
             self.power_up_mana_cost(source, &selected.mana_cost)
         } else {
             selected.mana_cost.clone()
+        };
+        let quoted = if let Some((_, _, _, extra)) = &modal_activation {
+            let mut merged = quoted;
+            merged.generic = merged.generic.plus(&extra.generic);
+            for (&color, amt) in &extra.required {
+                let slot = merged.required.entry(color).or_insert_with(|| 0.into());
+                *slot = slot.plus(amt);
+            }
+            merged
+        } else {
+            quoted
         };
         let pay = |cost: &ManaCost| {
             self.prepare_restricted_mana_payment(
@@ -989,7 +1097,21 @@ impl EffectWindow {
             let spend = pay(&quoted)?;
             (quoted, spend, None)
         };
-        let announced = if let Some((_, _, choices)) = &fixed_activation {
+        let announced = if let Some((_, segments, choices, _)) = &modal_activation {
+            if choices.is_empty() {
+                self.window
+                    .record_activation(self.window.revision(), actor, card.clone())?
+            } else {
+                let clauses = segments.iter().filter_map(|m| m.clause.clone()).collect();
+                self.window.record_targeted_activation(
+                    self.window.revision(),
+                    actor,
+                    card.clone(),
+                    clauses,
+                    choices.clone(),
+                )?
+            }
+        } else if let Some((_, _, choices)) = &fixed_activation {
             let clauses = choices
                 .iter()
                 .map(|choice| TargetClause {
@@ -1006,10 +1128,14 @@ impl EffectWindow {
                 choices.clone(),
             )?
         } else if let crate::activated::ActivationOrigin::PermanentTargets(targets) = &origin {
-            let (minimum, maximum) = selected
-                .body
-                .permanent_target_bounds()
-                .ok_or(EffectError::InconsistentProgram)?;
+            let (minimum, maximum) = if selected.body.has_x_target_count() {
+                (targets.len(), targets.len())
+            } else {
+                selected
+                    .body
+                    .permanent_target_bounds()
+                    .ok_or(EffectError::InconsistentProgram)?
+            };
             let choices = targets
                 .iter()
                 .enumerate()
@@ -1060,15 +1186,22 @@ impl EffectWindow {
         let mut next = self.clone();
         next.revision = revision;
         next.window = announced;
+        let activated_count = next
+            .characteristics
+            .activated_sources_this_turn
+            .entry(source)
+            .or_insert(0);
+        *activated_count = activated_count.saturating_add(1);
         if restriction.as_ref().is_some_and(|r| r.has_once_each_turn()) {
             next.activated_this_turn.insert(exhausted_id.clone());
         }
         if restriction.as_ref().is_some_and(|r| r.has_exhaust()) {
             next.characteristics.exhausted.insert(exhausted_id);
         }
-        let (mut body, fixed_segments) = match fixed_activation {
-            Some((body, segments, _)) => (body, segments),
-            None => (selected.body.clone(), Vec::new()),
+        let (mut body, fixed_segments) = match (modal_activation, fixed_activation) {
+            (Some((body, segments, _, _)), _) => (body, segments),
+            (None, Some((body, segments, _))) => (body, segments),
+            (None, None) => (selected.body.clone(), Vec::new()),
         };
         body.target = body.target.with_ability_source(source);
         for instruction in &mut body.instructions {
@@ -1212,6 +1345,28 @@ impl EffectWindow {
                         },
                     ])
                 },
+            )?;
+            cost_before = next.rules_snapshot(None)?;
+        }
+        if !extra_activation_costs.is_empty() {
+            let extra_selected: &[ObjectId] = match &origin {
+                ActivationOrigin::SelectedCost { objects, .. }
+                    if !selected.source_cost.uses_selected_cost_origin() =>
+                {
+                    objects.as_slice()
+                }
+                _ => &[],
+            };
+            next.pay_extra_costs_at_cut(
+                actor,
+                Some(source),
+                entry,
+                crate::occurrence::EventCause::ActivatedAbilityCost { entry, ability },
+                extra_activation_costs,
+                extra_selected,
+                chosen_x.as_ref(),
+                turn,
+                &mut append,
             )?;
             cost_before = next.rules_snapshot(None)?;
         }
@@ -1437,7 +1592,8 @@ impl EffectWindow {
                 Some(library[..needed].to_vec())
             }
             ActivationOrigin::SelectedCost { objects, .. }
-                if !matches!(selected.source_cost, SourceCost::TapPermanents { .. }) =>
+                if !matches!(selected.source_cost, SourceCost::TapPermanents { .. })
+                    && selected.source_cost.uses_selected_cost_origin() =>
             {
                 Some(objects.clone())
             }
@@ -1635,6 +1791,8 @@ impl EffectWindow {
         };
         let cost_taps = if let ActivationOrigin::Contributors(mut objects)
         | ActivationOrigin::SelectedCost { mut objects, .. } = origin
+            && (selected.source_cost.power_cost().is_some()
+                || matches!(selected.source_cost, SourceCost::TapPermanents { .. }))
         {
             if matches!(
                 selected.source_cost,
@@ -1820,7 +1978,7 @@ impl EffectWindow {
 
     // Recursive helper forwards activation context references rather than cloning into a wrapper struct.
     #[allow(clippy::too_many_arguments)]
-    fn check_activation_restriction(
+    pub(super) fn check_activation_restriction(
         &self,
         restriction: &crate::activated::ActivationRestriction,
         actor: SeatId,
@@ -1996,6 +2154,33 @@ impl EffectWindow {
             ActivationRestriction::SourceIsUntapped if card.tapped() != Some(false) => {
                 return Err(EffectError::ActivationConditionNotMet);
             }
+            ActivationRestriction::ClassLevelExact(expected)
+                if self
+                    .characteristics
+                    .class_levels
+                    .get(&source)
+                    .copied()
+                    .unwrap_or(1)
+                    != *expected =>
+            {
+                return Err(EffectError::ActivationConditionNotMet);
+            }
+            ActivationRestriction::MinClassLevel(minimum)
+                if self
+                    .characteristics
+                    .class_levels
+                    .get(&source)
+                    .copied()
+                    .unwrap_or(1)
+                    < *minimum =>
+            {
+                return Err(EffectError::ActivationConditionNotMet);
+            }
+            ActivationRestriction::SourceIsSolved
+                if !self.characteristics.solved_cases.contains(&source) =>
+            {
+                return Err(EffectError::ActivationConditionNotMet);
+            }
             ActivationRestriction::ControllerLifeAtLeast(min)
                 if !self
                     .life
@@ -2033,12 +2218,7 @@ impl EffectWindow {
                             };
                             (src_ok(c1) || c2.is_some_and(src_ok))
                                 && filter.matches_static_characteristics(p, &empty, || {
-                                    self.window
-                                        .cards()
-                                        .get(p.object)
-                                        .and_then(GameObject::card_id)
-                                        .and_then(|cid| self.programs.get(&cid))
-                                        .map(Program::mana_value)
+                                    self.copiable_program(p.object).map(Program::mana_value)
                                 })
                         })
                         .count()
@@ -2068,8 +2248,10 @@ impl EffectWindow {
                 }
             }
             ActivationRestriction::Condition(cond) => {
-                let left = self.resolve_value_expr_at(actor, &cond.left, None)?;
-                let right = self.resolve_value_expr_at(actor, &cond.right, None)?;
+                let left =
+                    self.resolve_value_expr_with_source(actor, &cond.left, None, Some(source))?;
+                let right =
+                    self.resolve_value_expr_with_source(actor, &cond.right, None, Some(source))?;
                 if !cond.comparison.evaluate(&left, &right) {
                     return Err(EffectError::ActivationConditionNotMet);
                 }

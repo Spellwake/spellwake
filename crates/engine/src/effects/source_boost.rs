@@ -85,6 +85,26 @@ impl EffectWindow {
                     .map(|p| p.object)
                     .collect())
             }
+            EffectSubject::TriggerSubject => {
+                let Some(binding) = self
+                    .execution_bindings(entry.id())
+                    .and_then(|b| b.trigger.as_ref())
+                else {
+                    return Ok(BTreeSet::new());
+                };
+                let ids: BTreeSet<ObjectId> = binding
+                    .causes
+                    .members()
+                    .iter()
+                    .filter_map(|m| m.subject_object_id())
+                    .collect();
+                Ok(view
+                    .objects
+                    .values()
+                    .filter(|p| p.zone == ObjectZone::Battlefield && ids.contains(&p.object))
+                    .map(|p| p.object)
+                    .collect())
+            }
             EffectSubject::AbilitySource => Ok(view
                 .objects
                 .values()
@@ -99,6 +119,65 @@ impl EffectWindow {
                 })
                 .map(|p| p.object)
                 .collect()),
+            EffectSubject::TargetObject => {
+                if let Ok(target) = self.instruction_target(entry) {
+                    if let TargetRef::Object(id) = target.choice().target
+                        && view
+                            .get(id)
+                            .is_some_and(|p| p.zone == ObjectZone::Battlefield)
+                    {
+                        return Ok(BTreeSet::from([id]));
+                    }
+                    return Ok(BTreeSet::new());
+                }
+                if let Ok(selected) = self.legal_permanent_targets() {
+                    return Ok(selected
+                        .into_iter()
+                        .filter(|id| {
+                            view.get(*id)
+                                .is_some_and(|p| p.zone == ObjectZone::Battlefield)
+                        })
+                        .collect());
+                }
+                Ok(BTreeSet::new())
+            }
+            EffectSubject::CreatedTokens => Ok(self
+                .resolution_cursor()
+                .map(|cursor| {
+                    cursor
+                        .last_created_tokens
+                        .iter()
+                        .copied()
+                        .filter(|id| {
+                            view.get(*id)
+                                .is_some_and(|p| p.zone == ObjectZone::Battlefield)
+                        })
+                        .collect()
+                })
+                .unwrap_or_default()),
+            EffectSubject::LastMoved => Ok(self
+                .resolution_cursor()
+                .map(|cursor| {
+                    let mut ids: BTreeSet<ObjectId> = cursor
+                        .results
+                        .last_moved_objects
+                        .iter()
+                        .copied()
+                        .filter(|id| {
+                            view.get(*id)
+                                .is_some_and(|p| p.zone == ObjectZone::Battlefield)
+                        })
+                        .collect();
+                    if let Some(id) = cursor.results.returned_target_permanent
+                        && view
+                            .get(id)
+                            .is_some_and(|p| p.zone == ObjectZone::Battlefield)
+                    {
+                        ids.insert(id);
+                    }
+                    ids
+                })
+                .unwrap_or_default()),
             EffectSubject::Matching(filter) => {
                 let mut excluded = BTreeSet::new();
                 if let Some(slot) = filter.chosen_type_slot() {
@@ -245,6 +324,9 @@ impl EffectWindow {
         if affected.is_empty() {
             return Ok(());
         }
+        let Some(duration) = self.resolve_duration(entry, duration)? else {
+            return Ok(());
+        };
         let before = self.rules_snapshot(None)?;
         let effect =
             self.characteristics

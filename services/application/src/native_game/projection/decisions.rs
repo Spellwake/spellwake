@@ -103,7 +103,8 @@ impl Projection<'_, '_> {
                                 spellwake_engine::mana::HybridAlternative::Mana(color) => {
                                     Some(mana(color))
                                 }
-                                spellwake_engine::mana::HybridAlternative::TwoLife => None,
+                                spellwake_engine::mana::HybridAlternative::TwoLife
+                                | spellwake_engine::mana::HybridAlternative::TwoGeneric => None,
                             },
                         })
                         .collect(),
@@ -214,7 +215,8 @@ impl Projection<'_, '_> {
                 },
             ),
             spellwake_engine::land::EntryTap::SiegeProtector
-            | spellwake_engine::land::EntryTap::ChosenOpponentControls => {
+            | spellwake_engine::land::EntryTap::ChosenOpponentControls
+            | spellwake_engine::land::EntryTap::ChooseOpponent => {
                 let eligible = self
                     .scope
                     .source
@@ -222,6 +224,23 @@ impl Projection<'_, '_> {
                     .opponents_of(self.scope.binding.actor)
                     .map_err(|_| NativeProjectionError::MissingNativeValue)?;
                 let targets = eligible
+                    .into_iter()
+                    .map(|seat| self.target(TargetRef::Player(seat)))
+                    .collect::<Result<_, _>>()?;
+                (
+                    DecisionKind::OpponentChoice,
+                    PlayerDomain::Targets { targets },
+                )
+            }
+            spellwake_engine::land::EntryTap::ChoosePlayer => {
+                let seats = self
+                    .scope
+                    .source
+                    .execution()
+                    .window()
+                    .participants()
+                    .to_vec();
+                let targets = seats
                     .into_iter()
                     .map(|seat| self.target(TargetRef::Player(seat)))
                     .collect::<Result<_, _>>()?;
@@ -291,7 +310,8 @@ impl Projection<'_, '_> {
                     },
                 )
             }
-            spellwake_engine::land::EntryTap::AlwaysChooseColorExcept(excluded) => {
+            spellwake_engine::land::EntryTap::AlwaysChooseColorExcept(excluded)
+            | spellwake_engine::land::EntryTap::ChooseColorExcept(excluded) => {
                 let options = spellwake_engine::mana::ManaType::ALL
                     .into_iter()
                     .filter(|color| {
@@ -312,10 +332,67 @@ impl Projection<'_, '_> {
                     },
                 )
             }
+            spellwake_engine::land::EntryTap::ChooseColor => {
+                let options = spellwake_engine::mana::ManaType::ALL
+                    .into_iter()
+                    .filter(|color| *color != spellwake_engine::mana::ManaType::Colourless)
+                    .map(|color| {
+                        self.option(
+                            NativeReference::ManaColor(color),
+                            mana_label(color).to_owned(),
+                        )
+                    })
+                    .collect::<Result<_, _>>()?;
+                (
+                    DecisionKind::ManaColor,
+                    PlayerDomain::Options {
+                        options,
+                        query: None,
+                    },
+                )
+            }
+            other if other.option_labels().is_some() => {
+                let labels = other.option_labels().unwrap_or(&[]);
+                let options = labels
+                    .iter()
+                    .enumerate()
+                    .map(|(idx, label)| {
+                        let idx_u8 = u8::try_from(idx)
+                            .map_err(|_| NativeProjectionError::MissingNativeValue)?;
+                        self.option(NativeReference::OptionIndex(idx_u8), (*label).to_owned())
+                    })
+                    .collect::<Result<_, _>>()?;
+                (
+                    DecisionKind::Modes,
+                    PlayerDomain::Options {
+                        options,
+                        query: None,
+                    },
+                )
+            }
             spellwake_engine::land::EntryTap::UnlessRevealHandLandType(_, _) => (
                 DecisionKind::EntryReveal,
                 self.objects_range(candidates, 0, candidates.len().min(1))?,
             ),
+            spellwake_engine::land::EntryTap::UnlessPayLife(life) => {
+                let options = vec![
+                    self.option(
+                        NativeReference::EntryPayLife(true),
+                        format!("Pay {life} life (enter untapped)"),
+                    )?,
+                    self.option(
+                        NativeReference::EntryPayLife(false),
+                        "Decline (enter tapped)".to_owned(),
+                    )?,
+                ];
+                (
+                    DecisionKind::OptionalEffect,
+                    PlayerDomain::Options {
+                        options,
+                        query: None,
+                    },
+                )
+            }
             _ => return Err(NativeBridgeError::Unsupported.into()),
         })
     }
@@ -502,7 +579,7 @@ impl Projection<'_, '_> {
                         },
                         Err(error) => return Err(error),
                     };
-                    let effect=if application.effect.created==Some(spellwake_engine::effects::CreatedZoneEffect::CorpseReturn) {"exile the returned creature".to_owned()} else if application.effect.madness {"madness".to_owned()} else if application.effect.unearth {"unearth".to_owned()} else {
+                    let effect=if application.effect.created==Some(spellwake_engine::effects::CreatedZoneEffect::CorpseReturn) {"exile the returned creature".to_owned()} else if matches!(application.effect.created, Some(spellwake_engine::effects::CreatedZoneEffect::TemporaryLeaveExile(_))) {"exile if it would leave the battlefield".to_owned()} else if application.effect.madness {"madness".to_owned()} else if application.effect.unearth {"unearth".to_owned()} else {
                         match self.visible_object(application.effect.source) {
                             Ok(source) => {
                                 let label = self.object_label(&source)?;
@@ -522,9 +599,10 @@ impl Projection<'_, '_> {
                 }
                 (DecisionKind::ZoneReplacement,PlayerDomain::Options{options,query:None})
             }
-            RuleFrame::Checks(CheckDecision::CleanupSelect(_)) => {
-                return Err(NativeBridgeError::Unsupported.into());
-            }
+            RuleFrame::Checks(CheckDecision::CleanupSelect(frame)) => (
+                DecisionKind::Discard,
+                self.objects_domain(frame.domain(), frame.required())?,
+            ),
             RuleFrame::Mutation(_) => (DecisionKind::Number,PlayerDomain::Number {minimum:1.into(),maximum:2.into(),mana_split:None}),
             RuleFrame::LibraryTop(frame) if frame.chooses_land_kind() => (DecisionKind::Number,PlayerDomain::Number {minimum:1.into(),maximum:2.into(), mana_split: None}),
             RuleFrame::LibraryTop(frame)
@@ -588,6 +666,35 @@ impl Projection<'_, '_> {
                     },
                 )
             }
+            RuleFrame::LibraryTop(frame)
+                if matches!(
+                    frame.kind(),
+                    spellwake_engine::effects::LibraryChoiceKind::Scry
+                        | spellwake_engine::effects::LibraryChoiceKind::Surveil
+                ) =>
+            {
+                let mut inspected = Vec::with_capacity(frame.domain_top_first().len());
+                for id in frame.domain_top_first() {
+                    let physical = source
+                        .execution()
+                        .window()
+                        .cards()
+                        .get(*id)
+                        .ok_or(NativeProjectionError::MissingNativeValue)?;
+                    let program = source
+                        .execution()
+                        .copiable_program(*id)
+                        .ok_or(NativeProjectionError::MissingNativeValue)?;
+                    let label = self.display.object(physical, program)?.characteristics.name;
+                    inspected.push(self.option(NativeReference::Object(*id), label)?);
+                }
+                let kind = if frame.kind() == spellwake_engine::effects::LibraryChoiceKind::Scry {
+                    DecisionKind::Scry
+                } else {
+                    DecisionKind::Surveil
+                };
+                (kind, PlayerDomain::LibraryTop { inspected })
+            }
             RuleFrame::LibraryTop(_) => return Err(NativeBridgeError::Unsupported.into()),
             RuleFrame::ResolutionSelect(frame) if matches!(frame.operation(), spellwake_engine::effects::ResolutionSelectionKind::VowCreature | spellwake_engine::effects::ResolutionSelectionKind::ChooseCreatureToKeep | spellwake_engine::effects::ResolutionSelectionKind::PayLifeToSaveCreatures) => {
                 let mut domain=self.objects_range(frame.domain(),frame.minimum(),frame.required())?;
@@ -622,6 +729,10 @@ impl Projection<'_, '_> {
                 mana_split: None,
             }),
             RuleFrame::TransformOrder(f)=>(DecisionKind::TransformOrder,self.object_order(f.objects())?),
+            RuleFrame::UntapKeepTapped(f) => (
+                DecisionKind::SelectResolution,
+                self.objects_range(f.objects(), 0, f.objects().len())?,
+            ),
             RuleFrame::LinkedReturnOrder(f) if source.execution().is_pending_exile_graveyard_order(f) || source.execution().is_looked_graveyard_order(f) => {
                 let mut objects = Vec::new();
                 let mut labels = Vec::new();
@@ -863,7 +974,7 @@ impl Projection<'_, '_> {
                             options.push(self.option(NativeReference::Object(id),label)?);
                         }
                         if matches!(frame.choice(),PileChoice::BottomOrder(_) | PileChoice::GraveyardOrder(_)) {
-                            (DecisionKind::OrderResolutionGraveyard,PlayerDomain::Ordering {objects:options.iter().map(|option|option.handle.clone()).collect(),labels:options})
+                            (DecisionKind::LinkedReturnOrder,PlayerDomain::Ordering {objects:options.iter().map(|option|option.handle.clone()).collect(),labels:options})
                         } else {
                             (DecisionKind::LibrarySearch,PlayerDomain::LibrarySearch {maximum:None,mode:if matches!(frame.choice(),PileChoice::OneToHand(_) | PileChoice::OneToHandRestBottom(_) | PileChoice::Creature(_)) {PlayerSearchMode::Single} else {PlayerSearchMode::DividePile},required:matches!(frame.choice(),PileChoice::OneToHand(_) | PileChoice::OneToHandRestBottom(_) | PileChoice::Creature(_)),shared_land_type:false,forest_and_plains:false,
                                 inspected:options.iter().map(|option|option.label.clone()).collect(),eligible:options,entry_color_offers:vec![],entry_reveal_offers:vec![]})
@@ -937,7 +1048,7 @@ impl Projection<'_, '_> {
                     targets: mode.targets.iter().map(|target| self.target(*target)).collect::<Result<_,_>>()?,
                 })).collect::<Result<Vec<_>, NativeProjectionError>>()?;
                 (DecisionKind::Modes, PlayerDomain::TriggerModes {
-                    minimum: modal.minimum, maximum: modal.maximum, distinct_targets: modal.distinct_targets, modes,
+                    minimum: modal.minimum, maximum: modal.maximum, distinct_targets: modal.distinct_targets, allow_repeat: modal.allow_repeat, modes,
                 })
             }
             RuleFrame::TriggerTarget(frame) if frame.ordered_any_target_bounds().is_some() => {
@@ -1124,6 +1235,10 @@ impl Projection<'_, '_> {
                 hand,
                 ..
             }) => (DecisionKind::Bottom, self.objects_domain(hand, *required)?),
+            RuleFrame::Opening(OpeningDecision::PregameBattlefield { eligible, .. }) => (
+                DecisionKind::SelectResolution,
+                self.objects_range(eligible, 0, eligible.len())?,
+            ),
             RuleFrame::CopyTargets(frame) => {
                 let number = frame.target_ordinal() + 1;
                 let ordering = source.execution().stack_body(frame.entry()).and_then(|body| body.instructions.get(frame.instruction_index()))
@@ -1202,8 +1317,13 @@ impl Projection<'_, '_> {
                         DamageEffectId::StaticPrevention(_) => "Apply damage prevention".into(),
                         DamageEffectId::StaticDouble(_) | DamageEffectId::DoubleDamageFromEquippedCreature(_)
                             | DamageEffectId::DoubleDamageToEquippedCreature(_) => "Double the damage".into(),
+                        DamageEffectId::StaticModify(_, _) => "Apply static damage replacement".into(),
+                        DamageEffectId::TemporaryStaticModify(_) => "Apply temporary damage replacement".into(),
+                        DamageEffectId::TemporaryPrevention(_) => "Prevent damage with temporary shield".into(),
                         DamageEffectId::StaticHalfPrevention { .. } => "Prevent half the damage, rounded up".into(),
-                        DamageEffectId::ProtectionSubtype(_) => "Prevent damage from sources of the protected type".into(),
+                        DamageEffectId::ProtectionSubtype(_) | DamageEffectId::ProtectionFrom(_) => {
+                            "Prevent damage from protected sources".into()
+                        }
                         DamageEffectId::ProtectionMulticolored => "Prevent damage from multicolored sources".into(),
                         DamageEffectId::Protection(color) => format!(
                             "Prevent damage from {} sources",
@@ -1320,6 +1440,25 @@ impl Projection<'_, '_> {
                 let options = frame.colors().iter().map(|color| self.option(NativeReference::ManaColor(*color), mana_label(*color).to_owned())).collect::<Result<_, _>>()?;
                 (DecisionKind::ManaColor, PlayerDomain::Options { options, query: None })
             }
+            RuleFrame::OptionIndex(frame) => {
+                let options = (0..frame.count())
+                    .map(|idx| {
+                        let label = frame
+                            .labels()
+                            .get(usize::from(idx))
+                            .cloned()
+                            .unwrap_or_else(|| format!("Option {}", usize::from(idx) + 1));
+                        self.option(NativeReference::OptionIndex(idx), label)
+                    })
+                    .collect::<Result<Vec<_>, _>>()?;
+                (
+                    DecisionKind::Modes,
+                    PlayerDomain::Options {
+                        options,
+                        query: None,
+                    },
+                )
+            }
             RuleFrame::CreatureType(frame) => {
                 let vocabulary = source.execution().creature_vocabulary();
                 if vocabulary.id() != frame.vocabulary() {
@@ -1414,7 +1553,10 @@ impl Projection<'_, '_> {
             RuleFrame::LinkedReturnOrder(frame) => Some(match frame.destination() {
                 spellwake_engine::program::PublicZoneDestination::Battlefield => "Order returning permanents from earliest to latest".into(),
                 spellwake_engine::program::PublicZoneDestination::Graveyard => "Order cards in the graveyard from top to bottom".into(),
-                _ => return Err(NativeBridgeError::Unsupported.into()),
+                spellwake_engine::program::PublicZoneDestination::Library => "Order cards from top to bottom".into(),
+                spellwake_engine::program::PublicZoneDestination::Hand => "Order cards returning to hand".into(),
+                spellwake_engine::program::PublicZoneDestination::Exile => "Order exiled cards".into(),
+                spellwake_engine::program::PublicZoneDestination::Command => "Order cards moving to the command zone".into(),
             }),
             RuleFrame::CastRecovery(frame) => Some(if frame.life_cost().is_positive() {
                 format!("Pay {} life to complete the cast, or abandon it", String::from(frame.life_cost().clone()))
@@ -1440,6 +1582,10 @@ impl Projection<'_, '_> {
                 let object = source.execution().window().cards().get(frame.object()).ok_or(NativeProjectionError::MissingNativeValue)?;
                 let program = source.execution().copiable_program(frame.object()).ok_or(NativeProjectionError::MissingNativeValue)?;
                 Some(self.display.object(object, program)?.characteristics.name)
+            }
+            RuleFrame::UntapKeepTapped(_) => Some("Choose permanents to keep tapped during your untap step.".into()),
+            RuleFrame::Opening(OpeningDecision::PregameBattlefield { .. }) => {
+                Some("Choose opening-hand cards to begin the game on the battlefield.".into())
             }
             _ => None,
         };
