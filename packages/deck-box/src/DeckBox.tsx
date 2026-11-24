@@ -11,6 +11,8 @@ export type DeckBoxProps = {
   name: string;
   appearance: BoxAppearance;
   modelUrl: string;
+  /** Public folder the host serves the leather maps, mana symbols and mark from. */
+  artworkUrl: string;
   onInspect: () => void;
   view?: BoxView | undefined;
   className?: string;
@@ -23,6 +25,7 @@ export function DeckBox({
   name,
   appearance,
   modelUrl,
+  artworkUrl,
   onInspect,
   view,
   className,
@@ -48,6 +51,7 @@ export function DeckBox({
         const { mountBoxMotion } = await import("./box-motion");
         signal.throwIfAborted();
         return mountBoxMotion(element, modelUrl, {
+          artworkUrl,
           collection: true,
           appearance: appearanceRef.current,
           view:
@@ -82,7 +86,7 @@ export function DeckBox({
       resource.dispose();
       lifetime.current = null;
     };
-  }, [modelUrl, azimuth, elevation]);
+  }, [modelUrl, artworkUrl, azimuth, elevation]);
 
   useEffect(() => {
     lifetime.current?.current()?.setAppearance(appearance);

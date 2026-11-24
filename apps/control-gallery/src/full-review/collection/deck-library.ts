@@ -21,8 +21,11 @@ function shelfDeck(deck: DemoDeck) {
     id: deck.id,
     name: deck.name,
     format: deck.format,
+    // A deck shows the art of the preset it was made from: its format and colors.
     artIndex: demoDeckPresets.findIndex(
-      (preset) => preset.artwork === deck.appearance.artwork,
+      (preset) =>
+        preset.format === deck.format &&
+        preset.colors.join() === deck.appearance.colors.join(),
     ),
   };
 }
@@ -36,7 +39,11 @@ const long = {
   name: "Moonlit Council of the Silver Coast",
   format: "Commander" as const,
 };
-export const longDeck = shelfDeck(long);
+// Renamed and moved to another format, it keeps the art of the deck it came from.
+export const longDeck = {
+  ...shelfDeck(long),
+  artIndex: shelfDeck(seed[3]!).artIndex,
+};
 const modeFor = (source: string) =>
   source === "DL-05" ? "open" : "collection";
 
