@@ -3619,6 +3619,7 @@ impl EffectWindow {
                         source: Box::new(appearance.clone()),
                         controller: entry.controller(),
                         body: body.clone(),
+                        chosen_x: entry.chosen_x().cloned(),
                     }])
                 },
             )?;
@@ -4369,7 +4370,32 @@ impl EffectWindow {
         }
         if let Instruction::AddMana(ref mana_yield) = instruction {
             use crate::program::EffectManaYield;
-            let produced: BTreeMap<_, _> = match mana_yield {
+            let (inner_yield, retain_until_cleanup) = match mana_yield {
+                EffectManaYield::RetainedUntilCleanup(inner) => (inner.as_ref(), true),
+                other => (other, false),
+            };
+            let mana_lot_source = retain_until_cleanup
+                .then(|| {
+                    self.execution_bindings(entry.id())
+                        .and_then(|bindings| bindings.trigger.as_ref())
+                        .map(|t| t.source.clone())
+                        .or_else(|| {
+                            let sid = match entry.kind() {
+                                StackKind::ActivatedAbility { source }
+                                | StackKind::TriggeredAbility { source } => Some(source.id()),
+                                StackKind::CardSpell(id) => Some(*id),
+                                _ => None,
+                            }?;
+                            self.rules_snapshot(None)
+                                .ok()
+                                .and_then(|snap| snap.view().appearance(sid))
+                        })
+                })
+                .flatten();
+            let produced: BTreeMap<_, _> = match inner_yield {
+                EffectManaYield::RetainedUntilCleanup(_) => {
+                    return Err(EffectError::InconsistentProgram);
+                }
                 EffectManaYield::RestrictedChoice {
                     colors,
                     amount,
@@ -4413,6 +4439,15 @@ impl EffectWindow {
                         .cloned()
                         .unwrap_or_else(|| 0.into());
                     self.restricted_mana.insert(key, previous.plus(&qty));
+                    if let Some(source) = mana_lot_source {
+                        let retained: BTreeMap<_, _> = [(color, qty.clone())].into();
+                        self.record_mana_lots(
+                            source,
+                            player,
+                            &retained,
+                            crate::mana::ManaSpendEffect::RetainUntilCleanup,
+                        )?;
+                    }
                     self.emit_from(
                         crate::occurrence::EventCause::Instruction {
                             entry: entry.id(),
@@ -4457,6 +4492,14 @@ impl EffectWindow {
                         self.restricted_mana.insert(key, previous.plus(amount));
                         before_map.insert(color, prior);
                         after_map.insert(color, after);
+                    }
+                    if let Some(source) = mana_lot_source {
+                        self.record_mana_lots(
+                            source,
+                            player,
+                            bundle,
+                            crate::mana::ManaSpendEffect::RetainUntilCleanup,
+                        )?;
                     }
                     self.emit_from(
                         crate::occurrence::EventCause::Instruction {
@@ -4783,6 +4826,16 @@ impl EffectWindow {
                 }
                 EffectManaYield::Fixed(produced) => produced.clone(),
             };
+            if let Some(source) = mana_lot_source
+                && !produced.is_empty()
+            {
+                self.record_mana_lots(
+                    source,
+                    entry.controller(),
+                    &produced,
+                    crate::mana::ManaSpendEffect::RetainUntilCleanup,
+                )?;
+            }
             let before_snapshot = self.rules_snapshot(None)?;
             let player = entry.controller();
             let before: BTreeMap<_, _> = produced

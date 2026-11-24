@@ -624,6 +624,10 @@ impl EffectWindow {
                     .results
                     .counter_target_types = target_type_set;
                 if self.spell_cannot_be_countered(countered)? {
+                    self.resolution_cursor_mut()
+                        .ok_or(EffectError::WrongResolutionFrame)?
+                        .results
+                        .last_action_succeeded = false;
                     return Ok(());
                 }
                 if self
@@ -644,6 +648,10 @@ impl EffectWindow {
                     }
                     self.window = window;
                     self.payloads.remove(&countered);
+                    self.resolution_cursor_mut()
+                        .ok_or(EffectError::WrongResolutionFrame)?
+                        .results
+                        .last_action_succeeded = true;
                     self.emit_from(
                         EventCause::CounterSpell {
                             entry: entry.id(),
@@ -712,6 +720,10 @@ impl EffectWindow {
                     },
                 )?;
                 self.window = window;
+                self.resolution_cursor_mut()
+                    .ok_or(EffectError::WrongResolutionFrame)?
+                    .results
+                    .last_action_succeeded = true;
                 cause = EventCause::CounterSpell {
                     entry: entry.id(),
                     instruction: index,
@@ -917,7 +929,7 @@ impl EffectWindow {
             }
             Instruction::CreateContinuousEffect { parts, duration } => {
                 let TargetRef::Object(target) = target else {
-                    return Err(EffectError::InconsistentProgram);
+                    return Ok(());
                 };
                 let Some(card) = self
                     .window
@@ -1051,7 +1063,7 @@ impl EffectWindow {
             }
             Instruction::PutNamedCounterOnTarget { kind, amount } => {
                 let TargetRef::Object(object) = target else {
-                    return Err(EffectError::InconsistentProgram);
+                    return Ok(());
                 };
                 let resolved = self.resolve_value_expr(entry.controller(), &amount)?;
                 if !resolved.is_positive() {

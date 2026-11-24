@@ -171,6 +171,8 @@ pub fn normalize_self(text: &str, face_name: &str, type_line: &str) -> String {
         ) && replaced.contains("~ target ")
         {
             replaced.replace("~ target ", &format!("{face_name} target "))
+        } else if replaced.contains("Target ~ creature") {
+            replaced.replace("Target ~ creature", &format!("Target {face_name} creature"))
         } else {
             replaced
         }
@@ -188,12 +190,13 @@ pub fn normalize_self(text: &str, face_name: &str, type_line: &str) -> String {
             s = replace_word(&s, short, "~");
         }
     } else if type_line.contains("Legendary") {
-        if let Some((short, _)) = face_name
-            .split_once(" of ")
-            .or_else(|| face_name.split_once(" the "))
-            .or_else(|| face_name.split_once(" the,"))
-            .or_else(|| face_name.split_once(" and "))
-        {
+        // Pick the earliest matching title delimiter so names like "Shang-Chi and the Ten Rings"
+        // extract "Shang-Chi" rather than "Shang-Chi and".
+        let earliest_short = [" of ", " the ", " the,", " and ", " and the "]
+            .into_iter()
+            .filter_map(|delim| face_name.find(delim).map(|pos| (pos, &face_name[..pos])))
+            .min_by_key(|(pos, _)| *pos);
+        if let Some((_, short)) = earliest_short {
             let short = short.trim();
             if short.len() >= 3 && s.contains(short) {
                 s = replace_word(&s, short, "~");
@@ -218,6 +221,11 @@ pub fn normalize_self(text: &str, face_name: &str, type_line: &str) -> String {
             && s.contains(prefix)
         {
             s = replace_word(&s, prefix, "~");
+        }
+    } else if let Some((short, _)) = face_name.split_once(" and the ") {
+        let short = short.trim();
+        if short.len() >= 4 && s.contains(short) {
+            s = replace_word(&s, short, "~");
         }
     }
 
@@ -248,6 +256,14 @@ pub fn normalize_self(text: &str, face_name: &str, type_line: &str) -> String {
         ("counters on her", "counters on it"),
         ("her loyalty abilities", "~'s loyalty abilities"),
         ("his loyalty abilities", "~'s loyalty abilities"),
+        ("with him on the battlefield", "with ~ on the battlefield"),
+        ("his power", "~'s power"),
+        ("her controller", "its controller"),
+        ("his controller", "its controller"),
+        ("his text box", "~'s text box"),
+        ("her text box", "~'s text box"),
+        ("his name", "~'s name"),
+        ("her name", "~'s name"),
     ] {
         if s.contains(from_pron) {
             s = s.replace(from_pron, to_pron);
@@ -298,6 +314,7 @@ fn is_common_non_proper_prefix(word: &str) -> bool {
             | "Angel"
             | "Archmage"
             | "Avatar"
+            | "Space"
             | "Baron"
             | "Beast"
             | "Black"
@@ -433,10 +450,20 @@ pub fn strip_ability_word(norm: &str) -> (Option<String>, &str) {
         return (None, norm);
     }
     let first = head.chars().next().unwrap_or(' ');
-    if !first.is_ascii_uppercase() && first != '~' {
+    if !first.is_ascii_uppercase()
+        && first != '~'
+        && !first.is_ascii_digit()
+        && first != '.'
+        && first != '\u{221e}'
+    {
         return (None, norm);
     }
     let hlow = head.to_ascii_lowercase();
+    if first.is_ascii_digit()
+        && (hlow.contains(" or ") || hlow.ends_with('+') || hlow.contains('-'))
+    {
+        return (None, norm);
+    }
     if hlow.starts_with("choose ")
         || hlow.ends_with(" chooses one")
         || hlow.contains("villainous choice")
@@ -513,16 +540,20 @@ pub fn split_sentences(body: &str) -> Vec<&str> {
     for (idx, ch) in body.char_indices() {
         if ch == '"' {
             in_quotes = !in_quotes;
+            let ends_quoted_sentence = idx > start
+                && (body.as_bytes()[idx - 1] == b'.'
+                    || (idx >= start + 2
+                        && body.as_bytes()[idx - 1] == b'\''
+                        && body.as_bytes()[idx - 2] == b'.'));
             if !in_quotes
-                && idx > start
-                && body.as_bytes()[idx - 1] == b'.'
+                && ends_quoted_sentence
                 && body.get(idx + 1..).is_some_and(|rest| {
                     rest.starts_with(char::is_whitespace)
                         && rest
                             .trim_start()
                             .chars()
                             .next()
-                            .is_some_and(|c| c.is_ascii_uppercase())
+                            .is_some_and(|c| c.is_ascii_uppercase() || c == '~')
                 })
             {
                 let part = body[start..=idx].trim();

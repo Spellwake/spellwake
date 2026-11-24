@@ -142,7 +142,13 @@ impl EffectWindow {
                 {
                     return Err(EffectError::ManaActivationConditionNotMet);
                 }
-                if cond.has_once_each_turn() && self.activated_this_turn.contains(&mana_exhaust_key)
+                if let Some(limit) = cond.max_per_turn()
+                    && self
+                        .activated_this_turn
+                        .get(&mana_exhaust_key)
+                        .copied()
+                        .unwrap_or(0)
+                        >= limit
                 {
                     return Err(EffectError::ManaActivationConditionNotMet);
                 }
@@ -532,9 +538,13 @@ impl EffectWindow {
         next.window = window;
         if activation_conditions
             .iter()
-            .any(crate::activated::ActivationRestriction::has_once_each_turn)
+            .any(crate::activated::ActivationRestriction::has_turn_activation_cap)
         {
-            next.activated_this_turn.insert(mana_exhaust_key.clone());
+            let count = next
+                .activated_this_turn
+                .entry(mana_exhaust_key.clone())
+                .or_insert(0);
+            *count = count.saturating_add(1);
         }
         if activation_conditions
             .iter()

@@ -19,6 +19,8 @@ pub enum ActivationRestriction {
     DuringUpkeep,
     /// Each player can activate this battlefield ability and pays its mana cost.
     AnyPlayer,
+    /// Only opponents of this permanent's controller may activate this battlefield ability.
+    OnlyOpponents,
     CreatedTokenThisTurn,
     HasCityBlessing,
     EmptyHand,
@@ -47,6 +49,14 @@ pub enum ActivationRestriction {
     DuringOpponentsTurn,
     /// Activate only during combat.
     DuringCombat,
+    /// Activate only during a specific turn step.
+    DuringStep(crate::turn::Step),
+    /// Activate only during a specific step of your turn.
+    DuringOwnStep(crate::turn::Step),
+    /// Activate only during a specific step of an opponent's turn.
+    DuringOpponentsStep(crate::turn::Step),
+    /// Activate at most `n` times each turn (CR 602.5b).
+    MaxPerTurn(u8),
     /// Activate only as a sorcery and only once each turn.
     SorceryOnceEachTurn,
     /// Activate only during your turn and only once each turn.
@@ -90,6 +100,25 @@ pub enum ActivationRestriction {
 }
 
 impl ActivationRestriction {
+    /// Tightest per-turn activation cap imposed by this restriction, if any.
+    #[must_use]
+    pub fn max_per_turn(&self) -> Option<u8> {
+        match self {
+            Self::OnceEachTurn | Self::SorceryOnceEachTurn | Self::DuringYourTurnOnceEachTurn => {
+                Some(1)
+            }
+            Self::MaxPerTurn(limit) => Some(*limit),
+            Self::All(items) => items.iter().filter_map(Self::max_per_turn).min(),
+            _ => None,
+        }
+    }
+
+    /// Whether this restriction imposes any per-turn activation cap.
+    #[must_use]
+    pub fn has_turn_activation_cap(&self) -> bool {
+        self.max_per_turn().is_some()
+    }
+
     /// Whether this restriction imposes a once-per-turn activation cap.
     #[must_use]
     pub fn has_once_each_turn(&self) -> bool {
@@ -122,6 +151,16 @@ impl ActivationRestriction {
         }
     }
 
+    /// Whether only opponents of the permanent's controller may activate this ability.
+    #[must_use]
+    pub fn is_only_opponents(&self) -> bool {
+        match self {
+            Self::OnlyOpponents => true,
+            Self::All(items) => items.iter().any(Self::is_only_opponents),
+            _ => false,
+        }
+    }
+
     /// Whether this restriction includes the Power-Up activation discount/cap.
     #[must_use]
     pub fn has_power_up(&self) -> bool {
@@ -148,6 +187,7 @@ impl ActivationRestriction {
         vocabulary: &spellwake_contracts::creature_types::CreatureTypeVocabulary,
     ) -> Result<(), crate::program::DefinitionError> {
         match self {
+            Self::MaxPerTurn(0) => Err(crate::program::DefinitionError::InvalidInstruction),
             Self::ControlsSubtypeCount { kind, .. } => {
                 if vocabulary.label(*kind).is_none() {
                     return Err(crate::program::DefinitionError::ForeignCreatureType);

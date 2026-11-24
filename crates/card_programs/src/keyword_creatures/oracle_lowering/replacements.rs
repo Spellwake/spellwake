@@ -6,6 +6,15 @@ pub(super) fn lower_replacement(
     vocabulary: &CreatureTypeVocabulary,
     ids: &mut LoweringIds,
 ) -> Result<(), &'static str> {
+    if let ReplacementEffectAst::Compound(items) = rep {
+        if items.is_empty() {
+            return Err("oracle:unsupported-replacement");
+        }
+        for item in items {
+            lower_replacement(item, program, vocabulary, ids)?;
+        }
+        return Ok(());
+    }
     if let ReplacementEffectAst::EscapesWithCounters {
         counter_kind,
         count,
@@ -298,6 +307,7 @@ pub(super) fn lower_replacement(
             counter_kind,
             count,
             additional: _,
+            per: None,
         } => {
             let kind = parse_counter_kind(counter_kind)
                 .ok_or("oracle:unsupported-others-entry-counters")?;
@@ -402,6 +412,19 @@ pub(super) fn lower_replacement(
                     }
                     _ => return Err("oracle:duplicate-entry-tap"),
                 }
+            }
+            if matches!(
+                low.as_str(),
+                "an opponent to protect it" | "an opponent to protect ~"
+            ) {
+                return match def.entry_tap {
+                    None => {
+                        def.entry_tap = Some(EntryTap::SiegeProtector);
+                        Ok(())
+                    }
+                    Some(EntryTap::SiegeProtector) => Ok(()),
+                    Some(_) => Err("oracle:duplicate-entry-tap"),
+                };
             }
             let entry_tap = match low.as_str() {
                 "a creature type" | "creature type" => EntryTap::ChooseCreatureType,
@@ -559,33 +582,84 @@ pub(super) fn lower_replacement(
                 }
                 if low.contains("isn't legendary") || low.contains("is not legendary") {
                     spec.nonlegendary = true;
-                    low = low
-                        .replace("it isn't legendary", "")
-                        .replace("isn't legendary", "")
-                        .replace("is not legendary", "");
+                    for phrase in [
+                        "it isn't legendary",
+                        "he isn't legendary",
+                        "she isn't legendary",
+                        "it is not legendary",
+                        "he is not legendary",
+                        "she is not legendary",
+                        "isn't legendary",
+                        "is not legendary",
+                    ] {
+                        low = low.replace(phrase, "");
+                    }
                 }
                 if low.contains("enters with an additional +1/+1 counter")
                     || low.contains("enters with a +1/+1 counter")
                 {
                     spec.extra_counters = Some((CounterKind::PlusOne, 1));
-                    low = low
-                        .replace("it enters with an additional +1/+1 counter on it", "")
-                        .replace("enters with an additional +1/+1 counter on it", "")
-                        .replace("it enters with a +1/+1 counter on it", "")
-                        .replace("enters with a +1/+1 counter on it", "");
+                    for phrase in [
+                        "it enters with an additional +1/+1 counter on it",
+                        "he enters with an additional +1/+1 counter on him",
+                        "she enters with an additional +1/+1 counter on her",
+                        "he enters with an additional +1/+1 counter on it",
+                        "she enters with an additional +1/+1 counter on it",
+                        "enters with an additional +1/+1 counter on it",
+                        "enters with an additional +1/+1 counter on him",
+                        "enters with an additional +1/+1 counter on her",
+                        "it enters with a +1/+1 counter on it",
+                        "he enters with a +1/+1 counter on him",
+                        "she enters with a +1/+1 counter on her",
+                        "he enters with a +1/+1 counter on it",
+                        "she enters with a +1/+1 counter on it",
+                        "enters with a +1/+1 counter on it",
+                        "enters with a +1/+1 counter on him",
+                        "enters with a +1/+1 counter on her",
+                    ] {
+                        low = low.replace(phrase, "");
+                    }
                 } else if low.contains("enters with a shield counter") {
                     spec.extra_counters = Some((CounterKind::Shield, 1));
-                    low = low
-                        .replace("it enters with a shield counter on it", "")
-                        .replace("enters with a shield counter on it", "");
+                    for phrase in [
+                        "it enters with a shield counter on it",
+                        "he enters with a shield counter on him",
+                        "she enters with a shield counter on her",
+                        "he enters with a shield counter on it",
+                        "she enters with a shield counter on it",
+                        "enters with a shield counter on it",
+                        "enters with a shield counter on him",
+                        "enters with a shield counter on her",
+                    ] {
+                        low = low.replace(phrase, "");
+                    }
                 }
-                if let Some(pos) = low.find("in addition to its other types") {
+                let addition_match = [
+                    "in addition to its other creature types",
+                    "in addition to his other creature types",
+                    "in addition to her other creature types",
+                    "in addition to its other types",
+                    "in addition to his other types",
+                    "in addition to her other types",
+                ]
+                .into_iter()
+                .filter_map(|suffix| low.find(suffix).map(|pos| (pos, suffix.len())))
+                .min_by_key(|(pos, _)| *pos);
+                if let Some((pos, suffix_len)) = addition_match {
                     let prefix = &low[..pos];
-                    let body = prefix.rsplit("it's ").next().unwrap_or(prefix).trim();
+                    let copula = ["it's ", "he's ", "she's ", "it is ", "he is ", "she is "]
+                        .into_iter()
+                        .filter_map(|op| prefix.rfind(op).map(|idx| (idx, op.len())))
+                        .max_by_key(|(idx, _)| *idx);
+                    let (clause_start, body) = match copula {
+                        Some((idx, len)) => (idx, prefix[idx + len..].trim()),
+                        None => (0, prefix.trim()),
+                    };
                     for tok in body.split_whitespace() {
                         let w = tok.trim_matches(|c: char| !c.is_alphanumeric() && c != '-');
                         match w {
-                            "" | "a" | "an" | "it" | "is" | "it's" => {}
+                            "" | "a" | "an" | "it" | "he" | "she" | "is" | "it's" | "he's"
+                            | "she's" => {}
                             "artifact" => {
                                 spec.extra_types.insert(CardType::Artifact);
                             }
@@ -599,13 +673,7 @@ pub(super) fn lower_replacement(
                                 spec.extra_types.insert(CardType::Land);
                             }
                             _ => {
-                                let title = {
-                                    let mut ch = w.chars();
-                                    ch.next()
-                                        .map(|c| c.to_uppercase().collect::<String>() + ch.as_str())
-                                        .unwrap_or_default()
-                                };
-                                if let Some(ct) = vocabulary.resolve_label(&title) {
+                                if let Some(ct) = resolve_creature_subtype_token(w, vocabulary) {
                                     spec.extra_creature_subtypes.insert(ct);
                                 } else {
                                     return Err("oracle:unsupported-enters-as-copy");
@@ -613,7 +681,8 @@ pub(super) fn lower_replacement(
                             }
                         }
                     }
-                    low = low.replace(&low[..pos + "in addition to its other types".len()], "");
+                    let clause_end = pos + suffix_len;
+                    low = format!("{} {}", &low[..clause_start], &low[clause_end..]);
                 }
                 for kw_name in [
                     "haste",
@@ -634,8 +703,13 @@ pub(super) fn lower_replacement(
                     if let Some(ka) = lower_keyword_ability_name(kw_name) {
                         for phrase in [
                             format!("it has {kw_name}"),
+                            format!("he has {kw_name}"),
+                            format!("she has {kw_name}"),
                             format!("it gains {kw_name}"),
+                            format!("he gains {kw_name}"),
+                            format!("she gains {kw_name}"),
                             format!("has {kw_name}"),
+                            format!("gains {kw_name}"),
                         ] {
                             if low.contains(&phrase) {
                                 spec.extra_keywords.insert(ka);
@@ -644,14 +718,22 @@ pub(super) fn lower_replacement(
                         }
                     }
                 }
-                let cleaned = low
-                    .replace("it has", "")
-                    .replace("it gains", "")
-                    .replace("it ", "")
-                    .replace([',', '.', ';'], "")
-                    .trim()
-                    .to_string();
-                if !cleaned.is_empty() {
+                let mut scrubbed = low;
+                for phrase in [
+                    "it has",
+                    "he has",
+                    "she has",
+                    "it gains",
+                    "he gains",
+                    "she gains",
+                ] {
+                    scrubbed = scrubbed.replace(phrase, " ");
+                }
+                let scrubbed = scrubbed.replace([',', '.', ';'], " ");
+                let has_unrecognized = scrubbed
+                    .split_whitespace()
+                    .any(|tok| !matches!(tok, "it" | "he" | "she"));
+                if has_unrecognized {
                     return Err("oracle:unsupported-enters-as-copy");
                 }
             }
@@ -797,6 +879,32 @@ fn lower_event_instead_replacement(
             ));
         }
     }
+    if is_permanent
+        && would_norm == "would_event"
+        && matches!(
+            subj_low.as_str(),
+            "damage" | "if you control a creature, damage"
+        )
+        && let Some(after_less) = instead_norm.strip_prefix("reduce your life total to less than ")
+        && let Some((floor_raw, target_raw)) = after_less.split_once(" reduces it to ")
+        && let (Ok(floor), Ok(target)) = (
+            floor_raw.trim().parse::<u8>(),
+            target_raw.trim().parse::<u8>(),
+        )
+        && floor > 0
+        && floor == target
+    {
+        return Some(push_static_ability(
+            program,
+            StaticContinuousAbility::DamageRule {
+                id: ids.static_id(),
+                rule: StaticDamageRule::MinimumLifeTotal {
+                    floor,
+                    require_creature: subj_low.starts_with("if you control a creature"),
+                },
+            },
+        ));
+    }
     if is_permanent && (would_norm == "special_replacement" || subj_low == "damage_source") {
         let full = instead_raw.as_str();
         if full
@@ -834,6 +942,17 @@ fn lower_event_instead_replacement(
                 StaticContinuousAbility::DamageRule {
                     id: ids.static_id(),
                     rule: StaticDamageRule::PreventIncomingCombatToSource,
+                },
+            ));
+        }
+        if full
+            == "if combat damage would be dealt to ~, prevent that damage and exile that many cards from the top of your library"
+        {
+            return Some(push_static_ability(
+                program,
+                StaticContinuousAbility::DamageRule {
+                    id: ids.static_id(),
+                    rule: StaticDamageRule::PreventIncomingCombatAndExile,
                 },
             ));
         }
@@ -947,6 +1066,24 @@ fn lower_event_instead_replacement(
                 },
             ));
         }
+        if let Some(after_if) = full.strip_prefix("if ")
+            && let Some((s_part, rest)) = after_if.split_once(" would ")
+            && let Some((w_part, i_part)) = rest.split_once(", ")
+            && let Some(rule) = parse_modify_damage_event(
+                s_part.trim(),
+                w_part.trim(),
+                i_part.trim().trim_end_matches(" instead").trim(),
+                vocabulary,
+            )
+        {
+            return Some(push_static_ability(
+                program,
+                StaticContinuousAbility::DamageRule {
+                    id: ids.static_id(),
+                    rule,
+                },
+            ));
+        }
     }
 
     // 2. Zone Replacement Abilities (CR 614.6)
@@ -959,6 +1096,12 @@ fn lower_event_instead_replacement(
             | "this enchantment"
             | "this land"
             | "this planeswalker"
+            | "this aura"
+            | "this equipment"
+            | "this vehicle"
+            | "this battle"
+            | "this spell"
+            | "this token"
     );
     if is_self_subj
         && matches!(
@@ -968,7 +1111,7 @@ fn lower_event_instead_replacement(
                 | "be put into its owner's graveyard from anywhere"
         )
     {
-        let dest = if matches!(instead_norm, "exile it" | "exile ~") {
+        let dest = if matches!(instead_norm, "exile it" | "exile ~" | "exile this card") {
             Some(PublicZoneDestination::Exile)
         } else if matches!(
             instead_norm,
@@ -979,6 +1122,7 @@ fn lower_event_instead_replacement(
                 | "put ~ on the bottom of its owner's library"
                 | "put it on the bottom of its owner's library"
                 | "put ~ on top of its owner's library"
+                | "put it on top of its owner's library"
         ) {
             Some(PublicZoneDestination::Library)
         } else {
@@ -1007,15 +1151,31 @@ fn lower_event_instead_replacement(
             "die"
                 | "be put into a graveyard from the battlefield"
                 | "be put into your graveyard from the battlefield"
+                | "be put into its owner's graveyard from the battlefield"
         )
     {
-        let dest = if matches!(instead_norm, "exile it" | "exile ~") {
+        let dest = if matches!(
+            instead_norm,
+            "exile it"
+                | "exile ~"
+                | "exile this creature"
+                | "exile this permanent"
+                | "exile this artifact"
+                | "exile this enchantment"
+                | "exile this card"
+        ) {
             Some(PublicZoneDestination::Exile)
         } else if matches!(
             instead_norm,
             "shuffle ~ into its owner's library"
                 | "shuffle it into its owner's library"
+                | "shuffle ~ into your library"
+                | "shuffle it into your library"
                 | "reveal ~ and shuffle it into its owner's library"
+                | "put it on top of its owner's library"
+                | "put ~ on top of its owner's library"
+                | "put it on the bottom of its owner's library"
+                | "put ~ on the bottom of its owner's library"
         ) {
             Some(PublicZoneDestination::Library)
         } else {
@@ -1040,16 +1200,46 @@ fn lower_event_instead_replacement(
             return Some(Ok(()));
         }
     }
-    if matches!(
+    let is_damaged_by_source_die = (matches!(
         subj_low.as_str(),
-        "a creature dealt damage by ~ this turn" | "a permanent dealt damage by ~ this turn"
+        "a creature dealt damage by ~ this turn"
+            | "a permanent dealt damage by ~ this turn"
+            | "a creature dealt damage this turn by ~"
+            | "a permanent dealt damage this turn by ~"
+            | "a creature dealt damage by this creature this turn"
+            | "a permanent dealt damage by this creature this turn"
+            | "a creature dealt damage this turn by this creature"
+            | "a permanent dealt damage this turn by this creature"
+            | "a creature dealt damage by this permanent this turn"
+            | "a permanent dealt damage by this permanent this turn"
+            | "a creature dealt damage this turn by this permanent"
+            | "a permanent dealt damage this turn by this permanent"
+            | "a creature that was dealt damage by ~ this turn"
+            | "a permanent that was dealt damage by ~ this turn"
+            | "a creature that was dealt damage this turn by ~"
+            | "a permanent that was dealt damage this turn by ~"
+            | "a creature that was dealt damage by this creature this turn"
+            | "a permanent that was dealt damage by this creature this turn"
+            | "any creature dealt damage by ~ this turn"
+            | "any permanent dealt damage by ~ this turn"
     ) && matches!(
         would_norm,
         "die" | "be put into a graveyard from the battlefield"
-    ) && matches!(
-        instead_norm,
-        "exile it" | "exile that creature" | "exile that permanent"
-    ) {
+    )) || (matches!(
+        subj_low.as_str(),
+        "a creature dealt damage by ~"
+            | "a permanent dealt damage by ~"
+            | "a creature dealt damage by this creature"
+            | "a permanent dealt damage by this creature"
+            | "a creature dealt damage by this permanent"
+            | "a permanent dealt damage by this permanent"
+    ) && would_norm == "die this turn");
+    if is_damaged_by_source_die
+        && matches!(
+            instead_norm,
+            "exile it" | "exile that creature" | "exile that permanent" | "exile that card"
+        )
+    {
         let id = next_zone_rep_id(program);
         program.zone_replacements.push(ZoneReplacementAbility {
             id,
@@ -1067,16 +1257,22 @@ fn lower_event_instead_replacement(
         });
         return Some(Ok(()));
     }
-    if matches!(subj_low.as_str(), "a card or token" | "a card")
-        && matches!(
-            would_norm,
-            "be put into an opponent's graveyard from anywhere"
-                | "be put into a graveyard from anywhere"
-        )
-        && instead_norm == "exile it"
-    {
+    if matches!(
+        subj_low.as_str(),
+        "a card or token" | "a card" | "any card" | "any card or token"
+    ) && matches!(
+        would_norm,
+        "be put into an opponent's graveyard from anywhere"
+            | "be put into a graveyard from anywhere"
+            | "be put into your graveyard from anywhere"
+            | "be put into a player's graveyard from anywhere"
+            | "be put into its owner's graveyard from anywhere"
+    ) && matches!(
+        instead_norm,
+        "exile it" | "exile that card" | "exile that permanent"
+    ) {
         let id = next_zone_rep_id(program);
-        let objects = if subj_low == "a card" {
+        let objects = if matches!(subj_low.as_str(), "a card" | "any card") {
             ZoneObjectKind::Card
         } else {
             ZoneObjectKind::Either
@@ -1085,6 +1281,11 @@ fn lower_event_instead_replacement(
             ZoneReplacementSubject::Matching {
                 filter: Box::new(ObjectFilter::any()),
                 owner_relation: Some(PlayerRelation::Opponent),
+            }
+        } else if would_norm.contains("your graveyard") {
+            ZoneReplacementSubject::Matching {
+                filter: Box::new(ObjectFilter::any()),
+                owner_relation: Some(PlayerRelation::Controller),
             }
         } else {
             ZoneReplacementSubject::AnyObject
@@ -1100,13 +1301,85 @@ fn lower_event_instead_replacement(
         });
         return Some(Ok(()));
     }
-    if matches!(
+    if subj_low == "a card you didn't control"
+        && would_norm == "be put into an opponent's graveyard from anywhere"
+        && matches!(instead_norm, "exile it" | "exile that card")
+    {
+        let id = next_zone_rep_id(program);
+        program.zone_replacements.push(ZoneReplacementAbility {
+            id,
+            actions: ZoneActionPredicate::Any,
+            objects: ZoneObjectKind::Card,
+            subject: ZoneReplacementSubject::Matching {
+                filter: Box::new(ObjectFilter::any().not_controlled()),
+                owner_relation: Some(PlayerRelation::Opponent),
+            },
+            destination: PublicZoneDestination::Graveyard,
+            replace_with: PublicZoneDestination::Exile,
+            choice: ZoneReplacementChoice::Mandatory,
+        });
+        return Some(Ok(()));
+    }
+    if subj_low == "a nontoken creature an opponent owns"
+        && would_norm
+            == "die or a creature card not on the battlefield would be put into an opponent's graveyard"
+        && matches!(instead_norm, "exile that card" | "exile it")
+    {
+        let id = next_zone_rep_id(program);
+        program.zone_replacements.push(ZoneReplacementAbility {
+            id,
+            actions: ZoneActionPredicate::Any,
+            objects: ZoneObjectKind::Card,
+            subject: ZoneReplacementSubject::Matching {
+                filter: Box::new(ObjectFilter::creature()),
+                owner_relation: Some(PlayerRelation::Opponent),
+            },
+            destination: PublicZoneDestination::Graveyard,
+            replace_with: PublicZoneDestination::Exile,
+            choice: ZoneReplacementChoice::Mandatory,
+        });
+        return Some(Ok(()));
+    }
+    if subj_low == "a black or red permanent, spell, or card not on the battlefield"
+        && would_norm == "be put into a graveyard"
+        && matches!(instead_norm, "exile it" | "exile that card")
+    {
+        let id = next_zone_rep_id(program);
+        program.zone_replacements.push(ZoneReplacementAbility {
+            id,
+            actions: ZoneActionPredicate::Any,
+            objects: ZoneObjectKind::Either,
+            subject: ZoneReplacementSubject::Matching {
+                filter: Box::new(ObjectFilter::any().with_color(ObjectColorFilter::Mask {
+                    any_of: ColorMask::BLACK.union(ColorMask::RED),
+                    none_of: ColorMask::EMPTY,
+                })),
+                owner_relation: None,
+            },
+            destination: PublicZoneDestination::Graveyard,
+            replace_with: PublicZoneDestination::Exile,
+            choice: ZoneReplacementChoice::Mandatory,
+        });
+        return Some(Ok(()));
+    }
+    let is_battlefield_to_gy = matches!(
         would_norm,
         "die"
             | "be put into a graveyard from the battlefield"
             | "be put into an opponent's graveyard from the battlefield"
             | "be put into your graveyard from the battlefield"
-    ) {
+            | "be put into its owner's graveyard from the battlefield"
+    ) || (matches!(
+        would_norm,
+        "be put into a graveyard"
+            | "be put into an opponent's graveyard"
+            | "be put into your graveyard"
+            | "be put into its owner's graveyard"
+    ) && (subj_low.contains("permanent")
+        || subj_low.contains("creature"))
+        && !subj_low.contains("card")
+        && !subj_low.contains("spell"));
+    if is_battlefield_to_gy {
         let (choice, instead_core) = if let Some(rest) = instead_norm.strip_prefix("you may ") {
             (ZoneReplacementChoice::OptionalAffectedPlayer, rest.trim())
         } else {
@@ -1114,10 +1387,17 @@ fn lower_event_instead_replacement(
         };
         let replace_dest = if matches!(
             instead_core,
-            "exile it" | "exile that creature" | "exile that permanent" | "exile that card"
+            "exile it"
+                | "exile that creature"
+                | "exile that permanent"
+                | "exile that card"
+                | "exile that planeswalker"
+                | "exile that token"
         ) {
             Some(PublicZoneDestination::Exile)
         } else if choice == ZoneReplacementChoice::Mandatory
+            && !instead_core.contains(" and ")
+            && !instead_core.contains(". ")
             && instead_core.contains("shuffle")
             && instead_core.contains("into its owner's library")
         {
@@ -1133,80 +1413,270 @@ fn lower_event_instead_replacement(
             } else {
                 None
             };
-            let matched = match subj_low.as_str() {
-                "a creature an opponent controls" => {
-                    Some((ObjectFilter::creature().opposing(), ZoneObjectKind::Either))
-                }
-                "a nontoken creature an opponent controls" => Some((
-                    ObjectFilter::creature().opposing().nontoken(),
-                    ZoneObjectKind::Card,
-                )),
-                "a creature" => Some((ObjectFilter::creature(), ZoneObjectKind::Either)),
-                "a nontoken creature" => {
-                    Some((ObjectFilter::creature().nontoken(), ZoneObjectKind::Card))
-                }
-                "another creature" => Some((
-                    ObjectFilter::creature().other_than_ability_source(),
-                    ZoneObjectKind::Either,
-                )),
-                "another nontoken creature" => Some((
-                    ObjectFilter::creature()
-                        .other_than_ability_source()
-                        .nontoken(),
-                    ZoneObjectKind::Card,
-                )),
-                "a creature you control" => Some((
-                    ObjectFilter::creature().controlled(),
-                    ZoneObjectKind::Either,
-                )),
-                "a nontoken creature you control" => Some((
-                    ObjectFilter::creature().controlled().nontoken(),
-                    ZoneObjectKind::Card,
-                )),
-                "a permanent an opponent controls" => {
-                    Some((ObjectFilter::permanent().opposing(), ZoneObjectKind::Either))
-                }
-                "a nontoken permanent an opponent controls" => Some((
-                    ObjectFilter::permanent().opposing().nontoken(),
-                    ZoneObjectKind::Card,
-                )),
-                "a permanent" => Some((ObjectFilter::permanent(), ZoneObjectKind::Either)),
-                _ => spellwake_oracle_compiler::filter::parse_object_filter(
-                    &subj_low,
-                    &cached_compiler_vocab(vocabulary),
+            let creature_or_pw = || {
+                ObjectFilter::Clause(
+                    ObjectClause::any()
+                        .any_types(CardTypeMask::CREATURE.union(CardTypeMask::PLANESWALKER)),
                 )
-                .ok()
-                .and_then(|ast_f| {
-                    let kind = match ast_f.token {
-                        Some(false) => ZoneObjectKind::Card,
-                        Some(true) => ZoneObjectKind::Token,
-                        None => ZoneObjectKind::Either,
-                    };
-                    lower_object_filter(&ast_f, vocabulary)
-                        .ok()
-                        .map(|obj| (obj, kind))
-                }),
             };
-            if let Some((filter, objects)) = matched {
-                let id = next_zone_rep_id(program);
-                program.zone_replacements.push(ZoneReplacementAbility {
-                    id,
-                    actions: ZoneActionPredicate::OneOf(BTreeSet::from([
-                        ZoneActionKind::StateBased,
-                        ZoneActionKind::EffectDestroy,
-                        ZoneActionKind::EffectSacrifice,
-                        ZoneActionKind::SacrificeCost,
-                    ])),
-                    objects,
-                    subject: ZoneReplacementSubject::Matching {
-                        filter: Box::new(filter),
-                        owner_relation,
-                    },
-                    destination: PublicZoneDestination::Graveyard,
-                    replace_with,
-                    choice,
-                });
-                return Some(Ok(()));
+            let matched: Option<(ObjectFilter, ZoneObjectKind, Option<PlayerRelation>)> =
+                match subj_low.as_str() {
+                    "a creature an opponent controls"
+                    | "a creature your opponents control"
+                    | "a creature opponents control" => Some((
+                        ObjectFilter::creature().opposing(),
+                        ZoneObjectKind::Either,
+                        None,
+                    )),
+                    "a creature you don't control" => Some((
+                        ObjectFilter::creature().not_controlled(),
+                        ZoneObjectKind::Either,
+                        None,
+                    )),
+                    "a nontoken creature an opponent controls"
+                    | "a nontoken creature your opponents control"
+                    | "a nontoken creature opponents control" => Some((
+                        ObjectFilter::creature().opposing().nontoken(),
+                        ZoneObjectKind::Card,
+                        None,
+                    )),
+                    "a nontoken creature you don't control" => Some((
+                        ObjectFilter::creature().not_controlled().nontoken(),
+                        ZoneObjectKind::Card,
+                        None,
+                    )),
+                    "a creature" => Some((ObjectFilter::creature(), ZoneObjectKind::Either, None)),
+                    "a nontoken creature" => Some((
+                        ObjectFilter::creature().nontoken(),
+                        ZoneObjectKind::Card,
+                        None,
+                    )),
+                    "a creature token" => Some((
+                        ObjectFilter::creature().token(),
+                        ZoneObjectKind::Token,
+                        None,
+                    )),
+                    "another creature" => Some((
+                        ObjectFilter::creature().other_than_ability_source(),
+                        ZoneObjectKind::Either,
+                        None,
+                    )),
+                    "another nontoken creature" => Some((
+                        ObjectFilter::creature()
+                            .other_than_ability_source()
+                            .nontoken(),
+                        ZoneObjectKind::Card,
+                        None,
+                    )),
+                    "a creature you control" => Some((
+                        ObjectFilter::creature().controlled(),
+                        ZoneObjectKind::Either,
+                        None,
+                    )),
+                    "a nontoken creature you control" => Some((
+                        ObjectFilter::creature().controlled().nontoken(),
+                        ZoneObjectKind::Card,
+                        None,
+                    )),
+                    "another creature you control" => Some((
+                        ObjectFilter::creature()
+                            .controlled()
+                            .other_than_ability_source(),
+                        ZoneObjectKind::Either,
+                        None,
+                    )),
+                    "another nontoken creature you control" => Some((
+                        ObjectFilter::creature()
+                            .controlled()
+                            .other_than_ability_source()
+                            .nontoken(),
+                        ZoneObjectKind::Card,
+                        None,
+                    )),
+                    "another creature an opponent controls"
+                    | "another creature your opponents control"
+                    | "another creature opponents control" => Some((
+                        ObjectFilter::creature()
+                            .opposing()
+                            .other_than_ability_source(),
+                        ZoneObjectKind::Either,
+                        None,
+                    )),
+                    "another nontoken creature an opponent controls"
+                    | "another nontoken creature your opponents control"
+                    | "another nontoken creature opponents control" => Some((
+                        ObjectFilter::creature()
+                            .opposing()
+                            .other_than_ability_source()
+                            .nontoken(),
+                        ZoneObjectKind::Card,
+                        None,
+                    )),
+                    "another creature you don't control" => Some((
+                        ObjectFilter::creature()
+                            .not_controlled()
+                            .other_than_ability_source(),
+                        ZoneObjectKind::Either,
+                        None,
+                    )),
+                    "another nontoken creature you don't control" => Some((
+                        ObjectFilter::creature()
+                            .not_controlled()
+                            .other_than_ability_source()
+                            .nontoken(),
+                        ZoneObjectKind::Card,
+                        None,
+                    )),
+                    "a creature an opponent owns" => Some((
+                        ObjectFilter::creature(),
+                        ZoneObjectKind::Either,
+                        Some(PlayerRelation::Opponent),
+                    )),
+                    "a nontoken creature an opponent owns" => Some((
+                        ObjectFilter::creature().nontoken(),
+                        ZoneObjectKind::Card,
+                        Some(PlayerRelation::Opponent),
+                    )),
+                    "a creature you own" => Some((
+                        ObjectFilter::creature(),
+                        ZoneObjectKind::Either,
+                        Some(PlayerRelation::Controller),
+                    )),
+                    "a nontoken creature you own" => Some((
+                        ObjectFilter::creature().nontoken(),
+                        ZoneObjectKind::Card,
+                        Some(PlayerRelation::Controller),
+                    )),
+                    "a creature or planeswalker" => {
+                        Some((creature_or_pw(), ZoneObjectKind::Either, None))
+                    }
+                    "a creature or planeswalker an opponent controls"
+                    | "a creature or planeswalker your opponents control"
+                    | "a creature or planeswalker opponents control" => {
+                        Some((creature_or_pw().opposing(), ZoneObjectKind::Either, None))
+                    }
+                    "a creature or planeswalker you control" => {
+                        Some((creature_or_pw().controlled(), ZoneObjectKind::Either, None))
+                    }
+                    "a creature or planeswalker you don't control" => Some((
+                        creature_or_pw().not_controlled(),
+                        ZoneObjectKind::Either,
+                        None,
+                    )),
+                    "a permanent an opponent controls"
+                    | "a permanent your opponents control"
+                    | "a permanent opponents control" => Some((
+                        ObjectFilter::permanent().opposing(),
+                        ZoneObjectKind::Either,
+                        None,
+                    )),
+                    "a permanent you don't control" => Some((
+                        ObjectFilter::permanent().not_controlled(),
+                        ZoneObjectKind::Either,
+                        None,
+                    )),
+                    "a nontoken permanent an opponent controls"
+                    | "a nontoken permanent your opponents control"
+                    | "a nontoken permanent opponents control" => Some((
+                        ObjectFilter::permanent().opposing().nontoken(),
+                        ZoneObjectKind::Card,
+                        None,
+                    )),
+                    "a nontoken permanent you don't control" => Some((
+                        ObjectFilter::permanent().not_controlled().nontoken(),
+                        ZoneObjectKind::Card,
+                        None,
+                    )),
+                    "a permanent you control" => Some((
+                        ObjectFilter::permanent().controlled(),
+                        ZoneObjectKind::Either,
+                        None,
+                    )),
+                    "a nontoken permanent you control" => Some((
+                        ObjectFilter::permanent().controlled().nontoken(),
+                        ZoneObjectKind::Card,
+                        None,
+                    )),
+                    "a permanent" => {
+                        Some((ObjectFilter::permanent(), ZoneObjectKind::Either, None))
+                    }
+                    "a nontoken permanent" => Some((
+                        ObjectFilter::permanent().nontoken(),
+                        ZoneObjectKind::Card,
+                        None,
+                    )),
+                    "another permanent" => Some((
+                        ObjectFilter::permanent().other_than_ability_source(),
+                        ZoneObjectKind::Either,
+                        None,
+                    )),
+                    "another nontoken permanent" => Some((
+                        ObjectFilter::permanent()
+                            .other_than_ability_source()
+                            .nontoken(),
+                        ZoneObjectKind::Card,
+                        None,
+                    )),
+                    "another permanent you control" => Some((
+                        ObjectFilter::permanent()
+                            .controlled()
+                            .other_than_ability_source(),
+                        ZoneObjectKind::Either,
+                        None,
+                    )),
+                    "another permanent an opponent controls"
+                    | "another permanent your opponents control"
+                    | "another permanent opponents control" => Some((
+                        ObjectFilter::permanent()
+                            .opposing()
+                            .other_than_ability_source(),
+                        ZoneObjectKind::Either,
+                        None,
+                    )),
+                    _ => spellwake_oracle_compiler::filter::parse_object_filter(
+                        &subj_low,
+                        &cached_compiler_vocab(vocabulary),
+                    )
+                    .ok()
+                    .filter(|ast_f| !(ast_f.any_spell && ast_f.any_types.is_empty()))
+                    .and_then(|ast_f| {
+                        let kind = match ast_f.token {
+                            Some(false) => ZoneObjectKind::Card,
+                            Some(true) => ZoneObjectKind::Token,
+                            None => ZoneObjectKind::Either,
+                        };
+                        lower_object_filter(&ast_f, vocabulary)
+                            .ok()
+                            .map(|obj| (obj, kind, None))
+                    }),
+                };
+            if let Some((filter, objects, subj_owner)) = matched {
+                let merged_owner = match (owner_relation, subj_owner) {
+                    (Some(a), Some(b)) if a != b => None,
+                    (Some(a), _) | (None, Some(a)) => Some(Some(a)),
+                    (None, None) => Some(None),
+                };
+                if let Some(final_owner) = merged_owner {
+                    let id = next_zone_rep_id(program);
+                    program.zone_replacements.push(ZoneReplacementAbility {
+                        id,
+                        actions: ZoneActionPredicate::OneOf(BTreeSet::from([
+                            ZoneActionKind::StateBased,
+                            ZoneActionKind::EffectDestroy,
+                            ZoneActionKind::EffectSacrifice,
+                            ZoneActionKind::SacrificeCost,
+                        ])),
+                        objects,
+                        subject: ZoneReplacementSubject::Matching {
+                            filter: Box::new(filter),
+                            owner_relation: final_owner,
+                        },
+                        destination: PublicZoneDestination::Graveyard,
+                        replace_with,
+                        choice,
+                    });
+                    return Some(Ok(()));
+                }
             }
         }
     }
@@ -1221,7 +1691,8 @@ fn lower_event_instead_replacement(
     ) && let Ok(ast_f) = spellwake_oracle_compiler::filter::parse_object_filter(
         &subj_low,
         &cached_compiler_vocab(vocabulary),
-    ) && let Ok(obj) = lower_object_filter(&ast_f, vocabulary)
+    ) && !(ast_f.any_spell && ast_f.any_types.is_empty())
+        && let Ok(obj) = lower_object_filter(&ast_f, vocabulary)
     {
         let objects = match ast_f.token {
             Some(false) => ZoneObjectKind::Card,
@@ -1298,13 +1769,29 @@ fn lower_event_instead_replacement(
             ));
         }
     }
+    let draw_mult_count = |s: &str| -> Option<u8> {
+        let rest = s
+            .strip_prefix("you draw ")
+            .or_else(|| s.strip_prefix("draw "))?;
+        let n_tok = rest.strip_suffix(" cards")?.trim();
+        parse_small_num(n_tok).filter(|&n| n >= 2)
+    };
+    let draw_plus_count = |s: &str| -> Option<u8> {
+        if matches!(s, "draw an additional card" | "you draw an additional card") {
+            return Some(1);
+        }
+        let rest = s
+            .strip_prefix("you draw that many cards plus ")
+            .or_else(|| s.strip_prefix("draw that many cards plus "))?;
+        parse_small_num(rest.trim()).filter(|&n| n > 0)
+    };
     if subj_low == "you"
         && matches!(
             would_norm,
             "draw a card except the first one you draw in each of your draw steps"
                 | "draw a card except the first one you draw in each of your draw steps,"
         )
-        && matches!(instead_norm, "draw two cards" | "you draw two cards")
+        && let Some(multiply) = draw_mult_count(instead_norm)
     {
         return Some(push_static_ability(
             program,
@@ -1312,7 +1799,7 @@ fn lower_event_instead_replacement(
                 id: ids.static_id(),
                 rule: StaticDrawRule::ModifyDraw {
                     add: 0,
-                    multiply: 2,
+                    multiply,
                     skip_first_draw_step: true,
                     require_empty_hand: false,
                 },
@@ -1321,7 +1808,7 @@ fn lower_event_instead_replacement(
     }
     if subj_low == "you"
         && would_norm == "draw a card while you have no cards in hand"
-        && matches!(instead_norm, "draw two cards" | "you draw two cards")
+        && let Some(multiply) = draw_mult_count(instead_norm)
     {
         return Some(push_static_ability(
             program,
@@ -1329,7 +1816,7 @@ fn lower_event_instead_replacement(
                 id: ids.static_id(),
                 rule: StaticDrawRule::ModifyDraw {
                     add: 0,
-                    multiply: 2,
+                    multiply,
                     skip_first_draw_step: false,
                     require_empty_hand: true,
                 },
@@ -1338,7 +1825,7 @@ fn lower_event_instead_replacement(
     }
     if subj_low == "you"
         && would_norm == "draw a card"
-        && matches!(instead_norm, "draw two cards" | "you draw two cards")
+        && let Some(multiply) = draw_mult_count(instead_norm)
     {
         return Some(push_static_ability(
             program,
@@ -1346,7 +1833,7 @@ fn lower_event_instead_replacement(
                 id: ids.static_id(),
                 rule: StaticDrawRule::ModifyDraw {
                     add: 0,
-                    multiply: 2,
+                    multiply,
                     skip_first_draw_step: false,
                     require_empty_hand: false,
                 },
@@ -1355,20 +1842,14 @@ fn lower_event_instead_replacement(
     }
     if subj_low == "you"
         && (would_norm == "draw one or more cards" || would_norm == "draw a card")
-        && matches!(
-            instead_norm,
-            "draw that many cards plus one"
-                | "you draw that many cards plus one"
-                | "draw an additional card"
-                | "you draw an additional card"
-        )
+        && let Some(add) = draw_plus_count(instead_norm)
     {
         return Some(push_static_ability(
             program,
             StaticContinuousAbility::DrawRule {
                 id: ids.static_id(),
                 rule: StaticDrawRule::ModifyDraw {
-                    add: 1,
+                    add,
                     multiply: 1,
                     skip_first_draw_step: false,
                     require_empty_hand: false,
@@ -1378,10 +1859,19 @@ fn lower_event_instead_replacement(
     }
     if subj_low == "you"
         && would_norm == "draw one or more cards"
-        && matches!(
+        && let Some(multiply) = if matches!(
             instead_norm,
             "draw twice that many cards" | "you draw twice that many cards"
-        )
+        ) {
+            Some(2u8)
+        } else if matches!(
+            instead_norm,
+            "draw three times that many cards" | "you draw three times that many cards"
+        ) {
+            Some(3u8)
+        } else {
+            None
+        }
     {
         return Some(push_static_ability(
             program,
@@ -1389,7 +1879,7 @@ fn lower_event_instead_replacement(
                 id: ids.static_id(),
                 rule: StaticDrawRule::ModifyDraw {
                     add: 0,
-                    multiply: 2,
+                    multiply,
                     skip_first_draw_step: false,
                     require_empty_hand: false,
                 },
@@ -1491,32 +1981,39 @@ fn lower_event_instead_replacement(
             },
         ));
     }
-    if (subj_low == "an effect"
-        && would_norm == "create one or more tokens under your control"
-        && matches!(
-            instead_norm,
-            "it creates that many tokens plus one"
-                | "it creates that many plus one of those tokens"
-                | "it creates those tokens plus one"
-        ))
-        || (subj_low == "one or more tokens"
-            && would_norm == "be created under your control"
-            && matches!(
-                instead_norm,
-                "that many tokens plus one are created" | "those tokens plus one are created"
-            ))
+    if (subj_low == "an effect" && would_norm == "create one or more tokens under your control")
+        || (subj_low == "one or more tokens" && would_norm == "be created under your control")
     {
-        return Some(push_static_ability(
-            program,
-            StaticContinuousAbility::Modifier {
-                id: ids.static_id(),
-                rule: StaticModifierRule::ModifyTokens {
-                    controller: PlayerRelation::Controller,
-                    add: 1,
-                    multiply: 1,
+        let add_n = if subj_low == "an effect" {
+            instead_norm
+                .strip_prefix("it creates that many tokens plus ")
+                .or_else(|| instead_norm.strip_prefix("it creates those tokens plus "))
+                .or_else(|| {
+                    instead_norm
+                        .strip_prefix("it creates that many plus ")
+                        .and_then(|s| s.strip_suffix(" of those tokens"))
+                })
+                .and_then(parse_small_num)
+        } else {
+            instead_norm
+                .strip_prefix("that many tokens plus ")
+                .or_else(|| instead_norm.strip_prefix("those tokens plus "))
+                .and_then(|s| s.strip_suffix(" are created"))
+                .and_then(parse_small_num)
+        };
+        if let Some(add) = add_n.filter(|&n| n > 0) {
+            return Some(push_static_ability(
+                program,
+                StaticContinuousAbility::Modifier {
+                    id: ids.static_id(),
+                    rule: StaticModifierRule::ModifyTokens {
+                        controller: PlayerRelation::Controller,
+                        add,
+                        multiply: 1,
+                    },
                 },
-            },
-        ));
+            ));
+        }
     }
     if (subj_low == "an effect"
         && would_norm == "create one or more tokens"
@@ -1538,12 +2035,8 @@ fn lower_event_instead_replacement(
         ));
     }
 
-    if subj_low == "you"
-        && would_norm.starts_with("create one or more ")
-        && let Some(sub_word) = would_norm
-            .strip_prefix("create one or more ")
-            .and_then(|s| s.strip_suffix(" tokens"))
-        && let Some(subtype) = match sub_word.trim() {
+    let parse_token_artifact_subtype = |w: &str| -> Option<ArtifactSubtype> {
+        match w.trim() {
             "treasure" => Some(ArtifactSubtype::Treasure),
             "food" => Some(ArtifactSubtype::Food),
             "clue" => Some(ArtifactSubtype::Clue),
@@ -1552,20 +2045,75 @@ fn lower_event_instead_replacement(
             "powerstone" => Some(ArtifactSubtype::Powerstone),
             _ => None,
         }
-        && instead_norm.contains("plus an additional")
+    };
+    if subj_low == "you"
+        && let Some(sub_word) = would_norm
+            .strip_prefix("create one or more ")
+            .and_then(|s| s.strip_suffix(" tokens"))
+        && let Some(subtype) = parse_token_artifact_subtype(sub_word)
     {
-        return Some(push_static_ability(
-            program,
-            StaticContinuousAbility::Modifier {
-                id: ids.static_id(),
-                rule: StaticModifierRule::ModifyTokenSubtype {
-                    subtype,
-                    controller: PlayerRelation::Controller,
-                    add: 1,
-                    multiply: 1,
+        let sub_trim = sub_word.trim();
+        let active_instead = instead_norm.strip_prefix("you ").unwrap_or(instead_norm);
+        let mod_pair = if active_instead
+            == format!("create those tokens plus an additional {sub_trim} token")
+            || active_instead == format!("create that many {sub_trim} tokens plus one")
+        {
+            Some((1u8, 1u8))
+        } else if active_instead == format!("create twice that many {sub_trim} tokens")
+            || active_instead == "create twice that many of those tokens"
+        {
+            Some((0u8, 2u8))
+        } else {
+            None
+        };
+        if let Some((add, multiply)) = mod_pair {
+            return Some(push_static_ability(
+                program,
+                StaticContinuousAbility::Modifier {
+                    id: ids.static_id(),
+                    rule: StaticModifierRule::ModifyTokenSubtype {
+                        subtype,
+                        controller: PlayerRelation::Controller,
+                        add,
+                        multiply,
+                    },
                 },
-            },
-        ));
+            ));
+        }
+    }
+    if let Some(sub_word) = subj_low
+        .strip_prefix("one or more ")
+        .and_then(|s| s.strip_suffix(" tokens"))
+        && would_norm == "be created under your control"
+        && let Some(subtype) = parse_token_artifact_subtype(sub_word)
+    {
+        let sub_trim = sub_word.trim();
+        let mod_pair = if instead_norm
+            == format!("those tokens plus an additional {sub_trim} token are created")
+            || instead_norm == format!("that many {sub_trim} tokens plus one are created")
+        {
+            Some((1u8, 1u8))
+        } else if instead_norm == "twice that many of those tokens are created"
+            || instead_norm == format!("twice that many {sub_trim} tokens are created")
+        {
+            Some((0u8, 2u8))
+        } else {
+            None
+        };
+        if let Some((add, multiply)) = mod_pair {
+            return Some(push_static_ability(
+                program,
+                StaticContinuousAbility::Modifier {
+                    id: ids.static_id(),
+                    rule: StaticModifierRule::ModifyTokenSubtype {
+                        subtype,
+                        controller: PlayerRelation::Controller,
+                        add,
+                        multiply,
+                    },
+                },
+            ));
+        }
     }
     if (subj_low == "an opponent"
         && would_norm.starts_with("put one or more counters on ")
@@ -1737,7 +2285,9 @@ fn lower_event_instead_replacement(
     if subj_low == "one or more counters"
         && matches!(
             would_norm,
-            "be put on a permanent you control" | "be put on an artifact or creature you control"
+            "be put on a permanent you control"
+                | "be put on a permanent your team controls"
+                | "be put on an artifact or creature you control"
         )
         && matches!(
             instead_norm,
@@ -1773,13 +2323,20 @@ fn lower_event_instead_replacement(
     }
 
     // General Counter Placement Modifier fallback (CR 614.1a)
+    let rejoined_counter = rejoin_counter_comma_split(would_norm, instead_norm);
+    let (counter_would, counter_instead) = match &rejoined_counter {
+        Some((w, i)) => (w.as_str(), *i),
+        None => (would_norm, instead_norm),
+    };
     if let Some(after_one) = subj_low.strip_prefix("one or more ")
         && let Some(kind_raw) = after_one
             .strip_suffix(" counters")
             .or_else(|| (after_one == "counters").then_some(""))
-        && let Some(target_raw) = would_norm
+        && let Some(target_raw) = counter_would
             .strip_prefix("be put on ")
-            .or_else(|| would_norm.strip_prefix("be placed on "))
+            .or_else(|| counter_would.strip_prefix("be placed on "))
+        && !counter_instead.contains(" and ")
+        && !counter_instead.contains(". ")
     {
         let counter_kind = if kind_raw.trim().is_empty() {
             None
@@ -1787,136 +2344,153 @@ fn lower_event_instead_replacement(
             parse_counter_kind(kind_raw.trim()).filter(|k| k.is_permanent())
         };
         let kind_ok = kind_raw.trim().is_empty() || counter_kind.is_some();
-        let selector_opt = if matches!(target_raw.trim(), "~" | "this creature" | "this permanent")
-        {
-            Some(PermanentSelector {
-                controller: ControllerSelector::SourceItself,
-                ..PermanentSelector::default()
-            })
-        } else {
-            spellwake_oracle_compiler::filter::parse_object_filter(
-                target_raw.trim(),
-                &cached_compiler_vocab(vocabulary),
-            )
-            .ok()
-            .and_then(|f| lower_filter_to_permanent_selector(&f, vocabulary).ok())
-        };
-        if kind_ok && let Some(selector) = selector_opt {
-            let (add, multiply) = if instead_norm.contains("twice that many")
-                || instead_norm.contains("double that many")
+        let selectors = parse_counter_target_selectors(target_raw.trim(), vocabulary);
+        if kind_ok && !selectors.is_empty() {
+            let (add, multiply) = if counter_instead.contains("twice that many")
+                || counter_instead.contains("double that many")
             {
                 (0u8, 2u8)
-            } else if instead_norm.contains("three times that many")
-                || instead_norm.contains("triple that many")
+            } else if counter_instead.contains("three times that many")
+                || counter_instead.contains("triple that many")
             {
                 (0u8, 3u8)
-            } else if instead_norm.contains("that many plus one")
-                || instead_norm.contains("plus one additional")
-                || instead_norm.contains("plus an additional")
+            } else if let Some((_, rhs)) = counter_instead.split_once("that many plus ")
+                && let Some(n_tok) = rhs.split_whitespace().next()
+                && let Some(n) = parse_small_num(n_tok)
+                && n > 0
+            {
+                (n, 1u8)
+            } else if counter_instead.contains("plus one additional")
+                || counter_instead.contains("plus an additional")
             {
                 (1u8, 1u8)
-            } else if instead_norm.contains("that many plus two") {
-                (2u8, 1u8)
             } else {
                 (0u8, 1u8)
             };
             if multiply > 1 || add > 0 {
-                return Some(push_static_ability(
-                    program,
-                    StaticContinuousAbility::Modifier {
-                        id: ids.static_id(),
-                        rule: StaticModifierRule::ModifyCounters {
-                            selector: Box::new(selector),
-                            counter_kind,
-                            add,
-                            multiply,
+                for selector in selectors {
+                    if let Err(err) = push_static_ability(
+                        program,
+                        StaticContinuousAbility::Modifier {
+                            id: ids.static_id(),
+                            rule: StaticModifierRule::ModifyCounters {
+                                selector: Box::new(selector),
+                                counter_kind,
+                                add,
+                                multiply,
+                            },
                         },
-                    },
-                ));
+                    ) {
+                        return Some(Err(err));
+                    }
+                }
+                return Some(Ok(()));
             }
         }
     }
 
     // 6. Life Gain Modifiers (CR 614.1a)
-    if subj_low == "you"
-        && let Some(cond_life) = would_norm.strip_prefix("gain life while you have ")
-        && let Some(limit_str) = cond_life.strip_suffix(" or less life")
-        && let Ok(limit) = limit_str.trim().parse::<i64>()
-        && instead_norm == "you gain twice that much life"
-    {
-        let condition = ResolutionCondition {
-            left: ValueExpr::PlayerStat(PlayerStatExpr::ControllerLife),
-            comparison: Comparison::LessOrEqual,
-            right: ValueExpr::literal(limit),
-        };
-        return Some(push_static_ability(
-            program,
-            StaticContinuousAbility::Modifier {
-                id: ids.static_id(),
-                rule: StaticModifierRule::ConditionalModifyLifeGain {
-                    condition: Box::new(condition),
-                    player: PlayerRelation::Controller,
-                    add: 0,
-                    multiply: 2,
-                },
-            },
-        ));
-    }
+    let parse_life_gain_mod = |s: &str| -> Option<(u8, u8)> {
+        if s.contains(" and ") || s.contains(". ") {
+            return None;
+        }
+        if s.contains("twice that much life") || s.contains("double that much life") {
+            Some((0, 2))
+        } else if s.contains("three times that much life") || s.contains("triple that much life") {
+            Some((0, 3))
+        } else if let Some((_, rhs)) = s
+            .split_once("that much life plus ")
+            .or_else(|| s.split_once("an additional "))
+            && let Some(n_tok) = rhs.split_whitespace().next()
+            && let Some(n) = parse_small_num(n_tok)
+            && n > 0
+        {
+            Some((n, 1))
+        } else {
+            None
+        }
+    };
     if matches!(
         subj_low.as_str(),
         "you" | "a player" | "any player" | "an opponent"
-    ) && would_norm == "gain life"
+    ) && let Some(cond_raw) = would_norm
+        .strip_prefix("gain life while ")
+        .or_else(|| would_norm.strip_prefix("gain life if "))
+        && let Some((add, multiply)) = parse_life_gain_mod(instead_norm)
+        && let Some(rc) = lower_world_resolution_condition(cond_raw, vocabulary)
     {
         let player = match subj_low.as_str() {
             "you" => PlayerRelation::Controller,
             "an opponent" => PlayerRelation::Opponent,
             _ => PlayerRelation::AnyParticipant,
         };
-        let life_rule = if instead_norm.contains("twice that much life")
-            || instead_norm.contains("double that much life")
-        {
-            Some(StaticModifierRule::ModifyLifeGain {
+        let ability = StaticContinuousAbility::Modifier {
+            id: ids.static_id(),
+            rule: StaticModifierRule::ConditionalModifyLifeGain {
+                condition: Box::new(rc),
                 player,
-                add: 0,
-                multiply: 2,
-                lose_instead: false,
-            })
-        } else if instead_norm.contains("three times that much life") {
-            Some(StaticModifierRule::ModifyLifeGain {
-                player,
-                add: 0,
-                multiply: 3,
-                lose_instead: false,
-            })
-        } else if let Some(plus_str) = instead_norm
-            .split_once("that much life plus ")
-            .or_else(|| instead_norm.split_once("an additional "))
-            .map(|(_, r)| r.trim())
-            && let Some(n) = match plus_str.split_whitespace().next().unwrap_or("") {
-                "one" | "1" => Some(1u8),
-                "two" | "2" => Some(2),
-                "three" | "3" => Some(3),
-                "four" | "4" => Some(4),
-                "five" | "5" => Some(5),
-                tok => tok.parse::<u8>().ok(),
-            }
-            && n > 0
-        {
-            Some(StaticModifierRule::ModifyLifeGain {
-                player,
-                add: n,
-                multiply: 1,
-                lose_instead: false,
-            })
-        } else {
-            None
+                add,
+                multiply,
+            },
         };
-        if let Some(rule) = life_rule {
+        if ability.validate(vocabulary).is_ok() {
+            return Some(push_static_ability(program, ability));
+        }
+    }
+    if matches!(
+        subj_low.as_str(),
+        "you" | "a player" | "any player" | "an opponent"
+    ) && would_norm == "gain life"
+    {
+        if matches!(
+            instead_norm,
+            "that player gains no life" | "they gain no life" | "you gain no life"
+        ) {
+            return match subj_low.as_str() {
+                "a player" | "any player" => Some(push_static_ability(
+                    program,
+                    StaticContinuousAbility::Restriction {
+                        id: ids.static_id(),
+                        rule: StaticRestriction::PlayersCannotGainLife,
+                    },
+                )),
+                "an opponent" => Some(push_static_ability(
+                    program,
+                    StaticContinuousAbility::Restriction {
+                        id: ids.static_id(),
+                        rule: StaticRestriction::OpponentsCannotGainLife,
+                    },
+                )),
+                "you" => Some(push_static_ability(
+                    program,
+                    StaticContinuousAbility::EventReplacement {
+                        id: ids.static_id(),
+                        event: ReplaceableEvent::LifeGain {
+                            player: AffectedPlayers::One(ResolvingPlayer::Controller),
+                        },
+                        condition: None,
+                        action: StaticReplacementAction::Skip,
+                    },
+                )),
+                _ => None,
+            };
+        }
+        let player = match subj_low.as_str() {
+            "you" => PlayerRelation::Controller,
+            "an opponent" => PlayerRelation::Opponent,
+            _ => PlayerRelation::AnyParticipant,
+        };
+        if let Some((add, multiply)) = parse_life_gain_mod(instead_norm) {
             return Some(push_static_ability(
                 program,
                 StaticContinuousAbility::Modifier {
                     id: ids.static_id(),
-                    rule,
+                    rule: StaticModifierRule::ModifyLifeGain {
+                        player,
+                        add,
+                        multiply,
+                        lose_instead: false,
+                    },
                 },
             ));
         }
@@ -2022,33 +2596,23 @@ fn lower_event_instead_replacement(
             ));
         }
     }
-    if would_norm == "deal_damage" && instead_norm == "double_damage" {
-        let rule = match subj_low.as_str() {
-            "a source" => Some(StaticDamageRule::ModifyDamage {
-                source: None,
-                source_controller: PlayerRelation::AnyParticipant,
-                recipient: StaticDamageRecipient::Any,
-                kind: StaticDamageKind::Any,
-                op: StaticDamageOp::Multiply(2),
-            }),
-            "a source you control" => Some(StaticDamageRule::ModifyDamage {
-                source: None,
-                source_controller: PlayerRelation::Controller,
-                recipient: StaticDamageRecipient::Any,
-                kind: StaticDamageKind::Any,
-                op: StaticDamageOp::Multiply(2),
-            }),
-            _ => None,
-        };
-        if let Some(rule) = rule {
-            return Some(push_static_ability(
-                program,
-                StaticContinuousAbility::DamageRule {
-                    id: ids.static_id(),
-                    rule,
+    if would_norm == "deal_damage"
+        && instead_norm == "double_damage"
+        && let Some((source, source_controller)) = parse_damage_source_filter(&subj_low, vocabulary)
+    {
+        return Some(push_static_ability(
+            program,
+            StaticContinuousAbility::DamageRule {
+                id: ids.static_id(),
+                rule: StaticDamageRule::ModifyDamage {
+                    source,
+                    source_controller,
+                    recipient: StaticDamageRecipient::Any,
+                    kind: StaticDamageKind::Any,
+                    op: StaticDamageOp::Multiply(2),
                 },
-            ));
-        }
+            },
+        ));
     }
     if subj_low == "a source"
         && would_norm == "deal damage to an opponent or a permanent an opponent controls"
@@ -2056,6 +2620,8 @@ fn lower_event_instead_replacement(
             instead_norm,
             "it deals double that damage to that player or permanent"
                 | "it deals twice that much damage to that player or permanent"
+                | "that source deals double that damage to that player or permanent"
+                | "that source deals twice that much damage to that player or permanent"
         )
     {
         return Some(push_static_ability(
@@ -2073,6 +2639,9 @@ fn lower_event_instead_replacement(
             "it deals double that damage to that player"
                 | "it deals double that damage to enchanted player"
                 | "it deals twice that much damage to that player"
+                | "that source deals double that damage to that player"
+                | "that source deals double that damage to enchanted player"
+                | "that source deals twice that much damage to that player"
         )
     {
         return Some(push_static_ability(
@@ -2080,6 +2649,46 @@ fn lower_event_instead_replacement(
             StaticContinuousAbility::DamageRule {
                 id: ids.static_id(),
                 rule: StaticDamageRule::DoubleToEnchantedPlayer,
+            },
+        ));
+    }
+    if let Some(after_battle_opp) = instead_norm.strip_prefix("battle, or opponent, ")
+        && matches!(
+            would_norm,
+            "deal damage to a creature"
+                | "deal combat damage to a creature"
+                | "deal noncombat damage to a creature"
+        )
+        && let Some(mut base_rule) =
+            parse_modify_damage_event(&subj_low, would_norm, after_battle_opp.trim(), vocabulary)
+        && let StaticDamageRule::ModifyDamage {
+            ref mut recipient, ..
+        } = base_rule
+    {
+        *recipient = StaticDamageRecipient::MatchingPermanent(ObjectFilter::any_types(
+            CardTypeMask::CREATURE.union(CardTypeMask::BATTLE),
+        ));
+        let mut opp_rule = base_rule.clone();
+        if let StaticDamageRule::ModifyDamage {
+            ref mut recipient, ..
+        } = opp_rule
+        {
+            *recipient = StaticDamageRecipient::Opponents;
+        }
+        if let Err(err) = push_static_ability(
+            program,
+            StaticContinuousAbility::DamageRule {
+                id: ids.static_id(),
+                rule: base_rule,
+            },
+        ) {
+            return Some(Err(err));
+        }
+        return Some(push_static_ability(
+            program,
+            StaticContinuousAbility::DamageRule {
+                id: ids.static_id(),
+                rule: opp_rule,
             },
         ));
     }
@@ -2131,13 +2740,413 @@ fn parse_small_num(tok: &str) -> Option<u8> {
     }
 }
 
+fn lower_world_resolution_condition(
+    cond_raw: &str,
+    vocabulary: &CreatureTypeVocabulary,
+) -> Option<ResolutionCondition> {
+    let cond_ast = spellwake_oracle_compiler::filter::parse_condition(
+        cond_raw.trim(),
+        &cached_compiler_vocab(vocabulary),
+    )
+    .ok()?;
+    let mut tmp_builder = BodyBuilder::new();
+    let rc =
+        lower_resolution_condition(&cond_ast, &mut tmp_builder, vocabulary, false, None).ok()?;
+    if tmp_builder.target != BodyTarget::None
+        || !rc.is_world_evaluable()
+        || rc.validate_world(vocabulary).is_err()
+    {
+        return None;
+    }
+    Some(rc)
+}
+
+fn resolve_creature_subtype_token(
+    raw: &str,
+    vocabulary: &CreatureTypeVocabulary,
+) -> Option<CreatureTypeId> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    let mut out = String::with_capacity(trimmed.len());
+    let mut cap_next = true;
+    for ch in trimmed.chars() {
+        if ch == ' ' || ch == '-' {
+            out.push(ch);
+            cap_next = true;
+        } else if cap_next {
+            for up in ch.to_uppercase() {
+                out.push(up);
+            }
+            cap_next = false;
+        } else {
+            out.push(ch);
+        }
+    }
+    vocabulary.resolve_label(&out)
+}
+
+fn parse_creature_subtype_list(
+    raw: &str,
+    vocabulary: &CreatureTypeVocabulary,
+) -> Option<Vec<CreatureTypeId>> {
+    if !raw.contains(", ") && !raw.contains(" or ") {
+        return None;
+    }
+    let mut subtypes = Vec::new();
+    for comma_part in raw.split(',') {
+        let part = comma_part.trim();
+        if part.is_empty() {
+            return None;
+        }
+        for or_part in part.split(" or ") {
+            let tok = or_part
+                .trim()
+                .strip_prefix("or ")
+                .unwrap_or(or_part.trim())
+                .trim();
+            let tok = tok
+                .strip_prefix("an ")
+                .or_else(|| tok.strip_prefix("a "))
+                .unwrap_or(tok)
+                .trim();
+            let ct = resolve_creature_subtype_token(tok, vocabulary)?;
+            if !subtypes.contains(&ct) {
+                subtypes.push(ct);
+            }
+        }
+    }
+    if subtypes.len() >= 2 {
+        Some(subtypes)
+    } else {
+        None
+    }
+}
+
+fn rejoin_counter_comma_split<'a>(
+    would_norm: &str,
+    instead_norm: &'a str,
+) -> Option<(String, &'a str)> {
+    if !would_norm.starts_with("be put on ") && !would_norm.starts_with("be placed on ") {
+        return None;
+    }
+    let markers = [
+        ", that many ",
+        ", twice that many ",
+        ", double that many ",
+        ", three times that many ",
+        ", triple that many ",
+        ", put ",
+        ", you put ",
+        ", instead ",
+    ];
+    let split_idx = markers.iter().filter_map(|m| instead_norm.find(m)).min()?;
+    let tail_target = instead_norm[..split_idx].trim();
+    if tail_target.is_empty() || tail_target.contains(". ") {
+        return None;
+    }
+    let real_instead = instead_norm[split_idx + 2..].trim();
+    Some((format!("{would_norm}, {tail_target}"), real_instead))
+}
+
+fn parse_artifact_subtype_ci(raw: &str) -> Option<ArtifactSubtype> {
+    let parse_one = |s: &str| match s {
+        "attraction" => Some(ArtifactSubtype::Attraction),
+        "blood" => Some(ArtifactSubtype::Blood),
+        "bobblehead" => Some(ArtifactSubtype::Bobblehead),
+        "book" => Some(ArtifactSubtype::Book),
+        "clue" => Some(ArtifactSubtype::Clue),
+        "contraption" => Some(ArtifactSubtype::Contraption),
+        "equipment" => Some(ArtifactSubtype::Equipment),
+        "food" => Some(ArtifactSubtype::Food),
+        "fortification" => Some(ArtifactSubtype::Fortification),
+        "gold" => Some(ArtifactSubtype::Gold),
+        "incubator" => Some(ArtifactSubtype::Incubator),
+        "junk" => Some(ArtifactSubtype::Junk),
+        "lander" => Some(ArtifactSubtype::Lander),
+        "map" => Some(ArtifactSubtype::Map),
+        "mutagen" => Some(ArtifactSubtype::Mutagen),
+        "powerstone" => Some(ArtifactSubtype::Powerstone),
+        "shard" => Some(ArtifactSubtype::Shard),
+        "spacecraft" => Some(ArtifactSubtype::Spacecraft),
+        "treasure" => Some(ArtifactSubtype::Treasure),
+        "vehicle" => Some(ArtifactSubtype::Vehicle),
+        _ => None,
+    };
+    let trimmed = raw.trim();
+    parse_one(trimmed).or_else(|| trimmed.strip_suffix('s').and_then(parse_one))
+}
+
+fn parse_land_subtype_ci(raw: &str) -> Option<LandType> {
+    let parse_one = |s: &str| match s {
+        "plains" => Some(LandType::Plains),
+        "island" => Some(LandType::Island),
+        "swamp" => Some(LandType::Swamp),
+        "mountain" => Some(LandType::Mountain),
+        "forest" => Some(LandType::Forest),
+        "cave" => Some(LandType::Cave),
+        "desert" => Some(LandType::Desert),
+        "gate" => Some(LandType::Gate),
+        "lair" => Some(LandType::Lair),
+        "locus" => Some(LandType::Locus),
+        "mine" => Some(LandType::Mine),
+        "planet" => Some(LandType::Planet),
+        "power-plant" => Some(LandType::PowerPlant),
+        "sphere" => Some(LandType::Sphere),
+        "tower" => Some(LandType::Tower),
+        "town" => Some(LandType::Town),
+        "urza's" => Some(LandType::Urzas),
+        _ => None,
+    };
+    let trimmed = raw.trim();
+    parse_one(trimmed).or_else(|| trimmed.strip_suffix('s').and_then(parse_one))
+}
+
+fn parse_counter_target_disjunction(
+    core_noun: &str,
+    controller: ControllerSelector,
+    exclude_source: bool,
+    vocabulary: &CreatureTypeVocabulary,
+) -> Option<Vec<PermanentSelector>> {
+    if !core_noun.contains(", ") && !core_noun.contains(" or ") && !core_noun.contains(" and/or ") {
+        return None;
+    }
+    let (token, list_raw) = if let Some(rest) = core_noun.strip_prefix("nontoken ") {
+        (Some(false), rest.trim())
+    } else if let Some(rest) = core_noun.strip_prefix("token ") {
+        (Some(true), rest.trim())
+    } else {
+        (None, core_noun)
+    };
+    let mut card_types = BTreeSet::new();
+    let mut creature_subtypes = BTreeSet::new();
+    let mut artifact_subtypes = BTreeSet::new();
+    let mut land_subtypes = BTreeSet::new();
+    let mut atom_count: usize = 0;
+
+    for comma_part in list_raw.split(',') {
+        let part = comma_part.trim();
+        if part.is_empty() {
+            return None;
+        }
+        for and_or_part in part.split(" and/or ") {
+            for or_part in and_or_part.split(" or ") {
+                let mut atom = or_part.trim();
+                atom = atom
+                    .strip_prefix("and/or ")
+                    .or_else(|| atom.strip_prefix("or "))
+                    .unwrap_or(atom)
+                    .trim();
+                atom = atom
+                    .strip_prefix("an ")
+                    .or_else(|| atom.strip_prefix("a "))
+                    .unwrap_or(atom)
+                    .trim();
+                if atom.is_empty() {
+                    return None;
+                }
+                match atom {
+                    "creature" | "creatures" => {
+                        card_types.insert(CardType::Creature);
+                    }
+                    "artifact" | "artifacts" => {
+                        card_types.insert(CardType::Artifact);
+                    }
+                    "enchantment" | "enchantments" => {
+                        card_types.insert(CardType::Enchantment);
+                    }
+                    "land" | "lands" => {
+                        card_types.insert(CardType::Land);
+                    }
+                    "planeswalker" | "planeswalkers" => {
+                        card_types.insert(CardType::Planeswalker);
+                    }
+                    "battle" | "battles" => {
+                        card_types.insert(CardType::Battle);
+                    }
+                    other => {
+                        if let Some(at) = parse_artifact_subtype_ci(other) {
+                            artifact_subtypes.insert(at);
+                        } else if let Some(lt) = parse_land_subtype_ci(other) {
+                            land_subtypes.insert(lt);
+                        } else {
+                            let ct = resolve_creature_subtype_token(other, vocabulary)?;
+                            creature_subtypes.insert(ct);
+                        }
+                    }
+                }
+                atom_count += 1;
+            }
+        }
+    }
+    if atom_count < 2 {
+        return None;
+    }
+    // Avoid double-applying counter modifiers if creature subtypes could overlap artifact/land subtypes
+    // without a Creature card-type selector absorbing creatures.
+    if !creature_subtypes.is_empty()
+        && (!artifact_subtypes.is_empty() || !land_subtypes.is_empty())
+        && !card_types.contains(&CardType::Creature)
+    {
+        return None;
+    }
+
+    let mut selectors = Vec::new();
+    if !card_types.is_empty() {
+        let mut sel = PermanentSelector {
+            token,
+            controller,
+            exclude_source,
+            ..PermanentSelector::default()
+        };
+        if card_types.len() == 1 {
+            sel.required_types = card_types.clone();
+        } else {
+            sel.any_types = card_types.clone();
+        }
+        selectors.push(sel);
+    }
+    if !creature_subtypes.is_empty() {
+        let mut sel = PermanentSelector {
+            token,
+            forbidden_types: card_types.clone(),
+            controller,
+            exclude_source,
+            ..PermanentSelector::default()
+        };
+        if let Some(&only) = creature_subtypes
+            .iter()
+            .next()
+            .filter(|_| creature_subtypes.len() == 1)
+        {
+            sel.creature_subtype = Some(only);
+        } else {
+            sel.any_creature_subtypes = creature_subtypes;
+        }
+        selectors.push(sel);
+    }
+    if !card_types.contains(&CardType::Artifact) {
+        for at in artifact_subtypes {
+            selectors.push(PermanentSelector {
+                token,
+                artifact_subtype: Some(at),
+                forbidden_types: card_types.clone(),
+                controller,
+                exclude_source,
+                ..PermanentSelector::default()
+            });
+        }
+    }
+    if !card_types.contains(&CardType::Land) {
+        for lt in land_subtypes {
+            selectors.push(PermanentSelector {
+                token,
+                land_subtype: Some(lt),
+                forbidden_types: card_types.clone(),
+                controller,
+                exclude_source,
+                ..PermanentSelector::default()
+            });
+        }
+    }
+    if selectors.is_empty() || selectors.iter().any(|s| s.validate(vocabulary).is_err()) {
+        return None;
+    }
+    Some(selectors)
+}
+
+fn parse_counter_target_selectors(
+    target_raw: &str,
+    vocabulary: &CreatureTypeVocabulary,
+) -> Vec<PermanentSelector> {
+    let trimmed = target_raw.trim();
+    if matches!(
+        trimmed,
+        "~" | "this creature"
+            | "this permanent"
+            | "this artifact"
+            | "this enchantment"
+            | "this land"
+            | "this planeswalker"
+    ) {
+        return vec![PermanentSelector {
+            controller: ControllerSelector::SourceItself,
+            ..PermanentSelector::default()
+        }];
+    }
+    if matches!(
+        trimmed,
+        "enchanted creature" | "equipped creature" | "enchanted permanent"
+    ) {
+        return vec![PermanentSelector {
+            attached_to_source: true,
+            ..PermanentSelector::default()
+        }];
+    }
+
+    let (controller, without_ctrl) = if let Some(rest) = trimmed
+        .strip_suffix(" you control")
+        .or_else(|| trimmed.strip_suffix(" your team controls"))
+    {
+        (ControllerSelector::SourceController, rest.trim())
+    } else if let Some(rest) = trimmed
+        .strip_suffix(" an opponent controls")
+        .or_else(|| trimmed.strip_suffix(" opponents control"))
+        .or_else(|| trimmed.strip_suffix(" you don't control"))
+    {
+        (ControllerSelector::Opponents, rest.trim())
+    } else {
+        (ControllerSelector::Any, trimmed)
+    };
+    let (exclude_source, core_noun) = if let Some(rest) = without_ctrl.strip_prefix("another ") {
+        (true, rest.trim())
+    } else if let Some(rest) = without_ctrl
+        .strip_prefix("an ")
+        .or_else(|| without_ctrl.strip_prefix("a "))
+    {
+        (false, rest.trim())
+    } else {
+        (false, without_ctrl)
+    };
+    if let Some(selectors) =
+        parse_counter_target_disjunction(core_noun, controller, exclude_source, vocabulary)
+    {
+        return selectors;
+    }
+
+    let target_norm = trimmed.replace(" your team controls", " you control");
+    if target_norm.contains("of the chosen")
+        || target_norm.contains("player")
+        || target_norm.starts_with("you")
+    {
+        return Vec::new();
+    }
+    let Ok(ast_f) = spellwake_oracle_compiler::filter::parse_object_filter(
+        &target_norm,
+        &cached_compiler_vocab(vocabulary),
+    ) else {
+        return Vec::new();
+    };
+    let Ok(sel) = lower_filter_to_permanent_selector(&ast_f, vocabulary) else {
+        return Vec::new();
+    };
+    if sel.validate(vocabulary).is_ok() {
+        vec![sel]
+    } else {
+        Vec::new()
+    }
+}
+
 fn parse_static_damage_recipient(
     raw: &str,
     vocabulary: &CreatureTypeVocabulary,
 ) -> Option<StaticDamageRecipient> {
     match raw.trim() {
         "a permanent or player"
+        | "a permanent, player, or battle"
         | "a creature, planeswalker, or player"
+        | "a creature, planeswalker, battle, or player"
         | "a creature or player"
         | "any target" => Some(StaticDamageRecipient::Any),
         "an opponent or a permanent an opponent controls"
@@ -2155,17 +3164,41 @@ fn parse_static_damage_recipient(
         "a creature you control" => Some(StaticDamageRecipient::ControlledCreatures),
         "a creature an opponent controls" => Some(StaticDamageRecipient::OpponentCreatures),
         "a creature" => Some(StaticDamageRecipient::Creatures),
+        "a permanent you control" => Some(StaticDamageRecipient::MatchingPermanent(
+            ObjectFilter::permanent().controlled(),
+        )),
+        "a permanent an opponent controls" => Some(StaticDamageRecipient::MatchingPermanent(
+            ObjectFilter::permanent().opposing(),
+        )),
+        "a permanent" => Some(StaticDamageRecipient::MatchingPermanent(
+            ObjectFilter::permanent(),
+        )),
+        "a planeswalker you control" => Some(StaticDamageRecipient::MatchingPermanent(
+            ObjectFilter::planeswalker().controlled(),
+        )),
+        "a planeswalker an opponent controls" => Some(StaticDamageRecipient::MatchingPermanent(
+            ObjectFilter::planeswalker().opposing(),
+        )),
+        "a planeswalker" => Some(StaticDamageRecipient::MatchingPermanent(
+            ObjectFilter::planeswalker(),
+        )),
         "a player" => Some(StaticDamageRecipient::Players),
         "~" | "this creature" | "this permanent" => Some(StaticDamageRecipient::SelfObject),
         "enchanted creature" | "equipped creature" | "enchanted permanent" => {
             Some(StaticDamageRecipient::AttachedHost)
         }
         other => {
+            if other.contains("of the chosen") || other.contains(" card") {
+                return None;
+            }
             let ast_f = spellwake_oracle_compiler::filter::parse_object_filter(
                 other,
                 &cached_compiler_vocab(vocabulary),
             )
             .ok()?;
+            if ast_f.zone.is_some() || ast_f.any_spell {
+                return None;
+            }
             let obj = lower_object_filter(&ast_f, vocabulary).ok()?;
             Some(StaticDamageRecipient::MatchingPermanent(obj))
         }
@@ -2195,15 +3228,15 @@ fn parse_redirect_damage_event(
             .or_else(|| instead_norm.strip_prefix("is dealt to "))?;
         (would_norm, d_part.trim())
     };
+    let is_passive_would = effective_would.starts_with("be dealt to ");
     let to = match dest_str {
         "~" | "this creature" | "this permanent" => DamageRedirectTarget::AbilitySource,
         "enchanted creature" | "equipped creature" | "enchanted permanent" => {
             DamageRedirectTarget::AttachedHost
         }
         "you" => DamageRedirectTarget::Controller,
-        "that source's controller" | "its controller" => {
-            DamageRedirectTarget::DamageSourceController
-        }
+        "that source's controller" => DamageRedirectTarget::DamageSourceController,
+        "its controller" if !is_passive_would => DamageRedirectTarget::DamageSourceController,
         _ => return None,
     };
 
@@ -2256,11 +3289,17 @@ fn parse_redirect_damage_event(
             false,
         ),
         other => {
+            if other.contains("of the chosen") {
+                return None;
+            }
             let ast_f = spellwake_oracle_compiler::filter::parse_object_filter(
                 other,
                 &cached_compiler_vocab(vocabulary),
             )
             .ok()?;
+            if ast_f.any_spell && ast_f.any_types.is_empty() {
+                return None;
+            }
             if is_unrestricted_filter(&ast_f) {
                 (None, false)
             } else {
@@ -2272,11 +3311,18 @@ fn parse_redirect_damage_event(
     let recipient_clean = if source.is_none()
         && let Some((recip_part, by_src)) = recipient_raw.split_once(" by ")
     {
+        let by_trim = by_src.trim();
+        if by_trim.contains("of the chosen") {
+            return None;
+        }
         let ast_f = spellwake_oracle_compiler::filter::parse_object_filter(
-            by_src.trim(),
+            by_trim,
             &cached_compiler_vocab(vocabulary),
         )
         .ok()?;
+        if ast_f.any_spell && ast_f.any_types.is_empty() {
+            return None;
+        }
         if !is_unrestricted_filter(&ast_f) {
             source = Some(lower_object_filter(&ast_f, vocabulary).ok()?);
         }
@@ -2285,12 +3331,16 @@ fn parse_redirect_damage_event(
         recipient_raw
     };
 
-    let from = if recipient_clean == "you or another permanent you control"
-        && to == DamageRedirectTarget::AbilitySource
+    let from = if matches!(
+        recipient_clean,
+        "you or another permanent you control" | "you and other permanents you control"
+    ) && to == DamageRedirectTarget::AbilitySource
     {
         StaticDamageRecipient::ControllerOrControlledPermanent
-    } else if recipient_clean == "you or another creature you control"
-        && to == DamageRedirectTarget::AbilitySource
+    } else if matches!(
+        recipient_clean,
+        "you or another creature you control" | "you and other creatures you control"
+    ) && to == DamageRedirectTarget::AbilitySource
     {
         StaticDamageRecipient::ControllerOrControlledCreatures
     } else {
@@ -2383,55 +3433,79 @@ fn lower_event_replacement_ability(
         }
     }
 
-    // Life loss skip or amount modifier
+    // Life loss skip or amount modifier (including turn/world conditions like Bloodletter of Aclazotz)
     if let Some(player) = affected_player
-        && would_norm == "lose life"
         && !instead_norm.contains(" and ")
         && !instead_norm.contains(". ")
     {
-        let action_opt = if instead_norm.contains("prevent")
-            || instead_norm.contains("loses no life")
-            || instead_norm.contains("lose no life")
-            || instead_norm.contains("don't lose")
-            || instead_norm.contains("doesn't lose")
+        let life_loss_cond: Option<Option<ResolutionCondition>> = if would_norm == "lose life" {
+            Some(None)
+        } else if would_norm == "lose life during your turn" {
+            Some(Some(ResolutionCondition {
+                left: ValueExpr::PlayerStat(PlayerStatExpr::ControllerIsActivePlayer),
+                comparison: Comparison::Equal,
+                right: ValueExpr::literal(1),
+            }))
+        } else if would_norm == "lose life during an opponent's turn" {
+            Some(Some(ResolutionCondition {
+                left: ValueExpr::PlayerStat(PlayerStatExpr::ControllerIsActivePlayer),
+                comparison: Comparison::Equal,
+                right: ValueExpr::literal(0),
+            }))
+        } else if let Some(cond_raw) = would_norm
+            .strip_prefix("lose life while ")
+            .or_else(|| would_norm.strip_prefix("lose life if "))
         {
-            Some(StaticReplacementAction::Skip)
-        } else if instead_norm.contains("twice that much life")
-            || instead_norm.contains("double that much life")
-        {
-            Some(StaticReplacementAction::ModifyAmount {
-                add: Box::new(ValueExpr::literal(0)),
-                multiply: 2,
-            })
-        } else if instead_norm.contains("three times that much life")
-            || instead_norm.contains("triple that much life")
-        {
-            Some(StaticReplacementAction::ModifyAmount {
-                add: Box::new(ValueExpr::literal(0)),
-                multiply: 3,
-            })
-        } else if let Some((_, plus_str)) = instead_norm.split_once("that much life plus ")
-            && let Some(n_tok) = plus_str.split_whitespace().next()
-            && let Some(n) = parse_small_num(n_tok)
-            && n > 0
-        {
-            Some(StaticReplacementAction::ModifyAmount {
-                add: Box::new(ValueExpr::literal(i64::from(n))),
-                multiply: 1,
-            })
+            lower_world_resolution_condition(cond_raw, vocabulary).map(Some)
         } else {
             None
         };
-        if let Some(action) = action_opt {
-            return Some(push_static_ability(
-                program,
-                StaticContinuousAbility::EventReplacement {
+        if let Some(cond_opt) = life_loss_cond {
+            let action_opt = if instead_norm.contains("prevent")
+                || instead_norm.contains("loses no life")
+                || instead_norm.contains("lose no life")
+                || instead_norm.contains("don't lose")
+                || instead_norm.contains("doesn't lose")
+            {
+                Some(StaticReplacementAction::Skip)
+            } else if instead_norm.contains("twice that much life")
+                || instead_norm.contains("double that much life")
+            {
+                Some(StaticReplacementAction::ModifyAmount {
+                    add: Box::new(ValueExpr::literal(0)),
+                    multiply: 2,
+                })
+            } else if instead_norm.contains("three times that much life")
+                || instead_norm.contains("triple that much life")
+            {
+                Some(StaticReplacementAction::ModifyAmount {
+                    add: Box::new(ValueExpr::literal(0)),
+                    multiply: 3,
+                })
+            } else if let Some((_, plus_str)) = instead_norm.split_once("that much life plus ")
+                && let Some(n_tok) = plus_str.split_whitespace().next()
+                && let Some(n) = parse_small_num(n_tok)
+                && n > 0
+            {
+                Some(StaticReplacementAction::ModifyAmount {
+                    add: Box::new(ValueExpr::literal(i64::from(n))),
+                    multiply: 1,
+                })
+            } else {
+                None
+            };
+            if let Some(action) = action_opt {
+                let ability = StaticContinuousAbility::EventReplacement {
                     id: ids.static_id(),
                     event: ReplaceableEvent::LifeLoss { player },
-                    condition: None,
+                    condition: cond_opt
+                        .map(|rc| Box::new(StaticSourceCondition::Eval(Box::new(rc)))),
                     action,
-                },
-            ));
+                };
+                if ability.validate(vocabulary).is_ok() {
+                    return Some(push_static_ability(program, ability));
+                }
+            }
         }
     }
 
@@ -2507,57 +3581,169 @@ fn lower_event_replacement_ability(
         }
     }
 
-    // Draw skip or body replacement (CR 614.1a)
-    if subj_low == "you" && would_norm == "draw a card" {
-        if matches!(instead_norm, "skip that draw" | "you skip that draw") {
-            return Some(push_static_ability(
-                program,
-                StaticContinuousAbility::EventReplacement {
-                    id: ids.static_id(),
-                    event: ReplaceableEvent::Draw {
-                        player: AffectedPlayers::One(ResolvingPlayer::Controller),
-                    },
-                    condition: None,
-                    action: StaticReplacementAction::Skip,
-                },
-            ));
-        }
-        let (optional, action_str) = if let Some(rest) = instead_raw
-            .strip_prefix("you may instead ")
-            .map(|s| s.trim_end_matches(" instead").trim())
+    // Draw skip, conditional amount modifier, or body replacement (CR 614.1a)
+    if let Some(player) = affected_player {
+        let draw_spec: Option<(bool, Option<ResolutionCondition>)> = if would_norm == "draw a card"
         {
-            (true, rest)
-        } else if let Some(rest) = instead_norm.strip_prefix("you may ") {
-            (true, rest.trim())
+            Some((true, None))
+        } else if would_norm == "draw one or more cards" {
+            Some((false, None))
+        } else if let Some(cond_raw) = would_norm
+            .strip_prefix("draw a card while ")
+            .or_else(|| would_norm.strip_prefix("draw a card if "))
+        {
+            if cond_raw.trim() == "your library has no cards in it" {
+                None
+            } else {
+                lower_world_resolution_condition(cond_raw, vocabulary).map(|rc| (true, Some(rc)))
+            }
+        } else if let Some(cond_raw) = would_norm
+            .strip_prefix("draw one or more cards while ")
+            .or_else(|| would_norm.strip_prefix("draw one or more cards if "))
+        {
+            if cond_raw.trim() == "your library has no cards in it" {
+                None
+            } else {
+                lower_world_resolution_condition(cond_raw, vocabulary).map(|rc| (false, Some(rc)))
+            }
         } else {
-            (false, instead_norm)
+            None
         };
-        if !action_str.is_empty()
-            && !action_str.contains("instead")
-            && !matches!(action_str, "skip that draw" | "you skip that draw")
-        {
-            let (ins, fails) = spellwake_oracle_compiler::clauses::parse_effect_body(
-                action_str,
-                &cached_compiler_vocab(vocabulary),
-            );
-            if fails.is_empty()
-                && !ins.is_empty()
-                && let Ok(body) = lower_effect_body(&ins, vocabulary, ids, false, true)
-                && body.target == BodyTarget::None
-            {
+
+        if let Some((is_single_draw, cond_opt)) = draw_spec {
+            let condition = cond_opt.map(|rc| Box::new(StaticSourceCondition::Eval(Box::new(rc))));
+            if matches!(
+                instead_norm,
+                "skip that draw"
+                    | "you skip that draw"
+                    | "that player skips that draw"
+                    | "they skip that draw"
+            ) {
                 let ability = StaticContinuousAbility::EventReplacement {
                     id: ids.static_id(),
-                    event: ReplaceableEvent::Draw {
-                        player: AffectedPlayers::One(ResolvingPlayer::Controller),
-                    },
-                    condition: None,
-                    action: StaticReplacementAction::ReplaceWithBody {
-                        optional,
-                        body: Box::new(body),
-                    },
+                    event: ReplaceableEvent::Draw { player },
+                    condition,
+                    action: StaticReplacementAction::Skip,
                 };
                 if ability.validate(vocabulary).is_ok() {
                     return Some(push_static_ability(program, ability));
+                }
+                return None;
+            }
+            if condition.is_some()
+                && !instead_norm.contains(" and ")
+                && !instead_norm.contains(". ")
+            {
+                let mod_action = if matches!(
+                    instead_norm,
+                    "draw twice that many cards"
+                        | "you draw twice that many cards"
+                        | "that player draws twice that many cards"
+                        | "they draw twice that many cards"
+                ) {
+                    Some(StaticReplacementAction::ModifyAmount {
+                        add: Box::new(ValueExpr::literal(0)),
+                        multiply: 2,
+                    })
+                } else if matches!(
+                    instead_norm,
+                    "draw three times that many cards"
+                        | "you draw three times that many cards"
+                        | "that player draws three times that many cards"
+                        | "they draw three times that many cards"
+                ) {
+                    Some(StaticReplacementAction::ModifyAmount {
+                        add: Box::new(ValueExpr::literal(0)),
+                        multiply: 3,
+                    })
+                } else if is_single_draw
+                    && let Some(n) = instead_norm
+                        .strip_prefix("you draw ")
+                        .or_else(|| instead_norm.strip_prefix("that player draws "))
+                        .or_else(|| instead_norm.strip_prefix("they draw "))
+                        .or_else(|| instead_norm.strip_prefix("draw "))
+                        .and_then(|r| r.strip_suffix(" cards"))
+                        .and_then(parse_small_num)
+                    && n >= 2
+                {
+                    Some(StaticReplacementAction::ModifyAmount {
+                        add: Box::new(ValueExpr::literal(0)),
+                        multiply: n,
+                    })
+                } else if let Some(n) = instead_norm
+                    .strip_prefix("you draw that many cards plus ")
+                    .or_else(|| {
+                        instead_norm.strip_prefix("that player draws that many cards plus ")
+                    })
+                    .or_else(|| instead_norm.strip_prefix("they draw that many cards plus "))
+                    .or_else(|| instead_norm.strip_prefix("draw that many cards plus "))
+                    .and_then(parse_small_num)
+                    && n > 0
+                {
+                    Some(StaticReplacementAction::ModifyAmount {
+                        add: Box::new(ValueExpr::literal(i64::from(n))),
+                        multiply: 1,
+                    })
+                } else {
+                    None
+                };
+                if let Some(action) = mod_action {
+                    let ability = StaticContinuousAbility::EventReplacement {
+                        id: ids.static_id(),
+                        event: ReplaceableEvent::Draw { player },
+                        condition: condition.clone(),
+                        action,
+                    };
+                    if ability.validate(vocabulary).is_ok() {
+                        return Some(push_static_ability(program, ability));
+                    }
+                }
+            }
+            if subj_low == "you" && is_single_draw {
+                let (optional, action_str) = if let Some(rest) = instead_raw
+                    .strip_prefix("you may instead ")
+                    .map(|s| s.trim_end_matches(" instead").trim())
+                {
+                    (true, rest)
+                } else if let Some(rest) = instead_norm.strip_prefix("you may ") {
+                    (true, rest.trim())
+                } else {
+                    (false, instead_norm)
+                };
+                if !action_str.is_empty()
+                    && !action_str.contains("instead")
+                    && !matches!(
+                        action_str,
+                        "skip that draw"
+                            | "you skip that draw"
+                            | "that player skips that draw"
+                            | "they skip that draw"
+                    )
+                {
+                    let (ins, fails) = spellwake_oracle_compiler::clauses::parse_effect_body(
+                        action_str,
+                        &cached_compiler_vocab(vocabulary),
+                    );
+                    if fails.is_empty()
+                        && !ins.is_empty()
+                        && let Ok(body) = lower_effect_body(&ins, vocabulary, ids, false, true)
+                        && body.target == BodyTarget::None
+                    {
+                        let ability = StaticContinuousAbility::EventReplacement {
+                            id: ids.static_id(),
+                            event: ReplaceableEvent::Draw {
+                                player: AffectedPlayers::One(ResolvingPlayer::Controller),
+                            },
+                            condition,
+                            action: StaticReplacementAction::ReplaceWithBody {
+                                optional,
+                                body: Box::new(body),
+                            },
+                        };
+                        if ability.validate(vocabulary).is_ok() {
+                            return Some(push_static_ability(program, ability));
+                        }
+                    }
                 }
             }
         }
@@ -2566,12 +3752,56 @@ fn lower_event_replacement_ability(
     None
 }
 
-pub(super) fn parse_modify_damage_event(
-    subj_low: &str,
-    would_norm: &str,
-    instead_norm: &str,
+fn parse_subtype_damage_source(
+    other: &str,
     vocabulary: &CreatureTypeVocabulary,
-) -> Option<StaticDamageRule> {
+) -> Option<(Option<ObjectFilter>, PlayerRelation)> {
+    let (ctrl_rel, without_ctrl) = if let Some(rest) = other.strip_suffix(" you control") {
+        (PlayerRelation::Controller, rest.trim())
+    } else if let Some(rest) = other
+        .strip_suffix(" an opponent controls")
+        .or_else(|| other.strip_suffix(" opponents control"))
+        .or_else(|| other.strip_suffix(" you don't control"))
+    {
+        (PlayerRelation::Opponent, rest.trim())
+    } else {
+        (PlayerRelation::AnyParticipant, other.trim())
+    };
+    let core = without_ctrl
+        .strip_prefix("an ")
+        .or_else(|| without_ctrl.strip_prefix("a "))
+        .unwrap_or(without_ctrl)
+        .trim();
+    if let Some(sub_raw) = core.strip_suffix(" source")
+        && let Some(ct) = resolve_creature_subtype_token(sub_raw, vocabulary)
+    {
+        return Some((Some(ObjectFilter::any().with_subtype(ct)), ctrl_rel));
+    }
+    let subtypes = parse_creature_subtype_list(core, vocabulary)?;
+    let base = ObjectClause::permanent();
+    let filter = match subtypes.as_slice() {
+        [a, b] => ObjectFilter::either(base.with_subtype(*a), base.with_subtype(*b)),
+        [a, b, c] => ObjectFilter::Clause(base.among_subtypes([*a, *b, *c])),
+        [a, b, c, d] => {
+            ObjectFilter::either(base.among_subtypes([*a, *b, *c]), base.with_subtype(*d))
+        }
+        [a, b, c, d, e] => ObjectFilter::either(
+            base.among_subtypes([*a, *b, *c]),
+            base.among_subtypes([*d, *e, *d]),
+        ),
+        [a, b, c, d, e, f] => ObjectFilter::either(
+            base.among_subtypes([*a, *b, *c]),
+            base.among_subtypes([*d, *e, *f]),
+        ),
+        _ => return None,
+    };
+    Some((Some(filter), ctrl_rel))
+}
+
+fn parse_damage_source_filter(
+    subj_low: &str,
+    vocabulary: &CreatureTypeVocabulary,
+) -> Option<(Option<ObjectFilter>, PlayerRelation)> {
     let (other_than_self, core_subj) = if let Some(rest) = subj_low.strip_prefix("another ") {
         (true, format!("a {rest}"))
     } else {
@@ -2580,15 +3810,33 @@ pub(super) fn parse_modify_damage_event(
     let (mut source, source_controller): (Option<ObjectFilter>, PlayerRelation) = match core_subj
         .as_str()
     {
-        "a source" => (None, PlayerRelation::AnyParticipant),
-        "a source you control" => (None, PlayerRelation::Controller),
+        "a source" | "any source" | "sources" => (None, PlayerRelation::AnyParticipant),
+        "a source you control" | "any source you control" | "sources you control" => {
+            (None, PlayerRelation::Controller)
+        }
+        "a source an opponent controls"
+        | "a source you don't control"
+        | "sources opponents control"
+        | "sources an opponent controls" => (None, PlayerRelation::Opponent),
+        "a white source" => (
+            Some(ObjectFilter::any().with_color(ObjectColorFilter::has(Color::White))),
+            PlayerRelation::AnyParticipant,
+        ),
+        "a blue source" => (
+            Some(ObjectFilter::any().with_color(ObjectColorFilter::has(Color::Blue))),
+            PlayerRelation::AnyParticipant,
+        ),
+        "a black source" => (
+            Some(ObjectFilter::any().with_color(ObjectColorFilter::has(Color::Black))),
+            PlayerRelation::AnyParticipant,
+        ),
         "a red source" => (
             Some(ObjectFilter::any().with_color(ObjectColorFilter::has(Color::Red))),
             PlayerRelation::AnyParticipant,
         ),
-        "a red source you control" => (
-            Some(ObjectFilter::any().with_color(ObjectColorFilter::has(Color::Red))),
-            PlayerRelation::Controller,
+        "a green source" => (
+            Some(ObjectFilter::any().with_color(ObjectColorFilter::has(Color::Green))),
+            PlayerRelation::AnyParticipant,
         ),
         "a white source you control" => (
             Some(ObjectFilter::any().with_color(ObjectColorFilter::has(Color::White))),
@@ -2602,16 +3850,62 @@ pub(super) fn parse_modify_damage_event(
             Some(ObjectFilter::any().with_color(ObjectColorFilter::has(Color::Black))),
             PlayerRelation::Controller,
         ),
+        "a red source you control" => (
+            Some(ObjectFilter::any().with_color(ObjectColorFilter::has(Color::Red))),
+            PlayerRelation::Controller,
+        ),
         "a green source you control" => (
             Some(ObjectFilter::any().with_color(ObjectColorFilter::has(Color::Green))),
             PlayerRelation::Controller,
         ),
-        "a creature you control" => (Some(ObjectFilter::creature()), PlayerRelation::Controller),
-        "a creature" => (
+        "a red or artifact source you control" => (
+            Some(ObjectFilter::either(
+                ObjectClause::any().with_color(ObjectColorFilter::has(Color::Red)),
+                ObjectClause::artifact(),
+            )),
+            PlayerRelation::Controller,
+        ),
+        "a noncreature source" => (
+            Some(ObjectFilter::noncreature()),
+            PlayerRelation::AnyParticipant,
+        ),
+        "a noncreature source you control" => (
+            Some(ObjectFilter::noncreature()),
+            PlayerRelation::Controller,
+        ),
+        "a creature you control" | "creatures you control" | "creature sources you control" => {
+            (Some(ObjectFilter::creature()), PlayerRelation::Controller)
+        }
+        "a creature" | "creatures" | "creature sources" => (
             Some(ObjectFilter::creature()),
             PlayerRelation::AnyParticipant,
         ),
-        "a permanent you control" => (Some(ObjectFilter::permanent()), PlayerRelation::Controller),
+        "creatures you control with counters on them"
+        | "a creature you control with a counter on it" => (
+            Some(ObjectFilter::creature().with_flags(ObjectFilterFlags::WITH_ANY_COUNTER)),
+            PlayerRelation::Controller,
+        ),
+        "a creature you control with a +1/+1 counter on it"
+        | "creatures you control with +1/+1 counters on them" => (
+            Some(ObjectFilter::creature().with_flags(ObjectFilterFlags::WITH_PLUS_ONE_COUNTER)),
+            PlayerRelation::Controller,
+        ),
+        "a creature you control that entered this turn"
+        | "a creature you control that entered the battlefield this turn" => (
+            Some(ObjectFilter::creature().entered_this_turn()),
+            PlayerRelation::Controller,
+        ),
+        "a source you control with an odd mana value" => (
+            Some(ObjectFilter::any().with_mana_value(ManaValueFilter::Odd)),
+            PlayerRelation::Controller,
+        ),
+        "a source you control with an even mana value" => (
+            Some(ObjectFilter::any().with_mana_value(ManaValueFilter::Even)),
+            PlayerRelation::Controller,
+        ),
+        "a permanent you control" | "permanents you control" => {
+            (Some(ObjectFilter::permanent()), PlayerRelation::Controller)
+        }
         "a creature or planeswalker you control" => (
             Some(ObjectFilter::any_types(
                 CardTypeMask::CREATURE.union(CardTypeMask::PLANESWALKER),
@@ -2621,34 +3915,58 @@ pub(super) fn parse_modify_damage_event(
         "an artifact you control" | "a artifact you control" => {
             (Some(ObjectFilter::artifact()), PlayerRelation::Controller)
         }
+        "an artifact" | "a artifact" => (
+            Some(ObjectFilter::artifact()),
+            PlayerRelation::AnyParticipant,
+        ),
         "a red instant or sorcery spell you control" => (
             Some(ObjectFilter::instant_or_sorcery().with_color(ObjectColorFilter::has(Color::Red))),
             PlayerRelation::Controller,
         ),
-        "an instant or sorcery spell you control" | "a instant or sorcery spell you control" => (
+        "an instant or sorcery spell you control"
+        | "a instant or sorcery spell you control"
+        | "an instant or sorcery source you control"
+        | "a instant or sorcery source you control" => (
             Some(ObjectFilter::instant_or_sorcery()),
             PlayerRelation::Controller,
         ),
+        "an instant or sorcery source" | "a instant or sorcery source" => (
+            Some(ObjectFilter::instant_or_sorcery()),
+            PlayerRelation::AnyParticipant,
+        ),
+        "a red instant or sorcery spell you control or a red planeswalker you control" => (
+            Some(ObjectFilter::either(
+                ObjectClause::any()
+                    .any_types(CardTypeMask::INSTANT.union(CardTypeMask::SORCERY))
+                    .with_color(ObjectColorFilter::has(Color::Red)),
+                ObjectClause::planeswalker().with_color(ObjectColorFilter::has(Color::Red)),
+            )),
+            PlayerRelation::Controller,
+        ),
+        "~" | "this creature" | "this permanent" => (
+            Some(ObjectFilter::self_object()),
+            PlayerRelation::AnyParticipant,
+        ),
+        "enchanted creature" | "equipped creature" => (
+            Some(ObjectFilter::Clause(ObjectClause {
+                source_relation: SourceRelation::AttachedToSelf,
+                ..ObjectClause::any()
+            })),
+            PlayerRelation::AnyParticipant,
+        ),
         other => {
-            if other == "a source an opponent controls" || other == "a source you don't control" {
-                (None, PlayerRelation::Opponent)
-            } else if matches!(other, "~" | "this creature" | "this permanent") {
-                (
-                    Some(ObjectFilter::self_object()),
-                    PlayerRelation::AnyParticipant,
-                )
-            } else if matches!(other, "enchanted creature" | "equipped creature") {
-                (
-                    Some(ObjectFilter::Clause(ObjectClause {
-                        source_relation: SourceRelation::AttachedToSelf,
-                        ..ObjectClause::any()
-                    })),
-                    PlayerRelation::AnyParticipant,
-                )
+            if other.contains("of the chosen") {
+                return None;
+            }
+            if let Some(res) = parse_subtype_damage_source(other, vocabulary) {
+                res
             } else if let Ok(mut ast_f) = spellwake_oracle_compiler::filter::parse_object_filter(
                 other,
                 &cached_compiler_vocab(vocabulary),
             ) {
+                if ast_f.any_spell && ast_f.any_types.is_empty() {
+                    return None;
+                }
                 let ctrl_rel = match ast_f.controller.take() {
                     Some(ControllerRelation::You) => PlayerRelation::Controller,
                     Some(ControllerRelation::Opponent | ControllerRelation::Opponents) => {
@@ -2677,51 +3995,71 @@ pub(super) fn parse_modify_damage_event(
                 .other_than_ability_source(),
         );
     }
+    Some((source, source_controller))
+}
+
+pub(super) fn parse_modify_damage_event(
+    subj_low: &str,
+    would_norm: &str,
+    instead_norm: &str,
+    vocabulary: &CreatureTypeVocabulary,
+) -> Option<StaticDamageRule> {
+    let (source, source_controller) = parse_damage_source_filter(subj_low, vocabulary)?;
 
     let mut threshold_cap: Option<u8> = None;
-    let (kind, rest_target) = if let Some(rest) = would_norm.strip_prefix("deal combat damage to ")
-    {
-        (StaticDamageKind::CombatOnly, rest)
-    } else if let Some(rest) = would_norm.strip_prefix("deal noncombat damage to ") {
-        (StaticDamageKind::NoncombatOnly, rest)
-    } else if let Some(rest) = would_norm.strip_prefix("deal damage to ") {
-        (StaticDamageKind::Any, rest)
-    } else if let Some(rest) = would_norm.strip_prefix("deal more than ") {
-        let mut parts = rest.splitn(2, ' ');
-        let n_tok = parts.next()?;
-        let after_n = parts.next()?.trim();
-        let cap = parse_small_num(n_tok)?;
-        threshold_cap = Some(cap);
-        if let Some(t) = after_n.strip_prefix("combat damage to ") {
-            (StaticDamageKind::CombatOnly, t)
-        } else if let Some(t) = after_n.strip_prefix("noncombat damage to ") {
-            (StaticDamageKind::NoncombatOnly, t)
-        } else {
-            let t = after_n.strip_prefix("damage to ")?;
-            (StaticDamageKind::Any, t)
-        }
+    let (kind, recipient) = if would_norm == "deal combat damage" {
+        (StaticDamageKind::CombatOnly, StaticDamageRecipient::Any)
+    } else if would_norm == "deal noncombat damage" {
+        (StaticDamageKind::NoncombatOnly, StaticDamageRecipient::Any)
+    } else if would_norm == "deal damage" {
+        (StaticDamageKind::Any, StaticDamageRecipient::Any)
     } else {
-        let rest = would_norm.strip_prefix("deal ")?;
-        let mut parts = rest.splitn(2, ' ');
-        let n_tok = parts.next()?;
-        let after_n = parts.next()?.trim();
-        let n = parse_small_num(n_tok)?;
-        let after_or_more = after_n.strip_prefix("or more ")?;
-        if n == 0 {
-            return None;
-        }
-        threshold_cap = Some(n - 1);
-        if let Some(t) = after_or_more.strip_prefix("combat damage to ") {
-            (StaticDamageKind::CombatOnly, t)
-        } else if let Some(t) = after_or_more.strip_prefix("noncombat damage to ") {
-            (StaticDamageKind::NoncombatOnly, t)
-        } else {
-            let t = after_or_more.strip_prefix("damage to ")?;
-            (StaticDamageKind::Any, t)
-        }
+        let (kind, rest_target) =
+            if let Some(rest) = would_norm.strip_prefix("deal combat damage to ") {
+                (StaticDamageKind::CombatOnly, rest)
+            } else if let Some(rest) = would_norm.strip_prefix("deal noncombat damage to ") {
+                (StaticDamageKind::NoncombatOnly, rest)
+            } else if let Some(rest) = would_norm.strip_prefix("deal damage to ") {
+                (StaticDamageKind::Any, rest)
+            } else if let Some(rest) = would_norm.strip_prefix("deal more than ") {
+                let mut parts = rest.splitn(2, ' ');
+                let n_tok = parts.next()?;
+                let after_n = parts.next()?.trim();
+                let cap = parse_small_num(n_tok)?;
+                threshold_cap = Some(cap);
+                if let Some(t) = after_n.strip_prefix("combat damage to ") {
+                    (StaticDamageKind::CombatOnly, t)
+                } else if let Some(t) = after_n.strip_prefix("noncombat damage to ") {
+                    (StaticDamageKind::NoncombatOnly, t)
+                } else {
+                    let t = after_n.strip_prefix("damage to ")?;
+                    (StaticDamageKind::Any, t)
+                }
+            } else {
+                let rest = would_norm.strip_prefix("deal ")?;
+                let mut parts = rest.splitn(2, ' ');
+                let n_tok = parts.next()?;
+                let after_n = parts.next()?.trim();
+                let n = parse_small_num(n_tok)?;
+                let after_or_more = after_n.strip_prefix("or more ")?;
+                if n == 0 {
+                    return None;
+                }
+                threshold_cap = Some(n - 1);
+                if let Some(t) = after_or_more.strip_prefix("combat damage to ") {
+                    (StaticDamageKind::CombatOnly, t)
+                } else if let Some(t) = after_or_more.strip_prefix("noncombat damage to ") {
+                    (StaticDamageKind::NoncombatOnly, t)
+                } else {
+                    let t = after_or_more.strip_prefix("damage to ")?;
+                    (StaticDamageKind::Any, t)
+                }
+            };
+        (
+            kind,
+            parse_static_damage_recipient(rest_target, vocabulary)?,
+        )
     };
-
-    let recipient = parse_static_damage_recipient(rest_target, vocabulary)?;
 
     let target_suffix_ok = |tail: &str| {
         matches!(
@@ -2734,11 +4072,19 @@ pub(super) fn parse_modify_damage_event(
                 | "to it"
                 | "to you"
                 | "to ~"
+                | "to this creature"
+                | "to this permanent"
+                | "to equipped creature"
+                | "to enchanted creature"
+                | "to enchanted player"
         )
     };
+    let after_deals = instead_norm
+        .strip_prefix("it deals ")
+        .or_else(|| instead_norm.strip_prefix("that source deals "));
 
     let op = if let Some(expected_cap) = threshold_cap {
-        let rest = instead_norm.strip_prefix("it deals ")?;
+        let rest = after_deals?;
         let mut parts = rest.splitn(2, ' ');
         let k_tok = parts.next()?;
         let after_k = parts.next()?.trim();
@@ -2779,14 +4125,14 @@ pub(super) fn parse_modify_damage_event(
         && n > 0
     {
         StaticDamageOp::PreventUpTo(n)
-    } else if let Some(rest) = instead_norm.strip_prefix("it deals that much damage minus ")
+    } else if let Some(rest) = after_deals.and_then(|s| s.strip_prefix("that much damage minus "))
         && let Some(n_tok) = rest.split_whitespace().next()
         && let Some(n) = parse_small_num(n_tok)
         && n > 0
         && target_suffix_ok(rest.strip_prefix(n_tok).unwrap_or("").trim())
     {
         StaticDamageOp::Subtract(n)
-    } else if let Some(rest) = instead_norm.strip_prefix("it deals ")
+    } else if let Some(rest) = after_deals
         && let Some(n_tok) = rest.split_whitespace().next()
         && let Some(n) = parse_small_num(n_tok)
         && n > 0
@@ -2798,35 +4144,20 @@ pub(super) fn parse_modify_damage_event(
         && target_suffix_ok(after_less.trim())
     {
         StaticDamageOp::Subtract(n)
-    } else if matches!(
-        instead_norm,
-        "it deals double that damage"
-            | "it deals double that damage to that player"
-            | "it deals double that damage to that permanent or player"
-            | "it deals double that damage to that player or permanent"
-            | "it deals double that damage to that creature"
-            | "it deals twice that much damage"
-            | "it deals twice that much damage to that player"
-            | "it deals twice that much damage to that permanent or player"
-            | "it deals twice that much damage to that player or permanent"
-            | "it deals twice that much damage to that creature"
-    ) {
+    } else if let Some(tail) = after_deals.and_then(|s| {
+        s.strip_prefix("double that damage")
+            .or_else(|| s.strip_prefix("twice that much damage"))
+    }) && target_suffix_ok(tail.trim())
+    {
         StaticDamageOp::Multiply(2)
-    } else if matches!(
-        instead_norm,
-        "it deals triple that damage"
-            | "it deals triple that damage to that player"
-            | "it deals triple that damage to that permanent or player"
-            | "it deals triple that damage to that player or permanent"
-            | "it deals triple that damage to that creature"
-            | "it deals three times that much damage"
-            | "it deals three times that much damage to that player"
-            | "it deals three times that much damage to that permanent or player"
-            | "it deals three times that much damage to that player or permanent"
-    ) {
+    } else if let Some(tail) = after_deals.and_then(|s| {
+        s.strip_prefix("triple that damage")
+            .or_else(|| s.strip_prefix("three times that much damage"))
+    }) && target_suffix_ok(tail.trim())
+    {
         StaticDamageOp::Multiply(3)
     } else {
-        let rest = instead_norm.strip_prefix("it deals that much damage plus ")?;
+        let rest = after_deals?.strip_prefix("that much damage plus ")?;
         if let Some(n_tok) = rest.split_whitespace().next()
             && let Some(n) = parse_small_num(n_tok)
             && n > 0
@@ -2844,6 +4175,11 @@ pub(super) fn parse_modify_damage_event(
                     .or_else(|| s.strip_suffix(" to it"))
                     .or_else(|| s.strip_suffix(" to you"))
                     .or_else(|| s.strip_suffix(" to ~"))
+                    .or_else(|| s.strip_suffix(" to this creature"))
+                    .or_else(|| s.strip_suffix(" to this permanent"))
+                    .or_else(|| s.strip_suffix(" to equipped creature"))
+                    .or_else(|| s.strip_suffix(" to enchanted creature"))
+                    .or_else(|| s.strip_suffix(" to enchanted player"))
                     .unwrap_or(s)
                     .trim()
             }

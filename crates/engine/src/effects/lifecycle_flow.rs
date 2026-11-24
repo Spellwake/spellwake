@@ -235,6 +235,12 @@ impl EffectWindow {
         if entered {
             // The new active/window and actual control-history stamp already exist.
             let before = next.rules_snapshot(Some(next_turn))?;
+            if position.step == Step::BeginningCombat {
+                next.characteristics.combat_phases_this_turn = next
+                    .characteristics
+                    .combat_phases_this_turn
+                    .saturating_add(1);
+            }
             if position.step == Step::PrecombatMain {
                 let current = next.evaluated_characteristics()?;
                 for (&id, permanent) in &current.objects {
