@@ -1280,6 +1280,15 @@ impl ObjectFilter {
         }
     }
 
+    /// True when any clause of this filter requires `flag`.
+    #[must_use]
+    pub const fn has_flag(self, flag: ObjectFilterFlags) -> bool {
+        match self {
+            Self::Clause(a) => a.flags.contains(flag),
+            Self::Either(a, b) => a.flags.contains(flag) || b.flags.contains(flag),
+        }
+    }
+
     #[must_use]
     pub const fn from_clause(clause: ObjectClause) -> Self {
         Self::Clause(clause)

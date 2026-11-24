@@ -3435,6 +3435,14 @@ impl EffectWindow {
                         self.linked_exiles.entry(src).or_default().extend(new_ids);
                     }
                 }
+                DelayedReturnTiming::LinkedGroup(group) => {
+                    if let Some(src) = source_id {
+                        self.independent_exile_links
+                            .entry((src, group))
+                            .or_default()
+                            .extend(new_ids);
+                    }
+                }
             }
         }
         Ok(moved_count)
@@ -5622,6 +5630,17 @@ impl EffectWindow {
             operation,
             ResolutionSelectionOperation::ExileGraveyardTargets { .. }
         ) {
+            for (movement, _) in &ordered {
+                if movement.after.zone() == ObjectZone::Exile
+                    && let Some((definition, _)) = before
+                        .view()
+                        .characteristics
+                        .copiable_definition(&movement.before, &self.programs)
+                {
+                    self.departed_copy_sources
+                        .insert(movement.before.id(), definition.clone());
+                }
+            }
             ordered
                 .iter()
                 .filter(|(movement, _)| {

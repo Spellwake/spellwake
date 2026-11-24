@@ -603,12 +603,14 @@ fn counter_keyword(keyword: spellwake_engine::program::CounterKeyword) -> Value 
 enum LinkWire {
     FiendHunter,
     Helvault,
+    SourceLinked,
 }
 impl From<LinkWire> for spellwake_engine::program::LinkedExileGroup {
     fn from(value: LinkWire) -> Self {
         match value {
             LinkWire::FiendHunter => Self::FiendHunter,
             LinkWire::Helvault => Self::Helvault,
+            LinkWire::SourceLinked => Self::SourceLinked,
         }
     }
 }
@@ -10408,6 +10410,7 @@ pub fn body(value: &ExecutableBody) -> Value {
                 spellwake_engine::program::EffectManaYield::CommanderIdentity { amount } => json!({"op":"AddManaCommanderIdentity","amount":instruction_amount(amount)}),
                 spellwake_engine::program::EffectManaYield::SourceChosenColor { amount } => json!({"op":"AddManaSourceChosenColor","amount":instruction_amount(amount)}),
                 spellwake_engine::program::EffectManaYield::DistinctColors { amount } => json!({"op":"AddManaDistinctColors","amount":instruction_amount(amount)}),
+                spellwake_engine::program::EffectManaYield::RetainedUntilCleanup(inner) => json!({"op":"AddManaRetainedUntilCleanup","inner":format!("{inner:?}")}),
             },
             Instruction::RequireCondition(cond) => match cond {
                 spellwake_engine::program::InterveningCondition::ReturnSourceOnBattlefield => json!({"op":"RequireReturnSourceOnBattlefield"}),
@@ -10630,6 +10633,7 @@ pub fn body(value: &ExecutableBody) -> Value {
                     SearchSource::OwnLibrary => "OwnLibrary".to_owned(),
                     SearchSource::OwnLibraryOrGraveyard => "OwnLibraryOrGraveyard".to_owned(),
                     SearchSource::TargetOpponentLibrary => "TargetOpponentLibrary".to_owned(),
+                    SearchSource::TargetPlayerLibrary => "TargetPlayerLibrary".to_owned(),
                     SearchSource::PlayerLibrary(seat) => format!("PlayerLibrary({})", seat.0),
                 };
                 json!({

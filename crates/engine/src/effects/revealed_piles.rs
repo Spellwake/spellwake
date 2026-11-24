@@ -1107,6 +1107,18 @@ impl EffectWindow {
                 counters.push((movement.before.id(), id, added));
             }
         }
+        if look_top_choose.is_some() {
+            let took_card = movements.iter().any(|movement| {
+                matches!(
+                    movement.after.zone(),
+                    ObjectZone::Hand(_) | ObjectZone::Battlefield
+                )
+            });
+            self.resolution_cursor_mut()
+                .ok_or(EffectError::WrongResolutionFrame)?
+                .results
+                .last_action_succeeded = took_card;
+        }
         self.resolution_cursor_mut()
             .ok_or(EffectError::WrongResolutionFrame)?
             .chosen_opponent = None;

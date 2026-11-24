@@ -695,6 +695,37 @@ impl EffectWindow {
                             _ => 0.into(),
                         }
                     }
+                    SourceStateExpr::IsRingBearer => i64::from(
+                        self.characteristics.ring_bearer.get(&controller) == Some(&source_id)
+                            && self.window.cards().get(source_id).is_some_and(|o| {
+                                o.zone() == ObjectZone::Battlefield
+                                    && o.controller() == Some(controller)
+                            }),
+                    )
+                    .into(),
+                    SourceStateExpr::EnteredFromGraveyard => i64::from(
+                        self.characteristics
+                            .entered_from_graveyard
+                            .contains(&source_id),
+                    )
+                    .into(),
+                    SourceStateExpr::PaidAlternative => i64::from(
+                        self.characteristics
+                            .paid_alternative_objects
+                            .contains(&source_id)
+                            || self
+                                .characteristics
+                                .cast_summaries
+                                .get(&source_id)
+                                .is_some_and(|s| s.paid_alternative)
+                            || self.window.resolving().is_some_and(|e| match e.kind() {
+                                StackKind::CardSpell(id) if *id == source_id => {
+                                    e.paid_conditional_cost() || e.cast_summary().paid_alternative
+                                }
+                                _ => false,
+                            }),
+                    )
+                    .into(),
                 };
                 Ok(val)
             }
@@ -2140,6 +2171,67 @@ impl EffectWindow {
                         .min()
                         .unwrap_or(0),
                 )),
+                PlayerStatExpr::CombatPhasesThisTurn => {
+                    Ok(i64::from(self.characteristics.combat_phases_this_turn).into())
+                }
+                PlayerStatExpr::CardsEnteredGraveyardThisTurn => Ok(i64::from(
+                    self.characteristics
+                        .cards_entered_graveyard_this_turn
+                        .get(&controller)
+                        .copied()
+                        .unwrap_or(0),
+                )
+                .into()),
+                PlayerStatExpr::CountersPlacedOnCreaturesThisTurn => Ok(i64::from(
+                    self.characteristics
+                        .counters_placed_on_creatures_this_turn
+                        .get(&controller)
+                        .copied()
+                        .unwrap_or(0),
+                )
+                .into()),
+                PlayerStatExpr::LandsEnteredThisTurn(role) => {
+                    let seat = if *role == crate::program::ResolvingPlayer::Controller {
+                        controller
+                    } else {
+                        self.resolving_player_at(*role, cursor)?
+                    };
+                    Ok(i64::from(
+                        self.characteristics
+                            .lands_entered_this_turn
+                            .get(&seat)
+                            .copied()
+                            .unwrap_or(0),
+                    )
+                    .into())
+                }
+                PlayerStatExpr::DiceRolledThisTurn => Ok(i64::from(
+                    self.characteristics
+                        .dice_rolled_this_turn
+                        .get(&controller)
+                        .copied()
+                        .unwrap_or(0),
+                )
+                .into()),
+                PlayerStatExpr::OtherSpellsCastManaValueThisTurn => {
+                    let total = self
+                        .characteristics
+                        .other_spells_mv_this_turn
+                        .get(&controller)
+                        .copied()
+                        .unwrap_or(0);
+                    let own_mv = self
+                        .window
+                        .resolving()
+                        .filter(|entry| {
+                            entry.controller() == controller
+                                && matches!(entry.kind(), StackKind::CardSpell(_))
+                        })
+                        .and_then(|entry| self.entry_spell_mana_value(entry.id()))
+                        .and_then(|mv| mv.to_usize())
+                        .map_or(0u32, |n| u32::try_from(n).unwrap_or(u32::MAX));
+                    Ok(i64::from(total.saturating_sub(own_mv)).into())
+                }
             },
             ValueExpr::ObjectMatches { subject, filter } => {
                 let (clause_a, _) = filter.clauses();

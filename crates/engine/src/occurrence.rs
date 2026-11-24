@@ -487,7 +487,9 @@ pub enum TriggerRelated {
         amount: RulesInteger,
     },
     /// A generalized CR 603.12 reflexive trigger generated during resolution.
-    ReflexiveTrigger,
+    ReflexiveTrigger {
+        chosen_x: Option<RulesInteger>,
+    },
     CardDrawn {
         player: SeatId,
     },
@@ -825,6 +827,7 @@ pub enum RulesOccurrence {
         source: Box<SupportedAppearance>,
         controller: SeatId,
         body: Box<ExecutableBody>,
+        chosen_x: Option<RulesInteger>,
     },
     CommanderTypeManaSpent {
         source: Box<SupportedAppearance>,
@@ -3523,6 +3526,7 @@ impl TriggerState {
                 source,
                 controller,
                 body,
+                chosen_x,
             } = &occurrence.value
             {
                 let causes = TriggerCauseSet::new(
@@ -3531,7 +3535,9 @@ impl TriggerState {
                     vec![TriggerCauseMember {
                         occurrence: occurrence.id,
                         related_player: Some(*controller),
-                        related: TriggerRelated::ReflexiveTrigger,
+                        related: TriggerRelated::ReflexiveTrigger {
+                            chosen_x: chosen_x.clone(),
+                        },
                     }],
                 )?;
                 let mut instance_body = body.as_ref().clone();

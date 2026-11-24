@@ -169,6 +169,12 @@ pub enum SourceStateExpr {
     Cleaved,
     /// `1` if evidence was collected for the ability source.
     EvidenceCollected,
+    /// `1` if the ability source is currently its controller's Ring-bearer (CR 701.52).
+    IsRingBearer,
+    /// `1` if the ability source entered the battlefield from a graveyard.
+    EnteredFromGraveyard,
+    /// `1` if an alternative or keyword casting cost was paid for the ability source.
+    PaidAlternative,
 }
 
 /// Turn-history statistic checked across active opponents.
@@ -264,6 +270,18 @@ pub enum PlayerStatExpr {
     RingLevel,
     /// `1` if the controller currently has the initiative (CR 725), else `0`.
     HasInitiative,
+    /// Number of combat phases that have begun this turn (1 during the first combat phase).
+    CombatPhasesThisTurn,
+    /// Number of cards put into the controller's graveyard from anywhere this turn.
+    CardsEnteredGraveyardThisTurn,
+    /// Number of counters placed on creatures by the controller this turn.
+    CountersPlacedOnCreaturesThisTurn,
+    /// Number of lands that entered the battlefield under `ResolvingPlayer`'s control this turn.
+    LandsEnteredThisTurn(ResolvingPlayer),
+    /// Number of dice rolled by the controller this turn.
+    DiceRolledThisTurn,
+    /// Total mana value of other spells the controller cast this turn.
+    OtherSpellsCastManaValueThisTurn,
 }
 
 /// Subject tested by [`ValueExpr::ObjectMatches`] (evaluates to `1` if matched, `0` otherwise).
@@ -730,7 +748,8 @@ impl ValueExpr {
                 PlayerStatExpr::PlayerLife(p)
                 | PlayerStatExpr::PlayerHandSize(p)
                 | PlayerStatExpr::PlayerLibrarySize(p)
-                | PlayerStatExpr::PlayerGraveyardSize(p) => world_player(*p),
+                | PlayerStatExpr::PlayerGraveyardSize(p)
+                | PlayerStatExpr::LandsEnteredThisTurn(p) => world_player(*p),
                 _ => true,
             },
             Self::ObjectMatches { subject, filter } => {
@@ -792,8 +811,7 @@ impl ValueExpr {
                     | ResolvingPlayer::TargetOwner
             )
         };
-        let world_filter =
-            |f: &ObjectFilter| f.chosen_type_slot().is_none() && !f.has_related_player();
+        let world_filter = |f: &ObjectFilter| f.chosen_type_slot().is_none();
         match self {
             Self::Literal(_)
             | Self::DomainCount
@@ -862,7 +880,8 @@ impl ValueExpr {
                 PlayerStatExpr::PlayerLife(p)
                 | PlayerStatExpr::PlayerHandSize(p)
                 | PlayerStatExpr::PlayerLibrarySize(p)
-                | PlayerStatExpr::PlayerGraveyardSize(p) => trig_player(*p),
+                | PlayerStatExpr::PlayerGraveyardSize(p)
+                | PlayerStatExpr::LandsEnteredThisTurn(p) => trig_player(*p),
                 _ => true,
             },
             Self::ObjectMatches { subject, filter } => {
@@ -1085,7 +1104,8 @@ impl ValueExpr {
                 PlayerStatExpr::PlayerLife(r)
                 | PlayerStatExpr::PlayerHandSize(r)
                 | PlayerStatExpr::PlayerLibrarySize(r)
-                | PlayerStatExpr::PlayerGraveyardSize(r),
+                | PlayerStatExpr::PlayerGraveyardSize(r)
+                | PlayerStatExpr::LandsEnteredThisTurn(r),
             ) => matches!(
                 r,
                 ResolvingPlayer::TargetPlayer
@@ -1201,7 +1221,8 @@ impl ValueExpr {
                 PlayerStatExpr::PlayerLife(r)
                 | PlayerStatExpr::PlayerHandSize(r)
                 | PlayerStatExpr::PlayerLibrarySize(r)
-                | PlayerStatExpr::PlayerGraveyardSize(r),
+                | PlayerStatExpr::PlayerGraveyardSize(r)
+                | PlayerStatExpr::LandsEnteredThisTurn(r),
             ) => role_family(*r),
             Self::ObjectStat {
                 subject: ValueObjectRef::TargetObject,
@@ -1669,11 +1690,10 @@ impl ValueExpr {
                             context,
                             BodyContext::TriggerBound {
                                 condition: TriggerSpec {
-                                    event: TriggerEvent::SpellCast { self_cast: true, .. },
                                     intervening_if: Some(TriggerCondition::HandSizeBelow(required)),
                                     ..
                                 },
-                                grouping: TriggerGrouping::EachOccurrence,
+                                ..
                             } if *required == *limit
                         )
                     {
@@ -1734,11 +1754,17 @@ impl ValueExpr {
                 | PlayerStatExpr::ExhaustActivatedThisTurn
                 | PlayerStatExpr::CompletedDungeons
                 | PlayerStatExpr::RingLevel
-                | PlayerStatExpr::HasInitiative => Ok(()),
+                | PlayerStatExpr::HasInitiative
+                | PlayerStatExpr::CombatPhasesThisTurn
+                | PlayerStatExpr::CardsEnteredGraveyardThisTurn
+                | PlayerStatExpr::CountersPlacedOnCreaturesThisTurn
+                | PlayerStatExpr::DiceRolledThisTurn
+                | PlayerStatExpr::OtherSpellsCastManaValueThisTurn => Ok(()),
                 PlayerStatExpr::PlayerLife(role)
                 | PlayerStatExpr::PlayerHandSize(role)
                 | PlayerStatExpr::PlayerLibrarySize(role)
-                | PlayerStatExpr::PlayerGraveyardSize(role) => {
+                | PlayerStatExpr::PlayerGraveyardSize(role)
+                | PlayerStatExpr::LandsEnteredThisTurn(role) => {
                     if matches!(
                         role,
                         ResolvingPlayer::Controller
@@ -1762,17 +1788,25 @@ impl ValueExpr {
                 .map_err(|_| DefinitionError::InvalidInstruction),
             Self::EventValue(kind) => match kind {
                 EventValueKind::ChosenX => {
-                    if let BodyContext::TriggerBound {
+                    if facts.defined_resolution_x {
+                        Ok(())
+                    } else if let BodyContext::TriggerBound {
                         condition,
                         grouping,
                     } = context
                     {
                         if grouping == TriggerGrouping::EachOccurrence
-                            && matches!(
+                            && (matches!(
                                 &condition.event,
                                 TriggerEvent::Enters { subject, .. }
                                     if *subject == ObjectFilter::self_object()
-                            )
+                            ) || matches!(
+                                &condition.event,
+                                TriggerEvent::SpellCast {
+                                    self_cast: true,
+                                    ..
+                                }
+                            ))
                         {
                             Ok(())
                         } else {

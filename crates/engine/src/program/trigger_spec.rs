@@ -46,6 +46,8 @@ pub enum TriggerFromZone {
     Exile,
     Library,
     Battlefield,
+    /// Origin zone is neither a graveyard nor exile.
+    NotGraveyardOrExile,
 }
 
 /// Cast-origin requirement on an entering permanent trigger.
@@ -68,6 +70,8 @@ pub enum DiesTriggerMode {
     ToControllerGraveyard,
     /// Creature dealt damage by the source earlier this turn dies.
     DamagedBySource,
+    /// Creature dealt damage earlier this turn by the permanent the source Aura or Equipment is attached to dies.
+    DamagedByAttachedHost,
     /// Death trigger granted by paying blitz.
     Blitz,
     /// Permanent put into a graveyard or command zone from the battlefield.
@@ -79,6 +83,10 @@ pub enum DiesTriggerMode {
 pub enum TriggerPlayerScope {
     Relation(PlayerRelation),
     EnchantedPlayer,
+    /// Controller of the permanent to which the source Aura or Equipment is attached.
+    AttachedHostController,
+    /// The player who is currently the monarch.
+    Monarch,
 }
 
 /// Attack-declaration matching mode.
@@ -202,6 +210,10 @@ pub enum StateThresholdKind {
 pub enum PlayerTriggerAction {
     Sacrificed(ObjectFilter),
     Discarded,
+    /// Player discarded a card matching `ObjectFilter`.
+    DiscardedMatching(ObjectFilter),
+    /// A spell or ability an opponent controls caused the player to discard a card (optionally matching `ObjectFilter`).
+    DiscardedByOpponent(Option<ObjectFilter>),
     Cycled {
         self_only: bool,
     },
@@ -389,6 +401,8 @@ pub enum TriggerCondition {
         filter: Box<ObjectFilter>,
         minimum: u8,
     },
+    /// Triggering activated ability is not a mana ability.
+    TriggeringAbilityNotMana,
     /// General world-evaluable condition expression (also re-checked on resolution per CR 603.4).
     Eval(Box<super::ResolutionCondition>),
     Not(Box<TriggerCondition>),
@@ -462,6 +476,10 @@ pub enum TriggerEvent {
         attached_to_creature: bool,
     },
     LeavesBattlefield {
+        subject: ObjectFilter,
+    },
+    /// A permanent matching `subject` leaves the battlefield without dying (destination is not a graveyard).
+    LeavesBattlefieldWithoutDying {
         subject: ObjectFilter,
     },
     Dies {
@@ -546,6 +564,12 @@ pub enum TriggerEvent {
         spell_only: bool,
         instant_or_sorcery_only: bool,
     },
+    /// A permanent matching `subject` becomes the target of a spell or ability controlled by the ability's controller.
+    TargetedByController {
+        subject: ObjectFilter,
+        spell_only: bool,
+        instant_or_sorcery_only: bool,
+    },
     CountersChanged {
         subject: ObjectFilter,
         kind: CounterTriggerKind,
@@ -589,6 +613,7 @@ impl TriggerEvent {
     pub fn is_lookback(&self) -> bool {
         match self {
             Self::LeavesBattlefield { .. }
+            | Self::LeavesBattlefieldWithoutDying { .. }
             | Self::Dies { .. }
             | Self::ReturnedToHand { .. }
             | Self::Exiled {
@@ -628,6 +653,7 @@ impl TriggerEvent {
         match self {
             Self::Enters { subject, .. }
             | Self::LeavesBattlefield { subject }
+            | Self::LeavesBattlefieldWithoutDying { subject }
             | Self::Dies { subject, .. }
             | Self::PutIntoGraveyard { subject, .. }
             | Self::Exiled { subject, .. }
@@ -635,6 +661,7 @@ impl TriggerEvent {
             | Self::LeavesGraveyard { subject, .. }
             | Self::DealtDamage { subject, .. }
             | Self::Targeted { subject, .. }
+            | Self::TargetedByController { subject, .. }
             | Self::CountersChanged { subject, .. }
             | Self::StatusChanged { subject, .. }
             | Self::DoorUnlocked { subject, .. } => subject.rewrite_creature_type(from, to),
@@ -676,7 +703,9 @@ impl TriggerEvent {
             Self::PlayerAction {
                 action:
                     PlayerTriggerAction::Sacrificed(filter)
-                    | PlayerTriggerAction::PermanentTappedForMana(filter),
+                    | PlayerTriggerAction::PermanentTappedForMana(filter)
+                    | PlayerTriggerAction::DiscardedMatching(filter)
+                    | PlayerTriggerAction::DiscardedByOpponent(Some(filter)),
                 ..
             } => filter.rewrite_creature_type(from, to),
             Self::AnyOf(events) => {
@@ -712,6 +741,7 @@ impl TriggerEvent {
         match self {
             Self::Enters { subject, .. }
             | Self::LeavesBattlefield { subject }
+            | Self::LeavesBattlefieldWithoutDying { subject }
             | Self::Dies { subject, .. }
             | Self::PutIntoGraveyard { subject, .. }
             | Self::Exiled { subject, .. }
@@ -719,6 +749,7 @@ impl TriggerEvent {
             | Self::LeavesGraveyard { subject, .. }
             | Self::DealtDamage { subject, .. }
             | Self::Targeted { subject, .. }
+            | Self::TargetedByController { subject, .. }
             | Self::CountersChanged { subject, .. }
             | Self::StatusChanged { subject, .. }
             | Self::DoorUnlocked { subject, .. } => subject.validate_vocabulary(vocabulary),
@@ -760,7 +791,9 @@ impl TriggerEvent {
             Self::PlayerAction {
                 action:
                     PlayerTriggerAction::Sacrificed(filter)
-                    | PlayerTriggerAction::PermanentTappedForMana(filter),
+                    | PlayerTriggerAction::PermanentTappedForMana(filter)
+                    | PlayerTriggerAction::DiscardedMatching(filter)
+                    | PlayerTriggerAction::DiscardedByOpponent(Some(filter)),
                 ..
             } => filter.validate_vocabulary(vocabulary),
             Self::AnyOf(events) => {

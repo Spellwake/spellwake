@@ -541,11 +541,13 @@ impl ResolvingPlayer {
             },
             Self::TargetSpellController => match target {
                 BodyTarget::SingleSpell(_) => Ok(Some(OperandFamily::Spell)),
-                BodyTarget::SingleStackObject(_) => Ok(Some(OperandFamily::StackEntry)),
-                BodyTarget::None
-                | BodyTarget::ControlledAbility { .. }
-                | BodyTarget::StackEntryTargetingControlledPermanent
+                BodyTarget::SingleStackObject(_)
                 | BodyTarget::SingleStackEntry
+                | BodyTarget::ControlledAbility { .. }
+                | BodyTarget::StackEntryTargetingControlledPermanent => {
+                    Ok(Some(OperandFamily::StackEntry))
+                }
+                BodyTarget::None
                 | BodyTarget::SinglePermanent
                 | BodyTarget::SingleCreature
                 | BodyTarget::SingleOpponent
@@ -624,6 +626,10 @@ impl ResolvingPlayer {
                 | BodyTarget::AnyGraveyardCard
                 | BodyTarget::AnyGraveyardCreature => Ok(Some(OperandFamily::GraveyardCard)),
                 BodyTarget::SingleSpell(_) => Ok(Some(OperandFamily::Spell)),
+                BodyTarget::SingleCreatureOrPlayer
+                | BodyTarget::SinglePlayerOrPlaneswalker
+                | BodyTarget::SingleOpponentOrPlaneswalker
+                | BodyTarget::SingleAnyTarget => Ok(Some(OperandFamily::DamageRecipient)),
                 _ => Err(DefinitionError::ResolvingPlayerTarget),
             },
             Self::ActivePlayer | Self::DefendingPlayer | Self::ChosenPlayer => Ok(None),
@@ -782,6 +788,8 @@ pub enum SearchSource {
     OwnLibraryOrGraveyard,
     /// The targeted opponent's library.
     TargetOpponentLibrary,
+    /// The targeted player's library.
+    TargetPlayerLibrary,
     /// Runtime-bound library of a specific seat (not statically authored).
     PlayerLibrary(crate::priority::SeatId),
 }
@@ -1189,7 +1197,9 @@ impl LibrarySearch {
     pub fn supports_optional_wrapper(&self) -> bool {
         !matches!(
             self.source,
-            SearchSource::PlayerLibrary(_) | SearchSource::TargetOpponentLibrary
+            SearchSource::PlayerLibrary(_)
+                | SearchSource::TargetOpponentLibrary
+                | SearchSource::TargetPlayerLibrary
         ) && !self.is_required()
             && !self.is_transfigure()
             && !self.is_haste_and_return()
@@ -1284,6 +1294,8 @@ pub enum RelatedExileGroup {
 pub enum LinkedExileGroup {
     FiendHunter,
     Helvault,
+    /// Generalized source-linked exile returned when the source leaves the battlefield.
+    SourceLinked,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1363,6 +1375,8 @@ pub enum DelayedReturnTiming {
     NextEndStep,
     /// Return to the battlefield when the ability source leaves the battlefield.
     UntilSourceLeaves,
+    /// Record exiled card(s) under an explicit `LinkedExileGroup` for explicit LTB return triggers (e.g. Champion).
+    LinkedGroup(LinkedExileGroup),
 }
 
 /// Orthogonal destination for unified zone-movement instructions.
@@ -1665,6 +1679,7 @@ pub enum ModalUniqueness {
 /// Casting timing and world-condition restrictions printed on a spell or castable card.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CastTimingRestriction {
+    Sorcery,
     DuringCombat,
     DuringCombatBeforeBlockers,
     BeforeCombatDamage,
@@ -1698,7 +1713,8 @@ impl CastTimingRestriction {
                 }
                 Ok(())
             }
-            Self::DuringCombat
+            Self::Sorcery
+            | Self::DuringCombat
             | Self::DuringCombatBeforeBlockers
             | Self::BeforeCombatDamage
             | Self::DuringCombatAfterBlockers
@@ -1969,6 +1985,24 @@ pub enum EffectManaYield {
     SourceChosenColor { amount: ValueExpr },
     /// Add `amount` mana of distinct colors (up to 5).
     DistinctColors { amount: ValueExpr },
+    /// Wrap any mana yield so the added mana is not lost as steps and phases end until cleanup.
+    RetainedUntilCleanup(Box<EffectManaYield>),
+}
+
+impl EffectManaYield {
+    pub(crate) fn uses_target(&self) -> bool {
+        match self {
+            Self::RetainedUntilCleanup(inner) => inner.uses_target(),
+            Self::Counted { amount, .. }
+            | Self::RetainedUntilEndOfCombat { amount, .. }
+            | Self::Split { amount, .. }
+            | Self::Choice { amount, .. }
+            | Self::CommanderIdentity { amount }
+            | Self::DistinctColors { amount }
+            | Self::SourceChosenColor { amount } => amount.uses_target(),
+            _ => false,
+        }
+    }
 }
 
 /// Duration window for exiled impulse-play permissions.
@@ -4064,8 +4098,10 @@ impl Instruction {
                     })
             }
             Self::SearchLibrary { filter } => {
-                filter.source == SearchSource::TargetOpponentLibrary
-                    || filter.curse_host() == Some(AuraSearchHost::TargetPlayer)
+                matches!(
+                    filter.source,
+                    SearchSource::TargetOpponentLibrary | SearchSource::TargetPlayerLibrary
+                ) || filter.curse_host() == Some(AuraSearchHost::TargetPlayer)
                     || is_target_player(filter.searcher)
             }
             Self::PhaseOut(subject) => matches!(subject, PhasingSubject::Target),
@@ -4154,15 +4190,7 @@ impl Instruction {
             Self::BranchIfFalse { condition, .. } => {
                 condition.left.uses_target() || condition.right.uses_target()
             }
-            Self::AddMana(
-                EffectManaYield::Counted { amount, .. }
-                | EffectManaYield::RetainedUntilEndOfCombat { amount, .. }
-                | EffectManaYield::Split { amount, .. }
-                | EffectManaYield::Choice { amount, .. }
-                | EffectManaYield::CommanderIdentity { amount }
-                | EffectManaYield::DistinctColors { amount }
-                | EffectManaYield::SourceChosenColor { amount },
-            ) => amount.uses_target(),
+            Self::AddMana(yield_kind) => yield_kind.uses_target(),
             Self::RepeatLoop { body, .. } => body.instructions.iter().any(Self::uses_mode_target),
             Self::ChooseOption { chooser, options } => {
                 is_target_player(*chooser)
@@ -4549,7 +4577,6 @@ impl Instruction {
             | Self::ExileRelatedTopForCastThisTurn
             | Self::RegisterTokenLinkedExile
             | Self::ReturnTokenLinkedExile
-            | Self::AddMana(..)
             | Self::RequireCondition(..)
             | Self::AbandonSourceScheme
             | Self::TabletopHonorAction { .. }
@@ -5769,6 +5796,15 @@ impl ExecutableBody {
         vocabulary: &CreatureTypeVocabulary,
         context: BodyContext<'_>,
     ) -> Result<(), DefinitionError> {
+        self.validate_in_with_x(vocabulary, context, false)
+    }
+
+    pub(crate) fn validate_in_with_x(
+        &self,
+        vocabulary: &CreatureTypeVocabulary,
+        context: BodyContext<'_>,
+        initial_defined_x: bool,
+    ) -> Result<(), DefinitionError> {
         if self.x_target_count {
             let valid_bounds = self
                 .permanent_target_bounds()
@@ -5911,7 +5947,10 @@ impl ExecutableBody {
             .checked_add(1)
             .ok_or(DefinitionError::InvalidControlFlow)?;
         let mut incoming = vec![None; points];
-        incoming[0] = Some(FlowFacts::default());
+        incoming[0] = Some(FlowFacts {
+            defined_resolution_x: initial_defined_x,
+            ..FlowFacts::default()
+        });
         // Unreachable instructions still validate scalar/context/operand syntax.
         // Their local reads do not contribute facts or make a target reachable.
         let declared_slots: BTreeSet<_> = self
@@ -7012,8 +7051,21 @@ impl ExecutableBody {
                     {
                         return Err(DefinitionError::InvalidInstruction);
                     }
-                    (*group == DamageGroup::ControllerAndTargetCreature)
-                        .then_some(OperandFamily::Permanent)
+                    let mut family = (*group == DamageGroup::ControllerAndTargetCreature)
+                        .then_some(OperandFamily::Permanent);
+                    if let DamageGroup::Filtered(filter)
+                    | DamageGroup::FilteredAndPlayers { filter, .. } = group
+                        && filter.has_target_player()
+                    {
+                        family = merge_family(family, Some(OperandFamily::Player))?;
+                    }
+                    if let DamageGroup::FilteredAndPlayers { players, .. }
+                    | DamageGroup::AffectedPlayers(players) = group
+                    {
+                        family =
+                            merge_family(family, players.validate(context, self.target, false)?)?;
+                    }
+                    family
                 }
                 Instruction::PutHandPermanentsOntoBattlefield {
                     player,
@@ -7024,11 +7076,6 @@ impl ExecutableBody {
                     if *maximum == 0
                         || types.is_empty()
                         || types.iter().any(|kind| !kind.is_permanent())
-                        || !matches!(
-                            player,
-                            ResolvingPlayer::Controller | ResolvingPlayer::UniqueRelatedPlayer
-                        )
-                        || self.target != BodyTarget::None
                     {
                         return Err(DefinitionError::InvalidInstruction);
                     }
@@ -7109,8 +7156,13 @@ impl ExecutableBody {
                 {
                     None
                 }
+                Instruction::ExploreSource => {
+                    if !context.has_source() {
+                        return Err(DefinitionError::InvalidInstruction);
+                    }
+                    None
+                }
                 Instruction::MayTurnControlledCreatureFaceUp
-                | Instruction::ExploreSource
                 | Instruction::ExileNonlandsToHandAndDamage { .. }
                 | Instruction::RevealTopHandLoseManaValue { .. }
                 | Instruction::RevealSharedTypeCreatureCastOrBottom
@@ -7129,7 +7181,6 @@ impl ExecutableBody {
                     None
                 }
                 Instruction::MayTurnControlledCreatureFaceUp
-                | Instruction::ExploreSource
                 | Instruction::ExileNonlandsToHandAndDamage { .. }
                 | Instruction::RevealTopHandLoseManaValue { .. }
                 | Instruction::RevealSharedTypeCreatureCastOrBottom
@@ -7588,6 +7639,14 @@ impl ExecutableBody {
                             return Err(DefinitionError::OperandFamily);
                         }
                         Some(OperandFamily::Player)
+                    } else if filter.source == SearchSource::TargetPlayerLibrary {
+                        if !matches!(
+                            self.target,
+                            BodyTarget::SinglePlayer | BodyTarget::SingleOpponent
+                        ) {
+                            return Err(DefinitionError::OperandFamily);
+                        }
+                        Some(OperandFamily::Player)
                     } else if filter.searcher == ResolvingPlayer::TargetPlayer {
                         filter.searcher.validate(
                             context,
@@ -7699,18 +7758,19 @@ impl ExecutableBody {
                 }
                 Instruction::EmitReflexiveTrigger { body } => {
                     if matches!(context, BodyContext::TriggerBound { .. }) {
-                        body.validate_in(vocabulary, context)?;
+                        body.validate_in_with_x(vocabulary, context, facts.defined_resolution_x)?;
                     } else {
                         let reflexive_spec = TriggerSpec::new(TriggerEvent::StepBegan {
                             step: crate::turn::Step::End,
                             player: TriggerPlayerScope::Relation(PlayerRelation::AnyParticipant),
                         });
-                        body.validate_in(
+                        body.validate_in_with_x(
                             vocabulary,
                             BodyContext::TriggerBound {
                                 condition: &reflexive_spec,
                                 grouping: TriggerGrouping::EachOccurrence,
                             },
+                            facts.defined_resolution_x,
                         )?;
                     }
                     None
@@ -7861,7 +7921,19 @@ impl ExecutableBody {
                     None
                 }
                 Instruction::AddMana(mana_yield) => {
-                    match mana_yield {
+                    let inner_yield = match mana_yield {
+                        EffectManaYield::RetainedUntilCleanup(inner) => {
+                            if matches!(inner.as_ref(), EffectManaYield::RetainedUntilCleanup(_)) {
+                                return Err(DefinitionError::InvalidInstruction);
+                            }
+                            inner.as_ref()
+                        }
+                        other => other,
+                    };
+                    match inner_yield {
+                        EffectManaYield::RetainedUntilCleanup(_) => {
+                            return Err(DefinitionError::InvalidInstruction);
+                        }
                         EffectManaYield::RestrictedChoice {
                             colors,
                             amount,
@@ -7881,7 +7953,7 @@ impl ExecutableBody {
                                 return Err(DefinitionError::InvalidInstruction);
                             }
                             amount.validate_amount(&defined_slots, context, &facts, vocabulary)?;
-                            None
+                            amount.required_operand_family(self.target)?
                         }
                         EffectManaYield::CombatDamageUntilCleanup(_) => {
                             ValueExpr::event(EventValueKind::CombatDamageToPlayer)
@@ -8018,8 +8090,19 @@ impl ExecutableBody {
                         players.validate(context, self.target, false)?;
                     }
                     amount.validate_amount(&defined_slots, context, &facts, vocabulary)?;
-                    let base = (*group == DamageGroup::ControllerAndTargetCreature)
+                    let mut base = (*group == DamageGroup::ControllerAndTargetCreature)
                         .then_some(OperandFamily::Permanent);
+                    if let DamageGroup::Filtered(filter)
+                    | DamageGroup::FilteredAndPlayers { filter, .. } = group
+                        && filter.has_target_player()
+                    {
+                        base = merge_family(base, Some(OperandFamily::Player))?;
+                    }
+                    if let DamageGroup::FilteredAndPlayers { players, .. }
+                    | DamageGroup::AffectedPlayers(players) = group
+                    {
+                        base = merge_family(base, players.validate(context, self.target, false)?)?;
+                    }
                     merge_family(base, amount.required_operand_family(self.target)?)?
                 }
                 Instruction::DoublePowerToughness {
@@ -8127,6 +8210,14 @@ impl ExecutableBody {
                         {
                             true
                         }
+                        (
+                            LinkedExileGroup::SourceLinked,
+                            BodyTarget::SingleCreature
+                            | BodyTarget::SinglePermanent
+                            | BodyTarget::SinglePlaneswalker
+                            | BodyTarget::FilteredPermanent(_),
+                            BodyContext::TriggerBound { .. } | BodyContext::Activated { .. },
+                        ) => true,
                         _ => false,
                     };
                     if !admitted {
@@ -8136,7 +8227,7 @@ impl ExecutableBody {
                 }
                 Instruction::ReturnCardsExiledWithLink(group) => {
                     let expected = match group {
-                        LinkedExileGroup::FiendHunter => {
+                        LinkedExileGroup::FiendHunter | LinkedExileGroup::SourceLinked => {
                             TriggerSpec::leaves_battlefield(ObjectFilter::self_object())
                         }
                         LinkedExileGroup::Helvault => TriggerSpec::new(TriggerEvent::Dies {
@@ -8788,6 +8879,8 @@ impl ExecutableBody {
                                         | Instruction::CollectEvidence { .. }
                                         | Instruction::PayLife { .. }
                                         | Instruction::PayEnergy { .. }
+                                        | Instruction::PayControllerLife(_)
+                                        | Instruction::PayControllerEnergy(_)
                                         | Instruction::ExploreSubject(_)
                                         | Instruction::SkipNextUntap { .. }
                                         | Instruction::RequireCombatAction { .. }
@@ -9042,7 +9135,11 @@ impl ExecutableBody {
                         return Err(DefinitionError::InvalidInstruction);
                     }
                     if let SubjectDestination::Exile {
-                        delayed_return: Some(DelayedReturnTiming::UntilSourceLeaves),
+                        delayed_return:
+                            Some(
+                                DelayedReturnTiming::UntilSourceLeaves
+                                | DelayedReturnTiming::LinkedGroup(_),
+                            ),
                     } = destination
                         && !context.has_source()
                     {
@@ -9053,14 +9150,22 @@ impl ExecutableBody {
                             BodyTarget::SingleCreature
                             | BodyTarget::SinglePermanent
                             | BodyTarget::SinglePlaneswalker
-                            | BodyTarget::SingleAnyTarget
                             | BodyTarget::FilteredPermanent(_) => Some(OperandFamily::Permanent),
+                            BodyTarget::SingleAnyTarget
+                            | BodyTarget::SingleCreatureOrPlayer
+                            | BodyTarget::SinglePlayerOrPlaneswalker
+                            | BodyTarget::SingleOpponentOrPlaneswalker => {
+                                Some(OperandFamily::DamageRecipient)
+                            }
                             BodyTarget::SingleOwnGraveyardCard
                             | BodyTarget::AnyGraveyardCard
                             | BodyTarget::AnyGraveyardCreature
                             | BodyTarget::AnyGraveyardCreatureOrPlaneswalker
                             | BodyTarget::FilteredOwnGraveyardCard(_)
                             | BodyTarget::FilteredAnyGraveyardCard { .. } => {
+                                if matches!(destination, SubjectDestination::Battlefield { .. }) {
+                                    facts.returned_graveyard_target = true;
+                                }
                                 Some(OperandFamily::GraveyardCard)
                             }
                             BodyTarget::SingleSpell(_) => Some(OperandFamily::Spell),
@@ -9115,13 +9220,47 @@ impl ExecutableBody {
                     if options.len() < 2 || options.len() > usize::from(u8::MAX) {
                         return Err(DefinitionError::InvalidInstruction);
                     }
-                    let family =
+                    let mut family =
                         chooser.validate(context, self.target, facts.definitely_exiled_target)?;
                     for branch in options {
                         if branch.body.target != BodyTarget::None {
                             return Err(DefinitionError::InvalidInstruction);
                         }
-                        branch.body.validate_in(vocabulary, context)?;
+                        if branch.body.validate_in(vocabulary, context).is_err() {
+                            if self.target == BodyTarget::None {
+                                branch.body.validate_in(vocabulary, context)?;
+                            } else {
+                                let mut inherited = branch.body.clone();
+                                inherited.target = self.target;
+                                inherited.validate_in(vocabulary, context)?;
+                                let inherited_fam = match self.target {
+                                    BodyTarget::SinglePlayer | BodyTarget::SingleOpponent => {
+                                        Some(OperandFamily::Player)
+                                    }
+                                    BodyTarget::SingleCreature
+                                    | BodyTarget::SinglePermanent
+                                    | BodyTarget::SinglePlaneswalker
+                                    | BodyTarget::FilteredPermanent(_) => {
+                                        Some(OperandFamily::Permanent)
+                                    }
+                                    BodyTarget::SingleAnyTarget
+                                    | BodyTarget::SingleCreatureOrPlayer
+                                    | BodyTarget::SinglePlayerOrPlaneswalker
+                                    | BodyTarget::SingleOpponentOrPlaneswalker => {
+                                        Some(OperandFamily::DamageRecipient)
+                                    }
+                                    BodyTarget::SingleSpell(_) => Some(OperandFamily::Spell),
+                                    BodyTarget::SingleStackEntry
+                                    | BodyTarget::SingleStackObject(_)
+                                    | BodyTarget::ControlledAbility { .. }
+                                    | BodyTarget::StackEntryTargetingControlledPermanent => {
+                                        Some(OperandFamily::StackEntry)
+                                    }
+                                    _ => Some(OperandFamily::GraveyardCard),
+                                };
+                                family = merge_family(family, inherited_fam)?;
+                            }
+                        }
                     }
                     family
                 }
@@ -9563,14 +9702,48 @@ impl ExecutableBody {
                     bands,
                     ..
                 } => {
-                    let family =
+                    let mut family =
                         player.validate(context, self.target, facts.definitely_exiled_target)?;
                     count.validate_amount(&defined_slots, context, &facts, vocabulary)?;
                     for band in bands {
                         if band.min > band.max {
                             return Err(DefinitionError::InvalidInstruction);
                         }
-                        band.body.validate_in(vocabulary, context)?;
+                        if band.body.validate_in(vocabulary, context).is_err() {
+                            if self.target == BodyTarget::None {
+                                band.body.validate_in(vocabulary, context)?;
+                            } else {
+                                let mut inherited = band.body.clone();
+                                inherited.target = self.target;
+                                inherited.validate_in(vocabulary, context)?;
+                                let inherited_fam = match self.target {
+                                    BodyTarget::SinglePlayer | BodyTarget::SingleOpponent => {
+                                        Some(OperandFamily::Player)
+                                    }
+                                    BodyTarget::SingleCreature
+                                    | BodyTarget::SinglePermanent
+                                    | BodyTarget::SinglePlaneswalker
+                                    | BodyTarget::FilteredPermanent(_) => {
+                                        Some(OperandFamily::Permanent)
+                                    }
+                                    BodyTarget::SingleAnyTarget
+                                    | BodyTarget::SingleCreatureOrPlayer
+                                    | BodyTarget::SinglePlayerOrPlaneswalker
+                                    | BodyTarget::SingleOpponentOrPlaneswalker => {
+                                        Some(OperandFamily::DamageRecipient)
+                                    }
+                                    BodyTarget::SingleSpell(_) => Some(OperandFamily::Spell),
+                                    BodyTarget::SingleStackEntry
+                                    | BodyTarget::SingleStackObject(_)
+                                    | BodyTarget::ControlledAbility { .. }
+                                    | BodyTarget::StackEntryTargetingControlledPermanent => {
+                                        Some(OperandFamily::StackEntry)
+                                    }
+                                    _ => Some(OperandFamily::GraveyardCard),
+                                };
+                                family = merge_family(family, inherited_fam)?;
+                            }
+                        }
                     }
                     family
                 }
@@ -10461,6 +10634,15 @@ impl ExecutableBody {
                             | BodyTarget::SinglePermanent
                             | BodyTarget::SinglePlaneswalker
                             | BodyTarget::FilteredPermanent(_) => Some(OperandFamily::Permanent),
+                            BodyTarget::SingleOwnGraveyardCard
+                            | BodyTarget::FilteredOwnGraveyardCard(_)
+                            | BodyTarget::FilteredAnyGraveyardCard { .. }
+                            | BodyTarget::AnyGraveyardCreature
+                            | BodyTarget::AnyGraveyardCreatureOrPlaneswalker
+                            | BodyTarget::AnyGraveyardCard
+                            | BodyTarget::RecentlyDiscardedOrFromLibrary => {
+                                Some(OperandFamily::GraveyardCard)
+                            }
                             _ => return Err(DefinitionError::OperandFamily),
                         },
                         MoveSubjectRef::AbilitySource | MoveSubjectRef::AttachedHost => {
@@ -10497,6 +10679,9 @@ impl ExecutableBody {
                             | BodyTarget::SinglePermanent
                             | BodyTarget::SinglePlaneswalker
                             | BodyTarget::FilteredPermanent(_) => Some(OperandFamily::Permanent),
+                            _ if facts.returned_graveyard_target => {
+                                Some(OperandFamily::GraveyardCard)
+                            }
                             _ => return Err(DefinitionError::OperandFamily),
                         },
                         MoveSubjectRef::AbilitySource | MoveSubjectRef::AttachedHost => {
@@ -10570,12 +10755,7 @@ impl ExecutableBody {
                     maximum,
                     ..
                 } => {
-                    if *maximum == 0
-                        || !matches!(
-                            player,
-                            ResolvingPlayer::Controller | ResolvingPlayer::UniqueRelatedPlayer
-                        )
-                    {
+                    if *maximum == 0 {
                         return Err(DefinitionError::InvalidInstruction);
                     }
                     filter
@@ -10988,7 +11168,13 @@ impl ExecutableBody {
                         return Err(DefinitionError::OperandFamily);
                     }
                     Some(
-                        if self.target == BodyTarget::StackEntryTargetingControlledPermanent {
+                        if matches!(
+                            self.target,
+                            BodyTarget::StackEntryTargetingControlledPermanent
+                                | BodyTarget::SingleStackEntry
+                                | BodyTarget::SingleStackObject(_)
+                                | BodyTarget::ControlledAbility { .. }
+                        ) {
                             OperandFamily::StackEntry
                         } else {
                             OperandFamily::Spell
@@ -11231,8 +11417,8 @@ impl ExecutableBody {
                         None
                     }
                 }
-                Instruction::UntapControlledCreatures
-                | Instruction::TapAttackersAndSkipNextUntap => {
+                Instruction::UntapControlledCreatures => None,
+                Instruction::TapAttackersAndSkipNextUntap => {
                     if self.target != BodyTarget::None {
                         return Err(DefinitionError::OperandFamily);
                     }
@@ -11412,7 +11598,15 @@ impl ExecutableBody {
                         return Err(DefinitionError::InvalidInstruction);
                     }
                     amount.validate_amount(&defined_slots, context, &facts, vocabulary)?;
-                    Some(OperandFamily::Permanent)
+                    Some(match self.target {
+                        BodyTarget::SingleAnyTarget
+                        | BodyTarget::SingleCreatureOrPlayer
+                        | BodyTarget::SinglePlayerOrPlaneswalker
+                        | BodyTarget::SingleOpponentOrPlaneswalker => {
+                            OperandFamily::DamageRecipient
+                        }
+                        _ => OperandFamily::Permanent,
+                    })
                 }
                 Instruction::GrantProtectionChosenColor(
                     ProtectionRecipients::ControllerAndPermanents,
@@ -11512,7 +11706,15 @@ impl ExecutableBody {
                             }
                             _ => DefinitionError::ContinuousEffect,
                         })?;
-                    Some(OperandFamily::Permanent)
+                    Some(match self.target {
+                        BodyTarget::SingleAnyTarget
+                        | BodyTarget::SingleCreatureOrPlayer
+                        | BodyTarget::SinglePlayerOrPlaneswalker
+                        | BodyTarget::SingleOpponentOrPlaneswalker => {
+                            OperandFamily::DamageRecipient
+                        }
+                        _ => OperandFamily::Permanent,
+                    })
                 }
                 Instruction::ResolveKeywordTrigger(keyword) => {
                     if matches!(keyword, CombatTriggerKeyword::Mobilize(_))
@@ -12292,7 +12494,14 @@ impl ExecutableBody {
                     if power_toughness.is_none() && keywords.is_empty() {
                         return Err(DefinitionError::InvalidInstruction);
                     }
-                    None
+                    if matches!(
+                        group.as_ref(),
+                        EffectSubject::Matching(filter) if filter.has_target_player()
+                    ) {
+                        Some(OperandFamily::Player)
+                    } else {
+                        None
+                    }
                 }
                 Instruction::Adapt(amount) => {
                     if *amount == 0
@@ -12578,13 +12787,14 @@ impl ExecutableBody {
                         | BodyContext::RevealedCreature
                         | BodyContext::ExiledCreatureCost
                         | BodyContext::SacrificedCreature
-                        | BodyContext::TapCreatureCost => self.target == ability.target(),
+                        | BodyContext::TapCreatureCost => {
+                            self.target == ability.target()
+                                || (*ability == crate::attachment::AttachAbility::Equip
+                                    && matches!(self.target, BodyTarget::FilteredPermanent(_)))
+                        }
                         BodyContext::TriggerBound { .. } => {
                             *ability == crate::attachment::AttachAbility::Equip
-                                && self.target
-                                    == BodyTarget::FilteredPermanent(
-                                        ObjectFilter::creature().controlled(),
-                                    )
+                                && matches!(self.target, BodyTarget::FilteredPermanent(_))
                         }
                     };
                     let single_only = !matches!(context, BodyContext::TriggerBound { .. });
@@ -12882,13 +13092,21 @@ impl ExecutableBody {
                         paid_destination,
                         declined_destination,
                         ..
+                    } => {
+                        facts.merge_into(&mut incoming[*paid_destination]);
+                        facts.merge_into(&mut incoming[*declined_destination]);
                     }
-                    | Instruction::OfferDynamicManaPayment {
+                    Instruction::OfferDynamicManaPayment {
+                        extra_generic,
                         paid_destination,
                         declined_destination,
                         ..
                     } => {
-                        facts.merge_into(&mut incoming[*paid_destination]);
+                        let mut paid_facts = facts.clone();
+                        if *extra_generic == ValueExpr::chosen_x() {
+                            paid_facts.defined_resolution_x = true;
+                        }
+                        paid_facts.merge_into(&mut incoming[*paid_destination]);
                         facts.merge_into(&mut incoming[*declined_destination]);
                     }
                     Instruction::ReturnCardsDestroyedThisWay
@@ -15923,7 +16141,7 @@ impl Program {
             }
             if let Some(restriction) = self.activation_restrictions.get(&ability.id) {
                 restriction.validate(vocabulary)?;
-                if restriction.is_any_player()
+                if (restriction.is_any_player() || restriction.is_only_opponents())
                     && (ability.source_cost != SourceCost::None
                         || self.loyalty_costs.contains_key(&ability.id))
                 {
@@ -16144,7 +16362,9 @@ impl Program {
                         op,
                         Instruction::PutNamedCounterOnSource { .. }
                             | Instruction::TapEnchantedCreature
-                            | Instruction::ExileTargetWithLink(LinkedExileGroup::Helvault)
+                            | Instruction::ExileTargetWithLink(
+                                LinkedExileGroup::Helvault | LinkedExileGroup::SourceLinked,
+                            )
                             | Instruction::ExchangeLifeWithSourceToughness
                             | Instruction::ShuffleAbilitySourceIntoLibrary
                             | Instruction::GrantGraveyardCastAndWatchAbilities
@@ -16859,10 +17079,7 @@ impl TriggeredAbility {
             return Err(DefinitionError::InvalidInstruction);
         }
         if let Some(TriggerCondition::HandSizeBelow(required)) = self.condition.intervening_if
-            && (required == 0
-                || self.grouping != TriggerGrouping::EachOccurrence
-                || self.body.target != BodyTarget::None
-                || !matches!(self.body.instructions.as_slice(), [Instruction::DrawController { amount: ValueExpr::PlayerStat(PlayerStatExpr::CardsShortOfHandSize(amount)) }] if *amount == required))
+            && required == 0
         {
             return Err(DefinitionError::InvalidInstruction);
         }
@@ -16908,8 +17125,19 @@ impl TriggeredAbility {
                     | InterveningCondition::OpponentMoreLands
                     | InterveningCondition::Monarch { .. }
             );
+            let has_require = self.body.instructions.first()
+                == Some(&Instruction::RequireCondition(cond))
+                || matches!(
+                    self.body.instructions.first(),
+                    Some(Instruction::ChooseOption { options, .. })
+                        if !options.is_empty()
+                            && options.iter().all(|branch| {
+                                branch.body.instructions.first()
+                                    == Some(&Instruction::RequireCondition(cond))
+                            })
+                );
             if (needs_each_occurrence && self.grouping != TriggerGrouping::EachOccurrence)
-                || self.body.instructions.first() != Some(&Instruction::RequireCondition(cond))
+                || !has_require
             {
                 return Err(DefinitionError::InvalidInstruction);
             }

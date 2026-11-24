@@ -10,6 +10,7 @@ pub mod filter;
 pub mod keywords;
 pub mod preprocess;
 pub mod vocab;
+pub mod wave_e6;
 
 use std::error::Error;
 use std::fmt;
@@ -126,19 +127,72 @@ pub fn compile_card_with_options(
     }
 }
 
+/// Normalize nested single-quoted granted abilities (e.g. `has '{T}: Add {G}{G}.'`)
+/// into double quotes without disturbing English apostrophes (`owner's`, `can't`, `~'s`).
+fn normalize_nested_single_quotes(text: &str) -> String {
+    if !text.contains('\'') || text.contains('"') {
+        return text.to_string();
+    }
+    let bytes = text.as_bytes();
+    let mut out = String::with_capacity(text.len());
+    let mut in_sq = false;
+    let mut i = 0;
+    while i < bytes.len() {
+        let b = bytes[i];
+        if b == b'\'' {
+            if !in_sq {
+                let prev_space_or_start = i == 0 || bytes[i - 1] == b' ';
+                let next_starts_ability = bytes
+                    .get(i + 1)
+                    .is_some_and(|&nb| nb == b'{' || nb.is_ascii_uppercase() || nb == b'~');
+                if prev_space_or_start && next_starts_ability {
+                    in_sq = true;
+                    out.push('"');
+                    i += 1;
+                    continue;
+                }
+            } else {
+                let next_ends_quote = bytes
+                    .get(i + 1)
+                    .is_none_or(|&nb| matches!(nb, b' ' | b',' | b'.' | b';'));
+                if next_ends_quote {
+                    in_sq = false;
+                    out.push('"');
+                    i += 1;
+                    continue;
+                }
+            }
+        }
+        // Preserve multi-byte UTF-8 safely
+        if let Some(ch) = text[i..].chars().next() {
+            out.push(ch);
+            i += ch.len_utf8();
+        } else {
+            break;
+        }
+    }
+    if in_sq {
+        // Unbalanced single quote: revert to original untouched text
+        text.to_string()
+    } else {
+        out
+    }
+}
+
 /// Recursively compile a quoted granted ability string into a typed `FaceAst` fragment.
 /// Returns `Some` only when the quoted ability compiles cleanly with zero failures.
 #[must_use]
 pub fn compile_granted_ability(ability_text: &str, vocab: &Vocabulary) -> Option<Box<FaceAst>> {
-    let trimmed = ability_text.trim();
+    let trimmed = ability_text.trim().trim_end_matches(',');
     if trimmed.is_empty() {
         return None;
     }
+    let normalized = normalize_nested_single_quotes(trimmed);
     let face = compile_face_with_options(
         FaceInput {
             name: "",
             type_line: "Creature",
-            oracle_text: trimmed,
+            oracle_text: &normalized,
         },
         vocab,
         CompileOptions {
@@ -232,7 +286,9 @@ pub fn compile_face_with_options(
     fn find_last_modal_modes_mut(ins: &mut [InstructionAst]) -> Option<&mut Vec<ModalModeAst>> {
         for op in ins.iter_mut().rev() {
             match op {
-                InstructionAst::AbilityRestriction { .. } | InstructionAst::AllowRepeatModes => {
+                InstructionAst::AbilityRestriction { .. }
+                | InstructionAst::AllowRepeatModes
+                | InstructionAst::ModalModifier(_) => {
                     continue;
                 }
                 InstructionAst::BindX { body, .. } if body.is_empty() => continue,
@@ -243,6 +299,7 @@ pub fn compile_face_with_options(
                     then_body: inner, ..
                 }
                 | InstructionAst::BindX { body: inner, .. }
+                | InstructionAst::BindXY { body: inner, .. }
                 | InstructionAst::IfPreviousSucceeded(inner)
                 | InstructionAst::IfPreviousFailed(inner)
                 | InstructionAst::Otherwise(inner)
@@ -253,10 +310,17 @@ pub fn compile_face_with_options(
                 | InstructionAst::ForEachPlayer { body: inner, .. }
                 | InstructionAst::ForEachObject { body: inner, .. }
                 | InstructionAst::ForEachCount { body: inner, .. }
+                | InstructionAst::ForEachSubjectPlayer { body: inner, .. }
+                | InstructionAst::ForEachColorAmong { body: inner, .. }
+                | InstructionAst::ForAsLongAs { body: inner, .. }
+                | InstructionAst::WhenYouNext { body: inner, .. }
+                | InstructionAst::TemporarySpecialAction { body: inner, .. }
                 | InstructionAst::Unless { body: inner, .. } => {
-                    return find_last_modal_modes_mut(inner);
+                    if let Some(modes) = find_last_modal_modes_mut(inner) {
+                        return Some(modes);
+                    }
                 }
-                _ => return None,
+                _ => {}
             }
         }
         None
@@ -270,6 +334,7 @@ pub fn compile_face_with_options(
         LastReplacement,
     }
     let mut modal_target = ModalTarget::None;
+    let mut last_replacement_is_named_choice = false;
     #[derive(Clone, Copy, PartialEq, Eq)]
     enum ActiveSection {
         Base,
@@ -356,12 +421,31 @@ pub fn compile_face_with_options(
         }
 
         if is_exotic_layout_header(&norm) {
+            // Cluster 21: Prototype `{M} - P/T` header compiles losslessly into PrototypeStats
+            if let Some((left, right)) = norm.split_once(preprocess::EM_DASH)
+                && preprocess::is_mana_sequence(left.trim())
+                && is_bare_pt(right.trim())
+                && let (Ok(cost), Some((power, toughness))) = (
+                    parse_cost_list(left.trim(), vocab),
+                    right.trim().split_once('/'),
+                )
+            {
+                out.statics.push(StaticAbilityAst::PrototypeStats {
+                    cost,
+                    power: power.to_string(),
+                    toughness: toughness.to_string(),
+                });
+                modal_target = ModalTarget::None;
+                last_replacement_is_named_choice = false;
+                continue;
+            }
             out.failures.push(ParseFailureAst {
                 stage: "layout_line".to_string(),
                 text: norm,
                 reason: "exotic_layout_header".to_string(),
             });
             modal_target = ModalTarget::None;
+            last_replacement_is_named_choice = false;
             continue;
         }
 
@@ -391,13 +475,60 @@ pub fn compile_face_with_options(
                 }
                 continue;
             }
-            let (_, bullet_clean) = strip_ability_word(bullet_body.trim());
-            let (ins, fails) = parse_effect_body(bullet_clean, vocab);
+            // Cluster 1: Promote `As ~ enters, choose Khans or Dragons.` when bullets follow
+            if modal_target == ModalTarget::None && last_replacement_is_named_choice {
+                let target_repls: &mut Vec<ast::ReplacementEffectAst> = match section {
+                    ActiveSection::Base => &mut out.replacements,
+                    ActiveSection::LevelBand => out
+                        .level_bands
+                        .last_mut()
+                        .map_or(&mut out.replacements, |b| &mut b.replacements),
+                    ActiveSection::ClassLevel => out
+                        .class_levels
+                        .last_mut()
+                        .map_or(&mut out.replacements, |c| &mut c.replacements),
+                    ActiveSection::CaseSolved => &mut out.case_solved.replacements,
+                };
+                if let Some(last_rp) = target_repls.last_mut()
+                    && let ast::ReplacementEffectAst::AsEntersChoose { choice } = last_rp
+                {
+                    let ch = choice.clone();
+                    *last_rp =
+                        ast::ReplacementEffectAst::AsEntersAction(vec![InstructionAst::Modal {
+                            choice: ch,
+                            modes: Vec::new(),
+                        }]);
+                    modal_target = ModalTarget::LastReplacement;
+                }
+            }
+            let (bullet_label, bullet_clean) = strip_ability_word(bullet_body.trim());
+            let (ins, mut fails) = parse_effect_body(bullet_clean, vocab);
+            let mut granted_face: Option<Box<FaceAst>> = None;
+            if !fails.is_empty()
+                && modal_target == ModalTarget::LastReplacement
+                && let Some(compiled) = compile_granted_ability(bullet_clean, vocab)
+            {
+                fails.clear();
+                granted_face = Some(compiled);
+            }
             out.failures.extend(fails);
+            let mode_ast = if let Some(gf) = granted_face {
+                ModalModeAst {
+                    body: Vec::new(),
+                    label: bullet_label,
+                    granted: Some(gf),
+                }
+            } else {
+                ModalModeAst {
+                    body: ins,
+                    label: bullet_label,
+                    granted: None,
+                }
+            };
             match modal_target {
                 ModalTarget::Spell => {
                     if let Some(modes) = find_last_modal_modes_mut(&mut out.spell_effects) {
-                        modes.push(ModalModeAst { body: ins });
+                        modes.push(mode_ast);
                     }
                 }
                 ModalTarget::LastAbility => {
@@ -420,7 +551,7 @@ pub fn compile_face_with_options(
                             | AbilityAst::Loyalty { body, .. }
                             | AbilityAst::SagaChapter { body, .. } => {
                                 if let Some(modes) = find_last_modal_modes_mut(body) {
-                                    modes.push(ModalModeAst { body: ins });
+                                    modes.push(mode_ast);
                                 }
                             }
                             AbilityAst::ClassLevel { .. } => {}
@@ -444,12 +575,12 @@ pub fn compile_face_with_options(
                         target_repls.last_mut()
                         && let Some(modes) = find_last_modal_modes_mut(body)
                     {
-                        modes.push(ModalModeAst { body: ins });
+                        modes.push(mode_ast);
                     }
                 }
                 ModalTarget::None => {
                     if is_spell {
-                        out.spell_effects.extend(ins);
+                        out.spell_effects.extend(mode_ast.body);
                     } else {
                         out.failures.push(ParseFailureAst {
                             stage: "modal_bullet".to_string(),
@@ -462,6 +593,7 @@ pub fn compile_face_with_options(
             continue;
         }
         modal_target = ModalTarget::None;
+        last_replacement_is_named_choice = false;
 
         // Saga chapter (strip optional flavor ability word like "Gungnir - ...")
         if is_saga && let Some((chapters, body_str)) = split_saga_line(&norm) {
@@ -508,11 +640,15 @@ pub fn compile_face_with_options(
                 });
                 continue;
             }
-            let is_die_band = !lt.is_empty()
+            let is_die_band = (!lt.is_empty()
                 && lt.chars().count() <= 7
                 && lt.chars().all(|c| {
                     c.is_ascii_digit() || c == '-' || c == '\u{2013}' || c == '\u{2014}' || c == '+'
-                });
+                }))
+                || (lt.ends_with(" or less")
+                    && lt
+                        .strip_suffix(" or less")
+                        .is_some_and(|n| n.trim().parse::<u8>().is_ok()));
             if is_die_band && lt.chars().any(|c| c.is_ascii_digit()) && !right.trim().is_empty() {
                 out.statics.push(StaticAbilityAst::DieRollBand {
                     roll: lt.to_string(),
@@ -520,6 +656,19 @@ pub fn compile_face_with_options(
                 });
                 continue;
             }
+        }
+        // Em-dash die-roll band (`1 or 2 — ...`, `4 or 5 — ...` on Comet, Stellar Pup)
+        if let Some((left, right)) = norm.split_once(" \u{2014} ")
+            && let Some((a, b)) = left.trim().split_once(" or ")
+            && a.trim().parse::<u8>().is_ok()
+            && b.trim().parse::<u8>().is_ok()
+            && !right.trim().is_empty()
+        {
+            out.statics.push(StaticAbilityAst::DieRollBand {
+                roll: left.trim().to_string(),
+                payload: right.trim().to_string(),
+            });
+            continue;
         }
 
         let (ability_word, body_for_parse) = strip_ability_word(&norm);
@@ -604,7 +753,7 @@ pub fn compile_face_with_options(
                 || body_for_parse.starts_with("Whenever ")
                 || body_for_parse.starts_with("At the beginning of ")
                 || body_for_parse.starts_with("At the end of ")
-                || body_for_parse.starts_with("At end of combat,"))
+                || body_for_parse.starts_with("At end of combat"))
         {
             let mut clause_commas: Vec<usize> = Vec::new();
             {
@@ -827,6 +976,8 @@ pub fn compile_face_with_options(
             Ok(StaticOrReplacement::Replacement(mut rp)) => {
                 if promote_as_enters_modal(&mut rp, vocab) {
                     modal_target = ModalTarget::LastReplacement;
+                } else if matches!(rp, ast::ReplacementEffectAst::AsEntersChoose { .. }) {
+                    last_replacement_is_named_choice = true;
                 }
                 match para_section {
                     ActiveSection::Base => out.replacements.push(rp),
@@ -872,21 +1023,75 @@ pub fn compile_face_with_options(
                                 sub_repls.push(rp);
                             }
                             Err(_) => {
-                                // Allow imperative follow-up sentences ("If you do, ...", "If you don't, ...",
-                                // "When you do, ...", "Otherwise, ...") when at least one static/replacement
+                                // Allow paired triggered sentences inside multi-sentence static paragraphs
+                                // (Keranos, God-Eternal Kefnet, etc.).
+                                let trimmed_sent = sent.trim();
+                                if (!sub_statics.is_empty() || !sub_repls.is_empty())
+                                    && (trimmed_sent.starts_with("Whenever ")
+                                        || trimmed_sent.starts_with("When ")
+                                        || trimmed_sent.starts_with("At the beginning of "))
+                                    && let Some((hdr, body_s)) = trimmed_sent.split_once(", ")
+                                    && let Ok(trig) = parse_trigger_header(hdr, vocab)
+                                {
+                                    let (ins, fails) = parse_effect_body(body_s, vocab);
+                                    if fails.is_empty()
+                                        && !ins.is_empty()
+                                        && (options.allow_tabletop_honor_system
+                                            || !ins.iter().any(instruction_uses_honor_system))
+                                    {
+                                        sub_statics.push(StaticAbilityAst::PairedTrigger {
+                                            trigger: trig,
+                                            body: ins,
+                                        });
+                                        continue;
+                                    }
+                                }
+                                // Allow imperative follow-up sentences when at least one static/replacement
                                 // has already parsed in this paragraph.
-                                let sl = sent.trim().to_ascii_lowercase();
+                                let sl = trimmed_sent.to_ascii_lowercase();
                                 let is_followup_lead = sl.starts_with("if you do, ")
                                     || sl.starts_with("if you don't, ")
                                     || sl.starts_with("if you can't, ")
                                     || sl.starts_with("if you cast ")
                                     || sl.starts_with("when you do, ")
                                     || sl.starts_with("if x is ")
+                                    || sl.starts_with("if it ")
+                                    || sl.starts_with("if the ")
+                                    || sl.starts_with("if a ")
+                                    || sl.starts_with("if that ")
+                                    || sl.starts_with("otherwise, ")
+                                    || sl.starts_with("until ")
+                                    || sl.starts_with("for each ")
+                                    || sl.starts_with("you choose ")
+                                    || sl.starts_with("you may ")
+                                    || sl.starts_with("that copy ")
+                                    || sl.starts_with("its base ")
+                                    || sl.starts_with("it enters ")
+                                    || sl.starts_with("it's still ")
+                                    || sl.starts_with("you may activate each of those abilities only once each turn")
+                                    || sl.starts_with("do this only once each turn")
+                                    || sl.starts_with("the same is true for ")
+                                    || sl.starts_with("no more than one mana of each color ")
                                     || sl.starts_with("then ");
+                                if (!sub_statics.is_empty() || !sub_repls.is_empty())
+                                    && (sl.starts_with("it's still ")
+                                        || sl.starts_with("you may activate each of those abilities only once each turn")
+                                        || sl.starts_with("do this only once each turn")
+                                        || sl.starts_with("the same is true for ")
+                                        || sl.starts_with("no more than one mana of each color "))
+                                {
+                                    sub_statics.push(StaticAbilityAst::RuleOrCombatRestriction {
+                                        subject: None,
+                                        rule: trimmed_sent.to_string(),
+                                        filter: None,
+                                        condition: None,
+                                    });
+                                    continue;
+                                }
                                 if (!sub_statics.is_empty() || !sub_repls.is_empty())
                                     && is_followup_lead
                                 {
-                                    let (ins, fails) = parse_effect_body(sent, vocab);
+                                    let (ins, fails) = parse_effect_body(trimmed_sent, vocab);
                                     if fails.is_empty()
                                         && !ins.is_empty()
                                         && (options.allow_tabletop_honor_system
@@ -895,6 +1100,39 @@ pub fn compile_face_with_options(
                                         sub_statics.push(StaticAbilityAst::FollowUp(ins));
                                         continue;
                                     }
+                                }
+                                // Ignore-effect escape clause attached to preceding static
+                                // ("Any player / Its controller / That player may <cost> for that player to ignore this effect until end of turn.")
+                                if let Some(last_st) = sub_statics.last_mut()
+                                    && let Some((who_cost, _)) = sl.split_once(
+                                        " for that player to ignore this effect until end of turn",
+                                    )
+                                    && let Some((who_raw, cost_raw)) = who_cost.split_once(" may ")
+                                    && let Ok(cost) =
+                                        clauses::parse_cost_list(cost_raw.trim(), vocab)
+                                {
+                                    let prev = std::mem::replace(
+                                        last_st,
+                                        StaticAbilityAst::DraftAction(String::new()),
+                                    );
+                                    *last_st = StaticAbilityAst::WithIgnoreCost {
+                                        inner: Box::new(prev),
+                                        who: who_raw.trim().to_string(),
+                                        cost,
+                                        duration: ast::DurationAst::UntilEndOfTurn,
+                                    };
+                                    continue;
+                                }
+                                // Clarification sentence ("This effect doesn't remove Auras already attached to those artifacts.")
+                                if !sub_statics.is_empty() && sl.starts_with("this effect doesn't ")
+                                {
+                                    sub_statics.push(StaticAbilityAst::RuleOrCombatRestriction {
+                                        subject: None,
+                                        rule: trimmed_sent.to_string(),
+                                        filter: None,
+                                        condition: None,
+                                    });
+                                    continue;
                                 }
                                 multi_ok = false;
                                 break;
@@ -953,6 +1191,14 @@ pub fn compile_face_with_options(
                             },
                             body: ins,
                         });
+                        continue;
+                    }
+                    if ability_word
+                        .as_deref()
+                        .is_some_and(|w| w.eq_ignore_ascii_case("visit"))
+                        && !fails.is_empty()
+                    {
+                        out.failures.extend(fails);
                         continue;
                     }
                 }
@@ -1025,9 +1271,9 @@ fn static_uses_honor_system(st: &StaticAbilityAst) -> bool {
             paired_rule: Some(inner),
             ..
         } => static_uses_honor_system(inner),
-        StaticAbilityAst::Otherwise(inner) | StaticAbilityAst::OncePerTurn(inner) => {
-            static_uses_honor_system(inner)
-        }
+        StaticAbilityAst::Otherwise(inner)
+        | StaticAbilityAst::OncePerTurn(inner)
+        | StaticAbilityAst::ScaledBy { inner, .. } => static_uses_honor_system(inner),
         StaticAbilityAst::Compound(items) => items.iter().any(static_uses_honor_system),
         StaticAbilityAst::FollowUp(body) => body.iter().any(instruction_uses_honor_system),
         _ => false,
@@ -1042,16 +1288,25 @@ fn section_uses_honor_system(
     if statics.iter().any(static_uses_honor_system) {
         return true;
     }
-    if replacements.iter().any(|r| match r {
-        ast::ReplacementEffectAst::EventInstead {
-            instead_body: Some(body),
-            ..
+    fn replacement_uses_honor_system(r: &ast::ReplacementEffectAst) -> bool {
+        match r {
+            ast::ReplacementEffectAst::EventInstead {
+                instead_body: Some(body),
+                ..
+            }
+            | ast::ReplacementEffectAst::AsEntersAction(body) => {
+                body.iter().any(instruction_uses_honor_system)
+            }
+            ast::ReplacementEffectAst::Compound(items) => {
+                items.iter().any(replacement_uses_honor_system)
+            }
+            ast::ReplacementEffectAst::ScaledBy { inner, .. } => {
+                replacement_uses_honor_system(inner)
+            }
+            _ => false,
         }
-        | ast::ReplacementEffectAst::AsEntersAction(body) => {
-            body.iter().any(instruction_uses_honor_system)
-        }
-        _ => false,
-    }) {
+    }
+    if replacements.iter().any(replacement_uses_honor_system) {
         return true;
     }
     for ab in abilities {
@@ -1185,9 +1440,19 @@ fn instruction_uses_honor_system(ins: &InstructionAst) -> bool {
         }) => options
             .iter()
             .any(|opt| opt.iter().any(instruction_uses_honor_system)),
-        InstructionAst::Modal { modes, .. } => modes
-            .iter()
-            .any(|m| m.body.iter().any(instruction_uses_honor_system)),
+        InstructionAst::Modal { modes, .. } => modes.iter().any(|m| {
+            m.body.iter().any(instruction_uses_honor_system)
+                || m.granted.as_deref().is_some_and(face_uses_honor_system)
+        }),
+        InstructionAst::ForEachSubjectPlayer { body, .. }
+        | InstructionAst::TemporarySpecialAction { body, .. }
+        | InstructionAst::ForEachColorAmong { body, .. } => {
+            body.iter().any(instruction_uses_honor_system)
+        }
+        InstructionAst::CreateEmblemFor {
+            compiled: Some(inner),
+            ..
+        } => face_uses_honor_system(inner),
         _ => false,
     }
 }
@@ -1337,7 +1602,7 @@ mod tests {
             }
         ));
 
-        // Gond Gate and Mox Amber must fail closed rather than silently dropping Gate/legendary filters
+        // Gond Gate and Mox Amber compile into exact lossless ManaSpecAst variants
         let gond = compile_card(
             &CardInput {
                 oracle_id: "gond-gate",
@@ -1351,10 +1616,20 @@ mod tests {
             },
             &vocab,
         );
-        assert!(
-            !gond.strictly_compiled,
-            "Gond Gate must not silently drop its Gate filter"
-        );
+        assert!(gond.strictly_compiled, "{:?}", gond.faces[0].failures);
+        let AbilityAst::Activated {
+            body: gond_body, ..
+        } = &gond.faces[0].abilities[0]
+        else {
+            panic!("expected activated ability on Gond Gate");
+        };
+        assert!(matches!(
+            &gond_body[0],
+            InstructionAst::AddMana {
+                mana: ManaSpecAst::AnyObjectCouldProduce { filter, any_type: false },
+                ..
+            } if filter.subtypes.iter().any(|s| s.eq_ignore_ascii_case("gate"))
+        ));
         let mox_amber = compile_card(
             &CardInput {
                 oracle_id: "mox-amber",
@@ -1369,9 +1644,20 @@ mod tests {
             &vocab,
         );
         assert!(
-            !mox_amber.strictly_compiled,
-            "Mox Amber must not silently become unconditional AnyColor"
+            mox_amber.strictly_compiled,
+            "{:?}",
+            mox_amber.faces[0].failures
         );
+        let AbilityAst::Activated { body: mox_body, .. } = &mox_amber.faces[0].abilities[0] else {
+            panic!("expected activated ability on Mox Amber");
+        };
+        assert!(matches!(
+            &mox_body[0],
+            InstructionAst::AddMana {
+                mana: ManaSpecAst::AnyColorAmong { .. },
+                ..
+            }
+        ));
 
         // 3. DieRollBand vs StationBand
         let portent = compile_card(
@@ -1490,31 +1776,107 @@ mod tests {
             }) if matches!(c.as_ref(), ValueExprAst::Const(2))
         ));
 
-        // 7. Lossy forms fail closed cleanly instead of silently stripping qualifiers
-        for lossy_text in [
-            "Sacrifice all creatures: Draw a card.",
-            "Sacrifice a creature and Lossy Card: Draw a card.",
-            "Destroy all creatures except for Lossy Card.",
-            "Draw up to three cards.",
-        ] {
-            let lossy = compile_card(
-                &CardInput {
-                    oracle_id: "lossy",
+        // 7. Previously-lossy forms now compile into exact lossless typed AST nodes
+        let sac_all = compile_card(
+            &CardInput {
+                oracle_id: "sac-all",
+                name: "Lossy Card",
+                layout: "normal",
+                faces: vec![FaceInput {
                     name: "Lossy Card",
-                    layout: "normal",
-                    faces: vec![FaceInput {
-                        name: "Lossy Card",
-                        type_line: "Artifact",
-                        oracle_text: lossy_text,
-                    }],
-                },
-                &vocab,
-            );
-            assert!(
-                !lossy.strictly_compiled,
-                "lossy clause must not silently compile: {lossy_text}"
-            );
-        }
+                    type_line: "Artifact",
+                    oracle_text: "Sacrifice all creatures: Draw a card.",
+                }],
+            },
+            &vocab,
+        );
+        assert!(sac_all.strictly_compiled, "{:?}", sac_all.faces[0].failures);
+        assert!(matches!(
+            sac_all.faces[0].abilities.first(),
+            Some(AbilityAst::Activated { cost, .. })
+                if matches!(cost.as_slice(), [ast::CostAtomAst::SacrificeAll(_)])
+        ));
+
+        let sac_compound = compile_card(
+            &CardInput {
+                oracle_id: "sac-compound",
+                name: "Lossy Card",
+                layout: "normal",
+                faces: vec![FaceInput {
+                    name: "Lossy Card",
+                    type_line: "Artifact",
+                    oracle_text: "Sacrifice a creature and Lossy Card: Draw a card.",
+                }],
+            },
+            &vocab,
+        );
+        assert!(
+            sac_compound.strictly_compiled,
+            "{:?}",
+            sac_compound.faces[0].failures
+        );
+        assert!(matches!(
+            sac_compound.faces[0].abilities.first(),
+            Some(AbilityAst::Activated { cost, .. })
+                if matches!(
+                    cost.as_slice(),
+                    [ast::CostAtomAst::Sacrifice { .. }, ast::CostAtomAst::SacrificeSelf]
+                )
+        ));
+
+        let destroy_except = compile_card(
+            &CardInput {
+                oracle_id: "destroy-except",
+                name: "Lossy Card",
+                layout: "normal",
+                faces: vec![FaceInput {
+                    name: "Lossy Card",
+                    type_line: "Sorcery",
+                    oracle_text: "Destroy all creatures except for Lossy Card.",
+                }],
+            },
+            &vocab,
+        );
+        assert!(
+            destroy_except.strictly_compiled,
+            "{:?}",
+            destroy_except.faces[0].failures
+        );
+        assert!(matches!(
+            destroy_except.faces[0].spell_effects.first(),
+            Some(InstructionAst::Destroy {
+                except: Some(ex),
+                random: false,
+                ..
+            }) if matches!(ex.as_ref(), SubjectRefAst::SelfObject)
+        ));
+
+        let draw_upto = compile_card(
+            &CardInput {
+                oracle_id: "draw-upto",
+                name: "Lossy Card",
+                layout: "normal",
+                faces: vec![FaceInput {
+                    name: "Lossy Card",
+                    type_line: "Sorcery",
+                    oracle_text: "Draw up to three cards.",
+                }],
+            },
+            &vocab,
+        );
+        assert!(
+            draw_upto.strictly_compiled,
+            "{:?}",
+            draw_upto.faces[0].failures
+        );
+        assert!(matches!(
+            draw_upto.faces[0].spell_effects.first(),
+            Some(InstructionAst::Draw {
+                up_to: true,
+                count,
+                ..
+            }) if matches!(count.as_ref(), ValueExprAst::Const(3))
+        ));
 
         // 8. Lossless SearchLibrary with NameFilterAst preserves exact card name
         let named_search = compile_card(
@@ -1769,5 +2131,446 @@ mod tests {
             &vocab,
         );
         assert!(!bad_cls.strictly_compiled);
+    }
+
+    #[test]
+    #[ignore]
+    fn stage1_corpus_audit() {
+        use std::collections::{BTreeMap, HashMap};
+        use std::io::{BufRead, BufReader};
+        use std::path::Path;
+        use std::process::{Command, Stdio};
+
+        #[derive(serde::Deserialize)]
+        struct RawFace {
+            name: String,
+            #[serde(default)]
+            type_line: Option<String>,
+            #[serde(default)]
+            oracle_text: Option<String>,
+        }
+        #[derive(serde::Deserialize)]
+        struct RawCard {
+            #[serde(default)]
+            oracle_id: Option<String>,
+            name: String,
+            layout: String,
+            #[serde(default)]
+            type_line: Option<String>,
+            #[serde(default)]
+            oracle_text: Option<String>,
+            #[serde(default)]
+            card_faces: Option<Vec<RawFace>>,
+            #[serde(default)]
+            legalities: BTreeMap<String, String>,
+        }
+
+        let vocab_path = std::env::var("SPELLWAKE_CREATURE_VOCABULARY_INPUT")
+            .expect("SPELLWAKE_CREATURE_VOCABULARY_INPUT");
+        let cat_path =
+            std::env::var("SPELLWAKE_CATALOGUE_INPUT").expect("SPELLWAKE_CATALOGUE_INPUT");
+        let vocab = Vocabulary::load_from_file(Path::new(&vocab_path)).expect("load vocab");
+
+        let mut child = Command::new("gzip")
+            .args(["-dc", &cat_path])
+            .stdout(Stdio::piped())
+            .spawn()
+            .expect("spawn gzip");
+        let stdout = child.stdout.take().expect("gzip stdout");
+        let reader = BufReader::new(stdout);
+
+        const BASE_FORMATS: [&str; 6] = [
+            "commander",
+            "standard",
+            "pioneer",
+            "modern",
+            "legacy",
+            "vintage",
+        ];
+
+        let mut total = 0usize;
+        let mut strict = 0usize;
+        let mut by_bucket: HashMap<String, Vec<String>> = HashMap::new();
+        let mut by_stage: HashMap<String, usize> = HashMap::new();
+        let mut dump_lines: Vec<String> = Vec::new();
+
+        for line in reader.lines() {
+            let line = line.expect("read line");
+            if line.trim().is_empty() {
+                continue;
+            }
+            let raw: RawCard = serde_json::from_str(&line).expect("parse card json");
+            let eligible = BASE_FORMATS.iter().any(|fmt| {
+                matches!(
+                    raw.legalities.get(*fmt).map(String::as_str),
+                    Some("legal" | "restricted")
+                )
+            });
+            if !eligible {
+                continue;
+            }
+            total += 1;
+            let owned_faces: Vec<(String, String, String)> = match raw.card_faces {
+                Some(fs) if !fs.is_empty() => fs
+                    .into_iter()
+                    .map(|f| {
+                        (
+                            f.name,
+                            f.type_line.unwrap_or_default(),
+                            f.oracle_text.unwrap_or_default(),
+                        )
+                    })
+                    .collect(),
+                _ => vec![(
+                    raw.name.clone(),
+                    raw.type_line.unwrap_or_default(),
+                    raw.oracle_text.unwrap_or_default(),
+                )],
+            };
+            let face_inputs: Vec<FaceInput<'_>> = owned_faces
+                .iter()
+                .map(|(n, tl, ot)| FaceInput {
+                    name: n.as_str(),
+                    type_line: tl.as_str(),
+                    oracle_text: ot.as_str(),
+                })
+                .collect();
+            let ast = compile_card(
+                &CardInput {
+                    oracle_id: raw.oracle_id.as_deref().unwrap_or(""),
+                    name: &raw.name,
+                    layout: &raw.layout,
+                    faces: face_inputs,
+                },
+                &vocab,
+            );
+            if ast.strictly_compiled {
+                strict += 1;
+            } else {
+                for face in &ast.faces {
+                    for fail in &face.failures {
+                        *by_stage.entry(fail.stage.clone()).or_insert(0) += 1;
+                        let norm_reason = fail
+                            .reason
+                            .split_once(':')
+                            .map_or(fail.reason.as_str(), |(h, _)| h);
+                        let words: Vec<&str> = fail.text.split_whitespace().take(3).collect();
+                        let prefix = words.join(" ").to_ascii_lowercase();
+                        let key = format!("{}:{norm_reason}:[{prefix}]", fail.stage);
+                        let entry = by_bucket.entry(key).or_default();
+                        if entry.len() < 4 {
+                            entry.push(format!("[{}] {}", raw.name, fail.text));
+                        } else {
+                            entry.push(String::new());
+                        }
+                        dump_lines.push(format!(
+                            "{}\t{}\t{}\t{}",
+                            fail.stage, norm_reason, raw.name, fail.text
+                        ));
+                    }
+                }
+            }
+        }
+        let _ = child.wait();
+
+        if let Ok(dump_path) = std::env::var("SPELLWAKE_AST_FAIL_DUMP") {
+            let _ = std::fs::write(&dump_path, dump_lines.join("\n"));
+        }
+
+        let failed = total.saturating_sub(strict);
+        eprintln!(
+            "=== FAST STAGE 1 AST AUDIT: {strict} / {total} ({:.2}%), {failed} incomplete ===",
+            (strict as f64 / total.max(1) as f64) * 100.0
+        );
+        let mut stage_sorted: Vec<(String, usize)> = by_stage.into_iter().collect();
+        stage_sorted.sort_by_key(|e| std::cmp::Reverse(e.1));
+        eprintln!("By stage: {:?}", stage_sorted);
+
+        let mut sorted: Vec<(String, Vec<String>)> = by_bucket.into_iter().collect();
+        sorted.sort_by_key(|e| std::cmp::Reverse(e.1.len()));
+        for (key, samples) in sorted.iter().take(70) {
+            let ex: Vec<&str> = samples
+                .iter()
+                .filter(|s| !s.is_empty())
+                .take(3)
+                .map(String::as_str)
+                .collect();
+            eprintln!("  {:5}  {key}  e.g. {:?}", samples.len(), ex);
+        }
+    }
+
+    #[test]
+    fn pass_e6_bug_fixes_and_lossless_fidelity_traps() {
+        let members: Vec<String> = [
+            "Dragon", "Troll", "Warrior", "Human", "Hero", "Avatar", "Ally", "Knight", "Rogue",
+            "Advisor", "Villain", "Otter", "Wizard", "Frog", "Octopus",
+        ]
+        .into_iter()
+        .map(str::to_string)
+        .collect();
+        let vocab = Vocabulary::from_creature_members(&members);
+        let compile = |name: &str, type_line: &str, oracle_text: &str| {
+            compile_card(
+                &CardInput {
+                    oracle_id: "test",
+                    name,
+                    layout: "normal",
+                    faces: vec![FaceInput {
+                        name,
+                        type_line,
+                        oracle_text,
+                    }],
+                },
+                &vocab,
+            )
+        };
+
+        // Bug 1: normalize_self earliest delimiter ("Shang-Chi and the Ten Rings" -> "~")
+        let shang = compile(
+            "Shang-Chi and the Ten Rings",
+            "Legendary Creature — Human Warrior Hero",
+            "First strike\nWhenever you draw a card, put a +1/+1 counter on Shang-Chi.",
+        );
+        assert!(
+            shang.strictly_compiled,
+            "Shang-Chi: {:?}",
+            shang.faces[0].failures
+        );
+
+        // Bug 2: Oxford-comma trigger headers (Sarkhan's Unsealing, Avatar Aang, River Song)
+        let sarkhan = compile(
+            "Sarkhan's Unsealing",
+            "Enchantment",
+            "Whenever you cast a creature spell with power 4, 5, or 6, Sarkhan's Unsealing deals 4 damage to any target.",
+        );
+        assert!(
+            sarkhan.strictly_compiled,
+            "Sarkhan's Unsealing: {:?}",
+            sarkhan.faces[0].failures
+        );
+
+        let aang = compile(
+            "Avatar Aang",
+            "Legendary Creature — Human Avatar Ally",
+            "Flying\nWhenever you waterbend, earthbend, firebend, or airbend, draw a card.",
+        );
+        assert!(
+            aang.strictly_compiled,
+            "Avatar Aang: {:?}",
+            aang.faces[0].failures
+        );
+
+        // Bug 3: Multi-quote + trailing comma + nested single quotes (Terminal Velocity, Old-Growth Troll, Bronzehide Lion)
+        let term_vel = compile(
+            "Terminal Velocity",
+            "Sorcery",
+            "You may put an artifact or creature card from your hand onto the battlefield. That permanent gains haste, \"When this permanent leaves the battlefield, it deals damage equal to its mana value to each creature,\" and \"At the beginning of your end step, sacrifice this permanent.\"",
+        );
+        assert!(
+            term_vel.strictly_compiled,
+            "Terminal Velocity: {:?}",
+            term_vel.faces[0].failures
+        );
+
+        let og_troll = compile(
+            "Old-Growth Troll",
+            "Creature — Troll Warrior",
+            "Trample\nWhen this creature dies, if it was a creature, return it to the battlefield. It's an Aura enchantment with enchant Forest you control and \"Enchanted Forest has '{T}: Add {G}{G}' and '{1}, {T}, Sacrifice this land: Create a tapped 4/4 green Troll Warrior creature token with trample.'\"",
+        );
+        assert!(
+            og_troll.strictly_compiled,
+            "Old-Growth Troll: {:?}",
+            og_troll.faces[0].failures
+        );
+
+        // Bug 4: "not named ~" in SearchLibrary (Tiamat) & bare protection/ward (Shay Cormac)
+        let tiamat = compile(
+            "Tiamat",
+            "Legendary Creature — Dragon God",
+            "Flying\nWhen Tiamat enters, if you cast it, search your library for up to five Dragon cards not named Tiamat that each have different names, reveal them, put them into your hand, then shuffle.",
+        );
+        assert!(
+            tiamat.strictly_compiled,
+            "Tiamat: {:?}",
+            tiamat.faces[0].failures
+        );
+
+        let shay = compile(
+            "Shay Cormac",
+            "Legendary Creature — Human Knight Rogue",
+            "{1}: Permanents your opponents control lose hexproof, indestructible, protection, shroud, and ward until end of turn.",
+        );
+        assert!(
+            shay.strictly_compiled,
+            "Shay Cormac: {:?}",
+            shay.faces[0].failures
+        );
+
+        // Trap #2: Exclude(referenced), NOT EXCLUDE_SELF (Knowledge Pool)
+        let kp = compile(
+            "Knowledge Pool",
+            "Artifact",
+            "Whenever a player casts a spell from their hand, that player exiles it. If the player does, they may cast a spell from among other cards exiled with Knowledge Pool without paying its mana cost.",
+        );
+        assert!(
+            kp.strictly_compiled,
+            "Knowledge Pool: {:?}",
+            kp.faces[0].failures
+        );
+        let kp_json = serde_json::to_string(&kp).unwrap_or_default();
+        assert!(
+            kp_json.contains("\"Exclude\""),
+            "Knowledge Pool must use FilterPredicateAst::Exclude, got: {kp_json}"
+        );
+
+        // Trap #3: Evil's Thrall (UntilEndOfNextTurn = controller's next turn) vs Nuka-Nuke Launcher (UntilEndOfPlayersNextTurn(DefendingPlayer))
+        let thrall = compile(
+            "Evil's Thrall",
+            "Sorcery",
+            "Gain control of target creature until end of turn. If you control a Villain with greater mana value than that creature, gain control of that creature until the end of your next turn instead.",
+        );
+        assert!(
+            thrall.strictly_compiled,
+            "Evil's Thrall: {:?}",
+            thrall.faces[0].failures
+        );
+        let thrall_json = serde_json::to_string(&thrall).unwrap_or_default();
+        assert!(
+            thrall_json.contains("\"UntilEndOfNextTurn\"")
+                || thrall_json.contains("\"UntilEndOfPlayersNextTurn\""),
+            "Evil's Thrall must preserve end-of-next-turn duration: {thrall_json}"
+        );
+
+        let nuka = compile(
+            "Nuka-Nuke Launcher",
+            "Artifact — Equipment",
+            "Whenever equipped creature attacks, until the end of defending player's next turn, that player gets two rad counters whenever they cast a spell.",
+        );
+        assert!(
+            nuka.strictly_compiled,
+            "Nuka-Nuke Launcher: {:?}",
+            nuka.faces[0].failures
+        );
+        let nuka_json = serde_json::to_string(&nuka).unwrap_or_default();
+        assert!(
+            nuka_json.contains("\"UntilEndOfPlayersNextTurn\":\"DefendingPlayer\""),
+            "Nuka-Nuke Launcher must preserve defending-player scoped duration: {nuka_json}"
+        );
+
+        // Trap #5: Stinging Study (greatest: false) vs Cloudkill (greatest: true)
+        let sting = compile(
+            "Stinging Study",
+            "Instant",
+            "You draw X cards and you lose X life, where X is the mana value of a commander you own on the battlefield or in the command zone.",
+        );
+        assert!(
+            sting.strictly_compiled,
+            "Stinging Study: {:?}",
+            sting.faces[0].failures
+        );
+        let sting_json = serde_json::to_string(&sting).unwrap_or_default();
+        assert!(
+            sting_json.contains("\"greatest\":false"),
+            "Stinging Study must allow choosing partner commander (greatest: false)"
+        );
+
+        let cloudkill = compile(
+            "Cloudkill",
+            "Sorcery",
+            "All creatures get -X/-X until end of turn, where X is the greatest mana value of a commander you own on the battlefield or in the command zone.",
+        );
+        assert!(
+            cloudkill.strictly_compiled,
+            "Cloudkill: {:?}",
+            cloudkill.faces[0].failures
+        );
+        let ck_json = serde_json::to_string(&cloudkill).unwrap_or_default();
+        assert!(
+            ck_json.contains("\"greatest\":true"),
+            "Cloudkill must use greatest: true"
+        );
+
+        // Trap #6: SeparateIntoPiles face_down_piles (Atris)
+        let atris = compile(
+            "Atris, Oracle of Half-Truths",
+            "Legendary Creature — Human Advisor",
+            "Menace\nWhen Atris enters, target opponent looks at the top three cards of your library and separates them into a face-down pile and a face-up pile.",
+        );
+        assert!(
+            atris.strictly_compiled,
+            "Atris: {:?}",
+            atris.faces[0].failures
+        );
+        let atris_json = serde_json::to_string(&atris).unwrap_or_default();
+        assert!(
+            atris_json.contains("\"face_down_piles\":1"),
+            "Atris must preserve face_down_piles: 1"
+        );
+
+        // Trap #8: The First Tyrannic War must use OthersEnterWithCounters (replacement), never PutCounters
+        let tyrannic = compile(
+            "The First Tyrannic War",
+            "Enchantment — Saga",
+            "I — You may put a creature card from your hand onto the battlefield. If its mana cost contains {X}, it enters with a number of +1/+1 counters on it equal to the number of lands you control.",
+        );
+        assert!(
+            tyrannic.strictly_compiled,
+            "The First Tyrannic War: {:?}",
+            tyrannic.faces[0].failures
+        );
+        let tyr_json = serde_json::to_string(&tyrannic).unwrap_or_default();
+        assert!(
+            tyr_json.contains("\"OthersEnterWithCounters\""),
+            "0/0 Hydra trap: must emit OthersEnterWithCounters"
+        );
+        assert!(
+            !tyr_json.contains("\"PutCounters\""),
+            "0/0 Hydra trap: must not emit PutCounters"
+        );
+
+        // Trap #9: Serpentine Spike DistinctTarget + Ballroom Brawlers GrantKeywordChoice
+        let spike = compile(
+            "Serpentine Spike",
+            "Sorcery",
+            "Serpentine Spike deals 2 damage to target creature, 3 damage to another target creature, and 4 damage to a third target creature.",
+        );
+        assert!(
+            spike.strictly_compiled,
+            "Serpentine Spike: {:?}",
+            spike.faces[0].failures
+        );
+        let spike_json = serde_json::to_string(&spike).unwrap_or_default();
+        assert!(
+            spike_json.contains("\"DistinctTarget\""),
+            "Serpentine Spike must preserve DistinctTarget slots"
+        );
+
+        // Trap #10: Turtles Forever exact: true, Master of the Wild Hunt divider: ItsController, Gatecrash Signal the Clans
+        let turtles = compile(
+            "Turtles Forever",
+            "Sorcery",
+            "Search your library and/or outside the game for exactly four legendary creature cards you own with different names, then reveal those cards.",
+        );
+        assert!(
+            turtles.strictly_compiled,
+            "Turtles Forever: {:?}",
+            turtles.faces[0].failures
+        );
+        let turtles_json = serde_json::to_string(&turtles).unwrap_or_default();
+        assert!(
+            turtles_json.contains("\"exact\":true"),
+            "Turtles Forever must preserve exact: true"
+        );
+
+        let signal = compile(
+            "Signal the Clans",
+            "Instant",
+            "Search your library for three creature cards and reveal them. If you reveal three cards with different names, choose one of them at random and put that card into your hand. Shuffle the rest into your library.",
+        );
+        assert!(
+            signal.strictly_compiled,
+            "Signal the Clans (gtc): {:?}",
+            signal.faces[0].failures
+        );
     }
 }

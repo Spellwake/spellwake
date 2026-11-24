@@ -398,7 +398,7 @@ impl Joins {
                         | TriggerRelated::StateTriggerSource(_)
                         | TriggerRelated::FinalSagaChapter { .. }
                         | TriggerRelated::Step { .. }
-                        | TriggerRelated::ReflexiveTrigger
+                        | TriggerRelated::ReflexiveTrigger { .. }
                         | TriggerRelated::LifeChanged(_) => None,
                         TriggerRelated::MiracleRevealed(object)
                         | TriggerRelated::LeftGame(object) => Some(*object),
