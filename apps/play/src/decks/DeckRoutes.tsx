@@ -5,6 +5,7 @@ import { useAccount } from "../auth/AccountProvider";
 import { lobbyPath } from "../lobby/LobbyRoutes";
 import { useConnectedFindMatch } from "../play/connected-find-match";
 import { useDemoFindMatch } from "../play/demo-find-match";
+import { useDemoQuests } from "../play/demo-quests";
 import { DeckBuilderPage } from "../routes/builder/DeckBuilderPage";
 import {
   DeckShelfPage,
@@ -93,6 +94,7 @@ function PreviewShelf({ mode }: { mode: PlayMode }): ReactElement {
       mode={mode}
       source={useDemoDeckShelf(mode)}
       play={(props) => <PreviewPlay mode={mode} {...props} />}
+      quests={useDemoQuests()}
     />
   );
 }

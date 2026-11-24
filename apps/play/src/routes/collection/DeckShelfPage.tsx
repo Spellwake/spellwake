@@ -21,6 +21,8 @@ import {
 } from "../../decks/deck-sources";
 import { ImportDeckDialog } from "../import/ImportDeckDialog";
 import { lobbyPath } from "../../lobby/LobbyRoutes";
+import type { QuestsSource } from "../../play/quest-sources";
+import { QuestStrip } from "./QuestStrip";
 import { motionLanguage as m } from "../../lib/motion";
 import * as s from "./deck-shelf.css";
 
@@ -63,11 +65,14 @@ export function DeckShelfPage({
   mode,
   source,
   play,
+  quests,
 }: {
   mode: PlayMode;
   source: DeckShelfSource;
   /** What Play on a deck opens. It comes from the account or the preview, as the decks do. */
   play: (props: PlayProps) => ReactElement;
+  /** Today's quests, shown above the decks. Absent where there are none to read. */
+  quests?: QuestsSource;
 }): ReactElement {
   const navigate = useNavigate();
   const [query, setQuery] = useQueryState("q", parseAsString.withDefault(""));
@@ -181,6 +186,7 @@ export function DeckShelfPage({
           aria-label="Deck library"
           tabIndex={0}
         >
+          {quests && <QuestStrip source={quests} />}
           <div className={s.grid}>
             {visible.map((deck, index) => (
               <motion.article
