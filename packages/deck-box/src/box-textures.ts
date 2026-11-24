@@ -10,15 +10,16 @@ import {
 const WIDTH = 1.6;
 const LENGTH = 3.558407044966673;
 const SIZE = 1024;
-/** Official mana symbols, as Scryfall serves them (see assets/mana-symbols). */
-const symbolUrls: Record<"W" | "U" | "B" | "R" | "G" | "C", string> = {
-  W: new URL("../../../assets/mana-symbols/W.svg", import.meta.url).href,
-  U: new URL("../../../assets/mana-symbols/U.svg", import.meta.url).href,
-  B: new URL("../../../assets/mana-symbols/B.svg", import.meta.url).href,
-  R: new URL("../../../assets/mana-symbols/R.svg", import.meta.url).href,
-  G: new URL("../../../assets/mana-symbols/G.svg", import.meta.url).href,
-  C: new URL("../../../assets/mana-symbols/C.svg", import.meta.url).href,
-};
+const SYMBOL_CODES = ["W", "U", "B", "R", "G", "C"] as const;
+type SymbolCode = (typeof SYMBOL_CODES)[number];
+/**
+ * The host serves the box's texture inputs from one public folder, beside
+ * the model: the leather maps in `materials/`, the official mana symbols as
+ * Scryfall serves them in `mana-symbols/`, and the Spellwake mark as
+ * `logo.svg`. A release build has no other copy of them.
+ */
+const artwork = (root: string, path: string): string =>
+  new URL(path, new URL(root, document.baseURI)).href;
 
 /**
  * The official symbol's glyph without its coloured disc, inked in the
@@ -26,9 +27,10 @@ const symbolUrls: Record<"W" | "U" | "B" | "R" | "G" | "C", string> = {
  * paths are left exactly as drawn.
  */
 async function glyphImage(
-  code: keyof typeof symbolUrls,
+  artworkUrl: string,
+  code: SymbolCode,
 ): Promise<HTMLImageElement> {
-  const response = await fetch(symbolUrls[code]);
+  const response = await fetch(artwork(artworkUrl, `mana-symbols/${code}.svg`));
   if (!response.ok) throw new Error(`Unable to load the {${code}} symbol.`);
   const svg = new DOMParser().parseFromString(
     await response.text(),
@@ -230,34 +232,22 @@ let shared: Promise<SharedInputs> | null = null;
  * the costly part of a box, so it happens once per page; each box only
  * makes its own textures from them. A failed read is tried again next time.
  */
-function sharedInputs(): Promise<SharedInputs> {
+function sharedInputs(artworkUrl: string): Promise<SharedInputs> {
   shared ??= (async () => {
     const material = (name: string) =>
-      image(
-        new URL(
-          `../../../assets/table-scene/materials/${name}`,
-          import.meta.url,
-        ).href,
-      );
+      image(artwork(artworkUrl, `materials/${name}`));
     const [leather, normal, roughness, glyphEntries, emblem] =
       await Promise.all([
         material("leather-color.jpg"),
         material("leather-normal.jpg"),
         material("leather-roughness.jpg"),
         Promise.all(
-          (Object.keys(symbolUrls) as (keyof typeof symbolUrls)[]).map(
-            async (code): Promise<[string, Glyph]> => [
-              code,
-              trimGlyph(await glyphImage(code)),
-            ],
-          ),
+          SYMBOL_CODES.map(async (code): Promise<[string, Glyph]> => [
+            code,
+            trimGlyph(await glyphImage(artworkUrl, code)),
+          ]),
         ),
-        image(
-          new URL(
-            "../../../assets/logo/spellwake-gold.svg",
-            import.meta.url,
-          ).href,
-        ),
+        image(artwork(artworkUrl, "logo.svg")),
       ]);
     const wear = wearPattern();
     const inkMask = surface();
@@ -344,12 +334,13 @@ export type BoxTextures = {
  */
 export async function createBoxTextures(
   root: THREE.Object3D,
+  artworkUrl: string,
   signal?: AbortSignal,
   onRepaint?: () => void,
 ): Promise<BoxTextures> {
   signal?.throwIfAborted();
   // The images and painted surfaces every box shares are prepared once per page.
-  const inputs = await sharedInputs();
+  const inputs = await sharedInputs(artworkUrl);
   signal?.throwIfAborted();
   const glyphs = inputs.glyphs;
   const grain = inputs.grain;

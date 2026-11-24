@@ -53,6 +53,14 @@ const applicationAssets = [
     from: resolve(assetRoot, "deck-box/models/deck-box-leather.glb"),
     to: "models/deck-box-leather.glb",
   },
+  ...["color", "normal", "roughness"].map((map) => ({
+    from: resolve(assetRoot, `table-scene/materials/leather-${map}.jpg`),
+    to: `materials/leather-${map}.jpg`,
+  })),
+  ...["W", "U", "B", "R", "G", "C"].map((code) => ({
+    from: resolve(assetRoot, `mana-symbols/${code}.svg`),
+    to: `mana-symbols/${code}.svg`,
+  })),
 ];
 // Account entry: the approved provider marks and the two open-licensed typefaces its card is set in.
 const entryReview = resolve(
