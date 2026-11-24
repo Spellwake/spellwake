@@ -165,7 +165,7 @@ export function SupplyPage({ source }: { source: SupplySource }): ReactElement {
 
   return (
     <section className={s.page} aria-label="Supply" role="region">
-      {ballot && ballot.status !== "unavailable" && (
+      {ballot && (
         <div className={s.banner}>
           <SupplyIcon className={s.bannerIcon} aria-hidden="true" />
           <div className={s.bannerCopy}>
@@ -185,7 +185,6 @@ export function SupplyPage({ source }: { source: SupplySource }): ReactElement {
             ref={voteButton}
             className={s.bannerAction}
             aria-haspopup="dialog"
-            disabled={ballot.status === "loading"}
             onClick={() => setIsVoting(true)}
           >
             {ballot.status === "ready" && !ballot.isOpen
