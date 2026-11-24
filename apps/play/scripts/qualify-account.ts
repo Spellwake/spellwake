@@ -1899,6 +1899,11 @@ try {
     "lobby: Play makes one room with the deck, Ready follows the room, and Back closes it once",
     async () => {
       await host.getByRole("button", { name: "Play Goblins" }).click();
+      // Play asks how: a table with friends is the lobby.
+      await host
+        .getByRole("dialog", { name: "Play Goblins" })
+        .getByRole("button", { name: /^Play with friends/ })
+        .click();
       await host.waitForURL(/\/collection\/lobby\?.*room=/);
       const yourDeck = host.getByRole("button", {
         name: /^Your deck: Goblins/,
