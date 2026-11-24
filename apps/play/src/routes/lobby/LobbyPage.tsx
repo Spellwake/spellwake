@@ -151,7 +151,8 @@ export function LobbyPage({
             )}
           </div>
           {lobby.aiQuota &&
-            lobby.seats.some((seat) => seat.kind === "ai") && (() => {
+            lobby.seats.some((seat) => seat.kind === "ai") &&
+            (() => {
               const q = lobby.aiQuota;
               const overLimit =
                 q.requiredAdvanced > 0 &&
@@ -163,7 +164,9 @@ export function LobbyPage({
                   : "Advanced AI: Unlimited"
                 : `Advanced AI: ${q.remainingToday ?? 0}/${q.dailyLimit ?? 0} remaining today · Resets 00:00 UTC`;
               return (
-                <p className={`${overLimit ? s.warning : s.passive} ${s.quotaLine}`}>
+                <p
+                  className={`${overLimit ? s.warning : s.passive} ${s.quotaLine}`}
+                >
                   {label}
                 </p>
               );
@@ -223,6 +226,7 @@ export function LobbyPage({
                   name={lobby.yourDeck.name}
                   appearance={lobby.yourDeck.appearance}
                   modelUrl={MODEL_URL}
+                  artworkUrl={import.meta.env.BASE_URL}
                   className={s.boxButton}
                   stageClassName={s.boxStage}
                   statusClassName={s.boxStatus}
