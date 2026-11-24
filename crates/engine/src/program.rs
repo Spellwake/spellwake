@@ -5964,10 +5964,33 @@ impl ExecutableBody {
                 }
             })
             .collect();
+        let permanent_target = matches!(
+            self.target,
+            BodyTarget::SingleCreature
+                | BodyTarget::SinglePlaneswalker
+                | BodyTarget::SinglePermanent
+                | BodyTarget::FilteredPermanent(_)
+        );
+        let player_target = matches!(
+            self.target,
+            BodyTarget::SinglePlayer | BodyTarget::SingleOpponent
+        );
         let merge_family = |a: Option<OperandFamily>,
                             b: Option<OperandFamily>|
          -> Result<Option<OperandFamily>, DefinitionError> {
             match (a, b) {
+                (Some(OperandFamily::DamageRecipient), Some(OperandFamily::Permanent))
+                | (Some(OperandFamily::Permanent), Some(OperandFamily::DamageRecipient))
+                    if permanent_target =>
+                {
+                    Ok(Some(OperandFamily::Permanent))
+                }
+                (Some(OperandFamily::DamageRecipient), Some(OperandFamily::Player))
+                | (Some(OperandFamily::Player), Some(OperandFamily::DamageRecipient))
+                    if player_target =>
+                {
+                    Ok(Some(OperandFamily::Player))
+                }
                 (Some(x), Some(y)) if x != y => Err(DefinitionError::OperandFamily),
                 (Some(x), _) | (_, Some(x)) => Ok(Some(x)),
                 (None, None) => Ok(None),
@@ -11007,8 +11030,7 @@ impl ExecutableBody {
                 Instruction::Bolster(_) => None,
                 Instruction::CreateArmyIfAbsent { army, subtype }
                 | Instruction::Amass { army, subtype, .. } => {
-                    if self.target != BodyTarget::None
-                        || vocabulary.label(*army) != Some("Army")
+                    if vocabulary.label(*army) != Some("Army")
                         || vocabulary.label(*subtype).is_none()
                         || matches!(instruction, Instruction::Amass { amount: 0, .. })
                     {
@@ -15330,7 +15352,9 @@ impl Program {
                 CastCopyKeyword::CopyThisPermanentSpell => {
                     self.permanent().is_none() || self.has_type(CardType::Land)
                 }
-                CastCopyKeyword::Replicate(_) => self.has_type(CardType::Land),
+                CastCopyKeyword::Replicate(_) | CastCopyKeyword::Storm => {
+                    self.has_type(CardType::Land)
+                }
                 _ => !matches!(self.kind, ProgramKind::Spell(_)),
             }) || matches!(copy,CastCopyKeyword::Replicate(i) if !matches!(self.additional_cast_costs.get(i),Some(AdditionalCastCost::Replicate(_))))
             {
@@ -15525,7 +15549,7 @@ impl Program {
                                 || amount
                                     .validate_amount(
                                         &BTreeSet::new(),
-                                        BodyContext::Unbound,
+                                        BodyContext::ACTIVATED,
                                         &FlowFacts::default(),
                                         vocabulary,
                                     )
@@ -15538,12 +15562,12 @@ impl Program {
                         } => {
                             !kind.is_permanent()
                                 || condition
-                                    .validate(BodyContext::Unbound, vocabulary)
+                                    .validate(BodyContext::ACTIVATED, vocabulary)
                                     .is_err()
                                 || amount
                                     .validate_amount(
                                         &BTreeSet::new(),
-                                        BodyContext::Unbound,
+                                        BodyContext::ACTIVATED,
                                         &FlowFacts::default(),
                                         vocabulary,
                                     )
@@ -16142,8 +16166,33 @@ impl Program {
             if let Some(restriction) = self.activation_restrictions.get(&ability.id) {
                 restriction.validate(vocabulary)?;
                 if (restriction.is_any_player() || restriction.is_only_opponents())
-                    && (ability.source_cost != SourceCost::None
-                        || self.loyalty_costs.contains_key(&ability.id))
+                    && (!matches!(
+                        ability.source_cost,
+                        SourceCost::None
+                            | SourceCost::Discard {
+                                tap_source: false,
+                                ..
+                            }
+                            | SourceCost::SacrificeSelected {
+                                tap_source: false,
+                                from_graveyard: false,
+                                ..
+                            }
+                            | SourceCost::PayLife {
+                                tap_source: false,
+                                ..
+                            }
+                            | SourceCost::ExileGraveyard {
+                                tap_source: false,
+                                ..
+                            }
+                            | SourceCost::Exile {
+                                tap_source: false,
+                                from_graveyard: false,
+                                ..
+                            }
+                            | SourceCost::Sacrifice
+                    ) || self.loyalty_costs.contains_key(&ability.id))
                 {
                     return Err(DefinitionError::InvalidInstruction);
                 }

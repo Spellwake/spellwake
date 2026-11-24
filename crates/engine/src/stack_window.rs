@@ -1417,6 +1417,19 @@ impl StackWindow {
             .set_tapped_batch(self.cards.revision(), objects, true)?;
         Ok((self.with_cards(revision, cards), changes))
     }
+    /// Tap or untap battlefield objects during an inline event-replacement body (CR 614.1),
+    /// which may execute outside stack resolution (e.g. draw step or combat damage lifelink).
+    pub(crate) fn record_inline_replacement_status(
+        &self,
+        objects: &[ObjectId],
+        tapped: bool,
+    ) -> Result<(Self, Vec<ObjectStatusChange>), StackWindowError> {
+        let revision = self.next_revision(self.revision)?;
+        let (cards, changes) =
+            self.cards
+                .set_tapped_batch(self.cards.revision(), objects, tapped)?;
+        Ok((self.with_cards(revision, cards), changes))
+    }
     /// Trusted resolution-time mana tap after the executor proves payment authority.
     /// This preserves the resolving entry and does not create priority/check work.
     ///
@@ -3415,6 +3428,26 @@ impl StackWindow {
         moves: &[(ObjectId, ObjectDestination)],
     ) -> Result<(Self, Vec<ObjectMovement>), StackWindowError> {
         self.apply_recorded_zone_moves(self.next_revision(self.revision())?, moves)
+    }
+    /// Move one object to a non-stack destination during an inline event-replacement body (CR 614.1).
+    pub(crate) fn record_inline_replacement_move(
+        &self,
+        card: ObjectId,
+        destination: ObjectDestination,
+    ) -> Result<(Self, Option<ObjectMovement>), StackWindowError> {
+        if self.cards.get(card).is_none() {
+            return Ok((self.clone(), None));
+        }
+        match destination {
+            ObjectDestination::Stack { .. } => {
+                return Err(StackWindowError::UnsupportedStackInsertion);
+            }
+            ObjectDestination::Battlefield { controller } => self.validate_player(controller)?,
+            _ => {}
+        }
+        let revision = self.next_revision(self.revision())?;
+        let (next, mut moves) = self.apply_recorded_zone_moves(revision, &[(card, destination)])?;
+        Ok((next, moves.pop()))
     }
     fn apply_recorded_zone_moves(
         &self,

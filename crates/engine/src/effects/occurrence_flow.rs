@@ -874,6 +874,8 @@ impl EffectWindow {
             let mut factors: Vec<u8> = Vec::new();
             let mut skip_first_any = false;
             let mut skip_draw = false;
+            let mut body_replacements: Vec<super::event_replacement::EventBodyReplacement> =
+                Vec::new();
             let opponents = self
                 .combat_rules
                 .opponents(self.window.participants(), player)?;
@@ -926,10 +928,10 @@ impl EffectWindow {
                             }
                         }
                         crate::characteristics::StaticContinuousAbility::EventReplacement {
+                            id,
                             event: crate::characteristics::ReplaceableEvent::Draw { player: rel },
                             condition,
                             action,
-                            ..
                         } => {
                             let applies = match rel {
                                 crate::program::AffectedPlayers::One(
@@ -991,8 +993,24 @@ impl EffectWindow {
                                     skip_draw = true;
                                 }
                                 crate::characteristics::StaticReplacementAction::ReplaceWithBody {
-                                    ..
-                                } => {}
+                                    optional,
+                                    body,
+                                } => {
+                                    let key = (Some(perm.object), *id);
+                                    if !optional && !self.active_event_replacements.contains(&key) {
+                                        skip_draw = true;
+                                        body_replacements.push(
+                                            super::event_replacement::EventBodyReplacement {
+                                                source: Some(perm.object),
+                                                ability: *id,
+                                                controller: perm_ctrl,
+                                                affected_player: player,
+                                                optional: false,
+                                                body: (**body).clone(),
+                                            },
+                                        );
+                                    }
+                                }
                             }
                         }
                         _ => {}
@@ -1005,6 +1023,7 @@ impl EffectWindow {
                 }
                 if let crate::program::TemporaryRuleKind::TemporaryStatic(ab) = &active.rule
                     && let crate::characteristics::StaticContinuousAbility::EventReplacement {
+                        id,
                         event: crate::characteristics::ReplaceableEvent::Draw { player: rel },
                         action,
                         ..
@@ -1043,10 +1062,36 @@ impl EffectWindow {
                             skip_draw = true;
                         }
                         crate::characteristics::StaticReplacementAction::ReplaceWithBody {
-                            ..
-                        } => {}
+                            optional,
+                            body,
+                        } => {
+                            let key = (active.source_object, *id);
+                            if !optional && !self.active_event_replacements.contains(&key) {
+                                skip_draw = true;
+                                body_replacements.push(
+                                    super::event_replacement::EventBodyReplacement {
+                                        source: active.source_object,
+                                        ability: *id,
+                                        controller: active.controller,
+                                        affected_player: player,
+                                        optional: false,
+                                        body: (**body).clone(),
+                                    },
+                                );
+                            }
+                        }
                     }
                 }
+            }
+            if !body_replacements.is_empty() {
+                let draws = amount.to_usize().unwrap_or(1);
+                let cause = EventCause::Draw { player, origin };
+                if let Some(rep) = body_replacements.into_iter().next() {
+                    for _ in 0..draws {
+                        self.execute_inline_replacement_body(&rep, cause.clone(), append)?;
+                    }
+                }
+                return Ok(DrawJournal::default());
             }
             if skip_draw {
                 amount = 0.into();

@@ -47,6 +47,20 @@ impl EffectWindow {
     ) -> Result<RuleProgress, EffectError> {
         loop {
             self.settle_departed_payer(&mut append)?;
+            if let Some(frame) = self.pending_life_replacement_decision() {
+                return Ok(RuleProgress::new(
+                    self,
+                    RuleResult::Pending {
+                        checks: CheckJournal::default(),
+                        frame,
+                        journal,
+                        declarations,
+                        assignments,
+                        draws,
+                    },
+                    append,
+                ));
+            }
             if self.random_resolution_pending() {
                 let frame = self
                     .pending_resolution_decision()

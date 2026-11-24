@@ -1004,6 +1004,11 @@ impl StaticContinuousAbility {
                     StaticReplacementAction::ReplaceWithBody { body, .. } => {
                         body.validate_in(vocabulary, crate::program::BodyContext::ACTIVATED)
                             .map_err(|_| CharacteristicDefinitionError::InvalidKeywordGrant)?;
+                        if !crate::effects::event_replacement::is_inline_replacement_body_supported(
+                            body,
+                        ) {
+                            return Err(CharacteristicDefinitionError::InvalidKeywordGrant);
+                        }
                     }
                 }
                 return Ok(());
@@ -1271,6 +1276,7 @@ impl StaticContinuousAbility {
                                     ..
                                 }
                                 | crate::activated::SourceCost::ExileGraveyard { .. }
+                                | crate::activated::SourceCost::Power { .. }
                         )
                     {
                         return Err(CharacteristicDefinitionError::InvalidKeywordGrant);

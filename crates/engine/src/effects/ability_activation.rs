@@ -1760,7 +1760,14 @@ impl EffectWindow {
                 .is_some_and(|p| p.madness.is_some());
         let (window, source_after) = if selected.source_cost.power_cost().is_some()
             || selected.source_cost == SourceCost::None
-        {
+            || matches!(
+                selected.source_cost,
+                SourceCost::PayLife {
+                    tap_source: false,
+                    sacrifice: None,
+                    ..
+                }
+            ) {
             (next.window.clone(), card.clone())
         } else if let Some(destination) = sacrifice_destination {
             next.window.pay_announced_source_to(

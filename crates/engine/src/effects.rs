@@ -58,6 +58,7 @@ mod progress_rules;
 mod rule_resume;
 pub use commanders::CommanderRecord;
 mod draw_replacement;
+pub(crate) mod event_replacement;
 mod face_down;
 mod library_access;
 mod library_search;
@@ -1444,6 +1445,9 @@ pub struct EffectWindow {
     typed_exile_cohorts: BTreeMap<StackEntryId, TypedExileCohort>,
     typed_exile_pending: BTreeMap<StackEntryId, (StackEntryId, CardType)>,
     draw_replacement: Option<Box<draw_replacement::DrawReplacement>>,
+    pending_life_replacement: Option<Box<event_replacement::PendingLifeReplacement>>,
+    active_event_replacements:
+        BTreeSet<(Option<ObjectId>, crate::characteristics::StaticAbilityId)>,
     adventured: BTreeSet<(ObjectId, SeatId)>,
     card_play_permissions: BTreeSet<CardPlayPermission>,
     temporary_any_color_exile_cast: BTreeSet<(ObjectId, SeatId)>,
@@ -2546,7 +2550,9 @@ impl EffectWindow {
             free_exiled_cards:BTreeSet::new(),
             free_exiled_noncreature_spells:BTreeSet::new(),
             typed_exile_cohorts:BTreeMap::new(),typed_exile_pending:BTreeMap::new(),
-            draw_replacement:None,
+            draw_replacement: None,
+            pending_life_replacement: None,
+            active_event_replacements: BTreeSet::new(),
             adventured:BTreeSet::new(),
             card_play_permissions: BTreeSet::new(),
             temporary_any_color_exile_cast:BTreeSet::new(),

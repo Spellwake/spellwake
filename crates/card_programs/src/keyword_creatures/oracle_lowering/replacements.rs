@@ -3505,6 +3505,81 @@ fn lower_event_replacement_ability(
                 if ability.validate(vocabulary).is_ok() {
                     return Some(push_static_ability(program, ability));
                 }
+            } else if let Some((optional, body)) =
+                lower_inline_replacement_body(instead_raw, instead_norm, vocabulary, ids)
+            {
+                let ability = StaticContinuousAbility::EventReplacement {
+                    id: ids.static_id(),
+                    event: ReplaceableEvent::LifeLoss { player },
+                    condition: cond_opt
+                        .map(|rc| Box::new(StaticSourceCondition::Eval(Box::new(rc)))),
+                    action: StaticReplacementAction::ReplaceWithBody {
+                        optional,
+                        body: Box::new(body),
+                    },
+                };
+                if ability.validate(vocabulary).is_ok() {
+                    return Some(push_static_ability(program, ability));
+                }
+            }
+        }
+    }
+
+    // Life gain skip or body replacement (CR 614.1a)
+    if let Some(player) = affected_player {
+        let life_gain_cond: Option<Option<ResolutionCondition>> = if would_norm == "gain life" {
+            Some(None)
+        } else if would_norm == "gain life during your turn" {
+            Some(Some(ResolutionCondition {
+                left: ValueExpr::PlayerStat(PlayerStatExpr::ControllerIsActivePlayer),
+                comparison: Comparison::Equal,
+                right: ValueExpr::literal(1),
+            }))
+        } else if would_norm == "gain life during an opponent's turn" {
+            Some(Some(ResolutionCondition {
+                left: ValueExpr::PlayerStat(PlayerStatExpr::ControllerIsActivePlayer),
+                comparison: Comparison::Equal,
+                right: ValueExpr::literal(0),
+            }))
+        } else if let Some(cond_raw) = would_norm
+            .strip_prefix("gain life while ")
+            .or_else(|| would_norm.strip_prefix("gain life if "))
+        {
+            lower_world_resolution_condition(cond_raw, vocabulary).map(Some)
+        } else {
+            None
+        };
+        if let Some(cond_opt) = life_gain_cond {
+            let condition = cond_opt.map(|rc| Box::new(StaticSourceCondition::Eval(Box::new(rc))));
+            if instead_norm.contains("gains no life")
+                || instead_norm.contains("gain no life")
+                || instead_norm.contains("don't gain")
+                || instead_norm.contains("doesn't gain")
+            {
+                let ability = StaticContinuousAbility::EventReplacement {
+                    id: ids.static_id(),
+                    event: ReplaceableEvent::LifeGain { player },
+                    condition,
+                    action: StaticReplacementAction::Skip,
+                };
+                if ability.validate(vocabulary).is_ok() {
+                    return Some(push_static_ability(program, ability));
+                }
+            } else if let Some((optional, body)) =
+                lower_inline_replacement_body(instead_raw, instead_norm, vocabulary, ids)
+            {
+                let ability = StaticContinuousAbility::EventReplacement {
+                    id: ids.static_id(),
+                    event: ReplaceableEvent::LifeGain { player },
+                    condition,
+                    action: StaticReplacementAction::ReplaceWithBody {
+                        optional,
+                        body: Box::new(body),
+                    },
+                };
+                if ability.validate(vocabulary).is_ok() {
+                    return Some(push_static_ability(program, ability));
+                }
             }
         }
     }
@@ -3577,6 +3652,21 @@ fn lower_event_replacement_ability(
                         action,
                     },
                 ));
+            } else if let Some((optional, body)) =
+                lower_inline_replacement_body(instead_raw, instead_norm, vocabulary, ids)
+            {
+                let ability = StaticContinuousAbility::EventReplacement {
+                    id: ids.static_id(),
+                    event,
+                    condition: None,
+                    action: StaticReplacementAction::ReplaceWithBody {
+                        optional,
+                        body: Box::new(body),
+                    },
+                };
+                if ability.validate(vocabulary).is_ok() {
+                    return Some(push_static_ability(program, ability));
+                }
             }
         }
     }
@@ -3699,57 +3789,75 @@ fn lower_event_replacement_ability(
                     }
                 }
             }
-            if subj_low == "you" && is_single_draw {
-                let (optional, action_str) = if let Some(rest) = instead_raw
-                    .strip_prefix("you may instead ")
-                    .map(|s| s.trim_end_matches(" instead").trim())
-                {
-                    (true, rest)
-                } else if let Some(rest) = instead_norm.strip_prefix("you may ") {
-                    (true, rest.trim())
-                } else {
-                    (false, instead_norm)
+            if is_single_draw
+                && let Some((optional, body)) =
+                    lower_inline_replacement_body(instead_raw, instead_norm, vocabulary, ids)
+            {
+                let ability = StaticContinuousAbility::EventReplacement {
+                    id: ids.static_id(),
+                    event: ReplaceableEvent::Draw { player },
+                    condition,
+                    action: StaticReplacementAction::ReplaceWithBody {
+                        optional,
+                        body: Box::new(body),
+                    },
                 };
-                if !action_str.is_empty()
-                    && !action_str.contains("instead")
-                    && !matches!(
-                        action_str,
-                        "skip that draw"
-                            | "you skip that draw"
-                            | "that player skips that draw"
-                            | "they skip that draw"
-                    )
-                {
-                    let (ins, fails) = spellwake_oracle_compiler::clauses::parse_effect_body(
-                        action_str,
-                        &cached_compiler_vocab(vocabulary),
-                    );
-                    if fails.is_empty()
-                        && !ins.is_empty()
-                        && let Ok(body) = lower_effect_body(&ins, vocabulary, ids, false, true)
-                        && body.target == BodyTarget::None
-                    {
-                        let ability = StaticContinuousAbility::EventReplacement {
-                            id: ids.static_id(),
-                            event: ReplaceableEvent::Draw {
-                                player: AffectedPlayers::One(ResolvingPlayer::Controller),
-                            },
-                            condition,
-                            action: StaticReplacementAction::ReplaceWithBody {
-                                optional,
-                                body: Box::new(body),
-                            },
-                        };
-                        if ability.validate(vocabulary).is_ok() {
-                            return Some(push_static_ability(program, ability));
-                        }
-                    }
+                if ability.validate(vocabulary).is_ok() {
+                    return Some(push_static_ability(program, ability));
                 }
             }
         }
     }
 
     None
+}
+
+fn lower_inline_replacement_body(
+    instead_raw: &str,
+    instead_norm: &str,
+    vocabulary: &CreatureTypeVocabulary,
+    ids: &mut LoweringIds,
+) -> Option<(bool, ExecutableBody)> {
+    let (optional, action_str) = if let Some(rest) = instead_raw
+        .strip_prefix("you may instead ")
+        .or_else(|| instead_raw.strip_prefix("that player may instead "))
+        .or_else(|| instead_raw.strip_prefix("they may instead "))
+        .map(|s| s.trim_end_matches(" instead").trim())
+    {
+        (true, rest)
+    } else if let Some(rest) = instead_norm
+        .strip_prefix("you may ")
+        .or_else(|| instead_norm.strip_prefix("that player may "))
+        .or_else(|| instead_norm.strip_prefix("they may "))
+    {
+        (true, rest.trim())
+    } else {
+        (false, instead_norm)
+    };
+    if action_str.is_empty()
+        || action_str.contains("instead")
+        || matches!(
+            action_str,
+            "skip that draw"
+                | "you skip that draw"
+                | "that player skips that draw"
+                | "they skip that draw"
+        )
+    {
+        return None;
+    }
+    let (ins, fails) = spellwake_oracle_compiler::clauses::parse_effect_body(
+        action_str,
+        &cached_compiler_vocab(vocabulary),
+    );
+    if !fails.is_empty() || ins.is_empty() {
+        return None;
+    }
+    let body = lower_effect_body(&ins, vocabulary, ids, false, true).ok()?;
+    if body.target != BodyTarget::None {
+        return None;
+    }
+    Some((optional, body))
 }
 
 fn parse_subtype_damage_source(

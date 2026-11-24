@@ -1154,10 +1154,18 @@ impl EffectWindow {
                     EntryCounterAbility::DynamicCounter { kind, amount }
                     | EntryCounterAbility::ConditionalCounter { kind, amount, .. } => {
                         if let EntryCounterAbility::ConditionalCounter { condition, .. } = ability {
-                            let left =
-                                self.resolve_value_expr_at(controller, &condition.left, None)?;
-                            let right =
-                                self.resolve_value_expr_at(controller, &condition.right, None)?;
+                            let left = self.resolve_value_expr_with_source(
+                                controller,
+                                &condition.left,
+                                None,
+                                Some(object),
+                            )?;
+                            let right = self.resolve_value_expr_with_source(
+                                controller,
+                                &condition.right,
+                                None,
+                                Some(object),
+                            )?;
                             if !condition.comparison.evaluate(&left, &right) {
                                 continue;
                             }
@@ -1167,7 +1175,12 @@ impl EffectWindow {
                                 .and_then(|entry| entry.chosen_x().cloned())
                                 .unwrap_or_else(|| 0.into())
                         } else {
-                            self.resolve_value_expr_at(controller, amount, None)?
+                            self.resolve_value_expr_with_source(
+                                controller,
+                                amount,
+                                None,
+                                Some(object),
+                            )?
                         };
                         if resolved.is_positive() {
                             match *kind {

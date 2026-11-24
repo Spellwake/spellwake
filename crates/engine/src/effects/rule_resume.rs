@@ -177,7 +177,9 @@ impl EffectWindow {
                     RulesJournal::default(),
                 )
             }
-            actual @ (EffectDecision::DrawReplacement(_) | EffectDecision::ZoneReplacement(_))
+            actual @ (EffectDecision::DrawReplacement(_)
+            | EffectDecision::ZoneReplacement(_)
+            | EffectDecision::OptionalEffect(_))
                 if self.draw_decision().as_ref() == Some(actual) =>
             {
                 let mut next = self.clone();
@@ -1272,6 +1274,16 @@ impl EffectWindow {
             | EffectDecision::ResolutionSelect(_)
             | EffectDecision::ResolutionGraveyardOrder(_) => {
                 self.resume_resolution_selection(expected, frame, actor, reply)
+            }
+            EffectDecision::OptionalEffect(bound)
+                if self.pending_life_replacement_decision().as_ref() == Some(frame) =>
+            {
+                self.resume_life_replacement(expected, bound, actor, reply)
+            }
+            EffectDecision::OptionalEffect(_)
+                if matches!(self.pending_work, Some(PendingWork::LibraryTop(_))) =>
+            {
+                self.resume_library_top(expected, frame, actor, reply)
             }
             EffectDecision::OptionalEffect(bound) => {
                 self.resume_optional_effect(expected, bound, actor, reply, turn)

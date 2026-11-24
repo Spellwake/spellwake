@@ -126,7 +126,9 @@ impl EffectWindow {
         &self,
         current: &crate::characteristics::EvaluatedCharacteristics,
         adjustments: &mut BTreeMap<SeatId, LifeAdjustment>,
-    ) -> Result<(), EffectError> {
+        declined: &BTreeSet<(Option<ObjectId>, crate::characteristics::StaticAbilityId)>,
+    ) -> Result<super::event_replacement::LifeReplacementOutcome, EffectError> {
+        let mut outcome = super::event_replacement::LifeReplacementOutcome::default();
         let prohibited = self.life_gain_prohibitions(current)?;
         adjustments.retain(|player, adjustment| {
             !prohibited.contains(player)
@@ -145,6 +147,7 @@ impl EffectWindow {
             if !is_gain && !is_loss {
                 continue;
             }
+            let original_adjustment = adjustment.clone();
             let amount = match adjustment {
                 LifeAdjustment::Gain(a) | LifeAdjustment::Lose(a) => a,
                 LifeAdjustment::Set(_) => continue,
@@ -193,10 +196,10 @@ impl EffectWindow {
                             }
                         }
                         crate::characteristics::StaticContinuousAbility::EventReplacement {
+                            id,
                             event,
                             condition,
                             action,
-                            ..
                         } => {
                             let rel_opt = match event {
                                 crate::characteristics::ReplaceableEvent::LifeGain {
@@ -235,7 +238,7 @@ impl EffectWindow {
                                             controller: active.controller,
                                             name_rules: &self.name_rules,
                                             trigger_subject: None,
-                                            related_player: None,
+                                            related_player: Some(player),
                                             defending_player: None,
                                         };
                                         match cond {
@@ -269,8 +272,36 @@ impl EffectWindow {
                                             skip_event = true;
                                         }
                                         crate::characteristics::StaticReplacementAction::ReplaceWithBody {
-                                            ..
-                                        } => {}
+                                            optional,
+                                            body,
+                                        } => {
+                                            let key = (active.source_object, *id);
+                                            if !self.active_event_replacements.contains(&key)
+                                                && !declined.contains(&key)
+                                            {
+                                                let rep = super::event_replacement::EventBodyReplacement {
+                                                    source: active.source_object,
+                                                    ability: *id,
+                                                    controller: active.controller,
+                                                    affected_player: player,
+                                                    optional: *optional,
+                                                    body: (**body).clone(),
+                                                };
+                                                if *optional {
+                                                    if outcome.optional.is_none() {
+                                                        outcome.optional = Some((
+                                                            player,
+                                                            original_adjustment.clone(),
+                                                            rep,
+                                                        ));
+                                                        skip_event = true;
+                                                    }
+                                                } else {
+                                                    outcome.mandatory.push(rep);
+                                                    skip_event = true;
+                                                }
+                                            }
+                                        }
                                     }
                                 }
                             }
@@ -374,10 +405,10 @@ impl EffectWindow {
                             }
                         }
                         crate::characteristics::StaticContinuousAbility::EventReplacement {
+                            id,
                             event,
                             condition,
                             action,
-                            ..
                         } => {
                             let rel_opt = match event {
                                 crate::characteristics::ReplaceableEvent::LifeGain {
@@ -414,7 +445,7 @@ impl EffectWindow {
                                     controller: source_ctrl,
                                     name_rules: &self.name_rules,
                                     trigger_subject: None,
-                                    related_player: None,
+                                    related_player: Some(player),
                                     defending_player: None,
                                 };
                                 let cond_ok = condition.as_deref().is_none_or(|cond| match cond {
@@ -447,8 +478,36 @@ impl EffectWindow {
                                             skip_event = true;
                                         }
                                         crate::characteristics::StaticReplacementAction::ReplaceWithBody {
-                                            ..
-                                        } => {}
+                                            optional,
+                                            body,
+                                        } => {
+                                            let key = (Some(source.object), *id);
+                                            if !self.active_event_replacements.contains(&key)
+                                                && !declined.contains(&key)
+                                            {
+                                                let rep = super::event_replacement::EventBodyReplacement {
+                                                    source: Some(source.object),
+                                                    ability: *id,
+                                                    controller: source_ctrl,
+                                                    affected_player: player,
+                                                    optional: *optional,
+                                                    body: (**body).clone(),
+                                                };
+                                                if *optional {
+                                                    if outcome.optional.is_none() {
+                                                        outcome.optional = Some((
+                                                            player,
+                                                            original_adjustment.clone(),
+                                                            rep,
+                                                        ));
+                                                        skip_event = true;
+                                                    }
+                                                } else {
+                                                    outcome.mandatory.push(rep);
+                                                    skip_event = true;
+                                                }
+                                            }
+                                        }
                                     }
                                 }
                             }
@@ -475,7 +534,7 @@ impl EffectWindow {
             LifeAdjustment::Gain(a) | LifeAdjustment::Lose(a) => a.is_positive(),
             LifeAdjustment::Set(_) => true,
         });
-        Ok(())
+        Ok(outcome)
     }
 
     /// Each opponent loses life simultaneously. The controller gains the total actually lost.
@@ -578,26 +637,37 @@ impl EffectWindow {
     ) -> Result<(), EffectError> {
         let before = self.rules_snapshot(None)?;
         let mut adjustments = BTreeMap::from([(player, LifeAdjustment::Gain(amount.clone()))]);
-        self.restrict_life_gains(&before.view().evaluated, &mut adjustments)?;
+        let outcome =
+            self.restrict_life_gains(&before.view().evaluated, &mut adjustments, &BTreeSet::new())?;
+        if let Some((opt_player, opt_adj, _)) = outcome.optional {
+            adjustments.insert(opt_player, opt_adj);
+        }
         let changes = self
             .life
             .apply_adjustments(&adjustments)
             .map_err(|_| EffectError::InconsistentProgram)?;
-        if changes.is_empty() {
-            return Ok(());
+        if !changes.is_empty() {
+            self.emit_from(
+                EventCause::ManaAbilityActivated { source, ability },
+                &before,
+                None,
+                append,
+                |_, _, _| {
+                    Ok(changes
+                        .into_iter()
+                        .map(RulesOccurrence::LifeChanged)
+                        .collect())
+                },
+            )?;
         }
-        self.emit_from(
-            EventCause::ManaAbilityActivated { source, ability },
-            &before,
-            None,
-            append,
-            |_, _, _| {
-                Ok(changes
-                    .into_iter()
-                    .map(RulesOccurrence::LifeChanged)
-                    .collect())
-            },
-        )
+        for rep in outcome.mandatory {
+            self.execute_inline_replacement_body(
+                &rep,
+                EventCause::ManaAbilityActivated { source, ability },
+                append,
+            )?;
+        }
+        Ok(())
     }
     pub(super) fn adjust_life_at_cut(
         &mut self,
@@ -748,7 +818,24 @@ impl EffectWindow {
         &mut self,
         entry: StackEntryId,
         instruction: usize,
+        adjustments: BTreeMap<SeatId, LifeAdjustment>,
+        append: &mut RulesJournal,
+    ) -> Result<(), EffectError> {
+        self.adjust_players_at_cut_with_declined(
+            entry,
+            instruction,
+            adjustments,
+            BTreeSet::new(),
+            append,
+        )
+    }
+
+    pub(super) fn adjust_players_at_cut_with_declined(
+        &mut self,
+        entry: StackEntryId,
+        instruction: usize,
         mut adjustments: BTreeMap<SeatId, LifeAdjustment>,
+        declined: BTreeSet<(Option<ObjectId>, crate::characteristics::StaticAbilityId)>,
         append: &mut RulesJournal,
     ) -> Result<(), EffectError> {
         adjustments.retain(|player, _| self.window.participants().contains(player));
@@ -756,7 +843,18 @@ impl EffectWindow {
             return Ok(());
         }
         let before = self.rules_snapshot(None)?;
-        self.restrict_life_gains(&before.view().evaluated, &mut adjustments)?;
+        let outcome =
+            self.restrict_life_gains(&before.view().evaluated, &mut adjustments, &declined)?;
+        let pending_opt = if let Some((opt_player, opt_adj, candidate)) = outcome.optional {
+            if self.pending_work.is_some() && self.pending_life_replacement.is_none() {
+                Some((opt_player, opt_adj, candidate))
+            } else {
+                adjustments.insert(opt_player, opt_adj);
+                None
+            }
+        } else {
+            None
+        };
         let changes = self
             .life
             .apply_adjustments(&adjustments)
@@ -774,6 +872,25 @@ impl EffectWindow {
                         .collect())
                 },
             )?;
+        }
+        for rep in outcome.mandatory {
+            self.execute_inline_replacement_body(
+                &rep,
+                EventCause::Instruction { entry, instruction },
+                append,
+            )?;
+        }
+        if let Some((opt_player, opt_adj, candidate)) = pending_opt {
+            self.pending_life_replacement =
+                Some(Box::new(super::event_replacement::PendingLifeReplacement {
+                    entry,
+                    instruction,
+                    player: opt_player,
+                    adjustment: opt_adj,
+                    candidate,
+                    remaining: BTreeMap::new(),
+                    declined,
+                }));
         }
         Ok(())
     }

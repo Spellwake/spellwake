@@ -54,6 +54,20 @@ pub struct OptionalEffectFrame {
     token_offer: Option<super::token_offers::TemptingTokenOffer>,
 }
 impl OptionalEffectFrame {
+    /// Optional event-replacement prompt (CR 614.1, e.g. `StaticReplacementAction::ReplaceWithBody`).
+    pub(super) fn event_replacement(revision: u64, chooser: SeatId) -> Self {
+        Self {
+            rebound_or_buyback: false,
+            cast: None,
+            revision,
+            entry: StackEntryId::entry_replacement_creator(),
+            instruction: 0,
+            chooser,
+            options: BTreeSet::from([OptionalEffectChoice::Take, OptionalEffectChoice::Decline]),
+            token_offer: None,
+        }
+    }
+
     /// The card owner is choosing between two replacements of the same spell exit.
     pub fn rebound_or_buyback(&self) -> bool {
         self.rebound_or_buyback
@@ -281,6 +295,9 @@ impl EffectWindow {
     /// Current actual effect-time choice, derived at the latest executor revision.
     /// A color child exposes its own decision until its mana ability completes.
     pub fn pending_resolution_decision(&self) -> Option<EffectDecision> {
+        if let Some(frame) = self.pending_life_replacement_decision() {
+            return Some(frame);
+        }
         match self.pending_work.as_ref() {
             Some(PendingWork::Combat(cursor)) if cursor.attack_payment.is_some() => {
                 match &cursor.frame {
