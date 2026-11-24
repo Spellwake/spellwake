@@ -228,7 +228,20 @@ impl EffectWindow {
                 }
             )
         }) > 0;
-        let prohibited = self.cards_drawn_this_turn.contains_key(&player)
+        let prohibited = current.objects.values().any(|perm| {
+            perm.zone == ObjectZone::Battlefield
+                && perm.has_battlefield_rule(|rule| match rule {
+                    crate::characteristics::StaticContinuousAbility::DrawRule {
+                        rule: crate::characteristics::StaticDrawRule::PlayersCannotDraw,
+                        ..
+                    } => true,
+                    crate::characteristics::StaticContinuousAbility::DrawRule {
+                        rule: crate::characteristics::StaticDrawRule::OpponentsCannotDraw,
+                        ..
+                    } => perm.controller.is_some_and(|c| opponents.contains(&c)),
+                    _ => false,
+                })
+        }) || (self.cards_drawn_this_turn.contains_key(&player)
             && opponents.iter().any(|&seat| {
                 current.controlled_rules(seat, |rule| {
                     matches!(
@@ -239,7 +252,7 @@ impl EffectWindow {
                         }
                     )
                 }) > 0
-            });
+            }));
         Ok((collectors, abundance, prohibited))
     }
     pub(crate) fn draw_with_replacements(

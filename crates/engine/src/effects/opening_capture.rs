@@ -127,6 +127,65 @@ impl EffectWindow {
         }
         Ok(RulesTransition::new(next, (), append))
     }
+
+    /// Move chosen opening-hand permanents (e.g. Leylines, CR 103.6) onto the battlefield
+    /// before Turn 1 begins, registering their battlefield timestamps.
+    pub(crate) fn opening_enter_battlefield(
+        &self,
+        expected: u64,
+        player: SeatId,
+        objects: &[ObjectId],
+    ) -> Result<RulesTransition<Self, ()>, EffectError> {
+        let revision = self.next_revision(expected)?;
+        if self.window.phase() != WindowPhase::Opening
+            || self.pending_work.is_some()
+            || !self.state_based_losses.is_empty()
+        {
+            return Err(EffectError::WrongPhase);
+        }
+        let before = self.rules_snapshot(None)?;
+        let (window, movements) = self.window.opening_battlefield_with_movements(
+            self.window.revision(),
+            player,
+            objects,
+        )?;
+        let mut next = Self {
+            revision,
+            window,
+            ..self.clone()
+        };
+        for movement in &movements {
+            next.characteristics
+                .register_battlefield_entry(movement.after.id())?;
+        }
+        let mut append = RulesJournal::default();
+        if !movements.is_empty() {
+            next.emit_from(
+                EventCause::OpeningCardsMoved {
+                    phase: OpeningMovePhase::PregameBattlefield,
+                    cohort: vec![player],
+                },
+                &before,
+                None,
+                &mut append,
+                |previous, current, controllers| {
+                    movements
+                        .iter()
+                        .map(|movement| {
+                            zone_occurrence_at(
+                                previous,
+                                current,
+                                movement,
+                                ZoneReason::Opening(OpeningMovePhase::PregameBattlefield),
+                                controllers,
+                            )
+                        })
+                        .collect()
+                },
+            )?;
+        }
+        Ok(RulesTransition::new(next, (), append))
+    }
 }
 
 #[cfg(test)]

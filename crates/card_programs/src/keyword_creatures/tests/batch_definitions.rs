@@ -565,6 +565,7 @@ fn sacrifice_each() -> Instruction {
             any_types: Default::default(),
             required_types: [CardType::Creature].into(),
             forbidden_types: BTreeSet::new(),
+            object_filter: None,
         },
     }
 }

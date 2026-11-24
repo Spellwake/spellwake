@@ -100,9 +100,10 @@ fn check_intervening_if(
                 < usize::from(*limit)
         }
         TriggerCondition::ControlsMeldPair => {
-            let Some(crate::program::Instruction::ChooseMeldPartner(mate)) =
-                ability.body.instructions.first()
-            else {
+            let Some(mate) = ability.body.instructions.iter().find_map(|op| match op {
+                crate::program::Instruction::ChooseMeldPartner(mate) => Some(mate),
+                _ => None,
+            }) else {
                 return false;
             };
             source.object.owner() == controller
@@ -111,7 +112,6 @@ fn check_intervening_if(
                         && v.object != source.object.id()
                         && v.owner == controller
                         && v.controller == Some(controller)
-                        && v.is_creature()
                         && after.name_rules.has_name(&v.current_names, mate)
                 })
         }
@@ -217,6 +217,26 @@ fn check_intervening_if(
         TriggerCondition::SourceIsAttacking => after
             .combat
             .is_some_and(|c| c.attacker(source.object.id()).is_some()),
+        TriggerCondition::SourceClassLevelAtLeast(min) => {
+            after
+                .characteristics
+                .class_levels
+                .get(&source.object.id())
+                .copied()
+                .unwrap_or(1)
+                >= *min
+        }
+        TriggerCondition::SourceIsSolved => after
+            .characteristics
+            .solved_cases
+            .contains(&source.object.id()),
+        TriggerCondition::SourceIsUnsolved => !after
+            .characteristics
+            .solved_cases
+            .contains(&source.object.id()),
+        TriggerCondition::SourceIsPrepared => {
+            after.characteristics.prepared.contains(&source.object.id())
+        }
         TriggerCondition::ControllerGainedLifeThisTurn => after
             .characteristics
             .life_gained_this_turn
@@ -383,6 +403,25 @@ fn check_intervening_if(
                 .count()
                 >= usize::from(*minimum)
         }
+        TriggerCondition::Eval(cond) => {
+            let ctx = crate::characteristics::WorldEvalCtx {
+                active_player: after.window.active_player(),
+                participants: after.window.participants(),
+                life: Some(after.life),
+                combat: after.combat,
+                cards: after.cards,
+                programs: after.programs,
+                state: after.characteristics,
+                objects: &after.evaluated.objects,
+                source: source.object.id(),
+                controller,
+                name_rules: after.name_rules,
+                trigger_subject: None,
+                related_player: None,
+                defending_player: None,
+            };
+            crate::characteristics::eval_world_condition(&ctx, cond)
+        }
         TriggerCondition::Not(inner) => {
             !check_intervening_if(Some(inner), ability, source, controller, after)
         }
@@ -394,6 +433,129 @@ fn check_intervening_if(
             check_intervening_if(Some(a), ability, source, controller, after)
                 || check_intervening_if(Some(b), ability, source, controller, after)
         }
+    }
+}
+
+fn trigger_condition_needs_event_context(cond: &TriggerCondition) -> bool {
+    match cond {
+        TriggerCondition::Eval(rc) => !rc.is_world_evaluable(),
+        TriggerCondition::Not(inner) => trigger_condition_needs_event_context(inner),
+        TriggerCondition::And(a, b) | TriggerCondition::Or(a, b) => {
+            trigger_condition_needs_event_context(a) || trigger_condition_needs_event_context(b)
+        }
+        _ => false,
+    }
+}
+
+fn member_event_context(
+    member: &TriggerCauseMember,
+    after: &RulesView<'_>,
+) -> (Option<ObjectId>, Option<SeatId>, Option<SeatId>) {
+    let trigger_subject = match &member.related {
+        TriggerRelated::ZoneChange { after: app, .. }
+        | TriggerRelated::Discard { after: app, .. }
+        | TriggerRelated::TokenCreated { after: app, .. } => Some(app.object.id()),
+        TriggerRelated::Combatant(id)
+        | TriggerRelated::AttackedAlone(id)
+        | TriggerRelated::TargetedPermanent(id)
+        | TriggerRelated::CounterSource(id)
+        | TriggerRelated::StateTriggerSource(id)
+        | TriggerRelated::Phased(id)
+        | TriggerRelated::Mutated(id)
+        | TriggerRelated::ManaSource(id)
+        | TriggerRelated::MiracleRevealed(id)
+        | TriggerRelated::LeftGame(id)
+        | TriggerRelated::FinalSagaChapter { saga: id, .. }
+        | TriggerRelated::SubtypeCombatDamage { creature: id, .. }
+        | TriggerRelated::AttachedCreatureDamaged { creature: id, .. }
+        | TriggerRelated::DamageDealtToPermanent { recipient: id, .. }
+        | TriggerRelated::CombatDamageToPlaneswalker {
+            planeswalker: id, ..
+        }
+        | TriggerRelated::CombatDamageToPlayer { source: id, .. } => Some(*id),
+        TriggerRelated::SpellCast(cast) => Some(cast.spell().object.id()),
+        TriggerRelated::StatusChange(ch) => Some(ch.after.id()),
+        _ => None,
+    };
+    let defending_player = match &member.related {
+        TriggerRelated::AttackGroup { attacked, .. } => match attacked {
+            crate::targets::TargetRef::Player(seat) => Some(*seat),
+            crate::targets::TargetRef::Object(obj) => {
+                after.evaluated.get(*obj).and_then(|p| p.controller)
+            }
+            crate::targets::TargetRef::Stack(_) => None,
+        },
+        TriggerRelated::Combatant(id) | TriggerRelated::AttackedAlone(id) => after
+            .combat
+            .and_then(|c| c.attacker(*id).map(|a| a.defender())),
+        _ => None,
+    };
+    (trigger_subject, member.related_player, defending_player)
+}
+
+fn check_intervening_if_with_ctx(
+    condition: Option<&TriggerCondition>,
+    ability: &TriggeredAbility,
+    source: &SupportedAppearance,
+    controller: SeatId,
+    after: &RulesView<'_>,
+    event_ctx: (Option<ObjectId>, Option<SeatId>, Option<SeatId>),
+) -> bool {
+    let Some(cond) = condition else {
+        return true;
+    };
+    match cond {
+        TriggerCondition::Eval(rc) => {
+            let (trigger_subject, related_player, defending_player) = event_ctx;
+            let ctx = crate::characteristics::WorldEvalCtx {
+                active_player: after.window.active_player(),
+                participants: after.window.participants(),
+                life: Some(after.life),
+                combat: after.combat,
+                cards: after.cards,
+                programs: after.programs,
+                state: after.characteristics,
+                objects: &after.evaluated.objects,
+                source: source.object.id(),
+                controller,
+                name_rules: after.name_rules,
+                trigger_subject,
+                related_player,
+                defending_player,
+            };
+            crate::characteristics::eval_world_condition(&ctx, rc)
+        }
+        TriggerCondition::Not(inner) => !check_intervening_if_with_ctx(
+            Some(inner),
+            ability,
+            source,
+            controller,
+            after,
+            event_ctx,
+        ),
+        TriggerCondition::And(a, b) => {
+            check_intervening_if_with_ctx(Some(a), ability, source, controller, after, event_ctx)
+                && check_intervening_if_with_ctx(
+                    Some(b),
+                    ability,
+                    source,
+                    controller,
+                    after,
+                    event_ctx,
+                )
+        }
+        TriggerCondition::Or(a, b) => {
+            check_intervening_if_with_ctx(Some(a), ability, source, controller, after, event_ctx)
+                || check_intervening_if_with_ctx(
+                    Some(b),
+                    ability,
+                    source,
+                    controller,
+                    after,
+                    event_ctx,
+                )
+        }
+        _ => check_intervening_if(Some(cond), ability, source, controller, after),
     }
 }
 
@@ -430,7 +592,9 @@ fn matches_evaluated_permanent(
             }
             crate::program::ControllerFilter::OwnerYou => candidate.owner == controller,
             crate::program::ControllerFilter::OwnerOpponent => candidate.owner != controller,
-            crate::program::ControllerFilter::RelatedPlayer => false,
+            crate::program::ControllerFilter::RelatedPlayer
+            | crate::program::ControllerFilter::TargetPlayer
+            | crate::program::ControllerFilter::TargetOpponent => false,
             crate::program::ControllerFilter::Player(seat) => candidate.controller == Some(seat),
         };
         if !controller_ok {
@@ -509,9 +673,11 @@ pub(super) fn match_trigger_event(
     {
         return Ok(());
     }
-    if !check_intervening_if(intervening_if, ability, source, controller, after) {
+    let deferred_if = intervening_if.is_some_and(trigger_condition_needs_event_context);
+    if !deferred_if && !check_intervening_if(intervening_if, ability, source, controller, after) {
         return Ok(());
     }
+    let start_len = members.len();
 
     match event {
         TriggerEvent::StateThreshold(threshold) => {
@@ -526,13 +692,17 @@ pub(super) fn match_trigger_event(
                     object: found,
                     definition,
                     grant,
+                } | RulesOccurrence::StateConditionMet {
+                    object: found,
+                    definition,
+                    grant,
                 } if *found == object && *definition == ability_id && *grant == granting_effect
             ) {
                 let related = match threshold {
                     StateThresholdKind::SourceCounters { .. } => {
                         TriggerRelated::CounterSource(object)
                     }
-                    StateThresholdKind::ControlledSubtype { .. } => {
+                    StateThresholdKind::ControlledSubtype { .. } | StateThresholdKind::Eval(_) => {
                         TriggerRelated::StateTriggerSource(object)
                     }
                 };
@@ -1141,9 +1311,13 @@ pub(super) fn match_trigger_event(
                             )
                         };
                         if subj_ok {
+                            let related_player = match mode {
+                                AttackTriggerMode::AtEnchantedPlayer => attacker.controller,
+                                _ => Some(attack.defender),
+                            };
                             members.push(TriggerCauseMember {
                                 occurrence: occurrence.id,
-                                related_player: Some(attack.defender),
+                                related_player,
                                 related: TriggerRelated::Combatant(attacker.object),
                             });
                         }
@@ -1762,6 +1936,9 @@ pub(super) fn match_trigger_event(
                         TriggerFromZone::ControllerGraveyard => {
                             change.before.object.zone() == ObjectZone::Graveyard(controller)
                         }
+                        TriggerFromZone::OpponentGraveyard => {
+                            matches!(change.before.object.zone(), ObjectZone::Graveyard(owner) if owner != controller)
+                        }
                         TriggerFromZone::Hand => {
                             matches!(change.before.object.zone(), ObjectZone::Hand(_))
                         }
@@ -1840,6 +2017,9 @@ pub(super) fn match_trigger_event(
                     }
                     TriggerFromZone::ControllerGraveyard => {
                         change.before.object.zone() == ObjectZone::Graveyard(controller)
+                    }
+                    TriggerFromZone::OpponentGraveyard => {
+                        matches!(change.before.object.zone(), ObjectZone::Graveyard(owner) if owner != controller)
                     }
                     TriggerFromZone::Hand => {
                         matches!(change.before.object.zone(), ObjectZone::Hand(_))
@@ -2237,6 +2417,294 @@ pub(super) fn match_trigger_event(
                         }
                     }
                 },
+                DamageTriggerRecipient::OpponentOrPlaneswalker => match damage.target {
+                    DamageRecipient::Player(player) if player != controller => {
+                        members.push(TriggerCauseMember {
+                            occurrence: occurrence.id,
+                            related_player: Some(player),
+                            related: TriggerRelated::DamageToOpponent {
+                                player,
+                                attempt: damage.attempt,
+                                amount: damage.amount.clone(),
+                            },
+                        });
+                    }
+                    DamageRecipient::Planeswalker(id) => {
+                        if let Some(seat) = after
+                            .evaluated
+                            .get(id)
+                            .and_then(|p| p.controller)
+                            .filter(|&s| s != controller)
+                        {
+                            members.push(TriggerCauseMember {
+                                occurrence: occurrence.id,
+                                related_player: Some(seat),
+                                related: TriggerRelated::CombatDamageToPlaneswalker {
+                                    planeswalker: id,
+                                    attempt: damage.attempt,
+                                    amount: damage.amount.clone(),
+                                },
+                            });
+                        }
+                    }
+                    _ => {}
+                },
+                DamageTriggerRecipient::ControllerOrPlaneswalker => match damage.target {
+                    DamageRecipient::Player(player) if player == controller => {
+                        members.push(TriggerCauseMember {
+                            occurrence: occurrence.id,
+                            related_player: Some(controller),
+                            related: TriggerRelated::DamageSource(damage.source.id()),
+                        });
+                    }
+                    DamageRecipient::Planeswalker(id)
+                        if after.evaluated.get(id).and_then(|p| p.controller)
+                            == Some(controller) =>
+                    {
+                        members.push(TriggerCauseMember {
+                            occurrence: occurrence.id,
+                            related_player: Some(controller),
+                            related: TriggerRelated::CombatDamageToPlaneswalker {
+                                planeswalker: id,
+                                attempt: damage.attempt,
+                                amount: damage.amount.clone(),
+                            },
+                        });
+                    }
+                    _ => {}
+                },
+                DamageTriggerRecipient::Battle => {
+                    if let DamageRecipient::Battle(id) = damage.target {
+                        let seat = after
+                            .evaluated
+                            .get(id)
+                            .and_then(|p| p.controller)
+                            .unwrap_or(controller);
+                        members.push(TriggerCauseMember {
+                            occurrence: occurrence.id,
+                            related_player: Some(seat),
+                            related: TriggerRelated::DamageDealtToPermanent {
+                                recipient: id,
+                                attempt: damage.attempt,
+                                amount: damage.amount.clone(),
+                            },
+                        });
+                    }
+                }
+                DamageTriggerRecipient::SelfObject => {
+                    let hit_self = matches!(
+                        damage.target,
+                        DamageRecipient::Creature(id)
+                            | DamageRecipient::Planeswalker(id)
+                            | DamageRecipient::Battle(id)
+                            if id == source.object.id()
+                    );
+                    if hit_self {
+                        members.push(TriggerCauseMember {
+                            occurrence: occurrence.id,
+                            related_player: Some(controller),
+                            related: TriggerRelated::DamageDealtToPermanent {
+                                recipient: source.object.id(),
+                                attempt: damage.attempt,
+                                amount: damage.amount.clone(),
+                            },
+                        });
+                    }
+                }
+            }
+        }
+        TriggerEvent::DealsNoncombatDamage {
+            source: source_filter,
+            recipient,
+        } => {
+            let RulesOccurrence::DamageDealt { damage, kind, .. } = value else {
+                return Ok(());
+            };
+            if *kind != DamageKind::Noncombat {
+                return Ok(());
+            }
+            let crate::damage::DamageSourceId::Object(dealer) = damage.source.id() else {
+                return Ok(());
+            };
+            let source_ok = if *source_filter == ObjectFilter::self_object() {
+                dealer == source.object.id()
+            } else if *source_filter == ObjectFilter::any().attached_to_self() {
+                source.attached_to == Some(crate::targets::TargetRef::Object(dealer))
+            } else {
+                after.evaluated.get(dealer).is_some_and(|view| {
+                    matches_evaluated_permanent(*source_filter, source, controller, view, after)
+                })
+            };
+            if !source_ok {
+                return Ok(());
+            }
+            let rec_ok = match *recipient {
+                DamageTriggerRecipient::Any => true,
+                DamageTriggerRecipient::AnyPlayer => {
+                    matches!(damage.target, DamageRecipient::Player(_))
+                }
+                DamageTriggerRecipient::Opponent => {
+                    matches!(damage.target, DamageRecipient::Player(p) if p != controller)
+                }
+                DamageTriggerRecipient::Controller => {
+                    damage.target == DamageRecipient::Player(controller)
+                }
+                DamageTriggerRecipient::EnchantedPlayer => matches!(
+                    damage.target,
+                    DamageRecipient::Player(p)
+                        if source.attached_to == Some(crate::targets::TargetRef::Player(p))
+                ),
+                DamageTriggerRecipient::Creature => {
+                    matches!(damage.target, DamageRecipient::Creature(_))
+                }
+                DamageTriggerRecipient::Battle => {
+                    matches!(damage.target, DamageRecipient::Battle(_))
+                }
+                DamageTriggerRecipient::PlayerOrPlaneswalker => matches!(
+                    damage.target,
+                    DamageRecipient::Player(_) | DamageRecipient::Planeswalker(_)
+                ),
+                DamageTriggerRecipient::OpponentOrPlaneswalker => match damage.target {
+                    DamageRecipient::Player(p) => p != controller,
+                    DamageRecipient::Planeswalker(id) => after
+                        .evaluated
+                        .get(id)
+                        .and_then(|p| p.controller)
+                        .is_some_and(|c| c != controller),
+                    _ => false,
+                },
+                DamageTriggerRecipient::ControllerOrPlaneswalker => match damage.target {
+                    DamageRecipient::Player(p) => p == controller,
+                    DamageRecipient::Planeswalker(id) => {
+                        after.evaluated.get(id).and_then(|p| p.controller) == Some(controller)
+                    }
+                    _ => false,
+                },
+                DamageTriggerRecipient::SelfObject => matches!(
+                    damage.target,
+                    DamageRecipient::Creature(id)
+                        | DamageRecipient::Planeswalker(id)
+                        | DamageRecipient::Battle(id)
+                        if id == source.object.id()
+                ),
+            };
+            if rec_ok {
+                let (related_player, related) = match damage.target {
+                    DamageRecipient::Player(p) => (
+                        Some(p),
+                        TriggerRelated::CombatDamageToPlayer {
+                            source: dealer,
+                            amount: damage.amount.clone(),
+                            player: p,
+                            attempt: damage.attempt,
+                        },
+                    ),
+                    DamageRecipient::Creature(id)
+                    | DamageRecipient::Planeswalker(id)
+                    | DamageRecipient::Battle(id) => (
+                        after.evaluated.get(id).and_then(|p| p.controller),
+                        TriggerRelated::DamageDealtToPermanent {
+                            recipient: id,
+                            attempt: damage.attempt,
+                            amount: damage.amount.clone(),
+                        },
+                    ),
+                };
+                members.push(TriggerCauseMember {
+                    occurrence: occurrence.id,
+                    related_player,
+                    related,
+                });
+            }
+        }
+        TriggerEvent::AbilityActivated {
+            player: relation,
+            source_filter,
+        } => {
+            if let RulesOccurrence::ActivatedAbility {
+                source: act_src, ..
+            } = value
+                && let Some(actor) = act_src.controller()
+                && player_matches(*relation, controller, actor, after)
+                && after.evaluated.get(act_src.id()).is_some_and(|view| {
+                    matches_evaluated_permanent(*source_filter, source, controller, view, after)
+                })
+            {
+                members.push(TriggerCauseMember {
+                    occurrence: occurrence.id,
+                    related_player: Some(actor),
+                    related: TriggerRelated::ManaSource(act_src.id()),
+                });
+            }
+        }
+        TriggerEvent::BecomesAttached { subject } => {
+            if let RulesOccurrence::AttachmentChanged {
+                source: att_id,
+                before,
+                after: Some(host_ref),
+            } = value
+                && before.as_ref() != Some(host_ref)
+                && after.evaluated.get(*att_id).is_some_and(|view| {
+                    matches_evaluated_permanent(*subject, source, controller, view, after)
+                })
+            {
+                let host_player = match host_ref {
+                    crate::targets::TargetRef::Player(p) => Some(*p),
+                    crate::targets::TargetRef::Object(hid) => {
+                        after.evaluated.get(*hid).and_then(|v| v.controller)
+                    }
+                    crate::targets::TargetRef::Stack(_) => None,
+                };
+                members.push(TriggerCauseMember {
+                    occurrence: occurrence.id,
+                    related_player: host_player.or(Some(controller)),
+                    related: TriggerRelated::ManaSource(*att_id),
+                });
+            }
+        }
+        TriggerEvent::PutIntoLibrary { subject } => {
+            if let RulesOccurrence::ZoneChange(change) = value
+                && matches!(change.after.object.zone(), ObjectZone::Library(_))
+                && subject.matches_appearance(source, controller, &change.before)
+            {
+                let owner = match change.after.object.zone() {
+                    ObjectZone::Library(p) => p,
+                    _ => controller,
+                };
+                members.push(TriggerCauseMember {
+                    occurrence: occurrence.id,
+                    related_player: Some(owner),
+                    related: TriggerRelated::ZoneChange {
+                        before: change.before.clone(),
+                        after: change.after.clone(),
+                    },
+                });
+            }
+        }
+        TriggerEvent::Exploits { subject } => {
+            if let RulesOccurrence::KeywordActionPerformed {
+                player: actor,
+                action: PlayerTriggerAction::Sacrificed(_),
+            } = value
+                && *subject == ObjectFilter::self_object()
+                && *actor == controller
+            {
+                members.push(TriggerCauseMember {
+                    occurrence: occurrence.id,
+                    related_player: Some(*actor),
+                    related: TriggerRelated::StateTriggerSource(source.object.id()),
+                });
+            }
+        }
+        TriggerEvent::DayNightChanged => {
+            if let RulesOccurrence::DayNightChanged { before, after: nxt } = value
+                && before != nxt
+            {
+                members.push(TriggerCauseMember {
+                    occurrence: occurrence.id,
+                    related_player: Some(controller),
+                    related: TriggerRelated::StateTriggerSource(source.object.id()),
+                });
             }
         }
         TriggerEvent::DealtDamage {
@@ -2402,6 +2870,114 @@ pub(super) fn match_trigger_event(
                         occurrence: occurrence.id,
                         related_player: Some(controller),
                         related: TriggerRelated::Mutated(*permanent),
+                    });
+                }
+            }
+            StatusTriggerKind::ClassLevelReached(expected) => {
+                if let RulesOccurrence::ClassLevelReached { object, level } = value
+                    && *object == source.object.id()
+                    && *level == expected
+                {
+                    members.push(TriggerCauseMember {
+                        occurrence: occurrence.id,
+                        related_player: Some(controller),
+                        related: TriggerRelated::StateTriggerSource(source.object.id()),
+                    });
+                }
+            }
+            StatusTriggerKind::CaseSolved => {
+                if let RulesOccurrence::CaseSolved { object } = value
+                    && *object == source.object.id()
+                {
+                    members.push(TriggerCauseMember {
+                        occurrence: occurrence.id,
+                        related_player: Some(controller),
+                        related: TriggerRelated::StateTriggerSource(source.object.id()),
+                    });
+                }
+            }
+            StatusTriggerKind::BecomesMonstrous => {
+                if let RulesOccurrence::BecameMonstrous { object, .. } = value
+                    && after.evaluated.get(*object).is_some_and(|v| {
+                        matches_evaluated_permanent(*subject, source, controller, v, after)
+                    })
+                {
+                    members.push(TriggerCauseMember {
+                        occurrence: occurrence.id,
+                        related_player: after.evaluated.get(*object).and_then(|v| v.controller),
+                        related: TriggerRelated::StateTriggerSource(*object),
+                    });
+                }
+            }
+            StatusTriggerKind::Crewed => {
+                if let RulesOccurrence::PowerAbilityResolved {
+                    source: vehicle,
+                    kind: crate::activated::PowerAbility::Crew,
+                    contributors,
+                    ..
+                } = value
+                {
+                    let matched_obj = if after.evaluated.get(*vehicle).is_some_and(|v| {
+                        matches_evaluated_permanent(*subject, source, controller, v, after)
+                    }) {
+                        Some(*vehicle)
+                    } else {
+                        contributors.iter().copied().find(|cid| {
+                            after.evaluated.get(*cid).is_some_and(|v| {
+                                matches_evaluated_permanent(*subject, source, controller, v, after)
+                            })
+                        })
+                    };
+                    if let Some(id) = matched_obj {
+                        members.push(TriggerCauseMember {
+                            occurrence: occurrence.id,
+                            related_player: after.evaluated.get(id).and_then(|v| v.controller),
+                            related: TriggerRelated::ManaSource(id),
+                        });
+                    }
+                }
+            }
+            StatusTriggerKind::Explored => {
+                if let RulesOccurrence::Explored {
+                    source: exp_src,
+                    controller: exp_ctrl,
+                } = value
+                    && after.evaluated.get(exp_src.id()).is_some_and(|v| {
+                        matches_evaluated_permanent(*subject, source, controller, v, after)
+                    })
+                {
+                    members.push(TriggerCauseMember {
+                        occurrence: occurrence.id,
+                        related_player: Some(*exp_ctrl),
+                        related: TriggerRelated::ManaSource(exp_src.id()),
+                    });
+                }
+            }
+            StatusTriggerKind::Regenerated => {
+                if let RulesOccurrence::PermanentRegenerated { object: reg_id, .. } = value
+                    && after.evaluated.get(*reg_id).is_some_and(|v| {
+                        matches_evaluated_permanent(*subject, source, controller, v, after)
+                    })
+                {
+                    members.push(TriggerCauseMember {
+                        occurrence: occurrence.id,
+                        related_player: after.evaluated.get(*reg_id).and_then(|v| v.controller),
+                        related: TriggerRelated::ManaSource(*reg_id),
+                    });
+                }
+            }
+            StatusTriggerKind::Exerted => {
+                if let RulesOccurrence::KeywordActionPerformed {
+                    player: actor,
+                    action: PlayerTriggerAction::Exerted,
+                } = value
+                    && *subject == ObjectFilter::self_object()
+                    && *actor == controller
+                {
+                    members.push(TriggerCauseMember {
+                        occurrence: occurrence.id,
+                        related_player: Some(*actor),
+                        related: TriggerRelated::StateTriggerSource(source.object.id()),
                     });
                 }
             }
@@ -2599,6 +3175,219 @@ pub(super) fn match_trigger_event(
                     });
                 }
             }
+            PlayerTriggerAction::LandPlayed => {
+                if let RulesOccurrence::ZoneChange(change) = value
+                    && matches!(change.reason, ZoneReason::LandPlay)
+                    && let Some(actor) = change.after.object.controller()
+                    && player_matches(*relation, controller, actor, after)
+                {
+                    members.push(TriggerCauseMember {
+                        occurrence: occurrence.id,
+                        related_player: Some(actor),
+                        related: TriggerRelated::ZoneChange {
+                            before: change.before.clone(),
+                            after: change.after.clone(),
+                        },
+                    });
+                }
+            }
+            PlayerTriggerAction::Proliferated => {
+                if let RulesOccurrence::Proliferated { player: actor, .. } = value
+                    && player_matches(*relation, controller, *actor, after)
+                {
+                    members.push(TriggerCauseMember {
+                        occurrence: occurrence.id,
+                        related_player: Some(*actor),
+                        related: TriggerRelated::StateTriggerSource(source.object.id()),
+                    });
+                }
+            }
+            PlayerTriggerAction::Explored => {
+                if let RulesOccurrence::Explored {
+                    source: exp_src,
+                    controller: actor,
+                } = value
+                    && player_matches(*relation, controller, *actor, after)
+                {
+                    members.push(TriggerCauseMember {
+                        occurrence: occurrence.id,
+                        related_player: Some(*actor),
+                        related: TriggerRelated::ManaSource(exp_src.id()),
+                    });
+                }
+            }
+            PlayerTriggerAction::ShuffledLibrary => {
+                if let RulesOccurrence::Shuffled(rec) = value
+                    && player_matches(*relation, controller, rec.player, after)
+                {
+                    members.push(TriggerCauseMember {
+                        occurrence: occurrence.id,
+                        related_player: Some(rec.player),
+                        related: TriggerRelated::StateTriggerSource(source.object.id()),
+                    });
+                }
+            }
+            PlayerTriggerAction::SearchedLibrary => {
+                if let RulesOccurrence::ZoneChange(change) = value
+                    && matches!(
+                        change.reason,
+                        ZoneReason::SearchToHand
+                            | ZoneReason::SearchToGraveyard
+                            | ZoneReason::SearchToExile
+                            | ZoneReason::SearchToBattlefield
+                    )
+                    && let ObjectZone::Library(actor) = change.before.object.zone()
+                    && player_matches(*relation, controller, actor, after)
+                {
+                    members.push(TriggerCauseMember {
+                        occurrence: occurrence.id,
+                        related_player: Some(actor),
+                        related: TriggerRelated::StateTriggerSource(source.object.id()),
+                    });
+                }
+            }
+            PlayerTriggerAction::FlippedCoin { won: expected } => {
+                if let RulesOccurrence::CoinFlipped { player: actor, won } = value
+                    && expected.is_none_or(|w| w == *won)
+                    && player_matches(*relation, controller, *actor, after)
+                {
+                    members.push(TriggerCauseMember {
+                        occurrence: occurrence.id,
+                        related_player: Some(*actor),
+                        related: TriggerRelated::StateTriggerSource(source.object.id()),
+                    });
+                }
+            }
+            PlayerTriggerAction::BecameMonarch => {
+                if let RulesOccurrence::MonarchChanged {
+                    after: Some(actor), ..
+                } = value
+                    && player_matches(*relation, controller, *actor, after)
+                {
+                    members.push(TriggerCauseMember {
+                        occurrence: occurrence.id,
+                        related_player: Some(*actor),
+                        related: TriggerRelated::StateTriggerSource(source.object.id()),
+                    });
+                }
+            }
+            PlayerTriggerAction::SpellCountered => {
+                if let RulesOccurrence::ZoneChange(change) = value
+                    && matches!(change.reason, ZoneReason::Countered)
+                    && let Some(actor) = change.before.object.controller()
+                    && player_matches(*relation, controller, actor, after)
+                {
+                    members.push(TriggerCauseMember {
+                        occurrence: occurrence.id,
+                        related_player: Some(actor),
+                        related: TriggerRelated::ZoneChange {
+                            before: change.before.clone(),
+                            after: change.after.clone(),
+                        },
+                    });
+                }
+            }
+            PlayerTriggerAction::GainedEnergy => {
+                if let RulesOccurrence::PlayerCounterChanged {
+                    player: actor,
+                    kind: crate::effects::CounterKind::Energy,
+                    before,
+                    after: after_cnt,
+                } = value
+                    && after_cnt > before
+                    && player_matches(*relation, controller, *actor, after)
+                {
+                    members.push(TriggerCauseMember {
+                        occurrence: occurrence.id,
+                        related_player: Some(*actor),
+                        related: TriggerRelated::StateTriggerSource(source.object.id()),
+                    });
+                }
+            }
+            PlayerTriggerAction::Saddled => {
+                if let RulesOccurrence::PowerAbilityResolved {
+                    source: mount,
+                    kind: crate::activated::PowerAbility::Saddle,
+                    ..
+                } = value
+                    && let Some(actor) = after.evaluated.get(*mount).and_then(|v| v.controller)
+                    && player_matches(*relation, controller, actor, after)
+                {
+                    members.push(TriggerCauseMember {
+                        occurrence: occurrence.id,
+                        related_player: Some(actor),
+                        related: TriggerRelated::ManaSource(*mount),
+                    });
+                }
+            }
+            PlayerTriggerAction::RolledDie { exact } => {
+                if let RulesOccurrence::DieRolled {
+                    player: actor,
+                    result,
+                    ..
+                } = value
+                    && exact.is_none_or(|n| n == *result)
+                    && player_matches(*relation, controller, *actor, after)
+                {
+                    members.push(TriggerCauseMember {
+                        occurrence: occurrence.id,
+                        related_player: Some(*actor),
+                        related: TriggerRelated::StateTriggerSource(source.object.id()),
+                    });
+                } else if let RulesOccurrence::KeywordActionPerformed {
+                    player: actor,
+                    action: PlayerTriggerAction::RolledDie { exact: seen },
+                } = value
+                    && (exact.is_none() || exact == *seen)
+                    && player_matches(*relation, controller, *actor, after)
+                {
+                    members.push(TriggerCauseMember {
+                        occurrence: occurrence.id,
+                        related_player: Some(*actor),
+                        related: TriggerRelated::StateTriggerSource(source.object.id()),
+                    });
+                }
+            }
+            other @ (PlayerTriggerAction::Investigated
+            | PlayerTriggerAction::Connived
+            | PlayerTriggerAction::Foraged
+            | PlayerTriggerAction::CollectedEvidence
+            | PlayerTriggerAction::Foretold
+            | PlayerTriggerAction::Exerted
+            | PlayerTriggerAction::Plotted
+            | PlayerTriggerAction::Clashed
+            | PlayerTriggerAction::Exhausted
+            | PlayerTriggerAction::Evolved
+            | PlayerTriggerAction::RingTemptsYou
+            | PlayerTriggerAction::Expend(_)
+            | PlayerTriggerAction::Populated
+            | PlayerTriggerAction::Discovered
+            | PlayerTriggerAction::Ventured
+            | PlayerTriggerAction::CompletedDungeon
+            | PlayerTriggerAction::ManifestedDread
+            | PlayerTriggerAction::PaidLife
+            | PlayerTriggerAction::GaveGift
+            | PlayerTriggerAction::WonClash
+            | PlayerTriggerAction::CopiedSpellOrAbility
+            | PlayerTriggerAction::Enlisted
+            | PlayerTriggerAction::Trained
+            | PlayerTriggerAction::KickedSpell
+            | PlayerTriggerAction::ScryToBottom
+            | PlayerTriggerAction::Waterbended) => {
+                if let RulesOccurrence::KeywordActionPerformed {
+                    player: actor,
+                    action: seen,
+                } = value
+                    && *seen == other
+                    && player_matches(*relation, controller, *actor, after)
+                {
+                    members.push(TriggerCauseMember {
+                        occurrence: occurrence.id,
+                        related_player: Some(*actor),
+                        related: TriggerRelated::StateTriggerSource(source.object.id()),
+                    });
+                }
+            }
         },
         TriggerEvent::LifeChanged { kind, player } => {
             if let RulesOccurrence::LifeChanged(change) = value
@@ -2654,6 +3443,47 @@ pub(super) fn match_trigger_event(
         | TriggerEvent::SchemeSetInMotion
         | TriggerEvent::ManualTabletopClaim { .. }
         | TriggerEvent::AnyOf(_) => {}
+        TriggerEvent::DoorUnlocked {
+            subject,
+            fully_unlocked_only,
+        } => {
+            if let RulesOccurrence::DoorUnlocked {
+                object,
+                player,
+                fully_unlocked,
+                ..
+            } = value
+                && (!*fully_unlocked_only || *fully_unlocked)
+                && after.evaluated.get(*object).is_some_and(|view| {
+                    subject.matches_static_characteristics(view, &BTreeSet::new(), || {
+                        Some(view.defined.mana_value.clone())
+                    })
+                })
+            {
+                members.push(TriggerCauseMember {
+                    occurrence: occurrence.id,
+                    related_player: Some(*player),
+                    related: TriggerRelated::ManaSource(*object),
+                });
+            }
+        }
+    }
+    if deferred_if && members.len() > start_len {
+        let mut kept = Vec::with_capacity(members.len() - start_len);
+        for m in members.drain(start_len..) {
+            let ctx = member_event_context(&m, after);
+            if check_intervening_if_with_ctx(
+                intervening_if,
+                ability,
+                source,
+                controller,
+                after,
+                ctx,
+            ) {
+                kept.push(m);
+            }
+        }
+        members.extend(kept);
     }
     Ok(())
 }
@@ -2669,6 +3499,8 @@ fn matches_cast_spell_filter(
         SpellCastZoneFilter::Any => true,
         SpellCastZoneFilter::OwnLibrary => cast.cast_from_library == Some(controller),
         SpellCastZoneFilter::Graveyard => cast.cast_from_graveyard,
+        SpellCastZoneFilter::Exile => cast.cast_from_exile,
+        SpellCastZoneFilter::Hand => cast.cast_from_hand,
         SpellCastZoneFilter::NotOwnersHand => !cast
             .spell()
             .cast_origin

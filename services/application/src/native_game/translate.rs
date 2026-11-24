@@ -5,7 +5,7 @@ use spellwake_engine::{
     checks::CheckDecision,
     combat::{AttackDeclaration, BlockDeclaration, CombatDamageAssignment, CombatDecision},
     damage::{DamageAllocation, DamageRecipient},
-    effects::{DamageDecision, PendingWorkKind, ResolutionPaymentReply},
+    effects::{DamageDecision, ResolutionPaymentReply},
     game::{DecisionReply, GameCommand, RuleFrame},
     mana::{ManaPayment, ManaSpend, ManaType},
     object_identity::ObjectId,
@@ -52,6 +52,9 @@ fn apply_cast_face(
         _ => None,
     };
     payment.disturb = face == Some(PlayerCastFace::Disturb);
+    payment.modal_back = face == Some(PlayerCastFace::ModalBack);
+    payment.prototype = face == Some(PlayerCastFace::Prototype);
+    payment.prepare = face == Some(PlayerCastFace::Prepare);
 }
 fn hybrid_side(value: &crate::player_wire::PlayerHybridSide) -> spellwake_engine::mana::HybridSide {
     match value {
@@ -163,6 +166,97 @@ fn restricted_payment(
                                 })
                                 .transpose()?,
                         )
+                    }
+                    crate::player_wire::PlayerManaRestriction::InstantOrSorcerySpell => {
+                        spellwake_engine::mana::ManaRestriction::InstantOrSorcerySpell
+                    }
+                    crate::player_wire::PlayerManaRestriction::ArtifactSpell => {
+                        spellwake_engine::mana::ManaRestriction::ArtifactSpell
+                    }
+                    crate::player_wire::PlayerManaRestriction::ArtifactAbility => {
+                        spellwake_engine::mana::ManaRestriction::ArtifactAbility
+                    }
+                    crate::player_wire::PlayerManaRestriction::ArtifactSpellOrAnyAbility => {
+                        spellwake_engine::mana::ManaRestriction::ArtifactSpellOrAnyAbility
+                    }
+                    crate::player_wire::PlayerManaRestriction::ActivatedAbility => {
+                        spellwake_engine::mana::ManaRestriction::ActivatedAbility
+                    }
+                    crate::player_wire::PlayerManaRestriction::CastSpell => {
+                        spellwake_engine::mana::ManaRestriction::CastSpell
+                    }
+                    crate::player_wire::PlayerManaRestriction::NotSpellFromHand => {
+                        spellwake_engine::mana::ManaRestriction::NotSpellFromHand
+                    }
+                    crate::player_wire::PlayerManaRestriction::CostContainingX => {
+                        spellwake_engine::mana::ManaRestriction::CostContainingX
+                    }
+                    crate::player_wire::PlayerManaRestriction::LegendarySpell => {
+                        spellwake_engine::mana::ManaRestriction::LegendarySpell
+                    }
+                    crate::player_wire::PlayerManaRestriction::MulticoloredSpell => {
+                        spellwake_engine::mana::ManaRestriction::MulticoloredSpell
+                    }
+                    crate::player_wire::PlayerManaRestriction::EnchantmentSpell => {
+                        spellwake_engine::mana::ManaRestriction::EnchantmentSpell
+                    }
+                    crate::player_wire::PlayerManaRestriction::CreatureSpellOrAbility => {
+                        spellwake_engine::mana::ManaRestriction::CreatureSpellOrAbility
+                    }
+                    crate::player_wire::PlayerManaRestriction::ColoredSpellWithoutX => {
+                        spellwake_engine::mana::ManaRestriction::ColoredSpellWithoutX
+                    }
+                    crate::player_wire::PlayerManaRestriction::InstantOrSorceryOrForetell => {
+                        spellwake_engine::mana::ManaRestriction::InstantOrSorceryOrForetell
+                    }
+                    crate::player_wire::PlayerManaRestriction::SpellWithMinManaValue => {
+                        spellwake_engine::mana::ManaRestriction::SpellWithMinManaValue(
+                            entry
+                                .min_mana_value
+                                .ok_or(NativeBridgeError::InvalidIntent)?,
+                        )
+                    }
+                    crate::player_wire::PlayerManaRestriction::CreatureSpellWithMinManaValue => {
+                        spellwake_engine::mana::ManaRestriction::CreatureSpellWithMinManaValue(
+                            entry
+                                .min_mana_value
+                                .ok_or(NativeBridgeError::InvalidIntent)?,
+                        )
+                    }
+                    crate::player_wire::PlayerManaRestriction::HistoricSpell => {
+                        spellwake_engine::mana::ManaRestriction::HistoricSpell
+                    }
+                    crate::player_wire::PlayerManaRestriction::CreatureOrPlaneswalkerSpell => {
+                        spellwake_engine::mana::ManaRestriction::CreatureOrPlaneswalkerSpell
+                    }
+                    crate::player_wire::PlayerManaRestriction::CreatureAbility => {
+                        spellwake_engine::mana::ManaRestriction::CreatureAbility
+                    }
+                    crate::player_wire::PlayerManaRestriction::PermanentSpell => {
+                        spellwake_engine::mana::ManaRestriction::PermanentSpell
+                    }
+                    crate::player_wire::PlayerManaRestriction::SpellFromGraveyardOrExile => {
+                        spellwake_engine::mana::ManaRestriction::SpellFromGraveyardOrExile
+                    }
+                    crate::player_wire::PlayerManaRestriction::EquipmentOrEquipAbility => {
+                        spellwake_engine::mana::ManaRestriction::EquipmentOrEquipAbility
+                    }
+                    crate::player_wire::PlayerManaRestriction::SpellWithMinManaValueOrX => {
+                        spellwake_engine::mana::ManaRestriction::SpellWithMinManaValueOrX(
+                            entry
+                                .min_mana_value
+                                .ok_or(NativeBridgeError::InvalidIntent)?,
+                        )
+                    }
+                    crate::player_wire::PlayerManaRestriction::CreatureSpellWithMinManaValueOrX => {
+                        spellwake_engine::mana::ManaRestriction::CreatureSpellWithMinManaValueOrX(
+                            entry
+                                .min_mana_value
+                                .ok_or(NativeBridgeError::InvalidIntent)?,
+                        )
+                    }
+                    crate::player_wire::PlayerManaRestriction::CreatureOrEnchantmentSpell => {
+                        spellwake_engine::mana::ManaRestriction::CreatureOrEnchantmentSpell
                     }
                 },
                 amount: entry.amount.as_rules_integer().clone(),
@@ -831,6 +925,32 @@ impl NativeScope<'_> {
                     payment: allocation.as_ref().map(plain_payment).transpose()?,
                 }
             }
+            PlayerAction::ActivateModalAbility {
+                source,
+                ability,
+                modes,
+                payment: allocation,
+            } => {
+                let (source, ability) = self.activated_source(source, ability)?;
+                let mut cast_modes = Vec::with_capacity(modes.len());
+                for m in modes {
+                    cast_modes.push(spellwake_engine::mana::CastMode {
+                        mode: m.mode,
+                        target: m.target.as_ref().map(|t| self.target(t)).transpose()?,
+                        targets: m
+                            .targets
+                            .iter()
+                            .map(|t| self.target(t))
+                            .collect::<Result<_, _>>()?,
+                    });
+                }
+                GameCommand::ActivateModalAbility {
+                    source,
+                    ability,
+                    modes: cast_modes,
+                    payment: allocation.as_ref().map(plain_payment).transpose()?,
+                }
+            }
             PlayerAction::ActivateMana { source, ability } => {
                 // ResolutionPayment expressly permits this action, including a
                 // nested color decision. Do not add a blanket decision gate.
@@ -1041,6 +1161,7 @@ impl NativeScope<'_> {
                     CastResource::ExileCreatureForReduction(id)
                 }
                 PlayerCastResource::Delve { .. } => CastResource::Delve(id),
+                PlayerCastResource::ExtraCost { .. } => CastResource::ExtraCost(id),
                 PlayerCastResource::Improvise { .. } => CastResource::Improvise(id),
                 PlayerCastResource::Convoke { color, .. } => CastResource::Convoke {
                     creature: id,
@@ -1080,6 +1201,9 @@ impl NativeScope<'_> {
             adventure: false,
             split_half: None,
             disturb: false,
+            modal_back: false,
+            prototype: false,
+            prepare: false,
             use_alternative,
             use_granted_flashback: allocation.is_some_and(|value| value.use_granted_flashback),
             mana: allocation.map(payment),
@@ -1160,10 +1284,6 @@ impl NativeScope<'_> {
         frame: &RuleFrame,
         choice: &PlayerChoice,
     ) -> Result<DecisionReply, NativeBridgeError> {
-        // Reused graveyard-order frames do not grant public library support.
-        if self.source.execution().pending_work_kind() == Some(PendingWorkKind::LibraryTop) {
-            return Err(NativeBridgeError::Unsupported);
-        }
         Ok(match (frame, choice) {
             (RuleFrame::Mutation(_), PlayerChoice::Number { value }) => {
                 DecisionReply::MutateOnTop(match value.to_usize() {
@@ -1179,6 +1299,22 @@ impl NativeScope<'_> {
                     Some(1) => true,
                     Some(2) => false,
                     _ => return Err(NativeBridgeError::WrongReferenceKind),
+                })
+            }
+            (RuleFrame::LibraryTop(frame), PlayerChoice::Scry { top, bottom })
+                if frame.kind() == spellwake_engine::effects::LibraryChoiceKind::Scry =>
+            {
+                DecisionReply::LibraryTop(spellwake_engine::effects::LibraryTopReply::Scry {
+                    top_first: self.objects(top)?,
+                    bottom_top_first: self.objects(bottom)?,
+                })
+            }
+            (RuleFrame::LibraryTop(frame), PlayerChoice::Surveil { top, graveyard })
+                if frame.kind() == spellwake_engine::effects::LibraryChoiceKind::Surveil =>
+            {
+                DecisionReply::LibraryTop(spellwake_engine::effects::LibraryTopReply::Surveil {
+                    top_first: self.objects(top)?,
+                    to_graveyard: self.objects(graveyard)?,
                 })
             }
             (RuleFrame::LibraryTop(frame), PlayerChoice::Objects { objects })
@@ -1317,6 +1453,9 @@ impl NativeScope<'_> {
             }
             (RuleFrame::TransformOrder(_), PlayerChoice::Ordering { ordered }) => {
                 DecisionReply::TransformOrder(self.objects(ordered)?)
+            }
+            (RuleFrame::UntapKeepTapped(_), PlayerChoice::Objects { objects }) => {
+                DecisionReply::UntapKeepTapped(self.objects(objects)?)
             }
             (RuleFrame::LinkedReturnOrder(_), PlayerChoice::Ordering { ordered }) => {
                 DecisionReply::LinkedReturnOrder(self.objects(ordered)?)
@@ -1654,7 +1793,9 @@ impl NativeScope<'_> {
                 )
             }
             (
-                RuleFrame::Checks(CheckDecision::CleanupDiscard(_)),
+                RuleFrame::Checks(
+                    CheckDecision::CleanupDiscard(_) | CheckDecision::CleanupSelect(_),
+                ),
                 PlayerChoice::Objects { objects },
             ) => DecisionReply::Discard(self.objects(objects)?),
             (
@@ -1694,6 +1835,7 @@ impl NativeScope<'_> {
                     spellwake_engine::effects::PileChoice::OneToHand(_)
                         | spellwake_engine::effects::PileChoice::OneToHandRestBottom(_)
                         | spellwake_engine::effects::PileChoice::OptionalCreatureToBattlefield { .. }
+                        | spellwake_engine::effects::PileChoice::OptionalUpTo { .. }
                         | spellwake_engine::effects::PileChoice::Creature(_)
                         | spellwake_engine::effects::PileChoice::Divide(_)
                         | spellwake_engine::effects::PileChoice::DividePermanents(_)
@@ -1994,6 +2136,10 @@ impl NativeScope<'_> {
                 RuleFrame::Opening(OpeningDecision::Bottom { .. }),
                 PlayerChoice::Objects { objects },
             ) => DecisionReply::Bottom(self.objects(objects)?),
+            (
+                RuleFrame::Opening(OpeningDecision::PregameBattlefield { .. }),
+                PlayerChoice::Objects { objects },
+            ) => DecisionReply::OpeningBattlefield(self.objects(objects)?),
             (RuleFrame::CopyTargets(_), PlayerChoice::Option { option }) => {
                 let NativeReference::CopyTargets(value) = self.reference(option)? else {
                     return Err(NativeBridgeError::WrongReferenceKind);
@@ -2035,12 +2181,60 @@ impl NativeScope<'_> {
                 if matches!(
                     frame.rule(),
                     spellwake_engine::land::EntryTap::AlwaysChooseColorExcept(_)
+                        | spellwake_engine::land::EntryTap::ChooseColor
+                        | spellwake_engine::land::EntryTap::ChooseColorExcept(_)
                 ) =>
             {
                 let NativeReference::ManaColor(value) = self.reference(option)? else {
                     return Err(NativeBridgeError::WrongReferenceKind);
                 };
                 DecisionReply::EntryChoice(spellwake_engine::land::EntryChoice::Color(value))
+            }
+            (RuleFrame::EntryChoice(frame), PlayerChoice::Option { option })
+                if frame.rule().option_labels().is_some() =>
+            {
+                let NativeReference::OptionIndex(index) = self.reference(option)? else {
+                    return Err(NativeBridgeError::WrongReferenceKind);
+                };
+                DecisionReply::EntryChoice(spellwake_engine::land::EntryChoice::OptionIndex(index))
+            }
+            (RuleFrame::EntryChoice(frame), PlayerChoice::Option { option })
+                if matches!(
+                    frame.rule(),
+                    spellwake_engine::land::EntryTap::UnlessPayLife(_)
+                ) =>
+            {
+                let NativeReference::EntryPayLife(pay) = self.reference(option)? else {
+                    return Err(NativeBridgeError::WrongReferenceKind);
+                };
+                DecisionReply::EntryChoice(spellwake_engine::land::EntryChoice::PayLife(pay))
+            }
+            (RuleFrame::EntryChoice(frame), PlayerChoice::Decline {})
+                if matches!(
+                    frame.rule(),
+                    spellwake_engine::land::EntryTap::UnlessPayLife(_)
+                ) =>
+            {
+                DecisionReply::EntryChoice(spellwake_engine::land::EntryChoice::PayLife(false))
+            }
+            (RuleFrame::TokenEntryChoice(frame), PlayerChoice::Option { option })
+                if matches!(
+                    frame.rule(),
+                    spellwake_engine::land::EntryTap::UnlessPayLife(_)
+                ) =>
+            {
+                let NativeReference::EntryPayLife(pay) = self.reference(option)? else {
+                    return Err(NativeBridgeError::WrongReferenceKind);
+                };
+                DecisionReply::TokenEntryChoice(spellwake_engine::land::EntryChoice::PayLife(pay))
+            }
+            (RuleFrame::TokenEntryChoice(frame), PlayerChoice::Decline {})
+                if matches!(
+                    frame.rule(),
+                    spellwake_engine::land::EntryTap::UnlessPayLife(_)
+                ) =>
+            {
+                DecisionReply::TokenEntryChoice(spellwake_engine::land::EntryChoice::PayLife(false))
             }
             (RuleFrame::EntryChoice(frame), PlayerChoice::Objects { objects })
                 if matches!(
@@ -2066,7 +2260,13 @@ impl NativeScope<'_> {
                 DecisionReply::OpponentChoice(seat)
             }
             (RuleFrame::EntryChoice(frame), PlayerChoice::Target { target })
-                if frame.rule() == spellwake_engine::land::EntryTap::SiegeProtector =>
+                if matches!(
+                    frame.rule(),
+                    spellwake_engine::land::EntryTap::SiegeProtector
+                        | spellwake_engine::land::EntryTap::ChosenOpponentControls
+                        | spellwake_engine::land::EntryTap::ChooseOpponent
+                        | spellwake_engine::land::EntryTap::ChoosePlayer
+                ) =>
             {
                 let TargetRef::Player(seat) = self.target(target)? else {
                     return Err(NativeBridgeError::WrongReferenceKind);
@@ -2078,6 +2278,8 @@ impl NativeScope<'_> {
                     frame.rule(),
                     spellwake_engine::land::EntryTap::SiegeProtector
                         | spellwake_engine::land::EntryTap::ChosenOpponentControls
+                        | spellwake_engine::land::EntryTap::ChooseOpponent
+                        | spellwake_engine::land::EntryTap::ChoosePlayer
                 ) =>
             {
                 let TargetRef::Player(seat) = self.target(target)? else {
@@ -2089,12 +2291,24 @@ impl NativeScope<'_> {
                 if matches!(
                     frame.rule(),
                     spellwake_engine::land::EntryTap::AlwaysChooseColorExcept(_)
+                        | spellwake_engine::land::EntryTap::ChooseColor
+                        | spellwake_engine::land::EntryTap::ChooseColorExcept(_)
                 ) =>
             {
                 let NativeReference::ManaColor(value) = self.reference(option)? else {
                     return Err(NativeBridgeError::WrongReferenceKind);
                 };
                 DecisionReply::TokenEntryChoice(spellwake_engine::land::EntryChoice::Color(value))
+            }
+            (RuleFrame::TokenEntryChoice(frame), PlayerChoice::Option { option })
+                if frame.rule().option_labels().is_some() =>
+            {
+                let NativeReference::OptionIndex(index) = self.reference(option)? else {
+                    return Err(NativeBridgeError::WrongReferenceKind);
+                };
+                DecisionReply::TokenEntryChoice(spellwake_engine::land::EntryChoice::OptionIndex(
+                    index,
+                ))
             }
             (RuleFrame::TokenEntryChoice(frame), PlayerChoice::Objects { objects })
                 if matches!(
@@ -2196,7 +2410,7 @@ impl NativeScope<'_> {
                 DecisionReply::RemoveCounters(
                     counters
                         .iter()
-                        .map(|entry| (entry.kind.into(), entry.count))
+                        .map(|entry| (entry.kind.clone().into(), entry.count))
                         .collect(),
                 )
             }
@@ -2221,6 +2435,12 @@ impl NativeScope<'_> {
                     return Err(NativeBridgeError::WrongReferenceKind);
                 };
                 DecisionReply::ManaColor(value)
+            }
+            (RuleFrame::OptionIndex(_), PlayerChoice::Option { option }) => {
+                let NativeReference::OptionIndex(index) = self.reference(option)? else {
+                    return Err(NativeBridgeError::WrongReferenceKind);
+                };
+                DecisionReply::OptionIndex(index)
             }
             (RuleFrame::CreatureType(_), PlayerChoice::Option { option }) => {
                 let NativeReference::CreatureType(value) = self.reference(option)? else {

@@ -56,6 +56,8 @@ pub enum NativeReference {
     PlaneswalkerType(spellwake_engine::program::PlaneswalkerSubtype),
     AttackDirection(spellwake_engine::effects::AttackDirection),
     OptionalEffect(OptionalEffectChoice),
+    EntryPayLife(bool),
+    OptionIndex(u8),
     ZoneReplacement(usize),
     Mulligan(MulliganChoice),
     CopyTargets(CopyTargetChoice),
@@ -259,6 +261,20 @@ impl NativeScope<'_> {
             NativeReference::OptionalEffect(choice) => {
                 matches!(self.frame()?, RuleFrame::OptionalEffect(frame) if frame.options().contains(&choice))
             }
+            NativeReference::EntryPayLife(_) => {
+                matches!(
+                    self.frame()?,
+                    RuleFrame::EntryChoice(frame) if matches!(frame.rule(), spellwake_engine::land::EntryTap::UnlessPayLife(_))
+                ) || matches!(
+                    self.frame()?,
+                    RuleFrame::TokenEntryChoice(frame) if matches!(frame.rule(), spellwake_engine::land::EntryTap::UnlessPayLife(_))
+                )
+            }
+            NativeReference::OptionIndex(index) => {
+                matches!(self.frame()?, RuleFrame::OptionIndex(frame) if index < frame.count())
+                    || matches!(self.frame()?, RuleFrame::EntryChoice(frame) if frame.rule().option_labels().is_some_and(|labels| usize::from(index) < labels.len()))
+                    || matches!(self.frame()?, RuleFrame::TokenEntryChoice(frame) if frame.rule().option_labels().is_some_and(|labels| usize::from(index) < labels.len()))
+            }
             NativeReference::Mulligan(choice) => {
                 matches!(self.frame()?, RuleFrame::Opening(OpeningDecision::Declare { can_mulligan, .. }) if choice == MulliganChoice::Keep || *can_mulligan)
             }
@@ -271,8 +287,18 @@ impl NativeScope<'_> {
             }
             NativeReference::ManaColor(color) => {
                 matches!(self.frame()?, RuleFrame::ManaColor(frame) if frame.colors().contains(&color))
-                    || matches!(self.frame()?, RuleFrame::EntryChoice(frame) if matches!(frame.rule(), spellwake_engine::land::EntryTap::AlwaysChooseColorExcept(excluded) if color != excluded && color != ManaType::Colourless))
-                    || matches!(self.frame()?, RuleFrame::TokenEntryChoice(frame) if matches!(frame.rule(), spellwake_engine::land::EntryTap::AlwaysChooseColorExcept(excluded) if color != excluded && color != ManaType::Colourless))
+                    || matches!(self.frame()?, RuleFrame::EntryChoice(frame) if match frame.rule() {
+                        spellwake_engine::land::EntryTap::AlwaysChooseColorExcept(excluded)
+                        | spellwake_engine::land::EntryTap::ChooseColorExcept(excluded) => color != excluded && color != ManaType::Colourless,
+                        spellwake_engine::land::EntryTap::ChooseColor => color != ManaType::Colourless,
+                        _ => false,
+                    })
+                    || matches!(self.frame()?, RuleFrame::TokenEntryChoice(frame) if match frame.rule() {
+                        spellwake_engine::land::EntryTap::AlwaysChooseColorExcept(excluded)
+                        | spellwake_engine::land::EntryTap::ChooseColorExcept(excluded) => color != excluded && color != ManaType::Colourless,
+                        spellwake_engine::land::EntryTap::ChooseColor => color != ManaType::Colourless,
+                        _ => false,
+                    })
             }
             NativeReference::CardName(index) => {
                 matches!(self.frame()?, RuleFrame::EntryChoice(frame) if frame.card_names().get(index.0).is_some())

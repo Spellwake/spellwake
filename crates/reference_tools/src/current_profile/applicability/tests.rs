@@ -36,6 +36,7 @@ pub(crate) fn selection(sacrifice: bool) -> Instruction {
                 any_types: Default::default(),
                 required_types: BTreeSet::new(),
                 forbidden_types: BTreeSet::new(),
+                object_filter: None,
             },
         }
     } else {

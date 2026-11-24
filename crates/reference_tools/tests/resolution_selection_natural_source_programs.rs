@@ -99,11 +99,20 @@ fn expected(helper: &Helper) -> Program {
     // Independent complete value from the saved Basic Land face, not the
     // production BasicLand constructor or a clone of a teaching definition.
     Program {
+        cast_timing: None,
+        activation_modes: Default::default(),
         adventure: None,
+        prepare_spell: None,
+        enters_prepared: false,
+        entry_tap_unless: None,
+        opening_hand_battlefield: false,
         entry_copy: None,
         splice: None,
         nightbound_back: None,
         transform_back: None,
+        modal_back: None,
+        flip_back: None,
+        prototype: None,
         split: None,
         cast_reductions: vec![],
         entry_counter_abilities: vec![],
@@ -130,6 +139,8 @@ fn expected(helper: &Helper) -> Program {
         graveyard_self_cast: None,
         activation_restrictions: Default::default(),
         activation_hybrid_symbols: Default::default(),
+        extra_activation_costs: Default::default(),
+        extra_cast_costs: Vec::new(),
         loyalty_costs: Default::default(),
         variable_loyalty_costs: Default::default(),
         face_up_abilities: Vec::new(),
@@ -139,6 +150,7 @@ fn expected(helper: &Helper) -> Program {
         hybrid_symbols: Vec::new(),
         cannot_be_countered: false,
         attack_requirement: None,
+        additional_attack_requirements: Vec::new(),
         combat_limits: Default::default(),
         cast_during_own_combat: false,
         additional_life_cost: None,
@@ -170,6 +182,13 @@ fn expected(helper: &Helper) -> Program {
         triggered: vec![],
         continuous: None,
         additional_battlefield_abilities: Vec::new(),
+        static_conditions: Default::default(),
+        gift: None,
+        casualty: None,
+        conspire: false,
+        dredge: None,
+        assist: false,
+        cipher: false,
     }
 }
 fn roundtrip(value: &Program, vocabulary: &CreatureTypeVocabulary) {

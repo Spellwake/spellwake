@@ -1,10 +1,12 @@
 //! Exact scalar choice vocabulary; no externally tagged object aliases.
 use super::*;
 /// Public descriptor category, not a serialized privileged RuleFrame.
-#[derive(Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case", try_from = "String")]
 pub enum DecisionKind {
     LibrarySearch,
+    Scry,
+    Surveil,
     SelectResolution,
     EntryReveal,
     LinkedReturnOrder,
@@ -53,6 +55,8 @@ impl TryFrom<String> for DecisionKind {
     fn try_from(s: String) -> Result<Self, Self::Error> {
         match s.as_str() {
             "library-search" => Ok(Self::LibrarySearch),
+            "scry" => Ok(Self::Scry),
+            "surveil" => Ok(Self::Surveil),
             "select-resolution" => Ok(Self::SelectResolution),
             "entry-reveal" => Ok(Self::EntryReveal),
             "linked-return-order" => Ok(Self::LinkedReturnOrder),
@@ -297,6 +301,8 @@ pub enum PlayerKeyword {
     DoubleStrike,
     Shroud,
     Hexproof,
+    HexproofFrom,
+    UmbraArmor,
     Flash,
     SplitSecond,
     Changeling,
@@ -320,6 +326,7 @@ pub enum PlayerKeyword {
     PowerUp,
     Ingest,
     Annihilator,
+    Myriad,
     Modular,
     Soulshift,
     Graft,
@@ -401,6 +408,8 @@ impl TryFrom<String> for PlayerKeyword {
             "double-strike" => Ok(Self::DoubleStrike),
             "shroud" => Ok(Self::Shroud),
             "hexproof" => Ok(Self::Hexproof),
+            "hexproof-from" => Ok(Self::HexproofFrom),
+            "umbra-armor" => Ok(Self::UmbraArmor),
             "flash" => Ok(Self::Flash),
             "split-second" => Ok(Self::SplitSecond),
             "changeling" => Ok(Self::Changeling),
@@ -423,6 +432,7 @@ impl TryFrom<String> for PlayerKeyword {
             "power-up" => Ok(Self::PowerUp),
             "ingest" => Ok(Self::Ingest),
             "annihilator" => Ok(Self::Annihilator),
+            "myriad" => Ok(Self::Myriad),
             "increment" => Ok(Self::Increment),
             "extort" => Ok(Self::Extort),
             "backup" => Ok(Self::Backup),

@@ -11,7 +11,11 @@ import { DeletionRecovery } from "../account/DeletionRecovery";
 import { AccountProvider } from "../auth/AccountProvider";
 import { CardsRoute, PacksRoute } from "../collection/CollectionRoutes";
 import { DeckBuilderRoute, DeckShelfRoute } from "../decks/DeckRoutes";
-import { SeasonRoute, StandingsRoute } from "../league/LeagueRoutes";
+import {
+  HistoryRoute,
+  SeasonRoute,
+  StandingsRoute,
+} from "../league/LeagueRoutes";
 import { LobbyRoute } from "../lobby/LobbyRoutes";
 import {
   ListingsRoute,
@@ -148,6 +152,7 @@ const router = createBrowserRouter(
         { path: "market/supply", element: gated(<SupplyRoute />) },
         { path: "league/season", element: gated(<SeasonRoute />) },
         { path: "league/standings", element: gated(<StandingsRoute />) },
+        { path: "league/history", element: gated(<HistoryRoute />) },
         {
           path: "decks/import",
           element: <Navigate to="/collection/decks?import=true" replace />,

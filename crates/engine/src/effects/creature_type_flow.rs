@@ -131,11 +131,24 @@ impl EffectWindow {
         expr: &crate::program::ValueExpr,
         cursor: Option<&ResolutionCursor>,
     ) -> Result<RulesInteger, EffectError> {
+        self.resolve_value_expr_with_source(controller, expr, cursor, None)
+    }
+    pub(super) fn resolve_value_expr_with_source(
+        &self,
+        controller: SeatId,
+        expr: &crate::program::ValueExpr,
+        cursor: Option<&ResolutionCursor>,
+        explicit_source: Option<ObjectId>,
+    ) -> Result<RulesInteger, EffectError> {
         use crate::program::{
             AttachedCountKind, CounterSubjectRef, EventValueKind, MatchObjectRef, ObjectStatKind,
-            PlayerStatExpr, StatAggregate, SubtypeFilter, ValueExpr, ValueObjectRef, ValueZone,
+            PlayerStatExpr, SourceStateExpr, StatAggregate, SubtypeFilter, ValueExpr,
+            ValueObjectRef, ValueZone,
         };
         let resolve_ability_source = || -> Option<ObjectId> {
+            if let Some(id) = explicit_source {
+                return Some(id);
+            }
             if let Some(binding) = cursor
                 .and_then(|c| self.execution_bindings(c.entry))
                 .and_then(|b| b.trigger.as_ref())
@@ -156,14 +169,15 @@ impl EffectWindow {
         match expr {
             ValueExpr::Literal(value) => Ok(value.clone()),
             ValueExpr::Scale { expr, factor } => Ok(self
-                .resolve_value_expr_at(controller, expr, cursor)?
+                .resolve_value_expr_with_source(controller, expr, cursor, explicit_source)?
                 .times(factor)),
             ValueExpr::DivConst {
                 expr,
                 divisor,
                 round_up,
             } => {
-                let value = self.resolve_value_expr_at(controller, expr, cursor)?;
+                let value =
+                    self.resolve_value_expr_with_source(controller, expr, cursor, explicit_source)?;
                 let d = usize::from(divisor.get());
                 if d == 2 {
                     Ok(if *round_up {
@@ -179,13 +193,17 @@ impl EffectWindow {
                 }
             }
             ValueExpr::Add(a, b) => {
-                let lhs = self.resolve_value_expr_at(controller, a, cursor)?;
-                let rhs = self.resolve_value_expr_at(controller, b, cursor)?;
+                let lhs =
+                    self.resolve_value_expr_with_source(controller, a, cursor, explicit_source)?;
+                let rhs =
+                    self.resolve_value_expr_with_source(controller, b, cursor, explicit_source)?;
                 Ok(lhs.plus(&rhs))
             }
             ValueExpr::Sub(a, b) => {
-                let lhs = self.resolve_value_expr_at(controller, a, cursor)?;
-                let rhs = self.resolve_value_expr_at(controller, b, cursor)?;
+                let lhs =
+                    self.resolve_value_expr_with_source(controller, a, cursor, explicit_source)?;
+                let rhs =
+                    self.resolve_value_expr_with_source(controller, b, cursor, explicit_source)?;
                 Ok(lhs.minus(&rhs))
             }
             ValueExpr::DomainCount => {
@@ -270,13 +288,415 @@ impl EffectWindow {
                 then_value,
                 else_value,
             } => {
-                let lhs = self.resolve_value_expr_at(controller, left, cursor)?;
-                let rhs = self.resolve_value_expr_at(controller, right, cursor)?;
+                let lhs =
+                    self.resolve_value_expr_with_source(controller, left, cursor, explicit_source)?;
+                let rhs = self.resolve_value_expr_with_source(
+                    controller,
+                    right,
+                    cursor,
+                    explicit_source,
+                )?;
                 if comparison.evaluate(&lhs, &rhs) {
-                    self.resolve_value_expr_at(controller, then_value, cursor)
+                    self.resolve_value_expr_with_source(
+                        controller,
+                        then_value,
+                        cursor,
+                        explicit_source,
+                    )
                 } else {
-                    self.resolve_value_expr_at(controller, else_value, cursor)
+                    self.resolve_value_expr_with_source(
+                        controller,
+                        else_value,
+                        cursor,
+                        explicit_source,
+                    )
                 }
+            }
+            ValueExpr::OpponentMaxCount { zone, filter }
+            | ValueExpr::OpponentMinCount { zone, filter } => {
+                let is_min = matches!(expr, ValueExpr::OpponentMinCount { .. });
+                let mut bound_filter = **filter;
+                if let Some(slot) = bound_filter.chosen_type_slot() {
+                    let selected = cursor
+                        .and_then(|c| c.values.get(&slot))
+                        .copied()
+                        .ok_or(EffectError::InconsistentProgram)?;
+                    if self.creature_vocabulary.label(selected).is_none() {
+                        return Err(EffectError::InconsistentProgram);
+                    }
+                    bound_filter = bound_filter.bind_matching_chosen_slot(slot, selected);
+                }
+                let ability_source = if bound_filter.excludes_ability_source() {
+                    Some(resolve_ability_source().ok_or(EffectError::InconsistentProgram)?)
+                } else {
+                    None
+                };
+                let opponents = self
+                    .combat_rules
+                    .opponents(self.window.participants(), controller)?;
+                let evaluated = self.evaluated_characteristics()?;
+                let excluded = BTreeSet::new();
+                let mut best: Option<usize> = None;
+                for opp in opponents {
+                    let count = match *zone {
+                        ValueZone::Battlefield => {
+                            let scoped = bound_filter.of_player(opp);
+                            evaluated
+                                .objects
+                                .values()
+                                .filter(|o| {
+                                    o.zone == ObjectZone::Battlefield
+                                        && self.matches_object_filter(
+                                            scoped,
+                                            o,
+                                            controller,
+                                            ability_source,
+                                            &excluded,
+                                            &evaluated,
+                                        )
+                                })
+                                .count()
+                        }
+                        ValueZone::Graveyard(_) => evaluated
+                            .objects
+                            .values()
+                            .filter(|o| {
+                                o.zone == ObjectZone::Graveyard(opp)
+                                    && self.matches_object_filter(
+                                        bound_filter,
+                                        o,
+                                        controller,
+                                        ability_source,
+                                        &excluded,
+                                        &evaluated,
+                                    )
+                            })
+                            .count(),
+                        ValueZone::Hand(_) => evaluated
+                            .objects
+                            .values()
+                            .filter(|o| {
+                                o.zone == ObjectZone::Hand(opp)
+                                    && self.matches_object_filter(
+                                        bound_filter,
+                                        o,
+                                        controller,
+                                        ability_source,
+                                        &excluded,
+                                        &evaluated,
+                                    )
+                            })
+                            .count(),
+                        ValueZone::Library(_) => evaluated
+                            .objects
+                            .values()
+                            .filter(|o| {
+                                o.zone == ObjectZone::Library(opp)
+                                    && self.matches_object_filter(
+                                        bound_filter,
+                                        o,
+                                        controller,
+                                        ability_source,
+                                        &excluded,
+                                        &evaluated,
+                                    )
+                            })
+                            .count(),
+                        ValueZone::Exile(_) => evaluated
+                            .objects
+                            .values()
+                            .filter(|o| {
+                                o.zone == ObjectZone::Exile
+                                    && o.owner == opp
+                                    && self.matches_object_filter(
+                                        bound_filter,
+                                        o,
+                                        controller,
+                                        ability_source,
+                                        &excluded,
+                                        &evaluated,
+                                    )
+                            })
+                            .count(),
+                        ValueZone::AllGraveyards => evaluated
+                            .objects
+                            .values()
+                            .filter(|o| {
+                                matches!(o.zone, ObjectZone::Graveyard(_))
+                                    && self.matches_object_filter(
+                                        bound_filter,
+                                        o,
+                                        controller,
+                                        ability_source,
+                                        &excluded,
+                                        &evaluated,
+                                    )
+                            })
+                            .count(),
+                    };
+                    best = Some(match best {
+                        Some(prev) => {
+                            if is_min {
+                                prev.min(count)
+                            } else {
+                                prev.max(count)
+                            }
+                        }
+                        None => count,
+                    });
+                }
+                Ok(RulesInteger::from_usize(best.unwrap_or(0)))
+            }
+            ValueExpr::PartyCount(roles) => {
+                let evaluated = self.evaluated_characteristics()?;
+                let creatures = evaluated.objects.values().filter_map(|o| {
+                    (o.zone == ObjectZone::Battlefield
+                        && o.controller == Some(controller)
+                        && o.is_creature())
+                    .then_some(&o.current_creature_subtypes)
+                });
+                Ok(RulesInteger::from_usize(
+                    crate::characteristics::compute_party_size(creatures, **roles),
+                ))
+            }
+            ValueExpr::DistinctColors { filter } => {
+                let ability_source = if filter.excludes_ability_source() {
+                    Some(resolve_ability_source().ok_or(EffectError::InconsistentProgram)?)
+                } else {
+                    None
+                };
+                let evaluated = self.evaluated_characteristics()?;
+                let excluded = BTreeSet::new();
+                let mut colors = BTreeSet::new();
+                for o in evaluated.objects.values() {
+                    if o.zone == ObjectZone::Battlefield
+                        && self.matches_object_filter(
+                            **filter,
+                            o,
+                            controller,
+                            ability_source,
+                            &excluded,
+                            &evaluated,
+                        )
+                    {
+                        colors.extend(o.current_colors.iter().copied());
+                    }
+                }
+                Ok(RulesInteger::from_usize(colors.len()))
+            }
+            ValueExpr::DistinctManaValuesInGraveyard(role) => {
+                let seat = if *role == crate::program::ResolvingPlayer::Controller {
+                    controller
+                } else {
+                    self.resolving_player_at(*role, cursor)?
+                };
+                let evaluated = self.evaluated_characteristics()?;
+                let mut mvs = BTreeSet::new();
+                for o in evaluated.objects.values() {
+                    if o.zone == ObjectZone::Graveyard(seat)
+                        && let Some(mv) = self.copiable_program(o.object).map(Program::mana_value)
+                    {
+                        mvs.insert(mv);
+                    }
+                }
+                Ok(RulesInteger::from_usize(mvs.len()))
+            }
+            ValueExpr::SourceState(kind) => {
+                let source_id = resolve_ability_source().ok_or(EffectError::InconsistentProgram)?;
+                let val: RulesInteger = match kind {
+                    SourceStateExpr::EnteredThisTurn => i64::from(
+                        self.characteristics
+                            .entered_objects_this_turn
+                            .contains(&source_id),
+                    )
+                    .into(),
+                    SourceStateExpr::AttackedThisTurn => i64::from(
+                        self.characteristics
+                            .attacked_objects_this_turn
+                            .contains(&source_id)
+                            || self.triggers.attacked_this_turn(source_id),
+                    )
+                    .into(),
+                    SourceStateExpr::AttackedOrBlockedThisTurn => i64::from(
+                        self.characteristics
+                            .attacked_objects_this_turn
+                            .contains(&source_id)
+                            || self
+                                .characteristics
+                                .blocked_objects_this_turn
+                                .contains(&source_id)
+                            || self.triggers.attacked_this_turn(source_id),
+                    )
+                    .into(),
+                    SourceStateExpr::AttackedOrBlockedThisCombat => {
+                        i64::from(self.combat.as_ref().is_some_and(|c| {
+                            c.attacker(source_id).is_some() || c.blocker(source_id).is_some()
+                        }))
+                        .into()
+                    }
+                    SourceStateExpr::AttackingAlone => {
+                        i64::from(self.combat.as_ref().is_some_and(|c| {
+                            c.attacker(source_id).is_some() && c.attackers().count() == 1
+                        }))
+                        .into()
+                    }
+                    SourceStateExpr::Saddled => {
+                        i64::from(self.characteristics.saddled.contains(&source_id)).into()
+                    }
+                    SourceStateExpr::Renowned => {
+                        i64::from(self.characteristics.renowned.contains(&source_id)).into()
+                    }
+                    SourceStateExpr::Paired => i64::from(
+                        self.characteristics
+                            .paired_creatures
+                            .contains_key(&source_id),
+                    )
+                    .into(),
+                    SourceStateExpr::Monstrous => {
+                        i64::from(self.characteristics.monstrous.contains(&source_id)).into()
+                    }
+                    SourceStateExpr::TributePaid => {
+                        i64::from(self.characteristics.tribute_paid.contains(&source_id)).into()
+                    }
+                    SourceStateExpr::Suspected => i64::from(
+                        self.characteristics
+                            .suspect_counters
+                            .get(&source_id)
+                            .is_some_and(RulesInteger::is_positive),
+                    )
+                    .into(),
+                    SourceStateExpr::Solved => {
+                        i64::from(self.characteristics.solved_cases.contains(&source_id)).into()
+                    }
+                    SourceStateExpr::Prepared => {
+                        i64::from(self.characteristics.prepared.contains(&source_id)).into()
+                    }
+                    SourceStateExpr::Goaded => i64::from(
+                        self.goaded
+                            .get(&source_id)
+                            .is_some_and(|seats| !seats.is_empty()),
+                    )
+                    .into(),
+                    SourceStateExpr::ExertedThisTurn => i64::from(
+                        self.characteristics
+                            .exerted_objects_this_turn
+                            .contains(&source_id),
+                    )
+                    .into(),
+                    SourceStateExpr::InZone(expected) => {
+                        use crate::program::SourceZoneKind;
+                        let in_z = self.window.cards().get(source_id).is_some_and(|o| {
+                            matches!(
+                                (o.zone(), expected),
+                                (ObjectZone::Battlefield, SourceZoneKind::Battlefield)
+                                    | (ObjectZone::Graveyard(_), SourceZoneKind::Graveyard)
+                                    | (ObjectZone::Hand(_), SourceZoneKind::Hand)
+                                    | (ObjectZone::Exile, SourceZoneKind::Exile)
+                                    | (ObjectZone::Command, SourceZoneKind::Command)
+                                    | (ObjectZone::Stack, SourceZoneKind::Stack)
+                                    | (ObjectZone::Library(_), SourceZoneKind::Library)
+                            )
+                        });
+                        i64::from(in_z).into()
+                    }
+                    SourceStateExpr::DamageDealtThisTurn => self
+                        .characteristics
+                        .object_damage_taken_this_turn
+                        .get(&source_id)
+                        .cloned()
+                        .unwrap_or_else(|| 0.into()),
+                    SourceStateExpr::AbilityActivatedThisTurn => i64::from(
+                        self.characteristics
+                            .activated_sources_this_turn
+                            .get(&source_id)
+                            .copied()
+                            .unwrap_or(0),
+                    )
+                    .into(),
+                    SourceStateExpr::AbilityResolvedCountThisTurn => i64::from(
+                        self.characteristics
+                            .ability_resolutions_by_source_this_turn
+                            .get(&source_id)
+                            .copied()
+                            .unwrap_or(0),
+                    )
+                    .into(),
+                    SourceStateExpr::ManaSpentToCast
+                    | SourceStateExpr::ColorsSpentToCast
+                    | SourceStateExpr::ManaTypeSpentToCast(_)
+                    | SourceStateExpr::SnowManaSpentToCast
+                    | SourceStateExpr::TreasureManaSpentToCast
+                    | SourceStateExpr::CreatureManaSpentToCast
+                    | SourceStateExpr::CastFromOutsideHand
+                    | SourceStateExpr::CastFromExile
+                    | SourceStateExpr::CastFromGraveyard
+                    | SourceStateExpr::CastDuringMainPhase
+                    | SourceStateExpr::Bargained
+                    | SourceStateExpr::GiftPromised
+                    | SourceStateExpr::Cleaved
+                    | SourceStateExpr::EvidenceCollected => {
+                        let summary =
+                            self.characteristics
+                                .cast_summaries
+                                .get(&source_id)
+                                .or_else(|| {
+                                    self.window.resolving().and_then(|e| match e.kind() {
+                                        StackKind::CardSpell(id) if *id == source_id => {
+                                            Some(e.cast_summary())
+                                        }
+                                        _ => None,
+                                    })
+                                });
+                        match kind {
+                            SourceStateExpr::ManaSpentToCast => {
+                                summary.map_or_else(|| 0.into(), |s| s.total_mana.clone())
+                            }
+                            SourceStateExpr::ColorsSpentToCast => summary.map_or_else(
+                                || 0.into(),
+                                |s| RulesInteger::from_usize(s.colors_spent.len()),
+                            ),
+                            SourceStateExpr::ManaTypeSpentToCast(mt) => summary
+                                .and_then(|s| s.mana_by_type.get(mt))
+                                .cloned()
+                                .unwrap_or_else(|| 0.into()),
+                            SourceStateExpr::SnowManaSpentToCast => {
+                                summary.map_or_else(|| 0.into(), |s| s.snow_mana.clone())
+                            }
+                            SourceStateExpr::TreasureManaSpentToCast => {
+                                summary.map_or_else(|| 0.into(), |s| s.treasure_mana.clone())
+                            }
+                            SourceStateExpr::CreatureManaSpentToCast => {
+                                summary.map_or_else(|| 0.into(), |s| s.creature_mana.clone())
+                            }
+                            SourceStateExpr::CastFromOutsideHand => {
+                                i64::from(summary.is_some_and(|s| s.cast_from_outside_hand)).into()
+                            }
+                            SourceStateExpr::CastFromExile => {
+                                i64::from(summary.is_some_and(|s| s.cast_from_exile)).into()
+                            }
+                            SourceStateExpr::CastFromGraveyard => {
+                                i64::from(summary.is_some_and(|s| s.cast_from_graveyard)).into()
+                            }
+                            SourceStateExpr::CastDuringMainPhase => {
+                                i64::from(summary.is_some_and(|s| s.cast_during_own_main)).into()
+                            }
+                            SourceStateExpr::Bargained => {
+                                i64::from(summary.is_some_and(|s| s.bargained)).into()
+                            }
+                            SourceStateExpr::GiftPromised => {
+                                i64::from(summary.is_some_and(|s| s.gift_promised)).into()
+                            }
+                            SourceStateExpr::Cleaved => {
+                                i64::from(summary.is_some_and(|s| s.cleaved)).into()
+                            }
+                            SourceStateExpr::EvidenceCollected => {
+                                i64::from(summary.is_some_and(|s| s.evidence_collected)).into()
+                            }
+                            _ => 0.into(),
+                        }
+                    }
+                };
+                Ok(val)
             }
             ValueExpr::Count {
                 zone,
@@ -547,6 +967,9 @@ impl EffectWindow {
                             .as_ref()
                             .map(|pt| pt.derived.toughness.clone()),
                         ObjectStatKind::ManaValue => self.permanent_mana_value(object.object),
+                        ObjectStatKind::Loyalty => {
+                            Some(self.counters_of_kind(object.object, CounterKind::Loyalty))
+                        }
                     }
                 });
                 match op {
@@ -557,42 +980,177 @@ impl EffectWindow {
                 }
             }
             ValueExpr::ObjectStat { subject, stat } => match (subject, stat) {
-                (ValueObjectRef::AbilitySource, ObjectStatKind::Power) => {
-                    let entry = self
-                        .window
-                        .resolving()
-                        .ok_or(EffectError::WrongResolutionFrame)?;
-                    let (StackKind::ActivatedAbility { source }
-                    | StackKind::TriggeredAbility { source }) = entry.kind()
-                    else {
-                        return Err(EffectError::InconsistentProgram);
-                    };
-                    Ok(self
-                        .current_characteristics(source.id())?
-                        .and_then(|value| value.power_toughness)
-                        .map_or_else(|| 0.into(), |pt| pt.derived.power))
+                (ValueObjectRef::AbilitySource, stat) => {
+                    let source_id =
+                        resolve_ability_source().ok_or(EffectError::InconsistentProgram)?;
+                    match stat {
+                        ObjectStatKind::Power => Ok(self
+                            .current_characteristics(source_id)?
+                            .and_then(|value| value.power_toughness)
+                            .map_or_else(|| 0.into(), |pt| pt.derived.power)),
+                        ObjectStatKind::Toughness => Ok(self
+                            .current_characteristics(source_id)?
+                            .and_then(|value| value.power_toughness)
+                            .map_or_else(|| 0.into(), |pt| pt.derived.toughness)),
+                        ObjectStatKind::ManaValue => Ok(self
+                            .permanent_mana_value(source_id)
+                            .or_else(|| self.copiable_program(source_id).map(Program::mana_value))
+                            .unwrap_or_else(|| 0.into())),
+                        ObjectStatKind::Loyalty => {
+                            Ok(self.counters_of_kind(source_id, CounterKind::Loyalty))
+                        }
+                    }
                 }
-                (ValueObjectRef::TriggerSource, ObjectStatKind::Power) => {
+                (ValueObjectRef::AttachedHost, stat) => {
+                    let source_id =
+                        resolve_ability_source().ok_or(EffectError::InconsistentProgram)?;
+                    let Some(TargetRef::Object(host_id)) = self.attached_to(source_id) else {
+                        return Ok(0.into());
+                    };
+                    match stat {
+                        ObjectStatKind::Power => Ok(self
+                            .current_characteristics(host_id)?
+                            .and_then(|value| value.power_toughness)
+                            .map_or_else(|| 0.into(), |pt| pt.derived.power)),
+                        ObjectStatKind::Toughness => Ok(self
+                            .current_characteristics(host_id)?
+                            .and_then(|value| value.power_toughness)
+                            .map_or_else(|| 0.into(), |pt| pt.derived.toughness)),
+                        ObjectStatKind::ManaValue => Ok(self
+                            .permanent_mana_value(host_id)
+                            .or_else(|| self.copiable_program(host_id).map(Program::mana_value))
+                            .unwrap_or_else(|| 0.into())),
+                        ObjectStatKind::Loyalty => {
+                            Ok(self.counters_of_kind(host_id, CounterKind::Loyalty))
+                        }
+                    }
+                }
+                (ValueObjectRef::RevealedTop, stat) => {
+                    let Some(id) = cursor
+                        .or_else(|| self.resolution_cursor())
+                        .and_then(|c| c.results.revealed_top_card)
+                    else {
+                        return Ok(0.into());
+                    };
+                    match stat {
+                        ObjectStatKind::Power => Ok(self
+                            .current_characteristics(id)?
+                            .and_then(|value| value.power_toughness)
+                            .map_or_else(|| 0.into(), |pt| pt.derived.power)),
+                        ObjectStatKind::Toughness => Ok(self
+                            .current_characteristics(id)?
+                            .and_then(|value| value.power_toughness)
+                            .map_or_else(|| 0.into(), |pt| pt.derived.toughness)),
+                        ObjectStatKind::ManaValue => Ok(self
+                            .copiable_program(id)
+                            .map(Program::mana_value)
+                            .unwrap_or_else(|| 0.into())),
+                        ObjectStatKind::Loyalty => {
+                            Ok(self.counters_of_kind(id, CounterKind::Loyalty))
+                        }
+                    }
+                }
+                (ValueObjectRef::TriggerSubject, stat) => {
+                    let binding = cursor
+                        .and_then(|c| self.execution_bindings(c.entry))
+                        .and_then(|b| b.trigger.as_ref())
+                        .ok_or(EffectError::InconsistentProgram)?;
+                    let Some(member) = binding.causes.members().first() else {
+                        return Ok(0.into());
+                    };
+                    let Some(id) = member.subject_object_id() else {
+                        return Ok(0.into());
+                    };
+                    match stat {
+                        ObjectStatKind::Power => {
+                            if let Some(pt) = self
+                                .current_characteristics(id)?
+                                .and_then(|v| v.power_toughness)
+                            {
+                                Ok(pt.derived.power)
+                            } else if let crate::occurrence::TriggerRelated::ZoneChange {
+                                before,
+                                ..
+                            } = &member.related
+                            {
+                                Ok(before
+                                    .current_power_toughness
+                                    .as_ref()
+                                    .map_or_else(|| 0.into(), |pt| pt.power.clone()))
+                            } else {
+                                Ok(0.into())
+                            }
+                        }
+                        ObjectStatKind::Toughness => {
+                            if let Some(pt) = self
+                                .current_characteristics(id)?
+                                .and_then(|v| v.power_toughness)
+                            {
+                                Ok(pt.derived.toughness)
+                            } else if let crate::occurrence::TriggerRelated::ZoneChange {
+                                before,
+                                ..
+                            } = &member.related
+                            {
+                                Ok(before
+                                    .current_power_toughness
+                                    .as_ref()
+                                    .map_or_else(|| 0.into(), |pt| pt.toughness.clone()))
+                            } else {
+                                Ok(0.into())
+                            }
+                        }
+                        ObjectStatKind::ManaValue => Ok(self
+                            .permanent_mana_value(id)
+                            .or_else(|| self.copiable_program(id).map(Program::mana_value))
+                            .unwrap_or_else(|| 0.into())),
+                        ObjectStatKind::Loyalty => {
+                            Ok(self.counters_of_kind(id, CounterKind::Loyalty))
+                        }
+                    }
+                }
+                (ValueObjectRef::TriggerSource, stat) => {
                     let trigger = cursor
                         .and_then(|c| self.execution_bindings(c.entry))
                         .and_then(|b| b.trigger.as_ref())
                         .ok_or(EffectError::InconsistentProgram)?;
                     let id = trigger.source.object.id();
+                    if *stat == ObjectStatKind::ManaValue {
+                        return Ok(self
+                            .permanent_mana_value(id)
+                            .or_else(|| self.copiable_program(id).map(Program::mana_value))
+                            .unwrap_or_else(|| 0.into()));
+                    }
+                    if *stat == ObjectStatKind::Loyalty {
+                        return Ok(self.counters_of_kind(id, CounterKind::Loyalty));
+                    }
                     let current = self.evaluated_characteristics()?;
-                    let power = if let Some(live) = current
+                    let value = if let Some(live) = current
                         .get(id)
                         .filter(|o| o.zone == ObjectZone::Battlefield)
                     {
-                        live.power_toughness.as_ref().map(|pt| &pt.derived.power)
+                        live.power_toughness.as_ref().map(|pt| {
+                            if *stat == ObjectStatKind::Power {
+                                &pt.derived.power
+                            } else {
+                                &pt.derived.toughness
+                            }
+                        })
                     } else {
                         self.departed_reflexive_sources
                             .get(&id)
                             .unwrap_or(&trigger.source)
                             .current_power_toughness
                             .as_ref()
-                            .map(|pt| &pt.power)
+                            .map(|pt| {
+                                if *stat == ObjectStatKind::Power {
+                                    &pt.power
+                                } else {
+                                    &pt.toughness
+                                }
+                            })
                     };
-                    Ok(power.cloned().unwrap_or_else(|| 0.into()).max(0.into()))
+                    Ok(value.cloned().unwrap_or_else(|| 0.into()).max(0.into()))
                 }
                 (
                     ValueObjectRef::TargetObject,
@@ -606,18 +1164,61 @@ impl EffectWindow {
                     else {
                         return Err(EffectError::InconsistentProgram);
                     };
-                    let stats = self
+                    if let Some(stats) = self
                         .current_characteristics(id)?
                         .and_then(|value| value.power_toughness)
-                        .ok_or(EffectError::InconsistentProgram)?
-                        .derived;
-                    Ok(if *stat == ObjectStatKind::Power {
-                        stats.power
+                    {
+                        Ok(if *stat == ObjectStatKind::Power {
+                            stats.derived.power
+                        } else {
+                            stats.derived.toughness
+                        })
+                    } else if let Some(lki) = cursor
+                        .or_else(|| self.resolution_cursor())
+                        .and_then(|c| c.results.target_lki.get(&id))
+                    {
+                        let raw = if *stat == ObjectStatKind::Power {
+                            lki.power.as_ref()
+                        } else {
+                            lki.toughness.as_ref()
+                        };
+                        raw.cloned().ok_or(EffectError::InconsistentProgram)
                     } else {
-                        stats.toughness
-                    })
+                        Err(EffectError::InconsistentProgram)
+                    }
                 }
                 (ValueObjectRef::TargetObject, ObjectStatKind::ManaValue) => {
+                    let entry = self
+                        .window
+                        .resolving()
+                        .ok_or(EffectError::WrongResolutionFrame)?;
+                    match self.instruction_target(entry)?.choice().target {
+                        TargetRef::Object(id) => self
+                            .copiable_program(id)
+                            .map(Program::mana_value)
+                            .or_else(|| {
+                                cursor
+                                    .or_else(|| self.resolution_cursor())
+                                    .and_then(|c| c.results.target_lki.get(&id))
+                                    .map(|lki| lki.mana_value.clone())
+                            })
+                            .ok_or(EffectError::InconsistentProgram),
+                        TargetRef::Stack(sid) => self
+                            .window
+                            .entries()
+                            .iter()
+                            .find(|e| e.id() == sid)
+                            .and_then(|e| match e.kind() {
+                                StackKind::CardSpell(id) => {
+                                    self.copiable_program(*id).map(Program::mana_value)
+                                }
+                                _ => None,
+                            })
+                            .ok_or(EffectError::InconsistentProgram),
+                        TargetRef::Player(_) => Err(EffectError::InconsistentProgram),
+                    }
+                }
+                (ValueObjectRef::TargetObject, ObjectStatKind::Loyalty) => {
                     let entry = self
                         .window
                         .resolving()
@@ -626,9 +1227,7 @@ impl EffectWindow {
                     else {
                         return Err(EffectError::InconsistentProgram);
                     };
-                    self.copiable_program(id)
-                        .map(Program::mana_value)
-                        .ok_or(EffectError::InconsistentProgram)
+                    Ok(self.counters_of_kind(id, CounterKind::Loyalty))
                 }
                 (
                     ValueObjectRef::DyingSource | ValueObjectRef::DyingCreature,
@@ -804,6 +1403,12 @@ impl EffectWindow {
             },
             ValueExpr::CounterCount { subject, kind } => match subject {
                 CounterSubjectRef::AbilitySource => {
+                    if let Some(source_id) = explicit_source {
+                        return Ok(match kind {
+                            Some(k) => self.counters_of_kind(source_id, *k),
+                            None => self.characteristics.total_permanent_counters(source_id),
+                        });
+                    }
                     let entry = self
                         .window
                         .resolving()
@@ -892,6 +1497,35 @@ impl EffectWindow {
                         },
                         _ => Err(EffectError::InconsistentProgram),
                     }
+                }
+                CounterSubjectRef::AttachedHost => {
+                    let source_id =
+                        resolve_ability_source().ok_or(EffectError::InconsistentProgram)?;
+                    let Some(TargetRef::Object(host_id)) = self.attached_to(source_id) else {
+                        return Ok(0.into());
+                    };
+                    Ok(match kind {
+                        Some(k) => self.counters_of_kind(host_id, *k),
+                        None => self.characteristics.total_permanent_counters(host_id),
+                    })
+                }
+                CounterSubjectRef::TriggerSubject => {
+                    let binding = cursor
+                        .and_then(|c| self.execution_bindings(c.entry))
+                        .and_then(|b| b.trigger.as_ref())
+                        .ok_or(EffectError::InconsistentProgram)?;
+                    let Some(id) = binding
+                        .causes
+                        .members()
+                        .first()
+                        .and_then(|m| m.subject_object_id())
+                    else {
+                        return Ok(0.into());
+                    };
+                    Ok(match kind {
+                        Some(k) => self.counters_of_kind(id, *k),
+                        None => self.characteristics.total_permanent_counters(id),
+                    })
                 }
                 CounterSubjectRef::ControllerExperience => Ok(self.experience_counters(controller)),
                 CounterSubjectRef::ControllerEnergy => {
@@ -1154,6 +1788,358 @@ impl EffectWindow {
                 PlayerStatExpr::ControllerHasCityBlessing => {
                     Ok(i64::from(self.characteristics.city_blessing.contains(&controller)).into())
                 }
+                PlayerStatExpr::ControllerStartingLife => self
+                    .life
+                    .starting_total(controller)
+                    .cloned()
+                    .ok_or(EffectError::InvalidResolvingPlayer),
+                PlayerStatExpr::OpponentMaxLife => {
+                    let opponents = self
+                        .combat_rules
+                        .opponents(self.window.participants(), controller)?;
+                    Ok(opponents
+                        .into_iter()
+                        .filter_map(|p| self.life.get(p).cloned())
+                        .max()
+                        .unwrap_or_else(|| {
+                            self.life
+                                .get(controller)
+                                .cloned()
+                                .unwrap_or_else(|| 0.into())
+                        }))
+                }
+                PlayerStatExpr::OpponentIsMonarch => Ok(i64::from(
+                    self.characteristics
+                        .monarch
+                        .is_some_and(|m| m != controller),
+                )
+                .into()),
+                PlayerStatExpr::NoMonarch => {
+                    Ok(i64::from(self.characteristics.monarch.is_none()).into())
+                }
+                PlayerStatExpr::ControllerIsAttacking => Ok(i64::from(
+                    self.window.active_player() == controller
+                        && self
+                            .combat
+                            .as_ref()
+                            .is_some_and(|c| c.attackers().next().is_some()),
+                )
+                .into()),
+                PlayerStatExpr::ControllerIsDefending => Ok(i64::from(
+                    self.combat
+                        .as_ref()
+                        .is_some_and(|c| c.attackers().any(|a| a.defender() == controller)),
+                )
+                .into()),
+                PlayerStatExpr::ControllerSpeed => Ok(i64::from(
+                    self.characteristics
+                        .speed
+                        .get(&controller)
+                        .copied()
+                        .unwrap_or(0),
+                )
+                .into()),
+                PlayerStatExpr::AllGraveyardsDistinctCardTypes => {
+                    let evaluated = self.evaluated_characteristics()?;
+                    let mut types = BTreeSet::new();
+                    for card in evaluated
+                        .objects
+                        .values()
+                        .filter(|c| matches!(c.zone, ObjectZone::Graveyard(_)))
+                    {
+                        types.extend(card.current_types.iter().copied());
+                    }
+                    Ok(RulesInteger::from_usize(types.len()))
+                }
+                PlayerStatExpr::CastSpellTypeThisTurn(kind) => Ok(i64::from(
+                    self.characteristics
+                        .cast_spell_types_this_turn
+                        .get(&controller)
+                        .and_then(|m| m.get(kind))
+                        .copied()
+                        .unwrap_or(0),
+                )
+                .into()),
+                PlayerStatExpr::CastNoncreatureSpellsThisTurn => Ok(i64::from(
+                    self.characteristics
+                        .noncreature_spells_cast_this_turn
+                        .get(&controller)
+                        .copied()
+                        .unwrap_or(0),
+                )
+                .into()),
+                PlayerStatExpr::CastSpellsFromHandThisTurn => Ok(i64::from(
+                    self.characteristics
+                        .spells_cast_from_hand_this_turn
+                        .get(&controller)
+                        .copied()
+                        .unwrap_or(0),
+                )
+                .into()),
+                PlayerStatExpr::AttackingCreaturesThisTurn => Ok(RulesInteger::from_usize(
+                    self.characteristics
+                        .attacking_creatures_this_turn
+                        .get(&controller)
+                        .map_or(0, BTreeSet::len),
+                )),
+                PlayerStatExpr::NonlandPermanentLeftBattlefieldThisTurn => Ok(i64::from(
+                    self.characteristics
+                        .nonland_permanents_left_battlefield_this_turn
+                        .get(&controller)
+                        .copied()
+                        .unwrap_or(0),
+                )
+                .into()),
+                PlayerStatExpr::EnteredPermanentThisTurn => Ok(i64::from(
+                    self.characteristics
+                        .permanents_entered_this_turn
+                        .get(&controller)
+                        .copied()
+                        .unwrap_or(0),
+                )
+                .into()),
+                PlayerStatExpr::EnteredTypeThisTurn(kind) => Ok(i64::from(
+                    self.characteristics
+                        .entered_types_this_turn
+                        .get(&controller)
+                        .and_then(|m| m.get(kind))
+                        .copied()
+                        .unwrap_or(0),
+                )
+                .into()),
+                PlayerStatExpr::PlayedLandThisTurn => Ok(i64::from(
+                    self.characteristics
+                        .lands_played_this_turn
+                        .get(&controller)
+                        .copied()
+                        .unwrap_or(0),
+                )
+                .into()),
+                PlayerStatExpr::CardsLeftGraveyardThisTurn => Ok(i64::from(
+                    self.characteristics
+                        .cards_left_graveyard_this_turn
+                        .get(&controller)
+                        .copied()
+                        .unwrap_or(0),
+                )
+                .into()),
+                PlayerStatExpr::CreaturesDiedThisTurn => Ok(self.creatures_died_this_turn.clone()),
+                PlayerStatExpr::ControlledCreatureDiedThisTurn => Ok(i64::from(
+                    self.characteristics
+                        .controlled_creatures_died_this_turn
+                        .get(&controller)
+                        .copied()
+                        .unwrap_or(0),
+                )
+                .into()),
+                PlayerStatExpr::CreatedTokensThisTurn => Ok(i64::from(
+                    self.characteristics
+                        .tokens_created_this_turn
+                        .get(&controller)
+                        .copied()
+                        .unwrap_or(0),
+                )
+                .into()),
+                PlayerStatExpr::OpponentDealtDamageThisTurn { noncombat_only } => {
+                    let opponents = self
+                        .combat_rules
+                        .opponents(self.window.participants(), controller)?;
+                    let set = if *noncombat_only {
+                        &self
+                            .characteristics
+                            .players_dealt_noncombat_damage_this_turn
+                    } else {
+                        &self.characteristics.players_dealt_damage_this_turn
+                    };
+                    Ok(i64::from(opponents.iter().any(|opp| set.contains(opp))).into())
+                }
+                PlayerStatExpr::AnyOpponentPoisoned => {
+                    let opponents = self
+                        .combat_rules
+                        .opponents(self.window.participants(), controller)?;
+                    Ok(i64::from(
+                        opponents
+                            .iter()
+                            .any(|opp| self.poison_counters(*opp).is_positive()),
+                    )
+                    .into())
+                }
+                PlayerStatExpr::LoyaltyActivatedThisTurn => Ok(i64::from(
+                    self.characteristics
+                        .loyalty_activators
+                        .contains(&controller),
+                )
+                .into()),
+                PlayerStatExpr::IsOwnMainPhase => Ok(i64::from(
+                    self.window.active_player() == controller
+                        && matches!(
+                            self.current_step,
+                            Some(
+                                crate::turn::Step::PrecombatMain
+                                    | crate::turn::Step::PostcombatMain
+                            )
+                        ),
+                )
+                .into()),
+                PlayerStatExpr::ExhaustActivatedThisTurn => {
+                    let src = resolve_ability_source();
+                    Ok(i64::from(src.is_some_and(|id| {
+                        self.characteristics
+                            .exhausted
+                            .iter()
+                            .any(|(obj, _, _, _)| *obj == id)
+                    }))
+                    .into())
+                }
+                PlayerStatExpr::CompletedDungeons => Ok(i64::from(
+                    self.characteristics
+                        .dungeons
+                        .get(&controller)
+                        .map_or(0, |d| d.completed),
+                )
+                .into()),
+                PlayerStatExpr::RingLevel => Ok(i64::from(
+                    self.characteristics
+                        .ring_level
+                        .get(&controller)
+                        .copied()
+                        .unwrap_or(0),
+                )
+                .into()),
+                PlayerStatExpr::HasInitiative => {
+                    Ok(i64::from(self.characteristics.initiative == Some(controller)).into())
+                }
+                PlayerStatExpr::OpponentMinLife => {
+                    let opponents = self
+                        .combat_rules
+                        .opponents(self.window.participants(), controller)?;
+                    Ok(opponents
+                        .iter()
+                        .filter_map(|&opp| self.life.get(opp))
+                        .min()
+                        .cloned()
+                        .or_else(|| self.life.get(controller).cloned())
+                        .unwrap_or_else(|| 0.into()))
+                }
+                PlayerStatExpr::OpponentMaxCounter(kind) => {
+                    let opponents = self
+                        .combat_rules
+                        .opponents(self.window.participants(), controller)?;
+                    Ok(opponents
+                        .iter()
+                        .map(|&opp| {
+                            if *kind == CounterKind::Experience {
+                                self.characteristics
+                                    .experience
+                                    .get(&opp)
+                                    .cloned()
+                                    .unwrap_or_else(|| 0.into())
+                            } else if *kind == CounterKind::Poison {
+                                self.poison_counters(opp)
+                            } else {
+                                self.characteristics
+                                    .player_counters
+                                    .get(kind)
+                                    .and_then(|m| m.get(&opp))
+                                    .cloned()
+                                    .unwrap_or_else(|| 0.into())
+                            }
+                        })
+                        .max()
+                        .unwrap_or_else(|| 0.into()))
+                }
+                PlayerStatExpr::OpponentStatThisTurn(stat) => {
+                    use crate::program::OpponentTurnStat;
+                    let opponents = self
+                        .combat_rules
+                        .opponents(self.window.participants(), controller)?;
+                    let any_opp = opponents.iter().any(|&opp| match stat {
+                        OpponentTurnStat::Discarded => {
+                            self.characteristics
+                                .cards_discarded_this_turn
+                                .get(&opp)
+                                .copied()
+                                .unwrap_or(0)
+                                > 0
+                        }
+                        OpponentTurnStat::Sacrificed => {
+                            self.characteristics
+                                .permanents_sacrificed_this_turn
+                                .get(&opp)
+                                .copied()
+                                .unwrap_or(0)
+                                > 0
+                        }
+                        OpponentTurnStat::CastSpells => {
+                            self.characteristics
+                                .spells_cast_this_turn
+                                .get(&opp)
+                                .copied()
+                                .unwrap_or(0)
+                                > 0
+                        }
+                        OpponentTurnStat::DrewCards => {
+                            self.characteristics
+                                .cards_drawn_this_turn_counts
+                                .get(&opp)
+                                .copied()
+                                .unwrap_or(0)
+                                > 0
+                        }
+                        OpponentTurnStat::Attacked => self
+                            .characteristics
+                            .attacked_this_turn_players
+                            .contains(&opp),
+                        OpponentTurnStat::GainedLife => self
+                            .characteristics
+                            .life_gained_this_turn
+                            .get(&opp)
+                            .is_some_and(RulesInteger::is_positive),
+                        OpponentTurnStat::LostLife => self
+                            .characteristics
+                            .life_lost_this_turn
+                            .get(&opp)
+                            .is_some_and(RulesInteger::is_positive),
+                        OpponentTurnStat::PlayedLand => {
+                            self.characteristics
+                                .lands_played_this_turn
+                                .get(&opp)
+                                .copied()
+                                .unwrap_or(0)
+                                > 0
+                        }
+                        OpponentTurnStat::CreatureEntered => {
+                            self.characteristics
+                                .creatures_entered_this_turn
+                                .get(&opp)
+                                .copied()
+                                .unwrap_or(0)
+                                > 0
+                        }
+                        OpponentTurnStat::PermanentLeft => {
+                            self.characteristics
+                                .permanents_left_battlefield_this_turn
+                                .get(&opp)
+                                .copied()
+                                .unwrap_or(0)
+                                > 0
+                        }
+                    });
+                    Ok(i64::from(any_opp).into())
+                }
+                PlayerStatExpr::DayNightState => Ok(match self.day_night() {
+                    crate::day_night::DayNight::Neither => 0.into(),
+                    crate::day_night::DayNight::Day => 1.into(),
+                    crate::day_night::DayNight::Night => 2.into(),
+                }),
+                PlayerStatExpr::MinLibrarySize => Ok(RulesInteger::from_usize(
+                    self.window
+                        .participants()
+                        .iter()
+                        .map(|&p| self.window.cards().library(p).len())
+                        .min()
+                        .unwrap_or(0),
+                )),
             },
             ValueExpr::ObjectMatches { subject, filter } => {
                 let (clause_a, _) = filter.clauses();
@@ -1251,6 +2237,48 @@ impl EffectWindow {
                             )
                         })
                     }
+                    MatchObjectRef::TriggerSubject => {
+                        let binding = cursor
+                            .and_then(|c| self.execution_bindings(c.entry))
+                            .and_then(|b| b.trigger.as_ref())
+                            .ok_or(EffectError::InconsistentProgram)?;
+                        let evaluated = self.evaluated_characteristics()?;
+                        let excluded = BTreeSet::new();
+                        let source_id = resolve_ability_source();
+                        binding
+                            .causes
+                            .members()
+                            .first()
+                            .and_then(|m| m.subject_object_id())
+                            .and_then(|id| evaluated.get(id))
+                            .is_some_and(|permanent| {
+                                self.matches_object_filter(
+                                    **filter, permanent, controller, source_id, &excluded,
+                                    &evaluated,
+                                )
+                            })
+                    }
+                    MatchObjectRef::AttachedHost => {
+                        let source_id =
+                            resolve_ability_source().ok_or(EffectError::InconsistentProgram)?;
+                        let evaluated = self.evaluated_characteristics()?;
+                        let excluded = BTreeSet::new();
+                        match self.attached_to(source_id) {
+                            Some(TargetRef::Object(host)) => {
+                                evaluated.get(host).is_some_and(|permanent| {
+                                    self.matches_object_filter(
+                                        **filter,
+                                        permanent,
+                                        controller,
+                                        Some(source_id),
+                                        &excluded,
+                                        &evaluated,
+                                    )
+                                })
+                            }
+                            _ => false,
+                        }
+                    }
                 };
                 Ok(i64::from(matched).into())
             }
@@ -1290,6 +2318,25 @@ impl EffectWindow {
                     };
                     Ok(before.spell_x.clone().unwrap_or_else(|| 0.into()))
                 }
+                EventValueKind::EnteredKickerCount(index) => {
+                    let binding = cursor
+                        .and_then(|c| self.execution_bindings(c.entry))
+                        .and_then(|b| b.trigger.as_ref())
+                        .ok_or(EffectError::InconsistentProgram)?;
+                    let [member] = binding.causes.members() else {
+                        return Err(EffectError::InconsistentProgram);
+                    };
+                    let crate::occurrence::TriggerRelated::ZoneChange { before, .. } =
+                        &member.related
+                    else {
+                        return Err(EffectError::InconsistentProgram);
+                    };
+                    Ok(before
+                        .kicker_choices
+                        .get(index)
+                        .cloned()
+                        .unwrap_or_else(|| 0.into()))
+                }
                 EventValueKind::KickerCount(index) => Ok(self
                     .window
                     .resolving()
@@ -1319,13 +2366,89 @@ impl EffectWindow {
                         .controller_cast_during_own_main(),
                 )
                 .into()),
-                EventValueKind::CastFromGraveyard => Ok(i64::from(
-                    self.window
+                EventValueKind::CastFromGraveyard => {
+                    let entry = self
+                        .window
                         .resolving()
-                        .ok_or(EffectError::WrongResolutionFrame)?
-                        .cast_from_graveyard,
-                )
-                .into()),
+                        .ok_or(EffectError::WrongResolutionFrame)?;
+                    let v = match entry.kind() {
+                        StackKind::CardSpell(_) | StackKind::SpellCopy { .. } => {
+                            entry.cast_from_graveyard || entry.cast_summary().cast_from_graveyard
+                        }
+                        StackKind::ActivatedAbility { source }
+                        | StackKind::TriggeredAbility { source } => self
+                            .characteristics
+                            .cast_summaries
+                            .get(&source.id())
+                            .is_some_and(|s| s.cast_from_graveyard),
+                        _ => false,
+                    };
+                    Ok(i64::from(v).into())
+                }
+                EventValueKind::ManaSpentToCast
+                | EventValueKind::ColorsSpentToCast
+                | EventValueKind::ManaTypeSpentToCast(_)
+                | EventValueKind::SnowManaSpentToCast
+                | EventValueKind::TreasureManaSpentToCast
+                | EventValueKind::CreatureManaSpentToCast
+                | EventValueKind::CastFromOutsideHand
+                | EventValueKind::CastFromExile
+                | EventValueKind::GiftPromised
+                | EventValueKind::Cleaved
+                | EventValueKind::EvidenceCollected => {
+                    let summary = self
+                        .window
+                        .resolving()
+                        .and_then(|entry| match entry.kind() {
+                            StackKind::CardSpell(_) | StackKind::SpellCopy { .. } => {
+                                Some(entry.cast_summary())
+                            }
+                            StackKind::ActivatedAbility { source }
+                            | StackKind::TriggeredAbility { source } => {
+                                self.characteristics.cast_summaries.get(&source.id())
+                            }
+                            _ => None,
+                        });
+                    let val: RulesInteger = match kind {
+                        EventValueKind::ManaSpentToCast => {
+                            summary.map_or_else(|| 0.into(), |s| s.total_mana.clone())
+                        }
+                        EventValueKind::ColorsSpentToCast => summary.map_or_else(
+                            || 0.into(),
+                            |s| RulesInteger::from_usize(s.colors_spent.len()),
+                        ),
+                        EventValueKind::ManaTypeSpentToCast(mt) => summary
+                            .and_then(|s| s.mana_by_type.get(mt))
+                            .cloned()
+                            .unwrap_or_else(|| 0.into()),
+                        EventValueKind::SnowManaSpentToCast => {
+                            summary.map_or_else(|| 0.into(), |s| s.snow_mana.clone())
+                        }
+                        EventValueKind::TreasureManaSpentToCast => {
+                            summary.map_or_else(|| 0.into(), |s| s.treasure_mana.clone())
+                        }
+                        EventValueKind::CreatureManaSpentToCast => {
+                            summary.map_or_else(|| 0.into(), |s| s.creature_mana.clone())
+                        }
+                        EventValueKind::CastFromOutsideHand => {
+                            i64::from(summary.is_some_and(|s| s.cast_from_outside_hand)).into()
+                        }
+                        EventValueKind::CastFromExile => {
+                            i64::from(summary.is_some_and(|s| s.cast_from_exile)).into()
+                        }
+                        EventValueKind::GiftPromised => {
+                            i64::from(summary.is_some_and(|s| s.gift_promised)).into()
+                        }
+                        EventValueKind::Cleaved => {
+                            i64::from(summary.is_some_and(|s| s.cleaved)).into()
+                        }
+                        EventValueKind::EvidenceCollected => {
+                            i64::from(summary.is_some_and(|s| s.evidence_collected)).into()
+                        }
+                        _ => 0.into(),
+                    };
+                    Ok(val)
+                }
                 EventValueKind::MatchedOccurrences => {
                     self.resolution_trigger_count_at(controller, cursor)
                 }
@@ -1528,6 +2651,31 @@ impl EffectWindow {
                             .is_some_and(|object| object.zone == ObjectZone::Battlefield),
                     )
                     .into())
+                }
+                EventValueKind::LastDieRoll => Ok(cursor
+                    .and_then(|c| c.results.last_die_roll.clone())
+                    .unwrap_or_else(|| 0.into())),
+                EventValueKind::CoinFlipsWon => Ok(cursor
+                    .and_then(|c| c.results.last_coin_flips_won.clone())
+                    .unwrap_or_else(|| 0.into())),
+                EventValueKind::LastCoinFlipWon => Ok(i64::from(
+                    cursor.is_some_and(|c| c.results.last_coin_flip_won == Some(true)),
+                )
+                .into()),
+                EventValueKind::ChosenNumber => Ok(cursor
+                    .and_then(|c| c.results.chosen_number.clone())
+                    .unwrap_or_else(|| 0.into())),
+                EventValueKind::ChosenOptionIndex => Ok(cursor
+                    .and_then(|c| c.results.chosen_option_index)
+                    .map_or_else(|| 0.into(), |idx| i64::from(idx).into())),
+                EventValueKind::VoteCount(idx) => Ok(cursor
+                    .and_then(|c| c.results.vote_counts.get(usize::from(*idx)).copied())
+                    .map_or_else(|| 0.into(), |count| i64::from(count).into())),
+                EventValueKind::WinningVoteOption => Ok(cursor
+                    .and_then(|c| c.results.winning_vote_option)
+                    .map_or_else(|| (-1).into(), |idx| i64::from(idx).into())),
+                EventValueKind::LastNonlandDiscarded => {
+                    Ok(i64::from(cursor.map_or(0, |c| c.results.last_nonland_discarded)).into())
                 }
             },
         }

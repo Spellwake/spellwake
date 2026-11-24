@@ -180,7 +180,107 @@ impl EffectWindow {
                 .plus_one
                 .plus(&doubling_factor(doublers - doublers_before_addition));
         }
+        if counters.plus_one.is_positive() {
+            counters.plus_one = self.apply_static_counter_modifiers(
+                battlefield_before,
+                object,
+                CounterKind::PlusOne,
+                counters.plus_one,
+            );
+        }
+        if counters.minus_one.is_positive() {
+            counters.minus_one = self.apply_static_counter_modifiers(
+                battlefield_before,
+                object,
+                CounterKind::MinusOne,
+                counters.minus_one,
+            );
+        }
         Ok(counters)
+    }
+
+    pub(super) fn apply_static_counter_modifiers(
+        &self,
+        battlefield_before: &crate::characteristics::EvaluatedCharacteristics,
+        object: ObjectId,
+        kind: CounterKind,
+        mut amount: RulesInteger,
+    ) -> RulesInteger {
+        if !amount.is_positive() {
+            return amount;
+        }
+        let mut total_add = 0i64;
+        let mut factors: Vec<u8> = Vec::new();
+        let mut halve_count: usize = 0;
+        let target_ctrl = battlefield_before.get(object).and_then(|p| p.controller);
+        for source in battlefield_before
+            .objects
+            .values()
+            .filter(|perm| perm.zone == ObjectZone::Battlefield)
+        {
+            let Some(source_ctrl) = source.controller else {
+                continue;
+            };
+            for ability in source
+                .printed_text
+                .continuous
+                .iter()
+                .chain(&source.printed_text.additional_battlefield_abilities)
+            {
+                let active = source.abilities.continuous == Some(ability.id())
+                    || source
+                        .abilities
+                        .additional_battlefield_abilities
+                        .contains(&ability.id());
+                if !active {
+                    continue;
+                }
+                if let crate::characteristics::StaticContinuousAbility::Modifier {
+                    rule: crate::characteristics::StaticModifierRule::HalveOpponentCounters,
+                    ..
+                } = ability
+                    && target_ctrl.is_some_and(|c| c != source_ctrl)
+                {
+                    halve_count += 1;
+                }
+                if let crate::characteristics::StaticContinuousAbility::Modifier {
+                    rule:
+                        crate::characteristics::StaticModifierRule::ModifyCounters {
+                            selector,
+                            counter_kind,
+                            add,
+                            multiply,
+                        },
+                    ..
+                } = ability
+                    && counter_kind.is_none_or(|k| k == kind)
+                    && crate::characteristics::selector_matches_permanent(
+                        self.window.cards(),
+                        battlefield_before,
+                        source.object,
+                        source_ctrl,
+                        selector,
+                        object,
+                        &self.name_rules,
+                    )
+                {
+                    total_add = total_add.saturating_add(i64::from(*add));
+                    if *multiply > 1 {
+                        factors.push(*multiply);
+                    }
+                }
+            }
+        }
+        if total_add > 0 {
+            amount = amount.plus(&RulesInteger::from(total_add));
+        }
+        for factor in factors {
+            amount = amount.times(&RulesInteger::from(i64::from(factor)));
+        }
+        for _ in 0..halve_count {
+            amount = amount.nonnegative_half_rounded_down();
+        }
+        amount
     }
 
     /// Put a counter on the exact permanent retained by an entry or attack trigger.
@@ -335,8 +435,14 @@ impl EffectWindow {
             let mut occurrences = Vec::with_capacity(targets.len());
             for object in targets {
                 let old = self.counters_of_kind(object, *kind);
-                let added =
+                let multiplied =
                     effect_counter_multiplier(&before.view().evaluated, object).times(&resolved);
+                let added = self.apply_static_counter_modifiers(
+                    &before.view().evaluated,
+                    object,
+                    *kind,
+                    multiplied,
+                );
                 let after = old.plus(&added);
                 self.characteristics
                     .named_permanent_counters_mut(*kind)
@@ -670,44 +776,105 @@ impl EffectWindow {
         cause: EventCause,
         append: &mut RulesJournal,
     ) -> Result<(), EffectError> {
+        self.place_divided_counters(CounterKind::PlusOne, selected, cause, append)
+    }
+
+    pub(super) fn place_divided_counters(
+        &mut self,
+        kind: CounterKind,
+        selected: Vec<(ObjectId, RulesInteger)>,
+        cause: EventCause,
+        append: &mut RulesJournal,
+    ) -> Result<(), EffectError> {
+        let selected: Vec<(ObjectId, RulesInteger)> = selected
+            .into_iter()
+            .filter(|(_, amount)| amount.is_positive())
+            .collect();
         if selected.is_empty() {
             return Ok(());
         }
         let before = self.rules_snapshot(None)?;
-        let selected = selected
-            .into_iter()
-            .map(|(object, amount)| {
-                let added = PowerToughnessCounters {
-                    plus_one: amount,
-                    minus_one: 0.into(),
-                };
-                self.adjusted_pt_counters(&before.view().evaluated, object, added, None)
-                    .map(|counters| (object, counters))
-            })
-            .collect::<Result<Vec<_>, _>>()?;
-        for (object, added) in &selected {
-            self.characteristics.place_counters(*object, added)?;
-        }
-        self.emit_from(cause, &before, None, append, |old, new, _| {
-            selected
+        if matches!(kind, CounterKind::PlusOne | CounterKind::MinusOne) {
+            let selected = selected
                 .into_iter()
-                .map(|(object, added)| {
-                    Ok(RulesOccurrence::CountersPlaced {
-                        object,
-                        before: old.characteristics.counters(object),
-                        after: new.characteristics.counters(object),
-                        added,
-                        before_appearance: Box::new(
-                            old.appearance(object)
-                                .ok_or(EffectError::InconsistentProgram)?,
-                        ),
-                        after_appearance: Box::new(
-                            new.appearance(object)
-                                .ok_or(EffectError::InconsistentProgram)?,
-                        ),
-                    })
+                .map(|(object, amount)| {
+                    let added = if kind == CounterKind::PlusOne {
+                        PowerToughnessCounters {
+                            plus_one: amount,
+                            minus_one: 0.into(),
+                        }
+                    } else {
+                        PowerToughnessCounters {
+                            plus_one: 0.into(),
+                            minus_one: amount,
+                        }
+                    };
+                    self.adjusted_pt_counters(&before.view().evaluated, object, added, None)
+                        .map(|counters| (object, counters))
                 })
-                .collect()
-        })
+                .collect::<Result<Vec<_>, _>>()?;
+            for (object, added) in &selected {
+                self.characteristics.place_counters(*object, added)?;
+            }
+            return self.emit_from(cause, &before, None, append, |old, new, _| {
+                selected
+                    .into_iter()
+                    .map(|(object, added)| {
+                        Ok(RulesOccurrence::CountersPlaced {
+                            object,
+                            before: old.characteristics.counters(object),
+                            after: new.characteristics.counters(object),
+                            added,
+                            before_appearance: Box::new(
+                                old.appearance(object)
+                                    .ok_or(EffectError::InconsistentProgram)?,
+                            ),
+                            after_appearance: Box::new(
+                                new.appearance(object)
+                                    .ok_or(EffectError::InconsistentProgram)?,
+                            ),
+                        })
+                    })
+                    .collect()
+            });
+        }
+        let mut occurrences = Vec::with_capacity(selected.len());
+        for (object, amount) in selected {
+            let old = self.counters_of_kind(object, kind);
+            let multiplied =
+                effect_counter_multiplier(&before.view().evaluated, object).times(&amount);
+            let added = self.apply_static_counter_modifiers(
+                &before.view().evaluated,
+                object,
+                kind,
+                multiplied,
+            );
+            let after = old.plus(&added);
+            self.characteristics
+                .named_permanent_counters_mut(kind)
+                .ok_or(EffectError::InconsistentProgram)?
+                .insert(object, after.clone());
+            if kind.keyword_counter_ability().is_some()
+                && let EventCause::Instruction { entry: eid, .. } = cause
+            {
+                self.characteristics
+                    .refresh_keyword_counter_grant(eid, object, kind)?;
+            }
+            occurrences.push(if kind == CounterKind::Loyalty {
+                RulesOccurrence::LoyaltyCountersChanged {
+                    object,
+                    before: old,
+                    after,
+                }
+            } else {
+                RulesOccurrence::PermanentCounterChanged {
+                    object,
+                    kind,
+                    before: old,
+                    after,
+                }
+            });
+        }
+        self.emit_from(cause, &before, None, append, |_, _, _| Ok(occurrences))
     }
 }

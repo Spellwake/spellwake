@@ -34,6 +34,7 @@ pub enum PlayerManaSpendEffect {
     CommanderEntryCounters,
     SharedCommanderTypeScry,
     RetainUntilCleanup,
+    RetainUntilEndOfCombat,
 }
 
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -511,6 +512,9 @@ pub enum PlayerEmblem {
         power: RulesInteger,
         toughness: RulesInteger,
         keywords: Vec<PlayerKeyword>,
+    },
+    Authored {
+        label: String,
     },
 }
 /// Public status of a permanent currently phased out of play.
@@ -992,7 +996,7 @@ impl PlayerSnapshot {
             if !list(&p.phased_out) || p.phased_out.iter().any(|permanent|permanent.phase_in_seat_id.is_nil() || !list(&permanent.names)
                 || permanent.face_down && !permanent.names.is_empty() || permanent.names.iter().any(|name|name.is_empty() || !display_text(name,256)))
                 || !list(&p.emblems)
-                || p.emblems.iter().any(|emblem| match emblem { PlayerEmblem::ReturnFallenArtifacts {} | PlayerEmblem::UnlimitedHandWithGraveyardReturn {} | PlayerEmblem::SacrificeCreatureGainLifeDraw { .. } | PlayerEmblem::LoyaltyAnyTurn { .. } | PlayerEmblem::PreventAllButOne { .. } => false, PlayerEmblem::ControlledCreatureBonus { keywords, .. } => !list(keywords) || !unique(keywords.iter()), PlayerEmblem::SpellcastDamage { amount, .. } | PlayerEmblem::UpkeepDamage { amount } => !amount.is_positive() })
+                || p.emblems.iter().any(|emblem| match emblem { PlayerEmblem::ReturnFallenArtifacts {} | PlayerEmblem::UnlimitedHandWithGraveyardReturn {} | PlayerEmblem::SacrificeCreatureGainLifeDraw { .. } | PlayerEmblem::LoyaltyAnyTurn { .. } | PlayerEmblem::PreventAllButOne { .. } => false, PlayerEmblem::ControlledCreatureBonus { keywords, .. } => !list(keywords) || !unique(keywords.iter()), PlayerEmblem::SpellcastDamage { amount, .. } | PlayerEmblem::UpkeepDamage { amount } => !amount.is_positive(), PlayerEmblem::Authored { label } => label.is_empty() || !display_text(label, 512) })
                 || p.speed > 4
                 || !counters_valid(&p.counters)
                 || p.cascade_reveals.iter().any(|face| !face.valid())
@@ -1007,9 +1011,10 @@ impl PlayerSnapshot {
                 || p.mana_lots.iter().any(|lot| lot.id==0 || !lot.amount.as_rules_integer().is_positive() || !p.mana_pool.iter().any(|pool|pool.color==lot.color))
                 || p.mana_pool.iter().any(|pool| p.mana_lots.iter().filter(|lot|lot.color==pool.color).fold(RulesInteger::from(0), |sum,lot|sum.plus(lot.amount.as_rules_integer())) > *pool.amount.as_rules_integer())
                 || !list(&p.restricted_mana)
-                || !unique(p.restricted_mana.iter().map(|x| (x.color, x.restriction, &x.creature_type)))
+                || !unique(p.restricted_mana.iter().map(|x| (x.color, x.restriction, &x.creature_type, x.min_mana_value)))
                 || p.restricted_mana.iter().any(|item| !item.amount.as_rules_integer().is_positive()
                     || (item.creature_type.is_some() && !matches!(item.restriction, super::actions::PlayerManaRestriction::CreatureSpellOfType | super::actions::PlayerManaRestriction::CreatureSpellOfTypeUncounterable | super::actions::PlayerManaRestriction::CreatureSpellOrAbilityOfType))
+                    || (item.min_mana_value.is_some() && !matches!(item.restriction, super::actions::PlayerManaRestriction::SpellWithMinManaValue | super::actions::PlayerManaRestriction::CreatureSpellWithMinManaValue | super::actions::PlayerManaRestriction::SpellWithMinManaValueOrX | super::actions::PlayerManaRestriction::CreatureSpellWithMinManaValueOrX))
                     || item.creature_type.as_ref().is_some_and(|label| f.creature_vocabulary.is_some_and(|v| v.resolve_label(label.as_str()).is_none()))
                     || p.mana_pool.iter().find(|pool| pool.color == item.color).is_none_or(|pool| pool.amount.as_rules_integer() < item.amount.as_rules_integer()))
                 || p.mana_pool.iter().any(|pool| p.restricted_mana.iter().filter(|item| item.color == pool.color)

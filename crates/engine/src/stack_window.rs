@@ -93,6 +93,7 @@ pub struct StackEntry {
     replicated: BTreeMap<usize, RulesInteger>,
     pub(crate) granted_replicate: BTreeMap<crate::characteristics::EffectInstanceKey, usize>,
     sunburst_colors: u8,
+    pub(crate) cast_summary: crate::mana::CastManaSummary,
     id: StackEntryId,
     controller: SeatId,
     kind: StackKind,
@@ -123,6 +124,12 @@ impl StackEntry {
     /// Chosen X is shared by every X symbol on this spell and its copies.
     pub fn chosen_x(&self) -> Option<&RulesInteger> {
         self.chosen_x.as_ref()
+    }
+    pub(crate) fn cast_summary(&self) -> &crate::mana::CastManaSummary {
+        &self.cast_summary
+    }
+    pub(crate) fn cast_from_any_hand(&self) -> bool {
+        self.cast_from_hand.is_some()
     }
     pub(crate) fn cast_origin(&self) -> Option<(SeatId, bool)> {
         self.caster
@@ -304,6 +311,8 @@ pub(crate) struct DrawBatch<'a> {
 
 /// A real physical cut, or the complete batch receipt. The predecessor registry
 /// lives only in this cut; occurrence discovery must happen before advancing next.
+// Transient single-use return enum; keeping `StackWindow` inline avoids extra heap churn per draw batch.
+#[allow(clippy::large_enum_variant)]
 #[derive(Debug)]
 pub(crate) enum DrawBatchProgress<'a> {
     Drawn {
@@ -988,6 +997,44 @@ impl StackWindow {
         next.revision = revision;
         Ok((next, movements))
     }
+
+    pub(crate) fn opening_battlefield_with_movements(
+        &self,
+        expected: u64,
+        player: SeatId,
+        objects: &[ObjectId],
+    ) -> Result<(Self, Vec<crate::object_identity::ObjectMovement>), StackWindowError> {
+        let revision = self.next_revision(expected)?;
+        if self.phase() != WindowPhase::Opening {
+            return Err(StackWindowError::NotInTurnWork);
+        }
+        if !self.order.contains(&player) {
+            return Err(StackWindowError::UnknownPlayer);
+        }
+        let mut next = self.clone();
+        let mut movements = Vec::with_capacity(objects.len());
+        for &object in objects {
+            if next.cards.get(object).map(GameObject::zone) != Some(ObjectZone::Hand(player)) {
+                return Err(StackWindowError::InvalidCheckMove);
+            }
+            let moved = next
+                .cards
+                .apply_zone_move(
+                    next.cards.revision(),
+                    object,
+                    ObjectDestination::Battlefield { controller: player },
+                )?
+                .require_moved()?;
+            let before = moved.before.ok_or(StackWindowError::InvalidCheckMove)?;
+            movements.push(crate::object_identity::ObjectMovement {
+                before,
+                after: moved.after,
+            });
+            next.cards = moved.next;
+        }
+        next.revision = revision;
+        Ok((next, movements))
+    }
     /// Receipt-dropping primitive adapter; executor publication retains status pairs.
     #[cfg(test)]
     pub(crate) fn untap_active(&self, expected: u64) -> Result<Self, StackWindowError> {
@@ -1206,6 +1253,7 @@ impl StackWindow {
             replicated: BTreeMap::new(),
             granted_replicate: BTreeMap::new(),
             sunburst_colors: 0,
+            cast_summary: crate::mana::CastManaSummary::default(),
             id: StackEntryId(self.next_entry),
             controller,
             kind,
@@ -1737,6 +1785,7 @@ impl StackWindow {
             let exact_source = match current.kind() {
                 StackKind::ActivatedAbility { source } => Some(source.id()),
                 StackKind::TriggeredAbility { source } => Some(source.id()),
+                StackKind::CardSpell(card) => Some(*card),
                 _ => None,
             };
             if exact_source != Some(source) || !matches!(moves, [(id, _)] if *id == source) {
@@ -1752,16 +1801,18 @@ impl StackWindow {
                 .get(*id)
                 .ok_or(ObjectIdentityError::UnknownObject)?;
             let eligible = if ability_source.is_some() {
-                object.zone() == ObjectZone::Battlefield
+                ((object.zone() == ObjectZone::Battlefield
+                    && self.cards.phased_out_under(*id).is_none())
+                    || object.zone() == ObjectZone::Stack)
                     && object.owner() == player
-                    && self.cards.phased_out_under(*id).is_none()
             } else {
                 object.card_id().is_some()
                     && if collective {
                         matches!(
                             object.zone(),
-                            ObjectZone::Hand(_) | ObjectZone::Graveyard(_)
-                        )
+                            ObjectZone::Hand(_) | ObjectZone::Graveyard(_) | ObjectZone::Exile
+                        ) || (object.zone() == ObjectZone::Battlefield
+                            && self.cards.phased_out_under(*id).is_none())
                     } else {
                         object.zone() == ObjectZone::Graveyard(player)
                     }
@@ -1963,12 +2014,38 @@ impl StackWindow {
         if let Some(ObjectZone::Hand(player)) = moved.before.as_ref().map(GameObject::zone) {
             entry.cast_from_hand = Some(player);
         }
+        entry.cast_summary.cast_from_graveyard = entry.cast_from_graveyard;
+        entry.cast_summary.cast_from_exile = moved
+            .before
+            .as_ref()
+            .is_some_and(|c| c.zone() == ObjectZone::Exile);
+        entry.cast_summary.cast_from_outside_hand = entry.cast_from_hand != Some(actor);
 
         next.stack.push(entry);
         next.cards = moved.next;
         if let Some(round) = round {
             next.status = Status::Priority(round);
         }
+        next.revision = revision;
+        Ok(next)
+    }
+    /// Admit a castable spell copy (such as a prepared permanent's spell) directly onto the stack.
+    pub(crate) fn admit_prepared_spell_copy(
+        &self,
+        expected: u64,
+        actor: SeatId,
+        definition: crate::program::Program,
+    ) -> Result<Self, StackWindowError> {
+        let revision = self.next_revision(expected)?;
+        let round = self.priority()?;
+        let round = round.record_action(round.revision(), actor)?;
+        let mut next = self.clone();
+        let copy_id = next.cards.insert_spell_copy(actor, definition)?;
+        let mut entry = next.allocate(actor, StackKind::CardSpell(copy_id))?;
+        entry.caster = Some(actor);
+        entry.cast_original_object = Some(copy_id);
+        next.stack.push(entry);
+        next.status = Status::Priority(round);
         next.revision = revision;
         Ok(next)
     }
@@ -2214,22 +2291,41 @@ impl StackWindow {
         &mut self,
         id: StackEntryId,
     ) -> Result<(), StackWindowError> {
-        self.stack
+        let entry = self
+            .stack
             .last_mut()
             .filter(|entry| entry.id == id)
-            .ok_or(StackWindowError::InconsistentStack)?
-            .cast_during_own_main = true;
+            .ok_or(StackWindowError::InconsistentStack)?;
+        entry.cast_during_own_main = true;
+        entry.cast_summary.cast_during_own_main = true;
+        Ok(())
+    }
+    pub(crate) fn record_cast_mana_summary(
+        &mut self,
+        id: StackEntryId,
+        spend: &[crate::mana::ManaSpend],
+        snow: RulesInteger,
+        treasure: RulesInteger,
+        creature: RulesInteger,
+    ) -> Result<(), StackWindowError> {
+        if let Some(entry) = self.stack.iter_mut().find(|entry| entry.id == id) {
+            entry
+                .cast_summary
+                .record_spend(spend, snow, treasure, creature);
+        }
         Ok(())
     }
     pub(crate) fn mark_conditional_cost(
         &mut self,
         id: StackEntryId,
     ) -> Result<(), StackWindowError> {
-        self.stack
+        let entry = self
+            .stack
             .last_mut()
             .filter(|s| s.id == id)
-            .ok_or(StackWindowError::InconsistentStack)?
-            .conditional_cost = true;
+            .ok_or(StackWindowError::InconsistentStack)?;
+        entry.conditional_cost = true;
+        entry.cast_summary.paid_alternative = true;
         Ok(())
     }
     pub(crate) fn set_chosen_x(
@@ -2290,6 +2386,7 @@ impl StackWindow {
             .filter(|s| s.id == id)
             .ok_or(StackWindowError::InconsistentStack)?;
         entry.bargained = bargained;
+        entry.cast_summary.bargained = bargained;
         entry.buyback = buyback;
         entry.kicked = kicked;
         Ok(())
@@ -2423,6 +2520,12 @@ impl StackWindow {
         entry.attacking_defender = source.attacking_defender;
         entry.conditional_cost = source.conditional_cost;
         entry.bargained = source.bargained;
+        entry.cast_summary.bargained = source.cast_summary.bargained;
+        entry.cast_summary.gift_promised = source.cast_summary.gift_promised;
+        entry.cast_summary.cleaved = source.cast_summary.cleaved;
+        entry.cast_summary.evidence_collected = source.cast_summary.evidence_collected;
+        entry.cast_summary.paid_alternative = source.cast_summary.paid_alternative;
+        entry.cast_summary.squad_count = source.cast_summary.squad_count;
         entry.buyback = buyback;
         entry.kicked = kicked;
         entry.replicated = source.replicated.clone();
@@ -2860,6 +2963,15 @@ impl StackWindow {
     pub(crate) fn select_siege_back(&mut self, spell: ObjectId) -> Result<(), StackWindowError> {
         Ok(self.cards.select_reverse_spell(spell)?)
     }
+    pub(crate) fn select_prototype_spell(
+        &mut self,
+        spell: ObjectId,
+    ) -> Result<(), StackWindowError> {
+        Ok(self.cards.select_prototype(spell)?)
+    }
+    pub(crate) fn enter_transformed(&mut self, id: ObjectId) -> Result<(), StackWindowError> {
+        Ok(self.cards.enter_transformed(id)?)
+    }
     pub(crate) fn preview_adventure(&mut self, spell: ObjectId) -> Result<(), StackWindowError> {
         Ok(self.cards.select_adventure(spell)?)
     }
@@ -3000,6 +3112,19 @@ impl StackWindow {
             }
         }
         self.apply_recorded_zone_moves(revision, &moves)
+    }
+    /// Destroy an Aura with Umbra armor (CR 702.89a) during destruction replacement resolution.
+    pub(crate) fn destroy_umbra_aura(
+        &self,
+        aura: ObjectId,
+    ) -> Result<(Self, Option<ObjectMovement>), StackWindowError> {
+        if self.cards.get(aura).map(GameObject::zone) != Some(ObjectZone::Battlefield) {
+            return Ok((self.clone(), None));
+        }
+        let revision = self.next_revision(self.revision())?;
+        let (next, mut moves) =
+            self.apply_recorded_zone_moves(revision, &[(aura, ObjectDestination::Graveyard)])?;
+        Ok((next, moves.pop()))
     }
     /// Apply the eligible commanders selected by their owners during CR 903.9a checks.
     pub(crate) fn return_commanders(
@@ -3155,7 +3280,12 @@ impl StackWindow {
                     (object.zone() == ObjectZone::Battlefield
                         && object.controller() == Some(player))
                         || (object.card_id().is_some()
-                            && matches!(object.zone(), ObjectZone::Graveyard(seat) | ObjectZone::Hand(seat) if seat == player))
+                            && matches!(
+                                object.zone(),
+                                ObjectZone::Graveyard(seat) | ObjectZone::Hand(seat) if seat == player
+                            ))
+                        || (matches!(object.zone(), ObjectZone::Exile | ObjectZone::Stack)
+                            && object.owner() == player)
                 }
                 ResolutionSelectionMove::BattlefieldEffect { .. }
                 | ResolutionSelectionMove::ReturnToHand { .. }
@@ -3181,15 +3311,20 @@ impl StackWindow {
             if !eligible || !unique.insert(id) {
                 return Err(StackWindowError::InvalidResolutionMove);
             }
-            let physical = if matches!(
-                selection,
-                ResolutionSelectionMove::PutInLibrary {
-                    placement: crate::program::LibraryPlacement::Bottom,
-                    ..
-                }
-            ) && destination == crate::program::PublicZoneDestination::Library
+            let physical = if let ResolutionSelectionMove::PutInLibrary { placement, .. } =
+                selection
+                && destination == crate::program::PublicZoneDestination::Library
             {
-                ObjectDestination::LibraryBottom
+                match placement {
+                    crate::program::LibraryPlacement::Top => ObjectDestination::LibraryTop,
+                    crate::program::LibraryPlacement::Bottom => ObjectDestination::LibraryBottom,
+                    crate::program::LibraryPlacement::FromTop(offset) => {
+                        ObjectDestination::LibraryFromTop(offset)
+                    }
+                    crate::program::LibraryPlacement::ChoiceTopOrBottom { .. } => {
+                        return Err(StackWindowError::InvalidResolutionMove);
+                    }
+                }
             } else {
                 destination
                     .physical(None)

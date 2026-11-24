@@ -65,7 +65,9 @@ impl EnchantRestriction {
                             ControllerFilter::Player(seat) => object.controller == Some(seat),
                             ControllerFilter::OwnerYou
                             | ControllerFilter::OwnerOpponent
-                            | ControllerFilter::RelatedPlayer => false,
+                            | ControllerFilter::RelatedPlayer
+                            | ControllerFilter::TargetPlayer
+                            | ControllerFilter::TargetOpponent => false,
                         };
                         let mv = || Some(object.defined.mana_value.clone());
                         controller_ok

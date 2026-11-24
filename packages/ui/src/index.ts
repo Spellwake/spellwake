@@ -41,6 +41,7 @@ export {
   ListingsIcon,
   PacksIcon,
   PredictionsIcon,
+  HistoryIcon,
   SeasonIcon,
   StandingsIcon,
   SupplyIcon,

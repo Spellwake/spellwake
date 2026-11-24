@@ -43,6 +43,7 @@ pub(super) fn exile_response(spell: u64, replacement: u64) -> [SeedCard; 2] {
                             any_types: Default::default(),
                             required_types: BTreeSet::new(),
                             forbidden_types: BTreeSet::new(),
+                            object_filter: None,
                         },
                     }],
                 ),

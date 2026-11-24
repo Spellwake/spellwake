@@ -27,6 +27,7 @@ fn sacrifice(player: ResolvingPlayer, amount: i64) -> Instruction {
             any_types: Default::default(),
             required_types: BTreeSet::from([CardType::Creature]),
             forbidden_types: BTreeSet::new(),
+            object_filter: None,
         },
     }
 }
@@ -232,6 +233,7 @@ fn other_player_roles_and_body_locals_survive_target_countering() {
                 any_types: Default::default(),
                 required_types: BTreeSet::from([CardType::Creature]),
                 forbidden_types: BTreeSet::new(),
+                object_filter: None,
             },
         },
         optional(ResolvingPlayer::Controller),

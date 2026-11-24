@@ -7,6 +7,7 @@ fn creature_filter() -> PermanentTypeFilter {
         any_types: Default::default(),
         required_types: BTreeSet::from([CardType::Creature]),
         forbidden_types: BTreeSet::new(),
+        object_filter: None,
     }
 }
 
@@ -196,16 +197,19 @@ fn selection_type_filters_admit_empty_and_disjoint_sets_but_reject_overlap() {
             any_types: Default::default(),
             required_types: BTreeSet::new(),
             forbidden_types: BTreeSet::new(),
+            object_filter: None,
         },
         PermanentTypeFilter {
             any_types: Default::default(),
             required_types: BTreeSet::from([CardType::Artifact, CardType::Creature]),
             forbidden_types: BTreeSet::from([CardType::Land]),
+            object_filter: None,
         },
         PermanentTypeFilter {
             any_types: Default::default(),
             required_types: BTreeSet::new(),
             forbidden_types: BTreeSet::from([CardType::Creature]),
+            object_filter: None,
         },
     ] {
         assert_eq!(
@@ -230,6 +234,7 @@ fn selection_type_filters_admit_empty_and_disjoint_sets_but_reject_overlap() {
                     any_types: Default::default(),
                     required_types: BTreeSet::from([CardType::Artifact, CardType::Creature]),
                     forbidden_types: BTreeSet::from([CardType::Creature]),
+                    object_filter: None
                 }
             }]
         ),
@@ -350,6 +355,7 @@ fn unreachable_selection_still_validates_roles_amounts_and_filter() {
                 any_types: Default::default(),
                 required_types: BTreeSet::from([CardType::Creature]),
                 forbidden_types: BTreeSet::from([CardType::Creature]),
+                object_filter: None,
             },
         },
     ];

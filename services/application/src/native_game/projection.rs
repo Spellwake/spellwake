@@ -669,6 +669,16 @@ impl Projection<'_, '_> {
                         power: power_toughness.power.clone(), toughness: power_toughness.toughness.clone(),
                         keywords: keywords.iter().copied().map(keyword).collect(),
                     },
+                    spellwake_engine::emblem::EmblemDefinition::Authored { label, .. } => {
+                        let clean: String = label
+                            .chars()
+                            .filter(|ch| !ch.is_control())
+                            .take(512)
+                            .collect();
+                        PlayerEmblem::Authored {
+                            label: if clean.is_empty() { "Emblem".to_owned() } else { clean },
+                        }
+                    }
                 }).collect(),
                 monarch: source.execution().monarch() == Some(native),
                 city_blessing: source.execution().has_city_blessing(native),
@@ -685,10 +695,25 @@ impl Projection<'_, '_> {
                     .clone(),
                 poison: quantity(&source.execution().poison_counters(native))?,
                 counters: {
-                    let experience=source.execution().experience_counters(native);
+                    let mut list = Vec::new();
+                    let experience = source.execution().experience_counters(native);
                     if experience.is_positive() {
-                        vec![crate::player_wire::PlayerCounter {name:"experience".to_owned(),count:quantity(&experience)?}]
-                    } else {vec![]}
+                        list.push(crate::player_wire::PlayerCounter {
+                            name: "experience".to_owned(),
+                            count: quantity(&experience)?,
+                        });
+                    }
+                    let energy = source.execution().player_counters_of_kind(
+                        native,
+                        spellwake_engine::effects::CounterKind::Energy,
+                    );
+                    if energy.is_positive() {
+                        list.push(crate::player_wire::PlayerCounter {
+                            name: "energy".to_owned(),
+                            count: quantity(&energy)?,
+                        });
+                    }
+                    list
                 },
                 mana_pool: ManaType::ALL
                     .into_iter()
@@ -704,6 +729,7 @@ impl Projection<'_, '_> {
                     use crate::player_wire::{PlayerManaLot, PlayerManaSpendEffect};
                     let effect = match lot.effect {
                         ManaSpendEffect::RetainUntilCleanup => PlayerManaSpendEffect::RetainUntilCleanup,
+                        ManaSpendEffect::RetainUntilEndOfCombat => PlayerManaSpendEffect::RetainUntilEndOfCombat,
                         ManaSpendEffect::CommanderEntryCounters => PlayerManaSpendEffect::CommanderEntryCounters,
                         ManaSpendEffect::SharedCommanderTypeScry => PlayerManaSpendEffect::SharedCommanderTypeScry,
                     };
@@ -712,9 +738,54 @@ impl Projection<'_, '_> {
                 restricted_mana: source.execution().restricted_mana().iter().filter(|((seat, _, _), amount)| *seat == native && amount.is_positive()).map(|((_, kind, restriction), amount)| {
                     Ok(crate::player_wire::PlayerRestrictedManaSpend {
                         color: mana(*kind), amount: quantity(amount)?,
-                        restriction: match restriction { spellwake_engine::mana::ManaRestriction::SpellWithFlashbackFromGraveyard => crate::player_wire::PlayerManaRestriction::SpellWithFlashbackFromGraveyard, spellwake_engine::mana::ManaRestriction::PlaneswalkerSpell => crate::player_wire::PlayerManaRestriction::PlaneswalkerSpell, spellwake_engine::mana::ManaRestriction::ColorlessSpell => crate::player_wire::PlayerManaRestriction::ColorlessSpell, spellwake_engine::mana::ManaRestriction::CommanderSpell => crate::player_wire::PlayerManaRestriction::CommanderSpell, spellwake_engine::mana::ManaRestriction::ColorlessEldraziSpellOrAbility => crate::player_wire::PlayerManaRestriction::ColorlessEldraziSpellOrAbility, spellwake_engine::mana::ManaRestriction::NoncreatureSpell => crate::player_wire::PlayerManaRestriction::NoncreatureSpell, spellwake_engine::mana::ManaRestriction::ArtifactSpellOrAbility => crate::player_wire::PlayerManaRestriction::ArtifactSpellOrAbility, spellwake_engine::mana::ManaRestriction::NotNonartifactSpell => crate::player_wire::PlayerManaRestriction::NotNonartifactSpell, spellwake_engine::mana::ManaRestriction::CreatureSpell => crate::player_wire::PlayerManaRestriction::CreatureSpell, spellwake_engine::mana::ManaRestriction::CreatureSpellOfTypeUncounterable(_) => crate::player_wire::PlayerManaRestriction::CreatureSpellOfTypeUncounterable, spellwake_engine::mana::ManaRestriction::CreatureSpellOfType(_) => crate::player_wire::PlayerManaRestriction::CreatureSpellOfType, spellwake_engine::mana::ManaRestriction::CreatureSpellOrAbilityOfType(_) => crate::player_wire::PlayerManaRestriction::CreatureSpellOrAbilityOfType },
+                        restriction: match restriction {
+                            spellwake_engine::mana::ManaRestriction::SpellWithFlashbackFromGraveyard => crate::player_wire::PlayerManaRestriction::SpellWithFlashbackFromGraveyard,
+                            spellwake_engine::mana::ManaRestriction::PlaneswalkerSpell => crate::player_wire::PlayerManaRestriction::PlaneswalkerSpell,
+                            spellwake_engine::mana::ManaRestriction::ColorlessSpell => crate::player_wire::PlayerManaRestriction::ColorlessSpell,
+                            spellwake_engine::mana::ManaRestriction::CommanderSpell => crate::player_wire::PlayerManaRestriction::CommanderSpell,
+                            spellwake_engine::mana::ManaRestriction::ColorlessEldraziSpellOrAbility => crate::player_wire::PlayerManaRestriction::ColorlessEldraziSpellOrAbility,
+                            spellwake_engine::mana::ManaRestriction::NoncreatureSpell => crate::player_wire::PlayerManaRestriction::NoncreatureSpell,
+                            spellwake_engine::mana::ManaRestriction::ArtifactSpellOrAbility => crate::player_wire::PlayerManaRestriction::ArtifactSpellOrAbility,
+                            spellwake_engine::mana::ManaRestriction::NotNonartifactSpell => crate::player_wire::PlayerManaRestriction::NotNonartifactSpell,
+                            spellwake_engine::mana::ManaRestriction::CreatureSpell => crate::player_wire::PlayerManaRestriction::CreatureSpell,
+                            spellwake_engine::mana::ManaRestriction::CreatureSpellOfTypeUncounterable(_) => crate::player_wire::PlayerManaRestriction::CreatureSpellOfTypeUncounterable,
+                            spellwake_engine::mana::ManaRestriction::CreatureSpellOfType(_) => crate::player_wire::PlayerManaRestriction::CreatureSpellOfType,
+                            spellwake_engine::mana::ManaRestriction::CreatureSpellOrAbilityOfType(_) => crate::player_wire::PlayerManaRestriction::CreatureSpellOrAbilityOfType,
+                            spellwake_engine::mana::ManaRestriction::InstantOrSorcerySpell => crate::player_wire::PlayerManaRestriction::InstantOrSorcerySpell,
+                            spellwake_engine::mana::ManaRestriction::ArtifactSpell => crate::player_wire::PlayerManaRestriction::ArtifactSpell,
+                            spellwake_engine::mana::ManaRestriction::ArtifactAbility => crate::player_wire::PlayerManaRestriction::ArtifactAbility,
+                            spellwake_engine::mana::ManaRestriction::ArtifactSpellOrAnyAbility => crate::player_wire::PlayerManaRestriction::ArtifactSpellOrAnyAbility,
+                            spellwake_engine::mana::ManaRestriction::ActivatedAbility => crate::player_wire::PlayerManaRestriction::ActivatedAbility,
+                            spellwake_engine::mana::ManaRestriction::CastSpell => crate::player_wire::PlayerManaRestriction::CastSpell,
+                            spellwake_engine::mana::ManaRestriction::NotSpellFromHand => crate::player_wire::PlayerManaRestriction::NotSpellFromHand,
+                            spellwake_engine::mana::ManaRestriction::CostContainingX => crate::player_wire::PlayerManaRestriction::CostContainingX,
+                            spellwake_engine::mana::ManaRestriction::LegendarySpell => crate::player_wire::PlayerManaRestriction::LegendarySpell,
+                            spellwake_engine::mana::ManaRestriction::MulticoloredSpell => crate::player_wire::PlayerManaRestriction::MulticoloredSpell,
+                            spellwake_engine::mana::ManaRestriction::EnchantmentSpell => crate::player_wire::PlayerManaRestriction::EnchantmentSpell,
+                            spellwake_engine::mana::ManaRestriction::CreatureSpellOrAbility => crate::player_wire::PlayerManaRestriction::CreatureSpellOrAbility,
+                            spellwake_engine::mana::ManaRestriction::ColoredSpellWithoutX => crate::player_wire::PlayerManaRestriction::ColoredSpellWithoutX,
+                            spellwake_engine::mana::ManaRestriction::InstantOrSorceryOrForetell => crate::player_wire::PlayerManaRestriction::InstantOrSorceryOrForetell,
+                            spellwake_engine::mana::ManaRestriction::SpellWithMinManaValue(_) => crate::player_wire::PlayerManaRestriction::SpellWithMinManaValue,
+                            spellwake_engine::mana::ManaRestriction::CreatureSpellWithMinManaValue(_) => crate::player_wire::PlayerManaRestriction::CreatureSpellWithMinManaValue,
+                            spellwake_engine::mana::ManaRestriction::HistoricSpell => crate::player_wire::PlayerManaRestriction::HistoricSpell,
+                            spellwake_engine::mana::ManaRestriction::CreatureOrPlaneswalkerSpell => crate::player_wire::PlayerManaRestriction::CreatureOrPlaneswalkerSpell,
+                            spellwake_engine::mana::ManaRestriction::CreatureAbility => crate::player_wire::PlayerManaRestriction::CreatureAbility,
+                            spellwake_engine::mana::ManaRestriction::PermanentSpell => crate::player_wire::PlayerManaRestriction::PermanentSpell,
+                            spellwake_engine::mana::ManaRestriction::SpellFromGraveyardOrExile => crate::player_wire::PlayerManaRestriction::SpellFromGraveyardOrExile,
+                            spellwake_engine::mana::ManaRestriction::EquipmentOrEquipAbility => crate::player_wire::PlayerManaRestriction::EquipmentOrEquipAbility,
+                            spellwake_engine::mana::ManaRestriction::SpellWithMinManaValueOrX(_) => crate::player_wire::PlayerManaRestriction::SpellWithMinManaValueOrX,
+                            spellwake_engine::mana::ManaRestriction::CreatureSpellWithMinManaValueOrX(_) => crate::player_wire::PlayerManaRestriction::CreatureSpellWithMinManaValueOrX,
+                            spellwake_engine::mana::ManaRestriction::CreatureOrEnchantmentSpell => crate::player_wire::PlayerManaRestriction::CreatureOrEnchantmentSpell,
+                        },
                         creature_type: match restriction {
                             spellwake_engine::mana::ManaRestriction::CreatureSpellOfTypeUncounterable(Some(kind)) | spellwake_engine::mana::ManaRestriction::CreatureSpellOfType(Some(kind)) | spellwake_engine::mana::ManaRestriction::CreatureSpellOrAbilityOfType(Some(kind)) => Some(PlayerCreatureTypeLabel::try_from(source.execution().creature_vocabulary().label(*kind).ok_or(NativeProjectionError::MissingNativeValue)?.to_owned()).map_err(|_| NativeProjectionError::InvalidSnapshot)?),
+                            _ => None,
+                        },
+                        min_mana_value: match restriction {
+                            spellwake_engine::mana::ManaRestriction::SpellWithMinManaValue(n)
+                            | spellwake_engine::mana::ManaRestriction::CreatureSpellWithMinManaValue(n)
+                            | spellwake_engine::mana::ManaRestriction::SpellWithMinManaValueOrX(n)
+                            | spellwake_engine::mana::ManaRestriction::CreatureSpellWithMinManaValueOrX(n) => Some(*n),
                             _ => None,
                         },
                     })
@@ -856,10 +927,20 @@ impl Projection<'_, '_> {
                         .execution()
                         .library_top_access(&self.evaluated, owner, self.scope.binding.actor)
                         .visible;
+                    let order_domain: &[ObjectId] =
+                        match source.pending_decision().map(|d| d.frame()) {
+                            Some(spellwake_engine::game::RuleFrame::ResolutionGraveyardOrder(
+                                frame,
+                            )) if frame.chooser() == self.scope.binding.actor => frame.domain(),
+                            _ => &[],
+                        };
                     ids.into_iter()
                         .enumerate()
                         .filter_map(|(i, id)| {
-                            (reveals.contains(&id) || (i == 0 && top_visible)).then_some(id)
+                            (reveals.contains(&id)
+                                || (i == 0 && top_visible)
+                                || order_domain.contains(&id))
+                            .then_some(id)
                         })
                         .collect()
                 }
@@ -1338,6 +1419,20 @@ impl Projection<'_, '_> {
                 count: quantity(amount)?,
             });
         }
+        for (kind, amount) in source.execution().extra_named_counters(id) {
+            if matches!(
+                kind,
+                spellwake_engine::effects::CounterKind::Study
+                    | spellwake_engine::effects::CounterKind::Eyeball
+                    | spellwake_engine::effects::CounterKind::Slime
+            ) {
+                continue;
+            }
+            counters.push(PlayerCounter {
+                name: kind.oracle_label().into_owned(),
+                count: quantity(&amount)?,
+            });
+        }
         let properties = PlayerPublicProperties {
             chosen_creature_type: source
                 .execution()
@@ -1412,143 +1507,165 @@ impl Projection<'_, '_> {
                 })
                 .collect(),
             colors: current.current_colors.iter().copied().map(color).collect(),
-            keywords: current
-                .keywords
-                .iter()
-                .copied()
-                .map(keyword)
-                .chain(
-                    current
-                        .printed_text
-                        .activation_restrictions
-                        .iter()
-                        .any(|(id, r)| {
-                            *r == spellwake_engine::activated::ActivationRestriction::PowerUp
-                                && current.abilities.activated.contains(id)
-                        })
-                        .then_some(PlayerKeyword::PowerUp),
-                )
-                .chain(
-                    current
-                        .toxic_value
-                        .is_some()
-                        .then_some(PlayerKeyword::Toxic),
-                )
-                .chain(
-                    current
-                        .printed_text
-                        .triggered
-                        .iter()
-                        .filter(|a| current.abilities.triggered.contains(&a.id))
-                        .filter_map(|a| match &a.condition.event {
-                            spellwake_engine::program::TriggerEvent::Attacks {
-                                subject,
-                                mode:
-                                    spellwake_engine::program::AttackTriggerMode::Individual {
-                                        capture_defender: true,
-                                    },
-                            } if *subject
-                                == spellwake_engine::program::ObjectFilter::self_object() =>
-                            {
-                                Some(PlayerKeyword::Annihilator)
-                            }
-                            spellwake_engine::program::TriggerEvent::Keyword(
-                                spellwake_engine::program::TriggerKeywordEvent::Counter(k),
-                            ) => match k {
-                                spellwake_engine::program::CounterKeyword::Fading(_) => {
-                                    Some(PlayerKeyword::Fading)
+            keywords: {
+                let mut seen = std::collections::BTreeSet::new();
+                current
+                    .keywords
+                    .iter()
+                    .copied()
+                    .map(keyword)
+                    .chain(
+                        current
+                            .printed_text
+                            .activation_restrictions
+                            .iter()
+                            .any(|(id, r)| {
+                                *r == spellwake_engine::activated::ActivationRestriction::PowerUp
+                                    && current.abilities.activated.contains(id)
+                            })
+                            .then_some(PlayerKeyword::PowerUp),
+                    )
+                    .chain(
+                        current
+                            .toxic_value
+                            .is_some()
+                            .then_some(PlayerKeyword::Toxic),
+                    )
+                    .chain(
+                        current
+                            .printed_text
+                            .triggered
+                            .iter()
+                            .filter(|a| current.abilities.triggered.contains(&a.id))
+                            .filter_map(|a| match &a.condition.event {
+                                spellwake_engine::program::TriggerEvent::Attacks {
+                                    subject,
+                                    mode:
+                                        spellwake_engine::program::AttackTriggerMode::Individual {
+                                            capture_defender: true,
+                                        },
+                                } if *subject
+                                    == spellwake_engine::program::ObjectFilter::self_object() =>
+                                {
+                                    if a.body
+                                        .instructions
+                                        .contains(&spellwake_engine::program::Instruction::Myriad)
+                                    {
+                                        Some(PlayerKeyword::Myriad)
+                                    } else if a.body.instructions.iter().any(|op| {
+                                        matches!(
+                                            op,
+                                            spellwake_engine::program::Instruction::Sacrifice { .. }
+                                        )
+                                    }) {
+                                        Some(PlayerKeyword::Annihilator)
+                                    } else {
+                                        None
+                                    }
                                 }
-                                spellwake_engine::program::CounterKeyword::Vanishing(_) => {
-                                    Some(PlayerKeyword::Vanishing)
-                                }
-                                spellwake_engine::program::CounterKeyword::Persist => {
-                                    Some(PlayerKeyword::Persist)
-                                }
-                                spellwake_engine::program::CounterKeyword::Undying => {
-                                    Some(PlayerKeyword::Undying)
-                                }
-                                _ => None,
-                            },
-                            spellwake_engine::program::TriggerEvent::Keyword(
-                                spellwake_engine::program::TriggerKeywordEvent::Upkeep(
-                                    spellwake_engine::program::UpkeepKeyword::Echo,
-                                ),
-                            ) => Some(PlayerKeyword::Echo),
-                            spellwake_engine::program::TriggerEvent::Keyword(
-                                spellwake_engine::program::TriggerKeywordEvent::Upkeep(
-                                    spellwake_engine::program::UpkeepKeyword::CumulativeUpkeep,
-                                ),
-                            ) => Some(PlayerKeyword::CumulativeUpkeep),
-                            _ => match a.body.instructions.as_slice() {
-                                [_, spellwake_engine::program::Instruction::ExtortDrain] => {
-                                    Some(PlayerKeyword::Extort)
-                                }
-                                [
-                                    _,
-                                    spellwake_engine::program::Instruction::ResolveTransfer(key),
-                                ] => {
-                                    use spellwake_engine::program::TransferKeyword;
-                                    Some(match key {
-                                        TransferKeyword::Graft(_) => PlayerKeyword::Graft,
-                                        TransferKeyword::Modular(_) => PlayerKeyword::Modular,
-                                        TransferKeyword::Soulshift(_) => PlayerKeyword::Soulshift,
-                                    })
-                                }
-                                [spellwake_engine::program::Instruction::ResolveGrowth(key)] => {
-                                    use spellwake_engine::program::GrowthKeyword;
-                                    Some(match key {
-                                        GrowthKeyword::Mentor => PlayerKeyword::Mentor,
-                                        GrowthKeyword::Increment => PlayerKeyword::Increment,
-                                        GrowthKeyword::Evolve => PlayerKeyword::Evolve,
-                                        GrowthKeyword::Backup { .. } => PlayerKeyword::Backup,
-                                    })
-                                }
-                                _ => None,
-                            },
-                        }),
-                )
-                .chain((current.exalted_instances() > 0).then_some(PlayerKeyword::Exalted))
-                .chain(
-                    current
-                        .printed_text
-                        .triggered
-                        .iter()
-                        .filter(|a| current.abilities.triggered.contains(&a.id))
-                        .filter_map(|a| {
-                            use spellwake_engine::program::TokenKeyword;
-                            TokenKeyword::from_ability(a, source.execution().creature_vocabulary())
+                                spellwake_engine::program::TriggerEvent::Keyword(
+                                    spellwake_engine::program::TriggerKeywordEvent::Counter(k),
+                                ) => match k {
+                                    spellwake_engine::program::CounterKeyword::Fading(_) => {
+                                        Some(PlayerKeyword::Fading)
+                                    }
+                                    spellwake_engine::program::CounterKeyword::Vanishing(_) => {
+                                        Some(PlayerKeyword::Vanishing)
+                                    }
+                                    spellwake_engine::program::CounterKeyword::Persist => {
+                                        Some(PlayerKeyword::Persist)
+                                    }
+                                    spellwake_engine::program::CounterKeyword::Undying => {
+                                        Some(PlayerKeyword::Undying)
+                                    }
+                                    _ => None,
+                                },
+                                spellwake_engine::program::TriggerEvent::Keyword(
+                                    spellwake_engine::program::TriggerKeywordEvent::Upkeep(
+                                        spellwake_engine::program::UpkeepKeyword::Echo,
+                                    ),
+                                ) => Some(PlayerKeyword::Echo),
+                                spellwake_engine::program::TriggerEvent::Keyword(
+                                    spellwake_engine::program::TriggerKeywordEvent::Upkeep(
+                                        spellwake_engine::program::UpkeepKeyword::CumulativeUpkeep,
+                                    ),
+                                ) => Some(PlayerKeyword::CumulativeUpkeep),
+                                _ => match a.body.instructions.as_slice() {
+                                    [_, spellwake_engine::program::Instruction::ExtortDrain] => {
+                                        Some(PlayerKeyword::Extort)
+                                    }
+                                    [
+                                        _,
+                                        spellwake_engine::program::Instruction::ResolveTransfer(
+                                            key,
+                                        ),
+                                    ] => {
+                                        use spellwake_engine::program::TransferKeyword;
+                                        Some(match key {
+                                            TransferKeyword::Graft(_) => PlayerKeyword::Graft,
+                                            TransferKeyword::Modular(_) => PlayerKeyword::Modular,
+                                            TransferKeyword::Soulshift(_) => {
+                                                PlayerKeyword::Soulshift
+                                            }
+                                        })
+                                    }
+                                    [
+                                        spellwake_engine::program::Instruction::ResolveGrowth(key),
+                                    ] => {
+                                        use spellwake_engine::program::GrowthKeyword;
+                                        Some(match key {
+                                            GrowthKeyword::Mentor => PlayerKeyword::Mentor,
+                                            GrowthKeyword::Increment => PlayerKeyword::Increment,
+                                            GrowthKeyword::Evolve => PlayerKeyword::Evolve,
+                                            GrowthKeyword::Backup { .. } => PlayerKeyword::Backup,
+                                        })
+                                    }
+                                    _ => None,
+                                },
+                            }),
+                    )
+                    .chain((current.exalted_instances() > 0).then_some(PlayerKeyword::Exalted))
+                    .chain(
+                        current
+                            .printed_text
+                            .triggered
+                            .iter()
+                            .filter(|a| current.abilities.triggered.contains(&a.id))
+                            .filter_map(|a| {
+                                use spellwake_engine::program::TokenKeyword;
+                                TokenKeyword::from_ability(
+                                    a,
+                                    source.execution().creature_vocabulary(),
+                                )
                                 .map(|k| match k {
                                     TokenKeyword::Afterlife => PlayerKeyword::Afterlife,
                                     TokenKeyword::Fabricate => PlayerKeyword::Fabricate,
                                 })
-                        }),
-                )
-                .chain(
-                    current
-                        .combat_trigger_keywords()
-                        .map(|ability| {
-                            use spellwake_engine::program::CombatTriggerKeyword;
-                            match ability {
-                                CombatTriggerKeyword::Decayed => PlayerKeyword::Decayed,
-                                CombatTriggerKeyword::Mobilize(_) => PlayerKeyword::Mobilize,
-                                CombatTriggerKeyword::Ingest => PlayerKeyword::Ingest,
-                                CombatTriggerKeyword::Poisonous(_) => PlayerKeyword::Poisonous,
-                                CombatTriggerKeyword::Afflict(_) => PlayerKeyword::Afflict,
-                                CombatTriggerKeyword::Dethrone => PlayerKeyword::Dethrone,
-                                CombatTriggerKeyword::Melee => PlayerKeyword::Melee,
-                                CombatTriggerKeyword::Renown(_) => PlayerKeyword::Renown,
-                                CombatTriggerKeyword::Training => PlayerKeyword::Training,
-                                CombatTriggerKeyword::Prowess => PlayerKeyword::Prowess,
-                                CombatTriggerKeyword::BattleCry => PlayerKeyword::BattleCry,
-                                CombatTriggerKeyword::Bushido(_) => PlayerKeyword::Bushido,
-                                CombatTriggerKeyword::Flanking => PlayerKeyword::Flanking,
-                                CombatTriggerKeyword::Frenzy(_) => PlayerKeyword::Frenzy,
-                                CombatTriggerKeyword::Rampage(_) => PlayerKeyword::Rampage,
-                            }
-                        })
-                        .collect::<std::collections::BTreeSet<_>>(),
-                )
-                .collect(),
+                            }),
+                    )
+                    .chain(current.combat_trigger_keywords().map(|ability| {
+                        use spellwake_engine::program::CombatTriggerKeyword;
+                        match ability {
+                            CombatTriggerKeyword::Decayed => PlayerKeyword::Decayed,
+                            CombatTriggerKeyword::Mobilize(_) => PlayerKeyword::Mobilize,
+                            CombatTriggerKeyword::Ingest => PlayerKeyword::Ingest,
+                            CombatTriggerKeyword::Poisonous(_) => PlayerKeyword::Poisonous,
+                            CombatTriggerKeyword::Afflict(_) => PlayerKeyword::Afflict,
+                            CombatTriggerKeyword::Dethrone => PlayerKeyword::Dethrone,
+                            CombatTriggerKeyword::Melee => PlayerKeyword::Melee,
+                            CombatTriggerKeyword::Renown(_) => PlayerKeyword::Renown,
+                            CombatTriggerKeyword::Training => PlayerKeyword::Training,
+                            CombatTriggerKeyword::Prowess => PlayerKeyword::Prowess,
+                            CombatTriggerKeyword::BattleCry => PlayerKeyword::BattleCry,
+                            CombatTriggerKeyword::Bushido(_) => PlayerKeyword::Bushido,
+                            CombatTriggerKeyword::Flanking => PlayerKeyword::Flanking,
+                            CombatTriggerKeyword::Frenzy(_) => PlayerKeyword::Frenzy,
+                            CombatTriggerKeyword::Rampage(_) => PlayerKeyword::Rampage,
+                        }
+                    }))
+                    .filter(|kw| seen.insert(*kw))
+                    .collect()
+            },
             power: current
                 .power_toughness
                 .as_ref()

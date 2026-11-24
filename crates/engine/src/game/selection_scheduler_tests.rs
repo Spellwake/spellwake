@@ -113,6 +113,7 @@ fn selected_trigger_finishes_in_cleanup_priority_before_the_real_repeat() {
                     any_types: Default::default(),
                     required_types: BTreeSet::from([CardType::Artifact]),
                     forbidden_types: BTreeSet::new(),
+                    object_filter: None,
                 },
             },
             Instruction::AdjustControllerLife {
@@ -365,6 +366,7 @@ fn simultaneous_selected_deaths_capture_the_dying_observer_for_every_occurrence(
                         any_types: Default::default(),
                         required_types: BTreeSet::from([CardType::Creature]),
                         forbidden_types: BTreeSet::new(),
+                        object_filter: None,
                     },
                 }],
             ),

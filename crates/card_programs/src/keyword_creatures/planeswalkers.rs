@@ -294,6 +294,7 @@ pub(super) fn compile(
                         any_types: BTreeSet::new(),
                         required_types: BTreeSet::from([CardType::Creature]),
                         forbidden_types: BTreeSet::new(),
+                        object_filter: None,
                     },
                 }],
             )),
@@ -393,6 +394,7 @@ pub(super) fn compile(
                                     ManaType::Red,
                                     ManaType::White,
                                 ]),
+                                amount: spellwake_engine::program::ValueExpr::literal(1),
                                 restriction:
                                     spellwake_engine::mana::ManaRestriction::NoncreatureSpell,
                             },
@@ -503,6 +505,7 @@ pub(super) fn compile(
                                 any_types: BTreeSet::new(),
                                 required_types: [CardType::Artifact].into(),
                                 forbidden_types: BTreeSet::new(),
+                                object_filter: None,
                             },
                         },
                         Instruction::ReturnOwnGraveyardPermanentToBattlefield { tapped: false },
@@ -1091,6 +1094,7 @@ pub(super) fn compile_transforming(
                     any_types: BTreeSet::new(),
                     required_types: [CardType::Creature].into(),
                     forbidden_types: BTreeSet::new(),
+                    object_filter: None,
                 },
             },
             Instruction::SearchLibrary {

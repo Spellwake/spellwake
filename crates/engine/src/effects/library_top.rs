@@ -476,6 +476,69 @@ impl EffectWindow {
             | Instruction::AddPlayerCounter { .. }
             | Instruction::ExileTopPlay { .. }
             | Instruction::LookTopChoose { .. }
+            | Instruction::MoveSubject { .. }
+            | Instruction::SelectZoneCardsToZone { .. }
+            | Instruction::ChooseOption { .. }
+            | Instruction::DealDamageFrom { .. }
+            | Instruction::DivideDamageAmongTargets { .. }
+            | Instruction::GainControlOfPermanent { .. }
+            | Instruction::GiveFixedTargetControl { .. }
+            | Instruction::BecomeCopy { .. }
+            | Instruction::BecomeCopyFixedTargets { .. }
+            | Instruction::DoublePowerToughnessSubject { .. }
+            | Instruction::DoubleCountersOnSubject { .. }
+            | Instruction::ShuffleSubjectIntoLibrary { .. }
+            | Instruction::WinGame(_)
+            | Instruction::LoseGame(_)
+            | Instruction::DistributeCountersAmongTargets { .. }
+            | Instruction::RollDie { .. }
+            | Instruction::FlipCoins { .. }
+            | Instruction::ChooseValue { .. }
+            | Instruction::ChooseOptionForPlayers { .. }
+            | Instruction::Vote { .. }
+            | Instruction::Incubate { .. }
+            | Instruction::Connive { .. }
+            | Instruction::ConniveFinalize { .. }
+            | Instruction::Discover { .. }
+            | Instruction::Clash { .. }
+            | Instruction::RingTemptsYou
+            | Instruction::VentureIntoDungeon { .. }
+            | Instruction::TakeInitiative { .. }
+            | Instruction::UnlockDoor { .. }
+            | Instruction::Behold { .. }
+            | Instruction::ManifestDread
+            | Instruction::Monstrosity { .. }
+            | Instruction::Fight { .. }
+            | Instruction::Exchange(_)
+            | Instruction::CopyStackObject { .. }
+            | Instruction::ExileGroupFromZone { .. }
+            | Instruction::SacrificeSubject { .. }
+            | Instruction::DestroyChosen { .. }
+            | Instruction::CastLinkedFaceDownFree
+            | Instruction::Ripple(_)
+            | Instruction::Demonstrate
+            | Instruction::Enlist
+            | Instruction::AttachPermanent { .. }
+            | Instruction::SkipNextUntap { .. }
+            | Instruction::RequireCombatAction { .. }
+            | Instruction::CreateTemporaryRule { .. }
+            | Instruction::DestroySubject { .. }
+            | Instruction::GrantCardPlayPermission { .. }
+            | Instruction::CreateTokenCopy { .. }
+            | Instruction::CreateAuraTokenAttached { .. }
+            | Instruction::ExploreSubject(_)
+            | Instruction::ScheduleDelayedEventTrigger { .. }
+            | Instruction::MoveGraveyardGroup { .. }
+            | Instruction::PutHandPermanentFiltered { .. }
+            | Instruction::RepeatLoop { .. }
+            | Instruction::OfferDynamicManaPayment { .. }
+            | Instruction::PayLife { .. }
+            | Instruction::PayEnergy { .. }
+            | Instruction::ExileFromZone { .. }
+            | Instruction::TapOrUntapControlled { .. }
+            | Instruction::ExertAbilitySource
+            | Instruction::CollectEvidence { .. }
+            | Instruction::Blight { .. }
             | Instruction::RevealUntilMatch { .. }
             | Instruction::ControlManaSourceThroughNextTurn
             | Instruction::GrantControllerFlashUntilCleanup
@@ -518,6 +581,8 @@ impl EffectWindow {
             | Instruction::AdditionalCombat { .. }
             | Instruction::AdditionalCombatAfterUntappingAttackers
             | Instruction::TakeExtraTurn
+            | Instruction::DisallowDamagePreventionThisTurn
+            | Instruction::GrantNoMaxHandSizeRestOfGame
             | Instruction::PreventDamageThisTurn(_)
             | Instruction::MoveGroup { .. }
             | Instruction::PutTargetInLibrary(_)
@@ -553,6 +618,9 @@ impl EffectWindow {
             | Instruction::ClearSourceCounters(_)
             | Instruction::TransformSource
             | Instruction::TransformSourceAndAttachToTarget
+            | Instruction::AdvanceClassLevel(_)
+            | Instruction::SolveSourceCase
+            | Instruction::BecomePreparedSource
             | Instruction::TransformSubtype(_)
             | Instruction::UntapAbilitySource
             | Instruction::TapAbilitySource
@@ -789,6 +857,8 @@ impl EffectWindow {
             | Instruction::CopyOtherTargetAsArtifact
             | Instruction::FixedTargetClause(_)
             | Instruction::ExileResolvingSpell
+            | Instruction::ReturnResolvingSpellToHand
+            | Instruction::Ascend
             | Instruction::DestroyFixedTargets
             | Instruction::DestroyTargetAndAttachedEquipment
             | Instruction::ReturnFixedTargets
@@ -893,6 +963,7 @@ impl EffectWindow {
             | Instruction::SacrificeMatching(_)
             | Instruction::Discard { .. }
             | Instruction::DestroyTargetWithoutRegeneration
+            | Instruction::DrawPlayer { .. }
             | Instruction::DiscardFiltered { .. } => return Ok(false),
         };
         let controller = self
@@ -900,11 +971,12 @@ impl EffectWindow {
             .resolving()
             .ok_or(EffectError::WrongResolutionFrame)?
             .controller();
-        let requested = self.resolve_value_expr(controller, amount)?;
-        if requested < 0.into() {
+        let raw_requested = self.resolve_value_expr(controller, amount)?;
+        if raw_requested < 0.into() {
             return Err(EffectError::InconsistentLibraryTopWork);
         }
         let player = self.resolving_player(role)?;
+        let requested = self.adjusted_library_action_amount(kind, player, raw_requested)?;
         let library_before = self.window.cards().library(player).to_vec();
         let library = &library_before;
         let count = std::cmp::min(&requested, &RulesInteger::from_usize(library.len()))
@@ -1185,6 +1257,129 @@ impl EffectWindow {
             RulesJournal::default(),
         )
     }
+    fn adjusted_library_action_amount(
+        &self,
+        kind: LibraryActionKind,
+        player: SeatId,
+        mut amount: RulesInteger,
+    ) -> Result<RulesInteger, EffectError> {
+        if !amount.is_positive()
+            || !matches!(kind, LibraryActionKind::Scry | LibraryActionKind::Mill)
+        {
+            return Ok(amount);
+        }
+        let evaluated = self.evaluated_characteristics()?;
+        let mut total_add = 0i64;
+        let mut factors: Vec<u8> = Vec::new();
+        let mut skip = false;
+        let check_rule = |ctrl: SeatId,
+                          ab: &crate::characteristics::StaticContinuousAbility,
+                          total_add: &mut i64,
+                          factors: &mut Vec<u8>,
+                          skip: &mut bool| {
+            let crate::characteristics::StaticContinuousAbility::EventReplacement {
+                event,
+                action,
+                ..
+            } = ab
+            else {
+                return;
+            };
+            let rel_opt = match (kind, event) {
+                (
+                    LibraryActionKind::Scry,
+                    crate::characteristics::ReplaceableEvent::Scry { player: rel },
+                )
+                | (
+                    LibraryActionKind::Mill,
+                    crate::characteristics::ReplaceableEvent::Mill { player: rel },
+                ) => Some(rel),
+                _ => None,
+            };
+            if let Some(rel) = rel_opt {
+                let applies = match rel {
+                    crate::program::AffectedPlayers::One(
+                        crate::program::ResolvingPlayer::Controller,
+                    ) => player == ctrl,
+                    crate::program::AffectedPlayers::EachOpponent
+                    | crate::program::AffectedPlayers::EachOtherPlayer => player != ctrl,
+                    crate::program::AffectedPlayers::EachPlayer
+                    | crate::program::AffectedPlayers::One(_) => true,
+                };
+                if applies {
+                    match action {
+                        crate::characteristics::StaticReplacementAction::ModifyAmount {
+                            add,
+                            multiply,
+                        } => {
+                            if let crate::program::ValueExpr::Literal(v) = add.as_ref()
+                                && let Some(u) = v.to_usize()
+                            {
+                                *total_add =
+                                    total_add.saturating_add(i64::try_from(u).unwrap_or(i64::MAX));
+                            }
+                            if *multiply > 1 {
+                                factors.push(*multiply);
+                            }
+                        }
+                        crate::characteristics::StaticReplacementAction::Skip => {
+                            *skip = true;
+                        }
+                        crate::characteristics::StaticReplacementAction::ReplaceWithBody {
+                            ..
+                        } => {}
+                    }
+                }
+            }
+        };
+        for perm in evaluated
+            .objects
+            .values()
+            .filter(|p| p.zone == ObjectZone::Battlefield)
+        {
+            let Some(ctrl) = perm.controller else {
+                continue;
+            };
+            for ab in perm
+                .printed_text
+                .continuous
+                .iter()
+                .chain(&perm.printed_text.additional_battlefield_abilities)
+            {
+                let active = perm.abilities.continuous == Some(ab.id())
+                    || perm
+                        .abilities
+                        .additional_battlefield_abilities
+                        .contains(&ab.id());
+                if active {
+                    check_rule(ctrl, ab, &mut total_add, &mut factors, &mut skip);
+                }
+            }
+        }
+        for active in &self.temporary_rules {
+            if !active.consumed
+                && let crate::program::TemporaryRuleKind::TemporaryStatic(ab) = &active.rule
+            {
+                check_rule(
+                    active.controller,
+                    ab,
+                    &mut total_add,
+                    &mut factors,
+                    &mut skip,
+                );
+            }
+        }
+        if skip {
+            return Ok(0.into());
+        }
+        if total_add != 0 {
+            amount = amount.plus(&RulesInteger::from(total_add)).max(0.into());
+        }
+        for factor in factors {
+            amount = amount.times(&RulesInteger::from(i64::from(factor)));
+        }
+        Ok(amount)
+    }
     /// Reauthorize the exact original operation/amount/prefix in every branch.
     fn validate_library_authority(&self, work: &LibraryTopWork) -> Result<(), EffectError> {
         let entry = self
@@ -1206,10 +1401,16 @@ impl EffectWindow {
             Instruction::Mill { player, amount } => (LibraryActionKind::Mill, *player, amount),
             _ => return Err(EffectError::InconsistentLibraryTopWork),
         };
-        let requested =
+        let raw_requested =
             self.resolve_value_expr_at(entry.controller(), amount, Some(&work.cursor))?;
+        let resolved_player = self.resolving_player_at(role, Some(&work.cursor))?;
+        let requested = if raw_requested < 0.into() {
+            raw_requested
+        } else {
+            self.adjusted_library_action_amount(kind, resolved_player, raw_requested)?
+        };
         if kind != work.kind
-            || self.resolving_player_at(role, Some(&work.cursor))? != work.player
+            || resolved_player != work.player
             || requested < 0.into()
             || requested != work.requested
             || self.window.revision() != work.window_revision

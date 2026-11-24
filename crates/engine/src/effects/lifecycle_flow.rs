@@ -105,6 +105,9 @@ impl EffectWindow {
         if let Some(ended) = previous.filter(|_| entered && !self.mana.is_empty()) {
             let before = self.rules_snapshot(Some(ended))?;
             let retained = self.retained_mana_types(&before.view().evaluated);
+            if ended.position().step == crate::turn::Step::EndCombat {
+                next.floating_mana.end_combat_effects();
+            }
             next.expire_step_mana(&retained);
             let mut values = Vec::new();
             for player in self.window.apnap_players()? {
@@ -187,7 +190,14 @@ impl EffectWindow {
             next.combat_damaged_players_by_source.clear();
             next.activated_this_turn.clear();
             next.ability_resolutions_this_turn.clear();
+            next.chosen_modal_modes_turn.clear();
             next.source_cast_uses.clear();
+            next.characteristics
+                .expire_at_turn_start(active, position.number);
+            next.temporary_rules
+                .retain(|rule| !rule.duration.expires_at_turn_start(active, position.number));
+            next.triggers
+                .expire_delayed_event_triggers_at_turn_start(active, position.number);
             next.goaded.retain(|id, players| {
                 players.retain(|player| *player != active && !next.skipped_turns.contains(player));
                 !players.is_empty()
@@ -286,6 +296,11 @@ impl EffectWindow {
             // The old root skipped the physical clear when no context existed.
             self.clone()
         };
+        next.characteristics.expire_at_end_of_combat();
+        next.temporary_rules
+            .retain(|rule| !rule.duration.expires_at_end_of_combat());
+        next.triggers
+            .expire_delayed_event_triggers_at_end_of_combat();
         next.emit_from(
             EventCause::CombatEnded {
                 position: turn.position(),
@@ -304,8 +319,10 @@ impl EffectWindow {
         &self,
         expected: u64,
     ) -> Result<RulesTransition<Self, ()>, EffectError> {
-        self.untap_with_context(expected, None)
+        let (state, _, journal) = self.untap_with_context(expected, None)?.into_parts();
+        Ok(RulesTransition::new(state, (), journal))
     }
+    #[cfg(test)]
     pub(crate) fn untap_on_turn(
         &self,
         expected: u64,
@@ -314,13 +331,39 @@ impl EffectWindow {
         if turn.position().step != Step::Untap || turn.stage() != TurnStage::Work(TurnWork::Untap) {
             return Err(EffectError::WrongPhase);
         }
+        let (state, _, journal) = self.untap_with_context(expected, Some(turn))?.into_parts();
+        Ok(RulesTransition::new(state, (), journal))
+    }
+    pub(crate) fn untap_on_turn_with_choice(
+        &self,
+        expected: u64,
+        turn: &TurnScheduler,
+    ) -> Result<RulesTransition<Self, Option<UntapKeepTappedFrame>>, EffectError> {
+        if turn.position().step != Step::Untap || turn.stage() != TurnStage::Work(TurnWork::Untap) {
+            return Err(EffectError::WrongPhase);
+        }
         self.untap_with_context(expected, Some(turn))
+    }
+    pub(crate) fn choose_untap_keep_tapped(
+        &mut self,
+        frame: &UntapKeepTappedFrame,
+        objects: Vec<ObjectId>,
+    ) -> Result<(), EffectError> {
+        if frame.revision != self.revision || frame.chooser != self.window.active_player() {
+            return Err(EffectError::WrongDecisionKind);
+        }
+        let chosen: BTreeSet<ObjectId> = objects.iter().copied().collect();
+        if chosen.len() != objects.len() || !chosen.iter().all(|id| frame.objects.contains(id)) {
+            return Err(EffectError::IllegalTarget);
+        }
+        self.untap_keep_tapped = Some(chosen);
+        Ok(())
     }
     fn untap_with_context(
         &self,
         expected: u64,
         turn: Option<&TurnScheduler>,
-    ) -> Result<RulesTransition<Self, ()>, EffectError> {
+    ) -> Result<RulesTransition<Self, Option<UntapKeepTappedFrame>>, EffectError> {
         let revision = self.next_revision(expected)?;
         if self.pending_work.is_some() {
             return Err(EffectError::WrongPhase);
@@ -331,58 +374,61 @@ impl EffectWindow {
         let mut next = self.clone();
         next.revision = revision;
         let mut append = RulesJournal::default();
-        let before_phasing = next.rules_snapshot(turn)?;
         let active = next.window.active_player();
-        let roots = before_phasing
-            .view()
-            .evaluated
-            .objects
-            .values()
-            .filter(|object| {
-                object.zone == ObjectZone::Battlefield
-                    && object.controller == Some(active)
-                    && object.has_keyword(KeywordAbility::Phasing)
-            })
-            .map(|object| object.object)
-            .collect::<Vec<_>>();
-        let (departed, returned) = next.window.phase_at_untap(
-            &roots,
-            &std::mem::take(&mut next.skipped_turns),
-            &next.characteristics.attachments,
-        )?;
-        let changes = [(true, departed), (false, returned)]
-            .into_iter()
-            .filter(|(_, objects)| !objects.is_empty())
-            .map(|(out, objects)| RulesOccurrence::Phased { objects, out })
-            .collect::<Vec<_>>();
-        if !changes.is_empty() {
-            next.emit_from(
-                EventCause::UntapTurn { active },
-                &before_phasing,
-                turn,
-                &mut append,
-                |_, _, _| Ok(changes),
+        if !next.untap_preface_done {
+            let before_phasing = next.rules_snapshot(turn)?;
+            let roots = before_phasing
+                .view()
+                .evaluated
+                .objects
+                .values()
+                .filter(|object| {
+                    object.zone == ObjectZone::Battlefield
+                        && object.controller == Some(active)
+                        && object.has_keyword(KeywordAbility::Phasing)
+                })
+                .map(|object| object.object)
+                .collect::<Vec<_>>();
+            let (departed, returned) = next.window.phase_at_untap(
+                &roots,
+                &std::mem::take(&mut next.skipped_turns),
+                &next.characteristics.attachments,
             )?;
-        }
+            let changes = [(true, departed), (false, returned)]
+                .into_iter()
+                .filter(|(_, objects)| !objects.is_empty())
+                .map(|(out, objects)| RulesOccurrence::Phased { objects, out })
+                .collect::<Vec<_>>();
+            if !changes.is_empty() {
+                next.emit_from(
+                    EventCause::UntapTurn { active },
+                    &before_phasing,
+                    turn,
+                    &mut append,
+                    |_, _, _| Ok(changes),
+                )?;
+            }
 
-        let previous = next.day_night();
-        if let Some(count) = next.previous_active_spells.take()
-            && turn.is_some()
-            && let Some(clock) = previous.untap(count)
-        {
-            let before = next.rules_snapshot(turn)?;
-            let (_, faces) =
-                next.reconcile_day_night(Some(clock), &next.evaluated_characteristics()?)?;
-            next.transform_orders.clear();
-            next.emit_from(
-                EventCause::UntapTurn {
-                    active: next.window.active_player(),
-                },
-                &before,
-                turn,
-                &mut append,
-                |old, new, _| Self::day_change_occurrences(previous, clock, &faces, old, new),
-            )?;
+            let previous = next.day_night();
+            if let Some(count) = next.previous_active_spells.take()
+                && turn.is_some()
+                && let Some(clock) = previous.untap(count)
+            {
+                let before = next.rules_snapshot(turn)?;
+                let (_, faces) =
+                    next.reconcile_day_night(Some(clock), &next.evaluated_characteristics()?)?;
+                next.transform_orders.clear();
+                next.emit_from(
+                    EventCause::UntapTurn {
+                        active: next.window.active_player(),
+                    },
+                    &before,
+                    turn,
+                    &mut append,
+                    |old, new, _| Self::day_change_occurrences(previous, clock, &faces, old, new),
+                )?;
+            }
+            next.untap_preface_done = true;
         }
         let before = next.rules_snapshot(turn)?;
         let evaluated = next.evaluated_characteristics()?;
@@ -442,6 +488,48 @@ impl EffectWindow {
                     .then_some(target)
                 }),
         );
+        // Check CR 502.3 "you may choose not to untap" before consuming skip_next_controller_untap or stun counters.
+        if turn.is_some() && next.untap_keep_tapped.is_none() {
+            let mut optional_keep_tapped: Vec<ObjectId> = evaluated
+                .objects
+                .values()
+                .filter(|source| {
+                    source.zone == ObjectZone::Battlefield
+                        && source.controller == Some(active)
+                        && !excluded.contains(&source.object)
+                        && !next.skip_next_controller_untap.contains(&source.object)
+                        && next
+                            .window
+                            .cards()
+                            .get(source.object)
+                            .and_then(GameObject::tapped)
+                            == Some(true)
+                        && source.has_battlefield_rule(|rule| {
+                            matches!(
+                                rule,
+                                crate::characteristics::StaticContinuousAbility::UntapRule {
+                                    rule: crate::characteristics::StaticUntapRule::MayChooseNotToUntapSource,
+                                    ..
+                                }
+                            )
+                        })
+                })
+                .map(|source| source.object)
+                .collect();
+            optional_keep_tapped.sort();
+            if !optional_keep_tapped.is_empty() {
+                let frame = UntapKeepTappedFrame {
+                    revision: next.revision,
+                    chooser: active,
+                    objects: optional_keep_tapped,
+                };
+                return Ok(RulesTransition::new(next, Some(frame), append));
+            }
+        }
+        if let Some(chosen_keep) = next.untap_keep_tapped.take() {
+            excluded.extend(chosen_keep);
+        }
+        next.untap_preface_done = false;
         next.skip_next_controller_untap.retain(|id| {
             let Some(card) = next
                 .window
@@ -556,7 +644,7 @@ impl EffectWindow {
                 |_, _, _| Ok(occurrences),
             )?;
         }
-        Ok(RulesTransition::new(next, (), append))
+        Ok(RulesTransition::new(next, None, append))
     }
 
     /// CR 122.1d: Untap selected battlefield permanents, replacing each untap of a permanent

@@ -30,6 +30,12 @@ pub enum DamageEffectId {
     ShieldCounter(ObjectId),
     /// Each eligible component is doubled once by this source's effect.
     StaticDouble(ObjectId),
+    /// Generalized static damage modification/replacement from a battlefield ability.
+    StaticModify(ObjectId, crate::characteristics::StaticAbilityId),
+    /// Generalized damage modification/replacement from a duration-scoped temporary rule.
+    TemporaryStaticModify(u64),
+    /// Finite damage prevention shield from a duration-scoped temporary rule.
+    TemporaryPrevention(u64),
     /// One of two independently ordered replacement effects from an Equipment.
     DoubleDamageFromEquippedCreature(ObjectId),
     DoubleDamageToEquippedCreature(ObjectId),
@@ -52,6 +58,7 @@ pub enum DamageEffectId {
     Protection(crate::characteristics::Color),
     ProtectionMulticolored,
     ProtectionSubtype(crate::characteristics::SubtypeProtection),
+    ProtectionFrom(crate::characteristics::ProtectionFromQuality),
     Prevention(PreventionShieldId),
     Multiplier(DamageMultiplierId),
 }
@@ -89,6 +96,8 @@ pub struct DepartedDamageSource {
     pub was_creature: bool,
     /// Last evaluated creature subtypes before leaving the battlefield.
     pub creature_subtypes: BTreeSet<spellwake_contracts::creature_types::CreatureTypeId>,
+    /// Last evaluated card types before leaving the battlefield.
+    pub card_types: BTreeSet<crate::program::CardType>,
     /// Last evaluated source colors at its battlefield departure.
     pub colors: std::collections::BTreeSet<crate::characteristics::Color>,
     /// Last battlefield object, including the controller when it left.
@@ -231,6 +240,7 @@ pub(crate) struct DamageReflection {
     pub(crate) colors: BTreeSet<crate::characteristics::Color>,
     pub(crate) keywords: BTreeSet<crate::characteristics::KeywordAbility>,
     pub(crate) creature_types: BTreeSet<spellwake_contracts::creature_types::CreatureTypeId>,
+    pub(crate) card_types: BTreeSet<crate::program::CardType>,
     pub(crate) is_creature: bool,
     pub(crate) target: crate::targets::TargetRef,
 }
@@ -340,6 +350,12 @@ impl ActiveDamageBatch {
         }
     }
 
+    pub(crate) fn disallow_all_prevention(&mut self) {
+        for component in self.components.values_mut() {
+            component.preventable = false;
+        }
+    }
+
     pub(crate) fn prevent_by_protection(
         &mut self,
         application: DamageApplication,
@@ -356,6 +372,7 @@ impl ActiveDamageBatch {
                 ProtectionQuality::Color(crate::characteristics::ColorFilter::Multicolored)
             }
             DamageEffectId::ProtectionSubtype(quality) => ProtectionQuality::Subtype(quality),
+            DamageEffectId::ProtectionFrom(quality) => ProtectionQuality::From(quality),
             _ => return Err(DamageError::InapplicableEffect),
         };
         let allocations = self.prevent_all(recipient, eligible)?;
@@ -493,6 +510,114 @@ impl ActiveDamageBatch {
         Ok((before, after))
     }
 
+    pub(crate) fn modify_static_component(
+        &mut self,
+        application: DamageApplication,
+        add: i64,
+        multiply: i64,
+    ) -> Result<(RulesInteger, RulesInteger), DamageError> {
+        if self.phase != DamageBatchPhase::Selecting
+            || self.consumed_shields.contains(&application)
+            || multiply < 1
+        {
+            return Err(DamageError::InapplicableEffect);
+        }
+        let (
+            DamageEffectId::StaticModify(_, _)
+            | DamageEffectId::TemporaryStaticModify(_)
+            | DamageEffectId::TemporaryPrevention(_),
+            DamageScope::Component(attempt),
+        ) = (application.effect, application.scope)
+        else {
+            return Err(DamageError::InapplicableEffect);
+        };
+        let stage = self
+            .stage
+            .checked_add(1)
+            .ok_or(DamageError::StageExhausted)?;
+        let component = self
+            .components
+            .get_mut(&attempt)
+            .filter(|component| component.remaining.is_positive())
+            .ok_or(DamageError::InapplicableEffect)?;
+        let before = component.remaining.clone();
+        let after = if multiply > 1 {
+            before.times(&RulesInteger::from(multiply))
+        } else {
+            before.plus(&RulesInteger::from(add)).max(0.into())
+        };
+        component.remaining = after.clone();
+        self.consumed_shields.insert(application);
+        self.stage = stage;
+        Ok((before, after))
+    }
+
+    pub(crate) fn replace_static_component_all(
+        &mut self,
+        application: DamageApplication,
+    ) -> Result<RulesInteger, DamageError> {
+        if self.phase != DamageBatchPhase::Selecting || self.consumed_shields.contains(&application)
+        {
+            return Err(DamageError::InapplicableEffect);
+        }
+        let (
+            DamageEffectId::StaticModify(_, _)
+            | DamageEffectId::TemporaryStaticModify(_)
+            | DamageEffectId::TemporaryPrevention(_),
+            DamageScope::Component(attempt),
+        ) = (application.effect, application.scope)
+        else {
+            return Err(DamageError::InapplicableEffect);
+        };
+        let stage = self
+            .stage
+            .checked_add(1)
+            .ok_or(DamageError::StageExhausted)?;
+        let component = self
+            .components
+            .get_mut(&attempt)
+            .filter(|component| component.remaining.is_positive())
+            .ok_or(DamageError::InapplicableEffect)?;
+        let replaced = component.remaining.clone();
+        component.remaining = 0.into();
+        self.consumed_shields.insert(application);
+        self.stage = stage;
+        Ok(replaced)
+    }
+
+    pub(crate) fn redirect_static_component(
+        &mut self,
+        application: DamageApplication,
+        new_target: DamageRecipient,
+    ) -> Result<(), DamageError> {
+        if self.phase != DamageBatchPhase::Selecting || self.consumed_shields.contains(&application)
+        {
+            return Err(DamageError::InapplicableEffect);
+        }
+        let (
+            DamageEffectId::StaticModify(_, _)
+            | DamageEffectId::TemporaryStaticModify(_)
+            | DamageEffectId::TemporaryPrevention(_),
+            DamageScope::Component(attempt),
+        ) = (application.effect, application.scope)
+        else {
+            return Err(DamageError::InapplicableEffect);
+        };
+        let stage = self
+            .stage
+            .checked_add(1)
+            .ok_or(DamageError::StageExhausted)?;
+        let component = self
+            .components
+            .get_mut(&attempt)
+            .filter(|component| component.remaining.is_positive())
+            .ok_or(DamageError::InapplicableEffect)?;
+        component.attempt.target = new_target;
+        self.consumed_shields.insert(application);
+        self.stage = stage;
+        Ok(())
+    }
+
     pub(crate) fn prevent_all_but_one(
         &mut self,
         application: DamageApplication,
@@ -627,6 +752,7 @@ pub struct PreventionApplication {
 pub enum ProtectionQuality {
     Color(crate::characteristics::ColorFilter),
     Subtype(crate::characteristics::SubtypeProtection),
+    From(crate::characteristics::ProtectionFromQuality),
 }
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProtectionPrevention {
@@ -718,6 +844,7 @@ pub(crate) struct DamageState {
     next_multiplier: u64,
     next_batch: u64,
     next_attempt: u64,
+    pub(crate) prevention_disallowed_this_turn: bool,
     pub(crate) turn_preventions: BTreeMap<
         (StackEntryId, usize),
         (
@@ -737,6 +864,7 @@ impl Default for DamageState {
             next_multiplier: 1,
             next_batch: 1,
             next_attempt: 1,
+            prevention_disallowed_this_turn: false,
             turn_preventions: BTreeMap::new(),
             shields: BTreeMap::new(),
             reflections: BTreeMap::new(),
