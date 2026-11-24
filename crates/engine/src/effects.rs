@@ -2368,24 +2368,10 @@ impl EffectWindow {
             }
         }
         let mut characteristics = CharacteristicState::default();
-        if programs.values().any(|program| {
-            entry_counters::definition_or_token_matches(program, |definition| {
-                definition.triggered.iter().any(|ability| {
-                    matches!(
-                        ability.condition.event,
-                        crate::program::TriggerEvent::Dies {
-                            mode: crate::program::DiesTriggerMode::DamagedBySource,
-                            ..
-                        }
-                    )
-                }) || definition.zone_replacements.iter().any(|rep| {
-                    matches!(
-                        rep.subject,
-                        crate::program::ZoneReplacementSubject::DamagedBySourceThisTurn
-                    )
-                })
-            })
-        }) {
+        if programs
+            .values()
+            .any(entry_counters::needs_creature_damage_pairs)
+        {
             characteristics.creature_damage_pairs = Some(BTreeSet::new());
         }
         characteristics.commander_chosen_colors = commander_chosen_colors;

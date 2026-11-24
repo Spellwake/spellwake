@@ -2751,13 +2751,11 @@ impl EffectWindow {
                                 .entry(id)
                                 .or_insert_with(|| 0.into());
                             *total = total.plus(&damage.amount);
-                            if let crate::damage::DamageSourceId::Object(dealer) =
-                                damage.source.id()
+                            if let Some(pairs) = &mut self.characteristics.creature_damage_pairs
+                                && let crate::damage::DamageSourceId::Object(dealer) =
+                                    damage.source.id()
                             {
-                                self.characteristics
-                                    .creature_damage_pairs
-                                    .get_or_insert_with(BTreeSet::new)
-                                    .insert((dealer, id));
+                                pairs.insert((dealer, id));
                             }
                         }
                         crate::damage::DamageRecipient::Planeswalker(id)
