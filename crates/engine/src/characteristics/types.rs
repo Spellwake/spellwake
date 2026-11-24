@@ -957,6 +957,8 @@ pub enum StaticSourceCondition {
     SourcePaired,
     /// Active while this permanent is currently in the prepared state.
     SourceIsPrepared,
+    /// Active while this permanent's entry option index equals the given value (e.g. Siege Khans/Dragons).
+    EntryOptionChosen(u8),
     /// Active while at least `minimum` nonland permanents entered under controller's control this turn (Celebration).
     NonlandPermanentsEnteredThisTurnAtLeast(u16),
     /// Active while any participant's library has at most `maximum` cards in it.

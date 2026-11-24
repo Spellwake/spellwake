@@ -649,6 +649,24 @@ pub(crate) fn evaluate(
                 .retain(|id| *id != static_id);
         }
     }
+    // CR 701.60a: A suspected creature has menace and "This creature can't block."
+    for (&suspect_id, count) in &world.state.suspect_counters {
+        if count.is_positive()
+            && let Some(creature) = objects.get_mut(&suspect_id)
+            && creature.zone == ObjectZone::Battlefield
+            && creature.is_creature()
+        {
+            if !creature
+                .suppressed_keywords
+                .contains(&KeywordAbility::Menace)
+            {
+                creature.keywords.insert(KeywordAbility::Menace);
+            }
+            creature
+                .blocking_restrictions
+                .push(BlockingRestriction::CannotBlock);
+        }
+    }
     // CR 701.52c Ring-bearer level 1: legendary and cannot be blocked by creatures with greater power.
     for (&seat, &bearer_id) in &world.state.ring_bearer {
         if world.state.ring_level.get(&seat).copied().unwrap_or(0) >= 1
@@ -1274,6 +1292,9 @@ fn static_source_condition_met(
         SourceEnteredThisTurn => world.state.entered_objects_this_turn.contains(&source),
         SourcePaired => world.state.paired_creatures.contains_key(&source),
         SourceIsPrepared => world.state.prepared.contains(&source),
+        EntryOptionChosen(expected) => {
+            world.state.entry_option_choices.get(&source) == Some(expected)
+        }
         NonlandPermanentsEnteredThisTurnAtLeast(min) => {
             let total = world
                 .state

@@ -3170,6 +3170,10 @@ pub enum Instruction {
     CounterSpell,
     /// Counter a spell and put its physical card in exile.
     CounterSpellToExile,
+    /// Counter a spell and put its physical card on top (or bottom when `top` is false) of its owner's library.
+    CounterSpellToLibrary {
+        top: bool,
+    },
     CopySpell,
     /// Put a copy of the targeted stack ability under the resolving controller.
     CopyAbility,
@@ -4006,6 +4010,7 @@ impl Instruction {
             | Self::ControllerLosesRememberedManaValue
             | Self::CounterSpell
             | Self::CounterSpellToExile
+            | Self::CounterSpellToLibrary { .. }
             | Self::CopySpell
             | Self::CopyAbility
             | Self::CopyTargetToSource { .. }
@@ -4478,6 +4483,7 @@ impl Instruction {
             | Self::ControllerLosesRememberedManaValue
             | Self::CounterSpell
             | Self::CounterSpellToExile
+            | Self::CounterSpellToLibrary { .. }
             | Self::CopySpell
             | Self::CopyAbility
             | Self::CopyTargetToSource { .. }
@@ -5306,6 +5312,7 @@ impl Instruction {
             | Self::ReturnAnyGraveyardCreatureOrPlaneswalker
             | Self::CounterSpell
             | Self::CounterSpellToExile
+            | Self::CounterSpellToLibrary { .. }
             | Self::CopyAbility
             | Self::CopySpell
             | Self::CopyTargetToSource { .. }
@@ -10363,9 +10370,11 @@ impl ExecutableBody {
                                 StaticModifierRule::DoubleCreatedTokens
                                     | StaticModifierRule::DoublePlacedCounters
                                     | StaticModifierRule::OthersEnterWithCounters { .. }
+                                    | StaticModifierRule::OthersEnterWithCountersExpr { .. }
                                     | StaticModifierRule::ModifyCounters { .. }
                                     | StaticModifierRule::ModifyTokens { .. }
                                     | StaticModifierRule::ModifyTokenSubtype { .. }
+                                    | StaticModifierRule::BonusTokenOnCreate { .. }
                                     | StaticModifierRule::HalveOpponentCounters
                                     | StaticModifierRule::ModifyLifeGain { .. }
                                     | StaticModifierRule::ConditionalModifyLifeGain { .. }
@@ -11183,9 +11192,14 @@ impl ExecutableBody {
                     facts.definitely_discarded = true;
                     family
                 }
-                Instruction::CounterSpell | Instruction::CounterSpellToExile => {
-                    if matches!(instruction, Instruction::CounterSpellToExile)
-                        && !matches!(self.target, BodyTarget::SingleSpell(_))
+                Instruction::CounterSpell
+                | Instruction::CounterSpellToExile
+                | Instruction::CounterSpellToLibrary { .. } => {
+                    if matches!(
+                        instruction,
+                        Instruction::CounterSpellToExile
+                            | Instruction::CounterSpellToLibrary { .. }
+                    ) && !matches!(self.target, BodyTarget::SingleSpell(_))
                     {
                         return Err(DefinitionError::OperandFamily);
                     }
@@ -11465,7 +11479,9 @@ impl ExecutableBody {
                     if self.instructions[..index].iter().any(|prior| {
                         matches!(
                             prior,
-                            Instruction::CounterSpell | Instruction::CounterSpellToExile
+                            Instruction::CounterSpell
+                                | Instruction::CounterSpellToExile
+                                | Instruction::CounterSpellToLibrary { .. }
                         )
                     }) =>
                 {
@@ -13509,6 +13525,7 @@ impl ExecutableBody {
                     | Instruction::ReturnAnyGraveyardCreatureOrPlaneswalker
                     | Instruction::CounterSpell
                     | Instruction::CounterSpellToExile
+                    | Instruction::CounterSpellToLibrary { .. }
                     | Instruction::ChooseNewTargets
                     | Instruction::GainControlOfSpell
                     | Instruction::ChangeOnlyTarget

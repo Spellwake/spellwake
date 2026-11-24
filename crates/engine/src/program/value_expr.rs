@@ -39,6 +39,7 @@ pub enum ObjectStatKind {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum StatAggregate {
     Max,
+    Min,
     Sum,
 }
 
@@ -297,6 +298,16 @@ pub enum MatchObjectRef {
     TargetObject,
     TriggerSubject,
     AttachedHost,
+    /// Any object affected/moved by the immediately preceding instruction in this resolution.
+    LastAffected,
+    /// Any object moved by the immediately preceding instruction that landed in a graveyard.
+    LastMovedToGraveyard,
+    /// Any object moved by the immediately preceding instruction that landed in exile.
+    LastMovedToExile,
+    /// Any object moved by the immediately preceding instruction that landed in hand.
+    LastMovedToHand,
+    /// Any object moved by the immediately preceding instruction that entered the battlefield.
+    LastMovedToBattlefield,
 }
 
 /// Runtime event, stack, or resolution binding read by [`ValueExpr::EventValue`].
@@ -2082,7 +2093,12 @@ impl ValueExpr {
                     | MatchObjectRef::TargetObject
                     | MatchObjectRef::RevealedTop
                     | MatchObjectRef::DiscardedCard
-                    | MatchObjectRef::MovedLibraryCard => {
+                    | MatchObjectRef::MovedLibraryCard
+                    | MatchObjectRef::LastAffected
+                    | MatchObjectRef::LastMovedToGraveyard
+                    | MatchObjectRef::LastMovedToExile
+                    | MatchObjectRef::LastMovedToHand
+                    | MatchObjectRef::LastMovedToBattlefield => {
                         if vocab_ok {
                             Ok(())
                         } else {

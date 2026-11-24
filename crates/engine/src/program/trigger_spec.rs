@@ -372,6 +372,8 @@ pub enum TriggerCondition {
     SourceIsUnsolved,
     /// Source permanent is currently prepared.
     SourceIsPrepared,
+    /// Source permanent's entry option index equals this value (e.g. Siege Khans/Dragons).
+    SourceEntryOption(u8),
     ControllerGainedLifeThisTurn,
     ControllerLostLifeThisTurn,
     ControllerAttackedThisTurn,

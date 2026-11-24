@@ -3067,6 +3067,7 @@ impl EffectWindow {
             | Instruction::ReturnAnyGraveyardCreatureOrPlaneswalker
             | Instruction::ReturnOwnGraveyardPermanentToBattlefield { .. }
             | Instruction::CounterSpellToExile
+            | Instruction::CounterSpellToLibrary { .. }
             | Instruction::CounterSpell
             | Instruction::GainControlOfSpell
             | Instruction::ChangeOnlyTarget
@@ -5393,6 +5394,10 @@ impl EffectWindow {
             return Err(EffectError::InconsistentSelectionWork);
         }
         self.window = window;
+        cursor.results.last_moved_objects = ordered
+            .iter()
+            .flat_map(|(movement, _)| movement.arrivals())
+            .collect();
         if matches!(
             operation,
             ResolutionSelectionOperation::DestroySingle { .. }

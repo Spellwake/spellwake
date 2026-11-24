@@ -1004,6 +1004,7 @@ pub(crate) fn eval_world_value_expr(ctx: &WorldEvalCtx<'_>, expr: &ValueExpr) ->
             });
             match op {
                 StatAggregate::Max => values.max().unwrap_or_else(|| 0.into()),
+                StatAggregate::Min => values.min().unwrap_or_else(|| 0.into()),
                 StatAggregate::Sum => values.fold(0.into(), |acc: RulesInteger, v| acc.plus(&v)),
             }
         }

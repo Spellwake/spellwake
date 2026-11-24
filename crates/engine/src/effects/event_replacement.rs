@@ -731,17 +731,24 @@ impl EffectWindow {
                 }
                 Instruction::WinGame(player) => {
                     let winner = self.resolve_replacement_player(player, rep)?;
-                    if self.window.participants().contains(&winner) {
+                    let evaluated = self.evaluated_characteristics()?;
+                    if self.window.participants().contains(&winner)
+                        && !self.player_cannot_win(&evaluated, winner)?
+                    {
                         self.won_by_effect =
                             Some((winner, rep.source.unwrap_or(ObjectId::SENTINEL)));
                     }
                 }
                 Instruction::LoseGame(players) => {
-                    let losing: BTreeSet<SeatId> = self
-                        .resolve_replacement_players(players, rep)?
-                        .into_iter()
-                        .filter(|seat| self.window.participants().contains(seat))
-                        .collect();
+                    let evaluated = self.evaluated_characteristics()?;
+                    let mut losing = BTreeSet::new();
+                    for seat in self.resolve_replacement_players(players, rep)? {
+                        if self.window.participants().contains(&seat)
+                            && !self.player_cannot_lose(&evaluated, seat, false)?
+                        {
+                            losing.insert(seat);
+                        }
+                    }
                     if !losing.is_empty() {
                         let before = self.rules_snapshot(None)?;
                         let mut loss_occs = Vec::with_capacity(losing.len());
@@ -1299,6 +1306,9 @@ impl EffectWindow {
             return Ok(());
         }
         let before = self.rules_snapshot(None)?;
+        if self.player_counter_prevented(&before.view().evaluated, player, kind)? {
+            return Ok(());
+        }
         let prev = self.player_counters_of_kind(player, kind);
         let after = prev.plus(amount);
         match kind {
@@ -1372,6 +1382,16 @@ impl EffectWindow {
                 for _ in 0..adjusted {
                     inputs.push((creator, creation.definition.program().clone()));
                     tapped_flags.push(creation.enters_tapped);
+                }
+                if adjusted > 0 {
+                    for (bonus_prog, bonus_count) in
+                        self.bonus_tokens_for_creation(&before.view().evaluated, creator, adjusted)?
+                    {
+                        for _ in 0..bonus_count {
+                            inputs.push((creator, bonus_prog.clone()));
+                            tapped_flags.push(false);
+                        }
+                    }
                 }
             }
         }

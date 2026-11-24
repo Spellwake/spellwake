@@ -1990,11 +1990,25 @@ impl EffectWindow {
                 .unwrap_or_else(|| 0.into());
             self.damage.insert(object, previous.plus(amount));
         }
-        let poison_results: Vec<_> = poison
-            .into_iter()
-            .map(|(player, contributions)| self.apply_poison(player, contributions))
-            .collect();
+        let mut poison_results = Vec::new();
+        for (player, contributions) in poison {
+            if !self.player_counter_prevented(
+                &before.view().evaluated,
+                player,
+                CounterKind::Poison,
+            )? {
+                poison_results.push(self.apply_poison(player, contributions));
+            }
+        }
+        let mut applied_minus_counters = false;
         for (&object, amount) in &minus_counters {
+            if self.permanent_counter_prevented(
+                &before.view().evaluated,
+                object,
+                CounterKind::MinusOne,
+            ) {
+                continue;
+            }
             self.characteristics.place_counters(
                 object,
                 &PowerToughnessCounters {
@@ -2002,12 +2016,13 @@ impl EffectWindow {
                     minus_one: amount.clone(),
                 },
             )?;
+            applied_minus_counters = true;
         }
         if !marks.is_empty()
             || !losses.is_empty()
             || !defense_results.is_empty()
             || !loyalty_results.is_empty()
-            || !minus_counters.is_empty()
+            || applied_minus_counters
             || !poison_results.is_empty()
             || !life_changes.is_empty()
         {

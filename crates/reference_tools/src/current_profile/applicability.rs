@@ -833,7 +833,8 @@ native!(ExecutableBody, self, {
         | Instruction::CastLinkedFaceDownFree
         | Instruction::Ripple(_)
         | Instruction::Demonstrate
-        | Instruction::Enlist => Ok(()),
+        | Instruction::Enlist
+        | Instruction::CounterSpellToLibrary { .. } => Ok(()),
     })
 });
 native!(TriggeredAbility, self, {

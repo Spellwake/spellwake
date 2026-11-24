@@ -598,7 +598,9 @@ impl EffectWindow {
                 journal.created.push(created.clone());
                 InstructionCut::Ready(RulesOccurrence::DamageEffectCreated(created))
             }
-            Instruction::CounterSpell | Instruction::CounterSpellToExile => {
+            Instruction::CounterSpell
+            | Instruction::CounterSpellToExile
+            | Instruction::CounterSpellToLibrary { .. } => {
                 let TargetRef::Stack(countered) = target else {
                     return Err(EffectError::InconsistentProgram);
                 };
@@ -710,14 +712,22 @@ impl EffectWindow {
                         },
                     }
                 });
+                let dest =
+                    if instruction == Instruction::CounterSpellToExile || temp_exile_countered {
+                        ObjectDestination::Exile
+                    } else if let Instruction::CounterSpellToLibrary { top } = instruction {
+                        if top {
+                            ObjectDestination::LibraryTop
+                        } else {
+                            ObjectDestination::LibraryBottom
+                        }
+                    } else {
+                        ObjectDestination::Graveyard
+                    };
                 let (window, exit) = self.window.record_targeted_resolution_move_with_exit(
                     self.window.revision(),
                     choice.id,
-                    if instruction == Instruction::CounterSpellToExile || temp_exile_countered {
-                        ObjectDestination::Exile
-                    } else {
-                        ObjectDestination::Graveyard
-                    },
+                    dest,
                 )?;
                 self.window = window;
                 self.resolution_cursor_mut()
@@ -1083,6 +1093,9 @@ impl EffectWindow {
                     };
                     let counters =
                         self.adjusted_pt_counters(&before.view().evaluated, object, raw, None)?;
+                    if !counters.valid_placement() {
+                        return Ok(());
+                    }
                     let previous = self.characteristics.counters(object);
                     self.characteristics.place_counters(object, &counters)?;
                     InstructionCut::Counters {
@@ -1093,11 +1106,20 @@ impl EffectWindow {
                     }
                 } else {
                     let old = self.counters_of_kind(object, kind);
-                    let added = permanent_counters::effect_counter_multiplier(
+                    let multiplied = permanent_counters::effect_counter_multiplier(
                         &before.view().evaluated,
                         object,
                     )
                     .times(&resolved);
+                    let added = self.apply_static_counter_modifiers(
+                        &before.view().evaluated,
+                        object,
+                        kind,
+                        multiplied,
+                    );
+                    if !added.is_positive() {
+                        return Ok(());
+                    }
                     let after = old.plus(&added);
                     self.characteristics
                         .named_permanent_counters_mut(kind)
@@ -1133,6 +1155,9 @@ impl EffectWindow {
                 };
                 let counters =
                     self.adjusted_pt_counters(&before.view().evaluated, target, counters, None)?;
+                if !counters.valid_placement() {
+                    return Ok(());
+                }
                 let previous = self.characteristics.counters(target);
                 self.characteristics.place_counters(target, &counters)?;
                 InstructionCut::Counters {
@@ -1303,6 +1328,12 @@ impl EffectWindow {
                     destination,
                 )?;
                 self.window = window;
+                if let crate::stack_window::StackExit::Object(movement) = &exit {
+                    self.resolution_cursor_mut()
+                        .ok_or(EffectError::WrongResolutionFrame)?
+                        .results
+                        .last_moved_objects = movement.arrivals().collect();
+                }
                 if matches!(
                     instruction,
                     Instruction::DestroyTarget | Instruction::DestroyTargetWithoutRegeneration

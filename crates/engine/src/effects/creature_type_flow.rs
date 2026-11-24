@@ -1005,6 +1005,7 @@ impl EffectWindow {
                 });
                 match op {
                     StatAggregate::Max => Ok(values.max().unwrap_or_else(|| 0.into())),
+                    StatAggregate::Min => Ok(values.min().unwrap_or_else(|| 0.into())),
                     StatAggregate::Sum => {
                         Ok(values.fold(0.into(), |total: RulesInteger, v| total.plus(&v)))
                     }
@@ -2370,6 +2371,45 @@ impl EffectWindow {
                             }
                             _ => false,
                         }
+                    }
+                    MatchObjectRef::LastAffected
+                    | MatchObjectRef::LastMovedToGraveyard
+                    | MatchObjectRef::LastMovedToExile
+                    | MatchObjectRef::LastMovedToHand
+                    | MatchObjectRef::LastMovedToBattlefield => {
+                        let evaluated = self.evaluated_characteristics()?;
+                        let excluded = BTreeSet::new();
+                        let source_id = resolve_ability_source();
+                        let check_zone = |zone: ObjectZone| match subject {
+                            MatchObjectRef::LastAffected => true,
+                            MatchObjectRef::LastMovedToGraveyard => {
+                                matches!(zone, ObjectZone::Graveyard(_))
+                            }
+                            MatchObjectRef::LastMovedToExile => zone == ObjectZone::Exile,
+                            MatchObjectRef::LastMovedToHand => matches!(zone, ObjectZone::Hand(_)),
+                            MatchObjectRef::LastMovedToBattlefield => {
+                                zone == ObjectZone::Battlefield
+                            }
+                            _ => true,
+                        };
+                        cursor.is_some_and(|c| {
+                            let candidates = if !c.results.last_moved_objects.is_empty() {
+                                c.results.last_moved_objects.as_slice()
+                            } else if !c.results.destroyed_cards_to_graveyard.is_empty() {
+                                c.results.destroyed_cards_to_graveyard.as_slice()
+                            } else {
+                                &[]
+                            };
+                            candidates.iter().any(|&id| {
+                                evaluated.get(id).is_some_and(|permanent| {
+                                    check_zone(permanent.zone)
+                                        && self.matches_object_filter(
+                                            **filter, permanent, controller, source_id, &excluded,
+                                            &evaluated,
+                                        )
+                                })
+                            })
+                        })
                     }
                 };
                 Ok(i64::from(matched).into())

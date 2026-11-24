@@ -1155,6 +1155,69 @@ pub(super) fn lower_static(
                 Ok(())
             }
         },
+        StaticAbilityAst::PreventCounters {
+            subject,
+            counter_kind,
+            condition,
+        } => {
+            if condition.is_some() {
+                return Err("oracle:unsupported-static-cond");
+            }
+            let kind = match counter_kind.as_deref() {
+                None => None,
+                Some(raw) => {
+                    let clean = raw
+                        .trim()
+                        .trim_end_matches(" counters")
+                        .trim_end_matches(" counter")
+                        .trim();
+                    let k = parse_counter_kind(clean).ok_or("oracle:unsupported-counter-kind")?;
+                    Some(k)
+                }
+            };
+            match subject.as_ref() {
+                SubjectRefAst::Player(p) => {
+                    let rel = match p {
+                        PlayerRefAst::You => PlayerRelation::Controller,
+                        PlayerRefAst::EachOpponent | PlayerRefAst::AnyOpponent => {
+                            PlayerRelation::Opponent
+                        }
+                        PlayerRefAst::EachPlayer | PlayerRefAst::AnyPlayer => {
+                            PlayerRelation::AnyParticipant
+                        }
+                        _ => return Err("oracle:unsupported-static"),
+                    };
+                    push_static_ability(
+                        program,
+                        StaticContinuousAbility::Restriction {
+                            id: ids.static_id(),
+                            rule: StaticRestriction::PreventCounters {
+                                selector: None,
+                                players: Some(rel),
+                                counter_kind: kind,
+                            },
+                        },
+                    )
+                }
+                _ => {
+                    let selectors = lower_permanent_selectors(subject, vocabulary)?;
+                    for sel in selectors {
+                        push_static_ability(
+                            program,
+                            StaticContinuousAbility::Restriction {
+                                id: ids.static_id(),
+                                rule: StaticRestriction::PreventCounters {
+                                    selector: Some(Box::new(sel)),
+                                    players: None,
+                                    counter_kind: kind,
+                                },
+                            },
+                        )?;
+                    }
+                    Ok(())
+                }
+            }
+        }
         StaticAbilityAst::RuleOrCombatRestriction {
             subject,
             rule,
@@ -2362,6 +2425,85 @@ pub(super) fn lower_static(
                     },
                 );
             }
+            if r_low == "you have shroud" {
+                return push_static_ability(
+                    program,
+                    StaticContinuousAbility::Restriction {
+                        id: ids.static_id(),
+                        rule: StaticRestriction::ControllerHasShroud,
+                    },
+                );
+            }
+            if r_low == "you don't lose the game for having 0 or less life" {
+                return push_static_ability(
+                    program,
+                    StaticContinuousAbility::Restriction {
+                        id: ids.static_id(),
+                        rule: StaticRestriction::ControllerCantLoseForZeroLife,
+                    },
+                );
+            }
+            if r_low == "you can't lose the game and your opponents can't win the game" {
+                return push_static_ability(
+                    program,
+                    StaticContinuousAbility::Restriction {
+                        id: ids.static_id(),
+                        rule: StaticRestriction::ControllerCantLoseOpponentsCantWin,
+                    },
+                );
+            }
+            if r_low == "you can't win the game and your opponents can't lose the game" {
+                return push_static_ability(
+                    program,
+                    StaticContinuousAbility::Restriction {
+                        id: ids.static_id(),
+                        rule: StaticRestriction::ControllerCantWinOpponentsCantLose,
+                    },
+                );
+            }
+            if r_low == "players can't lose the game or win the game" {
+                push_static_ability(
+                    program,
+                    StaticContinuousAbility::Restriction {
+                        id: ids.static_id(),
+                        rule: StaticRestriction::ControllerCantLoseOpponentsCantWin,
+                    },
+                )?;
+                return push_static_ability(
+                    program,
+                    StaticContinuousAbility::Restriction {
+                        id: ids.static_id(),
+                        rule: StaticRestriction::ControllerCantWinOpponentsCantLose,
+                    },
+                );
+            }
+            if r_low == "players can't play lands" {
+                return push_static_ability(
+                    program,
+                    StaticContinuousAbility::Restriction {
+                        id: ids.static_id(),
+                        rule: StaticRestriction::CantPlayLands(PlayerRelation::AnyParticipant),
+                    },
+                );
+            }
+            if r_low == "your opponents can't play lands" || r_low == "opponents can't play lands" {
+                return push_static_ability(
+                    program,
+                    StaticContinuousAbility::Restriction {
+                        id: ids.static_id(),
+                        rule: StaticRestriction::CantPlayLands(PlayerRelation::Opponent),
+                    },
+                );
+            }
+            if r_low == "you can't play lands" {
+                return push_static_ability(
+                    program,
+                    StaticContinuousAbility::Restriction {
+                        id: ids.static_id(),
+                        rule: StaticRestriction::CantPlayLands(PlayerRelation::Controller),
+                    },
+                );
+            }
             if r_low == "players can't cast spells from graveyards or libraries" {
                 return push_static_ability(
                     program,
@@ -3390,7 +3532,8 @@ fn static_ast_subject(st: &StaticAbilityAst) -> Option<&SubjectRefAst> {
         | StaticAbilityAst::GrantKeywords { subject, .. }
         | StaticAbilityAst::GrantAbilityText { subject, .. }
         | StaticAbilityAst::SetOrAddType { subject, .. }
-        | StaticAbilityAst::ContinuousLayerEffect { subject, .. } => Some(subject.as_ref()),
+        | StaticAbilityAst::ContinuousLayerEffect { subject, .. }
+        | StaticAbilityAst::PreventCounters { subject, .. } => Some(subject.as_ref()),
         StaticAbilityAst::RuleOrCombatRestriction { subject, .. } => subject.as_deref(),
         _ => None,
     }
@@ -3402,7 +3545,8 @@ fn resolve_static_anaphora_subject(st: &mut StaticAbilityAst, prev: &SubjectRefA
         | StaticAbilityAst::GrantKeywords { subject, .. }
         | StaticAbilityAst::GrantAbilityText { subject, .. }
         | StaticAbilityAst::SetOrAddType { subject, .. }
-        | StaticAbilityAst::ContinuousLayerEffect { subject, .. } => Some(subject.as_mut()),
+        | StaticAbilityAst::ContinuousLayerEffect { subject, .. }
+        | StaticAbilityAst::PreventCounters { subject, .. } => Some(subject.as_mut()),
         StaticAbilityAst::RuleOrCombatRestriction {
             subject: Some(subject),
             ..

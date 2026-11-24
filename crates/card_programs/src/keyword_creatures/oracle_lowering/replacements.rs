@@ -307,30 +307,62 @@ pub(super) fn lower_replacement(
             counter_kind,
             count,
             additional: _,
-            per: None,
+            per,
         } => {
             let kind = parse_counter_kind(counter_kind)
                 .ok_or("oracle:unsupported-others-entry-counters")?;
             if !kind.is_permanent() {
                 return Err("oracle:unsupported-others-entry-counters");
             }
-            let ValueExprAst::Const(n) = count.as_ref() else {
-                return Err("oracle:unsupported-others-entry-counters");
-            };
-            let cnt = u8::try_from(*n)
-                .ok()
-                .filter(|&v| v > 0)
-                .ok_or("oracle:unsupported-others-entry-counters")?;
             let selectors = lower_permanent_selectors(subject, vocabulary)?;
+            if per.is_none()
+                && let ValueExprAst::Const(n) = count.as_ref()
+                && let Some(cnt) = u8::try_from(*n).ok().filter(|&v| v > 0)
+            {
+                for sel in selectors {
+                    push_static_ability(
+                        program,
+                        StaticContinuousAbility::Modifier {
+                            id: ids.static_id(),
+                            rule: StaticModifierRule::OthersEnterWithCounters {
+                                selector: Box::new(sel),
+                                kind,
+                                count: cnt,
+                            },
+                        },
+                    )?;
+                }
+                return Ok(());
+            }
+            let amount = if let Some(per_expr) = per {
+                let mult = match count.as_ref() {
+                    ValueExprAst::Const(n) if *n > 0 => i64::from(*n),
+                    _ => return Err("oracle:unsupported-others-entry-counters"),
+                };
+                let base = lower_value_expr(per_expr, vocabulary)?;
+                if mult == 1 {
+                    base
+                } else {
+                    ValueExpr::Scale {
+                        expr: Box::new(base),
+                        factor: mult.into(),
+                    }
+                }
+            } else {
+                lower_value_expr(count, vocabulary)?
+            };
+            if !amount.is_world_evaluable() {
+                return Err("oracle:unsupported-others-entry-counters");
+            }
             for sel in selectors {
                 push_static_ability(
                     program,
                     StaticContinuousAbility::Modifier {
                         id: ids.static_id(),
-                        rule: StaticModifierRule::OthersEnterWithCounters {
+                        rule: StaticModifierRule::OthersEnterWithCountersExpr {
                             selector: Box::new(sel),
                             kind,
-                            count: cnt,
+                            amount: Box::new(amount.clone()),
                         },
                     },
                 )?;
@@ -1000,6 +1032,21 @@ fn lower_event_instead_replacement(
                 StaticContinuousAbility::DamageRule {
                     id: ids.static_id(),
                     rule: StaticDamageRule::PreventIncomingRemovePlusOne,
+                },
+            ));
+        }
+        if matches!(
+            full,
+            "if damage would be dealt to ~ while it has a +1/+1 counter on it, prevent that damage and remove a +1/+1 counter from it"
+                | "if damage would be dealt to ~ while it has a +1/+1 counter on it, prevent that damage and remove a +1/+1 counter from ~"
+                | "if damage would be dealt to ~ while it has a +1/+1 counter on it, prevent that damage. remove a +1/+1 counter from it"
+                | "if damage would be dealt to ~ while it has a +1/+1 counter on it, prevent that damage. remove a +1/+1 counter from ~"
+        ) {
+            return Some(push_static_ability(
+                program,
+                StaticContinuousAbility::DamageRule {
+                    id: ids.static_id(),
+                    rule: StaticDamageRule::PreventIncomingRemovePlusOneIfCounter,
                 },
             ));
         }
@@ -2013,6 +2060,77 @@ fn lower_event_instead_replacement(
                     },
                 },
             ));
+        }
+    }
+    let bonus_controller = if (subj_low == "one or more tokens"
+        && would_norm == "be created under your control")
+        || (subj_low == "an effect" && would_norm == "create one or more tokens under your control")
+        || (subj_low == "you" && would_norm == "create one or more tokens")
+    {
+        Some(PlayerRelation::Controller)
+    } else if (subj_low == "one or more tokens" && would_norm == "be created")
+        || (subj_low == "an effect" && would_norm == "create one or more tokens")
+    {
+        Some(PlayerRelation::AnyParticipant)
+    } else {
+        None
+    };
+    if let Some(controller) = bonus_controller {
+        let trimmed = instead_norm
+            .strip_prefix("you ")
+            .or_else(|| instead_norm.strip_prefix("it "))
+            .unwrap_or(instead_norm);
+        let trimmed = trimmed
+            .strip_prefix("creates ")
+            .or_else(|| trimmed.strip_prefix("create "))
+            .unwrap_or(trimmed);
+        let trimmed = trimmed.strip_suffix(" are created").unwrap_or(trimmed);
+        if let Some(bonus_raw) = trimmed
+            .strip_prefix("those tokens plus ")
+            .or_else(|| trimmed.strip_prefix("that many tokens plus "))
+        {
+            let (per_created, token_phrase) =
+                if let Some(rest) = bonus_raw.strip_prefix("that many ") {
+                    let singular = rest
+                        .strip_suffix(" tokens")
+                        .map(|s| format!("a {s} token"))
+                        .unwrap_or_else(|| format!("a {rest}"));
+                    (true, singular)
+                } else if let Some(rest) = bonus_raw
+                    .strip_prefix("an additional ")
+                    .or_else(|| bonus_raw.strip_prefix("additional "))
+                {
+                    (false, format!("a {rest}"))
+                } else {
+                    (false, bonus_raw.to_string())
+                };
+            let compiler_vocab = cached_compiler_vocab(vocabulary);
+            if let Ok(tok_ast) = spellwake_oracle_compiler::filter::parse_token_creation(
+                &token_phrase,
+                &compiler_vocab,
+            ) && let TokenSpecAst::Predefined { count, .. }
+            | TokenSpecAst::Creature { count, .. } = &tok_ast
+                && let ValueExprAst::Const(n) = count.as_ref()
+                && let Ok(count) = u8::try_from(*n)
+                && count > 0
+                && let Ok((creation, false)) =
+                    lower_token_spec(&tok_ast, TokenRecipients::Controller, vocabulary, ids, None)
+                && !creation.enters_tapped
+                && creation.base_size.is_none()
+            {
+                return Some(push_static_ability(
+                    program,
+                    StaticContinuousAbility::Modifier {
+                        id: ids.static_id(),
+                        rule: StaticModifierRule::BonusTokenOnCreate {
+                            controller,
+                            token: Box::new(creation.definition),
+                            count,
+                            per_created,
+                        },
+                    },
+                ));
+            }
         }
     }
     if (subj_low == "an effect"
@@ -4115,6 +4233,7 @@ pub(super) fn parse_modify_damage_event(
     let (source, source_controller) = parse_damage_source_filter(subj_low, vocabulary)?;
 
     let mut threshold_cap: Option<u8> = None;
+    let mut at_most_prevent: Option<u8> = None;
     let (kind, recipient) = if would_norm == "deal combat damage" {
         (StaticDamageKind::CombatOnly, StaticDamageRecipient::Any)
     } else if would_norm == "deal noncombat damage" {
@@ -4149,18 +4268,33 @@ pub(super) fn parse_modify_damage_event(
                 let n_tok = parts.next()?;
                 let after_n = parts.next()?.trim();
                 let n = parse_small_num(n_tok)?;
-                let after_or_more = after_n.strip_prefix("or more ")?;
-                if n == 0 {
-                    return None;
-                }
-                threshold_cap = Some(n - 1);
-                if let Some(t) = after_or_more.strip_prefix("combat damage to ") {
-                    (StaticDamageKind::CombatOnly, t)
-                } else if let Some(t) = after_or_more.strip_prefix("noncombat damage to ") {
-                    (StaticDamageKind::NoncombatOnly, t)
+                if let Some(after_or_less) = after_n.strip_prefix("or less ") {
+                    if n == 0 {
+                        return None;
+                    }
+                    at_most_prevent = Some(n);
+                    if let Some(t) = after_or_less.strip_prefix("combat damage to ") {
+                        (StaticDamageKind::CombatOnly, t)
+                    } else if let Some(t) = after_or_less.strip_prefix("noncombat damage to ") {
+                        (StaticDamageKind::NoncombatOnly, t)
+                    } else {
+                        let t = after_or_less.strip_prefix("damage to ")?;
+                        (StaticDamageKind::Any, t)
+                    }
                 } else {
-                    let t = after_or_more.strip_prefix("damage to ")?;
-                    (StaticDamageKind::Any, t)
+                    let after_or_more = after_n.strip_prefix("or more ")?;
+                    if n == 0 {
+                        return None;
+                    }
+                    threshold_cap = Some(n - 1);
+                    if let Some(t) = after_or_more.strip_prefix("combat damage to ") {
+                        (StaticDamageKind::CombatOnly, t)
+                    } else if let Some(t) = after_or_more.strip_prefix("noncombat damage to ") {
+                        (StaticDamageKind::NoncombatOnly, t)
+                    } else {
+                        let t = after_or_more.strip_prefix("damage to ")?;
+                        (StaticDamageKind::Any, t)
+                    }
                 }
             };
         (
@@ -4191,7 +4325,16 @@ pub(super) fn parse_modify_damage_event(
         .strip_prefix("it deals ")
         .or_else(|| instead_norm.strip_prefix("that source deals "));
 
-    let op = if let Some(expected_cap) = threshold_cap {
+    let op = if let Some(max_prevent) = at_most_prevent {
+        if matches!(
+            instead_norm,
+            "prevent that damage" | "prevent all of that damage"
+        ) {
+            StaticDamageOp::PreventAtMost(max_prevent)
+        } else {
+            return None;
+        }
+    } else if let Some(expected_cap) = threshold_cap {
         let rest = after_deals?;
         let mut parts = rest.splitn(2, ' ');
         let k_tok = parts.next()?;
@@ -4221,6 +4364,22 @@ pub(super) fn parse_modify_damage_event(
             return None;
         }
         StaticDamageOp::ReplaceWithMinusOneCounters
+    } else if matches!(
+        instead_norm,
+        "prevent half that damage, rounded up"
+            | "prevent half of that damage, rounded up"
+            | "it deals half that much damage, rounded down"
+            | "that source deals half that much damage, rounded down"
+    ) {
+        StaticDamageOp::PreventHalf { round_up: true }
+    } else if matches!(
+        instead_norm,
+        "prevent half that damage, rounded down"
+            | "prevent half of that damage, rounded down"
+            | "it deals half that much damage, rounded up"
+            | "that source deals half that much damage, rounded up"
+    ) {
+        StaticDamageOp::PreventHalf { round_up: false }
     } else if matches!(
         instead_norm,
         "prevent that damage" | "prevent all of that damage"

@@ -260,6 +260,13 @@ fn check_intervening_if(
         TriggerCondition::SourceIsPrepared => {
             after.characteristics.prepared.contains(&source.object.id())
         }
+        TriggerCondition::SourceEntryOption(expected) => {
+            after
+                .characteristics
+                .entry_option_choices
+                .get(&source.object.id())
+                == Some(expected)
+        }
         TriggerCondition::ControllerGainedLifeThisTurn => after
             .characteristics
             .life_gained_this_turn

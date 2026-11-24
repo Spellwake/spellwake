@@ -181,6 +181,12 @@ pub enum StaticDamageOp {
     Multiply(u8),
     PreventAll,
     PreventUpTo(u8),
+    /// Prevent all damage from an attempt if its remaining amount is at most `max`.
+    PreventAtMost(u8),
+    /// Prevent half of an attempt's remaining damage (rounded up when `round_up` is true).
+    PreventHalf {
+        round_up: bool,
+    },
     ReplaceWithMinusOneCounters,
 }
 
@@ -211,6 +217,8 @@ pub enum StaticDamageRule {
     PreventIncomingCombatAndExile,
     /// Prevent incoming damage to source by removing one +1/+1 counter (Phantom cycle).
     PreventIncomingRemovePlusOne,
+    /// Prevent incoming damage to source only while it has at least one +1/+1 counter, removing one (Oathsworn Knight).
+    PreventIncomingRemovePlusOneIfCounter,
     /// Prevent incoming damage to source by removing that many +1/+1 counters.
     PreventIncomingRemoveNPlusOne,
     /// Redirect damage that would be dealt to controller (and optionally other controlled permanents) to source.
@@ -355,6 +363,22 @@ pub enum StaticRestriction {
     RestrictGraveyardAndLibrary,
     CombatRequiresCityBlessing,
     ControllerHasHexproof,
+    /// Controller cannot be the target of spells or abilities from any player (CR 702.18, Ivory Mask).
+    ControllerHasShroud,
+    /// Controller cannot lose the game and opponents cannot win the game (Platinum Angel).
+    ControllerCantLoseOpponentsCantWin,
+    /// Controller does not lose the game for having 0 or less life (Phyrexian Unlife, Lich's Mastery).
+    ControllerCantLoseForZeroLife,
+    /// Controller cannot win the game and opponents cannot lose the game (Abyssal Persecutor).
+    ControllerCantWinOpponentsCantLose,
+    /// Players matching this relation cannot play lands.
+    CantPlayLands(crate::program::PlayerRelation),
+    /// Counters (optionally restricted to `counter_kind`) cannot be placed on matching permanents and/or players (Solemnity, Melira).
+    PreventCounters {
+        selector: Option<Box<PermanentSelector>>,
+        players: Option<crate::program::PlayerRelation>,
+        counter_kind: Option<crate::effects::CounterKind>,
+    },
     /// Each player can't cast more than one spell each turn (CR 101.2 / Rule of Law).
     OneSpellPerTurn,
     /// Creatures entering the battlefield don't cause abilities to trigger (Torpor Orb).
@@ -385,6 +409,12 @@ pub enum StaticModifierRule {
         kind: crate::effects::CounterKind,
         count: u8,
     },
+    /// Matching permanents enter with a dynamic world-evaluable number of additional `kind` counters.
+    OthersEnterWithCountersExpr {
+        selector: Box<PermanentSelector>,
+        kind: crate::effects::CounterKind,
+        amount: Box<crate::program::ValueExpr>,
+    },
     /// Modify counters placed on matching permanents (Hardened Scales, Benevolent Hydra, Branching Evolution).
     ModifyCounters {
         selector: Box<PermanentSelector>,
@@ -404,6 +434,13 @@ pub enum StaticModifierRule {
         controller: crate::program::PlayerRelation,
         add: u8,
         multiply: u8,
+    },
+    /// Whenever matching players would create one or more tokens, also create `count` bonus tokens (or `count` per created token when `per_created` is true; Peregrin Took, Chatterfang).
+    BonusTokenOnCreate {
+        controller: crate::program::PlayerRelation,
+        token: Box<crate::token::TokenDefinition>,
+        count: u8,
+        per_created: bool,
     },
     /// Halve (rounded down) counters placed on opponents or permanents opponents control (Vorinclex).
     HalveOpponentCounters,
@@ -711,6 +748,12 @@ impl StaticContinuousAbility {
                         | StaticRestriction::RestrictOpponentsDuringOwnTurn
                         | StaticRestriction::RestrictGraveyardAndLibrary
                         | StaticRestriction::ControllerHasHexproof
+                        | StaticRestriction::ControllerHasShroud
+                        | StaticRestriction::ControllerCantLoseOpponentsCantWin
+                        | StaticRestriction::ControllerCantLoseForZeroLife
+                        | StaticRestriction::ControllerCantWinOpponentsCantLose
+                        | StaticRestriction::CantPlayLands(_)
+                        | StaticRestriction::PreventCounters { .. }
                         | StaticRestriction::OneSpellPerTurn
                         | StaticRestriction::SuppressEntersTriggers
                         | StaticRestriction::ProhibitCasting { .. }
@@ -729,10 +772,12 @@ impl StaticContinuousAbility {
                         | StaticModifierRule::AdditionalSelfPlusOneCounter
                         | StaticModifierRule::OtherCreaturesEnterWithSourceCounters
                         | StaticModifierRule::OthersEnterWithCounters { .. }
+                        | StaticModifierRule::OthersEnterWithCountersExpr { .. }
                         | StaticModifierRule::ModifyCounters { .. }
                         | StaticModifierRule::HalveOpponentCounters
                         | StaticModifierRule::ModifyTokens { .. }
                         | StaticModifierRule::ModifyTokenSubtype { .. }
+                        | StaticModifierRule::BonusTokenOnCreate { .. }
                         | StaticModifierRule::ModifyLifeGain { .. }
                         | StaticModifierRule::ConditionalModifyLifeGain { .. }
                         | StaticModifierRule::RetainMana(_)
@@ -955,6 +1000,7 @@ impl StaticContinuousAbility {
                                 | StaticDamageOp::Subtract(0)
                                 | StaticDamageOp::Multiply(0 | 1)
                                 | StaticDamageOp::PreventUpTo(0)
+                                | StaticDamageOp::PreventAtMost(0)
                         ) {
                             return Err(CharacteristicDefinitionError::EmptyParts);
                         }
@@ -1062,6 +1108,17 @@ impl StaticContinuousAbility {
                 | StaticRestriction::ProhibitEntering(selector) => {
                     return selector.validate(vocabulary);
                 }
+                StaticRestriction::PreventCounters {
+                    selector, players, ..
+                } => {
+                    if selector.is_none() && players.is_none() {
+                        return Err(CharacteristicDefinitionError::EmptyParts);
+                    }
+                    if let Some(sel) = selector {
+                        sel.validate(vocabulary)?;
+                    }
+                    return Ok(());
+                }
                 _ => return Ok(()),
             },
             Self::Modifier { rule, .. } => {
@@ -1078,6 +1135,27 @@ impl StaticContinuousAbility {
                             return Err(CharacteristicDefinitionError::EmptyParts);
                         }
                         selector.validate(vocabulary)?;
+                    }
+                    StaticModifierRule::OthersEnterWithCountersExpr {
+                        selector,
+                        kind,
+                        amount,
+                    } => {
+                        if !kind.is_permanent() {
+                            return Err(CharacteristicDefinitionError::EmptyParts);
+                        }
+                        selector.validate(vocabulary)?;
+                        amount
+                            .validate_world_condition(vocabulary)
+                            .map_err(|_| CharacteristicDefinitionError::ForeignCreatureType)?;
+                    }
+                    StaticModifierRule::BonusTokenOnCreate { token, count, .. } => {
+                        if *count == 0 {
+                            return Err(CharacteristicDefinitionError::EmptyParts);
+                        }
+                        token
+                            .validate(vocabulary)
+                            .map_err(|_| CharacteristicDefinitionError::InvalidKeywordGrant)?;
                     }
                     StaticModifierRule::ModifyCounters {
                         selector,

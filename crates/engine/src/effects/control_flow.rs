@@ -622,6 +622,7 @@ impl EffectWindow {
             | Instruction::ReturnAnyGraveyardCreatureOrPlaneswalker
             | Instruction::ReturnOwnGraveyardPermanentToBattlefield { .. }
             | Instruction::CounterSpellToExile
+            | Instruction::CounterSpellToLibrary { .. }
             | Instruction::CounterSpell
             | Instruction::GainControlOfSpell
             | Instruction::ChangeOnlyTarget

@@ -5709,6 +5709,45 @@ pub(super) fn lower_resolution_condition(
             },
         ])
         .ok_or("oracle:unsupported-if-condition"),
+        ConditionAst::Marker(GameMarker::DiedThisWay) => Ok(ResolutionCondition {
+            left: ValueExpr::object_matches(
+                spellwake_engine::program::MatchObjectRef::LastMovedToGraveyard,
+                ObjectFilter::any(),
+            ),
+            comparison: Comparison::GreaterOrEqual,
+            right: ValueExpr::literal(1),
+        }),
+        ConditionAst::Marker(GameMarker::ZoneActionHappenedThisWay { filter, action }) => {
+            let act_low = action.trim().to_ascii_lowercase();
+            let subject = match act_low.as_str() {
+                "dies" | "died" | "destroyed" | "put_into_graveyard" | "graveyard"
+                | "discarded" | "milled" | "sacrificed" => {
+                    spellwake_engine::program::MatchObjectRef::LastMovedToGraveyard
+                }
+                "exiled" | "exile" | "put_into_exile" => {
+                    spellwake_engine::program::MatchObjectRef::LastMovedToExile
+                }
+                "returned_to_hand" | "put_into_hand" | "hand" => {
+                    spellwake_engine::program::MatchObjectRef::LastMovedToHand
+                }
+                "entered" | "put_onto_battlefield" | "battlefield" => {
+                    spellwake_engine::program::MatchObjectRef::LastMovedToBattlefield
+                }
+                _ => spellwake_engine::program::MatchObjectRef::LastAffected,
+            };
+            let mut inner = filter.as_ref().clone();
+            inner.zone = None;
+            let obj_filter = if is_unrestricted_filter(&inner) {
+                ObjectFilter::any()
+            } else {
+                lower_object_filter(&inner, vocabulary)?
+            };
+            Ok(ResolutionCondition {
+                left: ValueExpr::object_matches(subject, obj_filter),
+                comparison: Comparison::GreaterOrEqual,
+                right: ValueExpr::literal(1),
+            })
+        }
         ConditionAst::Marker(GameMarker::CardPutIntoGraveyardThisTurn { filter })
             if is_unrestricted_filter(filter) =>
         {
@@ -8452,8 +8491,10 @@ pub(super) fn lower_instruction_seq(
             let ev_low = event.trim().to_ascii_lowercase();
             let rep_low = replace_with.trim().to_ascii_lowercase();
             if ev_low.contains("counter")
-                && rep_low.contains("exile")
                 && matches!(&ins[i], InstructionAst::Counter { .. })
+                && (rep_low.contains("exile")
+                    || rep_low.contains("top of its owner's library")
+                    || rep_low.contains("bottom of its owner's library"))
             {
                 lower_instruction(
                     &ins[i],
@@ -8465,7 +8506,13 @@ pub(super) fn lower_instruction_seq(
                     bound_x,
                 )?;
                 if let Some(last @ Instruction::CounterSpell) = builder.instructions.last_mut() {
-                    *last = Instruction::CounterSpellToExile;
+                    if rep_low.contains("exile") {
+                        *last = Instruction::CounterSpellToExile;
+                    } else if rep_low.contains("top of its owner's library") {
+                        *last = Instruction::CounterSpellToLibrary { top: true };
+                    } else {
+                        *last = Instruction::CounterSpellToLibrary { top: false };
+                    }
                     i += 2;
                     continue;
                 }

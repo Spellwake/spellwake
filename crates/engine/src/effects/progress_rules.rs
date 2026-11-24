@@ -5396,7 +5396,10 @@ impl EffectWindow {
         }
         if let Instruction::WinGame(player) = instruction {
             let winner = self.resolving_player(player)?;
-            if self.window.participants().contains(&winner) {
+            let evaluated = self.evaluated_characteristics()?;
+            if self.window.participants().contains(&winner)
+                && !self.player_cannot_win(&evaluated, winner)?
+            {
                 let source = match entry.kind() {
                     StackKind::CardSpell(id) => *id,
                     StackKind::ActivatedAbility { source }
@@ -5414,11 +5417,17 @@ impl EffectWindow {
             return Ok(StepOutcome::Continue);
         }
         if let Instruction::LoseGame(players) = instruction {
-            let losing: BTreeSet<SeatId> = self
-                .selection_players(players, entry.controller(), self.resolution_cursor())?
-                .into_iter()
-                .filter(|seat| self.window.participants().contains(seat))
-                .collect();
+            let evaluated = self.evaluated_characteristics()?;
+            let mut losing = BTreeSet::new();
+            for seat in
+                self.selection_players(players, entry.controller(), self.resolution_cursor())?
+            {
+                if self.window.participants().contains(&seat)
+                    && !self.player_cannot_lose(&evaluated, seat, false)?
+                {
+                    losing.insert(seat);
+                }
+            }
             if !losing.is_empty() {
                 let before = self.rules_snapshot(None)?;
                 let mut loss_occs = Vec::with_capacity(losing.len());
@@ -7853,6 +7862,9 @@ impl EffectWindow {
                                     raw,
                                     None,
                                 )?;
+                                if !counters.valid_placement() {
+                                    continue;
+                                }
                                 let previous = self.characteristics.counters(object);
                                 self.characteristics.place_counters(object, &counters)?;
                                 let after_pt = self.characteristics.counters(object);

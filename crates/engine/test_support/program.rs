@@ -9259,6 +9259,9 @@ pub fn static_ability(value: &StaticContinuousAbility) -> Value {
                 StaticDamageRule::DamageCannotBePrevented => {
                     json!({"tag":"DamageCannotBePrevented","id":id.0})
                 }
+                StaticDamageRule::PreventIncomingRemovePlusOneIfCounter => {
+                    json!({"tag":"PreventIncomingRemovePlusOneIfCounter","id":id.0})
+                }
                 StaticDamageRule::RedirectDamage {
                     source,
                     from,
@@ -9392,6 +9395,28 @@ pub fn static_ability(value: &StaticContinuousAbility) -> Value {
                 StaticRestriction::FlashSacrificeAtCleanup => {
                     json!({"tag":"FlashSacrificeAtCleanup","id":id.0})
                 }
+                StaticRestriction::ControllerHasShroud => {
+                    json!({"tag":"ControllerHasShroud","id":id.0})
+                }
+                StaticRestriction::ControllerCantLoseOpponentsCantWin => {
+                    json!({"tag":"ControllerCantLoseOpponentsCantWin","id":id.0})
+                }
+                StaticRestriction::ControllerCantLoseForZeroLife => {
+                    json!({"tag":"ControllerCantLoseForZeroLife","id":id.0})
+                }
+                StaticRestriction::ControllerCantWinOpponentsCantLose => {
+                    json!({"tag":"ControllerCantWinOpponentsCantLose","id":id.0})
+                }
+                StaticRestriction::CantPlayLands(rel) => {
+                    json!({"tag":"CantPlayLands","id":id.0,"players":format!("{rel:?}")})
+                }
+                StaticRestriction::PreventCounters {
+                    selector,
+                    players,
+                    counter_kind,
+                } => {
+                    json!({"tag":"PreventCounters","id":id.0,"selector":format!("{selector:?}"),"players":format!("{players:?}"),"counter_kind":format!("{counter_kind:?}")})
+                }
             };
         }
         StaticContinuousAbility::Modifier { id, rule } => {
@@ -9493,6 +9518,21 @@ pub fn static_ability(value: &StaticContinuousAbility) -> Value {
                 StaticModifierRule::Ascend => json!({"tag":"Ascend","id":id.0}),
                 StaticModifierRule::AdditionalBlockWhileMonarch => {
                     json!({"tag":"AdditionalBlockWhileMonarch","id":id.0})
+                }
+                StaticModifierRule::OthersEnterWithCountersExpr {
+                    selector,
+                    kind,
+                    amount,
+                } => {
+                    json!({"tag":"OthersEnterWithCountersExpr","id":id.0,"selector":format!("{selector:?}"),"kind":format!("{kind:?}"),"amount":format!("{amount:?}")})
+                }
+                StaticModifierRule::BonusTokenOnCreate {
+                    controller,
+                    token,
+                    count,
+                    per_created,
+                } => {
+                    json!({"tag":"BonusTokenOnCreate","id":id.0,"controller":format!("{controller:?}"),"token":format!("{token:?}"),"count":count,"per_created":per_created})
                 }
             };
         }
@@ -11254,6 +11294,7 @@ pub fn body(value: &ExecutableBody) -> Value {
             Instruction::Ripple(n) => json!({"op":"Ripple","count":n}),
             Instruction::Demonstrate => json!({"op":"Demonstrate"}),
             Instruction::Enlist => json!({"op":"Enlist"}),
+            Instruction::CounterSpellToLibrary { top } => json!({"op":"CounterSpellToLibrary","top":top}),
         })
         .collect::<Vec<_>>();
     let mut result = json!({"target":target,"instructions":instructions});

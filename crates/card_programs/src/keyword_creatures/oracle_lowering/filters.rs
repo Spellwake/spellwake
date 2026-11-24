@@ -2510,8 +2510,8 @@ fn lower_value_expr_inner(
             }
             let agg = match op {
                 AggregateOp::Max => StatAggregate::Max,
+                AggregateOp::Min => StatAggregate::Min,
                 AggregateOp::Sum => StatAggregate::Sum,
-                AggregateOp::Min => return Err("oracle:min-aggregate-unsupported"),
             };
             let st = lower_stat_kind(*stat);
             let obj = lower_object_filter(filter, vocabulary)?;

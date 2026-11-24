@@ -179,6 +179,7 @@ pub(crate) struct CharacteristicState {
     pub(crate) ability_donors_in_exile: BTreeMap<ObjectId, Vec<ObjectId>>,
     pub(crate) chosen_entry_players: BTreeMap<ObjectId, [crate::priority::SeatId; 2]>,
     pub(crate) entry_color_choices: BTreeMap<ObjectId, Color>,
+    pub(crate) entry_option_choices: BTreeMap<ObjectId, u8>,
     pub(crate) indestructible_counters: BTreeMap<ObjectId, RulesInteger>,
     indestructible_grants: BTreeMap<ObjectId, ContinuousEffectId>,
     keyword_counter_grants: BTreeMap<(ObjectId, crate::effects::CounterKind), ContinuousEffectId>,
@@ -320,6 +321,7 @@ impl Default for CharacteristicState {
             ability_donors_in_exile: BTreeMap::new(),
             chosen_entry_players: BTreeMap::new(),
             entry_color_choices: BTreeMap::new(),
+            entry_option_choices: BTreeMap::new(),
             indestructible_counters: BTreeMap::new(),
             indestructible_grants: BTreeMap::new(),
             keyword_counter_grants: BTreeMap::new(),
@@ -1069,6 +1071,8 @@ impl CharacteristicState {
         self.chosen_entry_players
             .retain(|source, _| live.contains(source));
         self.entry_color_choices
+            .retain(|source, _| live.contains(source));
+        self.entry_option_choices
             .retain(|source, _| live.contains(source));
         self.indestructible_counters
             .retain(|object, _| live.contains(object));

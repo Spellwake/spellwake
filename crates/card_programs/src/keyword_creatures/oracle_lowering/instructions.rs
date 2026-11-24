@@ -7251,6 +7251,51 @@ pub(super) fn lower_instruction(
             }
             Err("oracle:unsupported-remove-abilities")
         }
+        InstructionAst::Suspect { subject } => lower_instruction(
+            &InstructionAst::PutCounters {
+                subject: subject.clone(),
+                counter_kind: "suspect".to_string(),
+                count: Box::new(ValueExprAst::Const(1)),
+            },
+            builder,
+            vocabulary,
+            ids,
+            in_trigger,
+            self_pronoun_valid,
+            bound_x,
+        ),
+        InstructionAst::SetSuspected { subject, remove } => {
+            if *remove {
+                lower_instruction(
+                    &InstructionAst::RemoveCounters {
+                        subject: subject.clone(),
+                        counter_kind: "suspect".to_string(),
+                        all: true,
+                        count: None,
+                    },
+                    builder,
+                    vocabulary,
+                    ids,
+                    in_trigger,
+                    self_pronoun_valid,
+                    bound_x,
+                )
+            } else {
+                lower_instruction(
+                    &InstructionAst::PutCounters {
+                        subject: subject.clone(),
+                        counter_kind: "suspect".to_string(),
+                        count: Box::new(ValueExprAst::Const(1)),
+                    },
+                    builder,
+                    vocabulary,
+                    ids,
+                    in_trigger,
+                    self_pronoun_valid,
+                    bound_x,
+                )
+            }
+        }
         InstructionAst::PutCounters {
             subject,
             counter_kind,
@@ -13305,6 +13350,19 @@ pub(super) fn lower_instruction(
                 && *last == Instruction::CounterSpell
             {
                 *last = Instruction::CounterSpellToExile;
+                return Ok(());
+            }
+            if (rep_low.contains("top of its owner's library")
+                || rep_low.contains("bottom of its owner's library"))
+                && (ev_low.contains("counter")
+                    || ev_low.contains("graveyard")
+                    || subj_low.contains("spell"))
+                && let Some(last) = builder.instructions.last_mut()
+                && *last == Instruction::CounterSpell
+            {
+                *last = Instruction::CounterSpellToLibrary {
+                    top: rep_low.contains("top of its owner's library"),
+                };
                 return Ok(());
             }
             if is_exile

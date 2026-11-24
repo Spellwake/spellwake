@@ -1231,7 +1231,9 @@ impl EffectWindow {
                     {
                         // The first impossible draw is replaced. Later draws never occur.
                         journal.events.pop();
-                        self.won_by_effect = Some((player, source));
+                        if !self.player_cannot_win(&before_evaluated, player)? {
+                            self.won_by_effect = Some((player, source));
+                        }
                     } else if matches!(journal.events.last(), Some(DrawEvent::EmptyLibrary { .. }))
                         && let Some((source, kind, count)) = before_evaluated
                             .objects

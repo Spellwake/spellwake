@@ -42,6 +42,7 @@ impl EffectWindow {
                     rule,
                     crate::characteristics::StaticContinuousAbility::DamageRule {
                         rule: crate::characteristics::StaticDamageRule::PreventIncomingRemovePlusOne
+                            | crate::characteristics::StaticDamageRule::PreventIncomingRemovePlusOneIfCounter
                             | crate::characteristics::StaticDamageRule::PreventIncomingRemoveNPlusOne,
                         ..
                     }
@@ -80,6 +81,20 @@ impl EffectWindow {
                             | DamageRecipient::Battle(id)
                             if id == source.object
                     ),
+                    crate::characteristics::StaticContinuousAbility::DamageRule {
+                        rule:
+                            crate::characteristics::StaticDamageRule::PreventIncomingRemovePlusOneIfCounter,
+                        ..
+                    } => {
+                        self.characteristics.counters(source.object).plus_one.is_positive()
+                            && matches!(
+                                target,
+                                DamageRecipient::Creature(id)
+                                    | DamageRecipient::Planeswalker(id)
+                                    | DamageRecipient::Battle(id)
+                                    if id == source.object
+                            )
+                    }
                     crate::characteristics::StaticContinuousAbility::DamageRule {
                         rule:
                             crate::characteristics::StaticDamageRule::PreventIncomingCombatToSource,
@@ -704,7 +719,14 @@ impl EffectWindow {
                         op,
                         crate::characteristics::StaticDamageOp::PreventAll
                             | crate::characteristics::StaticDamageOp::PreventUpTo(_)
+                            | crate::characteristics::StaticDamageOp::PreventAtMost(_)
+                            | crate::characteristics::StaticDamageOp::PreventHalf { .. }
                     ) && !component.can_prevent_damage()
+                    {
+                        continue;
+                    }
+                    if let crate::characteristics::StaticDamageOp::PreventAtMost(max) = op
+                        && component.remaining() > &RulesInteger::from(i64::from(*max))
                     {
                         continue;
                     }
@@ -922,7 +944,14 @@ impl EffectWindow {
                             op,
                             crate::characteristics::StaticDamageOp::PreventAll
                                 | crate::characteristics::StaticDamageOp::PreventUpTo(_)
+                                | crate::characteristics::StaticDamageOp::PreventAtMost(_)
+                                | crate::characteristics::StaticDamageOp::PreventHalf { .. }
                         ) && !component.can_prevent_damage()
+                        {
+                            continue;
+                        }
+                        if let crate::characteristics::StaticDamageOp::PreventAtMost(max) = op
+                            && component.remaining() > &RulesInteger::from(i64::from(*max))
                         {
                             continue;
                         }
@@ -1887,6 +1916,49 @@ impl EffectWindow {
                             allocations,
                         }
                     }
+                    crate::characteristics::StaticDamageOp::PreventAtMost(max) => {
+                        let rem = work
+                            .batch
+                            .component(attempt)
+                            .ok_or(DamageError::InapplicableEffect)?
+                            .remaining()
+                            .clone();
+                        let leave = if rem <= RulesInteger::from(i64::from(max)) {
+                            0.into()
+                        } else {
+                            rem
+                        };
+                        let allocations = work.batch.limit_damage(application, eligible, leave)?;
+                        RulesOccurrence::StaticDamagePrevented {
+                            source,
+                            batch,
+                            recipient: target_recipient,
+                            stage: work.batch.stage(),
+                            allocations,
+                        }
+                    }
+                    crate::characteristics::StaticDamageOp::PreventHalf { round_up } => {
+                        let rem = work
+                            .batch
+                            .component(attempt)
+                            .ok_or(DamageError::InapplicableEffect)?
+                            .remaining()
+                            .clone();
+                        let half_down = rem.nonnegative_half_rounded_down();
+                        let leave = if round_up {
+                            half_down
+                        } else {
+                            rem.minus(&half_down)
+                        };
+                        let allocations = work.batch.limit_damage(application, eligible, leave)?;
+                        RulesOccurrence::StaticDamagePrevented {
+                            source,
+                            batch,
+                            recipient: target_recipient,
+                            stage: work.batch.stage(),
+                            allocations,
+                        }
+                    }
                     crate::characteristics::StaticDamageOp::ReplaceWithMinusOneCounters => {
                         let DamageRecipient::Creature(creature_id) = target_recipient else {
                             return Err(DamageError::InapplicableEffect.into());
@@ -1902,6 +1974,9 @@ impl EffectWindow {
                             raw,
                             None,
                         )?;
+                        if !added.valid_placement() {
+                            return Ok(());
+                        }
                         let prev = self.characteristics.counters(creature_id);
                         self.characteristics.place_counters(creature_id, &added)?;
                         let after_c = self.characteristics.counters(creature_id);
@@ -2213,6 +2288,55 @@ impl EffectWindow {
                             allocations,
                         }
                     }
+                    crate::characteristics::StaticDamageOp::PreventAtMost(max) => {
+                        let rem = work
+                            .batch
+                            .component(attempt)
+                            .ok_or(DamageError::InapplicableEffect)?
+                            .remaining()
+                            .clone();
+                        let leave = if rem <= RulesInteger::from(i64::from(max)) {
+                            0.into()
+                        } else {
+                            rem
+                        };
+                        let allocations = work.batch.limit_damage(application, eligible, leave)?;
+                        let Some(source) = source_obj else {
+                            return Ok(());
+                        };
+                        RulesOccurrence::StaticDamagePrevented {
+                            source,
+                            batch,
+                            recipient: target_recipient,
+                            stage: work.batch.stage(),
+                            allocations,
+                        }
+                    }
+                    crate::characteristics::StaticDamageOp::PreventHalf { round_up } => {
+                        let rem = work
+                            .batch
+                            .component(attempt)
+                            .ok_or(DamageError::InapplicableEffect)?
+                            .remaining()
+                            .clone();
+                        let half_down = rem.nonnegative_half_rounded_down();
+                        let leave = if round_up {
+                            half_down
+                        } else {
+                            rem.minus(&half_down)
+                        };
+                        let allocations = work.batch.limit_damage(application, eligible, leave)?;
+                        let Some(source) = source_obj else {
+                            return Ok(());
+                        };
+                        RulesOccurrence::StaticDamagePrevented {
+                            source,
+                            batch,
+                            recipient: target_recipient,
+                            stage: work.batch.stage(),
+                            allocations,
+                        }
+                    }
                     crate::characteristics::StaticDamageOp::ReplaceWithMinusOneCounters => {
                         let DamageRecipient::Creature(creature_id) = target_recipient else {
                             return Err(DamageError::InapplicableEffect.into());
@@ -2228,6 +2352,9 @@ impl EffectWindow {
                             raw,
                             None,
                         )?;
+                        if !added.valid_placement() {
+                            return Ok(());
+                        }
                         let prev = self.characteristics.counters(creature_id);
                         self.characteristics.place_counters(creature_id, &added)?;
                         let after_c = self.characteristics.counters(creature_id);

@@ -369,6 +369,9 @@ impl EffectWindow {
                         {
                             return Err(EffectError::IllegalTarget);
                         }
+                        self.characteristics
+                            .entry_option_choices
+                            .insert(object, idx);
                         false
                     }
                     EntryTap::ChooseModalFace => {
@@ -911,15 +914,53 @@ impl EffectWindow {
                     placement.plus_one = placement.plus_one.plus(&source.plus_one_counters);
                 }
                 for ability in source.active_battlefield_rules() {
-                    if let crate::characteristics::StaticContinuousAbility::Modifier {
-                        rule:
-                            crate::characteristics::StaticModifierRule::OthersEnterWithCounters {
-                                selector,
-                                kind,
-                                count,
-                            },
-                        ..
-                    } = ability
+                    let entry_spec: Option<(
+                        &crate::characteristics::PermanentSelector,
+                        CounterKind,
+                        RulesInteger,
+                    )> = match ability {
+                        crate::characteristics::StaticContinuousAbility::Modifier {
+                            rule:
+                                crate::characteristics::StaticModifierRule::OthersEnterWithCounters {
+                                    selector,
+                                    kind,
+                                    count,
+                                },
+                            ..
+                        } => Some((selector.as_ref(), *kind, i64::from(*count).into())),
+                        crate::characteristics::StaticContinuousAbility::Modifier {
+                            rule:
+                                crate::characteristics::StaticModifierRule::OthersEnterWithCountersExpr {
+                                    selector,
+                                    kind,
+                                    amount,
+                                },
+                            ..
+                        } => {
+                            let ctx = crate::characteristics::WorldEvalCtx {
+                                active_player: previous.window.active_player(),
+                                participants: previous.window.participants(),
+                                life: Some(previous.life),
+                                combat: self.combat.as_ref(),
+                                cards: previous.cards,
+                                programs: &self.programs,
+                                state: &self.characteristics,
+                                objects: &previous.evaluated.objects,
+                                source: source.object,
+                                controller: source_controller,
+                                name_rules: &self.name_rules,
+                                trigger_subject: None,
+                                related_player: None,
+                                defending_player: None,
+                            };
+                            let val = crate::characteristics::eval_world_value_expr(&ctx, amount)
+                                .max(0.into());
+                            Some((selector.as_ref(), *kind, val))
+                        }
+                        _ => None,
+                    };
+                    if let Some((selector, kind, n)) = entry_spec
+                        && n.is_positive()
                         && crate::characteristics::selector_matches_permanent(
                             self.window.cards(),
                             &current_eval,
@@ -929,9 +970,9 @@ impl EffectWindow {
                             object,
                             &self.name_rules,
                         )
+                        && !self.permanent_counter_prevented(&current_eval, object, kind)
                     {
-                        let n: RulesInteger = i64::from(*count).into();
-                        match *kind {
+                        match kind {
                             CounterKind::PlusOne => {
                                 placement.plus_one = placement.plus_one.plus(&n);
                             }
@@ -1286,19 +1327,27 @@ impl EffectWindow {
                 .ok_or(EffectError::InconsistentProgram)?;
             placement =
                 self.adjusted_pt_counters(&previous.evaluated, object, placement, Some(&entering))?;
-            self.characteristics.place_counters(object, &placement)?;
+            if placement.valid_placement() {
+                self.characteristics.place_counters(object, &placement)?;
+            }
         }
-        if suspect.is_positive() {
+        if suspect.is_positive()
+            && !self.permanent_counter_prevented(&previous.evaluated, object, CounterKind::Suspect)
+        {
             self.characteristics
                 .suspect_counters
                 .insert(object, suspect.times(&multiplier));
         }
-        if charge.is_positive() {
+        if charge.is_positive()
+            && !self.permanent_counter_prevented(&previous.evaluated, object, CounterKind::Charge)
+        {
             self.characteristics
                 .charge
                 .insert(object, charge.times(&multiplier));
         }
-        if extra_loyalty.is_positive() {
+        if extra_loyalty.is_positive()
+            && !self.permanent_counter_prevented(&previous.evaluated, object, CounterKind::Loyalty)
+        {
             let loyalty = self
                 .characteristics
                 .loyalty

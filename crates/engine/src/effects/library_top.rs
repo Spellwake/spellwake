@@ -838,6 +838,7 @@ impl EffectWindow {
             | Instruction::ReturnAnyGraveyardCreatureOrPlaneswalker
             | Instruction::ReturnOwnGraveyardPermanentToBattlefield { .. }
             | Instruction::CounterSpellToExile
+            | Instruction::CounterSpellToLibrary { .. }
             | Instruction::CounterSpell
             | Instruction::GainControlOfSpell
             | Instruction::ChangeOnlyTarget
@@ -1735,6 +1736,10 @@ impl EffectWindow {
             work.cursor.results.last_action_count =
                 Some(RulesInteger::from_usize(public_zone_moves.len()));
             work.cursor.results.last_action_succeeded = !public_zone_moves.is_empty();
+            work.cursor.results.last_moved_objects = public_zone_moves
+                .iter()
+                .map(|movement| movement.after)
+                .collect();
             work.cursor.results.milled_mana_values = public_zone_moves
                 .iter()
                 .map(|movement| {

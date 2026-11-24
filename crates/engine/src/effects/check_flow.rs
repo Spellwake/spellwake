@@ -1841,21 +1841,38 @@ impl EffectWindow {
                 }
             }
         }
-        let mut losses = self.failed_draws.clone();
-        losses.extend(self.life.nonpositive_players());
-        losses.extend(self.commander_damage_losses().map(|(player, _)| player));
-        losses.extend(
-            self.window
-                .participants()
-                .iter()
-                .copied()
-                .filter(|&player| {
-                    self.poison
-                        .get(&player)
-                        .is_some_and(|count| count >= &10.into())
-                }),
-        );
-        losses.retain(|player| self.window.participants().contains(player));
+        let mut losses = BTreeSet::new();
+        for &player in &self.failed_draws {
+            if self.window.participants().contains(&player)
+                && !self.player_cannot_lose(&current, player, false)?
+            {
+                losses.insert(player);
+            }
+        }
+        for player in self.life.nonpositive_players() {
+            if self.window.participants().contains(&player)
+                && !self.player_cannot_lose(&current, player, true)?
+            {
+                losses.insert(player);
+            }
+        }
+        for (player, _) in self.commander_damage_losses() {
+            if self.window.participants().contains(&player)
+                && !self.player_cannot_lose(&current, player, false)?
+            {
+                losses.insert(player);
+            }
+        }
+        for &player in self.window.participants() {
+            if self
+                .poison
+                .get(&player)
+                .is_some_and(|count| count >= &10.into())
+                && !self.player_cannot_lose(&current, player, false)?
+            {
+                losses.insert(player);
+            }
+        }
         let mut by_owner: BTreeMap<SeatId, Vec<ObjectId>> = BTreeMap::new();
         for record in self.commanders.values() {
             if let Some(object) = record
@@ -2199,8 +2216,13 @@ impl EffectWindow {
                                 .map(|object| RulesOccurrence::TokenCeased { object }),
                         );
                     }
+                    let check_evaluated = before.view().evaluated.clone();
+                    let mut surviving_losses = BTreeSet::new();
                     for player in self.window.apnap_players()? {
                         if actions.losses.contains(&player) {
+                            if self.player_cannot_lose(&check_evaluated, player, false)? {
+                                continue;
+                            }
                             let mut reasons = BTreeSet::new();
                             if self
                                 .poison
@@ -2217,13 +2239,19 @@ impl EffectWindow {
                             if self.failed_draws.contains(&player) {
                                 reasons.insert(PlayerLossReason::FailedDraw);
                             }
-                            if self.life.get(player).is_some_and(|life| *life <= 0.into()) {
+                            if self.life.get(player).is_some_and(|life| *life <= 0.into())
+                                && !self.player_cannot_lose(&check_evaluated, player, true)?
+                            {
                                 reasons.insert(PlayerLossReason::NonpositiveLife);
                             }
+                            if reasons.is_empty() {
+                                continue;
+                            }
+                            surviving_losses.insert(player);
                             occurrences.push(RulesOccurrence::PlayerLost { player, reasons });
                         }
                     }
-                    self.state_based_losses.extend(actions.losses);
+                    self.state_based_losses.extend(surviving_losses);
                     self.failed_draws.clear();
                     self.deathtouch_damage.clear();
                     self.emit_from(

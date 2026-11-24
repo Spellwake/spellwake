@@ -5345,6 +5345,56 @@ impl EffectWindow {
     pub(crate) fn land_play_allowance(&self, actor: SeatId) -> Result<RulesInteger, EffectError> {
         use crate::characteristics::{CastPermissionRule, StaticContinuousAbility};
         let current = self.evaluated_characteristics()?;
+        let cant_play_land = current.objects.values().any(|permanent| {
+            if permanent.zone != ObjectZone::Battlefield {
+                return false;
+            }
+            let Some(ctrl) = permanent.controller else {
+                return false;
+            };
+            permanent.active_battlefield_rules().any(|rule| {
+                let StaticContinuousAbility::Restriction {
+                    rule: crate::characteristics::StaticRestriction::CantPlayLands(rel),
+                    ..
+                } = rule
+                else {
+                    return false;
+                };
+                match rel {
+                    crate::program::PlayerRelation::Controller => actor == ctrl,
+                    crate::program::PlayerRelation::Opponent => self
+                        .combat_rules
+                        .opponents(self.window.participants(), ctrl)
+                        .is_ok_and(|opps| opps.contains(&actor)),
+                    crate::program::PlayerRelation::AnyParticipant => true,
+                }
+            })
+        }) || self.temporary_rules.iter().any(|active| {
+            if active.consumed {
+                return false;
+            }
+            let crate::program::TemporaryRuleKind::TemporaryStatic(ab) = &active.rule else {
+                return false;
+            };
+            let StaticContinuousAbility::Restriction {
+                rule: crate::characteristics::StaticRestriction::CantPlayLands(rel),
+                ..
+            } = ab.as_ref()
+            else {
+                return false;
+            };
+            match rel {
+                crate::program::PlayerRelation::Controller => actor == active.controller,
+                crate::program::PlayerRelation::Opponent => self
+                    .combat_rules
+                    .opponents(self.window.participants(), active.controller)
+                    .is_ok_and(|opps| opps.contains(&actor)),
+                crate::program::PlayerRelation::AnyParticipant => true,
+            }
+        });
+        if cant_play_land {
+            return Ok(0.into());
+        }
         let extra = current.objects.values().filter_map(|permanent| {
             if permanent.zone != ObjectZone::Battlefield || permanent.controller != Some(actor) {
                 return None;
@@ -5373,6 +5423,234 @@ impl EffectWindow {
             n.plus(&i64::from(increment).into())
         });
         Ok(base.plus(&i64::from(temp_extra).into()))
+    }
+
+    /// True if active static or temporary restrictions prevent `player` from losing the game
+    /// (or, when `nonpositive_life_only` is true, specifically from losing due to 0 or less life).
+    pub(super) fn player_cannot_lose(
+        &self,
+        evaluated: &EvaluatedCharacteristics,
+        player: SeatId,
+        nonpositive_life_only: bool,
+    ) -> Result<bool, EffectError> {
+        use crate::characteristics::{StaticContinuousAbility, StaticRestriction};
+        if !self.window.participants().contains(&player) {
+            return Ok(false);
+        }
+        let opponents = self
+            .combat_rules
+            .opponents(self.window.participants(), player)?;
+        let rule_prevents = |ctrl: SeatId, ability: &StaticContinuousAbility| -> bool {
+            let StaticContinuousAbility::Restriction { rule, .. } = ability else {
+                return false;
+            };
+            match rule {
+                StaticRestriction::ControllerCantLoseOpponentsCantWin => ctrl == player,
+                StaticRestriction::ControllerCantLoseForZeroLife => {
+                    nonpositive_life_only && ctrl == player
+                }
+                StaticRestriction::ControllerCantWinOpponentsCantLose => opponents.contains(&ctrl),
+                _ => false,
+            }
+        };
+        if evaluated.objects.values().any(|perm| {
+            perm.zone == ObjectZone::Battlefield
+                && perm.controller.is_some_and(|ctrl| {
+                    perm.active_battlefield_rules()
+                        .any(|ab| rule_prevents(ctrl, ab))
+                })
+        }) {
+            return Ok(true);
+        }
+        Ok(self.temporary_rules.iter().any(|active| {
+            !active.consumed
+                && matches!(
+                    &active.rule,
+                    crate::program::TemporaryRuleKind::TemporaryStatic(ab)
+                        if rule_prevents(active.controller, ab)
+                )
+        }))
+    }
+
+    /// True if active static or temporary restrictions prevent `player` from winning the game.
+    pub(super) fn player_cannot_win(
+        &self,
+        evaluated: &EvaluatedCharacteristics,
+        player: SeatId,
+    ) -> Result<bool, EffectError> {
+        use crate::characteristics::{StaticContinuousAbility, StaticRestriction};
+        if !self.window.participants().contains(&player) {
+            return Ok(false);
+        }
+        let opponents = self
+            .combat_rules
+            .opponents(self.window.participants(), player)?;
+        let rule_prevents = |ctrl: SeatId, ability: &StaticContinuousAbility| -> bool {
+            let StaticContinuousAbility::Restriction { rule, .. } = ability else {
+                return false;
+            };
+            match rule {
+                StaticRestriction::ControllerCantLoseOpponentsCantWin => opponents.contains(&ctrl),
+                StaticRestriction::ControllerCantWinOpponentsCantLose => ctrl == player,
+                _ => false,
+            }
+        };
+        if evaluated.objects.values().any(|perm| {
+            perm.zone == ObjectZone::Battlefield
+                && perm.controller.is_some_and(|ctrl| {
+                    perm.active_battlefield_rules()
+                        .any(|ab| rule_prevents(ctrl, ab))
+                })
+        }) {
+            return Ok(true);
+        }
+        Ok(self.temporary_rules.iter().any(|active| {
+            !active.consumed
+                && matches!(
+                    &active.rule,
+                    crate::program::TemporaryRuleKind::TemporaryStatic(ab)
+                        if rule_prevents(active.controller, ab)
+                )
+        }))
+    }
+
+    /// True if active static or temporary `PreventCounters` rules forbid placing `kind` counters on `object`.
+    pub(super) fn permanent_counter_prevented(
+        &self,
+        evaluated: &EvaluatedCharacteristics,
+        object: ObjectId,
+        kind: CounterKind,
+    ) -> bool {
+        use crate::characteristics::{StaticContinuousAbility, StaticRestriction};
+        for source in evaluated
+            .objects
+            .values()
+            .filter(|perm| perm.zone == ObjectZone::Battlefield)
+        {
+            let Some(source_ctrl) = source.controller else {
+                continue;
+            };
+            for ab in source.active_battlefield_rules() {
+                if let StaticContinuousAbility::Restriction {
+                    rule:
+                        StaticRestriction::PreventCounters {
+                            selector: Some(sel),
+                            counter_kind,
+                            ..
+                        },
+                    ..
+                } = ab
+                    && counter_kind.is_none_or(|k| k == kind)
+                    && crate::characteristics::selector_matches_permanent(
+                        self.window.cards(),
+                        evaluated,
+                        source.object,
+                        source_ctrl,
+                        sel,
+                        object,
+                        &self.name_rules,
+                    )
+                {
+                    return true;
+                }
+            }
+        }
+        for active in &self.temporary_rules {
+            if active.consumed {
+                continue;
+            }
+            if let crate::program::TemporaryRuleKind::TemporaryStatic(ab) = &active.rule
+                && let StaticContinuousAbility::Restriction {
+                    rule:
+                        StaticRestriction::PreventCounters {
+                            selector: Some(sel),
+                            counter_kind,
+                            ..
+                        },
+                    ..
+                } = ab.as_ref()
+                && counter_kind.is_none_or(|k| k == kind)
+                && crate::characteristics::selector_matches_permanent(
+                    self.window.cards(),
+                    evaluated,
+                    active.source_object.unwrap_or(ObjectId::SENTINEL),
+                    active.controller,
+                    sel,
+                    object,
+                    &self.name_rules,
+                )
+            {
+                return true;
+            }
+        }
+        false
+    }
+
+    /// True if active static or temporary `PreventCounters` rules forbid `player` from getting `kind` counters.
+    pub(super) fn player_counter_prevented(
+        &self,
+        evaluated: &EvaluatedCharacteristics,
+        player: SeatId,
+        kind: CounterKind,
+    ) -> Result<bool, EffectError> {
+        use crate::characteristics::{StaticContinuousAbility, StaticRestriction};
+        let matches_player =
+            |rel: crate::program::PlayerRelation, ctrl: SeatId| -> Result<bool, EffectError> {
+                Ok(match rel {
+                    crate::program::PlayerRelation::Controller => player == ctrl,
+                    crate::program::PlayerRelation::Opponent => self
+                        .combat_rules
+                        .opponents(self.window.participants(), ctrl)?
+                        .contains(&player),
+                    crate::program::PlayerRelation::AnyParticipant => true,
+                })
+            };
+        for source in evaluated
+            .objects
+            .values()
+            .filter(|perm| perm.zone == ObjectZone::Battlefield)
+        {
+            let Some(source_ctrl) = source.controller else {
+                continue;
+            };
+            for ab in source.active_battlefield_rules() {
+                if let StaticContinuousAbility::Restriction {
+                    rule:
+                        StaticRestriction::PreventCounters {
+                            players: Some(rel),
+                            counter_kind,
+                            ..
+                        },
+                    ..
+                } = ab
+                    && counter_kind.is_none_or(|k| k == kind)
+                    && matches_player(*rel, source_ctrl)?
+                {
+                    return Ok(true);
+                }
+            }
+        }
+        for active in &self.temporary_rules {
+            if active.consumed {
+                continue;
+            }
+            if let crate::program::TemporaryRuleKind::TemporaryStatic(ab) = &active.rule
+                && let StaticContinuousAbility::Restriction {
+                    rule:
+                        StaticRestriction::PreventCounters {
+                            players: Some(rel),
+                            counter_kind,
+                            ..
+                        },
+                    ..
+                } = ab.as_ref()
+                && counter_kind.is_none_or(|k| k == kind)
+                && matches_player(*rel, active.controller)?
+            {
+                return Ok(true);
+            }
+        }
+        Ok(false)
     }
 
     /// Resolve authored continuous-effect / temporary-rule durations against the current
@@ -5592,7 +5870,7 @@ impl EffectWindow {
                 }
                 next.entry_choices.insert(record.after.id(), choice);
             }
-            if let Some(choice @ crate::land::EntryChoice::OptionIndex(_)) = choice {
+            if let Some(choice @ crate::land::EntryChoice::OptionIndex(idx)) = choice {
                 if !next
                     .copiable_program(record.after.id())
                     .and_then(Program::permanent)
@@ -5602,6 +5880,9 @@ impl EffectWindow {
                     return Err(EffectError::InconsistentProgram);
                 }
                 next.entry_choices.insert(record.after.id(), choice);
+                next.characteristics
+                    .entry_option_choices
+                    .insert(record.after.id(), idx);
             }
             if let Some(choice @ crate::land::EntryChoice::Opponent(_)) = choice {
                 if !matches!(
@@ -6759,6 +7040,9 @@ impl EffectWindow {
                 | crate::land::EntryChoice::CardName(_)
                 | crate::land::EntryChoice::PayLife(_)
                 | crate::land::EntryChoice::OptionIndex(_)) => {
+                    if let crate::land::EntryChoice::OptionIndex(idx) = reveal {
+                        self.characteristics.entry_option_choices.insert(new, idx);
+                    }
                     self.entry_choices.insert(new, reveal);
                 }
                 crate::land::EntryChoice::CreatureType(kind) => {
@@ -8048,22 +8332,65 @@ impl EffectWindow {
         controller: SeatId,
         evaluated: &EvaluatedCharacteristics,
     ) -> bool {
-        if let TargetRef::Player(player) = target
-            && self
-                .combat_rules
-                .opponents(self.window.participants(), controller)
-                .is_ok_and(|opponents| opponents.contains(&player))
-            && evaluated.controlled_rules(player, |rule| {
+        if let TargetRef::Player(player) = target {
+            let has_shroud = evaluated.controlled_rules(player, |rule| {
                 matches!(
                     rule,
                     crate::characteristics::StaticContinuousAbility::Restriction {
-                        rule: crate::characteristics::StaticRestriction::ControllerHasHexproof,
+                        rule: crate::characteristics::StaticRestriction::ControllerHasShroud,
                         ..
                     }
                 )
             }) > 0
-        {
-            return false;
+                || self.temporary_rules.iter().any(|active| {
+                    !active.consumed
+                        && active.controller == player
+                        && matches!(
+                            &active.rule,
+                            crate::program::TemporaryRuleKind::TemporaryStatic(ab)
+                                if matches!(
+                                    ab.as_ref(),
+                                    crate::characteristics::StaticContinuousAbility::Restriction {
+                                        rule: crate::characteristics::StaticRestriction::ControllerHasShroud,
+                                        ..
+                                    }
+                                )
+                        )
+                });
+            if has_shroud {
+                return false;
+            }
+            if self
+                .combat_rules
+                .opponents(self.window.participants(), controller)
+                .is_ok_and(|opponents| opponents.contains(&player))
+                && (evaluated.controlled_rules(player, |rule| {
+                    matches!(
+                        rule,
+                        crate::characteristics::StaticContinuousAbility::Restriction {
+                            rule: crate::characteristics::StaticRestriction::ControllerHasHexproof,
+                            ..
+                        }
+                    )
+                }) > 0
+                    || self.temporary_rules.iter().any(|active| {
+                        !active.consumed
+                            && active.controller == player
+                            && matches!(
+                                &active.rule,
+                                crate::program::TemporaryRuleKind::TemporaryStatic(ab)
+                                    if matches!(
+                                        ab.as_ref(),
+                                        crate::characteristics::StaticContinuousAbility::Restriction {
+                                            rule: crate::characteristics::StaticRestriction::ControllerHasHexproof,
+                                            ..
+                                        }
+                                    )
+                            )
+                    }))
+            {
+                return false;
+            }
         }
         if let TargetRef::Object(id) = target
             && let Some(permanent) = evaluated.get(id)
@@ -8491,7 +8818,9 @@ impl EffectWindow {
                 TargetRef::Player(player) => self.window.participants().contains(&player),
                 TargetRef::Object(_) | TargetRef::Stack(_) => false,
             },
-            Instruction::CounterSpell | Instruction::CounterSpellToExile => {
+            Instruction::CounterSpell
+            | Instruction::CounterSpellToExile
+            | Instruction::CounterSpellToLibrary { .. } => {
                 matches!(target,TargetRef::Stack(id) if self.window.entries().iter().any(|entry|entry.id()==id))
             }
             Instruction::ChooseNewTargets
