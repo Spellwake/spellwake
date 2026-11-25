@@ -48,6 +48,9 @@ impl BackendClient {
             http: HttpTransport::new(config.origin, config.key, user_agent, timeout)?,
         })
     }
+    pub(crate) fn origin_str(&self) -> &str {
+        self.http.origin_str()
+    }
     pub(crate) fn url(&self, path: &str) -> Result<Url, BackendError> {
         self.http.url(path)
     }

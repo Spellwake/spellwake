@@ -131,12 +131,8 @@ fn source_objects_stage_records_reject_nested_arrays_and_duplicates_before_emiss
     }
 }
 
-fn retained(prepared: &PreparedCatalogue) -> Vec<Step> {
-    let mut steps = vec![Step::get(
-        "/storage/v1/bucket/evidence".into(),
-        200,
-        br#"{"id":"evidence","public":false}"#.to_vec(),
-    )];
+fn retained_objects(prepared: &PreparedCatalogue) -> Vec<Step> {
+    let mut steps = Vec::new();
     for (key, path) in [
         (
             prepared.terms["metadataRef"].as_str().unwrap(),
@@ -157,6 +153,15 @@ fn retained(prepared: &PreparedCatalogue) -> Vec<Step> {
             fs::read(path).unwrap(),
         ));
     }
+    steps
+}
+fn retained(prepared: &PreparedCatalogue) -> Vec<Step> {
+    let mut steps = vec![Step::get(
+        "/storage/v1/bucket/evidence".into(),
+        200,
+        br#"{"id":"evidence","public":false}"#.to_vec(),
+    )];
+    steps.extend(retained_objects(prepared));
     steps
 }
 fn begin_step(prepared: &PreparedCatalogue, id: Uuid) -> Step {
@@ -215,7 +220,7 @@ fn lost_batch_acknowledgment_replays_the_same_source_plan_and_body_without_reupl
     lost.expect = Some(serde_json::to_vec(&payload).unwrap());
     lost.drop_ack = true;
     steps.push(lost);
-    steps.extend(retained(&prepared));
+    steps.extend(retained_objects(&prepared));
     steps.push(begin_step(&prepared, publication));
     let mut replay = Step::json("/rest/v1/rpc/append_catalogue_batch", json!(batch));
     replay.expect = Some(serde_json::to_vec(&payload).unwrap());
@@ -378,7 +383,7 @@ fn verified_uploads_and_unknown_final_ack_recover_without_changing_the_publicati
     );
     lost.drop_ack = true;
     steps.push(lost);
-    steps.extend(retained(&prepared));
+    steps.extend(retained_objects(&prepared));
     steps.push(begin_step(&prepared, publication));
     steps.push(Step::json(
         "/rest/v1/rpc/append_catalogue_batch",
