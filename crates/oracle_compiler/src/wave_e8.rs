@@ -4522,11 +4522,30 @@ fn parse_combat_activation_and_rule_statics_e8(
         )
         .and_then(|r| r.strip_suffix(" expansion"))
     {
+        let exp_name = exp_raw
+            .split_whitespace()
+            .map(|w| {
+                let mut chars = w.chars();
+                match chars.next() {
+                    Some(first) => {
+                        let mut word = first.to_uppercase().to_string();
+                        word.push_str(chars.as_str());
+                        word
+                    }
+                    None => String::new(),
+                }
+            })
+            .collect::<Vec<_>>()
+            .join(" ");
         return Some(StaticOrReplacement::Static(
             StaticAbilityAst::RuleOrCombatRestriction {
                 subject: None,
                 rule: format!("cant_cast_or_play_expansion:{}", exp_raw.trim()),
-                filter: None,
+                filter: Some(Box::new(ObjectFilterAst {
+                    any_card: true,
+                    predicates: vec![FilterPredicateAst::FirstPrintedInExpansion(exp_name)],
+                    ..ObjectFilterAst::default()
+                })),
                 condition: None,
             },
         ));
