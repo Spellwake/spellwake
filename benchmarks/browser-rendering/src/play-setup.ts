@@ -7,6 +7,7 @@ import {
   type SceneSettings,
 } from "./scene-settings";
 import { pileEntrySchema } from "./pile-browser";
+import { solidSleeveDesignSchema } from "./sleeve-colors";
 
 const publicCardSchema = pileEntrySchema
   .extend({
@@ -50,7 +51,10 @@ export const playSetupSchema = z
       .max(6),
     libraryCount: z.number().int().min(0).max(200),
     cardBack: z.enum(["classic", "spellwake", "unlettered"]),
-    sleeve: z.enum(["none", "midnight", "penny"]),
+    sleeve: z.union([
+      z.enum(["none", "midnight", "penny"]),
+      solidSleeveDesignSchema,
+    ]),
   })
   .superRefine((setup, context) => {
     for (const [index, player] of setup.players.entries())
