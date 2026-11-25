@@ -1,7 +1,8 @@
-"""Deterministic Shields-style flat SVG badge and endpoint JSON generator.
+"""Deterministic flat SVG badge and endpoint JSON generator.
 
 Shared by both the domain health check runner and the catalog refresh script so
-README badges render identically in private GitHub repositories and offline.
+README badges stay crisp, legible inside Markdown tables, and consistent across
+GitHub light and dark themes.
 """
 
 from __future__ import annotations
@@ -14,70 +15,92 @@ from pathlib import Path
 from typing import Any
 
 COLOR_HEX: dict[str, str] = {
-    "brightgreen": "#4c1",
-    "green": "#2ea043",
-    "yellow": "#d29922",
-    "orange": "#db6d28",
+    "brightgreen": "#1f883d",
+    "green": "#1f883d",
+    "yellow": "#9a6700",
+    "orange": "#bc4c00",
     "red": "#cf222e",
     "blue": "#0969da",
-    "lightgrey": "#6e7781",
-    "grey": "#6e7781",
+    "lightgrey": "#57606a",
+    "grey": "#57606a",
 }
 
+BADGE_HEIGHT = 24
+PILL_HEIGHT = 26
+LABEL_BG = "#24292f"
+FONT_FAMILY = "-apple-system,BlinkMacSystemFont,Segoe UI,Helvetica,Arial,sans-serif"
 
-def _text_width(text: str) -> int:
-    """Estimate Verdana 11px width in pixels (conservative, deterministic, ASCII-safe)."""
+
+def _text_width(text: str, *, font_size: int = 12, bold: bool = False) -> int:
+    """Estimate UI sans-serif width with generous horizontal padding (no squeezing)."""
+    size_scale = font_size / 12.0
+    weight_scale = 1.06 if bold else 1.0
     width = 0.0
     for ch in text:
-        if ch in "ilI1.,:;|!'` ":
-            width += 3.8
+        if ch in "ilI1.,:;|!'` ·":
+            width += 4.5 * size_scale * weight_scale
         elif ch in "mwMW@":
-            width += 9.2
+            width += 10.4 * size_scale * weight_scale
         elif ch.isupper():
-            width += 7.3
+            width += 8.4 * size_scale * weight_scale
         else:
-            width += 6.4
-    return max(24, int(round(width)) + 12)
+            width += 7.2 * size_scale * weight_scale
+    pad = 22 if font_size >= 13 else 20
+    return max(56 if font_size >= 13 else 38, int(round(width)) + pad)
 
 
-def render_svg(label: str, message: str, color: str = "lightgrey") -> str:
-    """Render a self-contained flat SVG badge matching Shields.io proportions."""
+def render_svg(
+    label: str,
+    message: str,
+    color: str = "lightgrey",
+    *,
+    aria_label: str | None = None,
+) -> str:
+    """Render a self-contained high-legibility flat SVG badge with viewBox scaling.
+
+    When `label` is empty, renders a compact single-segment status pill sized for
+    Markdown tables so GitHub never shrinks the text below readable size.
+    """
     fill = COLOR_HEX.get(color, color if color.startswith("#") else COLOR_HEX["lightgrey"])
-    lw = _text_width(label)
-    mw = _text_width(message)
-    total = lw + mw
-    esc_label = html.escape(label, quote=True)
     esc_message = html.escape(message, quote=True)
-    aria = html.escape(f"{label}: {message}", quote=True)
-    lx = lw * 5
-    mx = lw * 10 + mw * 5
-    l_len = max(10, (lw - 10) * 10)
-    m_len = max(10, (mw - 10) * 10)
+    computed_aria = aria_label or (f"{label}: {message}" if label else message)
+    aria = html.escape(computed_aria, quote=True)
+
+    if not label:
+        total = _text_width(message, font_size=13, bold=True)
+        h = PILL_HEIGHT
+        return (
+            f'<svg xmlns="http://www.w3.org/2000/svg" width="{total}" height="{h}" '
+            f'viewBox="0 0 {total} {h}" role="img" aria-label="{aria}">'
+            f"<title>{aria}</title>"
+            f'<rect width="{total}" height="{h}" rx="6" fill="{fill}"/>'
+            f'<text x="{total / 2.0:.1f}" y="{h / 2.0:.1f}" fill="#ffffff" '
+            f'text-anchor="middle" dominant-baseline="central" '
+            f'font-family="{FONT_FAMILY}" font-size="13" font-weight="600" '
+            f'text-rendering="geometricPrecision">{esc_message}</text>'
+            f"</svg>\n"
+        )
+
+    lw = _text_width(label, font_size=12, bold=False)
+    mw = _text_width(message, font_size=12, bold=True)
+    total = lw + mw
+    h = BADGE_HEIGHT
+    esc_label = html.escape(label, quote=True)
+    lx = lw / 2.0
+    mx = lw + mw / 2.0
     return (
-        f'<svg xmlns="http://www.w3.org/2000/svg" width="{total}" height="20" '
-        f'role="img" aria-label="{aria}">'
+        f'<svg xmlns="http://www.w3.org/2000/svg" width="{total}" height="{h}" '
+        f'viewBox="0 0 {total} {h}" role="img" aria-label="{aria}">'
         f"<title>{aria}</title>"
-        f'<linearGradient id="s" x2="0" y2="100%">'
-        f'<stop offset="0" stop-color="#bbb" stop-opacity=".1"/>'
-        f'<stop offset="1" stop-opacity=".1"/>'
-        f"</linearGradient>"
-        f'<clipPath id="r"><rect width="{total}" height="20" rx="3" fill="#fff"/></clipPath>'
+        f'<clipPath id="r"><rect width="{total}" height="{h}" rx="4" fill="#fff"/></clipPath>'
         f'<g clip-path="url(#r)">'
-        f'<rect width="{lw}" height="20" fill="#555"/>'
-        f'<rect x="{lw}" width="{mw}" height="20" fill="{fill}"/>'
-        f'<rect width="{total}" height="20" fill="url(#s)"/>'
+        f'<rect width="{lw}" height="{h}" fill="{LABEL_BG}"/>'
+        f'<rect x="{lw}" width="{mw}" height="{h}" fill="{fill}"/>'
         f"</g>"
-        f'<g fill="#fff" text-anchor="middle" '
-        f'font-family="Verdana,Geneva,DejaVu Sans,sans-serif" '
-        f'text-rendering="geometricPrecision" font-size="110">'
-        f'<text aria-hidden="true" x="{lx}" y="150" fill="#010101" fill-opacity=".3" '
-        f'transform="scale(.1)" textLength="{l_len}">{esc_label}</text>'
-        f'<text x="{lx}" y="140" transform="scale(.1)" fill="#fff" '
-        f'textLength="{l_len}">{esc_label}</text>'
-        f'<text aria-hidden="true" x="{mx}" y="150" fill="#010101" fill-opacity=".3" '
-        f'transform="scale(.1)" textLength="{m_len}">{esc_message}</text>'
-        f'<text x="{mx}" y="140" transform="scale(.1)" fill="#fff" '
-        f'textLength="{m_len}">{esc_message}</text>'
+        f'<g fill="#ffffff" text-anchor="middle" dominant-baseline="central" '
+        f'font-family="{FONT_FAMILY}" font-size="12" text-rendering="geometricPrecision">'
+        f'<text x="{lx:.1f}" y="{h / 2.0:.1f}" font-weight="500">{esc_label}</text>'
+        f'<text x="{mx:.1f}" y="{h / 2.0:.1f}" font-weight="600">{esc_message}</text>'
         f"</g></svg>\n"
     )
 
@@ -121,11 +144,12 @@ def write_badge(
     color: str = "lightgrey",
     *,
     is_error: bool = False,
+    aria_label: str | None = None,
 ) -> dict[str, Any]:
     """Write `<slug>.svg` and return its Shields endpoint descriptor."""
     svg_path = directory / f"{slug}.svg"
-    write_atomic_text(svg_path, render_svg(label, message, color))
-    return shields_endpoint_payload(label, message, color, is_error=is_error)
+    write_atomic_text(svg_path, render_svg(label, message, color, aria_label=aria_label))
+    return shields_endpoint_payload(label or slug, message, color, is_error=is_error)
 
 
 def write_atomic_json(path: Path, payload: Any) -> None:
