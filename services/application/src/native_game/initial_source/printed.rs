@@ -3,6 +3,87 @@ use super::*;
 use crate::player_wire::PlayerCharacteristics;
 use spellwake_content::InventoryCard;
 use spellwake_engine::program::Program;
+use std::collections::BTreeMap;
+
+/// Exact-equality prefilter index over the immutable retained catalogue.
+///
+/// Maps each bound program face's leading name (`program.names.iter().next()`)
+/// to candidate `OracleId`s. Because `Program` equality requires identical
+/// `names`, any matching definition is guaranteed to appear in the bucket, while
+/// `printed_card` still enforces exact `Program == Program` equality.
+pub(super) struct PrintedCardIndex {
+    missing_binding: bool,
+    has_unsupported_placement: bool,
+    by_name: BTreeMap<Option<String>, Vec<OracleId>>,
+}
+
+impl PrintedCardIndex {
+    pub(super) fn build(
+        catalogue: &BTreeMap<OracleId, InventoryCard>,
+        registry: &Registry,
+        meld_results: &BTreeMap<OracleId, (OracleId, spellwake_content::CatalogFace)>,
+    ) -> Self {
+        let mut missing_binding = false;
+        let mut has_unsupported_placement = false;
+        let mut by_name: BTreeMap<Option<String>, Vec<OracleId>> = BTreeMap::new();
+        let mut record = |program: &Program, oracle: &OracleId| {
+            let key = program
+                .names
+                .iter()
+                .next()
+                .map(|name| name.as_str().to_owned());
+            let bucket = by_name.entry(key).or_default();
+            if bucket.last() != Some(oracle) {
+                bucket.push(oracle.clone());
+            }
+        };
+        for oracle in catalogue.keys() {
+            let Some(bound) = registry.resolve(oracle) else {
+                missing_binding = true;
+                continue;
+            };
+            if bound.scope() == spellwake_card_programs::Scope::SeededVanillaBattlefieldOnly {
+                has_unsupported_placement = true;
+            }
+            let root = bound.program();
+            record(root, oracle);
+            if let Some(proto) = root.prototype.as_deref() {
+                record(proto, oracle);
+            }
+            if let Some(split) = root.split.as_ref() {
+                record(&split.left, oracle);
+                record(&split.right, oracle);
+            }
+            if let Some(back) = root.back_face() {
+                record(back, oracle);
+            }
+            if let Some(adventure) = root.adventure.as_deref() {
+                record(adventure, oracle);
+            }
+            if let Some(prepare) = root.prepare_spell.as_deref() {
+                record(prepare, oracle);
+            }
+            if meld_results.contains_key(oracle) {
+                for op in root
+                    .triggered
+                    .iter()
+                    .map(|a| &a.body.instructions)
+                    .chain(root.activated.iter().map(|a| &a.body.instructions))
+                    .flatten()
+                {
+                    if let spellwake_engine::program::Instruction::MeldExiledPair(back) = op {
+                        record(back.as_ref(), oracle);
+                    }
+                }
+            }
+        }
+        Self {
+            missing_binding,
+            has_unsupported_placement,
+            by_name,
+        }
+    }
+}
 
 /// A single immutable rules description, without a selected application printing.
 /// This is neither effective characteristics nor permission to expose a card.
@@ -99,8 +180,26 @@ impl NativeProgramSource {
         &self,
         program: &Program,
     ) -> Result<Option<NativePrintedCard<'_>>, NativeInitialError> {
-        let mut found = None;
-        for (oracle, card) in &self.catalogue {
+        if self.printed_index.missing_binding {
+            return Err(RegistryError::MissingBinding.into());
+        }
+        if self.printed_index.has_unsupported_placement {
+            return Err(RegistryError::UnsupportedPlacement.into());
+        }
+        let key = program
+            .names
+            .iter()
+            .next()
+            .map(|name| name.as_str().to_owned());
+        let Some(candidates) = self.printed_index.by_name.get(&key) else {
+            return Ok(None);
+        };
+        let mut primary: Option<NativePrintedCard<'_>> = None;
+        let mut secondary: Option<NativePrintedCard<'_>> = None;
+        for oracle in candidates {
+            let Some((oracle, card)) = self.catalogue.get_key_value(oracle) else {
+                continue;
+            };
             let bound = self
                 .registry
                 .resolve(oracle)
@@ -108,16 +207,45 @@ impl NativeProgramSource {
             if bound.scope() == spellwake_card_programs::Scope::SeededVanillaBattlefieldOnly {
                 return Err(RegistryError::UnsupportedPlacement.into());
             }
-            if let Some((joined,face))=self.meld_results.get(oracle)
-                && bound.program().triggered.iter().map(|a| &a.body.instructions).chain(bound.program().activated.iter().map(|a| &a.body.instructions)).flatten().any(|op|matches!(op,spellwake_engine::program::Instruction::MeldExiledPair(back) if back.as_ref()==program)) {
-                if found.is_some(){return Err(NativeInitialError::Invalid);}
-                found=Some(NativePrintedCard {oracle:joined,characteristics:face_characteristics(face,program.printed_loyalty.as_ref(),program.printed_defense.as_ref())?});
+            if let Some((joined, face)) = self.meld_results.get(oracle)
+                && bound
+                    .program()
+                    .triggered
+                    .iter()
+                    .map(|a| &a.body.instructions)
+                    .chain(
+                        bound
+                            .program()
+                            .activated
+                            .iter()
+                            .map(|a| &a.body.instructions),
+                    )
+                    .flatten()
+                    .any(|op| {
+                        matches!(
+                            op,
+                            spellwake_engine::program::Instruction::MeldExiledPair(back)
+                                if back.as_ref() == program
+                        )
+                    })
+            {
+                if primary.is_some() {
+                    return Err(NativeInitialError::Invalid);
+                }
+                primary = Some(NativePrintedCard {
+                    oracle: joined,
+                    characteristics: face_characteristics(
+                        face,
+                        program.printed_loyalty.as_ref(),
+                        program.printed_defense.as_ref(),
+                    )?,
+                });
                 continue;
             }
-            let face = if bound.program() == program
+            let (is_primary, face) = if bound.program() == program
                 || bound.program().prototype.as_deref() == Some(program)
             {
-                if program.split.is_some() {
+                let face = if program.split.is_some() {
                     split_characteristics(card)?
                 } else if card.layout == "meld" && program.meld_partner.is_some() {
                     let [face] = card.faces.as_slice() else {
@@ -151,18 +279,22 @@ impl NativeProgramSource {
                     )?
                 } else {
                     characteristics(card)?
-                }
+                };
+                (true, face)
             } else if let Some(split) = bound.program().split.as_ref()
                 && (split.left == *program || split.right == *program)
             {
                 let [left, right] = card.faces.as_slice() else {
                     return Err(NativeInitialError::Invalid);
                 };
-                face_characteristics(
-                    if split.left == *program { left } else { right },
-                    None,
-                    None,
-                )?
+                (
+                    false,
+                    face_characteristics(
+                        if split.left == *program { left } else { right },
+                        None,
+                        None,
+                    )?,
+                )
             } else if bound.program().back_face() == Some(program)
                 || bound.program().adventure.as_deref() == Some(program)
                 || bound.program().prepare_spell.as_deref() == Some(program)
@@ -170,23 +302,42 @@ impl NativeProgramSource {
                 let [_, back] = card.faces.as_slice() else {
                     return Err(NativeInitialError::Invalid);
                 };
-                face_characteristics(
-                    back,
-                    program.printed_loyalty.as_ref(),
-                    program.printed_defense.as_ref(),
-                )?
+                (
+                    false,
+                    face_characteristics(
+                        back,
+                        program.printed_loyalty.as_ref(),
+                        program.printed_defense.as_ref(),
+                    )?,
+                )
             } else {
                 continue;
             };
-            if found.is_some() || card.oracle_id.as_deref() != Some(oracle.as_str()) {
+            if card.oracle_id.as_deref() != Some(oracle.as_str()) {
                 return Err(NativeInitialError::Invalid);
             }
-            found = Some(NativePrintedCard {
-                oracle,
-                characteristics: face,
-            });
+            if is_primary {
+                if primary.is_some() {
+                    return Err(NativeInitialError::Invalid);
+                }
+                primary = Some(NativePrintedCard {
+                    oracle,
+                    characteristics: face,
+                });
+            } else if let Some(existing) = &secondary {
+                // Distinct multi-face cards may share an identical sub-face (such as a
+                // prepared spell) only when their printed characteristics match exactly.
+                if existing.characteristics != face {
+                    return Err(NativeInitialError::Invalid);
+                }
+            } else {
+                secondary = Some(NativePrintedCard {
+                    oracle,
+                    characteristics: face,
+                });
+            }
         }
-        Ok(found)
+        Ok(primary.or(secondary))
     }
 }
 

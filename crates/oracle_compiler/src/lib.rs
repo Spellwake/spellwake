@@ -11,6 +11,8 @@ pub mod keywords;
 pub mod preprocess;
 pub mod vocab;
 pub mod wave_e6;
+pub mod wave_e7;
+pub mod wave_e8;
 
 use std::error::Error;
 use std::fmt;
@@ -502,15 +504,15 @@ pub fn compile_face_with_options(
                 }
             }
             let (bullet_label, bullet_clean) = strip_ability_word(bullet_body.trim());
-            let (ins, mut fails) = parse_effect_body(bullet_clean, vocab);
             let mut granted_face: Option<Box<FaceAst>> = None;
-            if !fails.is_empty()
-                && modal_target == ModalTarget::LastReplacement
+            let (ins, fails) = if modal_target == ModalTarget::LastReplacement
                 && let Some(compiled) = compile_granted_ability(bullet_clean, vocab)
             {
-                fails.clear();
                 granted_face = Some(compiled);
-            }
+                (Vec::new(), Vec::new())
+            } else {
+                parse_effect_body(bullet_clean, vocab)
+            };
             out.failures.extend(fails);
             let mode_ast = if let Some(gf) = granted_face {
                 ModalModeAst {
@@ -2190,6 +2192,11 @@ mod tests {
 
         let mut total = 0usize;
         let mut strict = 0usize;
+        let mut cards_with_structured_rule = 0usize;
+        let mut structured_rule_nodes = 0usize;
+        let mut cards_with_game_state_flag = 0usize;
+        let mut structured_by_kind: HashMap<String, Vec<String>> = HashMap::new();
+        let mut purity_dump: Vec<String> = Vec::new();
         let mut by_bucket: HashMap<String, Vec<String>> = HashMap::new();
         let mut by_stage: HashMap<String, usize> = HashMap::new();
         let mut dump_lines: Vec<String> = Vec::new();
@@ -2246,7 +2253,42 @@ mod tests {
             );
             if ast.strictly_compiled {
                 strict += 1;
-            } else {
+            }
+            if let Ok(json) = serde_json::to_string(&ast) {
+                if json.contains("\"GameStateFlag\"") {
+                    cards_with_game_state_flag += 1;
+                }
+                if json.contains("\"StructuredRule\"") {
+                    cards_with_structured_rule += 1;
+                    let mut search_from = 0usize;
+                    while let Some(pos) =
+                        json[search_from..].find("\"StructuredRule\":{\"kind\":\"")
+                    {
+                        structured_rule_nodes += 1;
+                        let start = search_from + pos + "\"StructuredRule\":{\"kind\":\"".len();
+                        let kind = json[start..]
+                            .split_once('"')
+                            .map_or("unknown", |(k, _)| k)
+                            .to_string();
+                        let text_marker = ",\"text\":\"";
+                        let text = json[start..]
+                            .find(text_marker)
+                            .and_then(|tp| {
+                                let ts = start + tp + text_marker.len();
+                                json[ts..].split_once("\"}").map(|(t, _)| t)
+                            })
+                            .unwrap_or("")
+                            .to_string();
+                        structured_by_kind
+                            .entry(kind.clone())
+                            .or_default()
+                            .push(raw.name.clone());
+                        purity_dump.push(format!("StructuredRule\t{kind}\t{}\t{text}", raw.name));
+                        search_from = start;
+                    }
+                }
+            }
+            if !ast.strictly_compiled {
                 for face in &ast.faces {
                     for fail in &face.failures {
                         *by_stage.entry(fail.stage.clone()).or_insert(0) += 1;
@@ -2276,11 +2318,18 @@ mod tests {
         if let Ok(dump_path) = std::env::var("SPELLWAKE_AST_FAIL_DUMP") {
             let _ = std::fs::write(&dump_path, dump_lines.join("\n"));
         }
+        if let Ok(purity_path) = std::env::var("SPELLWAKE_AST_PURITY_DUMP") {
+            let _ = std::fs::write(&purity_path, purity_dump.join("\n"));
+        }
 
         let failed = total.saturating_sub(strict);
         eprintln!(
             "=== FAST STAGE 1 AST AUDIT: {strict} / {total} ({:.2}%), {failed} incomplete ===",
             (strict as f64 / total.max(1) as f64) * 100.0
+        );
+        eprintln!(
+            "AST purity: StructuredRule={structured_rule_nodes} nodes across {cards_with_structured_rule} cards ({} distinct kinds), GameStateFlag={cards_with_game_state_flag} cards",
+            structured_by_kind.len()
         );
         let mut stage_sorted: Vec<(String, usize)> = by_stage.into_iter().collect();
         stage_sorted.sort_by_key(|e| std::cmp::Reverse(e.1));
@@ -2571,6 +2620,900 @@ mod tests {
             signal.strictly_compiled,
             "Signal the Clans (gtc): {:?}",
             signal.faces[0].failures
+        );
+    }
+
+    #[test]
+    fn pass_e7_untap_and_lossless_upgrades() {
+        let members: Vec<String> = [
+            "Shark",
+            "Illusion",
+            "Drake",
+            "Human",
+            "Wizard",
+            "Goblin",
+            "Artificer",
+            "Dragon",
+            "Avatar",
+            "Zombie",
+            "God",
+            "Ooze",
+            "Tiefling",
+            "Warrior",
+            "Phyrexian",
+            "Angel",
+            "Wall",
+            "Fish",
+            "Beast",
+            "Bird",
+            "Hippo",
+            "Construct",
+        ]
+        .into_iter()
+        .map(str::to_string)
+        .collect();
+        let vocab = Vocabulary::from_creature_members(&members);
+        let compile = |name: &str, type_line: &str, oracle_text: &str| {
+            compile_card(
+                &CardInput {
+                    oracle_id: "test",
+                    name,
+                    layout: "normal",
+                    faces: vec![FaceInput {
+                        name,
+                        type_line,
+                        oracle_text,
+                    }],
+                },
+                &vocab,
+            )
+        };
+
+        // 1. Giant Shark trigger routing: uses typed DEALT_DAMAGE_THIS_TURN instead of dead branch
+        let shark = compile(
+            "Giant Shark",
+            "Creature — Shark",
+            "This creature can't attack unless defending player controls an Island.\nWhenever this creature blocks or becomes blocked by a creature that has been dealt damage this turn, this creature gets +2/+0 and gains trample until end of turn.\nWhen you control no Islands, sacrifice this creature.",
+        );
+        assert!(
+            shark.strictly_compiled,
+            "Giant Shark: {:?}",
+            shark.faces[0].failures
+        );
+        let has_typed_block_trig = shark.faces[0].abilities.iter().any(|ab| {
+            matches!(
+                ab,
+                AbilityAst::Triggered { trigger, .. }
+                    if trigger.events.iter().any(|ev| matches!(
+                        ev,
+                        TriggerEventAst::BlocksOrBecomesBlockedBy {
+                            other_filter,
+                            blocks: true,
+                            becomes_blocked: true,
+                            min_count: 1,
+                            ..
+                        } if other_filter.flags.0 & ast::ObjectFilterFlags::DEALT_DAMAGE_THIS_TURN.0 != 0
+                    ))
+            )
+        });
+        assert!(
+            has_typed_block_trig,
+            "Giant Shark must emit typed BlocksOrBecomesBlockedBy with DEALT_DAMAGE_THIS_TURN: {:?}",
+            shark.faces[0].abilities
+        );
+
+        // 2. InstructionAst::UntapPermanent preserves count and up_to for non-targeted untap cards
+        let palinchron = compile(
+            "Palinchron",
+            "Creature — Illusion",
+            "Flying\nWhen Palinchron enters, untap up to seven lands.\n{2}{U}{U}: Return Palinchron to its owner's hand.",
+        );
+        assert!(palinchron.strictly_compiled);
+        assert!(palinchron.faces[0].abilities.iter().any(|ab| matches!(
+            ab,
+            AbilityAst::Triggered { body, .. }
+                if body.iter().any(|ins| matches!(
+                    ins,
+                    InstructionAst::UntapPermanent {
+                        subject,
+                        count: Some(cnt),
+                        up_to: true,
+                    } if matches!(subject.as_ref(), ast::SubjectRefAst::Group(f) if f.any_types == ast::CardTypeMask::LAND)
+                        && **cnt == ast::ValueExprAst::Const(7)
+                ))
+        )));
+
+        let frantic = compile(
+            "Frantic Search",
+            "Instant",
+            "Draw two cards, then discard two cards. Untap up to three lands.",
+        );
+        assert!(frantic.strictly_compiled);
+        assert!(frantic.faces[0].spell_effects.iter().any(|ins| matches!(
+            ins,
+            InstructionAst::UntapPermanent {
+                count: Some(cnt),
+                up_to: true,
+                ..
+            } if **cnt == ast::ValueExprAst::Const(3)
+        )));
+
+        let azusa = compile(
+            "Likeness of the Seeker",
+            "Enchantment Creature — Human Monk",
+            "When Likeness of the Seeker enters, untap up to three lands you control.",
+        );
+        assert!(azusa.strictly_compiled);
+        assert!(azusa.faces[0].abilities.iter().any(|ab| matches!(
+            ab,
+            AbilityAst::Triggered { body, .. }
+                if body.iter().any(|ins| matches!(
+                    ins,
+                    InstructionAst::UntapPermanent {
+                        subject,
+                        count: Some(cnt),
+                        up_to: true,
+                    } if matches!(subject.as_ref(), ast::SubjectRefAst::Group(f) if f.controller == Some(ast::ControllerRelation::You))
+                        && **cnt == ast::ValueExprAst::Const(3)
+                ))
+        )));
+
+        let shriekwood = compile(
+            "Shriekwood Devourer",
+            "Creature — Treefolk",
+            "Whenever Shriekwood Devourer attacks, untap up to X lands, where X is its power.",
+        );
+        assert!(shriekwood.strictly_compiled);
+        let shriek_json = serde_json::to_string(&shriekwood).unwrap_or_default();
+        assert!(
+            shriek_json.contains("\"UntapPermanent\"")
+                && shriek_json.contains("\"ChosenX\"")
+                && shriek_json.contains("\"up_to\":true"),
+            "Shriekwood Devourer must preserve ChosenX + up_to: {shriek_json}"
+        );
+
+        // Targeted untap preserves TargetObject with count: None, up_to: false
+        let twiddle = compile(
+            "Garruk Wildspeaker",
+            "Planeswalker — Garruk",
+            "+1: Untap two target lands.",
+        );
+        assert!(twiddle.strictly_compiled);
+        assert!(twiddle.faces[0].abilities.iter().any(|ab| matches!(
+            ab,
+            AbilityAst::Loyalty { body, .. }
+                if body.iter().any(|ins| matches!(
+                    ins,
+                    InstructionAst::UntapPermanent {
+                        subject,
+                        count: None,
+                        up_to: false,
+                    } if matches!(subject.as_ref(), ast::SubjectRefAst::TargetObject { count: ast::TargetCountAst::Exact(2), .. })
+                ))
+        )));
+
+        // 3. All 9 high-playability black-border staples compile strictly with zero StructuredRule / GameStateFlag
+        let staples = [
+            (
+                "Chains of Mephistopheles",
+                "Enchantment",
+                "If a player would draw a card except the first one they draw in each of their draw steps, that player discards a card instead. If the player discards a card this way, they draw a card. If the player doesn't discard a card this way, they mill a card.",
+            ),
+            (
+                "Chancellor of the Annex",
+                "Creature — Phyrexian Angel",
+                "You may reveal this card from your opening hand. If you do, when each opponent casts their first spell of the game, counter that spell unless that player pays {1}.\nFlying\nWhenever an opponent casts a spell, counter it unless that player pays {1}.",
+            ),
+            (
+                "Goblin Welder",
+                "Creature — Goblin Artificer",
+                "{T}: Choose target artifact a player controls and target artifact card in that player's graveyard. If both targets are still legal as this ability resolves, that player simultaneously sacrifices the artifact and returns the artifact card to the battlefield.",
+            ),
+            (
+                "Helm of Obedience",
+                "Artifact",
+                "{X}, {T}: Target opponent mills a card, then repeats this process until a creature card or X cards have been put into their graveyard this way, whichever comes first. If one or more creature cards were put into that graveyard this way, sacrifice this artifact and put one of them onto the battlefield under your control. X can't be 0.",
+            ),
+            (
+                "Niv-Mizzet Reborn",
+                "Legendary Creature — Dragon Avatar",
+                "Flying\nWhen Niv-Mizzet enters, reveal the top ten cards of your library. For each color pair, choose a card that's exactly those colors from among them. Put the chosen cards into your hand and the rest on the bottom of your library in a random order.",
+            ),
+            (
+                "The Book of Vile Darkness",
+                "Legendary Artifact — Book",
+                "At the beginning of your end step, if you lost 2 or more life this turn, create a 2/2 black Zombie creature token.\n{T}, Exile The Book of Vile Darkness and artifacts you control named Eye of Vecna and Hand of Vecna: Create Vecna, a legendary 8/8 black Zombie God creature token with indestructible and all triggered abilities of the exiled cards.",
+            ),
+            (
+                "The Chain Veil",
+                "Legendary Artifact",
+                "At the beginning of your end step, if you didn't activate a loyalty ability of a planeswalker this turn, you lose 2 life.\n{4}, {T}: For each planeswalker you control, you may activate one of its loyalty abilities once this turn as though none of its loyalty abilities have been activated this turn.",
+            ),
+            (
+                "The Mimeoplasm",
+                "Legendary Creature — Ooze",
+                "As The Mimeoplasm enters, you may exile two creature cards from graveyards. If you do, it enters as a copy of one of those cards with a number of additional +1/+1 counters on it equal to the power of the other card.",
+            ),
+            (
+                "Zevlor, Elturel Exile",
+                "Legendary Creature — Tiefling Warrior",
+                "Haste\n{2}, {T}: When you next cast an instant or sorcery spell that targets only a single opponent or a single permanent an opponent controls this turn, for each other opponent, choose that player or a permanent they control, copy that spell, and the copy targets the chosen player or permanent.",
+            ),
+        ];
+        for (name, tl, ot) in staples {
+            let compiled = compile(name, tl, ot);
+            assert!(
+                compiled.strictly_compiled,
+                "{name} failed: {:?}",
+                compiled.faces[0].failures
+            );
+            let json = serde_json::to_string(&compiled).unwrap_or_default();
+            assert!(
+                !json.contains("\"StructuredRule\""),
+                "{name} must not emit StructuredRule: {json}"
+            );
+            assert!(
+                !json.contains("\"GameStateFlag\""),
+                "{name} must not emit GameStateFlag: {json}"
+            );
+        }
+
+        // Verify typed AST structure on key Pass E7 orthogonal variants
+        let welder = compile(
+            "Goblin Welder",
+            "Creature — Goblin Artificer",
+            "{T}: Choose target artifact a player controls and target artifact card in that player's graveyard. If both targets are still legal as this ability resolves, that player simultaneously sacrifices the artifact and returns the artifact card to the battlefield.",
+        );
+        let welder_json = serde_json::to_string(&welder).unwrap_or_default();
+        assert!(
+            welder_json.contains("\"AllTargetsLegal\"") && welder_json.contains("\"Simultaneous\""),
+            "Goblin Welder must emit AllTargetsLegal + Simultaneous: {welder_json}"
+        );
+
+        let snowblind = compile(
+            "Snowblind",
+            "Enchantment — Aura",
+            "Enchant creature\nEnchanted creature gets -X/-Y. If that creature is attacking, X is the number of snow lands defending player controls. Otherwise, X is the number of snow lands its controller controls. Y is equal to X or to enchanted creature's toughness minus 1, whichever is smaller.",
+        );
+        assert!(
+            snowblind.strictly_compiled,
+            "Snowblind: {:?}",
+            snowblind.faces[0].failures
+        );
+        let snow_json = serde_json::to_string(&snowblind).unwrap_or_default();
+        assert!(
+            snow_json.contains("\"DynamicModifyPT\"") && snow_json.contains("\"Conditional\""),
+            "Snowblind must emit DynamicModifyPT + Conditional: {snow_json}"
+        );
+
+        let wild = compile(
+            "Wild Endeavor",
+            "Sorcery",
+            "Roll two d4 and choose one result. Create a number of 3/3 green Beast creature tokens equal to that result. Then search your library for a number of basic land cards equal to the other result, put them onto the battlefield tapped, then shuffle.",
+        );
+        assert!(
+            wild.strictly_compiled,
+            "Wild Endeavor: {:?}",
+            wild.faces[0].failures
+        );
+    }
+
+    #[test]
+    fn pass_e8_compositional_and_zero_structured_rules() {
+        let members: Vec<String> = [
+            "Goblin",
+            "Artificer",
+            "Dragon",
+            "Avatar",
+            "Human",
+            "Wizard",
+            "Beast",
+            "Bird",
+            "Cleric",
+            "Rogue",
+            "Warrior",
+            "Soldier",
+            "Zombie",
+            "Hydra",
+            "Angel",
+            "Elf",
+            "Dinosaur",
+            "Phoenix",
+            "Dog",
+            "Spirit",
+            "Eldrazi",
+            "Shapeshifter",
+            "Construct",
+            "Phyrexian",
+            "Horror",
+            "Warlock",
+            "Giant",
+            "Fish",
+            "Knight",
+            "Vampire",
+        ]
+        .into_iter()
+        .map(str::to_string)
+        .collect();
+        let vocab = Vocabulary::from_creature_members(&members);
+        let compile = |name: &str, type_line: &str, oracle_text: &str| {
+            compile_card(
+                &CardInput {
+                    oracle_id: "test-e8",
+                    name,
+                    layout: "normal",
+                    faces: vec![FaceInput {
+                        name,
+                        type_line,
+                        oracle_text,
+                    }],
+                },
+                &vocab,
+            )
+        };
+
+        // 1. Hypothetical unseen future cards proving compositional generalization
+        let unseen_cards: &[(&str, &str, &str, &[&str])] = &[
+            (
+                "Enchantment Welder",
+                "Creature \u{2014} Human Artificer",
+                "{T}: Choose target enchantment a player controls and target enchantment card in that player's graveyard. If both targets are still legal as this ability resolves, that player simultaneously sacrifices the enchantment and returns the enchantment card to the battlefield.",
+                &["\"AllTargetsLegal\"", "\"Simultaneous\""],
+            ),
+            (
+                "Blue Chain Veil",
+                "Legendary Artifact",
+                "{3}, {T}: For each blue planeswalker you control, you may activate one of its loyalty abilities once this turn as though none of its loyalty abilities have been activated this turn.",
+                &["\"ForEachObject\""],
+            ),
+            (
+                "Guild Artificer",
+                "Legendary Creature \u{2014} Human Artificer",
+                "When Guild Artificer enters, reveal the top seven cards of your library. For each color pair, choose an artifact card that's exactly those colors from among them. Put the chosen cards into your hand and the rest on the bottom of your library in a random order.",
+                &["\"ForEachCategory\"", "\"ColorPair\""],
+            ),
+            (
+                "Sands of Enchantments",
+                "Artifact",
+                "At the beginning of each player's upkeep, that player simultaneously untaps each tapped enchantment and planeswalker they control and taps each untapped enchantment and planeswalker they control.",
+                &["\"Simultaneous\""],
+            ),
+            (
+                "Triple Power Instant",
+                "Instant",
+                "Triple target creature's power until end of turn.",
+                &["\"DoubleStatOrCounters\"", "\"triple_power\""],
+            ),
+            (
+                "Creature Firebombers",
+                "Creature \u{2014} Giant Warrior",
+                "When Creature Firebombers enters, each player sacrifices all creatures they control except for two.",
+                &["\"SacrificeAllExcept\""],
+            ),
+            (
+                "Red Soul Burn",
+                "Sorcery",
+                "Red Soul Burn deals X damage to any target. You gain life equal to the damage dealt, but not more life than the player's life total before the damage was dealt, the planeswalker's loyalty before the damage was dealt, or the creature's toughness.",
+                &["\"DealDamage\"", "\"ChangeLife\"", "\"TargetPreDamageCap\""],
+            ),
+            (
+                "Power Timesifter",
+                "Artifact",
+                "At the beginning of each upkeep, each player exiles the top card of their library. The player who exiled the card with the greatest power takes an extra turn after this one. If two or more players' cards are tied for greatest, the tied players repeat this process until the tie is broken.",
+                &["\"ExtraTurn\"", "\"RepeatProcessExt\""],
+            ),
+            (
+                "Enchantment Reins",
+                "Instant",
+                "Target opponent and you exchange control of all enchantments you each control until end of turn.",
+                &["\"ExchangeAllControlled\""],
+            ),
+            (
+                "Draw-Step Paradox",
+                "Enchantment \u{2014} Aura",
+                "Enchant player\nAt the beginning of enchanted player's first draw step each turn, that player gets an additional draw step after this step.",
+                &["\"AdditionalStep\"", "\"DrawStep\""],
+            ),
+            (
+                "Main Phase Silence",
+                "Sorcery",
+                "Target opponent skips all main phases of their next turn.",
+                &["\"SkipAllPhasesNextTurn\""],
+            ),
+            (
+                "Oath of Artifacts",
+                "Enchantment",
+                "At the beginning of each player's upkeep, that player chooses target player whose graveyard has fewer artifact cards in it than their graveyard does and is their opponent.",
+                &["\"ChooseFromGroup\""],
+            ),
+            (
+                "Artifact Terror",
+                "Creature \u{2014} Dragon",
+                "Spells your opponents cast that target an artifact you control cost an additional 4 life to cast.",
+                &["\"AdditionalActivationCost\"", "\"PayLife\""],
+            ),
+            (
+                "Dice Hydra",
+                "Creature \u{2014} Hydra",
+                "As Dice Hydra enters, roll X d8. It enters with a number of +1/+1 counters on it equal to the total of those results.",
+                &[
+                    "\"AsEntersAction\"",
+                    "\"sides\":8",
+                    "\"EntersWithCounters\"",
+                ],
+            ),
+            (
+                "Goblin Scion",
+                "Creature \u{2014} Goblin",
+                "Each Goblin you control has haste if it's red, deathtouch if it's black, and flying if it's blue.",
+                &["\"Compound\"", "\"GrantKeywords\""],
+            ),
+            (
+                "Boast Doubler",
+                "Enchantment",
+                "Each boast ability of creatures you control can be activated an additional time.",
+                &["\"ActivationLimitOverride\"", "\"extra_times\":1"],
+            ),
+        ];
+
+        for (name, tl, ot, expected_tokens) in unseen_cards {
+            let compiled = compile(name, tl, ot);
+            assert!(
+                compiled.strictly_compiled,
+                "Unseen card {name} failed: {:?}",
+                compiled.faces[0].failures
+            );
+            let json = serde_json::to_string(&compiled).unwrap_or_default();
+            assert!(
+                !json.contains("\"StructuredRule\""),
+                "Unseen card {name} emitted StructuredRule: {json}"
+            );
+            assert!(
+                !json.contains("\"GameStateFlag\""),
+                "Unseen card {name} emitted GameStateFlag: {json}"
+            );
+            for tok in *expected_tokens {
+                assert!(
+                    json.contains(tok),
+                    "Unseen card {name} missing expected AST token {tok}: {json}"
+                );
+            }
+        }
+
+        // 2. Former E5_STRUCTURED_RULES & E3/E4_STATIC_EXACTS staples compile strictly with zero catch-alls
+        let former_catchall_staples: &[(&str, &str, &str)] = &[
+            (
+                "Karn Liberated",
+                "Legendary Planeswalker \u{2014} Karn",
+                "\u{2212}14: Restart the game, leaving in exile all non-Aura permanent cards exiled with Karn Liberated. Then put those cards onto the battlefield under your control.",
+            ),
+            (
+                "Jace, the Mind Sculptor",
+                "Legendary Planeswalker \u{2014} Jace",
+                "\u{2212}12: Exile all cards from target player's library, then that player shuffles their hand into their library.",
+            ),
+            (
+                "Once Upon a Time",
+                "Instant",
+                "If this spell is the first spell you've cast this game, you may cast it without paying its mana cost.\nLook at the top five cards of your library. You may reveal a creature or land card from among them and put it into your hand. Put the rest on the bottom of your library in a random order.",
+            ),
+            (
+                "Approach of the Second Sun",
+                "Sorcery",
+                "If this spell was cast from your hand and you've cast another spell named Approach of the Second Sun this game, you win the game. Otherwise, put Approach of the Second Sun into its owner's library seventh from the top and you gain 7 life.",
+            ),
+            (
+                "Long-Term Plans",
+                "Instant",
+                "Search your library for a card, then shuffle and put that card third from the top.",
+            ),
+            (
+                "Reins of Power",
+                "Instant",
+                "Untap all creatures you control and all creatures target opponent controls. You and that opponent each gain control of all creatures the other controls until end of turn. Those creatures gain haste until end of turn.",
+            ),
+            (
+                "Sands of Time",
+                "Artifact",
+                "Each player skips their untap step.\nAt the beginning of each player's upkeep, that player simultaneously untaps each tapped artifact, creature, and land they control and taps each untapped artifact, creature, and land they control.",
+            ),
+            (
+                "Tifa's Limit Break",
+                "Instant",
+                "Tiered (Choose one additional cost.)\n\u{2022} Somersault \u{2014} {0} \u{2014} Target creature gets +2/+2 until end of turn.\n\u{2022} Meteor Strikes \u{2014} {2} \u{2014} Double target creature's power and toughness until end of turn.\n\u{2022} Final Heaven \u{2014} {6}{G} \u{2014} Triple target creature's power and toughness until end of turn.",
+            ),
+            (
+                "Terror of the Peaks",
+                "Creature \u{2014} Dragon",
+                "Flying\nSpells your opponents cast that target Terror of the Peaks cost an additional 3 life to cast.",
+            ),
+            (
+                "Jetmir, Nexus of Revels",
+                "Legendary Creature \u{2014} Cat Demon",
+                "Creatures you control get +1/+0 and have vigilance as long as you control three or more creatures.\nCreatures you control also get +1/+0 and have trample as long as you control six or more creatures.\nCreatures you control also get +1/+0 and have double strike as long as you control nine or more creatures.",
+            ),
+            (
+                "On Serra's Wings",
+                "Enchantment \u{2014} Aura",
+                "Enchant creature\nEnchanted creature is legendary, gets +1/+1, and has flying, vigilance, and lifelink.",
+            ),
+            (
+                "Scion of Draco",
+                "Artifact Creature \u{2014} Dragon",
+                "Flying\nEach creature you control has vigilance if it's white, hexproof if it's blue, lifelink if it's black, first strike if it's red, and trample if it's green.",
+            ),
+            (
+                "Arcades, the Strategist",
+                "Legendary Creature \u{2014} Elder Dragon",
+                "Flying, vigilance\nEach creature you control with defender assigns combat damage equal to its toughness rather than its power and can attack as though it didn't have defender.",
+            ),
+            (
+                "Winter, Misanthropic Guide",
+                "Legendary Creature \u{2014} Human Warlock",
+                "As long as there are four or more card types among cards in your graveyard, each opponent's maximum hand size is equal to seven minus the number of those card types.",
+            ),
+            (
+                "Trinisphere",
+                "Artifact",
+                "As long as Trinisphere is untapped, each spell that would cost less than three mana to cast costs three mana to cast.",
+            ),
+            (
+                "K'rrik, Son of Yawgmoth",
+                "Legendary Creature \u{2014} Phyrexian Horror Minion",
+                "Lifelink\nFor each {B} in a cost, you may pay 2 life rather than pay that mana.",
+            ),
+            (
+                "Opposition Agent",
+                "Creature \u{2014} Human Rogue",
+                "Flash\nYou control your opponents while they're searching their libraries.\nWhile an opponent is searching their library, they exile each card they find. You may play those cards for as long as they remain exiled, and you may spend mana as though it were mana of any color to cast them.",
+            ),
+            (
+                "Neverwinter Hydra",
+                "Creature \u{2014} Hydra",
+                "Trample, ward {4}\nAs Neverwinter Hydra enters, roll X d6. It enters with a number of +1/+1 counters on it equal to the total of those results.",
+            ),
+            (
+                "Deadpool, Trading Card",
+                "Legendary Creature \u{2014} Mutant Mercenary Hero",
+                "As Deadpool enters, you may exchange his text box and another creature's.",
+            ),
+            (
+                "Firestorm Phoenix",
+                "Creature \u{2014} Phoenix",
+                "Flying\nIf Firestorm Phoenix would die, return it to its owner's hand instead. Until that player's next turn, that player plays with that card revealed in their hand and can't play it.",
+            ),
+            (
+                "Cultist of the Absolute",
+                "Legendary Enchantment \u{2014} Background",
+                "Commander creatures you own get +3/+3 and have flying, deathtouch, \"Ward\u{2014}Pay 3 life,\" and \"At the beginning of your upkeep, sacrifice a creature.\"",
+            ),
+            (
+                "Oath of Teferi",
+                "Legendary Enchantment",
+                "You may activate the loyalty abilities of planeswalkers you control twice each turn rather than only once.",
+            ),
+            (
+                "Teferi, Master of Time",
+                "Legendary Planeswalker \u{2014} Teferi",
+                "You may activate loyalty abilities of Teferi, Master of Time on any player's turn any time you could cast an instant.",
+            ),
+            (
+                "Mycosynth Lattice",
+                "Artifact",
+                "All permanents are artifacts in addition to their other types.\nAll cards that aren't on the battlefield, spells, and permanents are colorless.\nPlayers may spend mana as though it were mana of any color.",
+            ),
+            (
+                "Drought",
+                "Enchantment",
+                "Spells cost an additional \"Sacrifice a Swamp\" to cast for each black mana symbol in their mana costs.\nActivated abilities cost an additional \"Sacrifice a Swamp\" to activate for each black mana symbol in their activation costs.",
+            ),
+            (
+                "Shalai, Voice of Plenty",
+                "Legendary Creature \u{2014} Angel",
+                "Flying\nYou, planeswalkers you control, and other creatures you control have hexproof.",
+            ),
+        ];
+
+        for (name, tl, ot) in former_catchall_staples {
+            let compiled = compile(name, tl, ot);
+            assert!(
+                compiled.strictly_compiled,
+                "Former catch-all staple {name} failed: {:?}",
+                compiled.faces[0].failures
+            );
+            let json = serde_json::to_string(&compiled).unwrap_or_default();
+            assert!(
+                !json.contains("\"StructuredRule\""),
+                "Staple {name} emitted StructuredRule: {json}"
+            );
+            assert!(
+                !json.contains("\"GameStateFlag\""),
+                "Staple {name} emitted GameStateFlag: {json}"
+            );
+        }
+    }
+
+    #[test]
+    fn pass_e8_lossless_engine_handoff_fixes() {
+        let members: Vec<String> = [
+            "Wall",
+            "Pilot",
+            "Human",
+            "Wizard",
+            "Knight",
+            "Vampire",
+            "Zombie",
+            "Rebel",
+            "Elf",
+            "Archer",
+            "Goblin",
+            "Dragon",
+            "Pirate",
+            "Ouphe",
+            "Horror",
+            "Warlock",
+            "Construct",
+            "Merfolk",
+            "Scout",
+            "Mount",
+            "Avatar",
+        ]
+        .into_iter()
+        .map(str::to_string)
+        .collect();
+        let vocab = Vocabulary::from_creature_members(&members);
+        let compile = |name: &str, type_line: &str, oracle_text: &str| {
+            compile_card(
+                &CardInput {
+                    oracle_id: "test-e8-fixes",
+                    name,
+                    layout: "normal",
+                    faces: vec![FaceInput {
+                        name,
+                        type_line,
+                        oracle_text,
+                    }],
+                },
+                &vocab,
+            )
+        };
+
+        // 1. AsEntersAction Siege modal bullets try compile_granted_ability first (lossless granted: Some(FaceAst))
+        let monastery = compile(
+            "Monastery Siege",
+            "Enchantment",
+            "As Monastery Siege enters, choose Khans or Dragons.\n\u{2022} Khans \u{2014} At the beginning of your draw step, draw an additional card, then discard a card.\n\u{2022} Dragons \u{2014} Spells your opponents cast that target you or a permanent you control cost {2} more to cast.",
+        );
+        assert!(
+            monastery.strictly_compiled,
+            "Monastery Siege: {:?}",
+            monastery.faces[0].failures
+        );
+        let monastery_json = serde_json::to_string(&monastery).unwrap_or_default();
+        assert!(
+            monastery_json.contains("\"CostModifier\"")
+                && monastery_json.contains("\"{2}\"")
+                && monastery_json.matches("\"granted\":{").count() == 2,
+            "Monastery Siege must emit lossless granted FaceAst for both Khans and Dragons: {monastery_json}"
+        );
+
+        let glacierwood = compile(
+            "Glacierwood Siege",
+            "Enchantment",
+            "As Glacierwood Siege enters, choose Temur or Sultai.\n\u{2022} Temur \u{2014} Whenever you cast an instant or sorcery spell, target player mills four cards.\n\u{2022} Sultai \u{2014} You may play lands from your graveyard.",
+        );
+        assert!(
+            glacierwood.strictly_compiled,
+            "Glacierwood Siege: {:?}",
+            glacierwood.faces[0].failures
+        );
+        let glacier_json = serde_json::to_string(&glacierwood).unwrap_or_default();
+        assert!(
+            glacier_json.contains("\"PlayOrCastPermission\"")
+                && glacier_json.contains("\"permission\":\"from your graveyard\"")
+                && glacier_json.matches("\"granted\":{").count() == 2,
+            "Glacierwood Siege must preserve from your graveyard in granted FaceAst: {glacier_json}"
+        );
+
+        let outpost = compile(
+            "Outpost Siege",
+            "Enchantment",
+            "As Outpost Siege enters, choose Khans or Dragons.\n\u{2022} Khans \u{2014} At the beginning of your upkeep, exile the top card of your library. Until end of turn, you may play that card.\n\u{2022} Dragons \u{2014} Whenever a creature you control leaves the battlefield, Outpost Siege deals 1 damage to any target.",
+        );
+        assert!(
+            outpost.strictly_compiled,
+            "Outpost Siege: {:?}",
+            outpost.faces[0].failures
+        );
+        let outpost_json = serde_json::to_string(&outpost).unwrap_or_default();
+        assert!(
+            outpost_json.matches("\"granted\":{").count() == 2,
+            "Outpost Siege must emit granted FaceAst for both modes: {outpost_json}"
+        );
+
+        // 2. Crew / Saddle power bonus preserves exact numeric bonus N (and generalizes to unseen cards)
+        let hotshot = compile(
+            "Hotshot Mechanic",
+            "Creature \u{2014} Fox Pilot",
+            "Hotshot Mechanic crews Vehicles as though its power were 2 greater.",
+        );
+        assert!(hotshot.strictly_compiled, "{:?}", hotshot.faces[0].failures);
+        assert!(hotshot.faces[0].statics.iter().any(|st| matches!(
+            st,
+            StaticAbilityAst::CrewOrSaddlePowerBonus {
+                crews_vehicles: true,
+                saddles_mounts: false,
+                bonus,
+                ..
+            } if **bonus == ast::ValueExprAst::Const(2)
+        )));
+
+        let deathless = compile(
+            "Deathless Pilot",
+            "Creature \u{2014} Zombie Pilot",
+            "Deathless Pilot saddles Mounts and crews Vehicles as though its power were 2 greater.",
+        );
+        assert!(
+            deathless.strictly_compiled,
+            "{:?}",
+            deathless.faces[0].failures
+        );
+        assert!(deathless.faces[0].statics.iter().any(|st| matches!(
+            st,
+            StaticAbilityAst::CrewOrSaddlePowerBonus {
+                crews_vehicles: true,
+                saddles_mounts: true,
+                bonus,
+                ..
+            } if **bonus == ast::ValueExprAst::Const(2)
+        )));
+
+        let unseen_mount = compile(
+            "Master Mountaineer",
+            "Creature \u{2014} Human Pilot",
+            "Master Mountaineer saddles Mounts as though its power were 3 greater.",
+        );
+        assert!(
+            unseen_mount.strictly_compiled,
+            "{:?}",
+            unseen_mount.faces[0].failures
+        );
+        assert!(unseen_mount.faces[0].statics.iter().any(|st| matches!(
+            st,
+            StaticAbilityAst::CrewOrSaddlePowerBonus {
+                crews_vehicles: false,
+                saddles_mounts: true,
+                bonus,
+                ..
+            } if **bonus == ast::ValueExprAst::Const(3)
+        )));
+
+        // 3. CantBeBlockedBy / CantBeBlockedExceptBy never silently drop unparseable filters to None
+        let doorman = compile(
+            "Doorman",
+            "Creature \u{2014} Human",
+            "{T}: Until end of turn, target creature can't be blocked by creatures with power 2 or less and/or Walls.",
+        );
+        assert!(doorman.strictly_compiled, "{:?}", doorman.faces[0].failures);
+        let doorman_json = serde_json::to_string(&doorman).unwrap_or_default();
+        assert!(
+            doorman_json.contains("\"Compound\"")
+                && doorman_json.contains("\"CantBeBlockedBy\"")
+                && doorman_json.contains("\"Wall\"")
+                && !doorman_json.contains("\"filter\":null"),
+            "Doorman must split into lossless Compound CantBeBlockedBy filters without filter:null: {doorman_json}"
+        );
+
+        let elven = compile(
+            "Elven Riders",
+            "Creature \u{2014} Elf",
+            "Elven Riders can't be blocked except by Walls and/or creatures with flying.",
+        );
+        assert!(elven.strictly_compiled, "{:?}", elven.faces[0].failures);
+        let elven_json = serde_json::to_string(&elven).unwrap_or_default();
+        assert!(
+            elven_json.contains("\"CantBeBlockedExceptByAny\"")
+                && elven_json.contains("\"Wall\"")
+                && elven_json.contains("\"flying\""),
+            "Elven Riders must emit lossless CantBeBlockedExceptByAny: {elven_json}"
+        );
+
+        let jasmine = compile(
+            "Jasmine Boreal of the Seven",
+            "Legendary Creature \u{2014} Human Druid",
+            "Creatures you control with no abilities can't be blocked by creatures with abilities.",
+        );
+        assert!(jasmine.strictly_compiled, "{:?}", jasmine.faces[0].failures);
+        let jasmine_json = serde_json::to_string(&jasmine).unwrap_or_default();
+        assert!(
+            jasmine_json.contains("\"has_abilities\":false")
+                && jasmine_json.contains("\"has_abilities\":true")
+                && !jasmine_json.contains("\"filter\":null"),
+            "Jasmine Boreal must preserve HasAbilities predicates on both sides: {jasmine_json}"
+        );
+
+        let admiral = compile(
+            "Azure Fleet Admiral",
+            "Creature \u{2014} Human Pirate",
+            "Azure Fleet Admiral can't be blocked by creatures the monarch controls.",
+        );
+        assert!(admiral.strictly_compiled, "{:?}", admiral.faces[0].failures);
+        let admiral_json = serde_json::to_string(&admiral).unwrap_or_default();
+        assert!(
+            admiral_json.contains("\"ControlledByMonarch\"")
+                && !admiral_json.contains("\"filter\":null"),
+            "Azure Fleet Admiral must preserve ControlledByMonarch: {admiral_json}"
+        );
+
+        // 4. "you control <flt> named <names>" preserves exact names and decomposes multi-name lists
+        let scepter = compile(
+            "Scepter of Empires",
+            "Artifact",
+            "{T}: Scepter of Empires deals 1 damage to target player or planeswalker. It deals 3 damage instead if you control artifacts named Crown of Empires and Throne of Empires.",
+        );
+        assert!(scepter.strictly_compiled, "{:?}", scepter.faces[0].failures);
+        let scepter_json = serde_json::to_string(&scepter).unwrap_or_default();
+        assert!(
+            scepter_json.contains("\"Exact\":\"Crown of Empires\"")
+                && scepter_json.contains("\"Exact\":\"Throne of Empires\"")
+                && scepter_json.contains("\"And\""),
+            "Scepter of Empires must emit And of two named ControlsCount conditions: {scepter_json}"
+        );
+
+        let kaldra = compile(
+            "Helm of Kaldra",
+            "Legendary Artifact \u{2014} Equipment",
+            "{1}: If you control Equipment named Helm of Kaldra, Sword of Kaldra, and Shield of Kaldra, create Kaldra, a legendary 4/4 colorless Avatar creature token.",
+        );
+        assert!(kaldra.strictly_compiled, "{:?}", kaldra.faces[0].failures);
+        let kaldra_json = serde_json::to_string(&kaldra).unwrap_or_default();
+        assert!(
+            kaldra_json.contains("\"SelfName\"")
+                && kaldra_json.contains("\"Exact\":\"Sword of Kaldra\"")
+                && kaldra_json.contains("\"Exact\":\"Shield of Kaldra\""),
+            "Helm of Kaldra must preserve all three named Equipment: {kaldra_json}"
+        );
+
+        let newt = compile(
+            "Festering Newt",
+            "Creature \u{2014} Salamander",
+            "When Festering Newt dies, target creature an opponent controls gets -1/-1 until end of turn. That creature gets -4/-4 instead if you control a creature named Bogbrew Witch.",
+        );
+        assert!(newt.strictly_compiled, "{:?}", newt.faces[0].failures);
+        let newt_json = serde_json::to_string(&newt).unwrap_or_default();
+        assert!(
+            newt_json.contains("\"Exact\":\"Bogbrew Witch\""),
+            "Festering Newt must preserve Bogbrew Witch name filter: {newt_json}"
+        );
+
+        let liu_bei = compile(
+            "Liu Bei, Lord of Shu",
+            "Legendary Creature \u{2014} Human Soldier",
+            "Horsemanship\nLiu Bei, Lord of Shu gets +2/+2 as long as you control a permanent named Guan Yu, Sainted Warrior or Zhang Fei, Fierce Warrior.",
+        );
+        assert!(liu_bei.strictly_compiled, "{:?}", liu_bei.faces[0].failures);
+        let liu_json = serde_json::to_string(&liu_bei).unwrap_or_default();
+        assert!(
+            liu_json.contains("\"Or\"")
+                && liu_json.contains("\"Exact\":\"Guan Yu, Sainted Warrior\"")
+                && liu_json.contains("\"Exact\":\"Zhang Fei, Fierce Warrior\""),
+            "Liu Bei must emit Or of two named ControlsCount conditions preserving commas: {liu_json}"
+        );
+
+        let galactus = compile(
+            "Galactus, Devourer of Worlds",
+            "Legendary Creature \u{2014} Alien",
+            "Galactus attacks each combat if able unless you control a creature named Silver Surfer, Galactus's Herald.",
+        );
+        assert!(
+            galactus.strictly_compiled,
+            "{:?}",
+            galactus.faces[0].failures
+        );
+        let galactus_json = serde_json::to_string(&galactus).unwrap_or_default();
+        assert!(
+            galactus_json.contains("\"Exact\":\"Silver Surfer, ~'s Herald\""),
+            "Galactus must keep comma inside singular legendary card name intact: {galactus_json}"
         );
     }
 }

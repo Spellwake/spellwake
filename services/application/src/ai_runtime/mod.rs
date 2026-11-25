@@ -7,6 +7,7 @@ pub mod affordances;
 pub mod codex_app_server;
 pub mod compact;
 pub mod driver;
+pub mod knowledge;
 pub mod lifecycle;
 pub mod provider;
 pub mod quota;
@@ -18,6 +19,10 @@ pub use affordances::{
 };
 pub use codex_app_server::{CodexAppServerConfig, CodexAppServerProvider, HOSTED_CODEX_EXECUTABLE};
 pub use driver::{AiRuntimeConfig, AiRuntimeService};
+pub use knowledge::{
+    HistoricalRevealView, KnowledgeSource, KnownOpponentHandCard, RevealStatusView,
+    SeatKnowledgeLedger, SeatKnowledgeView, VisibleLibraryCard, VisibleLibraryPosition,
+};
 pub use lifecycle::AiControllerRegistry;
 pub use provider::{
     AiDecisionProvider, AiModelRequest, AiModelResponse, AiProviderError, AiTierCatalog,
@@ -27,5 +32,7 @@ pub use provider::{
 pub use quota::{AiQuotaStatus, AiTier, SetAiTierRequest};
 pub use scheduler::{AiScheduler, PassGrant, ScheduleDecision, WakeCondition, WakeReason};
 
+#[cfg(test)]
+mod knowledge_tests;
 #[cfg(test)]
 mod tests;
