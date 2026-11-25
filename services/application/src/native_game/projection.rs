@@ -501,11 +501,58 @@ impl NativeScope<'_> {
             abilities: vec![],
             stack: vec![],
         };
-        let projected = builder.build()?;
+        let mut projected = builder.build()?;
+        populate_cast_offers(&staged, metadata, &mut projected)?;
         self.references = staged.references;
         self.used_handles = staged.used_handles;
         Ok(projected)
     }
+}
+
+#[inline(never)]
+fn populate_cast_offers(
+    scope: &NativeScope<'_>,
+    metadata: &NativeProjectionMetadata,
+    projected: &mut NativeProjectedSnapshot,
+) -> Result<(), NativeProjectionError> {
+    if metadata.disclosure != NativeDisclosure::LiveParticipant
+        || scope.source.outcome().is_some()
+        || !projected.snapshot.decisions.is_empty()
+        || !projected.snapshot.turn.as_ref().is_some_and(|t| {
+            t.priority_seat_ids
+                .contains(&projected.snapshot.viewer_seat_id)
+        })
+    {
+        return Ok(());
+    }
+    let affordances =
+        crate::ai_runtime::affordances::probe_priority_affordances(scope, &projected.snapshot);
+    let mut offers = Vec::with_capacity(affordances.castable_spells.len());
+    for spell in affordances.castable_spells {
+        let mut seen_pay = BTreeSet::new();
+        let pay_sources: Vec<PlayerHandle> = spell
+            .pay_sources
+            .into_iter()
+            .filter(|handle| seen_pay.insert(handle.clone()))
+            .collect();
+        offers.push(crate::player_wire::PlayerCastOffer {
+            source: spell.source,
+            targets: if spell.untargeted {
+                None
+            } else {
+                Some(spell.legal_targets)
+            },
+            cost: spell.cost_text,
+            pay_sources,
+            payment: spell.payment,
+        });
+    }
+    projected.snapshot.cast_offers = Some(offers);
+    let facts = projected.facts(scope.source.execution().creature_vocabulary())?;
+    projected
+        .snapshot
+        .validate(&facts)
+        .map_err(|_| NativeProjectionError::InvalidSnapshot)
 }
 struct Projection<'a, 's> {
     scope: &'a mut NativeScope<'s>,
@@ -858,6 +905,7 @@ impl Projection<'_, '_> {
             zones,
             stack: self.stack,
             decisions,
+            cast_offers: None,
             through_event_sequence: self.metadata.through_event_sequence.clone(),
         };
         snapshot

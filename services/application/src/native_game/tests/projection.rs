@@ -2106,3 +2106,169 @@ fn both_seats_see_player_speed_and_its_sourceless_stack_ability() {
         }
     }
 }
+
+#[test]
+#[ignore = "requires retained source-qualified vocabulary"]
+fn live_priority_holder_projects_authoritative_cast_offers_and_validates_invariants() {
+    use spellwake_engine::{
+        land::LandType,
+        mana::{ManaCost, ManaType},
+    };
+    struct OfferDisplay {
+        inner: Display,
+    }
+    impl NativeDisplaySource for OfferDisplay {
+        fn scope(&self) -> NativeDisplayScope {
+            self.inner.scope()
+        }
+        fn context(&self) -> &spellwake_engine::game::GameContext {
+            self.inner.context()
+        }
+        fn object(
+            &self,
+            _object: &GameObject,
+            definition: &Program,
+        ) -> Result<NativeObjectDisplay, NativeProjectionError> {
+            let is_land = definition.has_type(spellwake_engine::program::CardType::Land);
+            Ok(NativeObjectDisplay {
+                definition_id: None,
+                printing_id: None,
+                characteristics: if is_land {
+                    PlayerCharacteristics {
+                        name: "Mountain".into(),
+                        type_line: "Basic Land - Mountain".into(),
+                        rules_text: "{T}: Add {R}.".into(),
+                        mana_cost: None,
+                        printed_power: None,
+                        printed_toughness: None,
+                        printed_loyalty: None,
+                        printed_defense: None,
+                    }
+                } else {
+                    PlayerCharacteristics {
+                        name: "Lightning Bolt".into(),
+                        type_line: "Instant".into(),
+                        rules_text: "Lightning Bolt deals 3 damage to target player.".into(),
+                        mana_cost: Some("{R}".into()),
+                        printed_power: None,
+                        printed_toughness: None,
+                        printed_loyalty: None,
+                        printed_defense: None,
+                    }
+                },
+            })
+        }
+        fn ability(
+            &self,
+            object: &GameObject,
+            current: &ObjectCharacteristics,
+            ability: NativeAbilityReference,
+        ) -> Result<String, NativeProjectionError> {
+            self.inner.ability(object, current, ability)
+        }
+        fn stack(
+            &self,
+            entry: &StackEntry,
+            body: Option<&ExecutableBody>,
+            bindings: Option<&ExecutionBindings>,
+        ) -> Result<String, NativeProjectionError> {
+            self.inner.stack(entry, body, bindings)
+        }
+        fn token_preview(
+            &self,
+            preview: &TokenEntryPreview,
+        ) -> Result<String, NativeProjectionError> {
+            self.inner.token_preview(preview)
+        }
+        fn trigger(&self, instance: &WaitingInstance) -> Result<String, NativeProjectionError> {
+            self.inner.trigger(instance)
+        }
+        fn prevention_attempt(
+            &self,
+            domain: &spellwake_engine::effects::DamageAllocationDomain,
+        ) -> Result<String, NativeProjectionError> {
+            self.inner.prevention_attempt(domain)
+        }
+    }
+
+    let burn = Program::instant(
+        ManaCost::one(ManaType::Red),
+        ExecutableBody::new(
+            BodyTarget::SinglePlayer,
+            vec![Instruction::AdjustTargetLife {
+                adjustment: LifeAdjustment::Lose(3.into()),
+            }],
+        ),
+    );
+    let source = main_state(vec![
+        card(1, A, ObjectDestination::Hand, burn),
+        card(
+            2,
+            A,
+            ObjectDestination::Battlefield { controller: A },
+            Program::land(BTreeSet::from([LandType::Mountain]), vec![]),
+        ),
+    ]);
+    let display = OfferDisplay {
+        inner: Display::default(),
+    };
+
+    let mut view_a = scope(&source, viewer_a());
+    let projected_a = view_a.project_with_facts(&metadata(), &display).unwrap();
+    let facts_a = projected_a
+        .facts(source.execution().creature_vocabulary())
+        .unwrap();
+    let snap_a = projected_a.snapshot();
+    snap_a.validate(&facts_a).unwrap();
+
+    let spell_handle = view_a
+        .issue(NativeReference::Object(object(&source, 1)))
+        .unwrap();
+    let land_handle = view_a
+        .issue(NativeReference::Object(object(&source, 2)))
+        .unwrap();
+    let offers = snap_a
+        .cast_offers
+        .as_ref()
+        .expect("live priority holder receives cast_offers");
+    assert_eq!(offers.len(), 1);
+    assert!(offers[0].source == spell_handle);
+    assert_eq!(offers[0].cost, "{R}");
+    assert!(offers[0].pay_sources == vec![land_handle]);
+    assert!(offers[0].payment.is_some());
+    assert!(
+        offers[0]
+            .targets
+            .as_ref()
+            .is_some_and(|targets| targets.contains(&PlayerTarget::Seat {
+                seat_id: viewer_b()
+            }))
+    );
+
+    // Non-priority viewer must not receive cast offers.
+    let snap_b = scope(&source, viewer_b())
+        .project(&metadata(), &display)
+        .unwrap();
+    assert!(snap_b.cast_offers.is_none());
+
+    // Snapshot validation rejects forged/invalid cast offers.
+    let mut dup = snap_a.clone();
+    dup.cast_offers.as_mut().unwrap().push(offers[0].clone());
+    assert!(dup.validate(&facts_a).is_err());
+
+    let mut bad_source = snap_a.clone();
+    bad_source.cast_offers.as_mut().unwrap()[0].source =
+        PlayerHandle::try_from("unknown-source".to_owned()).unwrap();
+    assert!(bad_source.validate(&facts_a).is_err());
+
+    let mut bad_pay = snap_a.clone();
+    bad_pay.cast_offers.as_mut().unwrap()[0].pay_sources =
+        vec![PlayerHandle::try_from("unknown-land".to_owned()).unwrap()];
+    assert!(bad_pay.validate(&facts_a).is_err());
+
+    let mut bad_target = snap_a.clone();
+    bad_target.cast_offers.as_mut().unwrap()[0].targets = Some(vec![PlayerTarget::Object {
+        handle: PlayerHandle::try_from("unknown-target".to_owned()).unwrap(),
+    }]);
+    assert!(bad_target.validate(&facts_a).is_err());
+}
