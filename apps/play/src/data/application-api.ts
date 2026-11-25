@@ -161,9 +161,13 @@ import {
   playerReconnectSchema,
   playerHistoryPageSchema,
   playerReplayFrameSchema,
+  playerReplayRequestSchema,
+  playerHistoryQuerySchema,
   playerReceiptSchema,
   type PlayerCommand,
   type PlayerCursor,
+  type PlayerHistoryQuery,
+  type PlayerReplayRequest,
   type PlayerStreamFrame,
 } from "@spellwake/application-contracts";
 
@@ -2011,41 +2015,38 @@ export class ApplicationApi {
     );
   }
 
-  gameHistory(
-    bearer: string,
-    gameId: string,
-    contextId: string,
-    afterSequence: string | null = null,
-    limit = 50,
-    signal?: AbortSignal,
-  ) {
-    return this.request(
-      `/v1/games/${encodeURIComponent(gameId)}/history`,
-      bearer,
-      playerHistoryPageSchema,
-      { gameId, contextId, afterSequence, limit },
-      signal,
-    );
+  /** A page of a game's history for the player's own seat, read from its start or from a cursor. */
+  gameHistory(bearer: string, query: PlayerHistoryQuery, signal?: AbortSignal) {
+    const parsed = playerHistoryQuerySchema.safeParse(query);
+    return parsed.success
+      ? this.request(
+          `/v1/games/${encodeURIComponent(parsed.data.gameId)}/history`,
+          bearer,
+          playerHistoryPageSchema,
+          parsed.data,
+          signal,
+        )
+      : Promise.resolve<ApiResponse<z.infer<typeof playerHistoryPageSchema>>>({
+          status: "fail",
+          data: { query: "invalid" },
+        });
   }
 
-  gameReplay(
-    bearer: string,
-    gameId: string,
-    input: {
-      gameId: string;
-      contextId: string;
-      mode: "live_perspective" | "completed_full_information";
-      revision: string;
-    },
-    signal?: AbortSignal,
-  ) {
-    return this.request(
-      `/v1/games/${encodeURIComponent(gameId)}/replay`,
-      bearer,
-      playerReplayFrameSchema,
-      input,
-      signal,
-    );
+  /** The table as it stood after one event of a game, from a seat or with every hand. */
+  gameReplay(bearer: string, request: PlayerReplayRequest, signal?: AbortSignal) {
+    const parsed = playerReplayRequestSchema.safeParse(request);
+    return parsed.success
+      ? this.request(
+          `/v1/games/${encodeURIComponent(parsed.data.gameId)}/replay`,
+          bearer,
+          playerReplayFrameSchema,
+          parsed.data,
+          signal,
+        )
+      : Promise.resolve<ApiResponse<z.infer<typeof playerReplayFrameSchema>>>({
+          status: "fail",
+          data: { request: "invalid" },
+        });
   }
 
   gameReceipts(

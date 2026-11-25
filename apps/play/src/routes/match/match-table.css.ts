@@ -16,6 +16,9 @@ const teal = "#7fe9e0";
 export const stage = style({
   position: "absolute",
   inset: 0,
+  // The cards' own stacking stays inside the table: everything drawn over
+  // the table (the result band, chat, pills) stays above every card.
+  isolation: "isolate",
   // Clipped, not hidden: focusing a held card must never scroll the table.
   overflow: "clip",
   background: "#283329",

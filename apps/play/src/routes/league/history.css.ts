@@ -9,6 +9,7 @@ const NARROW = "league (inline-size < 46rem)";
 const gold = "#d9b878";
 const rule = "#a698774c";
 const muted = "#b9ae99";
+const focusColor = "#f5e9b9";
 const columns =
   "minmax(0,0.8fr) minmax(0,2.2fr) minmax(0,1.5fr) minmax(0,0.7fr) minmax(0,0.9fr)";
 
@@ -35,6 +36,7 @@ export const head = style({
   },
 });
 export const row = style({
+  position: "relative",
   display: "grid",
   gridTemplateColumns: columns,
   alignItems: "center",
@@ -44,7 +46,15 @@ export const row = style({
   borderBottom: `1px solid ${rule}`,
   font: `26px/1.2 ${shellTokens.serif}`,
   color: shellTokens.ink,
-  selectors: { "&:last-child": { borderBottom: 0 } },
+  selectors: {
+    "&:last-child": { borderBottom: 0 },
+    '&[data-opens="true"]:hover': { background: "#ffffff08" },
+    '&[data-opens="true"]:has(button:focus-visible)': {
+      outline: `2px solid ${focusColor}`,
+      outlineOffset: "-2px",
+      borderRadius: "8px",
+    },
+  },
   "@container": {
     [NARROW]: {
       gridTemplateColumns: "minmax(0,1fr) auto",
@@ -56,6 +66,19 @@ export const row = style({
     },
   },
 });
+/** A row that opens its replay is one press target, from edge to edge. */
+export const open = style({
+  appearance: "none",
+  position: "absolute",
+  inset: 0,
+  zIndex: 1,
+  padding: 0,
+  border: 0,
+  background: "none",
+  cursor: "pointer",
+  selectors: { "&:focus": { outline: "none" } },
+});
+
 /** Only a win is gold, as at the table. */
 export const outcome = style({
   selectors: { [`${row}[data-outcome="won"] &`]: { color: gold } },

@@ -72,9 +72,18 @@ function game(
   };
 }
 
-function decision(after: string, state: string, seatId = ME) {
+function decision(
+  after: string,
+  state: string,
+  seatId = ME,
+  chosen: {
+    decisionId: number;
+    revision: string;
+    openedAt: string;
+  } | null = null,
+) {
   return {
-    id: id(300),
+    id: id(chosen?.decisionId ?? 300),
     seatId,
     decisionKind: "deck",
     basisRevision: "8",
@@ -82,8 +91,8 @@ function decision(after: string, state: string, seatId = ME) {
     clockRevision: "0",
     state,
     afterGameId: after,
-    selectedDeckRevisionId: null,
-    openedAt: AT,
+    selectedDeckRevisionId: chosen?.revision ?? null,
+    openedAt: chosen?.openedAt ?? AT,
     deadlinePolicyRef: null,
     deadlineRevision: "0",
     deadlineAvailabilityRevision: null,
@@ -134,6 +143,7 @@ describe("where a match stands after one of its games", () => {
         decisionId: id(300),
         deadlineAt: null,
         matchRevision: "9",
+        lastChosenRevisionId: null,
       },
     });
   });
@@ -168,6 +178,32 @@ describe("where a match stands after one of its games", () => {
         2,
       )?.next,
     ).toEqual({ kind: "waiting" });
+  });
+
+  test("keeps the list chosen after the latest earlier game", () => {
+    const games = gameRows([
+      game(G1, 0, "completed", ME),
+      game(G2, 1, "completed", THEM),
+    ]);
+    const decisions = ownDecisions([
+      decision(G1, "answered", ME, {
+        decisionId: 301,
+        revision: id(401),
+        openedAt: "2026-11-24T10:05:00Z",
+      }),
+      decision(G2, "pending", ME, null),
+    ]);
+    const standing = seriesStanding(
+      detail("between_games"),
+      games,
+      decisions,
+      G2,
+      2,
+    );
+    expect(standing?.next).toMatchObject({
+      kind: "deciding",
+      lastChosenRevisionId: id(401),
+    });
   });
 
   test("names the next game once it can be played", () => {

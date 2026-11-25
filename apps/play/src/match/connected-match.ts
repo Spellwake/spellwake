@@ -18,6 +18,7 @@ import {
   looksFinished,
   type GameRow,
 } from "./game-result";
+import { useConnectedSideboard } from "./connected-sideboard";
 import {
   gameRows,
   ownDecisions,
@@ -304,32 +305,49 @@ export function useConnectedMatch(
     decisionId: string;
     state: "pending" | "failed";
   } | null>(null);
-  const deckRevisionId = playedDeck.data ?? null;
+  // The list the next game keeps: the one chosen after an earlier game, or
+  // the one the match began with.
+  const deckRevisionId =
+    deciding?.lastChosenRevisionId ?? playedDeck.data ?? null;
   const refetchStanding = standingQuery.refetch;
-  const ready = useCallback(async () => {
-    if (!owner || !services || !deciding || !deckRevisionId) return;
-    setAnswer({ decisionId: deciding.decisionId, state: "pending" });
-    let taken = false;
-    try {
-      const res = await services.api.betweenGameReply(
-        await ownerBearer(services, owner),
-        {
-          requestId: crypto.randomUUID(),
-          decisionId: deciding.decisionId,
-          expectedRevision: deciding.matchRevision,
-          selectedRevisionId: deckRevisionId,
-        },
+  const answerWith = useCallback(
+    async (selectedRevisionId: string): Promise<boolean> => {
+      if (!owner || !services || !deciding) return false;
+      setAnswer({ decisionId: deciding.decisionId, state: "pending" });
+      let taken = false;
+      try {
+        const res = await services.api.betweenGameReply(
+          await ownerBearer(services, owner),
+          {
+            requestId: crypto.randomUUID(),
+            decisionId: deciding.decisionId,
+            expectedRevision: deciding.matchRevision,
+            selectedRevisionId,
+          },
+        );
+        taken = res.status === "success";
+      } catch {
+        taken = false;
+      }
+      if (taken) await refetchStanding();
+      // Not taken, the time still runs and the same deck is kept at its end.
+      setAnswer(
+        taken ? null : { decisionId: deciding.decisionId, state: "failed" },
       );
-      taken = res.status === "success";
-    } catch {
-      taken = false;
-    }
-    if (taken) await refetchStanding();
-    // Not taken, the time still runs and the same deck is kept at its end.
-    setAnswer(
-      taken ? null : { decisionId: deciding.decisionId, state: "failed" },
-    );
-  }, [owner, services, deciding, deckRevisionId, refetchStanding]);
+      return taken;
+    },
+    [owner, services, deciding, refetchStanding],
+  );
+  const ready = useCallback(async () => {
+    if (deckRevisionId) await answerWith(deckRevisionId);
+  }, [answerWith, deckRevisionId]);
+  const sideboard = useConnectedSideboard({
+    matchId: target?.matchId ?? null,
+    revisionId: deckRevisionId,
+    deciding: !!deciding,
+    over: standing?.next.kind === "over",
+    answer: answerWith,
+  });
 
   const series = useMemo((): MatchSeries | null => {
     if (!standing) return null;
@@ -347,9 +365,10 @@ export function useConnectedMatch(
         ready: deckRevisionId ? () => void ready() : null,
         readyPending: mine === "pending",
         readyFailed: mine === "failed",
+        sideboard,
       },
     };
-  }, [standing, answer, deckRevisionId, ready]);
+  }, [standing, answer, deckRevisionId, ready, sideboard]);
 
   // Initial view load + live SSE stream with automatic reconnect.
   useEffect(() => {
