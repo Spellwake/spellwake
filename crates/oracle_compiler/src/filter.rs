@@ -1246,16 +1246,36 @@ pub fn parse_object_filter(phrase: &str, vocab: &Vocabulary) -> Result<ObjectFil
         }
         for (ch_sep, ch_player) in [
             (" of that player's choice ", PlayerRefAst::ThatPlayer),
+            (" of an opponent's choice ", PlayerRefAst::AnyOpponent),
             (" of their choice ", PlayerRefAst::ThatPlayer),
             (" of your choice ", PlayerRefAst::You),
         ] {
             if let Some((before_ch, after_ch)) = s.split_once(ch_sep)
-                && !before_ch.trim().is_empty()
+                && !is_characteristic_choice_prefix(before_ch)
                 && !after_ch.trim().is_empty()
             {
                 flt.predicates
                     .push(FilterPredicateAst::ChosenByPlayer(ch_player));
                 s = format!("{} {}", before_ch.trim(), after_ch.trim());
+                changed = true;
+                break;
+            }
+        }
+        if changed {
+            continue;
+        }
+        for (ch_suf, ch_player) in [
+            (" of that player's choice", PlayerRefAst::ThatPlayer),
+            (" of an opponent's choice", PlayerRefAst::AnyOpponent),
+            (" of their choice", PlayerRefAst::ThatPlayer),
+            (" of your choice", PlayerRefAst::You),
+        ] {
+            if let Some(before_ch) = s.strip_suffix(ch_suf)
+                && !is_characteristic_choice_prefix(before_ch)
+            {
+                flt.predicates
+                    .push(FilterPredicateAst::ChosenByPlayer(ch_player));
+                s = before_ch.trim().to_string();
                 changed = true;
                 break;
             }
@@ -2716,10 +2736,6 @@ pub fn parse_object_filter(phrase: &str, vocab: &Vocabulary) -> Result<ObjectFil
                 ObjectFilterFlags::EMPTY,
                 None,
             ),
-            (" of their choice", ObjectFilterFlags::EMPTY, None),
-            (" of your choice", ObjectFilterFlags::EMPTY, None),
-            (" of that player's choice", ObjectFilterFlags::EMPTY, None),
-            (" of an opponent's choice", ObjectFilterFlags::EMPTY, None),
             (" that aren't legendary", ObjectFilterFlags::EMPTY, None),
             (" that isn't legendary", ObjectFilterFlags::EMPTY, None),
             (" that aren't enchanted", ObjectFilterFlags::EMPTY, None),
@@ -2786,7 +2802,6 @@ pub fn parse_object_filter(phrase: &str, vocab: &Vocabulary) -> Result<ObjectFil
                 ObjectFilterFlags::EMPTY,
                 None,
             ),
-            (" of an opponent's choice", ObjectFilterFlags::EMPTY, None),
             (" exiled this way", ObjectFilterFlags::EMPTY, None),
             (
                 " put onto the battlefield with ~",
@@ -2906,8 +2921,6 @@ pub fn parse_object_filter(phrase: &str, vocab: &Vocabulary) -> Result<ObjectFil
                 ObjectFilterFlags::DEALT_DAMAGE_THIS_TURN,
                 None,
             ),
-            (" of their choice", ObjectFilterFlags::EMPTY, None),
-            (" of your choice", ObjectFilterFlags::EMPTY, None),
             (
                 " that don't have the same name as ~",
                 ObjectFilterFlags::EXCLUDE_SELF,
@@ -3530,10 +3543,6 @@ pub fn parse_object_filter(phrase: &str, vocab: &Vocabulary) -> Result<ObjectFil
                 ObjectFilterFlags::EMPTY,
                 None,
             ),
-            (" of their choice", ObjectFilterFlags::EMPTY, None),
-            (" of your choice", ObjectFilterFlags::EMPTY, None),
-            (" of that player's choice", ObjectFilterFlags::EMPTY, None),
-            (" of an opponent's choice", ObjectFilterFlags::EMPTY, None),
             (" that aren't legendary", ObjectFilterFlags::EMPTY, None),
             (" that isn't legendary", ObjectFilterFlags::EMPTY, None),
             (" that aren't enchanted", ObjectFilterFlags::EMPTY, None),
@@ -3600,7 +3609,6 @@ pub fn parse_object_filter(phrase: &str, vocab: &Vocabulary) -> Result<ObjectFil
                 ObjectFilterFlags::EMPTY,
                 None,
             ),
-            (" of an opponent's choice", ObjectFilterFlags::EMPTY, None),
             (" exiled this way", ObjectFilterFlags::EMPTY, None),
             (
                 " put onto the battlefield with ~",
@@ -5304,6 +5312,31 @@ pub fn parse_player_ref(phrase: &str) -> Option<PlayerRefAst> {
     }
 }
 
+fn is_characteristic_choice_prefix(prefix: &str) -> bool {
+    let p = prefix.trim();
+    p.is_empty()
+        || p.ends_with("of the creature type")
+        || p.ends_with("of the color")
+        || p.ends_with("of the card type")
+        || p.ends_with("in the sector")
+}
+
+fn attach_chosen_by_player(subj: &mut SubjectRefAst, chooser: PlayerRefAst) {
+    let pred = FilterPredicateAst::ChosenByPlayer(chooser);
+    let flt_opt = match subj {
+        SubjectRefAst::Group(flt)
+        | SubjectRefAst::All(flt)
+        | SubjectRefAst::TargetObject { filter: flt, .. }
+        | SubjectRefAst::DistinctTarget { filter: flt, .. } => Some(flt.as_mut()),
+        _ => None,
+    };
+    if let Some(flt) = flt_opt
+        && !flt.predicates.contains(&pred)
+    {
+        flt.predicates.push(pred);
+    }
+}
+
 /// Parse a subject, target, or group phrase into a typed `SubjectRefAst`.
 pub fn parse_subject_or_target(phrase: &str, vocab: &Vocabulary) -> Result<SubjectRefAst, String> {
     let raw = trim_punct(phrase);
@@ -5311,28 +5344,28 @@ pub fn parse_subject_or_target(phrase: &str, vocab: &Vocabulary) -> Result<Subje
         return Err("empty_subject".to_string());
     }
     let low = raw.to_ascii_lowercase();
-    for choice_suf in [
-        " of their choice",
-        " of your choice",
-        " of that player's choice",
-        " of its controller's choice",
-        " of an opponent's choice",
+    for (choice_suf, choice_player) in [
+        (" of their choice", PlayerRefAst::ThatPlayer),
+        (" of your choice", PlayerRefAst::You),
+        (" of that player's choice", PlayerRefAst::ThatPlayer),
+        (" of its controller's choice", PlayerRefAst::ItsController),
+        (" of an opponent's choice", PlayerRefAst::AnyOpponent),
     ] {
         if let Some(prefix) = low.strip_suffix(choice_suf)
-            && !prefix.trim().is_empty()
-            && !prefix.ends_with("of the creature type")
-            && !prefix.ends_with("of the color")
-            && !prefix.ends_with("of the card type")
-            && !prefix.ends_with("in the sector")
+            && !is_characteristic_choice_prefix(prefix)
         {
-            return parse_subject_or_target(&raw[..raw.len() - choice_suf.len()], vocab);
+            let mut parsed = parse_subject_or_target(&raw[..raw.len() - choice_suf.len()], vocab)?;
+            attach_chosen_by_player(&mut parsed, choice_player);
+            return Ok(parsed);
         }
     }
 
     // Wave E6.2: Mid-filter "of their choice" (Foundations sacrifice phrasing, e.g. "a creature of their choice that attacked or blocked this turn")
     if let Some((before_c, after_c)) = low.split_once(" of their choice that") {
         let rebuilt = format!("{} that{}", before_c.trim(), after_c);
-        return parse_subject_or_target(&rebuilt, vocab);
+        let mut parsed = parse_subject_or_target(&rebuilt, vocab)?;
+        attach_chosen_by_player(&mut parsed, PlayerRefAst::ThatPlayer);
+        return Ok(parsed);
     }
 
     // Wave E6.2 / E8: Compositional disjunctive shared target pools (`TargetOneOf`) preserving single shared target cardinality

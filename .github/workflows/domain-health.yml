@@ -57,10 +57,10 @@ jobs:
           exit 1
       - name: Run all domain health checks and generate badges
         run: |
-          mkdir -p .domain-health-out/badges
+          mkdir -p domain-health-out/badges
           python3 scripts/health_checks.py \
-            --output .domain-health-out/health-status.json \
-            --badges-dir .domain-health-out/badges
+            --output domain-health-out/health-status.json \
+            --badges-dir domain-health-out/badges
       - name: Run catalog-refresh and health-check unit tests
         run: python3 -m unittest discover -s tests/catalogue -p 'test_catalog_refresh_and_health.py'
       - name: Stop the job's Postgres container
@@ -74,10 +74,10 @@ jobs:
       - name: Publish domain health summary
         if: always()
         run: |
-          if [ ! -f .domain-health-out/health-status.json ]; then exit 0; fi
+          if [ ! -f domain-health-out/health-status.json ]; then exit 0; fi
           python3 - <<'PY' >> "$GITHUB_STEP_SUMMARY"
           import json
-          data = json.load(open(".domain-health-out/health-status.json"))
+          data = json.load(open("domain-health-out/health-status.json"))
           print("## Spellwake Domain Health Summary")
           print("")
           print("| Domain | Local CI Status | Live / Hosted Status | Passed Tests | Missing Hosted Credentials / Gaps |")
@@ -91,7 +91,7 @@ jobs:
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: domain-health-report
-          path: .domain-health-out/
+          path: domain-health-out/
           retention-days: 30
 
   publish-badges:
@@ -111,14 +111,22 @@ jobs:
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           name: domain-health-report
-          path: .badges-incoming
+          path: badges-incoming
       - name: Push domain health badges to orphan badges branch
         env:
           GH_TOKEN: ${{ github.token }}
+          UPSTREAM_RESULT: ${{ needs.health-checks.result }}
         run: |
-          if [ ! -d .badges-incoming/badges ]; then exit 0; fi
-          git init .badges-repo
-          cd .badges-repo
+          if [ ! -d badges-incoming/badges ] || ! compgen -G "badges-incoming/badges/*.svg" >/dev/null; then
+            if [ "$UPSTREAM_RESULT" = "success" ]; then
+              echo "ERROR: health-checks succeeded but no badge SVGs were downloaded." >&2
+              exit 1
+            fi
+            echo "No badge SVGs available from failed health-checks run; skipping push."
+            exit 0
+          fi
+          git init badges-repo
+          cd badges-repo
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git remote add origin "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
@@ -129,8 +137,8 @@ jobs:
               git checkout --orphan badges
               git rm -rf . >/dev/null 2>&1 || true
             fi
-            cp ../.badges-incoming/badges/*.svg . 2>/dev/null || true
-            cp ../.badges-incoming/badges/*.json . 2>/dev/null || true
+            cp ../badges-incoming/badges/*.svg . 2>/dev/null || true
+            cp ../badges-incoming/badges/*.json . 2>/dev/null || true
             git add -A
             if git diff --cached --quiet; then
               echo "Domain health badges unchanged."
