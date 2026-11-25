@@ -35,8 +35,21 @@ pub(super) fn value_expr_references_target_anaphora(expr: &ValueExprAst) -> bool
         ValueExprAst::PlayerStat { player, .. }
         | ValueExprAst::PlayerCounterCount { player, .. }
         | ValueExprAst::LifeChangedThisTurn { player, .. } => player_is_target_anaphora(*player),
-        ValueExprAst::Add(a, b) | ValueExprAst::Sub(a, b) | ValueExprAst::Mul(a, b) => {
+        ValueExprAst::Add(a, b)
+        | ValueExprAst::Sub(a, b)
+        | ValueExprAst::Mul(a, b)
+        | ValueExprAst::Max(a, b)
+        | ValueExprAst::Min(a, b) => {
             value_expr_references_target_anaphora(a) || value_expr_references_target_anaphora(b)
+        }
+        ValueExprAst::Conditional {
+            condition,
+            then_expr,
+            else_expr,
+        } => {
+            condition_references_target_anaphora(condition)
+                || value_expr_references_target_anaphora(then_expr)
+                || value_expr_references_target_anaphora(else_expr)
         }
         ValueExprAst::DivConst { expr, .. } => value_expr_references_target_anaphora(expr),
         _ => false,
@@ -313,14 +326,38 @@ pub(super) fn instruction_references_anaphora(instr: &InstructionAst) -> bool {
     }
 }
 
+fn condition_references_chosen_x(cond: &ConditionAst) -> bool {
+    match cond {
+        ConditionAst::Not(inner) => condition_references_chosen_x(inner),
+        ConditionAst::And(a, b) | ConditionAst::Or(a, b) => {
+            condition_references_chosen_x(a) || condition_references_chosen_x(b)
+        }
+        ConditionAst::Compare { lhs, rhs, .. } | ConditionAst::ExprCompare { lhs, rhs, .. } => {
+            value_expr_references_chosen_x(lhs) || value_expr_references_chosen_x(rhs)
+        }
+        _ => false,
+    }
+}
+
 fn value_expr_references_chosen_x(expr: &ValueExprAst) -> bool {
     match expr {
         ValueExprAst::ChosenX => true,
         ValueExprAst::Add(a, b)
         | ValueExprAst::Sub(a, b)
         | ValueExprAst::Mul(a, b)
+        | ValueExprAst::Max(a, b)
+        | ValueExprAst::Min(a, b)
         | ValueExprAst::AbsDiff(a, b) => {
             value_expr_references_chosen_x(a) || value_expr_references_chosen_x(b)
+        }
+        ValueExprAst::Conditional {
+            condition,
+            then_expr,
+            else_expr,
+        } => {
+            condition_references_chosen_x(condition)
+                || value_expr_references_chosen_x(then_expr)
+                || value_expr_references_chosen_x(else_expr)
         }
         ValueExprAst::DivConst { expr, .. } => value_expr_references_chosen_x(expr),
         ValueExprAst::Pow { base, exp } => {
@@ -1767,6 +1804,7 @@ pub(super) fn lower_permanent_type_filter(
         && f.any_colors.is_empty()
         && f.forbidden_colors.is_empty()
         && f.color_arity.is_none()
+        && f.combat.is_none()
         && f.tapped.is_none()
         && f.token.is_none()
         && f.stat_bounds.is_empty()
@@ -1776,6 +1814,12 @@ pub(super) fn lower_permanent_type_filter(
         && f.forbidden_keywords.is_empty()
         && f.counter_kind.is_none()
         && f.flags.0 == 0
+        && f.predicates.is_empty()
+        && f.named.is_none()
+        && f.owner.is_none()
+        && f.extra_zones.is_empty()
+        && !f.any_spell
+        && !f.is_ability
     {
         return Ok(PermanentTypeFilter {
             any_types: card_type_mask_to_set(f.any_types)?,
@@ -1888,6 +1932,16 @@ fn substitute_chosen_x_in_value_expr(
             let (na, ca) = substitute_chosen_x_in_value_expr(a, replacement);
             let (nb, cb) = substitute_chosen_x_in_value_expr(b, replacement);
             (ValueExprAst::AbsDiff(Box::new(na), Box::new(nb)), ca || cb)
+        }
+        ValueExprAst::Max(a, b) => {
+            let (na, ca) = substitute_chosen_x_in_value_expr(a, replacement);
+            let (nb, cb) = substitute_chosen_x_in_value_expr(b, replacement);
+            (ValueExprAst::Max(Box::new(na), Box::new(nb)), ca || cb)
+        }
+        ValueExprAst::Min(a, b) => {
+            let (na, ca) = substitute_chosen_x_in_value_expr(a, replacement);
+            let (nb, cb) = substitute_chosen_x_in_value_expr(b, replacement);
+            (ValueExprAst::Min(Box::new(na), Box::new(nb)), ca || cb)
         }
         _ => (expr.clone(), false),
     }
@@ -2213,6 +2267,10 @@ pub(super) fn lower_library_search_ext(
             ResolvingPlayer::Controller,
             SearchSource::TargetOpponentLibrary,
         ),
+        // Callers (body.rs and instructions.rs) rewrite this sentinel via
+        // `lower_resolving_player_in_context(PlayerRefAst::ThatPlayer, builder, in_trigger)`
+        // so non-trigger spells and activations resolve to a bound target or fail closed
+        // instead of leaking `UnboundResolvingPlayer`.
         "that player" | "that player's" | "that player's library" | "their" | "their library" => (
             ResolvingPlayer::UniqueRelatedPlayer,
             SearchSource::OwnLibrary,
@@ -2224,7 +2282,10 @@ pub(super) fn lower_library_search_ext(
         _ => return Err("oracle:unsupported-search-source"),
     };
     if !extra.extra_zones.is_empty() {
-        if source == SearchSource::OwnLibrary && extra.extra_zones == [ZoneFilter::YourGraveyard] {
+        if searcher == ResolvingPlayer::Controller
+            && source == SearchSource::OwnLibrary
+            && extra.extra_zones == [ZoneFilter::YourGraveyard]
+        {
             source = SearchSource::OwnLibraryOrGraveyard;
         } else {
             return Err("oracle:unsupported-search-source");
@@ -2410,27 +2471,36 @@ pub(super) fn lower_library_search_ext(
             .trim_end_matches('.')
             .trim()
             .to_ascii_lowercase();
-        let rest_is_hand = matches!(
-            rest_norm.as_str(),
-            "hand"
-                | "your hand"
-                | "into your hand"
-                | "in your hand"
-                | "their hand"
-                | "into their hand"
-                | "that player's hand"
-                | "into that player's hand"
-        );
-        let rest_is_graveyard = matches!(
-            rest_norm.as_str(),
-            "graveyard"
-                | "your graveyard"
-                | "into your graveyard"
-                | "their graveyard"
-                | "into their graveyard"
-                | "that player's graveyard"
-                | "into that player's graveyard"
-        );
+        let rest_is_hand = if searcher == ResolvingPlayer::Controller {
+            matches!(
+                rest_norm.as_str(),
+                "hand" | "your hand" | "into your hand" | "in your hand"
+            )
+        } else {
+            matches!(
+                rest_norm.as_str(),
+                "hand"
+                    | "their hand"
+                    | "into their hand"
+                    | "that player's hand"
+                    | "into that player's hand"
+            )
+        };
+        let rest_is_graveyard = if searcher == ResolvingPlayer::Controller {
+            matches!(
+                rest_norm.as_str(),
+                "graveyard" | "your graveyard" | "into your graveyard"
+            )
+        } else {
+            matches!(
+                rest_norm.as_str(),
+                "graveyard"
+                    | "their graveyard"
+                    | "into their graveyard"
+                    | "that player's graveyard"
+                    | "into that player's graveyard"
+            )
+        };
         destination = match destination {
             SearchDestination::Battlefield {
                 tapped: true,
@@ -2612,25 +2682,78 @@ pub(super) fn lower_search_matcher(
     Ok(SearchCardMatcher::Filtered(Box::new(obj)))
 }
 
+fn uppercase_mana_braces(raw: &str) -> String {
+    let mut brace_norm = String::with_capacity(raw.len());
+    let mut in_brace = false;
+    for ch in raw.chars() {
+        if ch == '{' {
+            in_brace = true;
+            brace_norm.push(ch);
+        } else if ch == '}' {
+            in_brace = false;
+            brace_norm.push(ch);
+        } else if in_brace {
+            brace_norm.push(ch.to_ascii_uppercase());
+        } else {
+            brace_norm.push(ch);
+        }
+    }
+    brace_norm
+}
+
 fn normalize_token_ability_text(raw: &str, tok_name: &str) -> String {
     let mut s = raw
         .trim()
         .trim_end_matches([',', ';'])
         .trim()
+        .replace("this token's", "~'s")
+        .replace("This token's", "~'s")
         .replace("this token", "~")
         .replace("This token", "~")
+        .replace("this creature's", "~'s")
+        .replace("This creature's", "~'s")
         .replace("this creature", "~")
         .replace("This creature", "~")
+        .replace("this permanent's", "~'s")
+        .replace("This permanent's", "~'s")
+        .replace("this permanent", "~")
+        .replace("This permanent", "~")
+        .replace("this artifact's", "~'s")
+        .replace("This artifact's", "~'s")
         .replace("this artifact", "~")
         .replace("This artifact", "~")
+        .replace("this enchantment's", "~'s")
+        .replace("This enchantment's", "~'s")
         .replace("this enchantment", "~")
         .replace("This enchantment", "~")
+        .replace("this land's", "~'s")
+        .replace("This land's", "~'s")
         .replace("this land", "~")
         .replace("This land", "~")
+        .replace("this equipment's", "~'s")
+        .replace("This equipment's", "~'s")
         .replace("this equipment", "~")
         .replace("This equipment", "~")
+        .replace("this aura's", "~'s")
+        .replace("This aura's", "~'s")
         .replace("this aura", "~")
-        .replace("This aura", "~");
+        .replace("This aura", "~")
+        .replace("this vehicle's", "~'s")
+        .replace("This vehicle's", "~'s")
+        .replace("this vehicle", "~")
+        .replace("This vehicle", "~")
+        .replace("this planeswalker's", "~'s")
+        .replace("This planeswalker's", "~'s")
+        .replace("this planeswalker", "~")
+        .replace("This planeswalker", "~")
+        .replace("this saga's", "~'s")
+        .replace("This saga's", "~'s")
+        .replace("this saga", "~")
+        .replace("This saga", "~")
+        .replace("this battle's", "~'s")
+        .replace("This battle's", "~'s")
+        .replace("this battle", "~")
+        .replace("This battle", "~");
     let tok_low = tok_name.trim().to_ascii_lowercase();
     if !tok_low.is_empty() && tok_low != "token" {
         // Replace case-insensitive token name occurrences with "~"
@@ -2654,21 +2777,7 @@ fn normalize_token_ability_text(raw: &str, tok_name: &str) -> String {
         s = out;
     }
     // Uppercase mana/tap/untap symbols inside braces (`{t}` -> `{T}`, `{w}` -> `{W}`, `{w/u}` -> `{W/U}`, etc.)
-    let mut brace_norm = String::with_capacity(s.len());
-    let mut in_brace = false;
-    for ch in s.chars() {
-        if ch == '{' {
-            in_brace = true;
-            brace_norm.push(ch);
-        } else if ch == '}' {
-            in_brace = false;
-            brace_norm.push(ch);
-        } else if in_brace {
-            brace_norm.push(ch.to_ascii_uppercase());
-        } else {
-            brace_norm.push(ch);
-        }
-    }
+    let brace_norm = uppercase_mana_braces(&s);
     // Sentence-case the start and after `. ` or `: ` so `oracle_compiler`'s capitalized clause headers match.
     let mut result = String::with_capacity(brace_norm.len());
     let mut cap_next = true;
@@ -2697,6 +2806,371 @@ fn normalize_token_ability_text(raw: &str, tok_name: &str) -> String {
         }
     }
     result
+}
+
+fn token_protection_quality_starts_with(right_low: &str) -> bool {
+    let first = right_low.split_whitespace().next().unwrap_or("");
+    matches!(
+        first,
+        "from"
+            | "white"
+            | "blue"
+            | "black"
+            | "red"
+            | "green"
+            | "colorless"
+            | "multicolored"
+            | "monocolored"
+            | "everything"
+            | "all"
+            | "each"
+            | "artifact"
+            | "artifacts"
+            | "creature"
+            | "creatures"
+            | "enchantment"
+            | "enchantments"
+            | "instant"
+            | "instants"
+            | "sorcery"
+            | "sorceries"
+            | "land"
+            | "lands"
+            | "planeswalker"
+            | "planeswalkers"
+            | "battle"
+            | "battles"
+            | "triggered"
+            | "activated"
+    )
+}
+
+/// Split a token keyword list on commas, semicolons, and conjunctions without tearing apart
+/// `protection from X and from Y`, `hexproof from X and from Y`, `protection from X and Y`,
+/// or `activated and triggered abilities`.
+fn split_token_keyword_list(raw: &str) -> Vec<String> {
+    fn strip_dangling_conj(input: &str) -> &str {
+        let mut cur = input.trim().trim_matches(['.', ',', ';']).trim();
+        loop {
+            let prev = cur;
+            if let Some(rest) = cur
+                .strip_prefix("and ")
+                .or_else(|| cur.strip_prefix("And "))
+                .or_else(|| cur.strip_prefix("with "))
+                .or_else(|| cur.strip_prefix("With "))
+            {
+                cur = rest.trim();
+            }
+            if let Some(rest) = cur
+                .strip_suffix(" and")
+                .or_else(|| cur.strip_suffix(" And"))
+            {
+                cur = rest.trim();
+            }
+            if cur.eq_ignore_ascii_case("and") || cur.eq_ignore_ascii_case("with") {
+                return "";
+            }
+            if cur == prev {
+                break;
+            }
+        }
+        cur
+    }
+
+    let mut coarse: Vec<String> = Vec::new();
+    for seg in raw.split([',', ';']) {
+        let s = strip_dangling_conj(seg);
+        if s.is_empty() {
+            continue;
+        }
+        let s_low = s.to_ascii_lowercase();
+        if s_low.starts_with("from ")
+            && let Some(prev) = coarse.last_mut()
+        {
+            let prev_low = prev.to_ascii_lowercase();
+            if prev_low.contains("protection from ") || prev_low.contains("hexproof from ") {
+                prev.push_str(" and ");
+                prev.push_str(s);
+                continue;
+            }
+        }
+        coarse.push(s.to_string());
+    }
+
+    let mut out = Vec::new();
+    for chunk in coarse {
+        let mut remaining = chunk.as_str();
+        let mut search_from = 0usize;
+        while let Some(rel) = remaining[search_from..].to_ascii_lowercase().find(" and ") {
+            let idx = search_from + rel;
+            let left = strip_dangling_conj(&remaining[..idx]);
+            let right = strip_dangling_conj(&remaining[idx + 5..]);
+            let left_low = left.to_ascii_lowercase();
+            let right_low = right.to_ascii_lowercase();
+            let keep_joined = right_low.starts_with("from ")
+                || (left_low.ends_with("activated") && right_low.starts_with("triggered"))
+                || ((left_low.contains("protection from ") || left_low.contains("hexproof from "))
+                    && token_protection_quality_starts_with(&right_low));
+            if keep_joined {
+                search_from = idx + 5;
+            } else {
+                if !left.is_empty() {
+                    out.push(left.to_string());
+                }
+                remaining = right;
+                search_from = 0;
+            }
+        }
+        let tail = strip_dangling_conj(remaining);
+        if !tail.is_empty() {
+            out.push(tail.to_string());
+        }
+    }
+    out
+}
+
+fn parse_direct_token_keyword_ast(trimmed: &str) -> Option<KeywordAst> {
+    let clean = trimmed
+        .trim()
+        .trim_start_matches("with ")
+        .trim_start_matches("With ")
+        .trim()
+        .trim_matches(['.', ',', ';'])
+        .trim();
+    if clean.is_empty() {
+        return None;
+    }
+    let low = clean.to_ascii_lowercase();
+    if matches!(
+        low.as_str(),
+        "decayed"
+            | "prowess"
+            | "exalted"
+            | "extort"
+            | "flanking"
+            | "battle cry"
+            | "melee"
+            | "dethrone"
+            | "training"
+            | "ingest"
+            | "evolve"
+            | "mentor"
+            | "undying"
+            | "persist"
+            | "myriad"
+            | "soulbond"
+            | "exploit"
+            | "cascade"
+            | "sunburst"
+            | "ravenous"
+            | "unleash"
+            | "riot"
+            | "provoke"
+            | "ascend"
+            | "increment"
+            | "living weapon"
+            | "for mirrodin!"
+            | "job select"
+            | "station"
+            | "vanishing"
+    ) {
+        return Some(KeywordAst {
+            name: low,
+            parameter: None,
+            desugared_rule: None,
+        });
+    }
+    if low.starts_with("protection from ") {
+        let param = clean["protection ".len()..].trim().to_string();
+        return Some(KeywordAst {
+            name: "protection".to_string(),
+            parameter: Some(param),
+            desugared_rule: None,
+        });
+    }
+    if low.starts_with("hexproof from ") {
+        let param = clean["hexproof ".len()..].trim().to_string();
+        return Some(KeywordAst {
+            name: "hexproof".to_string(),
+            parameter: Some(param),
+            desugared_rule: None,
+        });
+    }
+    if let Some(rest) = low
+        .strip_prefix("ward ")
+        .or_else(|| low.strip_prefix("ward\u{2014}"))
+        .or_else(|| low.strip_prefix("ward\u{2013}"))
+        .or_else(|| low.strip_prefix("ward-"))
+    {
+        let offset = clean.len().saturating_sub(rest.len());
+        let param_raw = clean[offset..]
+            .trim()
+            .trim_start_matches([':', '-', '\u{2014}', '\u{2013}'])
+            .trim();
+        if !param_raw.is_empty() {
+            return Some(KeywordAst {
+                name: "ward".to_string(),
+                parameter: Some(uppercase_mana_braces(param_raw)),
+                desugared_rule: None,
+            });
+        }
+    }
+    for kw_name in [
+        "cumulative upkeep",
+        "level up",
+        "annihilator",
+        "bloodthirst",
+        "firebending",
+        "reconfigure",
+        "afterlife",
+        "fabricate",
+        "poisonous",
+        "soulshift",
+        "vanishing",
+        "affinity",
+        "landwalk",
+        "mobilize",
+        "afflict",
+        "bushido",
+        "fortify",
+        "modular",
+        "outlast",
+        "rampage",
+        "devour",
+        "fading",
+        "frenzy",
+        "renown",
+        "saddle",
+        "equip",
+        "graft",
+        "toxic",
+        "crew",
+        "echo",
+    ] {
+        if let Some(after) = low.strip_prefix(kw_name) {
+            let sep_ok = after.starts_with(' ')
+                || after.starts_with('\u{2014}')
+                || after.starts_with('\u{2013}')
+                || after.starts_with('-');
+            if sep_ok {
+                let offset = clean.len().saturating_sub(after.len());
+                let param_raw = clean[offset..]
+                    .trim()
+                    .trim_start_matches([':', '-', '\u{2014}', '\u{2013}'])
+                    .trim();
+                if !param_raw.is_empty() {
+                    return Some(KeywordAst {
+                        name: kw_name.to_string(),
+                        parameter: Some(uppercase_mana_braces(param_raw)),
+                        desugared_rule: None,
+                    });
+                }
+            }
+        }
+    }
+    None
+}
+
+fn is_direct_token_keyword(trimmed: &str) -> bool {
+    let clean = trimmed
+        .trim()
+        .trim_start_matches("with ")
+        .trim_start_matches("With ")
+        .trim()
+        .trim_matches(['.', ',', ';'])
+        .trim();
+    if clean.is_empty() {
+        return false;
+    }
+    parse_direct_token_keyword_ast(clean).is_some() || lower_keyword_ability_name(clean).is_some()
+}
+
+fn try_lower_token_keyword_direct(
+    trimmed: &str,
+    program: &mut Program,
+    vocabulary: &CreatureTypeVocabulary,
+    tok_ids: &mut LoweringIds,
+) -> bool {
+    let clean = trimmed
+        .trim()
+        .trim_start_matches("with ")
+        .trim_start_matches("With ")
+        .trim()
+        .trim_matches(['.', ',', ';'])
+        .trim();
+    if clean.is_empty() {
+        return true;
+    }
+    if let Some(kw_ast) = parse_direct_token_keyword_ast(clean) {
+        let empty_face = FaceAst::default();
+        let mut probe = program.clone();
+        if lower_keyword(
+            &kw_ast,
+            0,
+            &empty_face,
+            &mut probe,
+            vocabulary,
+            tok_ids,
+            false,
+        )
+        .is_ok()
+        {
+            *program = probe;
+            return true;
+        }
+        return false;
+    }
+    if let Some(kw) = lower_keyword_ability_name(clean) {
+        program.printed_keywords.insert(kw);
+        return true;
+    }
+    false
+}
+
+#[derive(Clone, Copy)]
+struct TokenCompileTarget<'a> {
+    name: &'a str,
+    type_line: &'a str,
+    is_aura: bool,
+}
+
+fn lower_token_text_via_compile_card(
+    raw: &str,
+    target: TokenCompileTarget<'_>,
+    program: &mut Program,
+    vocabulary: &CreatureTypeVocabulary,
+    tok_ids: &mut LoweringIds,
+    compiler_vocab: &Vocabulary,
+) -> Result<(), &'static str> {
+    let norm_part = normalize_token_ability_text(raw, target.name);
+    let parsed_kw = compile_card(
+        &CardInput {
+            oracle_id: "",
+            name: target.name,
+            layout: "normal",
+            faces: vec![FaceInput {
+                name: target.name,
+                type_line: target.type_line,
+                oracle_text: &norm_part,
+            }],
+        },
+        compiler_vocab,
+    );
+    if !parsed_kw.strictly_compiled {
+        return Err("oracle:unsupported-granted-keyword");
+    }
+    let Some(face_ast) = parsed_kw.faces.first() else {
+        return Err("oracle:unsupported-granted-keyword");
+    };
+    if !face_ast.spell_effects.is_empty()
+        || (face_ast.keywords.is_empty()
+            && face_ast.statics.is_empty()
+            && face_ast.replacements.is_empty()
+            && face_ast.abilities.is_empty())
+    {
+        return Err("oracle:unsupported-granted-keyword");
+    }
+    lower_token_face_ast(face_ast, target.is_aura, program, vocabulary, tok_ids)
 }
 
 fn lower_token_face_ast(
@@ -2927,6 +3401,11 @@ pub(super) fn lower_token_spec(
             let mut tok_ids = LoweringIds::default();
             let compiler_vocab = cached_compiler_vocab(vocabulary);
             let tok_name = named.as_deref().unwrap_or("Token");
+            let compile_target = TokenCompileTarget {
+                name: tok_name,
+                type_line: &tok_type_line,
+                is_aura,
+            };
             for kw_raw in keywords {
                 if kw_raw.contains('"') {
                     let mut rest = kw_raw.as_str();
@@ -2949,56 +3428,24 @@ pub(super) fn lower_token_spec(
                         }
                     }
                     leading_text.push_str(rest);
-                    for part in leading_text
-                        .split([',', ';'])
-                        .flat_map(|s| s.split(" and "))
-                    {
-                        let trimmed = part
-                            .trim()
-                            .trim_start_matches("with ")
-                            .trim()
-                            .trim_matches(['.', ',', ';'])
-                            .trim();
+                    for part in split_token_keyword_list(&leading_text) {
+                        let trimmed = part.trim();
                         if trimmed.is_empty() {
                             continue;
                         }
-                        if let Some(kw) = lower_keyword_ability_name(trimmed) {
-                            p.printed_keywords.insert(kw);
-                        } else {
-                            let norm_part = normalize_token_ability_text(trimmed, tok_name);
-                            let parsed_kw = compile_card(
-                                &CardInput {
-                                    oracle_id: "",
-                                    name: tok_name,
-                                    layout: "normal",
-                                    faces: vec![FaceInput {
-                                        name: tok_name,
-                                        type_line: &tok_type_line,
-                                        oracle_text: &norm_part,
-                                    }],
-                                },
-                                &compiler_vocab,
-                            );
-                            if !parsed_kw.strictly_compiled {
-                                return Err("oracle:unsupported-granted-keyword");
-                            }
-                            let Some(face_ast) = parsed_kw.faces.first() else {
-                                return Err("oracle:unsupported-granted-keyword");
-                            };
-                            if !face_ast.spell_effects.is_empty()
-                                || (face_ast.keywords.is_empty()
-                                    && face_ast.statics.is_empty()
-                                    && face_ast.replacements.is_empty()
-                                    && face_ast.abilities.is_empty())
-                            {
-                                return Err("oracle:unsupported-granted-keyword");
-                            }
-                            lower_token_face_ast(
-                                face_ast,
-                                is_aura,
+                        if !try_lower_token_keyword_direct(
+                            trimmed,
+                            &mut p,
+                            vocabulary,
+                            &mut tok_ids,
+                        ) {
+                            lower_token_text_via_compile_card(
+                                trimmed,
+                                compile_target,
                                 &mut p,
                                 vocabulary,
                                 &mut tok_ids,
+                                &compiler_vocab,
                             )?;
                         }
                     }
@@ -3006,73 +3453,52 @@ pub(super) fn lower_token_spec(
                         if q.is_empty() {
                             continue;
                         }
-                        let norm_q = normalize_token_ability_text(&q, tok_name);
-                        let compiled_q = compile_card(
-                            &CardInput {
-                                oracle_id: "",
-                                name: tok_name,
-                                layout: "normal",
-                                faces: vec![FaceInput {
-                                    name: tok_name,
-                                    type_line: &tok_type_line,
-                                    oracle_text: &norm_q,
-                                }],
-                            },
+                        lower_token_text_via_compile_card(
+                            &q,
+                            compile_target,
+                            &mut p,
+                            vocabulary,
+                            &mut tok_ids,
                             &compiler_vocab,
-                        );
-                        if !compiled_q.strictly_compiled {
-                            return Err("oracle:unsupported-granted-keyword");
-                        }
-                        let Some(face_ast) = compiled_q.faces.first() else {
-                            return Err("oracle:unsupported-granted-keyword");
-                        };
-                        if !face_ast.spell_effects.is_empty()
-                            || (face_ast.keywords.is_empty()
-                                && face_ast.statics.is_empty()
-                                && face_ast.replacements.is_empty()
-                                && face_ast.abilities.is_empty())
-                        {
-                            return Err("oracle:unsupported-granted-keyword");
-                        }
-                        lower_token_face_ast(face_ast, is_aura, &mut p, vocabulary, &mut tok_ids)?;
+                        )?;
                     }
                 } else {
                     let kw_trimmed = kw_raw.trim().trim_end_matches(['.', ',', ';']).trim();
                     if kw_trimmed.is_empty() {
                         continue;
                     }
-                    if let Some(kw) = lower_keyword_ability_name(kw_trimmed) {
-                        p.printed_keywords.insert(kw);
-                    } else {
-                        let norm_kw = normalize_token_ability_text(kw_trimmed, tok_name);
-                        let compiled_kw = compile_card(
-                            &CardInput {
-                                oracle_id: "",
-                                name: tok_name,
-                                layout: "normal",
-                                faces: vec![FaceInput {
-                                    name: tok_name,
-                                    type_line: &tok_type_line,
-                                    oracle_text: &norm_kw,
-                                }],
-                            },
-                            &compiler_vocab,
-                        );
-                        if !compiled_kw.strictly_compiled {
-                            return Err("oracle:unsupported-granted-keyword");
-                        }
-                        let Some(face_ast) = compiled_kw.faces.first() else {
-                            return Err("oracle:unsupported-granted-keyword");
-                        };
-                        if !face_ast.spell_effects.is_empty()
-                            || (face_ast.keywords.is_empty()
-                                && face_ast.statics.is_empty()
-                                && face_ast.replacements.is_empty()
-                                && face_ast.abilities.is_empty())
+                    if !try_lower_token_keyword_direct(kw_trimmed, &mut p, vocabulary, &mut tok_ids)
+                    {
+                        let parts = split_token_keyword_list(kw_trimmed);
+                        if parts.len() > 1 && parts.iter().all(|part| is_direct_token_keyword(part))
                         {
-                            return Err("oracle:unsupported-granted-keyword");
+                            for part in &parts {
+                                if !try_lower_token_keyword_direct(
+                                    part,
+                                    &mut p,
+                                    vocabulary,
+                                    &mut tok_ids,
+                                ) {
+                                    lower_token_text_via_compile_card(
+                                        part,
+                                        compile_target,
+                                        &mut p,
+                                        vocabulary,
+                                        &mut tok_ids,
+                                        &compiler_vocab,
+                                    )?;
+                                }
+                            }
+                        } else {
+                            lower_token_text_via_compile_card(
+                                kw_trimmed,
+                                compile_target,
+                                &mut p,
+                                vocabulary,
+                                &mut tok_ids,
+                                &compiler_vocab,
+                            )?;
                         }
-                        lower_token_face_ast(face_ast, is_aura, &mut p, vocabulary, &mut tok_ids)?;
                     }
                 }
             }

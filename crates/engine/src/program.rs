@@ -555,11 +555,10 @@ impl ResolvingPlayer {
                     grouping,
                 } => {
                     let singular = match grouping {
-                        TriggerGrouping::EachOccurrence | TriggerGrouping::OneOrMoreByPlayer => {
-                            true
-                        }
-                        TriggerGrouping::OneOrMoreTogether
-                        | TriggerGrouping::OneOrMoreOnceEachTurn => false,
+                        TriggerGrouping::EachOccurrence
+                        | TriggerGrouping::OneOrMoreByPlayer
+                        | TriggerGrouping::OneOrMoreOnceEachTurn => true,
+                        TriggerGrouping::OneOrMoreTogether => false,
                     };
                     if singular && condition.captures_related_player() {
                         Ok(None)
@@ -5582,14 +5581,19 @@ impl Instruction {
                 players: AffectedPlayers::One(_),
                 ..
             }
-            | Self::ExileFromZone {
-                players: AffectedPlayers::One(_),
-                ..
-            }
-            | Self::TapOrUntapControlled {
-                players: AffectedPlayers::One(_),
-                ..
-            } => true,
+            | Self::ExileFromZone { .. }
+            | Self::TapOrUntapControlled { .. }
+            | Self::ModifyAnyNumberOfPermanents { .. }
+            | Self::UntapUpTo { .. }
+            | Self::DiscardUpTo { .. }
+            | Self::AdditionalCombat { .. }
+            | Self::AdditionalCombatAfterUntappingAttackers
+            | Self::TakeExtraTurn
+            | Self::ReturnOneNonlandPerOpponent
+            | Self::CreateEmblem(_)
+            | Self::CreateOpponentEmblems(_)
+            | Self::RegenerateSource
+            | Self::DoubleCountersOnTargets => true,
             Self::PutTargetOwnedExiledLandsOntoBattlefield
             | Self::BindOrderedPermanents { .. }
             | Self::LookOpponentExileForCast { .. }
@@ -5608,12 +5612,8 @@ impl Instruction {
             | Self::OfferDynamicManaPayment { .. }
             | Self::OptionalSequence { .. }
             | Self::OptionalEffect { .. }
-            | Self::ExileFromZone { .. }
-            | Self::TapOrUntapControlled { .. }
-            | Self::ModifyAnyNumberOfPermanents { .. }
             | Self::PutLibraryCohortIntoGraveyard(_)
             | Self::CreateArmyIfAbsent { .. }
-            | Self::UntapUpTo { .. }
             | Self::ChooseVowedCreatures
             | Self::ChooseCreaturesToKeep
             | Self::DestroyOtherCreatures
@@ -5627,7 +5627,6 @@ impl Instruction {
             | Self::ChooseOtherControlledCreature { .. }
             | Self::Sacrifice { .. }
             | Self::SacrificeRandomUntilLand
-            | Self::DiscardUpTo { .. }
             | Self::SacrificeToContinue { .. }
             | Self::Discard { .. }
             | Self::DiscardFiltered { .. }
@@ -5635,13 +5634,8 @@ impl Instruction {
             | Self::RememberPermanentTarget
             | Self::ControllerLosesRememberedManaValue
             | Self::ExiledTargetControllerGainsPower
-            | Self::GainControlOfSpell
-            | Self::ChangeOnlyTarget
             | Self::LoseLifeEqualToTargetSpellManaValue
             | Self::GoadOtherPlayersCreatures
-            | Self::AdditionalCombat { .. }
-            | Self::AdditionalCombatAfterUntappingAttackers
-            | Self::TakeExtraTurn
             | Self::DisallowDamagePreventionThisTurn
             | Self::GrantNoMaxHandSizeRestOfGame
             | Self::AbandonSourceScheme
@@ -5653,7 +5647,6 @@ impl Instruction {
             | Self::ExileMeldPair
             | Self::MeldExiledPair(_)
             | Self::PairWithCreature { .. }
-            | Self::ReturnOneNonlandPerOpponent
             | Self::WeakenDelayedAttacker(_)
             | Self::DrawRevealRemoveLoyalty
             | Self::CreateReflexiveDiscardDamage
@@ -5683,8 +5676,6 @@ impl Instruction {
             | Self::TapTargetWhileControllingSource
             | Self::RegisterTokenLinkedExile
             | Self::ReturnTokenLinkedExile
-            | Self::CreateEmblem(_)
-            | Self::CreateOpponentEmblems(_)
             | Self::PutOwnHandCardOnLibraryBottom
             | Self::PutGroupOnLibraryBottom(_)
             | Self::PutEquipmentFromHandOrGraveyard
@@ -5695,10 +5686,8 @@ impl Instruction {
             | Self::RelatedPlayerLosesHalfLife
             | Self::ExileDefeatedSiege
             | Self::ExileSourceAndGainLife(_)
-            | Self::RegenerateSource
             | Self::RegenerateControlledSubtype(_)
             | Self::ExileOnePerPlayerUntilSourceLeaves
-            | Self::DoubleCountersOnTargets
             | Self::ExileCombatDamagedCreature
             | Self::DestroyCapturedCombatCreature { .. }
             | Self::DestroyCapturedDamageSource
@@ -5827,6 +5816,8 @@ impl Instruction {
             | Self::CounterSpell
             | Self::CounterSpellToExile
             | Self::CounterSpellToLibrary { .. }
+            | Self::GainControlOfSpell
+            | Self::ChangeOnlyTarget
             | Self::CopyAbility
             | Self::CopySpell
             | Self::CopyTargetToSource { .. }
@@ -5856,6 +5847,180 @@ impl Instruction {
             | Self::LookTopCreatureSharingAttachedSubtype { .. }
             | Self::DivideTargetPermanentsAndSacrificePile => true,
         }
+    }
+
+    /// Whether this instruction can accompany [`Instruction::AffectPermanentTargets`]
+    /// with `(minimum, maximum)` without consuming an incompatible single permanent target.
+    pub(crate) fn allowed_with_affect_permanent_targets(&self, minimum: u16, maximum: u16) -> bool {
+        if matches!(
+            self,
+            Self::FixedTargetClause(_)
+                | Self::BindOrderedPermanents { .. }
+                | Self::ExileOrderedPermanent(_)
+                | Self::DestroyFixedTargets
+                | Self::ReturnFixedTargets
+                | Self::FightFixedTargets
+                | Self::GiveFixedTargetControl { .. }
+                | Self::BecomeCopyFixedTargets { .. }
+                | Self::DoubleCountersOnTargets
+                | Self::ReturnOneNonlandPerOpponent
+                | Self::DivideThreeDamageAmongTargets
+                | Self::DistributePlusOneCounters { .. }
+                | Self::DamageOrderedTargets { .. }
+                | Self::DivideDamageAmongTargets { .. }
+                | Self::DistributeCountersAmongTargets { .. }
+                | Self::DealDamageToAnnouncedTargets { .. }
+                | Self::ExileUntilOtherTargetLeaves
+                | Self::CopyOtherTargetAsArtifact
+                | Self::ReturnCardsDestroyedThisWay
+                | Self::RevealCreatureForEachTargetController
+                | Self::ReturnExiledTargetCohort { .. }
+                | Self::ReturnOddGraveyardPermanentIfPaid { .. }
+        ) {
+            return false;
+        }
+        if let Self::AffectPermanentTargets {
+            minimum: m2,
+            maximum: x2,
+            ..
+        } = self
+        {
+            return (*m2, *x2) == (minimum, maximum);
+        }
+        if !self.uses_mode_target() {
+            return true;
+        }
+        matches!(
+            self,
+            Self::DrawController { .. }
+                | Self::DrawPlayer { .. }
+                | Self::OfferManaPayment { .. }
+                | Self::OfferDynamicManaPayment { .. }
+                | Self::ExploreSource
+                | Self::Discard { .. }
+                | Self::DiscardFiltered { .. }
+                | Self::Scry { .. }
+                | Self::Surveil { .. }
+                | Self::GainControllerLife { .. }
+                | Self::AdjustControllerLife { .. }
+                | Self::AdjustEachOpponentLife { .. }
+                | Self::AdjustPlayersLife { .. }
+                | Self::CreateTokens { .. }
+                | Self::CreateAttackingTokens { .. }
+                | Self::Mill { .. }
+                | Self::AddPlayerCounter { .. }
+                | Self::ExileTopPlay { .. }
+                | Self::LookTopChoose { .. }
+                | Self::MoveSubject { .. }
+                | Self::SelectZoneCardsToZone { .. }
+                | Self::ChooseOption { .. }
+                | Self::MoveGraveyardGroup { .. }
+                | Self::PutHandPermanentFiltered { .. }
+                | Self::RepeatLoop { .. }
+                | Self::RevealUntilMatch { .. }
+                | Self::CreateContinuousEffect { .. }
+                | Self::CreateTemporaryRule { .. }
+                | Self::ChangeGroup { .. }
+                | Self::ChangeAbilitySource { .. }
+                | Self::PutCountersOnSubject { .. }
+                | Self::PutCountersOnSource { .. }
+                | Self::PutNamedCounterOnSource { .. }
+                | Self::SetGroupTapped { .. }
+                | Self::SetSubjectTapped { .. }
+                | Self::PutNamedCounterOnTarget { .. }
+                | Self::PutPowerToughnessCounters { .. }
+                | Self::DealDamageFrom { .. }
+                | Self::DamageOpponentsAmount(_)
+                | Self::DamageGroup { .. }
+                | Self::DamageGroupAmount { .. }
+                | Self::DestroyGroup(_)
+                | Self::MoveGroup { .. }
+                | Self::ExileFromZone { .. }
+                | Self::Blight { .. }
+                | Self::CollectEvidence { .. }
+                | Self::PayLife { .. }
+                | Self::PayEnergy { .. }
+                | Self::PayControllerLife(_)
+                | Self::PayControllerEnergy(_)
+                | Self::ExploreSubject(_)
+                | Self::SkipNextUntap { .. }
+                | Self::RequireCombatAction { .. }
+                | Self::CreateTokenCopy { .. }
+                | Self::CreateAuraTokenAttached { .. }
+                | Self::AttachPermanent { .. }
+                | Self::BranchIfFalse { .. }
+                | Self::Jump { .. }
+                | Self::OptionalEffect { .. }
+                | Self::OptionalSequence { .. }
+                | Self::ScheduleDelayedStepTrigger { .. }
+                | Self::ScheduleDelayedEventTrigger { .. }
+                | Self::EmitReflexiveTrigger { .. }
+                | Self::Proliferate
+                | Self::ShuffleOwnLibrary
+                | Self::BecomeMonarch(_)
+                | Self::IncreaseSpeed
+                | Self::Discover { .. }
+                | Self::Incubate { .. }
+                | Self::Connive { .. }
+                | Self::ConniveFinalize { .. }
+                | Self::Vote { .. }
+                | Self::ChooseValue { .. }
+                | Self::ChooseOptionForPlayers { .. }
+                | Self::CreateEmblem(_)
+                | Self::ExileResolvingSpell
+                | Self::DestroyTarget
+                | Self::DestroyTargetWithoutRegeneration
+                | Self::DestroySubject { .. }
+                | Self::GainControlOfPermanent { .. }
+                | Self::DoublePowerToughnessSubject { .. }
+                | Self::DoubleCountersOnSubject { .. }
+                | Self::Monstrosity { .. }
+                | Self::RollDie { .. }
+                | Self::FlipCoins { .. }
+                | Self::Clash { .. }
+                | Self::RingTemptsYou
+                | Self::VentureIntoDungeon { .. }
+                | Self::TakeInitiative { .. }
+                | Self::UnlockDoor { .. }
+                | Self::Behold { .. }
+                | Self::ManifestDread
+                | Self::GrantCardPlayPermission { .. }
+                | Self::GrantProtectionChosenColor(_)
+                | Self::ChooseNewTargets
+                | Self::DiscardOneAtRandom(_)
+                | Self::Fight { .. }
+                | Self::Exchange(_)
+                | Self::CopyStackObject { .. }
+                | Self::ExileGroupFromZone { .. }
+                | Self::SacrificeSubject { .. }
+                | Self::DestroyChosen { .. }
+                | Self::CastLinkedFaceDownFree
+                | Self::Ripple(_)
+                | Self::Demonstrate
+                | Self::Enlist
+                | Self::CreateArmyIfAbsent { .. }
+                | Self::Amass { .. }
+                | Self::ReturnToOwnersHand
+                | Self::ExileTarget
+                | Self::SearchLibrary { .. }
+                | Self::AddMana(_)
+                | Self::RemoveCountersFromPermanent { .. }
+                | Self::PutCountersOnControlledCreatures
+                | Self::ExileGraveyardTarget
+                | Self::CounterSpell
+                | Self::CounterSpellToLibrary { .. }
+                | Self::PhaseOut(PhasingSubject::Source)
+                | Self::ShuffleAbilitySourceIntoLibrary
+                | Self::ModifyGroupUntilEndOfTurn { .. }
+                | Self::PreventDamageThisTurn(
+                    crate::damage::TurnPreventionFilter::Combat
+                        | crate::damage::TurnPreventionFilter::All
+                        | crate::damage::TurnPreventionFilter::ToAbilitySource
+                        | crate::damage::TurnPreventionFilter::CombatToOrFromAbilitySource
+                        | crate::damage::TurnPreventionFilter::CombatToControlledCreatures
+                        | crate::damage::TurnPreventionFilter::CreaturesControlledByOpponents,
+                )
+        )
     }
 }
 /// Disturb casts a transforming card from its own graveyard using the reverse face and this price.
@@ -6367,7 +6532,9 @@ impl ExecutableBody {
             let has_safe_consumer = self.instructions.iter().any(|op| {
                 matches!(
                     op,
-                    Instruction::Fight { .. } | Instruction::AffectPermanentTargets { .. }
+                    Instruction::Fight { .. }
+                        | Instruction::AffectPermanentTargets { .. }
+                        | Instruction::DealDamageFrom { .. }
                 )
             });
             if !valid_target
@@ -6448,13 +6615,25 @@ impl ExecutableBody {
                 return Err(DefinitionError::InvalidInstruction);
             }
             if let Some(prefix) = &modes.prefix {
-                if prefix.target != BodyTarget::None || prefix.triggered_modes.is_some() {
+                if prefix.target != BodyTarget::None
+                    || prefix.triggered_modes.is_some()
+                    || prefix
+                        .instructions
+                        .iter()
+                        .any(|op| matches!(op, Instruction::FixedTargetClause(_)))
+                {
                     return Err(DefinitionError::InvalidInstruction);
                 }
                 prefix.validate_in(vocabulary, context)?;
             }
             if let Some(suffix) = &modes.suffix {
-                if suffix.target != BodyTarget::None || suffix.triggered_modes.is_some() {
+                if suffix.target != BodyTarget::None
+                    || suffix.triggered_modes.is_some()
+                    || suffix
+                        .instructions
+                        .iter()
+                        .any(|op| matches!(op, Instruction::FixedTargetClause(_)))
+                {
                     return Err(DefinitionError::InvalidInstruction);
                 }
                 suffix.validate_in(vocabulary, context)?;
@@ -6463,10 +6642,6 @@ impl ExecutableBody {
                 if option.triggered_modes.is_some()
                     || option.instructions.is_empty()
                     || option.ordered_any_target_bounds().is_some()
-                    || option
-                        .instructions
-                        .iter()
-                        .any(|op| matches!(op, Instruction::FixedTargetClause(_)))
                 {
                     return Err(DefinitionError::InvalidInstruction);
                 }
@@ -6507,7 +6682,15 @@ impl ExecutableBody {
                 return Err(DefinitionError::InvalidInstruction);
             }
             if (filter.has_related_player()
-                && !matches!(context, BodyContext::TriggerBound { condition, grouping: TriggerGrouping::EachOccurrence | TriggerGrouping::OneOrMoreByPlayer } if condition.captures_related_player()))
+                && !matches!(
+                    context,
+                    BodyContext::TriggerBound {
+                        condition,
+                        grouping: TriggerGrouping::EachOccurrence
+                            | TriggerGrouping::OneOrMoreByPlayer
+                            | TriggerGrouping::OneOrMoreOnceEachTurn,
+                    } if condition.captures_related_player()
+                ))
                 || filter.has_concrete_player()
             {
                 return Err(DefinitionError::UnguaranteedRelatedPlayer);
@@ -9518,145 +9701,7 @@ impl ExecutableBody {
                     let trailing_non_target_followups =
                         self.instructions.iter().enumerate().all(|(i, op)| {
                             i == index
-                                || matches!(
-                                    op,
-                                    Instruction::DrawController { .. }
-                                        | Instruction::DrawPlayer { .. }
-                                        | Instruction::OfferManaPayment { .. }
-                                        | Instruction::OfferDynamicManaPayment { .. }
-                                        | Instruction::ExploreSource
-                                        | Instruction::Discard { .. }
-                                        | Instruction::DiscardFiltered { .. }
-                                        | Instruction::Scry { .. }
-                                        | Instruction::Surveil { .. }
-                                        | Instruction::GainControllerLife { .. }
-                                        | Instruction::AdjustControllerLife { .. }
-                                        | Instruction::AdjustEachOpponentLife { .. }
-                                        | Instruction::AdjustPlayersLife { .. }
-                                        | Instruction::CreateTokens { .. }
-                                        | Instruction::CreateAttackingTokens { .. }
-                                        | Instruction::Mill { .. }
-                                        | Instruction::AddPlayerCounter { .. }
-                                        | Instruction::ExileTopPlay { .. }
-                                        | Instruction::LookTopChoose { .. }
-                                        | Instruction::MoveSubject { .. }
-                                        | Instruction::SelectZoneCardsToZone { .. }
-                                        | Instruction::ChooseOption { .. }
-                                        | Instruction::MoveGraveyardGroup { .. }
-                                        | Instruction::PutHandPermanentFiltered { .. }
-                                        | Instruction::RepeatLoop { .. }
-                                        | Instruction::RevealUntilMatch { .. }
-                                        | Instruction::CreateContinuousEffect { .. }
-                                        | Instruction::CreateTemporaryRule { .. }
-                                        | Instruction::ChangeGroup { .. }
-                                        | Instruction::ChangeAbilitySource { .. }
-                                        | Instruction::PutCountersOnSubject { .. }
-                                        | Instruction::PutCountersOnSource { .. }
-                                        | Instruction::PutNamedCounterOnSource { .. }
-                                        | Instruction::SetGroupTapped { .. }
-                                        | Instruction::SetSubjectTapped { .. }
-                                        | Instruction::PutNamedCounterOnTarget { .. }
-                                        | Instruction::PutPowerToughnessCounters { .. }
-                                        | Instruction::DealDamageFrom { .. }
-                                        | Instruction::DamageOpponentsAmount(_)
-                                        | Instruction::DamageGroup { .. }
-                                        | Instruction::DamageGroupAmount { .. }
-                                        | Instruction::DestroyGroup(_)
-                                        | Instruction::MoveGroup { .. }
-                                        | Instruction::ExileFromZone { .. }
-                                        | Instruction::Blight { .. }
-                                        | Instruction::CollectEvidence { .. }
-                                        | Instruction::PayLife { .. }
-                                        | Instruction::PayEnergy { .. }
-                                        | Instruction::PayControllerLife(_)
-                                        | Instruction::PayControllerEnergy(_)
-                                        | Instruction::ExploreSubject(_)
-                                        | Instruction::SkipNextUntap { .. }
-                                        | Instruction::RequireCombatAction { .. }
-                                        | Instruction::CreateTokenCopy { .. }
-                                        | Instruction::CreateAuraTokenAttached { .. }
-                                        | Instruction::AttachPermanent { .. }
-                                        | Instruction::BranchIfFalse { .. }
-                                        | Instruction::Jump { .. }
-                                        | Instruction::OptionalEffect { .. }
-                                        | Instruction::OptionalSequence { .. }
-                                        | Instruction::ScheduleDelayedStepTrigger { .. }
-                                        | Instruction::ScheduleDelayedEventTrigger { .. }
-                                        | Instruction::EmitReflexiveTrigger { .. }
-                                        | Instruction::Proliferate
-                                        | Instruction::ShuffleOwnLibrary
-                                        | Instruction::BecomeMonarch(_)
-                                        | Instruction::IncreaseSpeed
-                                        | Instruction::Discover { .. }
-                                        | Instruction::Incubate { .. }
-                                        | Instruction::Connive { .. }
-                                        | Instruction::ConniveFinalize { .. }
-                                        | Instruction::Vote { .. }
-                                        | Instruction::ChooseValue { .. }
-                                        | Instruction::ChooseOptionForPlayers { .. }
-                                        | Instruction::CreateEmblem(_)
-                                        | Instruction::ExileResolvingSpell
-                                        | Instruction::DestroyTarget
-                                        | Instruction::DestroyTargetWithoutRegeneration
-                                        | Instruction::DestroySubject { .. }
-                                        | Instruction::GainControlOfPermanent { .. }
-                                        | Instruction::DoublePowerToughnessSubject { .. }
-                                        | Instruction::DoubleCountersOnSubject { .. }
-                                        | Instruction::Monstrosity { .. }
-                                        | Instruction::RollDie { .. }
-                                        | Instruction::FlipCoins { .. }
-                                        | Instruction::Clash { .. }
-                                        | Instruction::RingTemptsYou
-                                        | Instruction::VentureIntoDungeon { .. }
-                                        | Instruction::TakeInitiative { .. }
-                                        | Instruction::UnlockDoor { .. }
-                                        | Instruction::Behold { .. }
-                                        | Instruction::ManifestDread
-                                        | Instruction::GrantCardPlayPermission { .. }
-                                        | Instruction::GrantProtectionChosenColor(_)
-                                        | Instruction::ChooseNewTargets
-                                        | Instruction::DiscardOneAtRandom(_)
-                                        | Instruction::Fight { .. }
-                                        | Instruction::Exchange(_)
-                                        | Instruction::CopyStackObject { .. }
-                                        | Instruction::ExileGroupFromZone { .. }
-                                        | Instruction::SacrificeSubject { .. }
-                                        | Instruction::DestroyChosen { .. }
-                                        | Instruction::CastLinkedFaceDownFree
-                                        | Instruction::Ripple(_)
-                                        | Instruction::Demonstrate
-                                        | Instruction::Enlist
-                                        | Instruction::CreateArmyIfAbsent { .. }
-                                        | Instruction::Amass { .. }
-                                        | Instruction::ReturnToOwnersHand
-                                        | Instruction::ExileTarget
-                                        | Instruction::SearchLibrary { .. }
-                                        | Instruction::AddMana(_)
-                                        | Instruction::RemoveCountersFromPermanent { .. }
-                                        | Instruction::PutCountersOnControlledCreatures
-                                        | Instruction::ExileGraveyardTarget
-                                        | Instruction::CounterSpell
-                                        | Instruction::CounterSpellToLibrary { .. }
-                                        | Instruction::PhaseOut(PhasingSubject::Source)
-                                        | Instruction::ShuffleAbilitySourceIntoLibrary
-                                        | Instruction::ModifyGroupUntilEndOfTurn { .. }
-                                        | Instruction::PreventDamageThisTurn(
-                                            crate::damage::TurnPreventionFilter::Combat
-                                                | crate::damage::TurnPreventionFilter::All
-                                                | crate::damage::TurnPreventionFilter::ToAbilitySource
-                                                | crate::damage::TurnPreventionFilter::CombatToOrFromAbilitySource
-                                                | crate::damage::TurnPreventionFilter::CombatToControlledCreatures
-                                                | crate::damage::TurnPreventionFilter::CreaturesControlledByOpponents,
-                                        )
-                                )
-                                || matches!(
-                                    op,
-                                    Instruction::AffectPermanentTargets {
-                                        minimum: m2,
-                                        maximum: x2,
-                                        ..
-                                    } if m2 == minimum && x2 == maximum
-                                )
+                                || op.allowed_with_affect_permanent_targets(*minimum, *maximum)
                         });
                     let single_target_in_sequence = (*minimum, *maximum) == (1, 1)
                         && matches!(
@@ -10911,8 +10956,13 @@ impl ExecutableBody {
                 } => {
                     let mut family =
                         players.validate(context, self.target, facts.definitely_exiled_target)?;
+                    let validate_paid =
+                        !(paid_body.instructions.is_empty() && declined_body.is_some());
+                    if !validate_paid && paid_body.target != BodyTarget::None {
+                        return Err(DefinitionError::InvalidInstruction);
+                    }
                     for sub in std::iter::once(cost_body)
-                        .chain(std::iter::once(paid_body))
+                        .chain(validate_paid.then_some(paid_body))
                         .chain(declined_body.iter())
                     {
                         if sub.target != BodyTarget::None {
@@ -17704,17 +17754,19 @@ impl Program {
                     return Err(DefinitionError::ActivatedSource);
                 }
                 if self.triggered.iter().any(|ability| {
-                    ability.condition.zone != TriggerZone::Graveyard
-                        && !matches!(
-                            ability.condition.event,
-                            TriggerEvent::SpellCast {
-                                self_cast: true,
-                                ..
-                            } | TriggerEvent::PlayerAction {
-                                action: PlayerTriggerAction::Cycled { self_only: true },
-                                ..
-                            }
-                        )
+                    !matches!(
+                        ability.condition.zone,
+                        TriggerZone::Graveyard | TriggerZone::Any
+                    ) && !matches!(
+                        ability.condition.event,
+                        TriggerEvent::SpellCast {
+                            self_cast: true,
+                            ..
+                        } | TriggerEvent::PlayerAction {
+                            action: PlayerTriggerAction::Cycled { self_only: true },
+                            ..
+                        }
+                    )
                 }) {
                     return Err(DefinitionError::TriggeredSource);
                 }
@@ -17818,6 +17870,15 @@ impl Program {
                     && (!matches!(
                         ability.source_cost,
                         SourceCost::None
+                            | SourceCost::GenericX {
+                                tap_source: false,
+                                ..
+                            }
+                            | SourceCost::Counter {
+                                tap_source: false,
+                                sacrifice_source: false,
+                                ..
+                            }
                             | SourceCost::Discard {
                                 tap_source: false,
                                 ..
@@ -18443,346 +18504,333 @@ impl Program {
                     ))
                 && !(self.permanent().is_some()
                     && ability.body.instructions.iter().all(|operation| {
-                        matches!(
-                            operation,
+                        let targetless_player = |player: ResolvingPlayer| {
+                            matches!(
+                                player,
+                                ResolvingPlayer::Controller
+                                    | ResolvingPlayer::ActivePlayer
+                                    | ResolvingPlayer::EnchantedPlayer
+                                    | ResolvingPlayer::AttachedHostController
+                                    | ResolvingPlayer::SourceChosenPlayer
+                                    | ResolvingPlayer::LoopPlayer
+                                    | ResolvingPlayer::RandomOpponent
+                                    | ResolvingPlayer::ChosenPlayer
+                            )
+                        };
+                        let targetless_players = |players: AffectedPlayers| match players {
+                            AffectedPlayers::One(player) => targetless_player(player),
+                            AffectedPlayers::EachOpponent
+                            | AffectedPlayers::EachOtherPlayer
+                            | AffectedPlayers::EachPlayer => true,
+                        };
+                        match operation {
                             Instruction::LookTopReveal {
                                 filter: LookTopFilter::SourceChosenCreatureType,
                                 ..
-                            } | Instruction::SuppressGroupKeywords { .. }
-                                | Instruction::ExileDefeatedSiege
-                                | Instruction::ExileSourceAndGainLife(_)
-                                | Instruction::ExileAbilitySource
-                                | Instruction::ReturnSourceToHand
-                                | Instruction::ReturnSourceGraveyardToHand
-                                | Instruction::ReturnSourceGraveyardToBattlefield { .. }
-                                | Instruction::UntapAbilitySource
-                                | Instruction::TapAbilitySource
-                                | Instruction::RegenerateSource
-                                | Instruction::GainControllerLife { .. }
-                                | Instruction::DrainTargetAndGain(_)
-                                | Instruction::AdjustControllerLife { .. }
-                                | Instruction::RequireAttackSourceNextTurn
-                                | Instruction::ChooseAttackDirection
-                                | Instruction::AdditionalLoyaltyActivation
-                                | Instruction::PayControllerLife(_)
-                                | Instruction::PayControllerEnergy(_)
-                                | Instruction::PutEquipmentFromHandOrGraveyard
-                                | Instruction::EquipNewToken
-                                | Instruction::Encore
-                                | Instruction::GrantNewTokensHaste
-                                | Instruction::RepeatOpponentLifeLoss
-                                | Instruction::OpponentsLoseAndControllerGains(_)
-                                | Instruction::AdjustEachOpponentLife { .. }
-                                | Instruction::AdjustPlayersLife { .. }
-                                | Instruction::FlipCoin { .. }
-                                | Instruction::GoadOtherPlayersCreatures
-                                | Instruction::AdditionalCombat { .. }
-                                | Instruction::AdditionalCombatAfterUntappingAttackers
-                                | Instruction::TakeExtraTurn
-                                | Instruction::DisallowDamagePreventionThisTurn
-                                | Instruction::GrantNoMaxHandSizeRestOfGame
-                                | Instruction::PreventDamageThisTurn(_)
-                                | Instruction::MoveGroup { .. }
-                                | Instruction::PutTargetInLibrary(_)
-                                | Instruction::PutOwnHandCardOnLibraryBottom
-                                | Instruction::PutGroupOnLibraryBottom(_)
-                                | Instruction::ExileGraveyardTarget
-                                | Instruction::ExileCapturedGraveyardCard
-                                | Instruction::GrantGraveyardCastAndWatchAbilities
-                                | Instruction::GainCastCardAbilities { .. }
-                                | Instruction::ExileCardsFromGraveyard { .. }
-                                | Instruction::ReturnOwnedCommandersToHand
-                                | Instruction::ExileTopForFreePlay
-                                | Instruction::ExileTargetUntilNonlandForFreeCast
-                                | Instruction::ExileTopRepeatOnPermanentEntry
-                                | Instruction::ShuffleEachHandAndGraveyard
-                                | Instruction::EndControllerTurn
-                                | Instruction::ShuffleOwnLibrary
-                                | Instruction::ShufflePlayerLibrary(_)
-                                | Instruction::ShuffleTargetIntoLibrary
-                                | Instruction::RevealPlayerHand(_)
-                                | Instruction::ShuffleOwnGraveyardIntoLibrary
-                                | Instruction::ShuffleTargetGraveyardCards { .. }
-                                | Instruction::MayTurnControlledCreatureFaceUp
-                                | Instruction::ExploreSource
-                                | Instruction::MayRevealLibraryTop
-                                | Instruction::ExileCreatureAtMostRevealedPower
-                                | Instruction::CastLinkedSpellMatchingX
-                                | Instruction::DestroyDamagedPlayersNonlandsAtX
-                                | Instruction::PutChosenXChargeCounters
-                                | Instruction::DestroyNonlandsAtSourceChargeCount
-                                | Instruction::DiscardOneAtRandom(_)
-                                | Instruction::Monstrosity { .. }
-                                | Instruction::GrantProtectionChosenColor(
-                                    ProtectionRecipients::AbilitySource
-                                        | ProtectionRecipients::Matching(_),
-                                )
-                                | Instruction::Fight { .. }
-                                | Instruction::Exchange(_)
-                                | Instruction::CopyStackObject { .. }
-                                | Instruction::ExileGroupFromZone { .. }
-                                | Instruction::SacrificeSubject { .. }
-                                | Instruction::DestroyChosen { .. }
-                                | Instruction::CastLinkedFaceDownFree
-                                | Instruction::Ripple(_)
-                                | Instruction::Demonstrate
-                                | Instruction::Enlist
-                                | Instruction::ForEachPlayer { .. }
-                                | Instruction::OfferAnyPlayer { .. }
-                                | Instruction::GrantChosenProtection { .. }
-                                | Instruction::RemoveCountersFromSubject { .. }
-                                | Instruction::MoveGroupToLibrary { .. }
-                                | Instruction::ExileLibraryTopLinked { .. }
-                                | Instruction::UntapOrTapSelect { .. }
-                                | Instruction::MoveGraveyardGroupOwned { .. }
-                                | Instruction::LookTopChooseExt { .. }
-                                | Instruction::RevealUntilMatchExt { .. }
-                                | Instruction::CreateTokenCopyExt { .. }
-                                | Instruction::AddCounterAndDischargeOnResolution(_)
-                                | Instruction::ExileCreaturesAndPlaneswalkersBelowRevealedManaValue
-                                | Instruction::ExileAllGraveyards
-                                | Instruction::ExilePlayerGraveyards(_)
-                                | Instruction::RemoveCountersFromPermanent { .. }
-                                | Instruction::DestroyGroupWithoutRegeneration(_)
-                                | Instruction::DestroyGroup(_)
-                                | Instruction::ExileOnePerPlayerUntilSourceLeaves
-                                | Instruction::DoubleCountersOnTargets
-                                | Instruction::ExileCombatDamagedCreature
-                                | Instruction::DestroyCapturedDamageSource
-                                | Instruction::RemoveCreatureCounters { .. }
-                                | Instruction::UntapControlledLands
-                                | Instruction::UntapControlledCreatures
-                                | Instruction::SetGroupTapped { .. }
-                                | Instruction::SetSubjectTapped { .. }
-                                | Instruction::PutCountersOnSubject { .. }
-                                | Instruction::PutHandPermanentsOntoBattlefield { .. }
-                                | Instruction::TapAttackersAndSkipNextUntap
-                                | Instruction::AttachOnEntry { .. }
-                                | Instruction::ControlledSubtypeDamagesAttacker(_)
-                                | Instruction::RevealTopAndRemoveAttackerIfForest
-                                | Instruction::DamageCapturedBlocker(_)
-                                | Instruction::ChangeControlledPlaneswalkers { .. }
-                                | Instruction::ChangeGroup { .. }
-                                | Instruction::ChangeAbilitySource { .. }
-                                | Instruction::GiveControlOfAbilitySource
-                                | Instruction::UntapAndControlCreatures
-                                | Instruction::Proliferate
-                                | Instruction::AttachControlledToSource { .. }
-                                | Instruction::ReturnDelayedGraveyardToHand(_)
-                                | Instruction::LoseLifeAndScryForSubtype(_)
-                                | Instruction::ExileForBlackToken { .. }
-                                | Instruction::ExileForSubtypeToken(_)
-                                | Instruction::GiveEquippedCreatureToUpkeepPlayer
-                                | Instruction::CopyCreatureExiledForAbility
-                                | Instruction::DamageFromGrantingPermanent { .. }
-                                | Instruction::CopyEntrantAsArtifact
-                                | Instruction::ReplaceSourceCreatedTokens
-                                | Instruction::CopyEntrantOnceEachTurn
-                                | Instruction::CopyCreatureAsToken
-                                | Instruction::CopyDifferentlyNamedTokens
-                                | Instruction::DamagePlayersHalfLife
-                                | Instruction::DamageGroup { .. }
-                                | Instruction::DamageGroupAmount { .. }
-                                | Instruction::DoublePowerToughness { .. }
-                                | Instruction::DamageTargetControllersCreatures { .. }
-                                | Instruction::DrawAndDamageOpponents { .. }
-                                | Instruction::Adapt(_)
-                                | Instruction::TransformSource
-                                | Instruction::TransformSourceAndAttachToTarget
-                                | Instruction::AdvanceClassLevel(_)
-                                | Instruction::SolveSourceCase
-                                | Instruction::BecomePreparedSource
-                                | Instruction::ChooseMeldPartner(_)
-                                | Instruction::ExileMeldPair
-                                | Instruction::MeldExiledPair(_)
-                                | Instruction::ChooseCreatureType { .. }
-                                | Instruction::TransformSubtype(_)
-                                | Instruction::ClearSourceCounters(_)
-                                | Instruction::PutCountersOnSource { .. }
-                                | Instruction::PutNamedCounterOnSource { .. }
-                                | Instruction::PutChargeCounterOnSource
-                                | Instruction::PutBlessingCounterOnSource
-                                | Instruction::PutQuestCounterOnSource
-                                | Instruction::PutStorageCounterOnSource
-                                | Instruction::ScheduleDelayedStepTrigger { .. }
-                                | Instruction::EmitReflexiveTrigger { .. }
-                                | Instruction::MillEachPlayer(_)
-                                | Instruction::PutCountersOnControlledCreatures
-                                | Instruction::PutCountersOnOtherCreatures
-                                | Instruction::PutCountersOnControlledSubtype(_)
-                                | Instruction::ReturnRandomGraveyardCards { .. }
-                                | Instruction::ReturnOwnGraveyardCardsOfTypeToHand(_)
-                                | Instruction::TapEnchantedCreature
-                                | Instruction::ModifyGroupUntilEndOfTurn { .. }
-                                | Instruction::ModifyGroupByAmount { .. }
-                                | Instruction::BoostSource { .. }
-                                | Instruction::SearchLibrary { .. }
-                                | Instruction::LookTopTakeOne { .. }
-                                | Instruction::LookTopPlaneswalkers
-                                | Instruction::LookTopLandBattlefieldTapped
-                                | Instruction::ExchangeLifeWithSourceToughness
-                                | Instruction::ShuffleAbilitySourceIntoLibrary
-                                | Instruction::RevealToNameAfterSourceShuffle(_)
-                                | Instruction::BranchIfFalse { .. }
-                                | Instruction::Jump { .. }
-                                | Instruction::GrantControllerFlashUntilCleanup
-                                | Instruction::DrawEachPlayer { .. }
-                                | Instruction::AbilitySourceControllerLosesLife(_)
-                                | Instruction::DrawPlayersControllingName(_)
-                                | Instruction::DrawController { .. }
-                                | Instruction::DrawPlayer {
-                                    players: AffectedPlayers::One(ResolvingPlayer::Controller)
-                                        | AffectedPlayers::EachOpponent
-                                        | AffectedPlayers::EachOtherPlayer
-                                        | AffectedPlayers::EachPlayer,
-                                    ..
-                                }
-                                | Instruction::CreateTokensToFight(_)
-                                | Instruction::FightPairedCreatures(_)
-                                | Instruction::OfferOpponentsDamage
-                                | Instruction::TemptWithTokens { .. }
-                                | Instruction::CreateTokens { .. }
-                                | Instruction::CreateAttackingTokens { .. }
-                                | Instruction::Scry {
-                                    player: ResolvingPlayer::Controller,
-                                    ..
-                                }
-                                | Instruction::Surveil {
-                                    player: ResolvingPlayer::Controller,
-                                    ..
-                                }
-                                | Instruction::Mill {
-                                    player: ResolvingPlayer::Controller,
-                                    ..
-                                }
-                                | Instruction::PhaseOut(PhasingSubject::Source)
-                                | Instruction::Bolster(_)
-                                | Instruction::CreateArmyIfAbsent { .. }
-                                | Instruction::Amass { .. }
-                                | Instruction::BecomeMonarch(_)
-                                | Instruction::ManifestTop {
-                                    player: ResolvingPlayer::Controller,
-                                    ..
-                                }
-                                | Instruction::ExileTopForPlay { .. }
-                                | Instruction::ExileLibraryTop {
-                                    player: ResolvingPlayer::Controller,
-                                    ..
-                                }
-                                | Instruction::LookTopOneRestBottom { .. }
-                                | Instruction::LookTopOneRestGraveyard { .. }
-                                | Instruction::LookTopChoose { .. }
-                                | Instruction::MoveSubject { .. }
-                                | Instruction::SelectZoneCardsToZone { .. }
-                                | Instruction::ChooseOption { .. }
-                                | Instruction::DealDamageFrom { .. }
-                                | Instruction::DivideDamageAmongTargets { .. }
-                                | Instruction::GainControlOfPermanent { .. }
-                                | Instruction::GiveFixedTargetControl { .. }
-                                | Instruction::BecomeCopy { .. }
-                                | Instruction::BecomeCopyFixedTargets { .. }
-                                | Instruction::DoublePowerToughnessSubject { .. }
-                                | Instruction::DoubleCountersOnSubject { .. }
-                                | Instruction::ShuffleSubjectIntoLibrary { .. }
-                                | Instruction::WinGame(_)
-                                | Instruction::LoseGame(_)
-                                | Instruction::DistributeCountersAmongTargets { .. }
-                                | Instruction::RollDie { .. }
-                                | Instruction::FlipCoins { .. }
-                                | Instruction::ChooseValue { .. }
-                                | Instruction::ChooseOptionForPlayers { .. }
-                                | Instruction::Vote { .. }
-                                | Instruction::Incubate { .. }
-                                | Instruction::Connive { .. }
-                                | Instruction::ConniveFinalize { .. }
-                                | Instruction::Discover { .. }
-                                | Instruction::Clash { .. }
-                                | Instruction::RingTemptsYou
-                                | Instruction::VentureIntoDungeon { .. }
-                                | Instruction::TakeInitiative { .. }
-                                | Instruction::UnlockDoor { .. }
-                                | Instruction::Behold { .. }
-                                | Instruction::ManifestDread
-                                | Instruction::AttachPermanent { .. }
-                                | Instruction::SkipNextUntap { .. }
-                                | Instruction::RequireCombatAction { .. }
-                                | Instruction::CreateTemporaryRule { .. }
-                                | Instruction::DestroySubject { .. }
-                                | Instruction::GrantCardPlayPermission { .. }
-                                | Instruction::CreateTokenCopy { .. }
-                                | Instruction::BindResolutionX(_)
-                                | Instruction::PutResolvingSpellInLibrary(_)
-                                | Instruction::PutSubjectIntoLibraryFromTop { .. }
-                                | Instruction::SetDayNight(_)
-                                | Instruction::CreateAuraTokenAttached { .. }
-                                | Instruction::ExploreSubject(_)
-                                | Instruction::ScheduleDelayedEventTrigger { .. }
-                                | Instruction::MoveGraveyardGroup { .. }
-                                | Instruction::PutHandPermanentFiltered { .. }
-                                | Instruction::RepeatLoop { .. }
-                                | Instruction::OfferManaPayment { .. }
-                                | Instruction::OfferDynamicManaPayment { .. }
-                                | Instruction::PayLife { .. }
-                                | Instruction::PayEnergy { .. }
-                                | Instruction::ExileFromZone { .. }
-                                | Instruction::TapOrUntapControlled { .. }
-                                | Instruction::ExertAbilitySource
-                                | Instruction::CollectEvidence { .. }
-                                | Instruction::Blight { .. }
-                                | Instruction::SacrificeStateTriggerSource
-                                | Instruction::DamageOpponentsAmount(_)
-                                | Instruction::DrainOpponents(_)
-                                | Instruction::RevealUntilMatch { .. }
-                                | Instruction::ExileTopPlay { .. }
-                                | Instruction::ScheduleCreatedTokenSacrifice
-                                | Instruction::ScheduleCreatedTokenExile(_)
-                                | Instruction::ReturnControlledPermanents {
-                                    players: AffectedPlayers::One(ResolvingPlayer::Controller)
-                                        | AffectedPlayers::EachOpponent
-                                        | AffectedPlayers::EachOtherPlayer
-                                        | AffectedPlayers::EachPlayer,
-                                    ..
-                                }
-                                | Instruction::OptionalEffect {
-                                    chooser: ResolvingPlayer::Controller
-                                        | ResolvingPlayer::ActivePlayer,
-                                }
-                                | Instruction::OptionalSequence {
-                                    chooser: ResolvingPlayer::Controller
-                                        | ResolvingPlayer::ActivePlayer,
-                                    ..
-                                }
-                                | Instruction::AddMana(_)
-                                | Instruction::SacrificeMatching(_)
-                                | Instruction::Sacrifice {
-                                    players: AffectedPlayers::One(ResolvingPlayer::Controller)
-                                        | AffectedPlayers::EachOpponent
-                                        | AffectedPlayers::EachOtherPlayer
-                                        | AffectedPlayers::EachPlayer,
-                                    ..
-                                }
-                                | Instruction::Discard {
-                                    players: AffectedPlayers::One(ResolvingPlayer::Controller)
-                                        | AffectedPlayers::EachOpponent
-                                        | AffectedPlayers::EachOtherPlayer
-                                        | AffectedPlayers::EachPlayer,
-                                    ..
-                                }
-                                | Instruction::DiscardFiltered {
-                                    players: AffectedPlayers::One(ResolvingPlayer::Controller)
-                                        | AffectedPlayers::EachOpponent
-                                        | AffectedPlayers::EachOtherPlayer
-                                        | AffectedPlayers::EachPlayer,
-                                    ..
-                                }
-                                | Instruction::AddPlayerCounter {
-                                    players: AffectedPlayers::One(ResolvingPlayer::Controller)
-                                        | AffectedPlayers::EachOpponent
-                                        | AffectedPlayers::EachOtherPlayer
-                                        | AffectedPlayers::EachPlayer,
-                                    ..
-                                }
-                        )
+                            }
+                            | Instruction::SuppressGroupKeywords { .. }
+                            | Instruction::ExileDefeatedSiege
+                            | Instruction::ExileSourceAndGainLife(_)
+                            | Instruction::ExileAbilitySource
+                            | Instruction::ReturnSourceToHand
+                            | Instruction::ReturnSourceGraveyardToHand
+                            | Instruction::ReturnSourceGraveyardToBattlefield { .. }
+                            | Instruction::UntapAbilitySource
+                            | Instruction::TapAbilitySource
+                            | Instruction::RegenerateSource
+                            | Instruction::GainControllerLife { .. }
+                            | Instruction::DrainTargetAndGain(_)
+                            | Instruction::AdjustControllerLife { .. }
+                            | Instruction::RequireAttackSourceNextTurn
+                            | Instruction::ChooseAttackDirection
+                            | Instruction::AdditionalLoyaltyActivation
+                            | Instruction::PayControllerLife(_)
+                            | Instruction::PayControllerEnergy(_)
+                            | Instruction::PutEquipmentFromHandOrGraveyard
+                            | Instruction::EquipNewToken
+                            | Instruction::Encore
+                            | Instruction::GrantNewTokensHaste
+                            | Instruction::RepeatOpponentLifeLoss
+                            | Instruction::OpponentsLoseAndControllerGains(_)
+                            | Instruction::AdjustEachOpponentLife { .. }
+                            | Instruction::AdjustPlayersLife { .. }
+                            | Instruction::FlipCoin { .. }
+                            | Instruction::GoadOtherPlayersCreatures
+                            | Instruction::AdditionalCombat { .. }
+                            | Instruction::AdditionalCombatAfterUntappingAttackers
+                            | Instruction::TakeExtraTurn
+                            | Instruction::DisallowDamagePreventionThisTurn
+                            | Instruction::GrantNoMaxHandSizeRestOfGame
+                            | Instruction::PreventDamageThisTurn(_)
+                            | Instruction::MoveGroup { .. }
+                            | Instruction::PutTargetInLibrary(_)
+                            | Instruction::PutOwnHandCardOnLibraryBottom
+                            | Instruction::PutGroupOnLibraryBottom(_)
+                            | Instruction::ExileGraveyardTarget
+                            | Instruction::ExileCapturedGraveyardCard
+                            | Instruction::GrantGraveyardCastAndWatchAbilities
+                            | Instruction::GainCastCardAbilities { .. }
+                            | Instruction::ExileCardsFromGraveyard { .. }
+                            | Instruction::ReturnOwnedCommandersToHand
+                            | Instruction::ExileTopForFreePlay
+                            | Instruction::ExileTargetUntilNonlandForFreeCast
+                            | Instruction::ExileTopRepeatOnPermanentEntry
+                            | Instruction::ShuffleEachHandAndGraveyard
+                            | Instruction::EndControllerTurn
+                            | Instruction::ShuffleOwnLibrary
+                            | Instruction::ShufflePlayerLibrary(_)
+                            | Instruction::ShuffleTargetIntoLibrary
+                            | Instruction::RevealPlayerHand(_)
+                            | Instruction::ShuffleOwnGraveyardIntoLibrary
+                            | Instruction::ShuffleTargetGraveyardCards { .. }
+                            | Instruction::MayTurnControlledCreatureFaceUp
+                            | Instruction::ExploreSource
+                            | Instruction::MayRevealLibraryTop
+                            | Instruction::ExileCreatureAtMostRevealedPower
+                            | Instruction::CastLinkedSpellMatchingX
+                            | Instruction::DestroyDamagedPlayersNonlandsAtX
+                            | Instruction::PutChosenXChargeCounters
+                            | Instruction::DestroyNonlandsAtSourceChargeCount
+                            | Instruction::DiscardOneAtRandom(_)
+                            | Instruction::Monstrosity { .. }
+                            | Instruction::GrantProtectionChosenColor(
+                                ProtectionRecipients::AbilitySource
+                                | ProtectionRecipients::Matching(_),
+                            )
+                            | Instruction::Fight { .. }
+                            | Instruction::CopyStackObject { .. }
+                            | Instruction::ExileGroupFromZone { .. }
+                            | Instruction::SacrificeSubject { .. }
+                            | Instruction::DestroyChosen { .. }
+                            | Instruction::CastLinkedFaceDownFree
+                            | Instruction::Ripple(_)
+                            | Instruction::Demonstrate
+                            | Instruction::Enlist
+                            | Instruction::GrantChosenProtection { .. }
+                            | Instruction::RemoveCountersFromSubject { .. }
+                            | Instruction::MoveGroupToLibrary { .. }
+                            | Instruction::ExileLibraryTopLinked { .. }
+                            | Instruction::MoveGraveyardGroupOwned { .. }
+                            | Instruction::AddCounterAndDischargeOnResolution(_)
+                            | Instruction::ExileCreaturesAndPlaneswalkersBelowRevealedManaValue
+                            | Instruction::ExileAllGraveyards
+                            | Instruction::ExilePlayerGraveyards(_)
+                            | Instruction::RemoveCountersFromPermanent { .. }
+                            | Instruction::DestroyGroupWithoutRegeneration(_)
+                            | Instruction::DestroyGroup(_)
+                            | Instruction::ExileOnePerPlayerUntilSourceLeaves
+                            | Instruction::DoubleCountersOnTargets
+                            | Instruction::ExileCombatDamagedCreature
+                            | Instruction::DestroyCapturedDamageSource
+                            | Instruction::RemoveCreatureCounters { .. }
+                            | Instruction::UntapControlledLands
+                            | Instruction::UntapControlledCreatures
+                            | Instruction::SetGroupTapped { .. }
+                            | Instruction::SetSubjectTapped { .. }
+                            | Instruction::PutCountersOnSubject { .. }
+                            | Instruction::PutHandPermanentsOntoBattlefield { .. }
+                            | Instruction::TapAttackersAndSkipNextUntap
+                            | Instruction::AttachOnEntry { .. }
+                            | Instruction::ControlledSubtypeDamagesAttacker(_)
+                            | Instruction::RevealTopAndRemoveAttackerIfForest
+                            | Instruction::DamageCapturedBlocker(_)
+                            | Instruction::ChangeControlledPlaneswalkers { .. }
+                            | Instruction::ChangeGroup { .. }
+                            | Instruction::ChangeAbilitySource { .. }
+                            | Instruction::GiveControlOfAbilitySource
+                            | Instruction::UntapAndControlCreatures
+                            | Instruction::Proliferate
+                            | Instruction::AttachControlledToSource { .. }
+                            | Instruction::ReturnDelayedGraveyardToHand(_)
+                            | Instruction::LoseLifeAndScryForSubtype(_)
+                            | Instruction::ExileForBlackToken { .. }
+                            | Instruction::ExileForSubtypeToken(_)
+                            | Instruction::GiveEquippedCreatureToUpkeepPlayer
+                            | Instruction::CopyCreatureExiledForAbility
+                            | Instruction::DamageFromGrantingPermanent { .. }
+                            | Instruction::CopyEntrantAsArtifact
+                            | Instruction::ReplaceSourceCreatedTokens
+                            | Instruction::CopyEntrantOnceEachTurn
+                            | Instruction::CopyCreatureAsToken
+                            | Instruction::CopyDifferentlyNamedTokens
+                            | Instruction::DamagePlayersHalfLife
+                            | Instruction::DamageGroup { .. }
+                            | Instruction::DamageGroupAmount { .. }
+                            | Instruction::DoublePowerToughness { .. }
+                            | Instruction::DamageTargetControllersCreatures { .. }
+                            | Instruction::DrawAndDamageOpponents { .. }
+                            | Instruction::Adapt(_)
+                            | Instruction::TransformSource
+                            | Instruction::TransformSourceAndAttachToTarget
+                            | Instruction::AdvanceClassLevel(_)
+                            | Instruction::SolveSourceCase
+                            | Instruction::BecomePreparedSource
+                            | Instruction::ChooseMeldPartner(_)
+                            | Instruction::ExileMeldPair
+                            | Instruction::MeldExiledPair(_)
+                            | Instruction::ChooseCreatureType { .. }
+                            | Instruction::TransformSubtype(_)
+                            | Instruction::ClearSourceCounters(_)
+                            | Instruction::PutCountersOnSource { .. }
+                            | Instruction::PutNamedCounterOnSource { .. }
+                            | Instruction::PutChargeCounterOnSource
+                            | Instruction::PutBlessingCounterOnSource
+                            | Instruction::PutQuestCounterOnSource
+                            | Instruction::PutStorageCounterOnSource
+                            | Instruction::ScheduleDelayedStepTrigger { .. }
+                            | Instruction::EmitReflexiveTrigger { .. }
+                            | Instruction::MillEachPlayer(_)
+                            | Instruction::PutCountersOnControlledCreatures
+                            | Instruction::PutCountersOnControlledCreaturesAndGrant(_)
+                            | Instruction::PutCountersOnOtherCreatures
+                            | Instruction::PutCountersOnControlledSubtype(_)
+                            | Instruction::ReturnRandomGraveyardCards { .. }
+                            | Instruction::ReturnOwnGraveyardCardsOfTypeToHand(_)
+                            | Instruction::TapEnchantedCreature
+                            | Instruction::ModifyGroupUntilEndOfTurn { .. }
+                            | Instruction::ModifyGroupByAmount { .. }
+                            | Instruction::ModifyAnyNumberOfPermanents { .. }
+                            | Instruction::BoostSource { .. }
+                            | Instruction::SearchLibrary { .. }
+                            | Instruction::LookTopTakeOne { .. }
+                            | Instruction::LookTopPlaneswalkers
+                            | Instruction::LookTopLandBattlefieldTapped
+                            | Instruction::ExchangeLifeWithSourceToughness
+                            | Instruction::ShuffleAbilitySourceIntoLibrary
+                            | Instruction::RevealToNameAfterSourceShuffle(_)
+                            | Instruction::BranchIfFalse { .. }
+                            | Instruction::Jump { .. }
+                            | Instruction::GrantControllerFlashUntilCleanup
+                            | Instruction::DrawEachPlayer { .. }
+                            | Instruction::AbilitySourceControllerLosesLife(_)
+                            | Instruction::DrawPlayersControllingName(_)
+                            | Instruction::DrawController { .. }
+                            | Instruction::CreateTokensToFight(_)
+                            | Instruction::FightPairedCreatures(_)
+                            | Instruction::OfferOpponentsDamage
+                            | Instruction::TemptWithTokens { .. }
+                            | Instruction::CreateTokens { .. }
+                            | Instruction::CreateAttackingTokens { .. }
+                            | Instruction::PhaseOut(PhasingSubject::Source)
+                            | Instruction::PhaseOutObjects(_)
+                            | Instruction::Bolster(_)
+                            | Instruction::CreateArmyIfAbsent { .. }
+                            | Instruction::Amass { .. }
+                            | Instruction::BecomeMonarch(_)
+                            | Instruction::ExileTopForPlay { .. }
+                            | Instruction::LookTopOneRestBottom { .. }
+                            | Instruction::LookTopOneRestGraveyard { .. }
+                            | Instruction::LookTopChoose { .. }
+                            | Instruction::MoveSubject { .. }
+                            | Instruction::ChooseOption { .. }
+                            | Instruction::DealDamageFrom { .. }
+                            | Instruction::DivideDamageAmongTargets { .. }
+                            | Instruction::GainControlOfPermanent { .. }
+                            | Instruction::GiveFixedTargetControl { .. }
+                            | Instruction::BecomeCopyFixedTargets { .. }
+                            | Instruction::ShuffleSubjectIntoLibrary { .. }
+                            | Instruction::WinGame(_)
+                            | Instruction::LoseGame(_)
+                            | Instruction::DistributeCountersAmongTargets { .. }
+                            | Instruction::RollDie { .. }
+                            | Instruction::FlipCoins { .. }
+                            | Instruction::ChooseValue { .. }
+                            | Instruction::ChooseOptionForPlayers { .. }
+                            | Instruction::Vote { .. }
+                            | Instruction::ConniveFinalize { .. }
+                            | Instruction::Clash { .. }
+                            | Instruction::RingTemptsYou
+                            | Instruction::VentureIntoDungeon { .. }
+                            | Instruction::TakeInitiative { .. }
+                            | Instruction::UnlockDoor { .. }
+                            | Instruction::Behold { .. }
+                            | Instruction::ManifestDread
+                            | Instruction::AttachPermanent { .. }
+                            | Instruction::SkipNextUntap { .. }
+                            | Instruction::RequireCombatAction { .. }
+                            | Instruction::DestroySubject { .. }
+                            | Instruction::GrantCardPlayPermission { .. }
+                            | Instruction::CreateTokenCopy { .. }
+                            | Instruction::BindResolutionX(_)
+                            | Instruction::PutResolvingSpellInLibrary(_)
+                            | Instruction::PutSubjectIntoLibraryFromTop { .. }
+                            | Instruction::SetDayNight(_)
+                            | Instruction::CreateAuraTokenAttached { .. }
+                            | Instruction::ExploreSubject(_)
+                            | Instruction::ScheduleDelayedEventTrigger { .. }
+                            | Instruction::MoveGraveyardGroup { .. }
+                            | Instruction::PutHandPermanentFiltered { .. }
+                            | Instruction::RepeatLoop { .. }
+                            | Instruction::OfferManaPayment { .. }
+                            | Instruction::OfferDynamicManaPayment { .. }
+                            | Instruction::ExertAbilitySource
+                            | Instruction::SacrificeStateTriggerSource
+                            | Instruction::DamageOpponentsAmount(_)
+                            | Instruction::DrainOpponents(_)
+                            | Instruction::RevealUntilMatch { .. }
+                            | Instruction::ScheduleCreatedTokenSacrifice
+                            | Instruction::ScheduleCreatedTokenExile(_)
+                            | Instruction::AddMana(_)
+                            | Instruction::SacrificeMatching(_)
+                            | Instruction::CreateEmblem(_)
+                            | Instruction::CreateOpponentEmblems(_)
+                            | Instruction::UntapUpTo { .. }
+                            | Instruction::DiscardUpTo { .. }
+                            | Instruction::Ascend
+                            | Instruction::ReturnCardsExiledWithLink(_)
+                            | Instruction::AddExperienceCounter
+                            | Instruction::RequireOpponentsCreaturesBlockThisTurn
+                            | Instruction::SetControlledCreatureSizeToHand
+                            | Instruction::ReturnRandomLinkedExile
+                            | Instruction::ReturnLinkedSearchCards
+                            | Instruction::TabletopHonorAction { .. }
+                            | Instruction::ReturnOneNonlandPerOpponent => true,
+                            Instruction::ForEachPlayer { .. }
+                            | Instruction::OfferAnyPlayer { .. }
+                            | Instruction::UntapOrTapSelect { .. }
+                            | Instruction::SelectZoneCardsToZone { .. }
+                            | Instruction::ExileTopPlay { .. }
+                            | Instruction::ExileFromZone { .. }
+                            | Instruction::TapOrUntapControlled { .. }
+                            | Instruction::PayLife { .. }
+                            | Instruction::PayEnergy { .. }
+                            | Instruction::Blight { .. }
+                            | Instruction::CollectEvidence { .. }
+                            | Instruction::Incubate { .. }
+                            | Instruction::Connive { .. }
+                            | Instruction::Discover { .. }
+                            | Instruction::CreateTokenCopyExt { .. }
+                            | Instruction::LookTopChooseExt { .. }
+                            | Instruction::RevealUntilMatchExt { .. }
+                            | Instruction::CreateTemporaryRule { .. }
+                            | Instruction::BecomeCopy { .. }
+                            | Instruction::Exchange(_)
+                            | Instruction::DoubleCountersOnSubject { .. }
+                            | Instruction::DoublePowerToughnessSubject { .. } => {
+                                !operation.uses_mode_target()
+                            }
+                            Instruction::Scry { player, .. }
+                            | Instruction::Surveil { player, .. }
+                            | Instruction::Mill { player, .. }
+                            | Instruction::ManifestTop { player, .. }
+                            | Instruction::ExileLibraryTop { player, .. } => {
+                                targetless_player(*player)
+                            }
+                            Instruction::OptionalEffect { chooser }
+                            | Instruction::OptionalSequence { chooser, .. } => {
+                                targetless_player(*chooser)
+                            }
+                            Instruction::DrawPlayer { players, .. }
+                            | Instruction::ReturnControlledPermanents { players, .. }
+                            | Instruction::ExileChosenPermanents { players, .. }
+                            | Instruction::Sacrifice { players, .. }
+                            | Instruction::Discard { players, .. }
+                            | Instruction::DiscardFiltered { players, .. }
+                            | Instruction::AddPlayerCounter { players, .. } => {
+                                targetless_players(*players)
+                            }
+                            _ => false,
+                        }
                     }))
             {
                 return Err(DefinitionError::TargetlessActivation);
@@ -18792,8 +18840,7 @@ impl Program {
             if ability.body.instructions.iter().any(|op| {
                 matches!(
                     op,
-                    Instruction::FixedTargetClause(_)
-                        | Instruction::ExileResolvingSpell
+                    Instruction::ExileResolvingSpell
                         | Instruction::ReturnResolvingSpellToHand
                         | Instruction::CreateReflexiveDiscardDamage
                 )

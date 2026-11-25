@@ -624,7 +624,21 @@ fn build_single_triggered_ability(
     {
         spec.zone = spellwake_engine::program::TriggerZone::Graveyard;
     }
-    let self_pronoun = trigger_subject_is_self(trigger);
+    let unwrapped_for_self = TriggerSpecAst {
+        events: trigger
+            .events
+            .iter()
+            .map(|ev| {
+                let mut cur = ev;
+                while let TriggerEventAst::QualifiedTrigger { inner, .. } = cur {
+                    cur = inner.as_ref();
+                }
+                cur.clone()
+            })
+            .collect(),
+        intervening_if: None,
+    };
+    let self_pronoun = trigger_subject_is_self(&unwrapped_for_self);
     let stripped_body = strip_triggered_restrictions(body, &mut spec, &mut grouping, vocabulary);
     let body = &stripped_body;
     let mut exec_body =
@@ -1778,8 +1792,12 @@ fn try_lower_mana_abilities(
     let base_outputs: Vec<ManaOutput> = match spec {
         ManaSpecAst::Fixed(raw) => vec![ManaOutput::Fixed(parse_mana_bundle(raw)?)],
         ManaSpecAst::Choice(opts) => {
-            let mut colors = BTreeSet::new();
-            let mut has_colorless = false;
+            if opts.is_empty() {
+                return None;
+            }
+            let mut single_colors = BTreeSet::new();
+            let mut extra_bundles: Vec<BTreeMap<ManaType, RulesInteger>> = Vec::new();
+            let mut extra_all_color_amounts: BTreeSet<RulesInteger> = BTreeSet::new();
             let mut has_chosen_color = false;
             for o in opts {
                 let o_low = o.trim().to_ascii_lowercase();
@@ -1787,26 +1805,40 @@ fn try_lower_mana_abilities(
                     o_low.as_str(),
                     "one mana of any color" | "one mana of any one color"
                 ) {
-                    colors.extend(ManaOutput::all_colors());
+                    single_colors.extend(ManaOutput::all_colors());
+                } else if o_low == "two mana of any one color" {
+                    extra_all_color_amounts.insert(2.into());
+                } else if o_low == "three mana of any one color" {
+                    extra_all_color_amounts.insert(3.into());
                 } else if matches!(
                     o_low.as_str(),
                     "chosen_color" | "one mana of the chosen color" | "one mana of that color"
                 ) {
                     has_chosen_color = true;
-                } else {
-                    let mt = parse_single_mana_type(o)?;
+                } else if let Some(mt) = parse_single_mana_type(o) {
                     if mt == ManaType::Colourless {
-                        has_colorless = true;
+                        let bundle = BTreeMap::from([(ManaType::Colourless, 1.into())]);
+                        if !extra_bundles.contains(&bundle) {
+                            extra_bundles.push(bundle);
+                        }
                     } else {
-                        colors.insert(mt);
+                        single_colors.insert(mt);
+                    }
+                } else {
+                    let bundle = parse_mana_bundle(o)?;
+                    if !extra_bundles.contains(&bundle) {
+                        extra_bundles.push(bundle);
                     }
                 }
             }
             if has_chosen_color {
-                if has_colorless || colors.len() != 1 {
+                if !extra_bundles.is_empty()
+                    || !extra_all_color_amounts.is_empty()
+                    || single_colors.len() != 1
+                {
                     return None;
                 }
-                let fixed = *colors.iter().next()?;
+                let fixed = *single_colors.iter().next()?;
                 if !matches!(
                     entry_tap,
                     Some(EntryTap::AlwaysChooseColorExcept(c) | EntryTap::ChooseColorExcept(c))
@@ -1817,34 +1849,56 @@ fn try_lower_mana_abilities(
                 vec![ManaOutput::SpecialColor(
                     SpecialColorYield::EntryChosenColor { fixed },
                 )]
-            } else if has_colorless {
-                let colorless_out =
-                    ManaOutput::Fixed(BTreeMap::from([(ManaType::Colourless, 1.into())]));
-                if colors.is_empty() {
-                    vec![colorless_out]
-                } else if colors.len() == 1 {
-                    let c = *colors.iter().next()?;
-                    vec![
-                        colorless_out,
-                        ManaOutput::Fixed(BTreeMap::from([(c, 1.into())])),
-                    ]
-                } else {
-                    vec![
-                        colorless_out,
-                        ManaOutput::ChooseColor {
-                            amount: 1.into(),
-                            colors,
-                        },
-                    ]
-                }
-            } else {
-                if colors.is_empty() {
+            } else if extra_bundles.is_empty() && extra_all_color_amounts.is_empty() {
+                if single_colors.is_empty() {
                     return None;
                 }
                 vec![ManaOutput::ChooseColor {
                     amount: 1.into(),
-                    colors,
+                    colors: single_colors,
                 }]
+            } else {
+                let mut outs = Vec::new();
+                let mut grouped_colored: BTreeMap<RulesInteger, BTreeSet<ManaType>> =
+                    BTreeMap::new();
+                let mut fixed_bundles: Vec<BTreeMap<ManaType, RulesInteger>> = Vec::new();
+                for bundle in extra_bundles {
+                    if bundle.len() == 1
+                        && let Some((&mt, qty)) = bundle.iter().next()
+                        && mt != ManaType::Colourless
+                    {
+                        grouped_colored.entry(qty.clone()).or_default().insert(mt);
+                    } else {
+                        fixed_bundles.push(bundle);
+                    }
+                }
+                if !single_colors.is_empty() {
+                    grouped_colored
+                        .entry(1.into())
+                        .or_default()
+                        .extend(single_colors);
+                }
+                for amt in extra_all_color_amounts {
+                    grouped_colored
+                        .entry(amt)
+                        .or_default()
+                        .extend(ManaOutput::all_colors());
+                }
+                for bundle in fixed_bundles {
+                    outs.push(ManaOutput::Fixed(bundle));
+                }
+                for (amount, colors) in grouped_colored {
+                    if colors.len() == 1 {
+                        let c = *colors.iter().next()?;
+                        outs.push(ManaOutput::Fixed(BTreeMap::from([(c, amount)])));
+                    } else if !colors.is_empty() {
+                        outs.push(ManaOutput::ChooseColor { amount, colors });
+                    }
+                }
+                if outs.is_empty() {
+                    return None;
+                }
+                outs
             }
         }
         ManaSpecAst::AnyColor {
@@ -2633,13 +2687,19 @@ pub(super) fn lower_extra_cost_atom(
             filter,
             up_to: false,
             min_one: false,
-        } => Ok(ExtraActivationCost::SacrificePermanent {
-            filter: lower_filter_any(filter)?,
-            count: opt_count(count)?,
-        }),
-        CostAtomAst::SacrificeAnyNumber(filter) => Ok(ExtraActivationCost::SacrificeAnyNumber(
-            lower_filter_any(filter)?,
-        )),
+        } => {
+            let filter = strip_matching_chooser(filter, PlayerRefAst::You);
+            Ok(ExtraActivationCost::SacrificePermanent {
+                filter: lower_filter_any(&filter)?,
+                count: opt_count(count)?,
+            })
+        }
+        CostAtomAst::SacrificeAnyNumber(filter) => {
+            let filter = strip_matching_chooser(filter, PlayerRefAst::You);
+            Ok(ExtraActivationCost::SacrificeAnyNumber(lower_filter_any(
+                &filter,
+            )?))
+        }
         CostAtomAst::TapPermanent {
             count,
             filter,
@@ -3090,7 +3150,8 @@ pub(super) fn lower_activation_cost_fast(
                 if n_u8 == 0 {
                     return Err("oracle:sac-zero");
                 }
-                let ssf = lower_selected_sacrifice_filter(filter, vocabulary)?;
+                let filter = strip_matching_chooser(filter, PlayerRefAst::You);
+                let ssf = lower_selected_sacrifice_filter(&filter, vocabulary)?;
                 sac_selected = Some((ssf, n_u8));
             }
             CostAtomAst::TapPermanent {
@@ -3513,6 +3574,81 @@ pub(super) fn lower_tap_cost_filter(
     Ok(TapCostFilter::Matching(obj))
 }
 
+fn combat_steps_condition() -> TriggerCondition {
+    TriggerCondition::Or(
+        Box::new(TriggerCondition::DuringStep(Step::BeginningCombat)),
+        Box::new(TriggerCondition::Or(
+            Box::new(TriggerCondition::DuringStep(Step::DeclareAttackers)),
+            Box::new(TriggerCondition::Or(
+                Box::new(TriggerCondition::DuringStep(Step::DeclareBlockers)),
+                Box::new(TriggerCondition::Or(
+                    Box::new(TriggerCondition::DuringStep(Step::CombatDamage)),
+                    Box::new(TriggerCondition::DuringStep(Step::EndCombat)),
+                )),
+            )),
+        )),
+    )
+}
+
+fn unwrap_qualified_trigger(
+    mut ev: &TriggerEventAst,
+    has_intervening_if: bool,
+) -> Result<(&TriggerEventAst, bool, Option<TriggerCondition>), &'static str> {
+    let mut first_time_each_turn = false;
+    let mut timings: Vec<&str> = Vec::new();
+    while let TriggerEventAst::QualifiedTrigger {
+        inner,
+        first_time_each_turn: ft,
+        timing,
+    } = ev
+    {
+        if *ft {
+            first_time_each_turn = true;
+        }
+        if let Some(t) = timing.as_deref() {
+            timings.push(t);
+        }
+        ev = inner.as_ref();
+    }
+    // CR 603.2g: OneOrMoreOnceEachTurn tracks whether the ability triggered, which is exact
+    // for "for the first time each turn" only when there is no intervening-if clause.
+    if first_time_each_turn && has_intervening_if {
+        return Err("oracle:unsupported-trigger-qualifier");
+    }
+    let mut cond: Option<TriggerCondition> = None;
+    let mut push_cond = |next: TriggerCondition| {
+        cond = Some(match cond.take() {
+            Some(prev) => TriggerCondition::And(Box::new(prev), Box::new(next)),
+            None => next,
+        });
+    };
+    for t in timings {
+        match t.trim().to_ascii_lowercase().as_str() {
+            "during_your_turn" => push_cond(TriggerCondition::ControllersTurn),
+            "during_combat" => push_cond(combat_steps_condition()),
+            "other_than_first_each_turn" => {
+                if matches!(
+                    ev,
+                    TriggerEventAst::SpellCast {
+                        caster: PlayerRefAst::You,
+                        spell,
+                        self_spell: false,
+                        targets: None,
+                        nth_each_turn: None,
+                        include_copy: false,
+                    } if spell.as_deref().is_none_or(is_unrestricted_filter)
+                ) {
+                    push_cond(TriggerCondition::ControllerCastSpellsThisTurn(2));
+                } else {
+                    return Err("oracle:unsupported-trigger-qualifier");
+                }
+            }
+            _ => return Err("oracle:unsupported-trigger-qualifier"),
+        }
+    }
+    Ok((ev, first_time_each_turn, cond))
+}
+
 pub(super) fn lower_trigger_spec(
     trig: &TriggerSpecAst,
     vocabulary: &CreatureTypeVocabulary,
@@ -3520,8 +3656,22 @@ pub(super) fn lower_trigger_spec(
     if trig.events.is_empty() {
         return Err("oracle:empty-trigger");
     }
+    let has_intervening_if = trig.intervening_if.is_some();
+    let mut unwrapped_events = Vec::with_capacity(trig.events.len());
+    let mut qualified_first_time = false;
+    let mut qualified_cond: Option<TriggerCondition> = None;
+    for (idx, ev) in trig.events.iter().enumerate() {
+        let (inner, ft, qcond) = unwrap_qualified_trigger(ev, has_intervening_if)?;
+        if idx == 0 {
+            qualified_first_time = ft;
+            qualified_cond = qcond;
+        } else if ft != qualified_first_time || qcond != qualified_cond {
+            return Err("oracle:conflicting-trigger-qualifiers");
+        }
+        unwrapped_events.push(inner);
+    }
     let mut grouping = TriggerGrouping::EachOccurrence;
-    let mut events = Vec::with_capacity(trig.events.len());
+    let mut events = Vec::with_capacity(unwrapped_events.len());
     let mut extra_cond: Option<TriggerCondition> = None;
     let own_main_phase = || {
         TriggerCondition::And(
@@ -3533,8 +3683,8 @@ pub(super) fn lower_trigger_spec(
         )
     };
     let mut handled_single = false;
-    if trig.events.len() == 1 {
-        match &trig.events[0] {
+    if unwrapped_events.len() == 1 {
+        match unwrapped_events[0] {
             TriggerEventAst::KeywordActionPerformed { action, .. } => {
                 let low = action.trim().to_ascii_lowercase();
                 if let Some(cond_raw) = low.strip_prefix("~ attacks while ") {
@@ -3724,19 +3874,30 @@ pub(super) fn lower_trigger_spec(
         }
     }
     if !handled_single {
-        for ev in &trig.events {
+        for ev in &unwrapped_events {
             let (e, g) = lower_trigger_event(ev, vocabulary)?;
             if g != TriggerGrouping::EachOccurrence {
+                if qualified_first_time && g == TriggerGrouping::OneOrMoreByPlayer {
+                    return Err("oracle:unsupported-trigger-qualifier");
+                }
                 grouping = g;
             }
             events.push(e);
         }
     }
-    let mut event = if events.len() == 1 {
-        events.pop().ok_or("oracle:unreachable")?
-    } else {
-        TriggerEvent::AnyOf(events)
-    };
+    if qualified_first_time {
+        if grouping == TriggerGrouping::OneOrMoreByPlayer {
+            return Err("oracle:unsupported-trigger-qualifier");
+        }
+        grouping = TriggerGrouping::OneOrMoreOnceEachTurn;
+    }
+    if let Some(qc) = qualified_cond {
+        extra_cond = Some(match extra_cond {
+            Some(prev) => TriggerCondition::And(Box::new(prev), Box::new(qc)),
+            None => qc,
+        });
+    }
+    let mut event = wrap_trigger_events_any_of(events)?;
     let mut consumed_if = false;
     if let (
         TriggerEvent::Enters {
@@ -3788,7 +3949,7 @@ pub(super) fn lower_trigger_spec(
         grouping = TriggerGrouping::OneOrMoreTogether;
         consumed_if = true;
     }
-    for ev in &trig.events {
+    for ev in &unwrapped_events {
         if let TriggerEventAst::Attacks {
             qualifier: Some(q), ..
         } = ev
@@ -3859,6 +4020,79 @@ pub(super) fn lower_trigger_spec(
     Ok((spec, grouping, guard))
 }
 
+fn normalize_trigger_from_zone(raw: &str) -> String {
+    let low = raw.trim().to_ascii_lowercase();
+    match low.as_str() {
+        "the battlefield" | "play" => "battlefield".to_owned(),
+        "anywhere" => "any".to_owned(),
+        "your graveyard" => "your_graveyard".to_owned(),
+        "opponent's graveyard"
+        | "an opponent's graveyard"
+        | "opponents' graveyards"
+        | "your opponents' graveyards" => "opponent_graveyard".to_owned(),
+        "a graveyard"
+        | "a player's graveyard"
+        | "any graveyard"
+        | "graveyards"
+        | "its owner's graveyard"
+        | "their graveyard"
+        | "their graveyards"
+        | "their owner's graveyard"
+        | "their owners' graveyards" => "graveyard".to_owned(),
+        "your hand" => "your_hand".to_owned(),
+        "an opponent's hand" | "opponent's hand" => "opponent_hand".to_owned(),
+        "a hand"
+        | "a player's hand"
+        | "their hand"
+        | "its owner's hand"
+        | "their owner's hand"
+        | "their owners' hands" => "hand".to_owned(),
+        "your library"
+        | "your_library"
+        | "opponent_library"
+        | "any_library"
+        | "a library"
+        | "any library"
+        | "a player's library"
+        | "their library"
+        | "their libraries"
+        | "an opponent's library"
+        | "its owner's library"
+        | "their owner's library"
+        | "their owners' libraries" => "library".to_owned(),
+        "exile" | "the exile zone" => "exile".to_owned(),
+        "the stack" | "stack" => "stack".to_owned(),
+        "anywhere other than a graveyard or exile" | "not_graveyard_or_exile" => {
+            "not_graveyard_or_exile".to_owned()
+        }
+        _ => low,
+    }
+}
+
+fn zone_filter_to_zone_name(zone: ZoneFilter) -> Option<&'static str> {
+    match zone {
+        ZoneFilter::Battlefield => Some("battlefield"),
+        ZoneFilter::Stack => Some("stack"),
+        ZoneFilter::Exile => Some("exile"),
+        ZoneFilter::YourGraveyard => Some("your_graveyard"),
+        ZoneFilter::OpponentGraveyard | ZoneFilter::OpponentsGraveyards => {
+            Some("opponent_graveyard")
+        }
+        ZoneFilter::AnyGraveyard
+        | ZoneFilter::AllGraveyards
+        | ZoneFilter::SingleGraveyard
+        | ZoneFilter::ItsOwnerGraveyard => Some("graveyard"),
+        ZoneFilter::YourHand => Some("your_hand"),
+        ZoneFilter::OpponentHand | ZoneFilter::OpponentsHands => Some("opponent_hand"),
+        ZoneFilter::AnyHand | ZoneFilter::EachPlayerHand => Some("hand"),
+        ZoneFilter::YourLibrary
+        | ZoneFilter::OpponentLibrary
+        | ZoneFilter::EachPlayerLibrary
+        | ZoneFilter::AnyLibrary => Some("library"),
+        _ => None,
+    }
+}
+
 pub(super) fn lower_trigger_event(
     ev: &TriggerEventAst,
     vocabulary: &CreatureTypeVocabulary,
@@ -3871,12 +4105,63 @@ pub(super) fn lower_trigger_event(
             grouped,
             entering_controller,
         } => {
+            let mut parts = Vec::new();
+            expand_trigger_subject_parts(subject, &mut parts);
+            if parts.len() >= 2 {
+                let mut sub_events = Vec::with_capacity(parts.len());
+                let mut common_grouping: Option<TriggerGrouping> = None;
+                for part in parts {
+                    let sub_ev = TriggerEventAst::ZoneChange {
+                        from: from.clone(),
+                        to: to.clone(),
+                        subject: Box::new(part.clone()),
+                        grouped: *grouped,
+                        entering_controller: *entering_controller,
+                    };
+                    let (e, g) = lower_trigger_event(&sub_ev, vocabulary)?;
+                    if let Some(prev) = common_grouping {
+                        if prev != g {
+                            return Err("oracle:unsupported-zone-trigger");
+                        }
+                    } else {
+                        common_grouping = Some(g);
+                    }
+                    sub_events.push(e);
+                }
+                return Ok((
+                    wrap_trigger_events_any_of(sub_events)?,
+                    common_grouping.unwrap_or(TriggerGrouping::EachOccurrence),
+                ));
+            }
+            let eff_subject = parts.into_iter().next().unwrap_or(subject.as_ref());
+            if let SubjectRefAst::InZone {
+                subject: inner,
+                zone,
+            } = eff_subject
+            {
+                let z_name =
+                    zone_filter_to_zone_name(*zone).ok_or("oracle:unsupported-zone-trigger")?;
+                let next_from = match from.as_deref().map(normalize_trigger_from_zone) {
+                    None => Some(z_name.to_owned()),
+                    Some(prev) if prev == "any" => Some(z_name.to_owned()),
+                    Some(prev) if prev == z_name => from.clone(),
+                    Some(_) => return Err("oracle:unsupported-zone-trigger"),
+                };
+                let sub_ev = TriggerEventAst::ZoneChange {
+                    from: next_from,
+                    to: to.clone(),
+                    subject: inner.clone(),
+                    grouped: *grouped,
+                    entering_controller: *entering_controller,
+                };
+                return lower_trigger_event(&sub_ev, vocabulary);
+            }
             let grouping = if *grouped {
                 TriggerGrouping::OneOrMoreTogether
             } else {
                 TriggerGrouping::EachOccurrence
             };
-            let mut filter = lower_trigger_subject_filter(subject, vocabulary)?;
+            let mut filter = lower_trigger_subject_filter(eff_subject, vocabulary)?;
             if let Some(ctrl) = entering_controller {
                 let cf = match ctrl {
                     ControllerRelation::You => ControllerFilter::You,
@@ -3899,54 +4184,7 @@ pub(super) fn lower_trigger_event(
                     }
                 }
             }
-            let from_norm = from.as_deref().map(|s| {
-                let low = s.trim().to_ascii_lowercase();
-                match low.as_str() {
-                    "the battlefield" | "play" => "battlefield".to_owned(),
-                    "anywhere" => "any".to_owned(),
-                    "your graveyard" => "your_graveyard".to_owned(),
-                    "opponent's graveyard"
-                    | "an opponent's graveyard"
-                    | "opponents' graveyards"
-                    | "your opponents' graveyards" => "opponent_graveyard".to_owned(),
-                    "a graveyard"
-                    | "a player's graveyard"
-                    | "any graveyard"
-                    | "graveyards"
-                    | "its owner's graveyard"
-                    | "their graveyard"
-                    | "their graveyards"
-                    | "their owner's graveyard"
-                    | "their owners' graveyards" => "graveyard".to_owned(),
-                    "your hand" => "your_hand".to_owned(),
-                    "an opponent's hand" | "opponent's hand" => "opponent_hand".to_owned(),
-                    "a hand"
-                    | "a player's hand"
-                    | "their hand"
-                    | "its owner's hand"
-                    | "their owner's hand"
-                    | "their owners' hands" => "hand".to_owned(),
-                    "your library"
-                    | "your_library"
-                    | "opponent_library"
-                    | "any_library"
-                    | "a library"
-                    | "any library"
-                    | "a player's library"
-                    | "their library"
-                    | "their libraries"
-                    | "an opponent's library"
-                    | "its owner's library"
-                    | "their owner's library"
-                    | "their owners' libraries" => "library".to_owned(),
-                    "exile" | "the exile zone" => "exile".to_owned(),
-                    "the stack" | "stack" => "stack".to_owned(),
-                    "anywhere other than a graveyard or exile" | "not_graveyard_or_exile" => {
-                        "not_graveyard_or_exile".to_owned()
-                    }
-                    _ => low,
-                }
-            });
+            let from_norm = from.as_deref().map(normalize_trigger_from_zone);
             let to_norm = to.as_deref().map(|s| {
                 let low = s.trim().to_ascii_lowercase();
                 match low.as_str() {
@@ -3998,7 +4236,7 @@ pub(super) fn lower_trigger_event(
                 Some("graveyard" | "any_graveyard" | "your_graveyard" | "opponent_graveyard")
             ) && entering_controller.is_none()
                 && let SubjectRefAst::Group(f) | SubjectRefAst::Each(f) | SubjectRefAst::All(f) =
-                    subject.as_ref()
+                    eff_subject
                 && f.zone.is_none()
             {
                 let mut stripped = f.as_ref().clone();
@@ -4264,7 +4502,7 @@ pub(super) fn lower_trigger_event(
                     ))
                 }
                 (Some("battlefield"), Some("graveyard" | "any_graveyard")) => {
-                    let mode = if matches!(subject.as_ref(), SubjectRefAst::SelfObject) {
+                    let mode = if matches!(eff_subject, SubjectRefAst::SelfObject) {
                         DiesTriggerMode::Creature
                     } else if let ObjectFilter::Clause(c) = filter
                         && !c.any_types.contains(CardType::Creature)
@@ -4333,12 +4571,55 @@ pub(super) fn lower_trigger_event(
             }
         }
         TriggerEventAst::Exiled { subject } => {
-            let subj = lower_trigger_subject_filter(subject, vocabulary)?;
+            let mut parts = Vec::new();
+            expand_trigger_subject_parts(subject, &mut parts);
+            let mut sub_events = Vec::with_capacity(parts.len());
+            for part in parts {
+                let mut cur = part;
+                let mut from_zone = TriggerFromZone::Any;
+                while let SubjectRefAst::InZone {
+                    subject: inner,
+                    zone,
+                } = cur
+                {
+                    let mapped = match zone {
+                        ZoneFilter::Battlefield => TriggerFromZone::Battlefield,
+                        ZoneFilter::YourGraveyard => TriggerFromZone::ControllerGraveyard,
+                        ZoneFilter::OpponentGraveyard | ZoneFilter::OpponentsGraveyards => {
+                            TriggerFromZone::OpponentGraveyard
+                        }
+                        ZoneFilter::AnyGraveyard
+                        | ZoneFilter::AllGraveyards
+                        | ZoneFilter::SingleGraveyard
+                        | ZoneFilter::ItsOwnerGraveyard => TriggerFromZone::Graveyard,
+                        ZoneFilter::YourHand
+                        | ZoneFilter::OpponentHand
+                        | ZoneFilter::OpponentsHands
+                        | ZoneFilter::AnyHand
+                        | ZoneFilter::EachPlayerHand => TriggerFromZone::Hand,
+                        ZoneFilter::Exile => TriggerFromZone::Exile,
+                        ZoneFilter::YourLibrary
+                        | ZoneFilter::OpponentLibrary
+                        | ZoneFilter::EachPlayerLibrary
+                        | ZoneFilter::AnyLibrary => TriggerFromZone::Library,
+                        _ => return Err("oracle:unsupported-trigger-subject"),
+                    };
+                    if from_zone != TriggerFromZone::Any && from_zone != mapped {
+                        return Err("oracle:unsupported-trigger-subject");
+                    }
+                    from_zone = mapped;
+                    cur = inner.as_ref();
+                }
+                let subj_filters = lower_trigger_subject_filters(cur, vocabulary)?;
+                for subj in subj_filters {
+                    sub_events.push(TriggerEvent::Exiled {
+                        subject: subj,
+                        from_zone,
+                    });
+                }
+            }
             Ok((
-                TriggerEvent::Exiled {
-                    subject: subj,
-                    from_zone: TriggerFromZone::Any,
-                },
+                wrap_trigger_events_any_of(sub_events)?,
                 TriggerGrouping::EachOccurrence,
             ))
         }
@@ -4701,33 +4982,40 @@ pub(super) fn lower_trigger_event(
                         }
                     };
                     if let Some(inst_sorc) = inst_sorc_only
-                        && let Ok(tgt_filter) = lower_trigger_subject_filter(t, vocabulary)
+                        && let Ok(tgt_filters) = lower_trigger_subject_filters(t, vocabulary)
                     {
-                        let event = match caster {
-                            PlayerRefAst::You => TriggerEvent::TargetedByController {
-                                subject: tgt_filter,
-                                spell_only: true,
-                                instant_or_sorcery_only: inst_sorc,
-                            },
-                            PlayerRefAst::AnyOpponent | PlayerRefAst::EachOpponent => {
-                                TriggerEvent::Targeted {
+                        let mut sub_events = Vec::with_capacity(tgt_filters.len());
+                        for tgt_filter in tgt_filters {
+                            let event = match caster {
+                                PlayerRefAst::You => TriggerEvent::TargetedByController {
                                     subject: tgt_filter,
-                                    by_opponent: true,
                                     spell_only: true,
                                     instant_or_sorcery_only: inst_sorc,
+                                },
+                                PlayerRefAst::AnyOpponent | PlayerRefAst::EachOpponent => {
+                                    TriggerEvent::Targeted {
+                                        subject: tgt_filter,
+                                        by_opponent: true,
+                                        spell_only: true,
+                                        instant_or_sorcery_only: inst_sorc,
+                                    }
                                 }
-                            }
-                            PlayerRefAst::AnyPlayer | PlayerRefAst::EachPlayer => {
-                                TriggerEvent::Targeted {
-                                    subject: tgt_filter,
-                                    by_opponent: false,
-                                    spell_only: true,
-                                    instant_or_sorcery_only: inst_sorc,
+                                PlayerRefAst::AnyPlayer | PlayerRefAst::EachPlayer => {
+                                    TriggerEvent::Targeted {
+                                        subject: tgt_filter,
+                                        by_opponent: false,
+                                        spell_only: true,
+                                        instant_or_sorcery_only: inst_sorc,
+                                    }
                                 }
-                            }
-                            _ => return Err("oracle:unsupported-spell-target"),
-                        };
-                        return Ok((event, TriggerGrouping::OneOrMoreTogether));
+                                _ => return Err("oracle:unsupported-spell-target"),
+                            };
+                            sub_events.push(event);
+                        }
+                        return Ok((
+                            wrap_trigger_events_any_of(sub_events)?,
+                            TriggerGrouping::OneOrMoreTogether,
+                        ));
                     }
                     return Err("oracle:unsupported-spell-target");
                 }
@@ -4754,14 +5042,16 @@ pub(super) fn lower_trigger_event(
             qualifier,
             grouped,
         } => {
-            let mut subj = match (subject, actor) {
-                (Some(s), _) => lower_trigger_subject_filter(s, vocabulary)?,
-                (None, None | Some(PlayerRefAst::You)) => ObjectFilter::creature().controlled(),
+            let mut subjects = match (subject, actor) {
+                (Some(s), _) => lower_trigger_subject_filters(s, vocabulary)?,
+                (None, None | Some(PlayerRefAst::You)) => {
+                    vec![ObjectFilter::creature().controlled()]
+                }
                 (None, Some(PlayerRefAst::AnyOpponent | PlayerRefAst::EachOpponent)) => {
-                    ObjectFilter::creature().opposing()
+                    vec![ObjectFilter::creature().opposing()]
                 }
                 (None, Some(PlayerRefAst::AnyPlayer | PlayerRefAst::EachPlayer)) => {
-                    ObjectFilter::creature()
+                    vec![ObjectFilter::creature()]
                 }
                 _ => return Err("oracle:unsupported-trigger-event"),
             };
@@ -4865,7 +5155,7 @@ pub(super) fn lower_trigger_event(
                             ) {
                                 f = f.opposing();
                             }
-                            subj = f;
+                            subjects = vec![f];
                         }
                         grouping = if matches!(
                             def_mode,
@@ -4912,7 +5202,7 @@ pub(super) fn lower_trigger_event(
                         ) {
                             f = f.opposing();
                         }
-                        subj = f;
+                        subjects = vec![f];
                         grouping = TriggerGrouping::OneOrMoreTogether;
                         AttackTriggerMode::GroupAtLeast(count_prefix)
                     } else {
@@ -4935,13 +5225,24 @@ pub(super) fn lower_trigger_event(
             {
                 grouping = TriggerGrouping::OneOrMoreByPlayer;
             }
-            Ok((
-                TriggerEvent::Attacks {
+            if subjects.len() > 1
+                && matches!(
+                    mode,
+                    AttackTriggerMode::GroupAtLeast(_)
+                        | AttackTriggerMode::GroupTotalPowerAtLeast(_)
+                        | AttackTriggerMode::OpponentsAtController { .. }
+                )
+            {
+                return Err("oracle:unsupported-trigger-subject");
+            }
+            let sub_events = subjects
+                .into_iter()
+                .map(|subj| TriggerEvent::Attacks {
                     subject: subj,
                     mode,
-                },
-                grouping,
-            ))
+                })
+                .collect();
+            Ok((wrap_trigger_events_any_of(sub_events)?, grouping))
         }
         TriggerEventAst::AttacksWithOthers {
             subject,
@@ -4974,47 +5275,72 @@ pub(super) fn lower_trigger_event(
                 TriggerGrouping::EachOccurrence,
             ))
         }
-        TriggerEventAst::AttacksUnblocked { subject } => {
-            let subj = lower_trigger_subject_filter(subject, vocabulary)?;
-            Ok((
+        TriggerEventAst::AttacksUnblocked { subject } => Ok((
+            lower_subject_trigger_event(subject, vocabulary, |subj| {
                 TriggerEvent::BlocksOrBlocked {
                     subject: subj,
                     kind: BlockTriggerKind::Unblocked,
-                },
-                TriggerGrouping::EachOccurrence,
-            ))
-        }
+                }
+            })?,
+            TriggerGrouping::EachOccurrence,
+        )),
         TriggerEventAst::Blocks { subject, attacker } => {
-            let subj = lower_trigger_subject_filter(subject, vocabulary)?;
-            let kind = match attacker {
-                None => BlockTriggerKind::Blocks,
-                Some(atk) => BlockTriggerKind::BlocksMatching(Box::new(
-                    lower_trigger_subject_filter(atk, vocabulary)?,
-                )),
-            };
+            let subjects = lower_trigger_subject_filters(subject, vocabulary)?;
+            let mut sub_events = Vec::new();
+            match attacker {
+                None => {
+                    for subj in subjects {
+                        sub_events.push(TriggerEvent::BlocksOrBlocked {
+                            subject: subj,
+                            kind: BlockTriggerKind::Blocks,
+                        });
+                    }
+                }
+                Some(atk) => {
+                    let attackers = lower_trigger_subject_filters(atk, vocabulary)?;
+                    for subj in &subjects {
+                        for atk_filter in &attackers {
+                            sub_events.push(TriggerEvent::BlocksOrBlocked {
+                                subject: *subj,
+                                kind: BlockTriggerKind::BlocksMatching(Box::new(*atk_filter)),
+                            });
+                        }
+                    }
+                }
+            }
             Ok((
-                TriggerEvent::BlocksOrBlocked {
-                    subject: subj,
-                    kind,
-                },
+                wrap_trigger_events_any_of(sub_events)?,
                 TriggerGrouping::EachOccurrence,
             ))
         }
         TriggerEventAst::BecomesBlocked { subject, blocker } => {
-            let subj = lower_trigger_subject_filter(subject, vocabulary)?;
-            let kind = match blocker {
-                None => BlockTriggerKind::BecomesBlocked {
-                    capture_defender: false,
-                },
-                Some(blk) => BlockTriggerKind::BlockedByMatching(Box::new(
-                    lower_trigger_subject_filter(blk, vocabulary)?,
-                )),
-            };
+            let subjects = lower_trigger_subject_filters(subject, vocabulary)?;
+            let mut sub_events = Vec::new();
+            match blocker {
+                None => {
+                    for subj in subjects {
+                        sub_events.push(TriggerEvent::BlocksOrBlocked {
+                            subject: subj,
+                            kind: BlockTriggerKind::BecomesBlocked {
+                                capture_defender: false,
+                            },
+                        });
+                    }
+                }
+                Some(blk) => {
+                    let blockers = lower_trigger_subject_filters(blk, vocabulary)?;
+                    for subj in &subjects {
+                        for blk_filter in &blockers {
+                            sub_events.push(TriggerEvent::BlocksOrBlocked {
+                                subject: *subj,
+                                kind: BlockTriggerKind::BlockedByMatching(Box::new(*blk_filter)),
+                            });
+                        }
+                    }
+                }
+            }
             Ok((
-                TriggerEvent::BlocksOrBlocked {
-                    subject: subj,
-                    kind,
-                },
+                wrap_trigger_events_any_of(sub_events)?,
                 TriggerGrouping::EachOccurrence,
             ))
         }
@@ -5025,7 +5351,7 @@ pub(super) fn lower_trigger_event(
             becomes_blocked,
             min_count,
         } if *min_count >= 1 && other_filter.zone.is_none() => {
-            let subj = lower_trigger_subject_filter(subject, vocabulary)?;
+            let subjects = lower_trigger_subject_filters(subject, vocabulary)?;
             if *min_count >= 2 {
                 if *blocks || !*becomes_blocked {
                     return Err("oracle:unsupported-trigger-event");
@@ -5044,27 +5370,25 @@ pub(super) fn lower_trigger_event(
                 } else {
                     Some(Box::new(lower_object_filter(other_filter, vocabulary)?))
                 };
-                return Ok((
-                    TriggerEvent::BlocksOrBlocked {
+                let sub_events = subjects
+                    .into_iter()
+                    .map(|subj| TriggerEvent::BlocksOrBlocked {
                         subject: subj,
                         kind: BlockTriggerKind::BlockedByAtLeast {
                             min_count: *min_count,
-                            blocker_filter,
+                            blocker_filter: blocker_filter.clone(),
                         },
-                    },
+                    })
+                    .collect();
+                return Ok((
+                    wrap_trigger_events_any_of(sub_events)?,
                     TriggerGrouping::EachOccurrence,
                 ));
             }
             let obj = lower_object_filter(other_filter, vocabulary)?;
-            let event = match (*blocks, *becomes_blocked) {
-                (true, false) => TriggerEvent::BlocksOrBlocked {
-                    subject: subj,
-                    kind: BlockTriggerKind::BlocksMatching(Box::new(obj)),
-                },
-                (false, true) => TriggerEvent::BlocksOrBlocked {
-                    subject: subj,
-                    kind: BlockTriggerKind::BlockedByMatching(Box::new(obj)),
-                },
+            let kind = match (*blocks, *becomes_blocked) {
+                (true, false) => BlockTriggerKind::BlocksMatching(Box::new(obj)),
+                (false, true) => BlockTriggerKind::BlockedByMatching(Box::new(obj)),
                 (true, true) => {
                     let simple_subtype = if let ObjectFilter::Clause(c) = obj
                         && (c.any_types.is_empty() || c.any_types == CardTypeMask::CREATURE)
@@ -5087,20 +5411,24 @@ pub(super) fn lower_trigger_event(
                         None
                     };
                     if let Some(required_subtype) = simple_subtype {
-                        TriggerEvent::BlocksOrBlocked {
-                            subject: subj,
-                            kind: BlockTriggerKind::BlocksOrBlockedByEach { required_subtype },
-                        }
+                        BlockTriggerKind::BlocksOrBlockedByEach { required_subtype }
                     } else {
-                        TriggerEvent::BlocksOrBlocked {
-                            subject: subj,
-                            kind: BlockTriggerKind::BlocksOrBlockedByMatching(Box::new(obj)),
-                        }
+                        BlockTriggerKind::BlocksOrBlockedByMatching(Box::new(obj))
                     }
                 }
                 (false, false) => return Err("oracle:unsupported-trigger-event"),
             };
-            Ok((event, TriggerGrouping::EachOccurrence))
+            let sub_events = subjects
+                .into_iter()
+                .map(|subj| TriggerEvent::BlocksOrBlocked {
+                    subject: subj,
+                    kind: kind.clone(),
+                })
+                .collect();
+            Ok((
+                wrap_trigger_events_any_of(sub_events)?,
+                TriggerGrouping::EachOccurrence,
+            ))
         }
         TriggerEventAst::DamageDealt {
             combat_only,
@@ -5120,19 +5448,23 @@ pub(super) fn lower_trigger_event(
                     rec_subj,
                     SubjectRefAst::Player(_) | SubjectRefAst::TargetPlayerOrPlaneswalker { .. }
                 )
-                && let Ok(subj_filter) = lower_trigger_subject_filter(rec_subj, vocabulary)
+                && let Ok(subj_filters) = lower_trigger_subject_filters(rec_subj, vocabulary)
             {
-                return Ok((
-                    TriggerEvent::DealtDamage {
-                        subject: subj_filter,
+                let sub_events = subj_filters
+                    .into_iter()
+                    .map(|subj| TriggerEvent::DealtDamage {
+                        subject: subj,
                         linked_player: false,
-                    },
+                    })
+                    .collect();
+                return Ok((
+                    wrap_trigger_events_any_of(sub_events)?,
                     TriggerGrouping::EachOccurrence,
                 ));
             }
-            let src = match source {
-                Some(s) => lower_trigger_subject_filter(s, vocabulary)?,
-                None => ObjectFilter::any(),
+            let sources = match source {
+                Some(s) => lower_trigger_subject_filters(s, vocabulary)?,
+                None => vec![ObjectFilter::any()],
             };
             let rec = match recipient.as_deref() {
                 None => DamageTriggerRecipient::Any,
@@ -5214,24 +5546,25 @@ pub(super) fn lower_trigger_event(
             } else {
                 TriggerGrouping::EachOccurrence
             };
-            if *noncombat_only {
-                Ok((
-                    TriggerEvent::DealsNoncombatDamage {
+            let sub_events: Vec<TriggerEvent> = if *noncombat_only {
+                sources
+                    .into_iter()
+                    .map(|src| TriggerEvent::DealsNoncombatDamage {
                         source: src,
                         recipient: rec,
-                    },
-                    grouping,
-                ))
+                    })
+                    .collect()
             } else {
-                Ok((
-                    TriggerEvent::DealsDamage {
+                sources
+                    .into_iter()
+                    .map(|src| TriggerEvent::DealsDamage {
                         source: src,
                         recipient: rec,
                         combat_only: *combat_only,
-                    },
-                    grouping,
-                ))
-            }
+                    })
+                    .collect()
+            };
+            Ok((wrap_trigger_events_any_of(sub_events)?, grouping))
         }
         TriggerEventAst::LifeChanged {
             player,
@@ -5330,12 +5663,13 @@ pub(super) fn lower_trigger_event(
         }
         TriggerEventAst::PermanentSacrificed { player, subject } => {
             let rel = lower_player_relation(*player)?;
-            let subj = lower_trigger_subject_filter(subject, vocabulary)?;
             Ok((
-                TriggerEvent::PlayerAction {
-                    player: rel,
-                    action: PlayerTriggerAction::Sacrificed(subj),
-                },
+                lower_subject_trigger_event(subject, vocabulary, |subj| {
+                    TriggerEvent::PlayerAction {
+                        player: rel,
+                        action: PlayerTriggerAction::Sacrificed(subj),
+                    }
+                })?,
                 TriggerGrouping::EachOccurrence,
             ))
         }
@@ -5368,16 +5702,18 @@ pub(super) fn lower_trigger_event(
             tapped,
             for_mana: false,
         } => {
-            let subj = lower_trigger_subject_filter(subject, vocabulary)?;
+            let kind = if *tapped {
+                StatusTriggerKind::BecomesTapped
+            } else {
+                StatusTriggerKind::BecomesUntapped
+            };
             Ok((
-                TriggerEvent::StatusChanged {
-                    subject: subj,
-                    kind: if *tapped {
-                        StatusTriggerKind::BecomesTapped
-                    } else {
-                        StatusTriggerKind::BecomesUntapped
-                    },
-                },
+                lower_subject_trigger_event(subject, vocabulary, |subj| {
+                    TriggerEvent::StatusChanged {
+                        subject: subj,
+                        kind,
+                    }
+                })?,
                 TriggerGrouping::EachOccurrence,
             ))
         }
@@ -5391,49 +5727,37 @@ pub(super) fn lower_trigger_event(
                 TriggerGrouping::EachOccurrence,
             ))
         }
-        TriggerEventAst::TurnedFaceUp { subject } => {
-            let subj = lower_trigger_subject_filter(subject, vocabulary)?;
-            Ok((
-                TriggerEvent::StatusChanged {
-                    subject: subj,
-                    kind: StatusTriggerKind::TurnsFaceUp,
-                },
-                TriggerGrouping::EachOccurrence,
-            ))
-        }
-        TriggerEventAst::Transforms { subject } => {
-            let subj = lower_trigger_subject_filter(subject, vocabulary)?;
-            Ok((
-                TriggerEvent::StatusChanged {
-                    subject: subj,
-                    kind: StatusTriggerKind::Transforms,
-                },
-                TriggerGrouping::EachOccurrence,
-            ))
-        }
+        TriggerEventAst::TurnedFaceUp { subject } => Ok((
+            lower_subject_trigger_event(subject, vocabulary, |subj| TriggerEvent::StatusChanged {
+                subject: subj,
+                kind: StatusTriggerKind::TurnsFaceUp,
+            })?,
+            TriggerGrouping::EachOccurrence,
+        )),
+        TriggerEventAst::Transforms { subject } => Ok((
+            lower_subject_trigger_event(subject, vocabulary, |subj| TriggerEvent::StatusChanged {
+                subject: subj,
+                kind: StatusTriggerKind::Transforms,
+            })?,
+            TriggerGrouping::EachOccurrence,
+        )),
         TriggerEventAst::PhaseChanged {
             subject,
             phased_out,
-        } => {
-            let subj = lower_trigger_subject_filter(subject, vocabulary)?;
-            Ok((
-                TriggerEvent::StatusChanged {
-                    subject: subj,
-                    kind: StatusTriggerKind::Phased { out: *phased_out },
-                },
-                TriggerGrouping::EachOccurrence,
-            ))
-        }
-        TriggerEventAst::Mutates { subject } => {
-            let subj = lower_trigger_subject_filter(subject, vocabulary)?;
-            Ok((
-                TriggerEvent::StatusChanged {
-                    subject: subj,
-                    kind: StatusTriggerKind::Mutated,
-                },
-                TriggerGrouping::EachOccurrence,
-            ))
-        }
+        } => Ok((
+            lower_subject_trigger_event(subject, vocabulary, |subj| TriggerEvent::StatusChanged {
+                subject: subj,
+                kind: StatusTriggerKind::Phased { out: *phased_out },
+            })?,
+            TriggerGrouping::EachOccurrence,
+        )),
+        TriggerEventAst::Mutates { subject } => Ok((
+            lower_subject_trigger_event(subject, vocabulary, |subj| TriggerEvent::StatusChanged {
+                subject: subj,
+                kind: StatusTriggerKind::Mutated,
+            })?,
+            TriggerGrouping::EachOccurrence,
+        )),
         TriggerEventAst::ClassLevelReached { level } => Ok((
             TriggerEvent::StatusChanged {
                 subject: ObjectFilter::self_object(),
@@ -5448,26 +5772,20 @@ pub(super) fn lower_trigger_event(
             },
             TriggerGrouping::EachOccurrence,
         )),
-        TriggerEventAst::BecomesMonstrous { subject } => {
-            let subj = lower_trigger_subject_filter(subject, vocabulary)?;
-            Ok((
-                TriggerEvent::StatusChanged {
-                    subject: subj,
-                    kind: StatusTriggerKind::BecomesMonstrous,
-                },
-                TriggerGrouping::EachOccurrence,
-            ))
-        }
-        TriggerEventAst::BecomesRenowned { subject } => {
-            let subj = lower_trigger_subject_filter(subject, vocabulary)?;
-            Ok((
-                TriggerEvent::StatusChanged {
-                    subject: subj,
-                    kind: StatusTriggerKind::BecomesRenowned,
-                },
-                TriggerGrouping::EachOccurrence,
-            ))
-        }
+        TriggerEventAst::BecomesMonstrous { subject } => Ok((
+            lower_subject_trigger_event(subject, vocabulary, |subj| TriggerEvent::StatusChanged {
+                subject: subj,
+                kind: StatusTriggerKind::BecomesMonstrous,
+            })?,
+            TriggerGrouping::EachOccurrence,
+        )),
+        TriggerEventAst::BecomesRenowned { subject } => Ok((
+            lower_subject_trigger_event(subject, vocabulary, |subj| TriggerEvent::StatusChanged {
+                subject: subj,
+                kind: StatusTriggerKind::BecomesRenowned,
+            })?,
+            TriggerGrouping::EachOccurrence,
+        )),
         TriggerEventAst::KeywordActionPerformed { player, action } => {
             let rel = lower_player_relation(*player)?;
             let low = action.trim().to_ascii_lowercase();
@@ -6317,6 +6635,7 @@ pub(super) fn lower_trigger_event(
                 }
                 "explore" | "explores" | "you explore" => PlayerTriggerAction::Explored,
                 "shuffle_library"
+                | "spell_or_ability_shuffle_library"
                 | "shuffle your library"
                 | "you shuffle your library"
                 | "shuffles their library"
@@ -6410,7 +6729,7 @@ pub(super) fn lower_trigger_event(
             by_opponent,
             by_text,
         } => {
-            let subj = lower_trigger_subject_filter(subject, vocabulary)?;
+            let subjects = lower_trigger_subject_filters(subject, vocabulary)?;
             let mut grouping = TriggerGrouping::EachOccurrence;
             let mut opp = *by_opponent;
             let mut by_controller = false;
@@ -6455,21 +6774,26 @@ pub(super) fn lower_trigger_event(
             } else {
                 (false, false)
             };
-            let event = if by_controller {
-                TriggerEvent::TargetedByController {
-                    subject: subj,
-                    spell_only,
-                    instant_or_sorcery_only: inst_sorc,
-                }
-            } else {
-                TriggerEvent::Targeted {
-                    subject: subj,
-                    by_opponent: opp,
-                    spell_only,
-                    instant_or_sorcery_only: inst_sorc,
-                }
-            };
-            Ok((event, grouping))
+            let sub_events = subjects
+                .into_iter()
+                .map(|subj| {
+                    if by_controller {
+                        TriggerEvent::TargetedByController {
+                            subject: subj,
+                            spell_only,
+                            instant_or_sorcery_only: inst_sorc,
+                        }
+                    } else {
+                        TriggerEvent::Targeted {
+                            subject: subj,
+                            by_opponent: opp,
+                            spell_only,
+                            instant_or_sorcery_only: inst_sorc,
+                        }
+                    }
+                })
+                .collect();
+            Ok((wrap_trigger_events_any_of(sub_events)?, grouping))
         }
         TriggerEventAst::CountersChanged {
             subject,
@@ -6501,82 +6825,80 @@ pub(super) fn lower_trigger_event(
                     by_controller_only: *by_you,
                 }
             };
-            match subject.as_ref() {
-                SubjectRefAst::Compound(parts)
-                | SubjectRefAst::TargetOneOf { options: parts, .. }
-                    if parts.len() >= 2 =>
-                {
-                    let mut sub_events = Vec::with_capacity(parts.len());
-                    for part in parts {
-                        let subj = lower_counters_changed_subject(part, vocabulary)?;
-                        sub_events.push(TriggerEvent::CountersChanged {
-                            subject: subj,
-                            kind,
-                        });
-                    }
-                    Ok((
-                        TriggerEvent::AnyOf(sub_events),
-                        TriggerGrouping::EachOccurrence,
-                    ))
-                }
-                other => {
-                    let subj = lower_counters_changed_subject(other, vocabulary)?;
-                    Ok((
-                        TriggerEvent::CountersChanged {
-                            subject: subj,
-                            kind,
-                        },
-                        TriggerGrouping::EachOccurrence,
-                    ))
-                }
-            }
+            let mut subjects = Vec::new();
+            lower_counters_changed_subjects_into(subject, vocabulary, &mut subjects)?;
+            let sub_events = subjects
+                .into_iter()
+                .map(|subj| TriggerEvent::CountersChanged {
+                    subject: subj,
+                    kind,
+                })
+                .collect();
+            Ok((
+                wrap_trigger_events_any_of(sub_events)?,
+                TriggerGrouping::EachOccurrence,
+            ))
         }
         TriggerEventAst::TapStateChanged {
             subject,
             tapped: true,
             for_mana: true,
         } => {
-            if let SubjectRefAst::Group(f) | SubjectRefAst::Each(f) | SubjectRefAst::All(f) =
-                subject.as_ref()
-                && f.any_types == AstCardTypeMask::ARTIFACT
-                && f.forbidden_types.is_empty()
-                && f.subtypes.is_empty()
-            {
-                let rel = match f.controller {
-                    None => PlayerRelation::AnyParticipant,
-                    Some(ControllerRelation::You) => PlayerRelation::Controller,
-                    Some(ControllerRelation::Opponent | ControllerRelation::Opponents) => {
-                        PlayerRelation::Opponent
-                    }
-                    _ => return Err("oracle:unsupported-trigger-event"),
-                };
-                return Ok((
-                    TriggerEvent::PlayerAction {
-                        player: rel,
-                        action: PlayerTriggerAction::ArtifactTappedForMana,
-                    },
-                    TriggerGrouping::EachOccurrence,
-                ));
-            }
-            let subj = lower_trigger_subject_filter(subject, vocabulary)?;
-            let rel = match subject.as_ref() {
-                SubjectRefAst::Group(f) | SubjectRefAst::Each(f) | SubjectRefAst::All(f) => {
-                    match f.controller {
+            let mut parts = Vec::new();
+            expand_trigger_subject_parts(subject, &mut parts);
+            let mut sub_events = Vec::with_capacity(parts.len());
+            for part in parts {
+                let mut cur = part;
+                while let SubjectRefAst::InZone {
+                    subject: inner,
+                    zone: ZoneFilter::Battlefield,
+                } = cur
+                {
+                    cur = inner.as_ref();
+                }
+                if let SubjectRefAst::Group(f) | SubjectRefAst::Each(f) | SubjectRefAst::All(f) =
+                    cur
+                    && f.any_types == AstCardTypeMask::ARTIFACT
+                    && f.forbidden_types.is_empty()
+                    && f.subtypes.is_empty()
+                {
+                    let rel = match f.controller {
                         None => PlayerRelation::AnyParticipant,
                         Some(ControllerRelation::You) => PlayerRelation::Controller,
                         Some(ControllerRelation::Opponent | ControllerRelation::Opponents) => {
                             PlayerRelation::Opponent
                         }
-                        _ => PlayerRelation::AnyParticipant,
-                    }
+                        _ => return Err("oracle:unsupported-trigger-event"),
+                    };
+                    sub_events.push(TriggerEvent::PlayerAction {
+                        player: rel,
+                        action: PlayerTriggerAction::ArtifactTappedForMana,
+                    });
+                    continue;
                 }
-                _ => PlayerRelation::AnyParticipant,
-            };
+                let subj_filters = lower_trigger_subject_filters(cur, vocabulary)?;
+                let rel = match cur {
+                    SubjectRefAst::Group(f) | SubjectRefAst::Each(f) | SubjectRefAst::All(f) => {
+                        match f.controller {
+                            None => PlayerRelation::AnyParticipant,
+                            Some(ControllerRelation::You) => PlayerRelation::Controller,
+                            Some(ControllerRelation::Opponent | ControllerRelation::Opponents) => {
+                                PlayerRelation::Opponent
+                            }
+                            _ => PlayerRelation::AnyParticipant,
+                        }
+                    }
+                    _ => PlayerRelation::AnyParticipant,
+                };
+                for subj in subj_filters {
+                    sub_events.push(TriggerEvent::PlayerAction {
+                        player: rel,
+                        action: PlayerTriggerAction::PermanentTappedForMana(subj),
+                    });
+                }
+            }
             Ok((
-                TriggerEvent::PlayerAction {
-                    player: rel,
-                    action: PlayerTriggerAction::PermanentTappedForMana(subj),
-                },
+                wrap_trigger_events_any_of(sub_events)?,
                 TriggerGrouping::EachOccurrence,
             ))
         }
@@ -6639,6 +6961,12 @@ pub(super) fn lower_trigger_event(
         TriggerEventAst::AbilityActivated {
             player,
             source_filter,
+        }
+        | TriggerEventAst::QualifiedAbilityActivated {
+            player,
+            source_filter,
+            loyalty_only: false,
+            nonmana_only: true,
         } => {
             let rel = lower_player_relation(*player)?;
             let sf = if is_unrestricted_filter(source_filter) {
@@ -6654,20 +6982,18 @@ pub(super) fn lower_trigger_event(
                 TriggerGrouping::EachOccurrence,
             ))
         }
-        TriggerEventAst::BecomesAttached { subject, .. } => {
-            let subj = lower_trigger_subject_filter(subject, vocabulary)?;
-            Ok((
-                TriggerEvent::BecomesAttached { subject: subj },
-                TriggerGrouping::EachOccurrence,
-            ))
-        }
-        TriggerEventAst::Exploits { subject } => {
-            let subj = lower_trigger_subject_filter(subject, vocabulary)?;
-            Ok((
-                TriggerEvent::Exploits { subject: subj },
-                TriggerGrouping::EachOccurrence,
-            ))
-        }
+        TriggerEventAst::BecomesAttached { subject, .. } => Ok((
+            lower_subject_trigger_event(subject, vocabulary, |subj| {
+                TriggerEvent::BecomesAttached { subject: subj }
+            })?,
+            TriggerGrouping::EachOccurrence,
+        )),
+        TriggerEventAst::Exploits { subject } => Ok((
+            lower_subject_trigger_event(subject, vocabulary, |subj| TriggerEvent::Exploits {
+                subject: subj,
+            })?,
+            TriggerGrouping::EachOccurrence,
+        )),
         TriggerEventAst::DayNightChanged => Ok((
             TriggerEvent::DayNightChanged,
             TriggerGrouping::EachOccurrence,
@@ -6678,6 +7004,48 @@ pub(super) fn lower_trigger_event(
                 TriggerEvent::PlayerAction {
                     player: rel,
                     action: PlayerTriggerAction::LandPlayed,
+                },
+                TriggerGrouping::EachOccurrence,
+            ))
+        }
+        TriggerEventAst::CardPlayed { player, filter } => {
+            if is_unrestricted_filter(filter) {
+                let rel = lower_player_relation(*player)?;
+                return Ok((
+                    TriggerEvent::AnyOf(vec![
+                        TriggerEvent::PlayerAction {
+                            player: rel,
+                            action: PlayerTriggerAction::LandPlayed,
+                        },
+                        TriggerEvent::SpellCast {
+                            caster: TriggerPlayerScope::Relation(rel),
+                            filter: SpellFilter::any(),
+                            self_cast: false,
+                            include_copy: false,
+                            min_mana_value: None,
+                        },
+                    ]),
+                    TriggerGrouping::EachOccurrence,
+                ));
+            }
+            let excludes_land = (filter.forbidden_types.0 & AstCardTypeMask::LAND.0) != 0
+                || (!filter.any_types.is_empty()
+                    && (filter.any_types.0 & AstCardTypeMask::LAND.0) == 0);
+            if !excludes_land {
+                return Err("oracle:unsupported-trigger-event");
+            }
+            let scope = match player {
+                PlayerRefAst::EnchantedPlayer => TriggerPlayerScope::EnchantedPlayer,
+                other => TriggerPlayerScope::Relation(lower_player_relation(*other)?),
+            };
+            let sf = lower_spell_filter(filter, vocabulary)?;
+            Ok((
+                TriggerEvent::SpellCast {
+                    caster: scope,
+                    filter: sf,
+                    self_cast: false,
+                    include_copy: false,
+                    min_mana_value: None,
                 },
                 TriggerGrouping::EachOccurrence,
             ))
@@ -6727,36 +7095,27 @@ pub(super) fn lower_trigger_event(
                 TriggerGrouping::EachOccurrence,
             ))
         }
-        TriggerEventAst::Crewed { subject } => {
-            let subj = lower_trigger_subject_filter(subject, vocabulary)?;
-            Ok((
-                TriggerEvent::StatusChanged {
-                    subject: subj,
-                    kind: StatusTriggerKind::Crewed,
-                },
-                TriggerGrouping::EachOccurrence,
-            ))
-        }
-        TriggerEventAst::Exerted { subject } => {
-            let subj = lower_trigger_subject_filter(subject, vocabulary)?;
-            Ok((
-                TriggerEvent::StatusChanged {
-                    subject: subj,
-                    kind: StatusTriggerKind::Exerted,
-                },
-                TriggerGrouping::EachOccurrence,
-            ))
-        }
-        TriggerEventAst::Explores { subject } => {
-            let subj = lower_trigger_subject_filter(subject, vocabulary)?;
-            Ok((
-                TriggerEvent::StatusChanged {
-                    subject: subj,
-                    kind: StatusTriggerKind::Explored,
-                },
-                TriggerGrouping::EachOccurrence,
-            ))
-        }
+        TriggerEventAst::Crewed { subject } => Ok((
+            lower_subject_trigger_event(subject, vocabulary, |subj| TriggerEvent::StatusChanged {
+                subject: subj,
+                kind: StatusTriggerKind::Crewed,
+            })?,
+            TriggerGrouping::EachOccurrence,
+        )),
+        TriggerEventAst::Exerted { subject } => Ok((
+            lower_subject_trigger_event(subject, vocabulary, |subj| TriggerEvent::StatusChanged {
+                subject: subj,
+                kind: StatusTriggerKind::Exerted,
+            })?,
+            TriggerGrouping::EachOccurrence,
+        )),
+        TriggerEventAst::Explores { subject } => Ok((
+            lower_subject_trigger_event(subject, vocabulary, |subj| TriggerEvent::StatusChanged {
+                subject: subj,
+                kind: StatusTriggerKind::Explored,
+            })?,
+            TriggerGrouping::EachOccurrence,
+        )),
         TriggerEventAst::Connives { .. } => Ok((
             TriggerEvent::PlayerAction {
                 player: PlayerRelation::Controller,
@@ -6764,16 +7123,13 @@ pub(super) fn lower_trigger_event(
             },
             TriggerGrouping::EachOccurrence,
         )),
-        TriggerEventAst::UnlockDoor { subject } => {
-            let subj = lower_trigger_subject_filter(subject, vocabulary)?;
-            Ok((
-                TriggerEvent::DoorUnlocked {
-                    subject: subj,
-                    fully_unlocked_only: false,
-                },
-                TriggerGrouping::EachOccurrence,
-            ))
-        }
+        TriggerEventAst::UnlockDoor { subject } => Ok((
+            lower_subject_trigger_event(subject, vocabulary, |subj| TriggerEvent::DoorUnlocked {
+                subject: subj,
+                fully_unlocked_only: false,
+            })?,
+            TriggerGrouping::EachOccurrence,
+        )),
         TriggerEventAst::RoomFullyUnlocked { player } => {
             let subj = match player {
                 PlayerRefAst::You => ObjectFilter::permanent().controlled(),
@@ -7027,18 +7383,144 @@ fn try_lower_damage_threshold_trigger(low: &str) -> Option<(TriggerEvent, Trigge
     None
 }
 
-fn lower_counters_changed_subject(
+fn expand_trigger_subject_parts<'a>(subject: &'a SubjectRefAst, out: &mut Vec<&'a SubjectRefAst>) {
+    match subject {
+        SubjectRefAst::Compound(items) => {
+            for item in items {
+                expand_trigger_subject_parts(item, out);
+            }
+        }
+        SubjectRefAst::TargetOneOf {
+            options,
+            count: TargetCountAst::Exact(1),
+        } => {
+            for item in options {
+                expand_trigger_subject_parts(item, out);
+            }
+        }
+        other => out.push(other),
+    }
+}
+
+fn wrap_trigger_events_any_of(events: Vec<TriggerEvent>) -> Result<TriggerEvent, &'static str> {
+    let mut flat = Vec::with_capacity(events.len());
+    for ev in events {
+        if let TriggerEvent::AnyOf(inner) = ev {
+            flat.extend(inner);
+        } else {
+            flat.push(ev);
+        }
+    }
+    match flat.len() {
+        0 => Err("oracle:empty-trigger-events"),
+        1 => flat.into_iter().next().ok_or("oracle:empty-trigger-events"),
+        _ => Ok(TriggerEvent::AnyOf(flat)),
+    }
+}
+
+fn lower_trigger_subject_filters_into(
     subject: &SubjectRefAst,
     vocabulary: &CreatureTypeVocabulary,
-) -> Result<ObjectFilter, &'static str> {
+    out: &mut Vec<ObjectFilter>,
+) -> Result<(), &'static str> {
     match subject {
-        SubjectRefAst::AnyTarget => Ok(ObjectFilter::any()),
-        SubjectRefAst::TargetObject { filter, .. } => lower_object_filter(filter, vocabulary),
+        SubjectRefAst::Compound(items) => {
+            if items.is_empty() {
+                return Err("oracle:unsupported-trigger-subject");
+            }
+            for item in items {
+                lower_trigger_subject_filters_into(item, vocabulary, out)?;
+            }
+            Ok(())
+        }
+        SubjectRefAst::TargetOneOf {
+            options,
+            count: TargetCountAst::Exact(1),
+        } => {
+            if options.is_empty() {
+                return Err("oracle:unsupported-trigger-subject");
+            }
+            for item in options {
+                lower_trigger_subject_filters_into(item, vocabulary, out)?;
+            }
+            Ok(())
+        }
         SubjectRefAst::InZone {
             subject: inner,
             zone: ZoneFilter::Battlefield,
-        } => lower_counters_changed_subject(inner, vocabulary),
-        other => lower_trigger_subject_filter(other, vocabulary),
+        } => lower_trigger_subject_filters_into(inner, vocabulary, out),
+        other => {
+            out.push(lower_trigger_subject_filter(other, vocabulary)?);
+            Ok(())
+        }
+    }
+}
+
+fn lower_trigger_subject_filters(
+    subject: &SubjectRefAst,
+    vocabulary: &CreatureTypeVocabulary,
+) -> Result<Vec<ObjectFilter>, &'static str> {
+    let mut out = Vec::new();
+    lower_trigger_subject_filters_into(subject, vocabulary, &mut out)?;
+    if out.is_empty() {
+        return Err("oracle:unsupported-trigger-subject");
+    }
+    Ok(out)
+}
+
+fn lower_subject_trigger_event<F>(
+    subject: &SubjectRefAst,
+    vocabulary: &CreatureTypeVocabulary,
+    build: F,
+) -> Result<TriggerEvent, &'static str>
+where
+    F: FnMut(ObjectFilter) -> TriggerEvent,
+{
+    let filters = lower_trigger_subject_filters(subject, vocabulary)?;
+    let events: Vec<TriggerEvent> = filters.into_iter().map(build).collect();
+    wrap_trigger_events_any_of(events)
+}
+
+fn lower_counters_changed_subjects_into(
+    subject: &SubjectRefAst,
+    vocabulary: &CreatureTypeVocabulary,
+    out: &mut Vec<ObjectFilter>,
+) -> Result<(), &'static str> {
+    match subject {
+        SubjectRefAst::Compound(items) => {
+            if items.is_empty() {
+                return Err("oracle:unsupported-trigger-subject");
+            }
+            for item in items {
+                lower_counters_changed_subjects_into(item, vocabulary, out)?;
+            }
+            Ok(())
+        }
+        SubjectRefAst::TargetOneOf {
+            options,
+            count: TargetCountAst::Exact(1),
+        } => {
+            if options.is_empty() {
+                return Err("oracle:unsupported-trigger-subject");
+            }
+            for item in options {
+                lower_counters_changed_subjects_into(item, vocabulary, out)?;
+            }
+            Ok(())
+        }
+        SubjectRefAst::AnyTarget => {
+            out.push(ObjectFilter::any());
+            Ok(())
+        }
+        SubjectRefAst::TargetObject { filter, .. } => {
+            out.push(lower_object_filter(filter, vocabulary)?);
+            Ok(())
+        }
+        SubjectRefAst::InZone {
+            subject: inner,
+            zone: ZoneFilter::Battlefield,
+        } => lower_counters_changed_subjects_into(inner, vocabulary, out),
+        other => lower_trigger_subject_filters_into(other, vocabulary, out),
     }
 }
 
@@ -7054,7 +7536,54 @@ pub(super) fn lower_trigger_subject_filter(
         SubjectRefAst::Group(f) | SubjectRefAst::Each(f) | SubjectRefAst::All(f) => {
             lower_object_filter(f, vocabulary)
         }
+        SubjectRefAst::InZone {
+            subject: inner,
+            zone: ZoneFilter::Battlefield,
+        } => lower_trigger_subject_filter(inner, vocabulary),
         _ => Err("oracle:unsupported-trigger-subject"),
+    }
+}
+
+fn clause_supported_by_zone_move_record(clause: ObjectClause) -> bool {
+    let ctrl_ok = matches!(
+        clause.controller,
+        ControllerFilter::Any
+            | ControllerFilter::You
+            | ControllerFilter::Opponent
+            | ControllerFilter::NotYou
+            | ControllerFilter::OwnerYou
+            | ControllerFilter::OwnerOpponent
+            | ControllerFilter::Player(_)
+    );
+    let subtype_ok = matches!(
+        clause.subtypes,
+        SubtypeFilter::Any
+            | SubtypeFilter::Has(_)
+            | SubtypeFilter::Lacks(_)
+            | SubtypeFilter::AnyOf(_)
+            | SubtypeFilter::NoneOf(_)
+            | SubtypeFilter::Artifact(_)
+    );
+    ctrl_ok
+        && subtype_ok
+        && clause.flags == ObjectFilterFlags::EMPTY
+        && clause.source_relation == SourceRelation::Any
+        && clause.combat == CombatFilter::Any
+        && clause.power == PowerFilter::Any
+        && clause.toughness == ToughnessFilter::Any
+        && clause.mana_value == ManaValueFilter::Any
+        && clause.keyword.is_none()
+        && clause.forbidden_keyword.is_none()
+        && clause.tapped.is_none()
+        && clause.token.is_none()
+}
+
+fn filter_supported_by_zone_move_record(filter: &ObjectFilter) -> bool {
+    match filter {
+        ObjectFilter::Clause(c) => clause_supported_by_zone_move_record(*c),
+        ObjectFilter::Either(a, b) => {
+            clause_supported_by_zone_move_record(*a) && clause_supported_by_zone_move_record(*b)
+        }
     }
 }
 
@@ -7072,9 +7601,52 @@ fn try_lower_specialized_trigger_condition(
     vocabulary: &CreatureTypeVocabulary,
 ) -> Option<TriggerCondition> {
     match cond {
-        ConditionAst::IsYourTurn => Some(TriggerCondition::ControllersTurn),
-        ConditionAst::Not(inner) if matches!(inner.as_ref(), ConditionAst::IsYourTurn) => {
+        ConditionAst::IsYourTurn | ConditionAst::IsPlayersTurn(PlayerRefAst::You) => {
+            Some(TriggerCondition::ControllersTurn)
+        }
+        ConditionAst::IsPlayersTurn(PlayerRefAst::AnyOpponent | PlayerRefAst::EachOpponent) => {
             Some(TriggerCondition::OpponentsTurn)
+        }
+        ConditionAst::Not(inner)
+            if matches!(
+                inner.as_ref(),
+                ConditionAst::IsYourTurn | ConditionAst::IsPlayersTurn(PlayerRefAst::You)
+            ) =>
+        {
+            Some(TriggerCondition::OpponentsTurn)
+        }
+        ConditionAst::Marker(GameMarker::DuringStep { player, step }) => {
+            let step_cond = match step {
+                TurnStepAst::UntapStep => TriggerCondition::DuringStep(Step::Untap),
+                TurnStepAst::Upkeep => TriggerCondition::DuringStep(Step::Upkeep),
+                TurnStepAst::DrawStep => TriggerCondition::DuringStep(Step::Draw),
+                TurnStepAst::PrecombatMain => TriggerCondition::DuringStep(Step::PrecombatMain),
+                TurnStepAst::PostcombatMain => TriggerCondition::DuringStep(Step::PostcombatMain),
+                TurnStepAst::MainPhase => TriggerCondition::Or(
+                    Box::new(TriggerCondition::DuringStep(Step::PrecombatMain)),
+                    Box::new(TriggerCondition::DuringStep(Step::PostcombatMain)),
+                ),
+                TurnStepAst::BeginningOfCombat => {
+                    TriggerCondition::DuringStep(Step::BeginningCombat)
+                }
+                TurnStepAst::EndOfCombat => TriggerCondition::DuringStep(Step::EndCombat),
+                TurnStepAst::EndStep => TriggerCondition::DuringStep(Step::End),
+                TurnStepAst::CleanupStep => TriggerCondition::DuringStep(Step::Cleanup),
+            };
+            match player {
+                PlayerRefAst::You => Some(TriggerCondition::And(
+                    Box::new(TriggerCondition::ControllersTurn),
+                    Box::new(step_cond),
+                )),
+                PlayerRefAst::AnyOpponent | PlayerRefAst::EachOpponent => {
+                    Some(TriggerCondition::And(
+                        Box::new(TriggerCondition::OpponentsTurn),
+                        Box::new(step_cond),
+                    ))
+                }
+                PlayerRefAst::AnyPlayer | PlayerRefAst::EachPlayer => Some(step_cond),
+                _ => None,
+            }
         }
         ConditionAst::Delirium => Some(TriggerCondition::Delirium),
         ConditionAst::Metalcraft => Some(TriggerCondition::Metalcraft),
@@ -7711,6 +8283,306 @@ fn try_lower_specialized_trigger_condition(
         } => Some(TriggerCondition::PreviousTurnCasts(
             spellwake_engine::program::PreviousTurnCastCondition::OnePlayerCastAtLeastTwo,
         )),
+        ConditionAst::ZoneChangeThisTurn {
+            filter,
+            from_zone,
+            to_zone,
+            controller,
+            min_count,
+        } if *min_count > 0 => {
+            use spellwake_engine::program::OpponentTurnStat;
+            let is_plain_extras = filter.required_supertypes.is_empty()
+                && filter.forbidden_supertypes.is_empty()
+                && filter.subtypes.is_empty()
+                && filter.forbidden_subtypes.is_empty()
+                && filter.any_colors.is_empty()
+                && filter.forbidden_colors.is_empty()
+                && filter.color_arity.is_none()
+                && filter.owner.is_none()
+                && filter.extra_zones.is_empty()
+                && filter.combat.is_none()
+                && filter.tapped.is_none()
+                && filter.token.is_none()
+                && filter.required_keywords.is_empty()
+                && filter.forbidden_keywords.is_empty()
+                && filter.stat_bounds.is_empty()
+                && filter.counter_kind.is_none()
+                && filter.named.is_none()
+                && filter.flags.is_empty()
+                && filter.predicates.is_empty();
+            if *from_zone == Some(ZoneFilter::Battlefield)
+                && matches!(
+                    to_zone,
+                    Some(
+                        ZoneFilter::AnyGraveyard
+                            | ZoneFilter::AllGraveyards
+                            | ZoneFilter::SingleGraveyard
+                    )
+                )
+                && filter.owner.is_none()
+                && filter.extra_zones.is_empty()
+                && matches!(filter.zone, None | Some(ZoneFilter::Battlefield))
+            {
+                let (ctrl, eff_filter_ctrl) = match controller {
+                    None => (None, filter.controller),
+                    Some(PlayerRefAst::You)
+                        if matches!(
+                            filter.controller,
+                            None | Some(ControllerRelation::You | ControllerRelation::YourTeam)
+                        ) =>
+                    {
+                        (Some(ResolvingPlayer::Controller), filter.controller)
+                    }
+                    Some(PlayerRefAst::AnyOpponent)
+                        if *min_count == 1
+                            && matches!(
+                                filter.controller,
+                                None | Some(ControllerRelation::Opponent)
+                            ) =>
+                    {
+                        (None, Some(ControllerRelation::Opponent))
+                    }
+                    _ => return None,
+                };
+                let mut clean = filter.as_ref().clone();
+                clean.zone = None;
+                clean.controller = eff_filter_ctrl;
+                let obj = lower_object_filter(&clean, vocabulary).ok()?;
+                if !filter_supported_by_zone_move_record(&obj) {
+                    return None;
+                }
+                if ctrl.is_none() && *min_count == 1 && obj == ObjectFilter::creature() {
+                    return Some(TriggerCondition::Morbid);
+                }
+                let rc = ResolutionCondition {
+                    left: ValueExpr::PlayerStat(
+                        PlayerStatExpr::GraveyardArrivalsMatchingThisTurn {
+                            filter: Box::new(obj),
+                            from_battlefield_only: true,
+                            controller: ctrl,
+                        },
+                    ),
+                    comparison: Comparison::GreaterOrEqual,
+                    right: ValueExpr::literal(i64::from(*min_count)),
+                };
+                return rc
+                    .is_trigger_world_evaluable()
+                    .then(|| TriggerCondition::Eval(Box::new(rc)));
+            }
+            if *from_zone == Some(ZoneFilter::Battlefield)
+                && to_zone.is_none()
+                && is_plain_extras
+                && matches!(filter.zone, None | Some(ZoneFilter::Battlefield))
+            {
+                let your_ctrl = (matches!(controller, Some(PlayerRefAst::You))
+                    && matches!(
+                        filter.controller,
+                        None | Some(ControllerRelation::You | ControllerRelation::YourTeam)
+                    ))
+                    || (controller.is_none()
+                        && matches!(
+                            filter.controller,
+                            Some(ControllerRelation::You | ControllerRelation::YourTeam)
+                        ));
+                let opp_ctrl = (matches!(controller, Some(PlayerRefAst::AnyOpponent))
+                    && matches!(filter.controller, None | Some(ControllerRelation::Opponent)))
+                    || (controller.is_none()
+                        && filter.controller == Some(ControllerRelation::Opponent));
+                let any_ctrl = controller.is_none() && filter.controller.is_none();
+                if your_ctrl && filter.any_types.is_empty() && filter.forbidden_types.is_empty() {
+                    if *min_count == 1 {
+                        return Some(TriggerCondition::PermanentLeftBattlefieldThisTurn);
+                    }
+                    return Some(TriggerCondition::Eval(Box::new(ResolutionCondition {
+                        left: ValueExpr::PlayerStat(
+                            PlayerStatExpr::PermanentLeftBattlefieldThisTurn,
+                        ),
+                        comparison: Comparison::GreaterOrEqual,
+                        right: ValueExpr::literal(i64::from(*min_count)),
+                    })));
+                }
+                if your_ctrl
+                    && filter.any_types.is_empty()
+                    && filter.forbidden_types == AstCardTypeMask::LAND
+                {
+                    return Some(TriggerCondition::Eval(Box::new(ResolutionCondition {
+                        left: ValueExpr::PlayerStat(
+                            PlayerStatExpr::NonlandPermanentLeftBattlefieldThisTurn,
+                        ),
+                        comparison: Comparison::GreaterOrEqual,
+                        right: ValueExpr::literal(i64::from(*min_count)),
+                    })));
+                }
+                if opp_ctrl
+                    && *min_count == 1
+                    && filter.any_types.is_empty()
+                    && filter.forbidden_types.is_empty()
+                {
+                    return Some(TriggerCondition::Eval(Box::new(ResolutionCondition {
+                        left: ValueExpr::PlayerStat(PlayerStatExpr::OpponentStatThisTurn(
+                            OpponentTurnStat::PermanentLeft,
+                        )),
+                        comparison: Comparison::GreaterOrEqual,
+                        right: ValueExpr::literal(1),
+                    })));
+                }
+                if any_ctrl
+                    && *min_count == 1
+                    && filter.any_types.is_empty()
+                    && filter.forbidden_types.is_empty()
+                {
+                    return Some(TriggerCondition::Or(
+                        Box::new(TriggerCondition::PermanentLeftBattlefieldThisTurn),
+                        Box::new(TriggerCondition::Eval(Box::new(ResolutionCondition {
+                            left: ValueExpr::PlayerStat(PlayerStatExpr::OpponentStatThisTurn(
+                                OpponentTurnStat::PermanentLeft,
+                            )),
+                            comparison: Comparison::GreaterOrEqual,
+                            right: ValueExpr::literal(1),
+                        }))),
+                    ));
+                }
+            }
+            if from_zone.is_none()
+                && *to_zone == Some(ZoneFilter::Battlefield)
+                && is_plain_extras
+                && filter.zone.is_none()
+                && filter.forbidden_types.is_empty()
+            {
+                if matches!(controller, Some(PlayerRefAst::AnyOpponent))
+                    && *min_count == 1
+                    && filter.any_types == AstCardTypeMask::CREATURE
+                    && matches!(filter.controller, None | Some(ControllerRelation::Opponent))
+                {
+                    return Some(TriggerCondition::Eval(Box::new(ResolutionCondition {
+                        left: ValueExpr::PlayerStat(PlayerStatExpr::OpponentStatThisTurn(
+                            OpponentTurnStat::CreatureEntered,
+                        )),
+                        comparison: Comparison::GreaterOrEqual,
+                        right: ValueExpr::literal(1),
+                    })));
+                }
+                if matches!(controller, Some(PlayerRefAst::You))
+                    && matches!(
+                        filter.controller,
+                        None | Some(ControllerRelation::You | ControllerRelation::YourTeam)
+                    )
+                {
+                    if filter.any_types.is_empty() {
+                        return Some(TriggerCondition::Eval(Box::new(ResolutionCondition {
+                            left: ValueExpr::PlayerStat(PlayerStatExpr::EnteredPermanentThisTurn),
+                            comparison: Comparison::GreaterOrEqual,
+                            right: ValueExpr::literal(i64::from(*min_count)),
+                        })));
+                    }
+                    if filter.any_types == AstCardTypeMask::CREATURE {
+                        if *min_count == 1 {
+                            return Some(TriggerCondition::CreatureEnteredUnderControlThisTurn);
+                        }
+                        return Some(TriggerCondition::Eval(Box::new(ResolutionCondition {
+                            left: ValueExpr::PlayerStat(
+                                PlayerStatExpr::CreatureEnteredUnderControlThisTurn,
+                            ),
+                            comparison: Comparison::GreaterOrEqual,
+                            right: ValueExpr::literal(i64::from(*min_count)),
+                        })));
+                    }
+                    if let Ok(mut types) = card_type_mask_to_set(filter.any_types)
+                        && types.len() == 1
+                        && let Some(kind) = types.pop_first()
+                    {
+                        return Some(TriggerCondition::Eval(Box::new(ResolutionCondition {
+                            left: ValueExpr::PlayerStat(PlayerStatExpr::EnteredTypeThisTurn(kind)),
+                            comparison: Comparison::GreaterOrEqual,
+                            right: ValueExpr::literal(i64::from(*min_count)),
+                        })));
+                    }
+                }
+            }
+            None
+        }
+        ConditionAst::GameStateFlag(flag) => {
+            let fl = flag.trim().trim_end_matches('.').to_ascii_lowercase();
+            match fl.as_str() {
+                "day" | "it's day" | "it is day" => {
+                    Some(TriggerCondition::Eval(Box::new(ResolutionCondition {
+                        left: ValueExpr::PlayerStat(PlayerStatExpr::DayNightState),
+                        comparison: Comparison::Equal,
+                        right: ValueExpr::literal(1),
+                    })))
+                }
+                "night" | "it's night" | "it is night" => {
+                    Some(TriggerCondition::Eval(Box::new(ResolutionCondition {
+                        left: ValueExpr::PlayerStat(PlayerStatExpr::DayNightState),
+                        comparison: Comparison::Equal,
+                        right: ValueExpr::literal(2),
+                    })))
+                }
+                "neither day nor night"
+                | "it's neither day nor night"
+                | "it is neither day nor night" => {
+                    Some(TriggerCondition::Eval(Box::new(ResolutionCondition {
+                        left: ValueExpr::PlayerStat(PlayerStatExpr::DayNightState),
+                        comparison: Comparison::Equal,
+                        right: ValueExpr::literal(0),
+                    })))
+                }
+                "city's blessing" | "you have the city's blessing" | "citys_blessing" => {
+                    Some(TriggerCondition::ControllerHasCityBlessing)
+                }
+                "monarch" | "you're the monarch" | "you are the monarch" => {
+                    Some(TriggerCondition::Monarch { opponent: false })
+                }
+                "an opponent is the monarch" | "opponent is the monarch" => {
+                    Some(TriggerCondition::Monarch { opponent: true })
+                }
+                "there is no monarch" | "no one is the monarch" | "no monarch" => {
+                    Some(TriggerCondition::Eval(Box::new(ResolutionCondition {
+                        left: ValueExpr::PlayerStat(PlayerStatExpr::NoMonarch),
+                        comparison: Comparison::GreaterOrEqual,
+                        right: ValueExpr::literal(1),
+                    })))
+                }
+                "initiative" | "you have the initiative" => {
+                    Some(TriggerCondition::Eval(Box::new(ResolutionCondition {
+                        left: ValueExpr::PlayerStat(PlayerStatExpr::HasInitiative),
+                        comparison: Comparison::GreaterOrEqual,
+                        right: ValueExpr::literal(1),
+                    })))
+                }
+                "max speed"
+                | "you have max speed"
+                | "your speed is 4"
+                | "your speed is 4 or greater"
+                | "speed >= 4" => Some(TriggerCondition::Eval(Box::new(ResolutionCondition {
+                    left: ValueExpr::PlayerStat(PlayerStatExpr::ControllerSpeed),
+                    comparison: Comparison::GreaterOrEqual,
+                    right: ValueExpr::literal(4),
+                }))),
+                "your speed is 1 or greater" | "speed >= 1" => {
+                    Some(TriggerCondition::Eval(Box::new(ResolutionCondition {
+                        left: ValueExpr::PlayerStat(PlayerStatExpr::ControllerSpeed),
+                        comparison: Comparison::GreaterOrEqual,
+                        right: ValueExpr::literal(1),
+                    })))
+                }
+                "your speed is 2 or greater" | "speed >= 2" => {
+                    Some(TriggerCondition::Eval(Box::new(ResolutionCondition {
+                        left: ValueExpr::PlayerStat(PlayerStatExpr::ControllerSpeed),
+                        comparison: Comparison::GreaterOrEqual,
+                        right: ValueExpr::literal(2),
+                    })))
+                }
+                "your speed is 3 or greater" | "speed >= 3" => {
+                    Some(TriggerCondition::Eval(Box::new(ResolutionCondition {
+                        left: ValueExpr::PlayerStat(PlayerStatExpr::ControllerSpeed),
+                        comparison: Comparison::GreaterOrEqual,
+                        right: ValueExpr::literal(3),
+                    })))
+                }
+                _ => None,
+            }
+        }
         _ => None,
     }
 }
@@ -7734,6 +8606,9 @@ pub(super) fn lower_trigger_condition(
             Box::new(lower_trigger_condition(a, vocabulary)?),
             Box::new(lower_trigger_condition(b, vocabulary)?),
         )),
+        ConditionAst::ZoneChangeThisTurn { .. } | ConditionAst::GameStateFlag(_) => {
+            Err("oracle:unsupported-trigger-condition")
+        }
         other => {
             let mut tmp_builder = BodyBuilder::new();
             let mut rc =

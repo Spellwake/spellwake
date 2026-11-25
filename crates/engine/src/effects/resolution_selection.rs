@@ -1777,7 +1777,11 @@ impl EffectWindow {
                 )
             }
             Instruction::ReturnOneNonlandPerOpponent => {
-                let objects = self.legal_permanent_targets()?;
+                let objects = if self.window.target_assessment().is_none() {
+                    BTreeSet::new()
+                } else {
+                    self.legal_permanent_targets()?
+                };
                 all = ValueExpr::Literal(RulesInteger::from_usize(objects.len()));
                 (
                     AffectedPlayers::EachPlayer,

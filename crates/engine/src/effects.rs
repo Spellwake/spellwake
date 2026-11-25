@@ -3219,9 +3219,15 @@ impl EffectWindow {
             .iter()
             .find(|value| value.id() == entry)
             .ok_or(EffectError::InconsistentProgram)?;
+        let has_fixed_clauses = waiting
+            .body
+            .instructions
+            .iter()
+            .any(|op| matches!(op, Instruction::FixedTargetClause(_)));
         if actual.controller() != waiting.controller
             || !matches!(actual.kind(), StackKind::TriggeredAbility { source } if source == &waiting.source.object)
-            || (waiting.body.triggered_modes().is_some() != selected.is_some())
+            || ((waiting.body.triggered_modes().is_some() || has_fixed_clauses)
+                != selected.is_some())
             || (selected.is_none()
                 && match waiting.body.target {
                     BodyTarget::None => !actual.targets().targets().is_empty(),
@@ -7978,13 +7984,45 @@ impl EffectWindow {
         {
             return Ok(false);
         }
+        let entry_source = match entry.kind() {
+            StackKind::ActivatedAbility { source } | StackKind::TriggeredAbility { source } => {
+                Some(source.id())
+            }
+            StackKind::CardSpell(id) => Some(*id),
+            _ => None,
+        };
+        let trigger_source_names = self
+            .execution_bindings(entry.id())
+            .and_then(|b| b.trigger.as_ref())
+            .map(|t| &t.source.current_names);
+        let source_ctx = TargetSourceContext {
+            id: entry_source,
+            names: trigger_source_names,
+        };
         if let Some(StackPayload::Instructions(payload)) = self.payloads.get(&entry.id())
             && let Some(body) = payload.splice_target_bodies.get(&choice.id)
         {
-            return Ok(self.legal_body_target_in(body, target, entry.controller(), current));
+            return Ok(self.legal_body_target_in_with_source(
+                body,
+                target,
+                entry.controller(),
+                source_ctx,
+                current,
+            ));
         }
         if let Some(kind) = self.mode_target_contract(entry.id(), choice.id) {
-            return Ok(self.legal_target_kind_in(kind, target, entry.controller(), current));
+            if matches!(kind, BodyTarget::FilteredPermanent(filter) if filter.excludes_ability_source())
+                && entry_source.is_some_and(|src| target == TargetRef::Object(src))
+            {
+                return Ok(false);
+            }
+            return Ok(self.legal_target_kind_with_source(
+                kind,
+                target,
+                entry.controller(),
+                source_ctx,
+                current,
+            ));
         }
         if let Some(spell) = self.mutating_spell(entry) {
             let owner = self
@@ -8004,6 +8042,7 @@ impl EffectWindow {
         if body.target == same_name_ability_target()
             && !matches!(entry.kind(), StackKind::ActivatedAbility { source }
                 if self.target_shares_ability_source_name(source.id(), target, current))
+            && !matches!(entry.kind(), StackKind::TriggeredAbility { .. })
         {
             return Ok(false);
         }
@@ -8017,7 +8056,13 @@ impl EffectWindow {
             .and_then(|b| b.trigger.as_ref())
             .map(|t| &t.source);
         Ok(self.mentor_target(body, target, source, current)
-            && self.legal_body_target_in(body, target, entry.controller(), current))
+            && self.legal_body_target_in_with_source(
+                body,
+                target,
+                entry.controller(),
+                source_ctx,
+                current,
+            ))
     }
     fn legal_dependent_target(
         &self,
@@ -8092,6 +8137,7 @@ impl EffectWindow {
         })
     }
 
+    #[cfg(test)]
     fn legal_body_target(
         &self,
         body: &ExecutableBody,
@@ -8140,6 +8186,23 @@ impl EffectWindow {
         controller: SeatId,
         evaluated: &EvaluatedCharacteristics,
     ) -> bool {
+        self.legal_body_target_in_with_source(
+            body,
+            target,
+            controller,
+            TargetSourceContext::default(),
+            evaluated,
+        )
+    }
+
+    pub(super) fn legal_body_target_in_with_source(
+        &self,
+        body: &ExecutableBody,
+        target: TargetRef,
+        controller: SeatId,
+        source: TargetSourceContext<'_>,
+        evaluated: &EvaluatedCharacteristics,
+    ) -> bool {
         if let [Instruction::ReturnGraveyardCreatureWithCorpse(mana_value)] =
             body.instructions.as_slice()
             && !matches!(target,TargetRef::Object(id) if self.copiable_program(id).is_some_and(|p|p.mana_value()==*mana_value))
@@ -8156,20 +8219,51 @@ impl EffectWindow {
         {
             return false;
         }
-        self.legal_target_kind_in(body.target, target, controller, evaluated)
+        self.legal_target_kind_with_source(body.target, target, controller, source, evaluated)
     }
-    fn matches_object_clause(
+
+    fn ability_source_names<'a>(
+        &'a self,
+        source: ObjectId,
+        evaluated: &'a EvaluatedCharacteristics,
+    ) -> Option<&'a spellwake_contracts::names::ObjectNames> {
+        evaluated
+            .get(source)
+            .map(|view| &view.current_names)
+            .or_else(|| {
+                self.growth_last_known
+                    .get(&source)
+                    .map(|appearance| &appearance.current_names)
+            })
+            .or_else(|| {
+                self.departed_reflexive_sources
+                    .get(&source)
+                    .map(|appearance| &appearance.current_names)
+            })
+            .or_else(|| {
+                self.window
+                    .resolving()
+                    .and_then(|entry| self.execution_bindings(entry.id()))
+                    .and_then(|bindings| bindings.trigger.as_ref())
+                    .filter(|trigger| trigger.source.object.id() == source)
+                    .map(|trigger| &trigger.source.current_names)
+            })
+            .or_else(|| self.copiable_program(source).map(|program| &program.names))
+    }
+
+    fn matches_object_clause_with_source(
         &self,
         clause: crate::program::ObjectClause,
         p: &ObjectCharacteristics,
         controller: SeatId,
-        ability_source: Option<ObjectId>,
+        source: TargetSourceContext<'_>,
         excluded_subtypes: &BTreeSet<CreatureTypeId>,
         evaluated: &EvaluatedCharacteristics,
     ) -> bool {
         use crate::program::{
             CombatFilter, ControllerFilter, ObjectFilterFlags, PowerFilter, SourceRelation,
         };
+        let ability_source = source.id;
         let id = p.object;
         let controller_ok = match clause.controller {
             ControllerFilter::Any => true,
@@ -8204,9 +8298,11 @@ impl EffectWindow {
             return false;
         }
         let source_ok = match clause.source_relation {
-            SourceRelation::Any
-            | SourceRelation::SharingNameWithAbilitySource
-            | SourceRelation::MatchesNamedAgendaSlot => true,
+            SourceRelation::Any | SourceRelation::MatchesNamedAgendaSlot => true,
+            SourceRelation::SharingNameWithAbilitySource => ability_source
+                .and_then(|src| self.ability_source_names(src, evaluated))
+                .or(source.names)
+                .is_some_and(|src_names| self.name_rules.shares_name(&p.current_names, src_names)),
             SourceRelation::SelfObject => ability_source == Some(id),
             SourceRelation::AttachedToSelf => ability_source.is_some_and(|src| {
                 self.characteristics.attachments.get(&src)
@@ -8597,28 +8693,50 @@ impl EffectWindow {
         excluded_subtypes: &BTreeSet<CreatureTypeId>,
         evaluated: &EvaluatedCharacteristics,
     ) -> bool {
+        self.matches_object_filter_with_source(
+            filter,
+            p,
+            controller,
+            TargetSourceContext {
+                id: ability_source,
+                names: None,
+            },
+            excluded_subtypes,
+            evaluated,
+        )
+    }
+
+    fn matches_object_filter_with_source(
+        &self,
+        filter: crate::program::ObjectFilter,
+        p: &ObjectCharacteristics,
+        controller: SeatId,
+        source: TargetSourceContext<'_>,
+        excluded_subtypes: &BTreeSet<CreatureTypeId>,
+        evaluated: &EvaluatedCharacteristics,
+    ) -> bool {
         match filter {
-            crate::program::ObjectFilter::Clause(a) => self.matches_object_clause(
+            crate::program::ObjectFilter::Clause(a) => self.matches_object_clause_with_source(
                 a,
                 p,
                 controller,
-                ability_source,
+                source,
                 excluded_subtypes,
                 evaluated,
             ),
             crate::program::ObjectFilter::Either(a, b) => {
-                self.matches_object_clause(
+                self.matches_object_clause_with_source(
                     a,
                     p,
                     controller,
-                    ability_source,
+                    source,
                     excluded_subtypes,
                     evaluated,
-                ) || self.matches_object_clause(
+                ) || self.matches_object_clause_with_source(
                     b,
                     p,
                     controller,
-                    ability_source,
+                    source,
                     excluded_subtypes,
                     evaluated,
                 )
@@ -8642,6 +8760,23 @@ impl EffectWindow {
         kind: BodyTarget,
         target: TargetRef,
         controller: SeatId,
+        evaluated: &EvaluatedCharacteristics,
+    ) -> bool {
+        self.legal_target_kind_with_source(
+            kind,
+            target,
+            controller,
+            TargetSourceContext::default(),
+            evaluated,
+        )
+    }
+
+    fn legal_target_kind_with_source(
+        &self,
+        kind: BodyTarget,
+        target: TargetRef,
+        controller: SeatId,
+        source: TargetSourceContext<'_>,
         evaluated: &EvaluatedCharacteristics,
     ) -> bool {
         if let TargetRef::Player(player) = target {
@@ -8759,7 +8894,24 @@ impl EffectWindow {
                     return false;
                 };
                 let excluded = BTreeSet::new();
-                self.matches_object_filter(filter, p, controller, None, &excluded, evaluated)
+                if source.id.is_some() || source.names.is_some() {
+                    self.matches_object_filter_with_source(
+                        filter, p, controller, source, &excluded, evaluated,
+                    )
+                } else if BodyTarget::FilteredPermanent(filter) == same_name_ability_target() {
+                    // Legacy callers such as ability activation check target_shares_ability_source_name
+                    // before delegating to legal_body_target_in without a source context.
+                    self.matches_object_filter(
+                        crate::program::ObjectFilter::creature(),
+                        p,
+                        controller,
+                        None,
+                        &excluded,
+                        evaluated,
+                    )
+                } else {
+                    self.matches_object_filter(filter, p, controller, None, &excluded, evaluated)
+                }
             }
             BodyTarget::AnyGraveyardCreature => {
                 matches!(target, TargetRef::Object(id) if self.window.cards().get(id).is_some_and(|object| object.card_id().is_some() && matches!(object.zone(), ObjectZone::Graveyard(_))) && evaluated.get(id).is_some_and(|object| object.is_creature()))
@@ -8934,10 +9086,11 @@ impl EffectWindow {
                             target_ok && controller_ok
                         }
                         StackKind::CardSpell(_) | StackKind::SpellCopy { .. } => self
-                            .legal_target_kind_in(
+                            .legal_target_kind_with_source(
                                 BodyTarget::SingleSpell(filter),
                                 target,
                                 controller,
+                                source,
                                 evaluated,
                             ),
                         StackKind::Speed
@@ -9074,6 +9227,10 @@ impl EffectWindow {
         let protection_source = source
             .map(|s| self.waiting_protection_source(s, &evaluated))
             .unwrap_or_default();
+        let source_ctx = TargetSourceContext {
+            id: source.map(|s| s.object.id()),
+            names: source.map(|s| &s.current_names),
+        };
         let candidates = self
             .window
             .cards()
@@ -9096,7 +9253,9 @@ impl EffectWindow {
             .filter(|target| {
                 self.mentor_target(body, *target, source, &evaluated)
                     && !Self::protected_target(*target, &protection_source, &evaluated)
-                    && self.legal_body_target_in(body, *target, controller, &evaluated)
+                    && self.legal_body_target_in_with_source(
+                        body, *target, controller, source_ctx, &evaluated,
+                    )
             })
             .collect::<BTreeSet<_>>()
             .into_iter()
@@ -9160,9 +9319,19 @@ impl EffectWindow {
             | Instruction::DiscardFiltered { .. } => {
                 return Err(EffectError::InconsistentProgram);
             }
-            Instruction::AdjustTargetLife { .. } => match target {
+            Instruction::AdjustTargetLife { .. }
+            | Instruction::DivideTargetPermanentsAndSacrificePile => match target {
                 TargetRef::Player(player) => self.window.participants().contains(&player),
                 TargetRef::Object(_) | TargetRef::Stack(_) => false,
+            },
+            Instruction::DamageTargetControllersCreatures { .. } => match target {
+                TargetRef::Player(player) => self.window.participants().contains(&player),
+                TargetRef::Object(id) => self
+                    .window
+                    .cards()
+                    .get(id)
+                    .is_some_and(|o| o.zone() == ObjectZone::Battlefield),
+                TargetRef::Stack(_) => false,
             },
             Instruction::CounterSpell
             | Instruction::CounterSpellToExile
@@ -9226,9 +9395,13 @@ impl EffectWindow {
             | Instruction::ExileTargetUntilOpponentMonarch => {
                 matches!(target, TargetRef::Object(id) if self.window.cards().get(id).is_some_and(|o| o.zone() == ObjectZone::Battlefield))
             }
-            Instruction::ReturnToOwnersHand => matches!(target, TargetRef::Object(id)
-                if self.window.cards().get(id).is_some_and(|o| matches!(o.zone(), ObjectZone::Battlefield | ObjectZone::Graveyard(_) | ObjectZone::Exile))),
-            Instruction::ExileForBlackToken { .. } => {
+            Instruction::ReturnToOwnersHand | Instruction::PutTargetInLibrary(_) => {
+                matches!(target, TargetRef::Object(id)
+                if self.window.cards().get(id).is_some_and(|o| matches!(o.zone(), ObjectZone::Battlefield | ObjectZone::Graveyard(_) | ObjectZone::Exile)))
+            }
+            Instruction::ExileForBlackToken { .. }
+            | Instruction::ExileGraveyardTarget
+            | Instruction::ReturnTargetGraveyardCreatureToHand => {
                 matches!(target, TargetRef::Object(id) if evaluated.get(id).is_some_and(|card| matches!(card.zone, ObjectZone::Graveyard(_))))
             }
             Instruction::ReturnAnyGraveyardCreatureBlackSubtype(_)
@@ -9255,7 +9428,13 @@ impl EffectWindow {
             | Instruction::PutIndestructibleCounter
             | Instruction::PutLoyaltyCounter
             | Instruction::PutNamedCounterOnTarget { .. }
-            | Instruction::PutPowerToughnessCounters { .. } => match target {
+            | Instruction::PutPowerToughnessCounters { .. }
+            | Instruction::PhaseOut(crate::program::PhasingSubject::Target)
+            | Instruction::DoublePowerToughness {
+                target_self: false, ..
+            }
+            | Instruction::CreatureDealsPowerDamageToOther { .. }
+            | Instruction::WatchTargetCombatDamageDraw => match target {
                 TargetRef::Object(card) => self
                     .window
                     .cards()
@@ -9430,7 +9609,10 @@ impl EffectWindow {
             | Instruction::ExileMeldPair
             | Instruction::MeldExiledPair(_)
             | Instruction::PairWithCreature { .. }
-            | Instruction::PhaseOut(_)
+            | Instruction::PhaseOut(
+                crate::program::PhasingSubject::Source
+                | crate::program::PhasingSubject::ControlledLands,
+            )
             | Instruction::PhaseOutObjects(_)
             | Instruction::ReturnOneNonlandPerOpponent
             | Instruction::WeakenDelayedAttacker(_)
@@ -9443,7 +9625,9 @@ impl EffectWindow {
             | Instruction::DamageOpponentsAmount(_)
             | Instruction::DamageRelatedPlayerAmount(_)
             | Instruction::DamageGroupAmount { .. }
-            | Instruction::DoublePowerToughness { .. }
+            | Instruction::DoublePowerToughness {
+                target_self: true, ..
+            }
             | Instruction::Ninjutsu
             | Instruction::Unearth
             | Instruction::FlipCoin { .. }
@@ -9543,7 +9727,6 @@ impl EffectWindow {
             | Instruction::ShuffleAbilitySourceIntoLibrary
             | Instruction::RevealToNameAfterSourceShuffle(_)
             | Instruction::WatchSmallCreatureCombatDraw(_)
-            | Instruction::WatchTargetCombatDamageDraw
             | Instruction::ChooseOwnCommanderToCast
             | Instruction::ChooseMatchingHandSpellToCast
             | Instruction::SearchEachLibraryForFreeCast
@@ -9556,7 +9739,6 @@ impl EffectWindow {
             | Instruction::RevealTopCreaturesAndLandsRestBottom { .. }
             | Instruction::RevealHandAndBottomPiles
             | Instruction::RevealDividePiles
-            | Instruction::DivideTargetPermanentsAndSacrificePile
             | Instruction::DrawToChosenOpponentHandSize
             | Instruction::LookTopPlaneswalkers
             | Instruction::RevealTopPermanentOrHand
@@ -9583,17 +9765,14 @@ impl EffectWindow {
             | Instruction::GrantNoMaxHandSizeRestOfGame
             | Instruction::PreventDamageThisTurn(_)
             | Instruction::MoveGroup { .. }
-            | Instruction::PutTargetInLibrary(_)
             | Instruction::PutOwnHandCardOnLibraryBottom
             | Instruction::PutGroupOnLibraryBottom(_)
-            | Instruction::ExileGraveyardTarget
             | Instruction::ExileCapturedGraveyardCard
             | Instruction::GrantGraveyardCastAndWatchAbilities
             | Instruction::GainCastCardAbilities { .. }
             | Instruction::ExileCardsFromGraveyard { .. }
             | Instruction::ReturnUpToOneRecentGraveyardCard
             | Instruction::ExileUpToTwoGraveyardTargetsGainLife
-            | Instruction::ReturnTargetGraveyardCreatureToHand
             | Instruction::ReturnRandomGraveyardCards { .. }
             | Instruction::ChooseRevealedHandCard { .. }
             | Instruction::ReturnUpToOneOwnGraveyardCreatureToHand
@@ -9676,9 +9855,7 @@ impl EffectWindow {
             | Instruction::Proliferate
             | Instruction::DamagePlayersHalfLife
             | Instruction::DamageGroup { .. }
-            | Instruction::DamageTargetControllersCreatures { .. }
             | Instruction::DrawAndDamageOpponents { .. }
-            | Instruction::CreatureDealsPowerDamageToOther { .. }
             | Instruction::GainControllerLife { .. }
             | Instruction::DrainTargetAndGain(_)
             | Instruction::AdjustControllerLife { .. }
@@ -10858,6 +11035,12 @@ mod setup_life_tests {
             state.window.set_test_object_revision(1);
         }
     }
+}
+
+#[derive(Clone, Copy, Default)]
+pub(super) struct TargetSourceContext<'a> {
+    pub(super) id: Option<ObjectId>,
+    pub(super) names: Option<&'a spellwake_contracts::names::ObjectNames>,
 }
 
 const fn same_name_ability_target() -> BodyTarget {
