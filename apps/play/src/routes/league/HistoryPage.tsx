@@ -13,10 +13,32 @@ import { GAP_COPY } from "./LeagueParts";
 import * as h from "./history.css";
 import * as s from "./league.css";
 
-function Row({ match, now }: { match: HistoryMatch; now: Date }): ReactElement {
+function Row({
+  match,
+  now,
+  onOpen,
+}: {
+  match: HistoryMatch;
+  now: Date;
+  onOpen?: ((matchId: string) => void) | undefined;
+}): ReactElement {
   return (
-    <div className={h.row} role="row" data-outcome={match.outcome}>
+    <div
+      className={h.row}
+      role="row"
+      data-outcome={match.outcome}
+      data-opens={onOpen ? true : undefined}
+    >
       <span className={h.outcome} role="cell">
+        {/* The whole row opens the match's replay. */}
+        {onOpen && (
+          <button
+            type="button"
+            className={h.open}
+            aria-label={`Replay: ${OUTCOME_LABEL[match.outcome]} against ${opponentsLine(match.opponents)}, ${match.formatName}, ${playedLine(match.startedAt, now)}`}
+            onClick={() => onOpen(match.matchId)}
+          />
+        )}
         {OUTCOME_LABEL[match.outcome]}
         {match.games && (
           <span className={h.outcomeGames} aria-hidden="true">
@@ -74,8 +96,11 @@ const NOTICE_MS = 5000;
  */
 export function HistoryPage({
   source,
+  onOpen,
 }: {
   source: HistorySource;
+  /** Opens a match's replay. */
+  onOpen?: (matchId: string) => void;
 }): ReactElement {
   const ready = source.status === "ready" ? source : null;
   const entries = ready?.entries ?? [];
@@ -138,7 +163,12 @@ export function HistoryPage({
       <div role="rowgroup" {...arrival.group}>
         {entries.map((entry) =>
           entry.match ? (
-            <Row key={entry.matchId} match={entry.match} now={now} />
+            <Row
+              key={entry.matchId}
+              match={entry.match}
+              now={now}
+              onOpen={onOpen}
+            />
           ) : (
             <PendingRow key={entry.matchId} />
           ),

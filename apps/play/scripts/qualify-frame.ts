@@ -120,6 +120,8 @@ type Case = {
     | "match-end-view"
     | "match-end-chat"
     | "league-history"
+    | "replay"
+    | "replay-open"
     | "quests"
     | "play-choose"
     | "play-options"
@@ -643,6 +645,24 @@ const cases: Case[] = [
     ).map(([path, state]) => ({
       viewport,
       art: "none",
+      decks: "six",
+      path,
+      state,
+    })),
+  ),
+  // A finished match replayed, on every screen: opened from History, moved
+  // through by step, turn and game, and while its steps are still read.
+  ...viewports.flatMap((viewport): Case[] =>
+    (
+      [
+        ["/league/history", "replay-open"],
+        ["/league/history/preview-match-0", "replay"],
+        ["/league/history/preview-match-0?replay=reading", "replay"],
+      ] as const
+    ).map(([path, state]) => ({
+      viewport,
+      // A replay fills the screen; it has no shell backdrop to wait for.
+      art: path.includes("preview-match") ? "none" : "dark",
       decks: "six",
       path,
       state,
@@ -2406,6 +2426,65 @@ async function run(browser: Browser, test: Case): Promise<Finding[]> {
     }
     await page.waitForTimeout(900);
   }
+  if (state === "replay-open") {
+    // Every row opens its match's replay; Back returns to the list.
+    await page
+      .getByRole("button", { name: /^Replay: Won against Alex/ })
+      .click();
+    const panel = page.getByRole("region", { name: "Replay" });
+    await panel.getByText("vs Alex · Modern").waitFor();
+    await page.getByRole("button", { name: "Back to history" }).click();
+    await page.getByRole("table", { name: "Match history" }).waitFor();
+    await page.waitForTimeout(600);
+  }
+  if (state === "replay") {
+    const reading = test.path.includes("replay=reading");
+    const panel = page.getByRole("region", { name: "Replay" });
+    await panel.waitFor();
+    const next = panel.getByRole("button", { name: "Next step" });
+    const back = panel.getByRole("button", { name: "Previous step" });
+    const nextTurn = panel.getByRole("button", { name: "Next turn" });
+    const previousTurn = panel.getByRole("button", { name: "Previous turn" });
+    if (reading) {
+      // Nothing can be moved through before the steps are read.
+      await panel.getByText("Reading the game…").waitFor();
+      await expect(next).toBeDisabled();
+      await expect(page.getByRole("region", { name: "Players" })).toHaveCount(
+        0,
+      );
+    } else {
+      await panel.getByText("Step 1 of 9").waitFor();
+      await expect(back).toBeDisabled();
+      await expect(previousTurn).toBeDisabled();
+      await next.click();
+      await panel.getByText("Step 2 of 9").waitFor();
+      await nextTurn.click();
+      await panel.getByText("Step 4 of 9").waitFor();
+      await panel.getByText(/Turn 5/).waitFor();
+      await previousTurn.click();
+      await panel.getByText("Step 1 of 9").waitFor();
+      // The scrubber reaches any step; the last stops Next.
+      await panel.getByRole("slider", { name: "Step" }).fill("8");
+      await panel.getByText("Step 9 of 9").waitFor();
+      await expect(next).toBeDisabled();
+      await expect(panel.getByRole("button", { name: "Play" })).toBeDisabled();
+      // Another game starts from its first step.
+      await panel.getByRole("radio", { name: "Game 2" }).check({ force: true });
+      await panel.getByText("Step 1 of 9").waitFor();
+      const hands = panel.getByRole("switch", { name: "Show every hand" });
+      await hands.setChecked(true);
+      await expect(hands).toBeChecked();
+      // Playing moves on by itself.
+      await panel.getByRole("button", { name: "Play" }).click();
+      await panel.getByText("Step 2 of 9").waitFor();
+      await panel.getByRole("button", { name: "Pause" }).click();
+      // Nothing on a replayed table can be played.
+      await expect(
+        page.getByRole("button", { name: "Next", exact: true }),
+      ).toHaveCount(0);
+    }
+    await page.waitForTimeout(900);
+  }
   if (state === "league-history") {
     const kind = new URLSearchParams(test.path.split("?")[1]).get("history");
     const table = page.getByRole("table", { name: "Match history" });
@@ -2427,7 +2506,8 @@ async function run(browser: Browser, test: Case): Promise<Finding[]> {
         // Newest first, and the oldest are shown as the end comes into view.
         await expect(rows.first()).toContainText("Won");
         await expect(rows.first()).toContainText("Alex");
-        await expect(rows.first()).toContainText("Today");
+        // Two hours ago: today, or yesterday just after midnight.
+        await expect(rows.first()).toContainText(/Today|Yesterday/);
         await rows.last().scrollIntoViewIfNeeded();
         await expect(rows).toHaveCount(10);
       }
