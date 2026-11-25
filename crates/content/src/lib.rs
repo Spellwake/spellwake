@@ -8,8 +8,10 @@ use std::{
 };
 
 pub mod creature_types;
+pub mod refresh;
 pub mod snapshot;
 
+/// Six ordinary base formats governing regular deck legality and required-card inventory.
 pub const FORMATS: [&str; 6] = [
     "commander",
     "standard",
@@ -18,7 +20,48 @@ pub const FORMATS: [&str; 6] = [
     "legacy",
     "vintage",
 ];
-#[derive(Debug, Deserialize, Serialize)]
+
+/// Scryfall preview formats isolated from ordinary base-format legality.
+///
+/// Scryfall publishes `future` for Future Standard only; Spellwake never synthesizes
+/// custom `futuremodern` or `futurelegacy` overlays.
+pub const PREVIEW_FORMATS: [&str; 1] = ["future"];
+
+/// Separation between ordinary constructed/commander formats and isolated preview formats.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum FormatClass {
+    Ordinary,
+    Preview,
+}
+
+/// Classify a Scryfall format key into ordinary vs isolated preview scope.
+///
+/// Unmapped or invented format keys (such as `futuremodern`) return `None` and are never
+/// silently treated as legal.
+#[must_use]
+pub fn classify_format(key: &str) -> Option<FormatClass> {
+    if FORMATS.contains(&key) {
+        Some(FormatClass::Ordinary)
+    } else if PREVIEW_FORMATS.contains(&key) {
+        Some(FormatClass::Preview)
+    } else {
+        None
+    }
+}
+
+/// Returns `true` if `key` is one of the six ordinary base formats.
+#[must_use]
+pub fn is_ordinary_format(key: &str) -> bool {
+    classify_format(key) == Some(FormatClass::Ordinary)
+}
+
+/// Returns `true` if `key` is an isolated Scryfall preview format (currently `future`).
+#[must_use]
+pub fn is_preview_format(key: &str) -> bool {
+    classify_format(key) == Some(FormatClass::Preview)
+}
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
 pub struct BulkMetadata {
     pub object: String,
     pub id: String,
@@ -85,7 +128,7 @@ struct RawCard {
     card_faces: Option<Vec<RawFace>>,
     legalities: BTreeMap<String, String>,
 }
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "status", content = "value", rename_all = "kebab-case")]
 pub enum Legality {
     Legal,
@@ -106,9 +149,26 @@ impl Legality {
             None => Self::Missing,
         }
     }
-    fn eligible(&self) -> bool {
+
+    /// Returns `true` when the card is `legal` or `restricted` in a format.
+    #[must_use]
+    pub fn is_eligible(&self) -> bool {
         matches!(self, Self::Legal | Self::Restricted)
     }
+}
+
+/// Isolated preview-format legality summary. Preview eligibility (`future` / Future Standard)
+/// never alters ordinary base-format legality, `eligibleFormats`, or `requiredByBaseFormats`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PreviewFormatInventory {
+    pub formats: Vec<String>,
+    pub isolated_from_ordinary_legality: bool,
+    pub eligible_by_format: BTreeMap<String, usize>,
+    pub preview_only_records: usize,
+    pub preview_not_in_standard: usize,
+    pub ordinary_overlap_records: usize,
+    pub unknown_preview_legality_records: usize,
 }
 #[derive(Debug, Clone, Serialize)]
 pub struct CatalogFace {
@@ -148,6 +208,12 @@ pub struct Inventory {
     source_loyalties: BTreeMap<String, Vec<Option<String>>>,
     #[serde(skip)]
     source_defenses: BTreeMap<String, Vec<Option<String>>>,
+    // Isolated preview-format legalities (Scryfall `future` / Future Standard) kept
+    // strictly separate from ordinary `InventoryCard::legalities` and `eligibleFormats`.
+    #[serde(skip)]
+    source_preview_legalities: Vec<BTreeMap<String, Legality>>,
+    #[serde(skip)]
+    source_preview_by_oracle: BTreeMap<String, BTreeMap<String, Legality>>,
     pub source: BulkMetadata,
     pub compressed_sha256: String,
     pub source_records: usize,
@@ -213,6 +279,87 @@ impl Inventory {
             .get(oracle_id)
             .map(Vec::as_slice)
     }
+    /// Isolated preview-format legality map aligned 1:1 with `self.cards[index]`.
+    #[must_use]
+    pub fn preview_legalities_at(&self, index: usize) -> Option<&BTreeMap<String, Legality>> {
+        self.source_preview_legalities.get(index)
+    }
+    /// Isolated preview-format legality for an Oracle ID and preview format key (e.g. `"future"`).
+    ///
+    /// Returns [`Legality::Missing`] for unknown/unmapped format keys or absent Oracle IDs;
+    /// never infers legality from ordinary formats or custom overlays.
+    #[must_use]
+    pub fn preview_legality(&self, oracle_id: &str, format: &str) -> Legality {
+        if !is_preview_format(format) {
+            return Legality::Missing;
+        }
+        self.source_preview_by_oracle
+            .get(oracle_id)
+            .and_then(|map| map.get(format))
+            .cloned()
+            .unwrap_or(Legality::Missing)
+    }
+    /// Returns `true` if `self.cards[index]` is legal or restricted in at least one isolated
+    /// preview format (`PREVIEW_FORMATS`), independent of ordinary base-format legality.
+    #[must_use]
+    pub fn is_preview_eligible_at(&self, index: usize) -> bool {
+        self.source_preview_legalities
+            .get(index)
+            .is_some_and(|map| map.values().any(Legality::is_eligible))
+    }
+    /// Summarize isolated preview-format eligibility without mutating or mixing into ordinary
+    /// base-format legality counts.
+    #[must_use]
+    pub fn preview_inventory(&self) -> PreviewFormatInventory {
+        let mut eligible_by_format: BTreeMap<String, usize> = PREVIEW_FORMATS
+            .into_iter()
+            .map(|format| (format.to_owned(), 0))
+            .collect();
+        let mut preview_only_records = 0usize;
+        let mut preview_not_in_standard = 0usize;
+        let mut ordinary_overlap_records = 0usize;
+        let mut unknown_preview_legality_records = 0usize;
+        for (card, preview) in self.cards.iter().zip(self.source_preview_legalities.iter()) {
+            if preview
+                .values()
+                .any(|status| matches!(status, Legality::Missing | Legality::Unknown(_)))
+            {
+                unknown_preview_legality_records += 1;
+            }
+            let mut preview_eligible = false;
+            for (format, status) in preview {
+                if status.is_eligible() {
+                    preview_eligible = true;
+                    if let Some(count) = eligible_by_format.get_mut(format) {
+                        *count += 1;
+                    }
+                }
+            }
+            if preview_eligible {
+                if card.required_by_base_formats {
+                    ordinary_overlap_records += 1;
+                } else {
+                    preview_only_records += 1;
+                }
+                let standard_eligible = card
+                    .legalities
+                    .get("standard")
+                    .is_some_and(Legality::is_eligible);
+                if preview.get("future").is_some_and(Legality::is_eligible) && !standard_eligible {
+                    preview_not_in_standard += 1;
+                }
+            }
+        }
+        PreviewFormatInventory {
+            formats: PREVIEW_FORMATS.into_iter().map(str::to_owned).collect(),
+            isolated_from_ordinary_legality: true,
+            eligible_by_format,
+            preview_only_records,
+            preview_not_in_standard,
+            ordinary_overlap_records,
+            unknown_preview_legality_records,
+        }
+    }
 }
 #[derive(Debug)]
 pub enum CatalogError {
@@ -267,6 +414,8 @@ pub fn inventory(
     let mut source_color_identities = BTreeMap::new();
     let mut source_defenses = BTreeMap::new();
     let mut source_loyalties = BTreeMap::new();
+    let mut source_preview_legalities = Vec::new();
+    let mut source_preview_by_oracle = BTreeMap::new();
     let mut record_ids = BTreeSet::new();
     let mut oracle_ids = BTreeSet::new();
     let mut duplicates = BTreeSet::new();
@@ -322,6 +471,15 @@ pub fn inventory(
                 )
             })
             .collect();
+        let preview_legalities: BTreeMap<_, _> = PREVIEW_FORMATS
+            .into_iter()
+            .map(|format| {
+                (
+                    format.to_owned(),
+                    Legality::read(raw.legalities.get(format)),
+                )
+            })
+            .collect();
         if legalities
             .values()
             .any(|status| matches!(status, Legality::Missing | Legality::Unknown(_)))
@@ -330,7 +488,7 @@ pub fn inventory(
         }
         let eligible_formats: Vec<_> = legalities
             .iter()
-            .filter(|(_, status)| status.eligible())
+            .filter(|(_, status)| status.is_eligible())
             .map(|(format, _)| format.clone())
             .collect();
         for format in &eligible_formats {
@@ -431,6 +589,10 @@ pub fn inventory(
         if let (Some(id), Some(colors)) = (&raw.oracle_id, raw.color_identity) {
             source_color_identities.insert(id.clone(), colors);
         }
+        if let Some(id) = &raw.oracle_id {
+            source_preview_by_oracle.insert(id.clone(), preview_legalities.clone());
+        }
+        source_preview_legalities.push(preview_legalities);
         cards.push(InventoryCard {
             scryfall_id: raw.id,
             oracle_id: raw.oracle_id,
@@ -452,6 +614,8 @@ pub fn inventory(
         source_color_identities,
         source_loyalties,
         source_defenses,
+        source_preview_legalities,
+        source_preview_by_oracle,
         source,
         compressed_sha256,
         source_records: cards.len(),
@@ -565,5 +729,70 @@ mod tests {
         assert!(run("{}".into()).is_err());
         let card = raw("1");
         assert!(run(format!("{card}\n{card}")).is_err());
+    }
+
+    #[test]
+    fn preview_formats_are_strictly_isolated_from_ordinary_legality() {
+        assert_eq!(classify_format("standard"), Some(FormatClass::Ordinary));
+        assert_eq!(classify_format("commander"), Some(FormatClass::Ordinary));
+        assert_eq!(classify_format("future"), Some(FormatClass::Preview));
+        // Never invent custom future overlays for non-Standard formats.
+        assert_eq!(classify_format("futuremodern"), None);
+        assert_eq!(classify_format("futurelegacy"), None);
+
+        // Card 1: preview-only spoiler (legal in `future`, not legal in any ordinary format).
+        let mut spoiler = raw("1");
+        for status in spoiler["legalities"].as_object_mut().unwrap().values_mut() {
+            *status = serde_json::json!("not_legal");
+        }
+        spoiler["legalities"]["future"] = serde_json::json!("legal");
+        spoiler["legalities"]["futuremodern"] = serde_json::json!("legal");
+
+        // Card 2: existing Modern-legal card reprinted in an upcoming Standard preview set.
+        let mut reprint = raw("2");
+        reprint["legalities"]["commander"] = serde_json::json!("legal");
+        reprint["legalities"]["standard"] = serde_json::json!("not_legal");
+        reprint["legalities"]["modern"] = serde_json::json!("legal");
+        reprint["legalities"]["legacy"] = serde_json::json!("legal");
+        reprint["legalities"]["vintage"] = serde_json::json!("legal");
+        reprint["legalities"]["future"] = serde_json::json!("legal");
+
+        // Card 3: currently Standard-legal card rotating out before Future Standard.
+        let mut rotating = raw("3");
+        rotating["legalities"]["standard"] = serde_json::json!("legal");
+        rotating["legalities"]["future"] = serde_json::json!("not_legal");
+
+        let report = run(format!("{spoiler}\n{reprint}\n{rotating}")).unwrap();
+
+        // Ordinary base-format inventory excludes the preview-only spoiler completely.
+        assert_eq!(report.source_records, 3);
+        assert_eq!(report.required_records, 2);
+        assert!(!report.cards[0].required_by_base_formats);
+        assert!(report.cards[0].eligible_formats.is_empty());
+        assert!(!report.cards[0].legalities.contains_key("future"));
+        assert!(!report.cards[0].legalities.contains_key("futuremodern"));
+
+        // Existing ordinary legality on reprint is preserved; `future` never leaks into `standard`.
+        assert!(report.cards[1].required_by_base_formats);
+        assert_eq!(report.cards[1].legalities["modern"], Legality::Legal);
+        assert_eq!(report.cards[1].legalities["standard"], Legality::NotLegal);
+        assert_eq!(report.eligible_by_format["standard"], 1);
+
+        // Preview inventory tracks `future` in isolation.
+        let preview = report.preview_inventory();
+        assert!(preview.isolated_from_ordinary_legality);
+        assert_eq!(preview.formats, vec!["future"]);
+        assert_eq!(preview.eligible_by_format["future"], 2);
+        assert_eq!(preview.preview_only_records, 1);
+        assert_eq!(preview.preview_not_in_standard, 2);
+        assert_eq!(preview.ordinary_overlap_records, 1);
+        assert_eq!(preview.unknown_preview_legality_records, 0);
+
+        assert_eq!(report.preview_legality("1", "future"), Legality::Legal);
+        assert_eq!(
+            report.preview_legality("1", "futuremodern"),
+            Legality::Missing
+        );
+        assert_eq!(report.preview_legality("3", "future"), Legality::NotLegal);
     }
 }

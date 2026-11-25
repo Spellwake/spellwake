@@ -216,3 +216,147 @@ fn vocabulary_cli_complete_uses_the_supported_full_source_pin() {
         "2883"
     );
 }
+
+#[test]
+fn cli_preview_inventory_and_incremental_diff_isolate_future_legality() {
+    let root = std::env::temp_dir().join(format!(
+        "spellwake-preview-refresh-cli-{}",
+        std::process::id()
+    ));
+    let _ = fs::remove_dir_all(&root);
+    fs::create_dir_all(&root).unwrap();
+
+    let write_snapshot = |prefix: &str, updated_at: &str, cards: &[serde_json::Value]| {
+        let meta = root.join(format!("{prefix}-meta.json"));
+        let data = root.join(format!("{prefix}.jsonl.gz"));
+        let mut zip = GzEncoder::new(Vec::new(), Compression::default());
+        for card in cards {
+            writeln!(zip, "{card}").unwrap();
+        }
+        let compressed = zip.finish().unwrap();
+        fs::write(&data, &compressed).unwrap();
+        let metadata = serde_json::json!({
+            "object": "bulk_data",
+            "id": "fixture",
+            "type": "oracle_cards",
+            "updated_at": updated_at,
+            "jsonl_download_uri": format!("https://data.scryfall.io/oracle-cards/{prefix}.jsonl.gz"),
+            "compressed_size": compressed.len()
+        });
+        fs::write(&meta, metadata.to_string()).unwrap();
+        (meta, data)
+    };
+
+    let spoiler = serde_json::json!({
+        "object": "card",
+        "id": "spoiler-1",
+        "oracle_id": "11111111-1111-1111-1111-111111111111",
+        "name": "Spoiler Preview",
+        "layout": "normal",
+        "type_line": "Instant",
+        "mana_cost": "{U}",
+        "oracle_text": "Draw a card.",
+        "legalities": {
+            "commander": "not_legal",
+            "standard": "not_legal",
+            "pioneer": "not_legal",
+            "modern": "not_legal",
+            "legacy": "not_legal",
+            "vintage": "not_legal",
+            "future": "legal"
+        }
+    });
+    let ordinary = serde_json::json!({
+        "object": "card",
+        "id": "ordinary-1",
+        "oracle_id": "22222222-2222-2222-2222-222222222222",
+        "name": "Ordinary Bear",
+        "layout": "normal",
+        "type_line": "Creature — Bear",
+        "mana_cost": "{1}{G}",
+        "power": "2",
+        "toughness": "2",
+        "oracle_text": "",
+        "legalities": {
+            "commander": "legal",
+            "standard": "legal",
+            "pioneer": "legal",
+            "modern": "legal",
+            "legacy": "legal",
+            "vintage": "legal",
+            "future": "legal"
+        }
+    });
+
+    let (meta1, data1) = write_snapshot(
+        "v1",
+        "2026-10-29T21:00:00Z",
+        &[spoiler.clone(), ordinary.clone()],
+    );
+    let state_path = root.join("refresh-state.json");
+
+    let (ok, inv) = invoke(&[meta1.to_str().unwrap(), data1.to_str().unwrap()]);
+    assert!(ok);
+    assert_eq!(inv["data"]["requiredRecords"], 1);
+    assert_eq!(inv["data"]["eligibleByFormat"]["standard"], 1);
+
+    let (ok, preview) = invoke(&[
+        "preview-inventory",
+        meta1.to_str().unwrap(),
+        data1.to_str().unwrap(),
+    ]);
+    assert!(ok);
+    assert_eq!(preview["status"], "success");
+    assert_eq!(preview["data"]["isolatedFromOrdinaryLegality"], true);
+    assert_eq!(preview["data"]["eligibleByFormat"]["future"], 2);
+    assert_eq!(preview["data"]["previewOnlyRecords"], 1);
+    assert_eq!(preview["data"]["previewNotInStandard"], 1);
+    assert_eq!(preview["data"]["ordinaryOverlapRecords"], 1);
+
+    let (ok, diff1) = invoke(&[
+        "incremental-diff",
+        meta1.to_str().unwrap(),
+        data1.to_str().unwrap(),
+        "--write-state",
+        state_path.to_str().unwrap(),
+    ]);
+    assert!(ok);
+    assert_eq!(diff1["data"]["refreshStatus"], "initial");
+    assert_eq!(diff1["data"]["addedOracleIds"].as_array().unwrap().len(), 2);
+
+    let (ok, diff_same) = invoke(&[
+        "incremental-diff",
+        meta1.to_str().unwrap(),
+        data1.to_str().unwrap(),
+        "--previous-state",
+        state_path.to_str().unwrap(),
+    ]);
+    assert!(ok);
+    assert_eq!(diff_same["data"]["refreshStatus"], "unchanged");
+    assert_eq!(diff_same["data"]["unchangedOracleIds"], 2);
+
+    let mut released = spoiler.clone();
+    released["legalities"]["standard"] = serde_json::json!("legal");
+    let (meta2, data2) = write_snapshot("v2", "2026-11-05T21:00:00Z", &[released, ordinary]);
+    let (ok, diff2) = invoke(&[
+        "incremental-diff",
+        meta2.to_str().unwrap(),
+        data2.to_str().unwrap(),
+        "--previous-state",
+        state_path.to_str().unwrap(),
+    ]);
+    assert!(ok);
+    assert_eq!(diff2["data"]["refreshStatus"], "updated");
+    assert_eq!(
+        diff2["data"]["ordinaryLegalityChangedOracleIds"],
+        serde_json::json!(["11111111-1111-1111-1111-111111111111"])
+    );
+    assert!(
+        diff2["data"]["semanticallyChangedOracleIds"]
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
+
+    fs::remove_dir_all(root).unwrap();
+}
