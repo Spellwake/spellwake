@@ -451,14 +451,14 @@ def run_catalog_refresh(
         badge_svg.write_badge(
             badges_dir,
             "card-support-ast",
-            "Stage 1 AST",
+            "Parser",
             f"{s1:,} / {req:,} ({s1_pct:.1f}%)",
             "blue",
         )
         badge_svg.write_badge(
             badges_dir,
             "card-support-engine",
-            "Stage 2 Bound",
+            "Rules Engine",
             f"{s2:,} / {req:,} ({s2_pct:.1f}%)",
             "blue",
         )
