@@ -1,0 +1,170 @@
+name: Scryfall catalog refresh and card support audit
+on:
+  push:
+    branches: [main]
+  schedule:
+    # Daily incremental check at 06:17 UTC (after Scryfall's nightly bulk export).
+    - cron: "17 6 * * *"
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "Catalog source mode"
+        type: choice
+        default: scryfall-live
+        options:
+          - scryfall-live
+          - retained-fixture
+      force_full_recompile:
+        description: "Ignore cached per-card compilation entries and recompile every card"
+        type: boolean
+        default: false
+permissions:
+  contents: read
+concurrency:
+  group: catalog-refresh-${{ github.ref }}
+  cancel-in-progress: false
+jobs:
+  catalog-refresh:
+    name: Incremental Scryfall refresh and honest support counts
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - name: Install pinned Rust toolchain
+        run: rustup show
+      - name: Prepare the pinned CI creature vocabulary
+        run: |
+          vocabulary="$RUNNER_TEMP/spellwake-creature-vocabulary.input.json"
+          python3 tests/support/prepare_ci_vocabulary.py "$vocabulary"
+          echo "SPELLWAKE_CREATURE_VOCABULARY_INPUT=$vocabulary" >> "$GITHUB_ENV"
+      - name: Restore incremental catalog state and compilation cache
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: .catalog-refresh-state
+          key: spellwake-catalog-refresh-${{ runner.os }}-${{ hashFiles('crates/content/src/**', 'crates/oracle_compiler/src/**', 'crates/card_programs/src/**') }}-${{ github.run_id }}
+          restore-keys: |
+            spellwake-catalog-refresh-${{ runner.os }}-${{ hashFiles('crates/content/src/**', 'crates/oracle_compiler/src/**', 'crates/card_programs/src/**') }}-
+            spellwake-catalog-refresh-${{ runner.os }}-
+      - name: Build content and card-programs CLIs
+        run: cargo build --locked --release -p spellwake-content -p spellwake-card-programs
+      - name: Run catalog and preview-format isolation unit tests
+        env:
+          RUST_MIN_STACK: "67108864"
+        run: |
+          cargo test --locked -p spellwake-content
+          cargo test --locked -p spellwake-card-programs -- catalog_support cli_support_report
+      - name: Run incremental Scryfall refresh and honest support count report
+        env:
+          REFRESH_MODE: ${{ inputs.mode || 'scryfall-live' }}
+          FORCE_RECOMPILE: ${{ inputs.force_full_recompile || false }}
+        run: |
+          mkdir -p .catalog-refresh-state .catalog-refresh-out/badges
+          EXTRA_ARGS=()
+          if [ "$FORCE_RECOMPILE" = "true" ]; then
+            EXTRA_ARGS+=(--force-full-recompile)
+          fi
+          if [ "$REFRESH_MODE" = "retained-fixture" ]; then
+            if [ ! -f "work/catalogue/oracle-metadata.json" ] || [ ! -f "work/catalogue/oracle-cards-20261029210158.jsonl.gz" ]; then
+              echo "Retained Scryfall snapshot fixture is absent from this checkout; run scryfall-live mode or supply explicit fixture paths." >&2
+              exit 1
+            fi
+            python3 scripts/catalog_refresh.py \
+              --metadata work/catalogue/oracle-metadata.json \
+              --snapshot work/catalogue/oracle-cards-20261029210158.jsonl.gz \
+              --vocab "$SPELLWAKE_CREATURE_VOCABULARY_INPUT" \
+              --state-dir .catalog-refresh-state \
+              --output .catalog-refresh-out/catalog-support-summary.json \
+              --badges-dir .catalog-refresh-out/badges \
+              --binary target/release/spellwake-card-programs \
+              "${EXTRA_ARGS[@]}"
+          else
+            python3 scripts/catalog_refresh.py \
+              --fetch-scryfall \
+              --vocab "$SPELLWAKE_CREATURE_VOCABULARY_INPUT" \
+              --state-dir .catalog-refresh-state \
+              --output .catalog-refresh-out/catalog-support-summary.json \
+              --badges-dir .catalog-refresh-out/badges \
+              --binary target/release/spellwake-card-programs \
+              "${EXTRA_ARGS[@]}"
+          fi
+      - name: Publish job summary
+        run: |
+          python3 - <<'PY' >> "$GITHUB_STEP_SUMMARY"
+          import json
+          s = json.load(open(".catalog-refresh-out/catalog-support-summary.json"))
+          h = s["honestCardSupport"]
+          p = s["isolatedPreviewFormats"]
+          inc = s["incremental"]
+          s3 = h["stage3GameQualification"]
+          print("## Scryfall Catalog Refresh & Honest Card Support")
+          print("")
+          print(f"- **Source mode**: `{s['sourceMode']}` | **Refresh status**: `{inc['refreshStatus']}` | **Downloaded new snapshot**: `{s['downloadedNewSnapshot']}`")
+          print(f"- **Snapshot updatedAt**: `{s['snapshot']['updatedAt']}` | **SHA-256**: `{s['snapshot']['compressedSha256'][:16]}...`")
+          print(f"- **Incremental cache**: reused `{inc['reusedCachedCards']:,}`, recompiled `{inc['recompiledCards']:,}` (added `{inc['addedCount']:,}`, semantic changes `{inc['semanticallyChangedCount']:,}`, ordinary legality changes `{inc['ordinaryLegalityChangedCount']:,}`, preview legality changes `{inc['previewLegalityChangedCount']:,}`)")
+          print("")
+          print("| Stage | Count | Notes |")
+          print("| --- | ---: | --- |")
+          print(f"| Required ordinary base-format cards | {h['requiredBaseFormatCards']:,} | Commander, Standard, Pioneer, Modern, Legacy, Vintage |")
+          print(f"| Stage 1: Strict AST parsed | {h['stage1AstParsed']:,} | `spellwake-oracle-compiler` (`allow_tabletop_honor_system=false`) |")
+          print(f"| Stage 2: Validated engine bound | {h['stage2EngineBound']:,} | `spellwake-card-programs` + `Program::validate` |")
+          print(f"| Stage 3: Game qualified | {s3['verifiedCompleteCards'] if s3['verifiedCompleteCards'] is not None else 'unverified in this run'} | Declared hash-matched complete: {s3['declaredCompleteMatchingSnapshot']:,}; stale/drifted: {len(s3['staleOrDriftedEntries']):,} |")
+          print(f"| Isolated preview format (`future`) | {p['eligibleByFormat'].get('future', 0):,} | Preview-only: {p['previewOnlyRecords']:,}; isolated from ordinary legality: `{p['isolatedFromOrdinaryLegality']}` |")
+          PY
+      - name: Upload catalog support report and badges
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: catalog-support-report
+          path: .catalog-refresh-out/
+          retention-days: 30
+
+  publish-badges:
+    name: Update live README catalog badges
+    needs: catalog-refresh
+    if: always() && github.event_name != 'pull_request' && (github.ref == 'refs/heads/main' || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch')
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    concurrency:
+      group: spellwake-badges-branch
+      cancel-in-progress: false
+    steps:
+      - name: Download generated catalog badges
+        continue-on-error: true
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: catalog-support-report
+          path: .badges-incoming
+      - name: Push catalog badges to orphan badges branch
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if [ ! -d .badges-incoming/badges ]; then exit 0; fi
+          git init .badges-repo
+          cd .badges-repo
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git remote add origin "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+          for attempt in 1 2 3; do
+            if git fetch --depth=1 origin badges; then
+              git checkout -B badges FETCH_HEAD
+            else
+              git checkout --orphan badges
+              git rm -rf . >/dev/null 2>&1 || true
+            fi
+            cp ../.badges-incoming/badges/*.svg . 2>/dev/null || true
+            cp ../.badges-incoming/badges/*.json . 2>/dev/null || true
+            git add -A
+            if git diff --cached --quiet; then
+              echo "Catalog badges unchanged."
+              exit 0
+            fi
+            git commit -m "chore(badges): update catalog support badges [skip ci]"
+            if git push origin badges; then
+              exit 0
+            fi
+            sleep 3
+          done
+          exit 1

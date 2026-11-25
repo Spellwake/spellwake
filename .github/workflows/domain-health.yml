@@ -1,0 +1,145 @@
+name: Domain health checks
+on:
+  push:
+    branches: [dev, staging, main]
+  pull_request:
+  schedule:
+    - cron: "30 6 * * *"
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: domain-health-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name != 'schedule' }}
+jobs:
+  health-checks:
+    name: Real domain health checks and honest badges
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      RUST_MIN_STACK: "67108864"
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - name: Install pinned Rust toolchain
+        run: rustup show
+      - name: Prepare the pinned CI creature vocabulary
+        run: |
+          vocabulary="$RUNNER_TEMP/spellwake-creature-vocabulary.input.json"
+          python3 tests/support/prepare_ci_vocabulary.py "$vocabulary"
+          echo "SPELLWAKE_CREATURE_VOCABULARY_INPUT=$vocabulary" >> "$GITHUB_ENV"
+      - name: Install pinned Bun
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6
+        with:
+          bun-version: 1.3.11
+      - name: Install JS workspace dependencies
+        run: bun install --frozen-lockfile
+      - name: Run preview-format isolation checks in application service
+        run: |
+          cargo test --locked --manifest-path services/application/Cargo.toml --lib formats
+          cargo test --locked --manifest-path services/application/Cargo.toml --test formats
+      - name: Start isolated Postgres 17
+        shell: bash
+        run: |
+          docker run --rm --detach --name spellwake-application-db \
+            --cidfile "$RUNNER_TEMP/spellwake-postgres.cid" \
+            --publish 127.0.0.1:55439:5432 \
+            --env POSTGRES_HOST_AUTH_METHOD=trust \
+            --env POSTGRES_DB=spellwake_application \
+            postgres:17
+          for _ in {1..30}; do
+            if docker exec spellwake-application-db pg_isready -h 127.0.0.1 -U postgres; then
+              exit 0
+            fi
+            sleep 2
+          done
+          exit 1
+      - name: Run all seven domain health checks and generate badges
+        run: |
+          mkdir -p .domain-health-out/badges
+          python3 scripts/health_checks.py \
+            --output .domain-health-out/health-status.json \
+            --badges-dir .domain-health-out/badges
+      - name: Run catalog-refresh and health-check unit tests
+        run: python3 -m unittest discover -s tests/catalogue -p 'test_catalog_refresh_and_health.py'
+      - name: Stop the job's Postgres container
+        if: always()
+        shell: bash
+        run: |
+          cidfile="$RUNNER_TEMP/spellwake-postgres.cid"
+          if [ -s "$cidfile" ]; then
+            docker stop "$(cat "$cidfile")" || true
+          fi
+      - name: Publish domain health summary
+        if: always()
+        run: |
+          if [ ! -f .domain-health-out/health-status.json ]; then exit 0; fi
+          python3 - <<'PY' >> "$GITHUB_STEP_SUMMARY"
+          import json
+          data = json.load(open(".domain-health-out/health-status.json"))
+          print("## Spellwake Domain Health Summary")
+          print("")
+          print("| Domain | Local CI Status | Live / Hosted Status | Passed Tests | Missing Hosted Credentials / Gaps |")
+          print("| --- | --- | --- | ---: | --- |")
+          for d in data["domains"]:
+              creds = ", ".join(d["hostedCredentialsRequired"])
+              print(f"| {d['label']} | `{d['localBadge']['message']}` | `{d['liveBadge']['message']}` | {d['passedTests']} | {creds} |")
+          PY
+      - name: Upload domain health report and badges
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: domain-health-report
+          path: .domain-health-out/
+          retention-days: 30
+
+  publish-badges:
+    name: Update live README health badges
+    needs: health-checks
+    if: always() && github.event_name != 'pull_request' && (github.ref == 'refs/heads/main' || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch')
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    concurrency:
+      group: spellwake-badges-branch
+      cancel-in-progress: false
+    steps:
+      - name: Download generated health badges
+        continue-on-error: true
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: domain-health-report
+          path: .badges-incoming
+      - name: Push domain health badges to orphan badges branch
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if [ ! -d .badges-incoming/badges ]; then exit 0; fi
+          git init .badges-repo
+          cd .badges-repo
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git remote add origin "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+          for attempt in 1 2 3; do
+            if git fetch --depth=1 origin badges; then
+              git checkout -B badges FETCH_HEAD
+            else
+              git checkout --orphan badges
+              git rm -rf . >/dev/null 2>&1 || true
+            fi
+            cp ../.badges-incoming/badges/*.svg . 2>/dev/null || true
+            cp ../.badges-incoming/badges/*.json . 2>/dev/null || true
+            git add -A
+            if git diff --cached --quiet; then
+              echo "Domain health badges unchanged."
+              exit 0
+            fi
+            git commit -m "chore(badges): update domain health badges [skip ci]"
+            if git push origin badges; then
+              exit 0
+            fi
+            sleep 3
+          done
+          exit 1
