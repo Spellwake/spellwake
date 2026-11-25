@@ -230,7 +230,7 @@ export function VoteDialog({
                 className={s.saveVote}
                 onClick={() => {
                   onClose();
-                  void navigate("/open-play");
+                  void navigate("/open-play/decks");
                 }}
               >
                 Open Play

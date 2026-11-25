@@ -161,7 +161,7 @@ async fn a_deck_keeps_a_face_card_from_its_contents_with_official_art() -> TestR
         .get(0);
     assert_eq!(
         detail["data"]["deck"]["faceCard"],
-        json!({"definitionId":second,"artUrl":art})
+        json!({"kind":"official","definitionId":second,"artUrl":art})
     );
     let library: Value = client
         .query_one("SELECT app.read_my_deck_library(NULL,100)", &[])
@@ -175,7 +175,7 @@ async fn a_deck_keeps_a_face_card_from_its_contents_with_official_art() -> TestR
         .unwrap();
     assert_eq!(
         listed["faceCard"],
-        json!({"definitionId":second,"artUrl":art})
+        json!({"kind":"official","definitionId":second,"artUrl":art})
     );
     client.batch_execute("RESET ROLE").await?;
     Ok(())
@@ -216,7 +216,10 @@ async fn face_card_art_never_reveals_private_references_or_other_decks() -> Test
         .query_one("SELECT app.deck_face_card_json($1,NULL)", &[&current])
         .await?
         .get(0);
-    assert_eq!(own, json!({"definitionId":definition,"artUrl":null}));
+    assert_eq!(
+        own,
+        json!({"kind":"official","definitionId":definition,"artUrl":null})
+    );
     super::set_auth_claims(&client, stranger).await?;
     let other: Option<Value> = client
         .query_one("SELECT app.deck_face_card_json($1,NULL)", &[&current])

@@ -13,10 +13,16 @@ export type DeckLine = {
   quantity: string;
   section: DeckSection;
   card?: CardRef;
+  /** Open Play custom card revision identity (mutually exclusive with `card`). */
+  customCardRevisionId?: string;
 };
 const row = (
   id: string,
-  from: { name: string; card?: CardRef | undefined },
+  from: {
+    name: string;
+    card?: CardRef | undefined;
+    customCardRevisionId?: string | undefined;
+  },
   section: DeckSection,
 ): DeckLine => ({
   id,
@@ -24,6 +30,9 @@ const row = (
   quantity: "1",
   section,
   ...(from.card ? { card: from.card } : {}),
+  ...(from.customCardRevisionId
+    ? { customCardRevisionId: from.customCardRevisionId }
+    : {}),
 });
 
 /** The three ordinary sections the builder edits. Role sections are assigned separately. */
@@ -54,6 +63,17 @@ export function sectionCount(
     .reduce((total, entry) => total + copiesOf(entry), 0n);
 }
 
+const sameLineIdentity = (
+  entry: DeckLine,
+  name: string,
+  customCardRevisionId?: string,
+): boolean => {
+  if (entry.customCardRevisionId || customCardRevisionId) {
+    return entry.customCardRevisionId === customCardRevisionId;
+  }
+  return sameCard(entry.name, name);
+};
+
 /** Adds one copy to a section, merging into the card's existing row there. */
 export function addCopy(
   entries: readonly DeckLine[],
@@ -61,11 +81,15 @@ export function addCopy(
   section: BuilderSection,
   newId: () => string,
   card?: CardRef,
+  customCardRevisionId?: string,
 ): DeckLine[] {
   const existing = entries.find(
-    (entry) => entry.section === section && sameCard(entry.name, name),
+    (entry) =>
+      entry.section === section &&
+      sameLineIdentity(entry, name, customCardRevisionId),
   );
-  if (!existing) return [...entries, row(newId(), { name, card }, section)];
+  if (!existing)
+    return [...entries, row(newId(), { name, card, customCardRevisionId }, section)];
   return entries.map((entry) =>
     entry === existing
       ? { ...entry, quantity: String(copiesOf(entry) + 1n) }
@@ -97,7 +121,9 @@ export function moveAll(
   const moving = entries.find((entry) => entry.id === entryId);
   if (!moving || moving.section === to) return [...entries];
   const target = entries.find(
-    (entry) => entry.section === to && sameCard(entry.name, moving.name),
+    (entry) =>
+      entry.section === to &&
+      sameLineIdentity(entry, moving.name, moving.customCardRevisionId),
   );
   if (!target)
     return entries.map((entry) =>
@@ -179,7 +205,9 @@ export type DeckRole = "commander" | "companion";
  */
 export function assignRole(
   entries: readonly DeckLine[],
-  source: { entryId: string } | { name: string; card?: CardRef },
+  source:
+    | { entryId: string }
+    | { name: string; card?: CardRef; customCardRevisionId?: string },
   role: DeckRole,
   newId: () => string,
 ): DeckLine[] {
@@ -206,6 +234,7 @@ export function clearRole(
     "main",
     newId,
     assigned.card,
+    assigned.customCardRevisionId,
   );
 }
 
