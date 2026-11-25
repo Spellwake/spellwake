@@ -1,66 +1,67 @@
-import { useLayoutEffect, useRef, useState, type ReactNode } from "react";
-import frame from "./extended-art-frame.svg?inline";
+import { isValidElement, useMemo, type ReactNode } from "react";
+import { CustomCardFrame } from "../cards/CustomCardFrame";
+import type {
+  CardFrameAccent,
+  StackTriggerFrameInput,
+} from "../cards/card-frame-svg";
 import * as s from "./stack.css";
-
-// The bands share an original-coordinate viewBox so the printed bevels stay the
-// same thickness when the rules field takes over the art window.
-function FrameBand({ top, bottom }: { top: number; bottom: number }) {
-  return (
-    <svg
-      aria-hidden
-      className={s.frameBand}
-      viewBox={`0 ${top} 1062 ${bottom - top}`}
-      preserveAspectRatio="none"
-    >
-      <image href={frame} width={1062} height={1482} />
-    </svg>
-  );
-}
 
 export interface TriggeredAbilityContent {
   name: string;
+  /** Optional artwork URL rendered inside the unified 1062x1482 stack trigger frame. */
+  artUrl?: string | null;
+  /** Whether `artUrl` is pre-cropped artwork (`"art"`) or a full 5:7 printed card face (`"full_card"`). */
+  artSourceKind?: "art" | "full_card";
+  /** Optional color-identity pinline accent for the stack trigger frame. */
+  frameAccent?: CardFrameAccent;
+  /** Legacy artwork element; if `artUrl` is omitted and `art` is an `<img>`, its `src` is used. */
   art?: ReactNode;
   typeLabel: string;
   effect: string;
 }
 
+function extractImageSrc(node: ReactNode): string | null {
+  if (!isValidElement(node)) return null;
+  const props = node.props as { src?: unknown } | null;
+  return typeof props?.src === "string" && props.src.trim().length > 0
+    ? props.src
+    : null;
+}
+
+/**
+ * Stack ability face consolidated onto Spellwake's unified 1062x1482 procedural
+ * `CustomCardFrame` (`kind: "stack_trigger"`). Short effects with art render in
+ * illustrated mode; longer effects automatically expand into full-height text mode.
+ */
 export function TriggeredAbilityFace({
   name,
   art,
+  artUrl,
+  artSourceKind,
+  frameAccent,
   typeLabel,
   effect,
 }: TriggeredAbilityContent) {
-  const rules = useRef<HTMLSpanElement>(null);
-  const [fitsArtPanel, setFitsArtPanel] = useState(false);
-  useLayoutEffect(() => {
-    const text = rules.current;
-    if (!text) return;
-    // At stack size the illustrated frame has 35px for rules, including padding.
-    const measure = () => setFitsArtPanel(text.offsetHeight <= 35);
-    measure();
-    const observer = new ResizeObserver(measure);
-    observer.observe(text);
-    return () => observer.disconnect();
-  }, [effect]);
-  const illustrated = Boolean(art) && fitsArtPanel;
+  const resolvedArtUrl = artUrl ?? extractImageSrc(art);
+  const illustrated = Boolean(resolvedArtUrl) && effect.trim().length <= 100;
+
+  const frameInput = useMemo<StackTriggerFrameInput>(
+    () => ({
+      kind: "stack_trigger",
+      name,
+      typeLabel,
+      effect,
+      artUrl: resolvedArtUrl,
+      illustrated,
+      ...(artSourceKind ? { artSourceKind } : {}),
+      ...(frameAccent ? { frameAccent } : {}),
+    }),
+    [name, typeLabel, effect, resolvedArtUrl, illustrated, artSourceKind, frameAccent],
+  );
+
   return (
     <div className={s.ability} data-illustrated={illustrated}>
-      {illustrated && <div className={s.abilityArt}>{art}</div>}
-      <div className={s.abilityName}>
-        <FrameBand top={0} bottom={202} />
-        <strong>{name}</strong>
-      </div>
-      <div className={s.abilityType}>
-        <FrameBand top={illustrated ? 970 : 1003} bottom={1120} />
-        <b>{typeLabel}</b>
-      </div>
-      <div className={s.abilityRules}>
-        <FrameBand top={1120} bottom={1350} />
-        <span ref={rules}>{effect}</span>
-      </div>
-      <div className={s.abilityFoot}>
-        <FrameBand top={1350} bottom={1482} />
-      </div>
+      <CustomCardFrame input={frameInput} />
     </div>
   );
 }
