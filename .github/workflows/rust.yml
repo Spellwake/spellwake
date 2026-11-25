@@ -36,6 +36,10 @@ jobs:
         run: >
           cargo test --locked --workspace -- --skip
           ordinary_game::record::staged::tests::complete_existing_fixture_uses_finalized_delivery_and_preserves_report_bytes
+      - name: Run real-card parser semantic audit suite
+        env:
+          RUST_MIN_STACK: "67108864"
+        run: cargo test --locked -p spellwake-oracle-compiler --test real_card_semantic_suite -- --nocapture
       - name: Build deployable service
         run: cargo build --locked --release -p spellwake-platform
       - name: Run rules fixtures
