@@ -18179,16 +18179,33 @@ pub fn parse_static_or_replacement(
             },
         ));
     }
-    // "~ crews Vehicles as though its power were N greater" (Hotshot Mechanic, etc.)
-    if low.starts_with("~ crews vehicles as though its power were ") {
-        return Ok(StaticOrReplacement::Static(
-            StaticAbilityAst::RuleOrCombatRestriction {
-                subject: Some(Box::new(SubjectRefAst::SelfObject)),
-                rule: "CrewPowerBonus".to_string(),
-                filter: None,
-                condition: None,
-            },
-        ));
+    // "<subj> [saddles Mounts and] crews Vehicles / saddles Mounts as though its/their power were <val> greater"
+    // (Hotshot Mechanic, Deathless Pilot, Pilot tokens, and future crew/saddle power bonus cards)
+    for (phrase, crews_vehicles, saddles_mounts) in [
+        (" saddles mounts and crews vehicles as though ", true, true),
+        (" crews vehicles and saddles mounts as though ", true, true),
+        (" crews vehicles as though ", true, false),
+        (" saddles mounts as though ", false, true),
+    ] {
+        if let Some((subj_raw, rest)) = low.split_once(phrase)
+            && let Some(val_raw) = rest
+                .strip_prefix("its power were ")
+                .or_else(|| rest.strip_prefix("their power were "))
+                .and_then(|r| r.strip_suffix(" greater"))
+            && let (Ok(subj), Ok(bonus)) = (
+                parse_subject_or_target(subj_raw.trim(), vocab),
+                parse_value_expr(val_raw.trim(), vocab),
+            )
+        {
+            return Ok(StaticOrReplacement::Static(
+                StaticAbilityAst::CrewOrSaddlePowerBonus {
+                    subject: Box::new(subj),
+                    crews_vehicles,
+                    saddles_mounts,
+                    bonus: Box::new(bonus),
+                },
+            ));
+        }
     }
     // "As ~ transforms into ~, <effect>" (Zenos, Curse of Leeches)
     if let Some(after) = low.strip_prefix("as ~ transforms into ~, ")
@@ -18367,21 +18384,6 @@ pub fn parse_static_or_replacement(
             },
         ));
     }
-    // "~ saddles Mounts and crews Vehicles as though its power were N greater" (Deathless Pilot)
-    if let Some(subj_raw) = low
-        .split_once(" saddles mounts and crews vehicles as though ")
-        .map(|(l, _)| l)
-        && let Ok(subj) = parse_subject_or_target(subj_raw, vocab)
-    {
-        return Ok(StaticOrReplacement::Static(
-            StaticAbilityAst::RuleOrCombatRestriction {
-                subject: Some(Box::new(subj)),
-                rule: "SaddleCrewPowerBonus".to_string(),
-                filter: None,
-                condition: None,
-            },
-        ));
-    }
     // "You may activate abilities of <filter> as though those creatures had haste" (Thousand-Year Elixir)
     if let Some(rest) = low.strip_prefix("you may activate abilities of ")
         && let Some((flt_raw, _)) = rest.split_once(" as though ")
@@ -18486,7 +18488,7 @@ pub fn parse_static_or_replacement(
     if let Some((subj_raw, blocker_raw)) = low.split_once(" can't be blocked by ")
         && let Ok(subj) = parse_subject_or_target(subj_raw, vocab)
     {
-        if blocker_raw == "more than one creature" {
+        if blocker_raw.starts_with("more than one creature") {
             return Ok(StaticOrReplacement::Static(
                 StaticAbilityAst::RuleOrCombatRestriction {
                     subject: Some(Box::new(subj)),
@@ -18495,6 +18497,21 @@ pub fn parse_static_or_replacement(
                     condition: None,
                 },
             ));
+        }
+        if let Some(disjuncts) = split_disjunctive_object_filters(blocker_raw, vocab) {
+            // De Morgan: "can't be blocked by (A or B)" == "can't be blocked by A" AND "can't be blocked by B"
+            let items = disjuncts
+                .into_iter()
+                .map(|flt| StaticAbilityAst::RuleOrCombatRestriction {
+                    subject: Some(Box::new(subj.clone())),
+                    rule: "CantBeBlockedBy".to_string(),
+                    filter: Some(Box::new(flt)),
+                    condition: None,
+                })
+                .collect();
+            return Ok(StaticOrReplacement::Static(StaticAbilityAst::Compound(
+                items,
+            )));
         }
         if let Ok(flt) = parse_object_filter(blocker_raw, vocab) {
             return Ok(StaticOrReplacement::Static(
@@ -18557,6 +18574,15 @@ pub fn parse_static_or_replacement(
                     subject: Some(Box::new(subj)),
                     rule: format!("MinBlockers:{rhs}"),
                     filter: None,
+                    condition: None,
+                },
+            ));
+        }
+        if let Some(allowed_filters) = split_disjunctive_object_filters(rhs, vocab) {
+            return Ok(StaticOrReplacement::Static(
+                StaticAbilityAst::CantBeBlockedExceptByAny {
+                    subject: Box::new(subj),
+                    allowed_filters,
                     condition: None,
                 },
             ));
@@ -19211,33 +19237,6 @@ pub fn parse_static_or_replacement(
             },
         ));
     }
-    if let Some((subj_raw, by_raw)) = low.split_once(" can't be blocked except by ")
-        && let Ok(subj) = parse_subject_or_target(subj_raw, vocab)
-    {
-        let flt = parse_object_filter(by_raw, vocab).ok().map(Box::new);
-        return Ok(StaticOrReplacement::Static(
-            StaticAbilityAst::RuleOrCombatRestriction {
-                subject: Some(Box::new(subj)),
-                rule: "CantBeBlockedExceptBy".to_string(),
-                filter: flt,
-                condition: None,
-            },
-        ));
-    }
-    if let Some((subj_raw, by_raw)) = low.split_once(" can't be blocked by ")
-        && let Ok(subj) = parse_subject_or_target(subj_raw, vocab)
-    {
-        let flt = parse_object_filter(by_raw, vocab).ok().map(Box::new);
-        return Ok(StaticOrReplacement::Static(
-            StaticAbilityAst::RuleOrCombatRestriction {
-                subject: Some(Box::new(subj)),
-                rule: "CantBeBlockedBy".to_string(),
-                filter: flt,
-                condition: None,
-            },
-        ));
-    }
-
     // "<subj> lose(s) <keywords>" (Mystic Decree: "All creatures lose flying and islandwalk")
     if !s.contains('"')
         && let Some((subj_raw, kw_raw)) = low
@@ -23664,4 +23663,59 @@ fn parse_wave_e4_statics(s: &str, low: &str, vocab: &Vocabulary) -> Option<Stati
     crate::wave_e6::parse_wave_e6_statics(s, low, vocab)
         .or_else(|| crate::wave_e7::parse_wave_e7_statics(s, low, vocab))
         .or_else(|| crate::wave_e8::parse_wave_e8_statics(s, low, vocab))
+}
+
+fn split_disjunctive_object_filters(raw: &str, vocab: &Vocabulary) -> Option<Vec<ObjectFilterAst>> {
+    let trimmed = raw.trim();
+    // 1. Explicit " and/or " disjunction (checked before " or " so "power 2 or less and/or walls" stays intact)
+    if trimmed.contains(" and/or ") {
+        let mut out = Vec::new();
+        for seg in trimmed.split(" and/or ") {
+            let flt = parse_object_filter(seg.trim(), vocab).ok()?;
+            out.push(flt);
+        }
+        if out.len() >= 2 {
+            return Some(out);
+        }
+    }
+    // 2. Oxford comma list ("krakens, leviathans, octopuses, and serpents" / "a, b, or c")
+    for tail_sep in [", and/or ", ", or ", ", and "] {
+        if let Some((head, last)) = trimmed.rsplit_once(tail_sep) {
+            let mut out = Vec::new();
+            let mut ok = true;
+            for seg in head.split(", ") {
+                match parse_object_filter(seg.trim(), vocab) {
+                    Ok(flt) => out.push(flt),
+                    Err(_) => {
+                        ok = false;
+                        break;
+                    }
+                }
+            }
+            if ok && let Ok(last_flt) = parse_object_filter(last.trim(), vocab) {
+                out.push(last_flt);
+                if out.len() >= 2 {
+                    return Some(out);
+                }
+            }
+        }
+    }
+    // 3. Plain " or " disjunction ("knights or walls", "vampires or zombies", "enchanted creatures or enchantment creatures")
+    if trimmed.contains(" or ") {
+        let mut out = Vec::new();
+        let mut ok = true;
+        for seg in trimmed.split(" or ") {
+            match parse_object_filter(seg.trim(), vocab) {
+                Ok(flt) => out.push(flt),
+                Err(_) => {
+                    ok = false;
+                    break;
+                }
+            }
+        }
+        if ok && out.len() >= 2 {
+            return Some(out);
+        }
+    }
+    None
 }

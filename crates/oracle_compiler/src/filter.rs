@@ -479,6 +479,26 @@ pub fn parse_object_filter(phrase: &str, vocab: &Vocabulary) -> Result<ObjectFil
     loop {
         let mut changed = false;
 
+        if let Some(prefix) = s.strip_suffix(" with abilities") {
+            flt.predicates.push(FilterPredicateAst::HasAbilities {
+                has_abilities: true,
+            });
+            s = prefix.trim().to_string();
+            continue;
+        }
+        if let Some(prefix) = s.strip_suffix(" with no abilities") {
+            flt.predicates.push(FilterPredicateAst::HasAbilities {
+                has_abilities: false,
+            });
+            s = prefix.trim().to_string();
+            continue;
+        }
+        if let Some(prefix) = s.strip_suffix(" the monarch controls") {
+            flt.predicates.push(FilterPredicateAst::ControlledByMonarch);
+            s = prefix.trim().to_string();
+            continue;
+        }
+
         // Distinctness qualifiers ("with different names", "with different mana values", etc.)
         for (suf, flag) in [
             (
@@ -2683,7 +2703,6 @@ pub fn parse_object_filter(phrase: &str, vocab: &Vocabulary) -> Result<ObjectFil
                 ObjectFilterFlags::MATCHES_NAMED_AGENDA,
                 None,
             ),
-            (" with no abilities", ObjectFilterFlags::EMPTY, None),
             (
                 " each with power greater than its base power",
                 ObjectFilterFlags::MODIFIED,
@@ -3695,9 +3714,18 @@ pub fn parse_object_filter(phrase: &str, vocab: &Vocabulary) -> Result<ObjectFil
         if let Some((prefix, name_part)) = s.rsplit_once(" named ")
             && !prefix.trim().is_empty()
             && !name_part.trim().is_empty()
+            && !name_part.contains(" and ")
+            && !name_part.contains(" or ")
+            && !name_part.starts_with("the chosen")
+            && !name_part.starts_with("a card")
             && name_part.split_whitespace().count() <= 4
         {
-            flt.flags = flt.flags.union(ObjectFilterFlags::MATCHES_NAMED_AGENDA);
+            let trimmed_name = name_part.trim();
+            if trimmed_name == "~" {
+                flt.named = Some(NameFilterAst::SelfName);
+            } else {
+                flt.named = Some(NameFilterAst::Exact(trimmed_name.to_string()));
+            }
             s = prefix.trim().to_string();
             continue;
         }
@@ -9402,6 +9430,59 @@ pub fn parse_condition(phrase: &str, vocab: &Vocabulary) -> Result<ConditionAst,
             value: 1,
         });
     }
+    // Lossless "you control <flt> named <A> [and <B> ...]" preserving exact original-case card names
+    // (Scepter of Empires, Power Plant Worker, Helm of Kaldra, Festering Newt, Ruin in Their Wake, Galactus, etc.)
+    if let Some(after) = low.strip_prefix("you control ")
+        && let Some((flt_raw, names_low)) = after.split_once(" named ")
+        && !names_low.trim().is_empty()
+        && let Ok(base_flt) = parse_object_filter(flt_raw, vocab)
+    {
+        let raw_base = raw.get(..low.len()).unwrap_or(raw);
+        let names_start = "you control ".len() + flt_raw.len() + " named ".len();
+        let names_orig = raw_base.get(names_start..).unwrap_or(names_low).trim();
+        let is_singular = flt_raw.starts_with("a ")
+            || flt_raw.starts_with("an ")
+            || flt_raw.starts_with("another ");
+        let (is_disjunction, names): (bool, Vec<String>) = if names_orig.contains(" or ") {
+            (
+                true,
+                names_orig
+                    .split(" or ")
+                    .map(|p| p.trim().to_string())
+                    .collect(),
+            )
+        } else if is_singular {
+            (false, vec![names_orig.to_string()])
+        } else {
+            (false, split_named_card_list(names_orig))
+        };
+        let mut iter = names.into_iter().filter(|n| !n.is_empty());
+        if let Some(first_name) = iter.next() {
+            let make_cond = |name: String| {
+                let mut f = base_flt.clone();
+                f.named = Some(if name == "~" {
+                    NameFilterAst::SelfName
+                } else {
+                    NameFilterAst::Exact(name)
+                });
+                ConditionAst::ControlsCount {
+                    player: PlayerRefAst::You,
+                    filter: Box::new(f),
+                    op: CompareOp::Ge,
+                    value: 1,
+                }
+            };
+            let mut acc = make_cond(first_name);
+            for next_name in iter {
+                acc = if is_disjunction {
+                    ConditionAst::Or(Box::new(acc), Box::new(make_cond(next_name)))
+                } else {
+                    ConditionAst::And(Box::new(acc), Box::new(make_cond(next_name)))
+                };
+            }
+            return Ok(acc);
+        }
+    }
     if let Some(subj_raw) = low.strip_prefix("you control ") {
         if let Ok(flt) = parse_object_filter(subj_raw, vocab) {
             return Ok(ConditionAst::ControlsCount {
@@ -9643,18 +9724,6 @@ pub fn parse_condition(phrase: &str, vocab: &Vocabulary) -> Result<ConditionAst,
         && let Some(cost_raw) = after.strip_suffix(" cost was paid")
     {
         return Ok(ConditionAst::ManaSpentToCast(cost_raw.trim().to_string()));
-    }
-    // "you control <flt> named <A> and <B>" / "you controlled <flt>" (Power Plant Worker, Throne of Empires, Orator of Ojutai)
-    if let Some(after) = low.strip_prefix("you control ")
-        && let Some((flt_raw, _names)) = after.split_once(" named ")
-        && let Ok(flt) = parse_object_filter(flt_raw, vocab)
-    {
-        return Ok(ConditionAst::ControlsCount {
-            player: PlayerRefAst::You,
-            filter: Box::new(flt),
-            op: CompareOp::Ge,
-            value: 1,
-        });
     }
     if let Some(flt_raw) = low.strip_prefix("you controlled ")
         && let Ok(flt) = parse_object_filter(flt_raw, vocab)
@@ -12612,4 +12681,27 @@ pub fn split_keyword_tokens(line: &str) -> Vec<&str> {
         }
     }
     out
+}
+
+fn split_named_card_list(names_orig: &str) -> Vec<String> {
+    let s = names_orig.trim();
+    if let Some((head, last)) = s.rsplit_once(", and ") {
+        let mut out: Vec<String> = head
+            .split(", ")
+            .map(|p| p.trim().to_string())
+            .filter(|p| !p.is_empty())
+            .collect();
+        if !last.trim().is_empty() {
+            out.push(last.trim().to_string());
+        }
+        return out;
+    }
+    if s.contains(" and ") {
+        return s
+            .split(" and ")
+            .map(|p| p.trim().to_string())
+            .filter(|p| !p.is_empty())
+            .collect();
+    }
+    vec![s.to_string()]
 }

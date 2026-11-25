@@ -504,15 +504,15 @@ pub fn compile_face_with_options(
                 }
             }
             let (bullet_label, bullet_clean) = strip_ability_word(bullet_body.trim());
-            let (ins, mut fails) = parse_effect_body(bullet_clean, vocab);
             let mut granted_face: Option<Box<FaceAst>> = None;
-            if !fails.is_empty()
-                && modal_target == ModalTarget::LastReplacement
+            let (ins, fails) = if modal_target == ModalTarget::LastReplacement
                 && let Some(compiled) = compile_granted_ability(bullet_clean, vocab)
             {
-                fails.clear();
                 granted_face = Some(compiled);
-            }
+                (Vec::new(), Vec::new())
+            } else {
+                parse_effect_body(bullet_clean, vocab)
+            };
             out.failures.extend(fails);
             let mode_ast = if let Some(gf) = granted_face {
                 ModalModeAst {
@@ -3231,5 +3231,289 @@ mod tests {
                 "Staple {name} emitted GameStateFlag: {json}"
             );
         }
+    }
+
+    #[test]
+    fn pass_e8_lossless_engine_handoff_fixes() {
+        let members: Vec<String> = [
+            "Wall",
+            "Pilot",
+            "Human",
+            "Wizard",
+            "Knight",
+            "Vampire",
+            "Zombie",
+            "Rebel",
+            "Elf",
+            "Archer",
+            "Goblin",
+            "Dragon",
+            "Pirate",
+            "Ouphe",
+            "Horror",
+            "Warlock",
+            "Construct",
+            "Merfolk",
+            "Scout",
+            "Mount",
+            "Avatar",
+        ]
+        .into_iter()
+        .map(str::to_string)
+        .collect();
+        let vocab = Vocabulary::from_creature_members(&members);
+        let compile = |name: &str, type_line: &str, oracle_text: &str| {
+            compile_card(
+                &CardInput {
+                    oracle_id: "test-e8-fixes",
+                    name,
+                    layout: "normal",
+                    faces: vec![FaceInput {
+                        name,
+                        type_line,
+                        oracle_text,
+                    }],
+                },
+                &vocab,
+            )
+        };
+
+        // 1. AsEntersAction Siege modal bullets try compile_granted_ability first (lossless granted: Some(FaceAst))
+        let monastery = compile(
+            "Monastery Siege",
+            "Enchantment",
+            "As Monastery Siege enters, choose Khans or Dragons.\n\u{2022} Khans \u{2014} At the beginning of your draw step, draw an additional card, then discard a card.\n\u{2022} Dragons \u{2014} Spells your opponents cast that target you or a permanent you control cost {2} more to cast.",
+        );
+        assert!(
+            monastery.strictly_compiled,
+            "Monastery Siege: {:?}",
+            monastery.faces[0].failures
+        );
+        let monastery_json = serde_json::to_string(&monastery).unwrap_or_default();
+        assert!(
+            monastery_json.contains("\"CostModifier\"")
+                && monastery_json.contains("\"{2}\"")
+                && monastery_json.matches("\"granted\":{").count() == 2,
+            "Monastery Siege must emit lossless granted FaceAst for both Khans and Dragons: {monastery_json}"
+        );
+
+        let glacierwood = compile(
+            "Glacierwood Siege",
+            "Enchantment",
+            "As Glacierwood Siege enters, choose Temur or Sultai.\n\u{2022} Temur \u{2014} Whenever you cast an instant or sorcery spell, target player mills four cards.\n\u{2022} Sultai \u{2014} You may play lands from your graveyard.",
+        );
+        assert!(
+            glacierwood.strictly_compiled,
+            "Glacierwood Siege: {:?}",
+            glacierwood.faces[0].failures
+        );
+        let glacier_json = serde_json::to_string(&glacierwood).unwrap_or_default();
+        assert!(
+            glacier_json.contains("\"PlayOrCastPermission\"")
+                && glacier_json.contains("\"permission\":\"from your graveyard\"")
+                && glacier_json.matches("\"granted\":{").count() == 2,
+            "Glacierwood Siege must preserve from your graveyard in granted FaceAst: {glacier_json}"
+        );
+
+        let outpost = compile(
+            "Outpost Siege",
+            "Enchantment",
+            "As Outpost Siege enters, choose Khans or Dragons.\n\u{2022} Khans \u{2014} At the beginning of your upkeep, exile the top card of your library. Until end of turn, you may play that card.\n\u{2022} Dragons \u{2014} Whenever a creature you control leaves the battlefield, Outpost Siege deals 1 damage to any target.",
+        );
+        assert!(
+            outpost.strictly_compiled,
+            "Outpost Siege: {:?}",
+            outpost.faces[0].failures
+        );
+        let outpost_json = serde_json::to_string(&outpost).unwrap_or_default();
+        assert!(
+            outpost_json.matches("\"granted\":{").count() == 2,
+            "Outpost Siege must emit granted FaceAst for both modes: {outpost_json}"
+        );
+
+        // 2. Crew / Saddle power bonus preserves exact numeric bonus N (and generalizes to unseen cards)
+        let hotshot = compile(
+            "Hotshot Mechanic",
+            "Creature \u{2014} Fox Pilot",
+            "Hotshot Mechanic crews Vehicles as though its power were 2 greater.",
+        );
+        assert!(hotshot.strictly_compiled, "{:?}", hotshot.faces[0].failures);
+        assert!(hotshot.faces[0].statics.iter().any(|st| matches!(
+            st,
+            StaticAbilityAst::CrewOrSaddlePowerBonus {
+                crews_vehicles: true,
+                saddles_mounts: false,
+                bonus,
+                ..
+            } if **bonus == ast::ValueExprAst::Const(2)
+        )));
+
+        let deathless = compile(
+            "Deathless Pilot",
+            "Creature \u{2014} Zombie Pilot",
+            "Deathless Pilot saddles Mounts and crews Vehicles as though its power were 2 greater.",
+        );
+        assert!(
+            deathless.strictly_compiled,
+            "{:?}",
+            deathless.faces[0].failures
+        );
+        assert!(deathless.faces[0].statics.iter().any(|st| matches!(
+            st,
+            StaticAbilityAst::CrewOrSaddlePowerBonus {
+                crews_vehicles: true,
+                saddles_mounts: true,
+                bonus,
+                ..
+            } if **bonus == ast::ValueExprAst::Const(2)
+        )));
+
+        let unseen_mount = compile(
+            "Master Mountaineer",
+            "Creature \u{2014} Human Pilot",
+            "Master Mountaineer saddles Mounts as though its power were 3 greater.",
+        );
+        assert!(
+            unseen_mount.strictly_compiled,
+            "{:?}",
+            unseen_mount.faces[0].failures
+        );
+        assert!(unseen_mount.faces[0].statics.iter().any(|st| matches!(
+            st,
+            StaticAbilityAst::CrewOrSaddlePowerBonus {
+                crews_vehicles: false,
+                saddles_mounts: true,
+                bonus,
+                ..
+            } if **bonus == ast::ValueExprAst::Const(3)
+        )));
+
+        // 3. CantBeBlockedBy / CantBeBlockedExceptBy never silently drop unparseable filters to None
+        let doorman = compile(
+            "Doorman",
+            "Creature \u{2014} Human",
+            "{T}: Until end of turn, target creature can't be blocked by creatures with power 2 or less and/or Walls.",
+        );
+        assert!(doorman.strictly_compiled, "{:?}", doorman.faces[0].failures);
+        let doorman_json = serde_json::to_string(&doorman).unwrap_or_default();
+        assert!(
+            doorman_json.contains("\"Compound\"")
+                && doorman_json.contains("\"CantBeBlockedBy\"")
+                && doorman_json.contains("\"Wall\"")
+                && !doorman_json.contains("\"filter\":null"),
+            "Doorman must split into lossless Compound CantBeBlockedBy filters without filter:null: {doorman_json}"
+        );
+
+        let elven = compile(
+            "Elven Riders",
+            "Creature \u{2014} Elf",
+            "Elven Riders can't be blocked except by Walls and/or creatures with flying.",
+        );
+        assert!(elven.strictly_compiled, "{:?}", elven.faces[0].failures);
+        let elven_json = serde_json::to_string(&elven).unwrap_or_default();
+        assert!(
+            elven_json.contains("\"CantBeBlockedExceptByAny\"")
+                && elven_json.contains("\"Wall\"")
+                && elven_json.contains("\"flying\""),
+            "Elven Riders must emit lossless CantBeBlockedExceptByAny: {elven_json}"
+        );
+
+        let jasmine = compile(
+            "Jasmine Boreal of the Seven",
+            "Legendary Creature \u{2014} Human Druid",
+            "Creatures you control with no abilities can't be blocked by creatures with abilities.",
+        );
+        assert!(jasmine.strictly_compiled, "{:?}", jasmine.faces[0].failures);
+        let jasmine_json = serde_json::to_string(&jasmine).unwrap_or_default();
+        assert!(
+            jasmine_json.contains("\"has_abilities\":false")
+                && jasmine_json.contains("\"has_abilities\":true")
+                && !jasmine_json.contains("\"filter\":null"),
+            "Jasmine Boreal must preserve HasAbilities predicates on both sides: {jasmine_json}"
+        );
+
+        let admiral = compile(
+            "Azure Fleet Admiral",
+            "Creature \u{2014} Human Pirate",
+            "Azure Fleet Admiral can't be blocked by creatures the monarch controls.",
+        );
+        assert!(admiral.strictly_compiled, "{:?}", admiral.faces[0].failures);
+        let admiral_json = serde_json::to_string(&admiral).unwrap_or_default();
+        assert!(
+            admiral_json.contains("\"ControlledByMonarch\"")
+                && !admiral_json.contains("\"filter\":null"),
+            "Azure Fleet Admiral must preserve ControlledByMonarch: {admiral_json}"
+        );
+
+        // 4. "you control <flt> named <names>" preserves exact names and decomposes multi-name lists
+        let scepter = compile(
+            "Scepter of Empires",
+            "Artifact",
+            "{T}: Scepter of Empires deals 1 damage to target player or planeswalker. It deals 3 damage instead if you control artifacts named Crown of Empires and Throne of Empires.",
+        );
+        assert!(scepter.strictly_compiled, "{:?}", scepter.faces[0].failures);
+        let scepter_json = serde_json::to_string(&scepter).unwrap_or_default();
+        assert!(
+            scepter_json.contains("\"Exact\":\"Crown of Empires\"")
+                && scepter_json.contains("\"Exact\":\"Throne of Empires\"")
+                && scepter_json.contains("\"And\""),
+            "Scepter of Empires must emit And of two named ControlsCount conditions: {scepter_json}"
+        );
+
+        let kaldra = compile(
+            "Helm of Kaldra",
+            "Legendary Artifact \u{2014} Equipment",
+            "{1}: If you control Equipment named Helm of Kaldra, Sword of Kaldra, and Shield of Kaldra, create Kaldra, a legendary 4/4 colorless Avatar creature token.",
+        );
+        assert!(kaldra.strictly_compiled, "{:?}", kaldra.faces[0].failures);
+        let kaldra_json = serde_json::to_string(&kaldra).unwrap_or_default();
+        assert!(
+            kaldra_json.contains("\"SelfName\"")
+                && kaldra_json.contains("\"Exact\":\"Sword of Kaldra\"")
+                && kaldra_json.contains("\"Exact\":\"Shield of Kaldra\""),
+            "Helm of Kaldra must preserve all three named Equipment: {kaldra_json}"
+        );
+
+        let newt = compile(
+            "Festering Newt",
+            "Creature \u{2014} Salamander",
+            "When Festering Newt dies, target creature an opponent controls gets -1/-1 until end of turn. That creature gets -4/-4 instead if you control a creature named Bogbrew Witch.",
+        );
+        assert!(newt.strictly_compiled, "{:?}", newt.faces[0].failures);
+        let newt_json = serde_json::to_string(&newt).unwrap_or_default();
+        assert!(
+            newt_json.contains("\"Exact\":\"Bogbrew Witch\""),
+            "Festering Newt must preserve Bogbrew Witch name filter: {newt_json}"
+        );
+
+        let liu_bei = compile(
+            "Liu Bei, Lord of Shu",
+            "Legendary Creature \u{2014} Human Soldier",
+            "Horsemanship\nLiu Bei, Lord of Shu gets +2/+2 as long as you control a permanent named Guan Yu, Sainted Warrior or Zhang Fei, Fierce Warrior.",
+        );
+        assert!(liu_bei.strictly_compiled, "{:?}", liu_bei.faces[0].failures);
+        let liu_json = serde_json::to_string(&liu_bei).unwrap_or_default();
+        assert!(
+            liu_json.contains("\"Or\"")
+                && liu_json.contains("\"Exact\":\"Guan Yu, Sainted Warrior\"")
+                && liu_json.contains("\"Exact\":\"Zhang Fei, Fierce Warrior\""),
+            "Liu Bei must emit Or of two named ControlsCount conditions preserving commas: {liu_json}"
+        );
+
+        let galactus = compile(
+            "Galactus, Devourer of Worlds",
+            "Legendary Creature \u{2014} Alien",
+            "Galactus attacks each combat if able unless you control a creature named Silver Surfer, Galactus's Herald.",
+        );
+        assert!(
+            galactus.strictly_compiled,
+            "{:?}",
+            galactus.faces[0].failures
+        );
+        let galactus_json = serde_json::to_string(&galactus).unwrap_or_default();
+        assert!(
+            galactus_json.contains("\"Exact\":\"Silver Surfer, ~'s Herald\""),
+            "Galactus must keep comma inside singular legendary card name intact: {galactus_json}"
+        );
     }
 }

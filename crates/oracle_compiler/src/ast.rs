@@ -396,6 +396,12 @@ pub enum FilterPredicateAst {
     DifferentControllers,
     /// Matches a permanent controlled by the same player as the referenced permanent (`Glamer Spinners`).
     WithSameControllerAs(Box<SubjectRefAst>),
+    /// Matches permanents that have (or lack) abilities (`Jasmine Boreal of the Seven`, `Muraganda Petroglyphs`).
+    HasAbilities {
+        has_abilities: bool,
+    },
+    /// Matches permanents controlled by the player who is currently the monarch (`Azure Fleet Admiral`).
+    ControlledByMonarch,
     StateQualification(String),
 }
 
@@ -3245,6 +3251,20 @@ pub enum StaticAbilityAst {
     ModifyMaximumHandSize {
         player: PlayerRefAst,
         size: Box<ValueExprAst>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        condition: Option<Box<ConditionAst>>,
+    },
+    /// Power bonus applied when crewing Vehicles and/or saddling Mounts (`Hotshot Mechanic`, `Deathless Pilot`).
+    CrewOrSaddlePowerBonus {
+        subject: Box<SubjectRefAst>,
+        crews_vehicles: bool,
+        saddles_mounts: bool,
+        bonus: Box<ValueExprAst>,
+    },
+    /// Disjunctive blocking requirement where a blocker matching any listed filter may block (`Elven Riders`, `Amrou Seekers`, `Skirk Shaman`, `Serpent of Yawning Depths`).
+    CantBeBlockedExceptByAny {
+        subject: Box<SubjectRefAst>,
+        allowed_filters: Vec<ObjectFilterAst>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         condition: Option<Box<ConditionAst>>,
     },
