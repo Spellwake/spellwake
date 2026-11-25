@@ -294,7 +294,13 @@ impl EffectWindow {
                 }
             }
         }
-        let max_hand_size = best_limit.map_or(7, |(_, limit)| limit);
+        let base_limit = best_limit.map_or(7, |(_, limit)| limit);
+        let delta = self.max_hand_size_delta(active)?;
+        let adjusted = i64::try_from(base_limit)
+            .unwrap_or(i64::MAX)
+            .saturating_add(i64::from(delta))
+            .max(0);
+        let max_hand_size = usize::try_from(adjusted).unwrap_or(0);
         Ok(cards_in_hand.saturating_sub(max_hand_size))
     }
     fn cleanup_hand(&self) -> Vec<ObjectId> {
@@ -2320,6 +2326,15 @@ impl EffectWindow {
                             moves.append(&mut occurrences);
                             Ok(moves)
                         },
+                    )?;
+                    self.apply_zone_replacement_extras_from_movements(
+                        moves.replacements(),
+                        &logical_changes,
+                        EventCause::StateBasedActions {
+                            event: process.event,
+                            boundary: process.boundary,
+                        },
+                        &mut append,
                     )?;
                     if !self.state_based_losses.is_empty() {
                         if self.window.participants().len() - self.state_based_losses.len() <= 1 {

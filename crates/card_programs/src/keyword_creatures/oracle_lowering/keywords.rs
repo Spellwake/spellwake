@@ -557,7 +557,8 @@ pub(super) fn lower_keyword(
         "equip" => lower_equip_keyword(param, program, vocabulary, ids),
         "scavenge" => {
             let p_str = param.ok_or("oracle:kw-param")?;
-            let (mana_cost, 0, hybrids) = parse_mana_cost_full(p_str).ok_or("oracle:kw-param")?
+            let (mana_cost, 0, hybrids, snow) =
+                parse_mana_cost_with_snow(p_str).ok_or("oracle:kw-param")?
             else {
                 return Err("oracle:kw-param");
             };
@@ -572,6 +573,11 @@ pub(super) fn lower_keyword(
             let id = ids.activated();
             if !hybrids.is_empty() {
                 program.activation_hybrid_symbols.insert(id, hybrids);
+            }
+            if let Some(nz_snow) = NonZeroU8::new(snow) {
+                program
+                    .extra_activation_costs
+                    .insert(id, vec![ExtraActivationCost::PaySnowMana(nz_snow)]);
             }
             program
                 .activation_restrictions
@@ -657,11 +663,23 @@ pub(super) fn lower_keyword(
             Ok(())
         }
         "cycling" => {
-            let cost = param
-                .and_then(parse_fixed_mana_cost)
-                .ok_or("oracle:cycling-non-mana")?;
+            let (cost, 0, hybrids, snow) = param
+                .and_then(parse_mana_cost_with_snow)
+                .ok_or("oracle:cycling-non-mana")?
+            else {
+                return Err("oracle:cycling-non-mana");
+            };
+            let id = ids.activated();
+            if !hybrids.is_empty() {
+                program.activation_hybrid_symbols.insert(id, hybrids);
+            }
+            if let Some(nz_snow) = NonZeroU8::new(snow) {
+                program
+                    .extra_activation_costs
+                    .insert(id, vec![ExtraActivationCost::PaySnowMana(nz_snow)]);
+            }
             program.activated.push(ActivatedAbility {
-                id: ids.activated(),
+                id,
                 mana_cost: cost,
                 source_cost: SourceCost::HandDiscardSelf(HandDiscardKeyword::Cycling),
                 body: ExecutableBody::new(
@@ -677,10 +695,21 @@ pub(super) fn lower_keyword(
             lower_typecycling_keyword(s, param, program, vocabulary, ids)
         }
         "transmute" => {
-            let cost = param
-                .and_then(parse_fixed_mana_cost)
-                .ok_or("oracle:transmute-cost")?;
+            let (cost, 0, hybrids, snow) = param
+                .and_then(parse_mana_cost_with_snow)
+                .ok_or("oracle:transmute-cost")?
+            else {
+                return Err("oracle:transmute-cost");
+            };
             let id = ids.activated();
+            if !hybrids.is_empty() {
+                program.activation_hybrid_symbols.insert(id, hybrids);
+            }
+            if let Some(nz_snow) = NonZeroU8::new(snow) {
+                program
+                    .extra_activation_costs
+                    .insert(id, vec![ExtraActivationCost::PaySnowMana(nz_snow)]);
+            }
             program.activated.push(ActivatedAbility {
                 id,
                 mana_cost: cost,
@@ -701,10 +730,21 @@ pub(super) fn lower_keyword(
             Ok(())
         }
         "unearth" => {
-            let cost = param
-                .and_then(parse_fixed_mana_cost)
-                .ok_or("oracle:unearth-cost")?;
+            let (cost, 0, hybrids, snow) = param
+                .and_then(parse_mana_cost_with_snow)
+                .ok_or("oracle:unearth-cost")?
+            else {
+                return Err("oracle:unearth-cost");
+            };
             let id = ids.activated();
+            if !hybrids.is_empty() {
+                program.activation_hybrid_symbols.insert(id, hybrids);
+            }
+            if let Some(nz_snow) = NonZeroU8::new(snow) {
+                program
+                    .extra_activation_costs
+                    .insert(id, vec![ExtraActivationCost::PaySnowMana(nz_snow)]);
+            }
             program.activated.push(ActivatedAbility {
                 id,
                 mana_cost: cost,
@@ -954,20 +994,31 @@ pub(super) fn lower_keyword(
             Ok(())
         }
         "kicker" => {
-            let (cost, x) = param
-                .and_then(parse_mana_cost_with_x)
-                .ok_or("oracle:kicker-non-mana")?;
-            if x == 0 {
-                program
-                    .additional_cast_costs
-                    .push(AdditionalCastCost::Kicker(cost));
-            } else if x == 1 {
-                program
-                    .additional_cast_costs
-                    .push(AdditionalCastCost::KickerX(cost));
-            } else {
-                return Err("oracle:kicker-multi-x");
+            let p = param.ok_or("oracle:kicker-non-mana")?;
+            let trimmed = p
+                .trim()
+                .trim_start_matches(['\u{2014}', '\u{2013}', '-', ':'])
+                .trim()
+                .trim_end_matches('.')
+                .trim();
+            if trimmed.is_empty() {
+                return Err("oracle:kicker-non-mana");
             }
+            let branches = split_kicker_and_or(trimmed);
+            let mut lowered_costs = Vec::with_capacity(branches.len());
+            for raw_branch in branches {
+                let branch = raw_branch
+                    .trim()
+                    .trim_start_matches(['\u{2014}', '\u{2013}', '-', ':'])
+                    .trim()
+                    .trim_end_matches('.')
+                    .trim();
+                if branch.is_empty() {
+                    return Err("oracle:kicker-non-mana");
+                }
+                lowered_costs.push(lower_single_kicker_branch(branch, vocabulary)?);
+            }
+            program.additional_cast_costs.extend(lowered_costs);
             Ok(())
         }
         "multikicker" => {
@@ -1435,10 +1486,21 @@ pub(super) fn lower_keyword(
             Ok(())
         }
         "outlast" => {
-            let cost = param
-                .and_then(parse_fixed_mana_cost)
-                .ok_or("oracle:outlast-cost")?;
+            let (cost, 0, hybrids, snow) = param
+                .and_then(parse_mana_cost_with_snow)
+                .ok_or("oracle:outlast-cost")?
+            else {
+                return Err("oracle:outlast-cost");
+            };
             let id = ids.activated();
+            if !hybrids.is_empty() {
+                program.activation_hybrid_symbols.insert(id, hybrids);
+            }
+            if let Some(nz_snow) = NonZeroU8::new(snow) {
+                program
+                    .extra_activation_costs
+                    .insert(id, vec![ExtraActivationCost::PaySnowMana(nz_snow)]);
+            }
             program.activated.push(ActivatedAbility {
                 id,
                 mana_cost: cost,
@@ -2886,12 +2948,15 @@ fn lower_equip_keyword(
         return Err("oracle:equip-non-mana");
     }
 
-    // Fast path for plain or hybrid mana equip costs without loading the compiler vocabulary.
-    if let Some((mana_cost, 0, hybrids)) = parse_mana_cost_full(core) {
+    // Fast path for plain, hybrid, or snow mana equip costs without loading the compiler vocabulary.
+    if let Some((mana_cost, 0, hybrids, snow)) = parse_mana_cost_with_snow(core) {
+        let extra = NonZeroU8::new(snow)
+            .map(|nz| vec![ExtraActivationCost::PaySnowMana(nz)])
+            .unwrap_or_default();
         emit_equip_ability(
             program,
             ids,
-            (mana_cost, SourceCost::None, hybrids, Vec::new()),
+            (mana_cost, SourceCost::None, hybrids, extra),
             BodyTarget::SingleCreature,
             restriction,
         );
@@ -2941,6 +3006,102 @@ fn emit_equip_ability(
         source_cost,
         body: ExecutableBody::new(target, vec![Instruction::Attach(AttachAbility::Equip)]),
     });
+}
+
+fn split_kicker_and_or(raw: &str) -> Vec<&str> {
+    let low = raw.to_ascii_lowercase();
+    let needle = " and/or ";
+    let mut parts = Vec::new();
+    let mut start = 0usize;
+    while let Some(rel) = low[start..].find(needle) {
+        let end = start + rel;
+        parts.push(&raw[start..end]);
+        start = end + needle.len();
+    }
+    parts.push(&raw[start..]);
+    parts
+}
+
+fn lower_single_kicker_branch(
+    branch: &str,
+    vocabulary: &CreatureTypeVocabulary,
+) -> Result<AdditionalCastCost, &'static str> {
+    if let Some((cost, x, hybrids, snow)) = parse_mana_cost_with_snow(branch)
+        && hybrids.is_empty()
+    {
+        if snow == 0 {
+            return match x {
+                0 => Ok(AdditionalCastCost::Kicker(cost)),
+                1 => Ok(AdditionalCastCost::KickerX(cost)),
+                _ => Err("oracle:kicker-multi-x"),
+            };
+        }
+        if x == 0
+            && let Some(nz_snow) = NonZeroU8::new(snow)
+        {
+            return Ok(AdditionalCastCost::KickerExtra {
+                mana: cost,
+                extra: vec![ExtraActivationCost::PaySnowMana(nz_snow)],
+            });
+        }
+        return Err("oracle:kicker-non-mana");
+    }
+
+    let compiler_vocab = cached_compiler_vocab(vocabulary);
+    let atoms = spellwake_oracle_compiler::clauses::parse_cost_list(branch, &compiler_vocab)
+        .map_err(|_| "oracle:kicker-non-mana")?;
+    if atoms.is_empty() {
+        return Err("oracle:kicker-non-mana");
+    }
+    let mut mana = ManaCost::free();
+    let mut snow_mana: u8 = 0;
+    let mut extra = Vec::new();
+    for atom in &atoms {
+        match atom {
+            CostAtomAst::PayMana(raw) => {
+                let (mc, x, hybs, snow) =
+                    parse_mana_cost_with_snow(raw).ok_or("oracle:kicker-non-mana")?;
+                if x > 0 || !hybs.is_empty() {
+                    return Err("oracle:kicker-non-mana");
+                }
+                mana.generic = mana.generic.plus(&mc.generic);
+                for (k, v) in mc.required {
+                    let entry = mana.required.entry(k).or_insert_with(|| 0.into());
+                    *entry = entry.plus(&v);
+                }
+                snow_mana = snow_mana
+                    .checked_add(snow)
+                    .ok_or("oracle:kicker-non-mana")?;
+            }
+            other => {
+                let lowered = lower_extra_cost_atom(other, vocabulary)
+                    .map_err(|_| "oracle:kicker-non-mana")?;
+                if matches!(
+                    lowered,
+                    ExtraActivationCost::TapSource
+                        | ExtraActivationCost::UntapSource
+                        | ExtraActivationCost::SacrificeSource
+                        | ExtraActivationCost::ExertSource
+                        | ExtraActivationCost::ReturnSourceToHand
+                        | ExtraActivationCost::SourceCounter { .. }
+                        | ExtraActivationCost::DiscardSource
+                        | ExtraActivationCost::ExileSource { .. }
+                        | ExtraActivationCost::RevealSource
+                ) {
+                    return Err("oracle:kicker-non-mana");
+                }
+                extra.push(lowered);
+            }
+        }
+    }
+    if let Some(nz_snow) = NonZeroU8::new(snow_mana) {
+        extra.push(ExtraActivationCost::PaySnowMana(nz_snow));
+    }
+    if extra.is_empty() {
+        Ok(AdditionalCastCost::Kicker(mana))
+    } else {
+        Ok(AdditionalCastCost::KickerExtra { mana, extra })
+    }
 }
 
 fn trim_equip_param(raw: &str) -> &str {
@@ -3013,8 +3174,11 @@ fn parse_single_equip_cost(
     if cleaned.is_empty() {
         return None;
     }
-    if let Some((mc, 0, hybs)) = parse_mana_cost_full(&cleaned) {
-        return Some((mc, SourceCost::None, hybs, Vec::new()));
+    if let Some((mc, 0, hybs, snow)) = parse_mana_cost_with_snow(&cleaned) {
+        let extra = NonZeroU8::new(snow)
+            .map(|nz| vec![ExtraActivationCost::PaySnowMana(nz)])
+            .unwrap_or_default();
+        return Some((mc, SourceCost::None, hybs, extra));
     }
     let low = cleaned.to_ascii_lowercase();
     if low.contains("where x is") {

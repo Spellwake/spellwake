@@ -572,24 +572,51 @@ pub(crate) fn evaluate(
                 })
                 .collect::<Result<_, _>>()?;
             let mut original_waits = BTreeSet::new();
-            for (a_key, a) in &remaining {
-                for b_key in remaining.keys().filter(|key| *key != a_key) {
-                    let mut probe = objects.clone();
-                    apply(&generated[b_key], &mut probe, &world.state.speed);
-                    let after = generate(
-                        world,
-                        *a,
-                        bucket,
-                        &probe,
-                        &battlefield,
-                        &trace.bindings,
-                        world.name_rules,
-                    )?;
-                    if !generated[a_key].same_semantics(&after) {
-                        original_waits.insert(ComponentWait {
-                            waiting: *a_key,
-                            prerequisite: *b_key,
-                        });
+            if remaining.len() > 1 {
+                for b_key in remaining.keys() {
+                    let b_comp = &generated[b_key];
+                    if b_comp.generated.is_empty() {
+                        continue;
+                    }
+                    let saved: Vec<(ObjectId, ObjectCharacteristics)> = b_comp
+                        .generated
+                        .keys()
+                        .filter_map(|id| objects.get(id).cloned().map(|prev| (*id, prev)))
+                        .collect();
+                    apply(b_comp, &mut objects, &world.state.speed);
+                    let mut err = None;
+                    for (a_key, a) in &remaining {
+                        if a_key == b_key {
+                            continue;
+                        }
+                        match generate(
+                            world,
+                            *a,
+                            bucket,
+                            &objects,
+                            &battlefield,
+                            &trace.bindings,
+                            world.name_rules,
+                        ) {
+                            Ok(after) => {
+                                if !generated[a_key].same_semantics(&after) {
+                                    original_waits.insert(ComponentWait {
+                                        waiting: *a_key,
+                                        prerequisite: *b_key,
+                                    });
+                                }
+                            }
+                            Err(e) => {
+                                err = Some(e);
+                                break;
+                            }
+                        }
+                    }
+                    for (id, prev) in saved {
+                        objects.insert(id, prev);
+                    }
+                    if let Some(e) = err {
+                        return Err(e);
                     }
                 }
             }
@@ -740,6 +767,7 @@ pub(crate) fn evaluate(
                     &battlefield,
                     world.name_rules,
                     world.combat,
+                    Some(world.state),
                 );
                 for target_id in affected {
                     let flag = match kind {
@@ -1106,6 +1134,8 @@ fn apply_definitions(
     }
     Ok(())
 }
+// Private selector helper passes borrowed evaluation context slices directly to avoid allocating a wrapper struct on hot layer sweeps.
+#[allow(clippy::too_many_arguments)]
 fn select_affected(
     selector: &PermanentSelector,
     source: ObjectId,
@@ -1114,6 +1144,7 @@ fn select_affected(
     battlefield: &BTreeSet<ObjectId>,
     name_rules: &NameRules,
     combat: Option<&crate::combat::CombatState>,
+    state: Option<&super::CharacteristicState>,
 ) -> BTreeSet<ObjectId> {
     if let Some(subtype) = selector.controlled_creatures_and_typed_tokens {
         return objects
@@ -1244,6 +1275,31 @@ fn select_affected(
                 && selector
                     .required_keyword
                     .is_none_or(|kw| object.has_keyword(kw))
+                && selector
+                    .extra_required_keyword
+                    .is_none_or(|kw| object.has_keyword(kw))
+                && (!selector.requires_toxic
+                    || object
+                        .toxic_value
+                        .as_ref()
+                        .is_some_and(RulesInteger::is_positive))
+                && selector.required_counter_kind.is_none_or(|kind| {
+                    if let Some(st) = state {
+                        st.permanent_counter_count(*id, kind).is_positive()
+                    } else {
+                        match kind {
+                            crate::effects::CounterKind::PlusOne => object.has_plus_one_counter,
+                            crate::effects::CounterKind::MinusOne => object.has_minus_one_counter,
+                            crate::effects::CounterKind::Charge => {
+                                object.charge_counters.is_positive()
+                            }
+                            crate::effects::CounterKind::Blessing => {
+                                object.blessing_counters.is_positive()
+                            }
+                            _ => object.has_any_counter,
+                        }
+                    }
+                })
                 && selector
                     .forbidden_keyword
                     .is_none_or(|kw| !object.has_keyword(kw))
@@ -1509,6 +1565,7 @@ fn static_source_condition_met(
                     battlefield,
                     world.name_rules,
                     world.combat,
+                    Some(world.state),
                 )
                 .contains(&host)
             }),
@@ -1525,6 +1582,7 @@ fn static_source_condition_met(
                 battlefield,
                 world.name_rules,
                 world.combat,
+                Some(world.state),
             ) == i64::from(*count).into()
         }
         SourceIsTapped => objects.get(&source).is_some_and(|o| o.tapped == Some(true)),
@@ -1687,6 +1745,7 @@ fn static_source_condition_met(
                 battlefield,
                 world.name_rules,
                 world.combat,
+                Some(world.state),
             ) >= i64::from(*minimum).into()
         }
         OpponentControlsMatching { selector, minimum } => {
@@ -1702,6 +1761,7 @@ fn static_source_condition_met(
                 battlefield,
                 world.name_rules,
                 world.combat,
+                Some(world.state),
             ) >= i64::from(*minimum).into()
         }
         Eval(cond) => {
@@ -1783,6 +1843,7 @@ fn numeric(
             battlefield,
             name_rules,
             world.combat,
+            Some(world.state),
         )
         .times(multiplier)
         .plus(offset),
@@ -1947,6 +2008,8 @@ fn numeric(
         }
     }
 }
+// Private wrapper forwarding the same borrowed layer-evaluation context to select_affected.
+#[allow(clippy::too_many_arguments)]
 fn count_matching(
     selector: &PermanentSelector,
     source: ObjectId,
@@ -1955,6 +2018,7 @@ fn count_matching(
     battlefield: &BTreeSet<ObjectId>,
     name_rules: &NameRules,
     combat: Option<&crate::combat::CombatState>,
+    state: Option<&super::CharacteristicState>,
 ) -> RulesInteger {
     select_affected(
         selector,
@@ -1964,6 +2028,7 @@ fn count_matching(
         battlefield,
         name_rules,
         combat,
+        state,
     )
     .iter()
     .fold(0.into(), |count: RulesInteger, _| count.plus(&1.into()))
@@ -1991,6 +2056,7 @@ pub(crate) fn count_permanents(
         &battlefield,
         name_rules,
         None,
+        None,
     )
 }
 /// Whether a battlefield `selector` hosted by `source` (`controller`) matches `candidate`.
@@ -2015,6 +2081,7 @@ pub(crate) fn selector_matches_permanent(
         &evaluated.objects,
         &battlefield,
         name_rules,
+        None,
         None,
     )
     .contains(&candidate)
@@ -2174,6 +2241,7 @@ fn generate(
                     battlefield,
                     name_rules,
                     world.combat,
+                    Some(world.state),
                 ),
             };
             let operation = if affected.is_empty() {
@@ -2521,6 +2589,7 @@ fn generate(
                     battlefield,
                     name_rules,
                     world.combat,
+                    Some(world.state),
                 ),
             };
             // Empty generated data is independent of unused numeric/source values.
@@ -2933,6 +3002,10 @@ fn apply_part(
         }
         ResolvedPart::BlockingRestriction(value) => {
             object.blocking_restrictions.push(value.clone())
+        }
+        ResolvedPart::CannotBeTargetedByColors(colors) => {
+            object.cannot_be_targeted_by_colors =
+                object.cannot_be_targeted_by_colors.union(*colors);
         }
         ResolvedPart::Abilities(change) => {
             if change.removal == Some(AbilityRemoval::Flying) {

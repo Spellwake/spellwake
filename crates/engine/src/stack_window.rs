@@ -3357,7 +3357,10 @@ impl StackWindow {
             {
                 match placement {
                     crate::program::LibraryPlacement::Top => ObjectDestination::LibraryTop,
-                    crate::program::LibraryPlacement::Bottom => ObjectDestination::LibraryBottom,
+                    crate::program::LibraryPlacement::Bottom
+                    | crate::program::LibraryPlacement::BottomRandom => {
+                        ObjectDestination::LibraryBottom
+                    }
                     crate::program::LibraryPlacement::FromTop(offset) => {
                         ObjectDestination::LibraryFromTop(offset)
                     }
@@ -3366,8 +3369,11 @@ impl StackWindow {
                     }
                 }
             } else {
+                let controller = (destination
+                    == crate::program::PublicZoneDestination::Battlefield)
+                    .then_some(object.owner());
                 destination
-                    .physical(None)
+                    .physical(controller)
                     .ok_or(StackWindowError::InvalidResolutionMove)?
             };
             moves.push((id, physical));

@@ -132,6 +132,10 @@ pub enum AttackTriggerMode {
     AtEnchantedPlayer,
     /// At least `u8` matching creatures attack together in a single attack declaration.
     GroupAtLeast(u8),
+    /// A matching creature attacks the player who is currently the monarch.
+    AtMonarch,
+    /// A matching creature attacks the player who currently has the initiative.
+    AtInitiative,
 }
 
 /// Block-declaration matching mode.
@@ -155,6 +159,13 @@ pub enum BlockTriggerKind {
     BlockedByMatching(Box<ObjectFilter>),
     /// Once per attacker matching `ObjectFilter` blocked by `subject`.
     BlocksMatching(Box<ObjectFilter>),
+    /// `subject` becomes blocked by at least `min_count` creatures (optionally matching `blocker_filter`).
+    BlockedByAtLeast {
+        min_count: u8,
+        blocker_filter: Option<Box<ObjectFilter>>,
+    },
+    /// `subject` blocks or becomes blocked by a creature matching `ObjectFilter`.
+    BlocksOrBlockedByMatching(Box<ObjectFilter>),
 }
 
 /// Damage recipient predicate on a `DealsDamage` trigger.
@@ -274,6 +285,10 @@ pub enum PlayerTriggerAction {
     KickedSpell,
     ScryToBottom,
     Waterbended,
+    /// Players finish voting (CR 701.32).
+    FinishedVoting,
+    /// A spell cast by `player` is countered.
+    OwnSpellCountered,
 }
 
 /// Status or physical-transition trigger on a permanent.
@@ -283,7 +298,9 @@ pub enum StatusTriggerKind {
     BecomesUntapped,
     TurnsFaceUp,
     Transforms,
-    Phased { out: bool },
+    Phased {
+        out: bool,
+    },
     Mutated,
     Crewed,
     Exerted,
@@ -292,6 +309,8 @@ pub enum StatusTriggerKind {
     ClassLevelReached(u8),
     CaseSolved,
     BecomesMonstrous,
+    /// Permanent becomes renowned (CR 702.112).
+    BecomesRenowned,
 }
 
 /// Keyword-owned trigger event with specialized rules semantics.
@@ -611,6 +630,18 @@ pub enum TriggerEvent {
         subject: ObjectFilter,
         fully_unlocked_only: bool,
     },
+    /// A permanent matching `subject` enters the battlefield without being played as a land.
+    EntersWithoutBeingPlayed {
+        subject: ObjectFilter,
+    },
+    /// Damage threshold trigger: `source` deals at least (or exactly) `min_damage` damage to `recipient`.
+    DealsAtLeastDamage {
+        source: ObjectFilter,
+        recipient: DamageTriggerRecipient,
+        min_damage: u16,
+        exact: bool,
+        combat_only: Option<bool>,
+    },
 }
 
 impl TriggerEvent {
@@ -670,10 +701,11 @@ impl TriggerEvent {
             | Self::TargetedByController { subject, .. }
             | Self::CountersChanged { subject, .. }
             | Self::StatusChanged { subject, .. }
-            | Self::DoorUnlocked { subject, .. } => subject.rewrite_creature_type(from, to),
-            Self::DealsDamage { source, .. } | Self::DealsNoncombatDamage { source, .. } => {
-                source.rewrite_creature_type(from, to)
-            }
+            | Self::DoorUnlocked { subject, .. }
+            | Self::EntersWithoutBeingPlayed { subject } => subject.rewrite_creature_type(from, to),
+            Self::DealsDamage { source, .. }
+            | Self::DealsNoncombatDamage { source, .. }
+            | Self::DealsAtLeastDamage { source, .. } => source.rewrite_creature_type(from, to),
             Self::AbilityActivated { source_filter, .. } => {
                 source_filter.rewrite_creature_type(from, to);
             }
@@ -694,7 +726,12 @@ impl TriggerEvent {
                         required_subtype: Some(subtype),
                     } => word(subtype),
                     BlockTriggerKind::BlockedByMatching(other)
-                    | BlockTriggerKind::BlocksMatching(other) => {
+                    | BlockTriggerKind::BlocksMatching(other)
+                    | BlockTriggerKind::BlocksOrBlockedByMatching(other)
+                    | BlockTriggerKind::BlockedByAtLeast {
+                        blocker_filter: Some(other),
+                        ..
+                    } => {
                         other.rewrite_creature_type(from, to);
                     }
                     _ => {}
@@ -758,10 +795,11 @@ impl TriggerEvent {
             | Self::TargetedByController { subject, .. }
             | Self::CountersChanged { subject, .. }
             | Self::StatusChanged { subject, .. }
-            | Self::DoorUnlocked { subject, .. } => subject.validate_vocabulary(vocabulary),
-            Self::DealsDamage { source, .. } | Self::DealsNoncombatDamage { source, .. } => {
-                source.validate_vocabulary(vocabulary)
-            }
+            | Self::DoorUnlocked { subject, .. }
+            | Self::EntersWithoutBeingPlayed { subject } => subject.validate_vocabulary(vocabulary),
+            Self::DealsDamage { source, .. }
+            | Self::DealsNoncombatDamage { source, .. }
+            | Self::DealsAtLeastDamage { source, .. } => source.validate_vocabulary(vocabulary),
             Self::AbilityActivated { source_filter, .. } => {
                 source_filter.validate_vocabulary(vocabulary)
             }
@@ -783,7 +821,12 @@ impl TriggerEvent {
                         required_subtype: Some(subtype),
                     } => check(*subtype)?,
                     BlockTriggerKind::BlockedByMatching(other)
-                    | BlockTriggerKind::BlocksMatching(other) => {
+                    | BlockTriggerKind::BlocksMatching(other)
+                    | BlockTriggerKind::BlocksOrBlockedByMatching(other)
+                    | BlockTriggerKind::BlockedByAtLeast {
+                        blocker_filter: Some(other),
+                        ..
+                    } => {
                         other.validate_vocabulary(vocabulary)?;
                     }
                     _ => {}

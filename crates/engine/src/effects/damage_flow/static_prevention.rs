@@ -262,8 +262,10 @@ impl EffectWindow {
             return Err(EffectError::WrongDamageFrame);
         };
         let allocations = work.batch.prevent_all_but_one(application, eligible)?;
+        let prevented = Self::allocations_total(&allocations);
         let batch = work.batch.id();
         let stage = work.batch.stage();
+        self.record_resolution_damage_prevented(&prevented);
         self.emit_from(
             EventCause::DamageAdjusted { batch },
             &before,
@@ -398,8 +400,10 @@ impl EffectWindow {
             }
             _ => work.batch.prevent_all(recipient, eligible)?,
         };
+        let prevented = Self::allocations_total(&allocations);
         let batch = work.batch.id();
         let stage = work.batch.stage();
+        self.record_resolution_damage_prevented(&prevented);
         self.emit_from(
             EventCause::DamageAdjusted { batch },
             &before,
@@ -418,7 +422,107 @@ impl EffectWindow {
     }
 }
 
+struct PreventFollowupContext {
+    source_object: Option<ObjectId>,
+    ability_id: crate::characteristics::StaticAbilityId,
+    rule_controller: SeatId,
+    target_recipient: DamageRecipient,
+    damage_source_controller: SeatId,
+    prevented: RulesInteger,
+}
+
 impl EffectWindow {
+    fn allocations_total(allocations: &[DamageAllocation]) -> RulesInteger {
+        allocations
+            .iter()
+            .fold(RulesInteger::from(0), |sum, row| sum.plus(&row.amount))
+    }
+
+    fn pending_removed_counters(
+        followups: &VecDeque<DamageFollowup>,
+        object: ObjectId,
+        kind: CounterKind,
+    ) -> RulesInteger {
+        followups
+            .iter()
+            .fold(RulesInteger::from(0), |sum, followup| match followup {
+                DamageFollowup::RemoveCounters {
+                    object: target,
+                    kind: k,
+                    count,
+                } if *target == object && *k == kind => sum.plus(count),
+                DamageFollowup::RemovePlusOneCounter {
+                    object: target,
+                    count,
+                } if *target == object && kind == CounterKind::PlusOne => sum.plus(count),
+                DamageFollowup::RemoveShieldCounter(target)
+                    if *target == object && kind == CounterKind::Shield =>
+                {
+                    sum.plus(&1.into())
+                }
+                _ => sum,
+            })
+    }
+
+    fn queue_damage_prevent_followup(
+        followups: &mut VecDeque<DamageFollowup>,
+        followup: crate::characteristics::DamagePreventFollowup,
+        ctx: PreventFollowupContext,
+    ) {
+        if !ctx.prevented.is_positive() {
+            return;
+        }
+        match followup {
+            crate::characteristics::DamagePreventFollowup::PutCountersOnRecipient {
+                kind,
+                per_prevented,
+            } => {
+                let count = if per_prevented {
+                    ctx.prevented
+                } else {
+                    1.into()
+                };
+                followups.push_back(DamageFollowup::PutCounters {
+                    target: ctx.target_recipient,
+                    kind,
+                    count,
+                });
+            }
+            crate::characteristics::DamagePreventFollowup::RemoveCountersFromSource {
+                kind,
+                per_prevented,
+            } => {
+                if let Some(object) = ctx.source_object {
+                    let count = if per_prevented {
+                        ctx.prevented
+                    } else {
+                        1.into()
+                    };
+                    followups.push_back(DamageFollowup::RemoveCounters {
+                        object,
+                        kind,
+                        count,
+                    });
+                }
+            }
+            crate::characteristics::DamagePreventFollowup::InlineBody(body) => {
+                followups.push_back(DamageFollowup::InlineBody {
+                    replacement: Box::new(
+                        crate::effects::event_replacement::EventBodyReplacement {
+                            source: ctx.source_object,
+                            ability: ctx.ability_id,
+                            controller: ctx.rule_controller,
+                            affected_player: ctx.damage_source_controller,
+                            optional: false,
+                            body: *body,
+                        },
+                    ),
+                    prevented: ctx.prevented,
+                });
+            }
+        }
+    }
+
     pub(super) fn static_damage_modifications(
         &self,
         evaluated: &EvaluatedCharacteristics,
@@ -683,20 +787,60 @@ impl EffectWindow {
                     }
                     _ => {}
                 }
-                let crate::characteristics::StaticContinuousAbility::DamageRule {
-                    id: rule_id,
-                    rule:
-                        crate::characteristics::StaticDamageRule::ModifyDamage {
-                            source: source_filter,
+                let (rule_id, condition, source_filter, source_controller, recipient, kind, op) =
+                    match ability {
+                        crate::characteristics::StaticContinuousAbility::DamageRule {
+                            id: rule_id,
+                            rule:
+                                crate::characteristics::StaticDamageRule::ModifyDamage {
+                                    source: source_filter,
+                                    source_controller,
+                                    recipient,
+                                    kind,
+                                    op,
+                                },
+                        } => (
+                            rule_id,
+                            None,
+                            source_filter,
                             source_controller,
                             recipient,
                             kind,
                             op,
-                        },
-                } = ability
-                else {
+                        ),
+                        crate::characteristics::StaticContinuousAbility::DamageRule {
+                            id: rule_id,
+                            rule:
+                                crate::characteristics::StaticDamageRule::ConditionalModifyDamage {
+                                    condition,
+                                    source: source_filter,
+                                    source_controller,
+                                    recipient,
+                                    kind,
+                                    op,
+                                },
+                        } => (
+                            rule_id,
+                            Some(condition.as_ref()),
+                            source_filter,
+                            source_controller,
+                            recipient,
+                            kind,
+                            op,
+                        ),
+                        _ => continue,
+                    };
+                if let Some(cond) = condition
+                    && !self.eval_static_source_condition_at(
+                        evaluated,
+                        cond,
+                        Some(permanent.object),
+                        controller,
+                        None,
+                    )
+                {
                     continue;
-                };
+                }
                 let kind_matches = match kind {
                     crate::characteristics::StaticDamageKind::Any => true,
                     crate::characteristics::StaticDamageKind::CombatOnly => {
@@ -708,6 +852,58 @@ impl EffectWindow {
                 };
                 if !kind_matches {
                     continue;
+                }
+                match op {
+                    crate::characteristics::StaticDamageOp::PreventUpToExpr(expr) => {
+                        let ctx = crate::characteristics::WorldEvalCtx {
+                            active_player: self.window.active_player(),
+                            participants: self.window.participants(),
+                            life: Some(&self.life),
+                            combat: self.combat.as_ref(),
+                            cards: self.window.cards(),
+                            programs: &self.programs,
+                            state: &self.characteristics,
+                            objects: &evaluated.objects,
+                            source: permanent.object,
+                            controller,
+                            name_rules: &self.name_rules,
+                            trigger_subject: None,
+                            related_player: None,
+                            defending_player: None,
+                        };
+                        if !crate::characteristics::eval_world_value_expr(&ctx, expr).is_positive()
+                        {
+                            continue;
+                        }
+                    }
+                    crate::characteristics::StaticDamageOp::PreventAndFollowup { mode, .. } => {
+                        match mode {
+                            crate::characteristics::DamagePreventMode::UpTo(0) => continue,
+                            crate::characteristics::DamagePreventMode::UpToSourceCounters(
+                                counter_kind,
+                            ) => {
+                                let pending_removed = match &self.pending_work {
+                                    Some(PendingWork::Damage(work)) => {
+                                        Self::pending_removed_counters(
+                                            &work.followups,
+                                            permanent.object,
+                                            *counter_kind,
+                                        )
+                                    }
+                                    _ => 0.into(),
+                                };
+                                let available = self
+                                    .characteristics
+                                    .permanent_counter_count(permanent.object, *counter_kind)
+                                    .minus(&pending_removed);
+                                if !available.is_positive() {
+                                    continue;
+                                }
+                            }
+                            _ => {}
+                        }
+                    }
+                    _ => {}
                 }
                 let opponents = self
                     .combat_rules
@@ -721,9 +917,27 @@ impl EffectWindow {
                         op,
                         crate::characteristics::StaticDamageOp::PreventAll
                             | crate::characteristics::StaticDamageOp::PreventUpTo(_)
+                            | crate::characteristics::StaticDamageOp::PreventUpToExpr(_)
+                            | crate::characteristics::StaticDamageOp::PreventAndFollowup { .. }
                             | crate::characteristics::StaticDamageOp::PreventAtMost(_)
                             | crate::characteristics::StaticDamageOp::PreventHalf { .. }
                     ) && !component.can_prevent_damage()
+                    {
+                        continue;
+                    }
+                    if matches!(
+                        op,
+                        crate::characteristics::StaticDamageOp::PreventHalf { round_up: false }
+                            | crate::characteristics::StaticDamageOp::PreventAndFollowup {
+                                mode: crate::characteristics::DamagePreventMode::Half {
+                                    round_up: false,
+                                },
+                                ..
+                            }
+                    ) && !component
+                        .remaining()
+                        .nonnegative_half_rounded_down()
+                        .is_positive()
                     {
                         continue;
                     }
@@ -844,20 +1058,51 @@ impl EffectWindow {
             let excluded = BTreeSet::new();
             match &active.rule {
                 crate::program::TemporaryRuleKind::TemporaryStatic(ability) => {
-                    let crate::characteristics::StaticContinuousAbility::DamageRule {
-                        rule:
-                            crate::characteristics::StaticDamageRule::ModifyDamage {
-                                source: source_filter,
+                    let (condition, source_filter, source_controller, recipient, kind, op) =
+                        match ability.as_ref() {
+                            crate::characteristics::StaticContinuousAbility::DamageRule {
+                                rule:
+                                    crate::characteristics::StaticDamageRule::ModifyDamage {
+                                        source: source_filter,
+                                        source_controller,
+                                        recipient,
+                                        kind,
+                                        op,
+                                    },
+                                ..
+                            } => (None, source_filter, source_controller, recipient, kind, op),
+                            crate::characteristics::StaticContinuousAbility::DamageRule {
+                                rule:
+                                    crate::characteristics::StaticDamageRule::ConditionalModifyDamage {
+                                        condition,
+                                        source: source_filter,
+                                        source_controller,
+                                        recipient,
+                                        kind,
+                                        op,
+                                    },
+                                ..
+                            } => (
+                                Some(condition.as_ref()),
+                                source_filter,
                                 source_controller,
                                 recipient,
                                 kind,
                                 op,
-                            },
-                        ..
-                    } = ability.as_ref()
-                    else {
+                            ),
+                            _ => continue,
+                        };
+                    if let Some(cond) = condition
+                        && !self.eval_static_source_condition_at(
+                            evaluated,
+                            cond,
+                            active.source_object,
+                            controller,
+                            None,
+                        )
+                    {
                         continue;
-                    };
+                    }
                     let kind_matches = match kind {
                         crate::characteristics::StaticDamageKind::Any => true,
                         crate::characteristics::StaticDamageKind::CombatOnly => {
@@ -870,6 +1115,62 @@ impl EffectWindow {
                     if !kind_matches {
                         continue;
                     }
+                    match op {
+                        crate::characteristics::StaticDamageOp::PreventUpToExpr(expr) => {
+                            let ctx = crate::characteristics::WorldEvalCtx {
+                                active_player: self.window.active_player(),
+                                participants: self.window.participants(),
+                                life: Some(&self.life),
+                                combat: self.combat.as_ref(),
+                                cards: self.window.cards(),
+                                programs: &self.programs,
+                                state: &self.characteristics,
+                                objects: &evaluated.objects,
+                                source: active.source_object.unwrap_or(ObjectId::SENTINEL),
+                                controller,
+                                name_rules: &self.name_rules,
+                                trigger_subject: None,
+                                related_player: None,
+                                defending_player: None,
+                            };
+                            if !crate::characteristics::eval_world_value_expr(&ctx, expr)
+                                .is_positive()
+                            {
+                                continue;
+                            }
+                        }
+                        crate::characteristics::StaticDamageOp::PreventAndFollowup {
+                            mode, ..
+                        } => match mode {
+                            crate::characteristics::DamagePreventMode::UpTo(0) => continue,
+                            crate::characteristics::DamagePreventMode::UpToSourceCounters(
+                                counter_kind,
+                            ) => {
+                                let Some(src) = active.source_object else {
+                                    continue;
+                                };
+                                let pending_removed = match &self.pending_work {
+                                    Some(PendingWork::Damage(work)) => {
+                                        Self::pending_removed_counters(
+                                            &work.followups,
+                                            src,
+                                            *counter_kind,
+                                        )
+                                    }
+                                    _ => 0.into(),
+                                };
+                                let available = self
+                                    .characteristics
+                                    .permanent_counter_count(src, *counter_kind)
+                                    .minus(&pending_removed);
+                                if !available.is_positive() {
+                                    continue;
+                                }
+                            }
+                            _ => {}
+                        },
+                        _ => {}
+                    }
                     let opponents = self
                         .combat_rules
                         .opponents(self.window.participants(), controller)?;
@@ -881,9 +1182,27 @@ impl EffectWindow {
                             op,
                             crate::characteristics::StaticDamageOp::PreventAll
                                 | crate::characteristics::StaticDamageOp::PreventUpTo(_)
+                                | crate::characteristics::StaticDamageOp::PreventUpToExpr(_)
+                                | crate::characteristics::StaticDamageOp::PreventAndFollowup { .. }
                                 | crate::characteristics::StaticDamageOp::PreventAtMost(_)
                                 | crate::characteristics::StaticDamageOp::PreventHalf { .. }
                         ) && !component.can_prevent_damage()
+                        {
+                            continue;
+                        }
+                        if matches!(
+                            op,
+                            crate::characteristics::StaticDamageOp::PreventHalf { round_up: false }
+                                | crate::characteristics::StaticDamageOp::PreventAndFollowup {
+                                    mode: crate::characteristics::DamagePreventMode::Half {
+                                        round_up: false,
+                                    },
+                                    ..
+                                }
+                        ) && !component
+                            .remaining()
+                            .nonnegative_half_rounded_down()
+                            .is_positive()
                         {
                             continue;
                         }
@@ -1439,6 +1758,7 @@ impl EffectWindow {
             return Err(EffectError::WrongDamageFrame);
         };
         let batch = work.batch.id();
+        let mut prevented_total = RulesInteger::from(0);
         let result = match (application.effect, application.scope) {
             (
                 DamageEffectId::StaticDouble(source)
@@ -1447,14 +1767,14 @@ impl EffectWindow {
                 DamageScope::Component(attempt),
             ) => {
                 let (before, after) = work.batch.double_static_component(application)?;
-                RulesOccurrence::StaticDamageMultiplied {
+                Some(RulesOccurrence::StaticDamageMultiplied {
                     source,
                     batch,
                     attempt,
                     stage: work.batch.stage(),
                     before,
                     after,
-                }
+                })
             }
             (DamageEffectId::StaticModify(source, rule_id), DamageScope::Component(attempt)) => {
                 let damage_rule = before
@@ -1540,7 +1860,10 @@ impl EffectWindow {
                         .redirect_static_component(application, DamageRecipient::Creature(host))?;
                     return Ok(());
                 }
-                let crate::characteristics::StaticDamageRule::ModifyDamage { op, .. } = damage_rule
+                let (crate::characteristics::StaticDamageRule::ModifyDamage { op, .. }
+                | crate::characteristics::StaticDamageRule::ConditionalModifyDamage {
+                    op, ..
+                }) = damage_rule
                 else {
                     return Err(DamageError::InapplicableEffect.into());
                 };
@@ -1555,14 +1878,14 @@ impl EffectWindow {
                         let (before_amt, after_amt) =
                             work.batch
                                 .modify_static_component(application, i64::from(delta), 1)?;
-                        RulesOccurrence::StaticDamageMultiplied {
+                        Some(RulesOccurrence::StaticDamageMultiplied {
                             source,
                             batch,
                             attempt,
                             stage: work.batch.stage(),
                             before: before_amt,
                             after: after_amt,
-                        }
+                        })
                     }
                     crate::characteristics::StaticDamageOp::AddExpr(expr) => {
                         let view = before.view();
@@ -1595,14 +1918,14 @@ impl EffectWindow {
                         };
                         let (before_amt, after_amt) =
                             work.batch.modify_static_component(application, delta, 1)?;
-                        RulesOccurrence::StaticDamageMultiplied {
+                        Some(RulesOccurrence::StaticDamageMultiplied {
                             source,
                             batch,
                             attempt,
                             stage: work.batch.stage(),
                             before: before_amt,
                             after: after_amt,
-                        }
+                        })
                     }
                     crate::characteristics::StaticDamageOp::Subtract(delta) => {
                         let (before_amt, after_amt) = work.batch.modify_static_component(
@@ -1610,14 +1933,14 @@ impl EffectWindow {
                             -i64::from(delta),
                             1,
                         )?;
-                        RulesOccurrence::StaticDamageMultiplied {
+                        Some(RulesOccurrence::StaticDamageMultiplied {
                             source,
                             batch,
                             attempt,
                             stage: work.batch.stage(),
                             before: before_amt,
                             after: after_amt,
-                        }
+                        })
                     }
                     crate::characteristics::StaticDamageOp::CapAt(cap) => {
                         let rem = work
@@ -1635,14 +1958,14 @@ impl EffectWindow {
                         let delta = -i64::try_from(diff).unwrap_or(i64::MAX);
                         let (before_amt, after_amt) =
                             work.batch.modify_static_component(application, delta, 1)?;
-                        RulesOccurrence::StaticDamageMultiplied {
+                        Some(RulesOccurrence::StaticDamageMultiplied {
                             source,
                             batch,
                             attempt,
                             stage: work.batch.stage(),
                             before: before_amt,
                             after: after_amt,
-                        }
+                        })
                     }
                     crate::characteristics::StaticDamageOp::Multiply(factor) => {
                         let (before_amt, after_amt) = work.batch.modify_static_component(
@@ -1650,25 +1973,27 @@ impl EffectWindow {
                             0,
                             i64::from(factor),
                         )?;
-                        RulesOccurrence::StaticDamageMultiplied {
+                        Some(RulesOccurrence::StaticDamageMultiplied {
                             source,
                             batch,
                             attempt,
                             stage: work.batch.stage(),
                             before: before_amt,
                             after: after_amt,
-                        }
+                        })
                     }
                     crate::characteristics::StaticDamageOp::PreventAll => {
                         let allocations =
                             work.batch.limit_damage(application, eligible, 0.into())?;
-                        RulesOccurrence::StaticDamagePrevented {
+                        prevented_total =
+                            prevented_total.plus(&Self::allocations_total(&allocations));
+                        Some(RulesOccurrence::StaticDamagePrevented {
                             source,
                             batch,
                             recipient: target_recipient,
                             stage: work.batch.stage(),
                             allocations,
-                        }
+                        })
                     }
                     crate::characteristics::StaticDamageOp::PreventUpTo(delta) => {
                         let rem = work
@@ -1681,13 +2006,126 @@ impl EffectWindow {
                             .minus(&RulesInteger::from(i64::from(delta)))
                             .max(0.into());
                         let allocations = work.batch.limit_damage(application, eligible, leave)?;
-                        RulesOccurrence::StaticDamagePrevented {
+                        prevented_total =
+                            prevented_total.plus(&Self::allocations_total(&allocations));
+                        Some(RulesOccurrence::StaticDamagePrevented {
                             source,
                             batch,
                             recipient: target_recipient,
                             stage: work.batch.stage(),
                             allocations,
-                        }
+                        })
+                    }
+                    crate::characteristics::StaticDamageOp::PreventUpToExpr(expr) => {
+                        let view = before.view();
+                        let ctrl = view
+                            .evaluated
+                            .get(source)
+                            .and_then(|p| p.controller)
+                            .ok_or(DamageError::InapplicableEffect)?;
+                        let ctx = crate::characteristics::WorldEvalCtx {
+                            active_player: self.window.active_player(),
+                            participants: self.window.participants(),
+                            life: Some(&self.life),
+                            combat: self.combat.as_ref(),
+                            cards: self.window.cards(),
+                            programs: &self.programs,
+                            state: &self.characteristics,
+                            objects: &view.evaluated.objects,
+                            source,
+                            controller: ctrl,
+                            name_rules: &self.name_rules,
+                            trigger_subject: None,
+                            related_player: None,
+                            defending_player: None,
+                        };
+                        let cap = crate::characteristics::eval_world_value_expr(&ctx, &expr)
+                            .max(0.into());
+                        let rem = work
+                            .batch
+                            .component(attempt)
+                            .ok_or(DamageError::InapplicableEffect)?
+                            .remaining()
+                            .clone();
+                        let leave = rem.minus(&cap).max(0.into());
+                        let allocations = work.batch.limit_damage(application, eligible, leave)?;
+                        prevented_total =
+                            prevented_total.plus(&Self::allocations_total(&allocations));
+                        Some(RulesOccurrence::StaticDamagePrevented {
+                            source,
+                            batch,
+                            recipient: target_recipient,
+                            stage: work.batch.stage(),
+                            allocations,
+                        })
+                    }
+                    crate::characteristics::StaticDamageOp::PreventAndFollowup {
+                        mode,
+                        followup,
+                    } => {
+                        let view = before.view();
+                        let rule_ctrl = view
+                            .evaluated
+                            .get(source)
+                            .and_then(|p| p.controller)
+                            .ok_or(DamageError::InapplicableEffect)?;
+                        let component = work
+                            .batch
+                            .component(attempt)
+                            .ok_or(DamageError::InapplicableEffect)?;
+                        let damage_source_ctrl = component.attempt().source.controller();
+                        let rem = component.remaining().clone();
+                        let leave = match mode {
+                            crate::characteristics::DamagePreventMode::All => 0.into(),
+                            crate::characteristics::DamagePreventMode::UpTo(delta) => rem
+                                .minus(&RulesInteger::from(i64::from(delta)))
+                                .max(0.into()),
+                            crate::characteristics::DamagePreventMode::Half { round_up } => {
+                                let half_down = rem.nonnegative_half_rounded_down();
+                                if round_up {
+                                    half_down
+                                } else {
+                                    rem.minus(&half_down)
+                                }
+                            }
+                            crate::characteristics::DamagePreventMode::UpToSourceCounters(
+                                counter_kind,
+                            ) => {
+                                let pending_removed = Self::pending_removed_counters(
+                                    &work.followups,
+                                    source,
+                                    counter_kind,
+                                );
+                                let available = self
+                                    .characteristics
+                                    .permanent_counter_count(source, counter_kind)
+                                    .minus(&pending_removed)
+                                    .max(0.into());
+                                rem.minus(&available).max(0.into())
+                            }
+                        };
+                        let allocations = work.batch.limit_damage(application, eligible, leave)?;
+                        let prevented = Self::allocations_total(&allocations);
+                        prevented_total = prevented_total.plus(&prevented);
+                        Self::queue_damage_prevent_followup(
+                            &mut work.followups,
+                            followup,
+                            PreventFollowupContext {
+                                source_object: Some(source),
+                                ability_id: rule_id,
+                                rule_controller: rule_ctrl,
+                                target_recipient,
+                                damage_source_controller: damage_source_ctrl,
+                                prevented,
+                            },
+                        );
+                        Some(RulesOccurrence::StaticDamagePrevented {
+                            source,
+                            batch,
+                            recipient: target_recipient,
+                            stage: work.batch.stage(),
+                            allocations,
+                        })
                     }
                     crate::characteristics::StaticDamageOp::PreventAtMost(max) => {
                         let rem = work
@@ -1702,13 +2140,15 @@ impl EffectWindow {
                             rem
                         };
                         let allocations = work.batch.limit_damage(application, eligible, leave)?;
-                        RulesOccurrence::StaticDamagePrevented {
+                        prevented_total =
+                            prevented_total.plus(&Self::allocations_total(&allocations));
+                        Some(RulesOccurrence::StaticDamagePrevented {
                             source,
                             batch,
                             recipient: target_recipient,
                             stage: work.batch.stage(),
                             allocations,
-                        }
+                        })
                     }
                     crate::characteristics::StaticDamageOp::PreventHalf { round_up } => {
                         let rem = work
@@ -1724,13 +2164,15 @@ impl EffectWindow {
                             rem.minus(&half_down)
                         };
                         let allocations = work.batch.limit_damage(application, eligible, leave)?;
-                        RulesOccurrence::StaticDamagePrevented {
+                        prevented_total =
+                            prevented_total.plus(&Self::allocations_total(&allocations));
+                        Some(RulesOccurrence::StaticDamagePrevented {
                             source,
                             batch,
                             recipient: target_recipient,
                             stage: work.batch.stage(),
                             allocations,
-                        }
+                        })
                     }
                     crate::characteristics::StaticDamageOp::ReplaceWithMinusOneCounters => {
                         let DamageRecipient::Creature(creature_id) = target_recipient else {
@@ -1793,19 +2235,21 @@ impl EffectWindow {
                     eligible,
                     total.nonnegative_half_rounded_down(),
                 )?;
-                RulesOccurrence::StaticDamagePrevented {
+                prevented_total = prevented_total.plus(&Self::allocations_total(&allocations));
+                Some(RulesOccurrence::StaticDamagePrevented {
                     source: permanent,
                     batch,
                     recipient,
                     stage: work.batch.stage(),
                     allocations,
-                }
+                })
             }
             (DamageEffectId::TemporaryStaticModify(rule_id), DamageScope::Component(attempt)) => {
                 enum TempDamageAction {
                     Modify(
                         Option<ObjectId>,
                         SeatId,
+                        crate::characteristics::StaticAbilityId,
                         crate::characteristics::StaticDamageOp,
                     ),
                     Redirect {
@@ -1828,17 +2272,22 @@ impl EffectWindow {
                         match &active.rule {
                             crate::program::TemporaryRuleKind::TemporaryStatic(ability) => {
                                 if let crate::characteristics::StaticContinuousAbility::DamageRule {
+                                    id: ab_id,
                                     rule:
                                         crate::characteristics::StaticDamageRule::ModifyDamage {
                                             op,
                                             ..
+                                        }
+                                        | crate::characteristics::StaticDamageRule::ConditionalModifyDamage {
+                                            op,
+                                            ..
                                         },
-                                    ..
                                 } = ability.as_ref()
                                 {
                                     Some(TempDamageAction::Modify(
                                         active.source_object,
                                         active.controller,
+                                        *ab_id,
                                         op.clone(),
                                     ))
                                 } else {
@@ -1863,7 +2312,7 @@ impl EffectWindow {
                         }
                     })
                     .ok_or(DamageError::InapplicableEffect)?;
-                let (source_obj, rule_ctrl, op) = match action {
+                let (source_obj, rule_ctrl, ability_id, op) = match action {
                     TempDamageAction::Redirect {
                         controller: r_ctrl,
                         source_object,
@@ -1928,7 +2377,7 @@ impl EffectWindow {
                         }
                         return Ok(());
                     }
-                    TempDamageAction::Modify(s, c, op) => (s, c, op),
+                    TempDamageAction::Modify(s, c, ab_id, op) => (s, c, ab_id, op),
                 };
                 let target_recipient = work
                     .batch
@@ -1941,17 +2390,14 @@ impl EffectWindow {
                         let (before_amt, after_amt) =
                             work.batch
                                 .modify_static_component(application, i64::from(delta), 1)?;
-                        let Some(source) = source_obj else {
-                            return Ok(());
-                        };
-                        RulesOccurrence::StaticDamageMultiplied {
+                        source_obj.map(|source| RulesOccurrence::StaticDamageMultiplied {
                             source,
                             batch,
                             attempt,
                             stage: work.batch.stage(),
                             before: before_amt,
                             after: after_amt,
-                        }
+                        })
                     }
                     crate::characteristics::StaticDamageOp::AddExpr(expr) => {
                         let delta = if let Some(src) = source_obj {
@@ -1984,17 +2430,14 @@ impl EffectWindow {
                         };
                         let (before_amt, after_amt) =
                             work.batch.modify_static_component(application, delta, 1)?;
-                        let Some(source) = source_obj else {
-                            return Ok(());
-                        };
-                        RulesOccurrence::StaticDamageMultiplied {
+                        source_obj.map(|source| RulesOccurrence::StaticDamageMultiplied {
                             source,
                             batch,
                             attempt,
                             stage: work.batch.stage(),
                             before: before_amt,
                             after: after_amt,
-                        }
+                        })
                     }
                     crate::characteristics::StaticDamageOp::Subtract(delta) => {
                         let (before_amt, after_amt) = work.batch.modify_static_component(
@@ -2002,17 +2445,14 @@ impl EffectWindow {
                             -i64::from(delta),
                             1,
                         )?;
-                        let Some(source) = source_obj else {
-                            return Ok(());
-                        };
-                        RulesOccurrence::StaticDamageMultiplied {
+                        source_obj.map(|source| RulesOccurrence::StaticDamageMultiplied {
                             source,
                             batch,
                             attempt,
                             stage: work.batch.stage(),
                             before: before_amt,
                             after: after_amt,
-                        }
+                        })
                     }
                     crate::characteristics::StaticDamageOp::CapAt(cap) => {
                         let rem = work
@@ -2030,17 +2470,14 @@ impl EffectWindow {
                         let delta = -i64::try_from(diff).unwrap_or(i64::MAX);
                         let (before_amt, after_amt) =
                             work.batch.modify_static_component(application, delta, 1)?;
-                        let Some(source) = source_obj else {
-                            return Ok(());
-                        };
-                        RulesOccurrence::StaticDamageMultiplied {
+                        source_obj.map(|source| RulesOccurrence::StaticDamageMultiplied {
                             source,
                             batch,
                             attempt,
                             stage: work.batch.stage(),
                             before: before_amt,
                             after: after_amt,
-                        }
+                        })
                     }
                     crate::characteristics::StaticDamageOp::Multiply(factor) => {
                         let (before_amt, after_amt) = work.batch.modify_static_component(
@@ -2048,31 +2485,27 @@ impl EffectWindow {
                             0,
                             i64::from(factor),
                         )?;
-                        let Some(source) = source_obj else {
-                            return Ok(());
-                        };
-                        RulesOccurrence::StaticDamageMultiplied {
+                        source_obj.map(|source| RulesOccurrence::StaticDamageMultiplied {
                             source,
                             batch,
                             attempt,
                             stage: work.batch.stage(),
                             before: before_amt,
                             after: after_amt,
-                        }
+                        })
                     }
                     crate::characteristics::StaticDamageOp::PreventAll => {
                         let allocations =
                             work.batch.limit_damage(application, eligible, 0.into())?;
-                        let Some(source) = source_obj else {
-                            return Ok(());
-                        };
-                        RulesOccurrence::StaticDamagePrevented {
+                        prevented_total =
+                            prevented_total.plus(&Self::allocations_total(&allocations));
+                        source_obj.map(|source| RulesOccurrence::StaticDamagePrevented {
                             source,
                             batch,
                             recipient: target_recipient,
                             stage: work.batch.stage(),
                             allocations,
-                        }
+                        })
                     }
                     crate::characteristics::StaticDamageOp::PreventUpTo(delta) => {
                         let rem = work
@@ -2085,16 +2518,119 @@ impl EffectWindow {
                             .minus(&RulesInteger::from(i64::from(delta)))
                             .max(0.into());
                         let allocations = work.batch.limit_damage(application, eligible, leave)?;
-                        let Some(source) = source_obj else {
-                            return Ok(());
-                        };
-                        RulesOccurrence::StaticDamagePrevented {
+                        prevented_total =
+                            prevented_total.plus(&Self::allocations_total(&allocations));
+                        source_obj.map(|source| RulesOccurrence::StaticDamagePrevented {
                             source,
                             batch,
                             recipient: target_recipient,
                             stage: work.batch.stage(),
                             allocations,
-                        }
+                        })
+                    }
+                    crate::characteristics::StaticDamageOp::PreventUpToExpr(expr) => {
+                        let view = before.view();
+                        let ctx = crate::characteristics::WorldEvalCtx {
+                            active_player: self.window.active_player(),
+                            participants: self.window.participants(),
+                            life: Some(&self.life),
+                            combat: self.combat.as_ref(),
+                            cards: self.window.cards(),
+                            programs: &self.programs,
+                            state: &self.characteristics,
+                            objects: &view.evaluated.objects,
+                            source: source_obj.unwrap_or(ObjectId::SENTINEL),
+                            controller: rule_ctrl,
+                            name_rules: &self.name_rules,
+                            trigger_subject: None,
+                            related_player: None,
+                            defending_player: None,
+                        };
+                        let cap = crate::characteristics::eval_world_value_expr(&ctx, &expr)
+                            .max(0.into());
+                        let rem = work
+                            .batch
+                            .component(attempt)
+                            .ok_or(DamageError::InapplicableEffect)?
+                            .remaining()
+                            .clone();
+                        let leave = rem.minus(&cap).max(0.into());
+                        let allocations = work.batch.limit_damage(application, eligible, leave)?;
+                        prevented_total =
+                            prevented_total.plus(&Self::allocations_total(&allocations));
+                        source_obj.map(|source| RulesOccurrence::StaticDamagePrevented {
+                            source,
+                            batch,
+                            recipient: target_recipient,
+                            stage: work.batch.stage(),
+                            allocations,
+                        })
+                    }
+                    crate::characteristics::StaticDamageOp::PreventAndFollowup {
+                        mode,
+                        followup,
+                    } => {
+                        let component = work
+                            .batch
+                            .component(attempt)
+                            .ok_or(DamageError::InapplicableEffect)?;
+                        let damage_source_ctrl = component.attempt().source.controller();
+                        let rem = component.remaining().clone();
+                        let leave = match mode {
+                            crate::characteristics::DamagePreventMode::All => 0.into(),
+                            crate::characteristics::DamagePreventMode::UpTo(delta) => rem
+                                .minus(&RulesInteger::from(i64::from(delta)))
+                                .max(0.into()),
+                            crate::characteristics::DamagePreventMode::Half { round_up } => {
+                                let half_down = rem.nonnegative_half_rounded_down();
+                                if round_up {
+                                    half_down
+                                } else {
+                                    rem.minus(&half_down)
+                                }
+                            }
+                            crate::characteristics::DamagePreventMode::UpToSourceCounters(
+                                counter_kind,
+                            ) => {
+                                let available = source_obj.map_or_else(
+                                    || 0.into(),
+                                    |src| {
+                                        let pending_removed = Self::pending_removed_counters(
+                                            &work.followups,
+                                            src,
+                                            counter_kind,
+                                        );
+                                        self.characteristics
+                                            .permanent_counter_count(src, counter_kind)
+                                            .minus(&pending_removed)
+                                            .max(0.into())
+                                    },
+                                );
+                                rem.minus(&available).max(0.into())
+                            }
+                        };
+                        let allocations = work.batch.limit_damage(application, eligible, leave)?;
+                        let prevented = Self::allocations_total(&allocations);
+                        prevented_total = prevented_total.plus(&prevented);
+                        Self::queue_damage_prevent_followup(
+                            &mut work.followups,
+                            followup,
+                            PreventFollowupContext {
+                                source_object: source_obj,
+                                ability_id,
+                                rule_controller: rule_ctrl,
+                                target_recipient,
+                                damage_source_controller: damage_source_ctrl,
+                                prevented,
+                            },
+                        );
+                        source_obj.map(|source| RulesOccurrence::StaticDamagePrevented {
+                            source,
+                            batch,
+                            recipient: target_recipient,
+                            stage: work.batch.stage(),
+                            allocations,
+                        })
                     }
                     crate::characteristics::StaticDamageOp::PreventAtMost(max) => {
                         let rem = work
@@ -2109,16 +2645,15 @@ impl EffectWindow {
                             rem
                         };
                         let allocations = work.batch.limit_damage(application, eligible, leave)?;
-                        let Some(source) = source_obj else {
-                            return Ok(());
-                        };
-                        RulesOccurrence::StaticDamagePrevented {
+                        prevented_total =
+                            prevented_total.plus(&Self::allocations_total(&allocations));
+                        source_obj.map(|source| RulesOccurrence::StaticDamagePrevented {
                             source,
                             batch,
                             recipient: target_recipient,
                             stage: work.batch.stage(),
                             allocations,
-                        }
+                        })
                     }
                     crate::characteristics::StaticDamageOp::PreventHalf { round_up } => {
                         let rem = work
@@ -2134,16 +2669,15 @@ impl EffectWindow {
                             rem.minus(&half_down)
                         };
                         let allocations = work.batch.limit_damage(application, eligible, leave)?;
-                        let Some(source) = source_obj else {
-                            return Ok(());
-                        };
-                        RulesOccurrence::StaticDamagePrevented {
+                        prevented_total =
+                            prevented_total.plus(&Self::allocations_total(&allocations));
+                        source_obj.map(|source| RulesOccurrence::StaticDamagePrevented {
                             source,
                             batch,
                             recipient: target_recipient,
                             stage: work.batch.stage(),
                             allocations,
-                        }
+                        })
                     }
                     crate::characteristics::StaticDamageOp::ReplaceWithMinusOneCounters => {
                         let DamageRecipient::Creature(creature_id) = target_recipient else {
@@ -2230,6 +2764,7 @@ impl EffectWindow {
                 };
                 let leave = rem.minus(&prevented);
                 let allocations = work.batch.limit_damage(application, eligible, leave)?;
+                prevented_total = prevented_total.plus(&Self::allocations_total(&allocations));
                 let stage = work.batch.stage();
                 if let Some(active) = self
                     .temporary_rules
@@ -2249,18 +2784,19 @@ impl EffectWindow {
                         _ => {}
                     }
                 }
-                let Some(source) = source_obj else {
-                    return Ok(());
-                };
-                RulesOccurrence::StaticDamagePrevented {
+                source_obj.map(|source| RulesOccurrence::StaticDamagePrevented {
                     source,
                     batch,
                     recipient: target_recipient,
                     stage,
                     allocations,
-                }
+                })
             }
             _ => return Err(EffectError::WrongDamageFrame),
+        };
+        self.record_resolution_damage_prevented(&prevented_total);
+        let Some(result) = result else {
+            return Ok(());
         };
         self.emit_from(
             EventCause::DamageAdjusted { batch },

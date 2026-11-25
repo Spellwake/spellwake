@@ -897,6 +897,38 @@ impl EffectWindow {
                 .or_else(|| self.resolution_cursor())
                 .and_then(|cursor| cursor.chosen_opponent)
                 .ok_or(EffectError::InvalidResolvingPlayer)?,
+            ResolvingPlayer::LoopPlayer => selection_cursor
+                .or_else(|| self.resolution_cursor())
+                .and_then(|cursor| cursor.results.loop_player)
+                .ok_or(EffectError::InvalidResolvingPlayer)?,
+            ResolvingPlayer::RandomOpponent => {
+                let opponents = self
+                    .combat_rules
+                    .opponents(self.window.participants(), entry.controller())?;
+                if opponents.is_empty() {
+                    return Err(EffectError::InvalidResolvingPlayer);
+                }
+                let pick = if opponents.len() == 1 {
+                    0
+                } else {
+                    let mut h = self.revision
+                        ^ u64::from(entry.controller().0).wrapping_mul(0x9E37_79B9_7F4A_7C15)
+                        ^ u64::try_from(self.window.entries().len())
+                            .unwrap_or(0)
+                            .wrapping_mul(0xBF58_476D_1CE4_E5B9)
+                        ^ u64::try_from(index.unwrap_or(0))
+                            .unwrap_or(0)
+                            .wrapping_mul(0x94D0_49BB_1331_11EB);
+                    h ^= h >> 30;
+                    h = h.wrapping_mul(0xBF58_476D_1CE4_E5B9);
+                    h ^= h >> 27;
+                    h = h.wrapping_mul(0x94D0_49BB_1331_11EB);
+                    h ^= h >> 31;
+                    let denom = u64::try_from(opponents.len()).unwrap_or(1);
+                    usize::try_from(h % denom).unwrap_or(0)
+                };
+                opponents[pick]
+            }
         };
         if !self.window.original_participants().contains(&player) {
             return Err(EffectError::InvalidResolvingPlayer);
@@ -1738,7 +1770,21 @@ impl EffectWindow {
             | Instruction::OfferOpponentsDamage
             | Instruction::TemptWithTokens { .. }
             | Instruction::CreateTokens { .. }
-            | Instruction::CreateAttackingTokens { .. } => Ok(true),
+            | Instruction::CreateAttackingTokens { .. }
+            | Instruction::ForEachPlayer { .. }
+            | Instruction::OfferAnyPlayer { .. }
+            | Instruction::DealDamageToAnnouncedTargets { .. }
+            | Instruction::GrantChosenProtection { .. }
+            | Instruction::RemoveCountersFromSubject { .. }
+            | Instruction::MoveGroupToLibrary { .. }
+            | Instruction::ExileLibraryTopLinked { .. }
+            | Instruction::UntapOrTapSelect { .. }
+            | Instruction::MoveGraveyardGroupOwned { .. }
+            | Instruction::LookTopChooseExt { .. }
+            | Instruction::RevealUntilMatchExt { .. }
+            | Instruction::CreateTokenCopyExt { .. }
+            | Instruction::ExileResolvingSpell
+            | Instruction::ReturnResolvingSpellToHand => Ok(true),
             Instruction::ChooseCreatureType { excluding, .. } => {
                 Ok(excluding.len() < self.creature_vocabulary.len())
             }
@@ -1840,8 +1886,6 @@ impl EffectWindow {
             | Instruction::ExileUntilOtherTargetLeaves
             | Instruction::CopyOtherTargetAsArtifact
             | Instruction::FixedTargetClause(_)
-            | Instruction::ExileResolvingSpell
-            | Instruction::ReturnResolvingSpellToHand
             | Instruction::Ascend
             | Instruction::DestroyFixedTargets
             | Instruction::DestroyTargetAndAttachedEquipment
@@ -2943,7 +2987,19 @@ impl EffectWindow {
             | Instruction::DestroyTargetWithoutRegeneration
             | Instruction::ExileCardsFromGraveyard { .. }
             | Instruction::EndControllerTurn
-            | Instruction::DrawController { .. } => return Ok(false),
+            | Instruction::DrawController { .. }
+            | Instruction::ForEachPlayer { .. }
+            | Instruction::OfferAnyPlayer { .. }
+            | Instruction::DealDamageToAnnouncedTargets { .. }
+            | Instruction::GrantChosenProtection { .. }
+            | Instruction::RemoveCountersFromSubject { .. }
+            | Instruction::MoveGroupToLibrary { .. }
+            | Instruction::ExileLibraryTopLinked { .. }
+            | Instruction::UntapOrTapSelect { .. }
+            | Instruction::MoveGraveyardGroupOwned { .. }
+            | Instruction::LookTopChooseExt { .. }
+            | Instruction::RevealUntilMatchExt { .. }
+            | Instruction::CreateTokenCopyExt { .. } => return Ok(false),
         }
         Ok(true)
     }

@@ -726,6 +726,8 @@ pub enum ResolvedPart {
     GrantMana(Box<crate::mana::ManaOutput>),
     Abilities(AbilityChange),
     BlockingRestriction(BlockingRestriction),
+    /// Layer 6 targeting restriction preventing spells/abilities of the specified colors from targeting this permanent.
+    CannotBeTargetedByColors(crate::program::ColorMask),
     /// Multiple Layer 6 ability parts bundled by characteristic evaluation for a single effect.
     CompoundAbilities(Vec<ResolvedPart>),
     SetPT(PowerToughness),
@@ -750,6 +752,7 @@ impl ResolvedPart {
             | Self::GrantMana(_)
             | Self::Abilities(_)
             | Self::BlockingRestriction(_)
+            | Self::CannotBeTargetedByColors(_)
             | Self::CompoundAbilities(_) => CharacteristicBucket::Abilities,
             Self::SetPT(_) | Self::SetToughness(_) => CharacteristicBucket::SetPT,
             Self::ModifyPT(_) => CharacteristicBucket::ModifyPT,
@@ -777,6 +780,14 @@ pub enum ResolvedPartSpec {
         >,
     },
     Color(ColorOperation<BTreeSet<Color>>),
+    /// Set or add the color chosen earlier during resolution via `Instruction::ChooseValue(Color)`.
+    ChosenColor {
+        add: bool,
+    },
+    /// Set or add the basic land type chosen earlier during resolution via `Instruction::ChooseValue(BasicLandType)`.
+    ChosenBasicLandType {
+        add: bool,
+    },
     GrantTrigger(Box<TriggeredAbility>),
     GrantActivated(Box<crate::activated::ActivatedAbility>),
     GrantActivatedRestricted {
@@ -788,6 +799,12 @@ pub enum ResolvedPartSpec {
     GrantMana(Box<crate::mana::ManaOutput>),
     Abilities(AbilityChange),
     BlockingRestriction(BlockingRestriction),
+    /// Layer 6 protection from each opponent of the resolving controller.
+    ProtectionFromEachOpponent,
+    /// Layer 6 targeting restriction preventing spells/abilities of `ColorMask` from targeting affected permanents.
+    CannotBeTargetedByColors(crate::program::ColorMask),
+    /// Materializes `BlockingRestriction::MustBlockObject(id)` for a subject resolved during resolution (e.g. CreatedTokens).
+    MustBlockSubject(crate::program::MoveSubjectRef),
     SetPT(PowerToughness),
     ModifyPT(PowerToughness),
     /// Dynamic +P/+T modification evaluated at resolution time (CR 611.2c).
@@ -807,8 +824,10 @@ impl ResolvedPartSpec {
         match self {
             Self::Control(_) => CharacteristicBucket::Control,
             Self::Text(_) | Self::Names(_) => CharacteristicBucket::Text,
-            Self::Type(_) | Self::TypeWithSubtypes { .. } => CharacteristicBucket::Type,
-            Self::Color(_) => CharacteristicBucket::Color,
+            Self::Type(_) | Self::TypeWithSubtypes { .. } | Self::ChosenBasicLandType { .. } => {
+                CharacteristicBucket::Type
+            }
+            Self::Color(_) | Self::ChosenColor { .. } => CharacteristicBucket::Color,
             Self::GrantTrigger(_)
             | Self::GrantActivated(_)
             | Self::GrantActivatedRestricted { .. }
@@ -816,7 +835,10 @@ impl ResolvedPartSpec {
             | Self::GrantFixedColorMana(_)
             | Self::GrantMana(_)
             | Self::Abilities(_)
-            | Self::BlockingRestriction(_) => CharacteristicBucket::Abilities,
+            | Self::BlockingRestriction(_)
+            | Self::ProtectionFromEachOpponent
+            | Self::CannotBeTargetedByColors(_)
+            | Self::MustBlockSubject(_) => CharacteristicBucket::Abilities,
             Self::SetPT(_) | Self::SetPTExpr { .. } => CharacteristicBucket::SetPT,
             Self::ModifyPT(_) | Self::ModifyPTExpr { .. } => CharacteristicBucket::ModifyPT,
             Self::SwitchPT => CharacteristicBucket::SwitchPT,
@@ -908,6 +930,12 @@ pub struct PermanentSelector {
     pub requires_flying: bool,
     /// Require a specific keyword ability on this recipient.
     pub required_keyword: Option<KeywordAbility>,
+    /// Optional second required keyword ability on this recipient (both must be present).
+    pub extra_required_keyword: Option<KeywordAbility>,
+    /// Require this recipient to have toxic (printed or granted).
+    pub requires_toxic: bool,
+    /// Require at least one counter of this specific permanent counter kind on this recipient.
+    pub required_counter_kind: Option<crate::effects::CounterKind>,
     /// Forbid a specific keyword ability on this recipient.
     pub forbidden_keyword: Option<KeywordAbility>,
     /// Forbid every keyword ability in this set on this recipient (e.g., "without flying or islandwalk").
@@ -956,6 +984,9 @@ impl Default for PermanentSelector {
             attached_to_source: false,
             requires_flying: false,
             required_keyword: None,
+            extra_required_keyword: None,
+            requires_toxic: false,
+            required_counter_kind: None,
             forbidden_keyword: None,
             forbidden_keywords: BTreeSet::new(),
             plus_one_counter: false,
@@ -1660,6 +1691,35 @@ impl ResolvedPartsSpec {
         resolving_controller: SeatId,
         target_owner: SeatId,
         source_object: Option<ObjectId>,
+        eval: F,
+    ) -> Result<ResolvedParts, CharacteristicInvariantError>
+    where
+        F: FnMut(&crate::program::ValueExpr) -> Result<RulesInteger, CharacteristicInvariantError>,
+    {
+        self.materialize_full(
+            values,
+            resolving_controller,
+            target_owner,
+            source_object,
+            None,
+            None,
+            &[],
+            None,
+            eval,
+        )
+    }
+    /// Full materialization including resolution-chosen color, basic land type, opponent set, and resolved subject object.
+    #[allow(clippy::too_many_arguments)]
+    pub fn materialize_full<F>(
+        &self,
+        values: &BTreeMap<CreatureTypeSlot, CreatureTypeId>,
+        resolving_controller: SeatId,
+        target_owner: SeatId,
+        source_object: Option<ObjectId>,
+        chosen_color: Option<Color>,
+        chosen_basic_land_type: Option<crate::land::BasicLandType>,
+        opponents: &[SeatId],
+        subject_object: Option<ObjectId>,
         mut eval: F,
     ) -> Result<ResolvedParts, CharacteristicInvariantError>
     where
@@ -1671,6 +1731,50 @@ impl ResolvedPartsSpec {
                 Ok(match part {
                     ResolvedPartSpec::Names(change) => ResolvedPart::Names(change.clone()),
                     ResolvedPartSpec::Color(change) => ResolvedPart::Color(change.clone()),
+                    ResolvedPartSpec::ChosenColor { add } => {
+                        let c = chosen_color
+                            .ok_or(CharacteristicInvariantError::NoEligibleComponent)?;
+                        let set = BTreeSet::from([c]);
+                        ResolvedPart::Color(if *add {
+                            ColorOperation::Add(set)
+                        } else {
+                            ColorOperation::Set(set)
+                        })
+                    }
+                    ResolvedPartSpec::ChosenBasicLandType { add } => {
+                        let lt = chosen_basic_land_type
+                            .ok_or(CharacteristicInvariantError::NoEligibleComponent)?;
+                        let set = BTreeSet::from([lt.land_type()]);
+                        ResolvedPart::Type(TypeChange {
+                            supertypes: TypeOperation::Keep,
+                            types: TypeOperation::Keep,
+                            subtypes: SubtypeOperation::Keep,
+                            land_subtypes: if *add {
+                                SubtypeOperation::Add(set)
+                            } else {
+                                SubtypeOperation::Set(set)
+                            },
+                        })
+                    }
+                    ResolvedPartSpec::ProtectionFromEachOpponent => {
+                        let mut ab = AbilityChange::default();
+                        for &opp in opponents {
+                            ab.granted_keywords.insert(KeywordAbility::ProtectionFrom(
+                                ProtectionFromQuality::Player(opp),
+                            ));
+                        }
+                        ResolvedPart::Abilities(ab)
+                    }
+                    ResolvedPartSpec::CannotBeTargetedByColors(mask) => {
+                        ResolvedPart::CannotBeTargetedByColors(*mask)
+                    }
+                    ResolvedPartSpec::MustBlockSubject(_) => {
+                        let target_id = subject_object
+                            .ok_or(CharacteristicInvariantError::NoEligibleComponent)?;
+                        ResolvedPart::BlockingRestriction(BlockingRestriction::MustBlockObject(
+                            target_id,
+                        ))
+                    }
                     ResolvedPartSpec::Text(change) => ResolvedPart::Text(CreatureTypeTextChange {
                         from: materialize_word(change.from, values)?,
                         to: materialize_word(change.to, values)?,
@@ -2050,6 +2154,12 @@ pub struct PrintedText {
         std::collections::BTreeMap<ActivatedAbilityId, Vec<crate::mana::HybridSymbol>>,
     pub extra_activation_costs:
         std::collections::BTreeMap<ActivatedAbilityId, Vec<crate::activated::ExtraActivationCost>>,
+    pub activation_cost_reductions:
+        std::collections::BTreeMap<ActivatedAbilityId, crate::program::ValueExpr>,
+    pub zone_replacement_extras: std::collections::BTreeMap<
+        crate::program::ZoneReplacementAbilityId,
+        crate::program::ZoneReplacementExtra,
+    >,
     pub extra_cast_costs: Vec<crate::activated::ExtraActivationCost>,
     /// Printed loyalty costs for surviving activated abilities.
     pub loyalty_costs: std::collections::BTreeMap<ActivatedAbilityId, i32>,
@@ -2105,6 +2215,8 @@ impl PrintedText {
             activation_modes: program.activation_modes.clone(),
             activation_hybrid_symbols: program.activation_hybrid_symbols.clone(),
             extra_activation_costs: program.extra_activation_costs.clone(),
+            activation_cost_reductions: program.activation_cost_reductions.clone(),
+            zone_replacement_extras: program.zone_replacement_extras.clone(),
             extra_cast_costs: program.extra_cast_costs.clone(),
             loyalty_costs: program.loyalty_costs.clone(),
             variable_loyalty_costs: program.variable_loyalty_costs.clone(),
@@ -2126,7 +2238,7 @@ impl PrintedText {
             discard_cast_cost_filter: program.discard_cast_cost_filter,
             graveyard_creature_exile_cost: program.graveyard_creature_exile_cost,
             graveyard_exile_x_cost: program.graveyard_exile_x_cost,
-            graveyard_self_cast: program.graveyard_self_cast,
+            graveyard_self_cast: program.graveyard_self_cast.clone(),
             sacrifice_creature_cast_cost: program.sacrifice_creature_cast_cost,
             sacrifice_cast_cost_filter: program.sacrifice_cast_cost_filter,
             tap_creatures_cast_cost: program.tap_creatures_cast_cost,

@@ -47,6 +47,20 @@ pub(super) enum DamageFollowup {
         count: RulesInteger,
     },
     RemoveShieldCounter(ObjectId),
+    PutCounters {
+        target: DamageRecipient,
+        kind: CounterKind,
+        count: RulesInteger,
+    },
+    RemoveCounters {
+        object: ObjectId,
+        kind: CounterKind,
+        count: RulesInteger,
+    },
+    InlineBody {
+        replacement: Box<super::event_replacement::EventBodyReplacement>,
+        prevented: RulesInteger,
+    },
     LibraryTop {
         player: SeatId,
         amount: RulesInteger,
@@ -418,6 +432,31 @@ impl EffectWindow {
         journal.multiplications.push(multiplication);
         Ok(())
     }
+    pub(super) fn record_resolution_damage_prevented(&mut self, amount: &RulesInteger) {
+        if !amount.is_positive() {
+            return;
+        }
+        if let Some(PendingWork::Damage(work)) = &mut self.pending_work
+            && let DamageParent::Resolution(cursor) = &mut work.parent
+        {
+            cursor.results.damage_prevented_this_resolution =
+                cursor.results.damage_prevented_this_resolution.plus(amount);
+        }
+    }
+
+    fn pending_damage_total(&self) -> RulesInteger {
+        self.pending_damage().map_or_else(
+            || 0.into(),
+            |batch| {
+                batch
+                    .components()
+                    .fold(RulesInteger::from(0), |sum, component| {
+                        sum.plus(component.remaining())
+                    })
+            },
+        )
+    }
+
     fn prevent_damage_at_cut(
         &mut self,
         application: DamageApplication,
@@ -455,6 +494,7 @@ impl EffectWindow {
                 reflection: Box::new(reflection),
             });
         }
+        self.record_resolution_damage_prevented(&prevention.amount);
         self.emit_from(
             EventCause::DamageAdjusted {
                 batch: prevention.batch,
@@ -1425,7 +1465,10 @@ impl EffectWindow {
                 }
                 match application.effect {
                     DamageEffectId::UntilEndOfTurn { .. } => {
-                        next.apply_turn_prevention(application, &mut append)?
+                        let before_rem = next.pending_damage_total();
+                        next.apply_turn_prevention(application, &mut append)?;
+                        let prevented = before_rem.minus(&next.pending_damage_total());
+                        next.record_resolution_damage_prevented(&prevented);
                     }
                     DamageEffectId::StaticPrevention(_)
                     | DamageEffectId::StaticPreventionWithExile(_, _)
@@ -1450,7 +1493,10 @@ impl EffectWindow {
                     | DamageEffectId::ProtectionSubtype(_)
                     | DamageEffectId::ProtectionFrom(_)
                     | DamageEffectId::Protection(_) => {
-                        next.prevent_by_protection(application, &mut journal, &mut append)?
+                        let before_rem = next.pending_damage_total();
+                        next.prevent_by_protection(application, &mut journal, &mut append)?;
+                        let prevented = before_rem.minus(&next.pending_damage_total());
+                        next.record_resolution_damage_prevented(&prevented);
                     }
                     DamageEffectId::Multiplier(_) => {
                         next.multiply_damage_at_cut(application, &mut journal, &mut append)?
@@ -1519,7 +1565,10 @@ impl EffectWindow {
             let application = *applications.first().ok_or(EffectError::WrongDamageFrame)?;
             match application.effect {
                 DamageEffectId::UntilEndOfTurn { .. } => {
-                    self.apply_turn_prevention(application, append)?
+                    let before_rem = self.pending_damage_total();
+                    self.apply_turn_prevention(application, append)?;
+                    let prevented = before_rem.minus(&self.pending_damage_total());
+                    self.record_resolution_damage_prevented(&prevented);
                 }
                 DamageEffectId::StaticPrevention(_)
                 | DamageEffectId::StaticPreventionWithExile(_, _)
@@ -1542,7 +1591,10 @@ impl EffectWindow {
                 | DamageEffectId::ProtectionSubtype(_)
                 | DamageEffectId::ProtectionFrom(_)
                 | DamageEffectId::Protection(_) => {
-                    self.prevent_by_protection(application, journal, append)?
+                    let before_rem = self.pending_damage_total();
+                    self.prevent_by_protection(application, journal, append)?;
+                    let prevented = before_rem.minus(&self.pending_damage_total());
+                    self.record_resolution_damage_prevented(&prevented);
                 }
                 DamageEffectId::Multiplier(_) => {
                     self.multiply_damage_at_cut(application, journal, append)?
@@ -2149,11 +2201,15 @@ impl EffectWindow {
                 },
             )?;
         }
+        let any_dealt = applied.iter().any(|fact| fact.amount.is_positive());
         journal.applied.extend(applied);
         journal.completions.extend(completions);
         let Some(PendingWork::Damage(work)) = &mut self.pending_work else {
             return Err(EffectError::WrongDamageFrame);
         };
+        if any_dealt && let DamageParent::Resolution(cursor) = &mut work.parent {
+            cursor.results.dealt_damage_this_resolution = true;
+        }
         work.results_committed = true;
         self.progress_damage_followups(journal, append)
     }
@@ -2300,6 +2356,224 @@ impl EffectWindow {
                             }])
                         })?;
                     }
+                    continue;
+                }
+                DamageFollowup::PutCounters {
+                    target,
+                    kind,
+                    count,
+                } => {
+                    if count.is_positive() {
+                        match target {
+                            DamageRecipient::Creature(object)
+                            | DamageRecipient::Planeswalker(object)
+                            | DamageRecipient::Battle(object)
+                                if kind.is_permanent() =>
+                            {
+                                if self
+                                    .window
+                                    .cards()
+                                    .get(object)
+                                    .is_some_and(|c| c.zone() == ObjectZone::Battlefield)
+                                {
+                                    self.place_divided_counters(
+                                        kind,
+                                        vec![(object, count)],
+                                        cause,
+                                        append,
+                                    )?;
+                                    if kind.keyword_counter_ability().is_some()
+                                        && self.counters_of_kind(object, kind).is_positive()
+                                    {
+                                        self.characteristics.refresh_keyword_counter_grant(
+                                            StackEntryId::entry_replacement_creator(),
+                                            object,
+                                            kind,
+                                        )?;
+                                    }
+                                }
+                            }
+                            DamageRecipient::Player(player)
+                                if !kind.is_permanent()
+                                    && self.window.participants().contains(&player) =>
+                            {
+                                let before = self.rules_snapshot(None)?;
+                                if !self.player_counter_prevented(
+                                    &before.view().evaluated,
+                                    player,
+                                    kind,
+                                )? {
+                                    let prev = self.player_counters_of_kind(player, kind);
+                                    let after = prev.plus(&count);
+                                    match kind {
+                                        CounterKind::Poison => {
+                                            self.poison.insert(player, after.clone());
+                                        }
+                                        CounterKind::Experience => {
+                                            self.characteristics
+                                                .experience
+                                                .insert(player, after.clone());
+                                        }
+                                        other => {
+                                            self.characteristics
+                                                .player_counters
+                                                .entry(other)
+                                                .or_default()
+                                                .insert(player, after.clone());
+                                        }
+                                    }
+                                    self.emit_from(cause, &before, None, append, |_, _, _| {
+                                        Ok(vec![RulesOccurrence::PlayerCounterChanged {
+                                            player,
+                                            kind,
+                                            before: prev,
+                                            after,
+                                        }])
+                                    })?;
+                                }
+                            }
+                            _ => {}
+                        }
+                    }
+                    continue;
+                }
+                DamageFollowup::RemoveCounters {
+                    object,
+                    kind,
+                    count,
+                } => {
+                    if count.is_positive()
+                        && self
+                            .window
+                            .cards()
+                            .get(object)
+                            .is_some_and(|c| c.zone() == ObjectZone::Battlefield)
+                    {
+                        if matches!(kind, CounterKind::PlusOne | CounterKind::MinusOne) {
+                            let previous = self.characteristics.counters(object);
+                            let available = if kind == CounterKind::PlusOne {
+                                &previous.plus_one
+                            } else {
+                                &previous.minus_one
+                            };
+                            if available.is_positive() {
+                                let take = count.min(available.clone());
+                                let removed = if kind == CounterKind::PlusOne {
+                                    PowerToughnessCounters {
+                                        plus_one: take,
+                                        minus_one: 0.into(),
+                                    }
+                                } else {
+                                    PowerToughnessCounters {
+                                        plus_one: 0.into(),
+                                        minus_one: take,
+                                    }
+                                };
+                                let before = self.rules_snapshot(None)?;
+                                let after = self
+                                    .characteristics
+                                    .take_power_toughness_counters(object, &removed)?;
+                                self.emit_from(cause, &before, None, append, |_, _, _| {
+                                    Ok(vec![RulesOccurrence::PowerToughnessCountersRemoved {
+                                        object,
+                                        before: previous,
+                                        after,
+                                    }])
+                                })?;
+                            }
+                        } else {
+                            let previous = self.counters_of_kind(object, kind);
+                            if previous.is_positive() {
+                                let take = count.min(previous.clone());
+                                let after = previous.minus(&take);
+                                let before = self.rules_snapshot(None)?;
+                                let updated = if let Some(counts) =
+                                    self.characteristics.named_permanent_counters_mut(kind)
+                                {
+                                    if after.is_positive() {
+                                        counts.insert(object, after.clone());
+                                    } else {
+                                        counts.remove(&object);
+                                        if kind == CounterKind::Vow {
+                                            self.characteristics
+                                                .vow_protected_players
+                                                .remove(&object);
+                                        }
+                                        if kind.keyword_counter_ability().is_some() {
+                                            self.characteristics
+                                                .clear_keyword_counter_grant(object, kind);
+                                        }
+                                    }
+                                    true
+                                } else {
+                                    false
+                                };
+                                if updated {
+                                    let occ = match kind {
+                                        CounterKind::Time => RulesOccurrence::TimeCounterRemoved {
+                                            object,
+                                            before: previous,
+                                            after,
+                                        },
+                                        CounterKind::Fade => RulesOccurrence::FadeCounterRemoved {
+                                            object,
+                                            before: previous,
+                                            after,
+                                        },
+                                        CounterKind::Loyalty => {
+                                            RulesOccurrence::LoyaltyCountersChanged {
+                                                object,
+                                                before: previous,
+                                                after,
+                                            }
+                                        }
+                                        CounterKind::Charge => {
+                                            RulesOccurrence::ChargeCountersChanged {
+                                                object,
+                                                before: previous,
+                                                after,
+                                            }
+                                        }
+                                        CounterKind::Storage => {
+                                            RulesOccurrence::StorageCountersChanged {
+                                                object,
+                                                before: previous,
+                                                after,
+                                            }
+                                        }
+                                        CounterKind::Suspect => {
+                                            RulesOccurrence::SuspectCountersChanged {
+                                                object,
+                                                before: previous,
+                                                after,
+                                            }
+                                        }
+                                        _ => RulesOccurrence::PermanentCounterChanged {
+                                            object,
+                                            kind,
+                                            before: previous,
+                                            after,
+                                        },
+                                    };
+                                    self.emit_from(cause, &before, None, append, |_, _, _| {
+                                        Ok(vec![occ])
+                                    })?;
+                                }
+                            }
+                        }
+                    }
+                    continue;
+                }
+                DamageFollowup::InlineBody {
+                    replacement,
+                    prevented,
+                } => {
+                    self.execute_inline_replacement_body_with_amount(
+                        &replacement,
+                        Some(prevented),
+                        cause,
+                        append,
+                    )?;
                     continue;
                 }
                 DamageFollowup::LibraryTop {

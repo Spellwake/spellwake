@@ -982,7 +982,19 @@ impl EffectWindow {
             | Instruction::Discard { .. }
             | Instruction::DestroyTargetWithoutRegeneration
             | Instruction::DrawPlayer { .. }
-            | Instruction::DiscardFiltered { .. } => return Ok(false),
+            | Instruction::DiscardFiltered { .. }
+            | Instruction::ForEachPlayer { .. }
+            | Instruction::OfferAnyPlayer { .. }
+            | Instruction::DealDamageToAnnouncedTargets { .. }
+            | Instruction::GrantChosenProtection { .. }
+            | Instruction::RemoveCountersFromSubject { .. }
+            | Instruction::MoveGroupToLibrary { .. }
+            | Instruction::ExileLibraryTopLinked { .. }
+            | Instruction::UntapOrTapSelect { .. }
+            | Instruction::MoveGraveyardGroupOwned { .. }
+            | Instruction::LookTopChooseExt { .. }
+            | Instruction::RevealUntilMatchExt { .. }
+            | Instruction::CreateTokenCopyExt { .. } => return Ok(false),
         };
         let controller = self
             .window

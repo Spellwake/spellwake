@@ -7,11 +7,40 @@ use crate::{
 };
 
 impl EffectWindow {
+    fn lifecycle_player_relation_matches(
+        &self,
+        rel: crate::program::PlayerRelation,
+        rule_ctrl: SeatId,
+        candidate: SeatId,
+    ) -> Result<bool, EffectError> {
+        Ok(match rel {
+            crate::program::PlayerRelation::Controller => candidate == rule_ctrl,
+            crate::program::PlayerRelation::Opponent => self
+                .combat_rules
+                .opponents(self.window.participants(), rule_ctrl)?
+                .contains(&candidate),
+            crate::program::PlayerRelation::AnyParticipant => true,
+        })
+    }
+
     pub(super) fn retained_mana_types(
         &self,
         current: &EvaluatedCharacteristics,
     ) -> BTreeSet<(SeatId, ManaType)> {
         let mut retained = BTreeSet::new();
+        for active in &self.temporary_rules {
+            if active.consumed {
+                continue;
+            }
+            if let crate::program::TemporaryRuleKind::TemporaryStatic(ability) = &active.rule
+                && let crate::characteristics::StaticContinuousAbility::Modifier {
+                    rule: crate::characteristics::StaticModifierRule::RetainMana(kind),
+                    ..
+                } = ability.as_ref()
+            {
+                retained.insert((active.controller, *kind));
+            }
+        }
         for object in current
             .objects
             .values()
@@ -20,27 +49,159 @@ impl EffectWindow {
             let Some(player) = object.controller else {
                 continue;
             };
-            for ability in object
-                .printed_text
-                .continuous
-                .iter()
-                .chain(&object.printed_text.additional_battlefield_abilities)
-            {
+            for ability in object.active_battlefield_rules() {
                 if let crate::characteristics::StaticContinuousAbility::Modifier {
-                    id,
                     rule: crate::characteristics::StaticModifierRule::RetainMana(kind),
+                    ..
                 } = ability
-                    && (object.abilities.continuous == Some(*id)
-                        || object
-                            .abilities
-                            .additional_battlefield_abilities
-                            .contains(id))
                 {
                     retained.insert((player, *kind));
                 }
             }
         }
         retained
+    }
+
+    pub(super) fn converted_unspent_mana_types(
+        &self,
+        current: &EvaluatedCharacteristics,
+    ) -> BTreeMap<SeatId, ManaType> {
+        let mut converted = BTreeMap::new();
+        for active in &self.temporary_rules {
+            if active.consumed {
+                continue;
+            }
+            if let crate::program::TemporaryRuleKind::TemporaryStatic(ability) = &active.rule
+                && let crate::characteristics::StaticContinuousAbility::Modifier {
+                    rule: crate::characteristics::StaticModifierRule::ConvertUnspentMana(target),
+                    ..
+                } = ability.as_ref()
+            {
+                converted.insert(active.controller, *target);
+            }
+        }
+        for object in current
+            .objects
+            .values()
+            .filter(|p| p.zone == ObjectZone::Battlefield)
+        {
+            let Some(player) = object.controller else {
+                continue;
+            };
+            for ability in object.active_battlefield_rules() {
+                if let crate::characteristics::StaticContinuousAbility::Modifier {
+                    rule: crate::characteristics::StaticModifierRule::ConvertUnspentMana(target),
+                    ..
+                } = ability
+                {
+                    converted.insert(player, *target);
+                }
+            }
+        }
+        converted
+    }
+
+    /// Whether active battlefield or temporary rules cause `active` to skip `step`.
+    pub(crate) fn should_skip_step(&self, active: SeatId, step: Step) -> Result<bool, EffectError> {
+        let check_ability = |ability: &crate::characteristics::StaticContinuousAbility,
+                             rule_ctrl: SeatId|
+         -> Result<bool, EffectError> {
+            match ability {
+                crate::characteristics::StaticContinuousAbility::Restriction {
+                    rule:
+                        crate::characteristics::StaticRestriction::SkipStep {
+                            player,
+                            step: skipped,
+                        },
+                    ..
+                } if *skipped == step => {
+                    self.lifecycle_player_relation_matches(*player, rule_ctrl, active)
+                }
+                crate::characteristics::StaticContinuousAbility::DrawRule {
+                    rule: crate::characteristics::StaticDrawRule::SkipControllerDrawStep,
+                    ..
+                } if step == Step::Draw => Ok(rule_ctrl == active),
+                _ => Ok(false),
+            }
+        };
+        for entry in &self.temporary_rules {
+            if entry.consumed {
+                continue;
+            }
+            if let crate::program::TemporaryRuleKind::TemporaryStatic(ability) = &entry.rule
+                && check_ability(ability.as_ref(), entry.controller)?
+            {
+                return Ok(true);
+            }
+        }
+        let evaluated = self.evaluated_characteristics()?;
+        for object in evaluated
+            .objects
+            .values()
+            .filter(|p| p.zone == ObjectZone::Battlefield)
+        {
+            let Some(rule_ctrl) = object.controller else {
+                continue;
+            };
+            for ability in object.active_battlefield_rules() {
+                if check_ability(ability, rule_ctrl)? {
+                    return Ok(true);
+                }
+            }
+        }
+        Ok(false)
+    }
+
+    /// Net signed delta applied to `player`'s maximum hand size from all active
+    /// `StaticModifierRule::ModifyMaxHandSize` rules (CR 402.2).
+    ///
+    /// # Errors
+    /// Propagates characteristic or opponent-relation evaluation failures.
+    pub fn max_hand_size_delta(&self, player: SeatId) -> Result<i32, EffectError> {
+        let mut total = 0i32;
+        for entry in &self.temporary_rules {
+            if entry.consumed {
+                continue;
+            }
+            if let crate::program::TemporaryRuleKind::TemporaryStatic(ability) = &entry.rule
+                && let crate::characteristics::StaticContinuousAbility::Modifier {
+                    rule:
+                        crate::characteristics::StaticModifierRule::ModifyMaxHandSize {
+                            player: rel,
+                            delta,
+                        },
+                    ..
+                } = ability.as_ref()
+                && self.lifecycle_player_relation_matches(*rel, entry.controller, player)?
+            {
+                total = total.saturating_add(i32::from(*delta));
+            }
+        }
+        let evaluated = self.evaluated_characteristics()?;
+        for object in evaluated
+            .objects
+            .values()
+            .filter(|p| p.zone == ObjectZone::Battlefield)
+        {
+            let Some(rule_ctrl) = object.controller else {
+                continue;
+            };
+            for ability in object.active_battlefield_rules() {
+                if let crate::characteristics::StaticContinuousAbility::Modifier {
+                    rule:
+                        crate::characteristics::StaticModifierRule::ModifyMaxHandSize {
+                            player: rel,
+                            delta,
+                        },
+                    ..
+                } = ability
+                    && self.lifecycle_player_relation_matches(*rel, rule_ctrl, player)?
+                {
+                    total = total.saturating_add(i32::from(*delta));
+                }
+            }
+        }
+        Ok(total)
     }
 
     pub(crate) fn take_additional_combat(&mut self) -> bool {
@@ -105,12 +266,16 @@ impl EffectWindow {
         if let Some(ended) = previous.filter(|_| entered && !self.mana.is_empty()) {
             let before = self.rules_snapshot(Some(ended))?;
             let retained = self.retained_mana_types(&before.view().evaluated);
+            let converted = self.converted_unspent_mana_types(&before.view().evaluated);
             if ended.position().step == crate::turn::Step::EndCombat {
                 next.floating_mana.end_combat_effects();
             }
-            next.expire_step_mana(&retained);
+            next.expire_step_mana_with_conversion(&retained, &converted);
             let mut values = Vec::new();
             for player in self.window.apnap_players()? {
+                if converted.contains_key(&player) {
+                    continue;
+                }
                 let mut expired = BTreeMap::new();
                 let mut remaining = BTreeMap::new();
                 for kind in ManaType::ALL {
@@ -230,7 +395,32 @@ impl EffectWindow {
             if let Some(history) = &mut next.cast_history {
                 *history = CastTurnHistory::default();
             }
+            let prev_life_lost = if previous.is_some() {
+                next.characteristics.life_lost_this_turn.clone()
+            } else {
+                BTreeMap::new()
+            };
             next = next.record_turn_start(next.revision())?;
+            next.characteristics.life_lost_last_turn = prev_life_lost;
+            next.characteristics.cast_spells_this_turn.clear();
+            next.characteristics
+                .activated_graveyard_ability_this_turn
+                .clear();
+            next.characteristics.cards_exiled_this_turn = 0;
+            next.characteristics
+                .cards_put_into_graveyard_this_turn
+                .clear();
+            next.characteristics.sacrificed_this_turn.clear();
+            next.characteristics.damage_dealt_this_turn_by.clear();
+            next.characteristics
+                .damage_dealt_to_opponents_this_turn
+                .clear();
+            next.characteristics
+                .combat_damage_dealt_to_player_this_turn
+                .clear();
+            next.characteristics
+                .excess_damage_received_this_turn
+                .clear();
         }
         if entered {
             // The new active/window and actual control-history stamp already exist.
@@ -381,6 +571,9 @@ impl EffectWindow {
         next.revision = revision;
         let mut append = RulesJournal::default();
         let active = next.window.active_player();
+        if next.should_skip_step(active, Step::Untap)? {
+            return Ok(RulesTransition::new(next, None, append));
+        }
         if !next.untap_preface_done {
             let before_phasing = next.rules_snapshot(turn)?;
             let roots = before_phasing

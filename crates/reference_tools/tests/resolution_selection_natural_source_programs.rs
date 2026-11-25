@@ -101,6 +101,8 @@ fn expected(helper: &Helper) -> Program {
     Program {
         cannot_be_copied: false,
         conditional_flash: None,
+        activation_cost_reductions: std::collections::BTreeMap::new(),
+        zone_replacement_extras: std::collections::BTreeMap::new(),
         cast_timing: None,
         activation_modes: Default::default(),
         adventure: None,

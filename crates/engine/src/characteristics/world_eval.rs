@@ -121,6 +121,221 @@ fn resolve_world_player(ctx: &WorldEvalCtx<'_>, role: ResolvingPlayer) -> Option
     }
 }
 
+fn source_zone_matches(
+    recorded: crate::program::SourceZoneFilter,
+    required: crate::program::SourceZoneFilter,
+) -> bool {
+    use crate::program::SourceZoneFilter;
+    if recorded == required {
+        return true;
+    }
+    match required {
+        SourceZoneFilter::HandOrGraveyard => matches!(
+            recorded,
+            SourceZoneFilter::Hand
+                | SourceZoneFilter::Graveyard
+                | SourceZoneFilter::OpponentGraveyard
+                | SourceZoneFilter::AnyGraveyard
+                | SourceZoneFilter::HandOrGraveyard
+        ),
+        SourceZoneFilter::AnyGraveyard => matches!(
+            recorded,
+            SourceZoneFilter::Graveyard
+                | SourceZoneFilter::OpponentGraveyard
+                | SourceZoneFilter::AnyGraveyard
+        ),
+        SourceZoneFilter::Exile => matches!(
+            recorded,
+            SourceZoneFilter::Exile
+                | SourceZoneFilter::OpponentExile
+                | SourceZoneFilter::LinkedExile
+        ),
+        _ => false,
+    }
+}
+
+fn supertypes_from_mask(
+    mask: crate::program::SupertypeMask,
+) -> BTreeSet<crate::program::Supertype> {
+    use crate::program::Supertype;
+    let mut out = BTreeSet::new();
+    if !mask.is_empty() {
+        for kind in [
+            Supertype::Basic,
+            Supertype::Legendary,
+            Supertype::Ongoing,
+            Supertype::Snow,
+            Supertype::World,
+        ] {
+            let single = BTreeSet::from([kind]);
+            if !mask.matches_none(&single) {
+                out.insert(kind);
+            }
+        }
+    }
+    out
+}
+
+fn colors_from_mask(mask: crate::program::ColorMask) -> BTreeSet<Color> {
+    let mut out = BTreeSet::new();
+    if !mask.is_empty() {
+        for color in [
+            Color::White,
+            Color::Blue,
+            Color::Black,
+            Color::Red,
+            Color::Green,
+        ] {
+            if mask.contains(color) {
+                out.insert(color);
+            }
+        }
+    }
+    out
+}
+
+fn matches_compact_clause(
+    clause: ObjectClause,
+    types: crate::program::CardTypeMask,
+    colors: crate::program::ColorMask,
+    supertypes: crate::program::SupertypeMask,
+    subtypes: &BTreeSet<CreatureTypeId>,
+    artifact_subtypes: Option<&BTreeSet<crate::program::ArtifactSubtype>>,
+) -> bool {
+    use crate::program::{SubtypeFilter, Supertype};
+    if !clause.any_types.is_empty() && (types.bits() & clause.any_types.bits()) == 0 {
+        return false;
+    }
+    if (types.bits() & clause.required_types.bits()) != clause.required_types.bits() {
+        return false;
+    }
+    if (types.bits() & clause.forbidden_types.bits()) != 0 {
+        return false;
+    }
+    let super_set = supertypes_from_mask(supertypes);
+    if !clause.required_supertypes.matches_all(&super_set)
+        || !clause.forbidden_supertypes.matches_none(&super_set)
+    {
+        return false;
+    }
+    let color_set = colors_from_mask(colors);
+    if !clause.color.matches(&color_set) {
+        return false;
+    }
+    let subtype_ok = match clause.subtypes {
+        SubtypeFilter::Any => true,
+        SubtypeFilter::Has(ct) => subtypes.contains(&ct),
+        SubtypeFilter::Lacks(ct) => !subtypes.contains(&ct),
+        SubtypeFilter::AnyOf(cts) => cts.iter().any(|ct| subtypes.contains(ct)),
+        SubtypeFilter::NoneOf(cts) => cts.iter().all(|ct| !subtypes.contains(ct)),
+        SubtypeFilter::Artifact(art) => artifact_subtypes.is_some_and(|set| set.contains(&art)),
+        _ => false,
+    };
+    if !subtype_ok {
+        return false;
+    }
+    if clause.flags.contains(ObjectFilterFlags::HISTORIC)
+        && !types.contains(CardType::Artifact)
+        && !super_set.contains(&Supertype::Legendary)
+    {
+        return false;
+    }
+    true
+}
+
+fn matches_cast_spell_record(
+    filter: ObjectFilter,
+    rec: &super::CastSpellTurnRecord,
+    from_zone: Option<crate::program::SourceZoneFilter>,
+) -> bool {
+    use crate::program::SourceZoneFilter;
+    let zone_ok = match from_zone {
+        None => true,
+        Some(SourceZoneFilter::Hand) => rec.from_hand,
+        Some(
+            SourceZoneFilter::Graveyard
+            | SourceZoneFilter::AnyGraveyard
+            | SourceZoneFilter::OpponentGraveyard,
+        ) => rec.from_graveyard,
+        Some(SourceZoneFilter::HandOrGraveyard) => rec.from_hand || rec.from_graveyard,
+        Some(
+            SourceZoneFilter::Exile
+            | SourceZoneFilter::OpponentExile
+            | SourceZoneFilter::LinkedExile,
+        ) => rec.from_exile,
+        Some(_) => false,
+    };
+    if !zone_ok {
+        return false;
+    }
+    let check = |clause: ObjectClause| {
+        matches_compact_clause(
+            clause,
+            rec.types,
+            rec.colors,
+            rec.supertypes,
+            &rec.subtypes,
+            None,
+        )
+    };
+    match filter {
+        ObjectFilter::Clause(c) => check(c),
+        ObjectFilter::Either(a, b) => check(a) || check(b),
+    }
+}
+
+fn matches_zone_move_record(
+    filter: ObjectFilter,
+    rec: &super::ZoneMoveTurnRecord,
+    controller: SeatId,
+    opponents: &[SeatId],
+) -> bool {
+    let check = |clause: ObjectClause| {
+        let ctrl_ok = match clause.controller {
+            ControllerFilter::Any => true,
+            ControllerFilter::You => rec.previous_controller == Some(controller),
+            ControllerFilter::Opponent => rec
+                .previous_controller
+                .is_some_and(|seat| opponents.contains(&seat)),
+            ControllerFilter::NotYou => rec.previous_controller != Some(controller),
+            ControllerFilter::OwnerYou => rec.owner == controller,
+            ControllerFilter::OwnerOpponent => opponents.contains(&rec.owner),
+            ControllerFilter::Player(seat) => rec.previous_controller == Some(seat),
+            _ => true,
+        };
+        ctrl_ok
+            && matches_compact_clause(
+                clause,
+                rec.types,
+                rec.colors,
+                rec.supertypes,
+                &rec.subtypes,
+                Some(&rec.artifact_subtypes),
+            )
+    };
+    match filter {
+        ObjectFilter::Clause(c) => check(c),
+        ObjectFilter::Either(a, b) => check(a) || check(b),
+    }
+}
+
+fn resolve_world_affected_players(
+    ctx: &WorldEvalCtx<'_>,
+    players: crate::program::AffectedPlayers,
+) -> Vec<SeatId> {
+    use crate::program::AffectedPlayers;
+    match players {
+        AffectedPlayers::One(role) => resolve_world_player(ctx, role).into_iter().collect(),
+        AffectedPlayers::EachPlayer => ctx.participants.to_vec(),
+        AffectedPlayers::EachOtherPlayer | AffectedPlayers::EachOpponent => ctx
+            .participants
+            .iter()
+            .copied()
+            .filter(|&p| p != ctx.controller)
+            .collect(),
+    }
+}
+
 fn object_mana_value(
     ctx: &WorldEvalCtx<'_>,
     object: &ObjectCharacteristics,
@@ -964,6 +1179,44 @@ pub(crate) fn eval_world_value_expr(ctx: &WorldEvalCtx<'_>, expr: &ValueExpr) ->
                         .is_some_and(|s| s.paid_alternative),
             )
             .into(),
+            SourceStateExpr::WasCast {
+                by_controller,
+                from_hand,
+            } => {
+                let on_stack = ctx
+                    .objects
+                    .get(&ctx.source)
+                    .is_some_and(|o| o.zone == ObjectZone::Stack);
+                let was_cast = on_stack
+                    || ctx.state.cast_summaries.contains_key(&ctx.source)
+                    || ctx.state.cast_by_controller_objects.contains(&ctx.source)
+                    || ctx.state.cast_from_hand_objects.contains(&ctx.source);
+                let ctrl_ok = !*by_controller
+                    || ctx.state.cast_by_controller_objects.contains(&ctx.source)
+                    || (on_stack
+                        && ctx
+                            .objects
+                            .get(&ctx.source)
+                            .is_some_and(|o| o.controller == Some(ctx.controller)));
+                let hand_ok = !*from_hand
+                    || ctx.state.cast_from_hand_objects.contains(&ctx.source)
+                    || ctx
+                        .state
+                        .cast_summaries
+                        .get(&ctx.source)
+                        .is_some_and(|s| !s.cast_from_outside_hand);
+                i64::from(was_cast && ctrl_ok && hand_ok).into()
+            }
+            SourceStateExpr::EnteredFromZone(zone) => {
+                let matched = ctx
+                    .state
+                    .entered_from_zone
+                    .get(&ctx.source)
+                    .is_some_and(|recorded| source_zone_matches(*recorded, *zone))
+                    || (ctx.state.entered_from_graveyard.contains(&ctx.source)
+                        && source_zone_matches(crate::program::SourceZoneFilter::Graveyard, *zone));
+                i64::from(matched).into()
+            }
         },
         ValueExpr::CountOtherSharingSourceSubtype => {
             let subtypes = ctx
@@ -1132,6 +1385,26 @@ pub(crate) fn eval_world_value_expr(ctx: &WorldEvalCtx<'_>, expr: &ValueExpr) ->
                 .and_then(|m| m.get(&ctx.controller))
                 .cloned()
                 .unwrap_or_else(|| 0.into()),
+            CounterSubjectRef::PlayerCounter(role, counter_kind) => {
+                resolve_world_player(ctx, *role).map_or_else(
+                    || 0.into(),
+                    |seat| match counter_kind {
+                        CounterKind::Experience => ctx
+                            .state
+                            .experience
+                            .get(&seat)
+                            .cloned()
+                            .unwrap_or_else(|| 0.into()),
+                        _ => ctx
+                            .state
+                            .player_counters
+                            .get(counter_kind)
+                            .and_then(|m| m.get(&seat))
+                            .cloned()
+                            .unwrap_or_else(|| 0.into()),
+                    },
+                )
+            }
             _ => 0.into(),
         },
         ValueExpr::AttachedCount(kind) => match kind {
@@ -1186,6 +1459,13 @@ pub(crate) fn eval_world_value_expr(ctx: &WorldEvalCtx<'_>, expr: &ValueExpr) ->
             .into(),
             MatchObjectRef::TriggerSubject | MatchObjectRef::DyingCreature => i64::from(
                 ctx.trigger_subject
+                    .and_then(|id| ctx.objects.get(&id))
+                    .is_some_and(|o| matches_world_object_filter(ctx, **filter, o)),
+            )
+            .into(),
+            MatchObjectRef::LibraryTop(role) => i64::from(
+                resolve_world_player(ctx, *role)
+                    .and_then(|seat| ctx.cards.library(seat).first().copied())
                     .and_then(|id| ctx.objects.get(&id))
                     .is_some_and(|o| matches_world_object_filter(ctx, **filter, o)),
             )
@@ -1326,6 +1606,49 @@ pub(crate) fn eval_world_value_expr(ctx: &WorldEvalCtx<'_>, expr: &ValueExpr) ->
                     .is_some_and(|s| s.additional_cost_paid),
             )
             .into(),
+            EventValueKind::SharesCardTypeWithLinkedExile(subject) => {
+                let mut exiled_types = BTreeSet::new();
+                for list in [
+                    ctx.state.imprinted_cards.get(&ctx.source),
+                    ctx.state.ability_donors_in_exile.get(&ctx.source),
+                ]
+                .into_iter()
+                .flatten()
+                {
+                    for id in list {
+                        if let Some(card) = ctx.objects.get(id)
+                            && card.zone == ObjectZone::Exile
+                        {
+                            exiled_types.extend(card.current_types.iter().copied());
+                        }
+                    }
+                }
+                if exiled_types.is_empty() {
+                    0.into()
+                } else {
+                    let subj_obj = match subject {
+                        MatchObjectRef::AbilitySource => ctx.objects.get(&ctx.source),
+                        MatchObjectRef::AttachedHost => {
+                            ctx.objects
+                                .get(&ctx.source)
+                                .and_then(|s| match s.attached_to {
+                                    Some(TargetRef::Object(host)) => ctx.objects.get(&host),
+                                    _ => None,
+                                })
+                        }
+                        MatchObjectRef::TriggerSubject | MatchObjectRef::DyingCreature => {
+                            ctx.trigger_subject.and_then(|id| ctx.objects.get(&id))
+                        }
+                        MatchObjectRef::LibraryTop(role) => resolve_world_player(ctx, *role)
+                            .and_then(|seat| ctx.cards.library(seat).first().copied())
+                            .and_then(|id| ctx.objects.get(&id)),
+                        _ => None,
+                    };
+                    i64::from(subj_obj.is_some_and(|o| !o.current_types.is_disjoint(&exiled_types)))
+                        .into()
+                }
+            }
+            // DamagePreventedThisWay, DealtDamageThisWay, and other resolution-local values are 0 outside resolution.
             _ => 0.into(),
         },
         ValueExpr::PlayerStat(stat) => match stat {
@@ -1861,6 +2184,231 @@ pub(crate) fn eval_world_value_expr(ctx: &WorldEvalCtx<'_>, expr: &ValueExpr) ->
                 .max()
                 .cloned()
                 .unwrap_or_else(|| 0.into()),
+            PlayerStatExpr::SpellsCastMatchingThisTurn {
+                players,
+                filter,
+                from_zone,
+            } => {
+                let seats = resolve_world_affected_players(ctx, *players);
+                let mut count = 0usize;
+                for seat in seats {
+                    if let Some(records) = ctx.state.cast_spells_this_turn.get(&seat) {
+                        count += records
+                            .iter()
+                            .filter(|rec| matches_cast_spell_record(**filter, rec, *from_zone))
+                            .count();
+                    }
+                }
+                RulesInteger::from_usize(count)
+            }
+            PlayerStatExpr::ActivatedGraveyardAbilityThisTurn(role) => {
+                i64::from(resolve_world_player(ctx, *role).is_some_and(|seat| {
+                    ctx.state
+                        .activated_graveyard_ability_this_turn
+                        .contains(&seat)
+                }))
+                .into()
+            }
+            PlayerStatExpr::PlayerLifeLostLastTurn(role) => resolve_world_player(ctx, *role)
+                .and_then(|seat| ctx.state.life_lost_last_turn.get(&seat).cloned())
+                .unwrap_or_else(|| 0.into()),
+            PlayerStatExpr::CardsExiledThisTurn => {
+                i64::from(ctx.state.cards_exiled_this_turn).into()
+            }
+            PlayerStatExpr::GraveyardArrivalsMatchingThisTurn {
+                filter,
+                from_battlefield_only,
+                controller: ctrl_role,
+            } => {
+                let req_ctrl = match ctrl_role {
+                    None => None,
+                    Some(role) => match resolve_world_player(ctx, *role) {
+                        Some(seat) => Some(seat),
+                        None => return 0.into(),
+                    },
+                };
+                let opp_vec: Vec<SeatId> = opponents().collect();
+                let count = ctx
+                    .state
+                    .cards_put_into_graveyard_this_turn
+                    .iter()
+                    .filter(|rec| {
+                        (!*from_battlefield_only || rec.from_battlefield)
+                            && req_ctrl.is_none_or(|seat| {
+                                rec.previous_controller == Some(seat)
+                                    || (rec.previous_controller.is_none() && rec.owner == seat)
+                            })
+                            && matches_zone_move_record(**filter, rec, ctx.controller, &opp_vec)
+                    })
+                    .count();
+                RulesInteger::from_usize(count)
+            }
+            PlayerStatExpr::SacrificedMatchingThisTurn { players, filter } => {
+                let seats = resolve_world_affected_players(ctx, *players);
+                let opp_vec: Vec<SeatId> = opponents().collect();
+                let mut count = 0usize;
+                for seat in seats {
+                    if let Some(records) = ctx.state.sacrificed_this_turn.get(&seat) {
+                        count += records
+                            .iter()
+                            .filter(|rec| {
+                                matches_zone_move_record(**filter, rec, ctx.controller, &opp_vec)
+                            })
+                            .count();
+                    }
+                }
+                RulesInteger::from_usize(count)
+            }
+            PlayerStatExpr::DamageDealtThisTurn {
+                subject,
+                to_opponent_only,
+                combat_only,
+            } => {
+                let target_id = match subject {
+                    ValueObjectRef::AbilitySource | ValueObjectRef::TriggerSource => {
+                        Some(ctx.source)
+                    }
+                    ValueObjectRef::AttachedHost => {
+                        ctx.objects
+                            .get(&ctx.source)
+                            .and_then(|s| match s.attached_to {
+                                Some(TargetRef::Object(host)) => Some(host),
+                                _ => None,
+                            })
+                    }
+                    ValueObjectRef::TriggerSubject
+                    | ValueObjectRef::DyingSource
+                    | ValueObjectRef::DyingCreature
+                    | ValueObjectRef::EnteringPermanent
+                    | ValueObjectRef::TriggeringSpell => ctx.trigger_subject,
+                    _ => None,
+                };
+                let Some(id) = target_id else {
+                    return 0.into();
+                };
+                if *combat_only {
+                    if !ctx
+                        .state
+                        .combat_damage_dealt_to_player_this_turn
+                        .contains(&id)
+                    {
+                        return 0.into();
+                    }
+                    if *to_opponent_only
+                        && !ctx
+                            .state
+                            .damage_dealt_to_opponents_this_turn
+                            .get(&id)
+                            .is_some_and(|s| !s.is_empty())
+                    {
+                        return 0.into();
+                    }
+                    ctx.state
+                        .damage_dealt_this_turn_by
+                        .get(&id)
+                        .cloned()
+                        .filter(RulesInteger::is_positive)
+                        .unwrap_or_else(|| 1.into())
+                } else if *to_opponent_only {
+                    match ctx.state.damage_dealt_to_opponents_this_turn.get(&id) {
+                        Some(opps) if !opps.is_empty() => ctx
+                            .state
+                            .damage_dealt_this_turn_by
+                            .get(&id)
+                            .cloned()
+                            .filter(RulesInteger::is_positive)
+                            .unwrap_or_else(|| RulesInteger::from_usize(opps.len())),
+                        _ => 0.into(),
+                    }
+                } else {
+                    ctx.state
+                        .damage_dealt_this_turn_by
+                        .get(&id)
+                        .cloned()
+                        .unwrap_or_else(|| 0.into())
+                }
+            }
+            PlayerStatExpr::DamageReceivedThisTurn {
+                subject,
+                excess_only,
+            } => {
+                let target_id = match subject {
+                    ValueObjectRef::AbilitySource | ValueObjectRef::TriggerSource => {
+                        Some(ctx.source)
+                    }
+                    ValueObjectRef::AttachedHost => {
+                        ctx.objects
+                            .get(&ctx.source)
+                            .and_then(|s| match s.attached_to {
+                                Some(TargetRef::Object(host)) => Some(host),
+                                _ => None,
+                            })
+                    }
+                    ValueObjectRef::TriggerSubject
+                    | ValueObjectRef::DyingSource
+                    | ValueObjectRef::DyingCreature
+                    | ValueObjectRef::EnteringPermanent
+                    | ValueObjectRef::TriggeringSpell => ctx.trigger_subject,
+                    _ => None,
+                };
+                let Some(id) = target_id else {
+                    return 0.into();
+                };
+                if *excess_only {
+                    i64::from(ctx.state.excess_damage_received_this_turn.contains(&id)).into()
+                } else {
+                    ctx.state
+                        .object_damage_taken_this_turn
+                        .get(&id)
+                        .cloned()
+                        .unwrap_or_else(|| 0.into())
+                }
+            }
+            PlayerStatExpr::ControlsGreatestStat {
+                player,
+                filter,
+                stat,
+            } => {
+                let Some(seat) = resolve_world_player(ctx, *player) else {
+                    return 0.into();
+                };
+                let mut best: Option<(RulesInteger, bool)> = None;
+                for o in ctx.objects.values() {
+                    if o.zone != ObjectZone::Battlefield
+                        || !matches_world_object_filter(ctx, **filter, o)
+                    {
+                        continue;
+                    }
+                    let val = match stat {
+                        ObjectStatKind::Power => o
+                            .power_toughness
+                            .as_ref()
+                            .map(|pt| pt.derived.power.clone()),
+                        ObjectStatKind::Toughness => o
+                            .power_toughness
+                            .as_ref()
+                            .map(|pt| pt.derived.toughness.clone()),
+                        ObjectStatKind::ManaValue => object_mana_value(ctx, o),
+                        ObjectStatKind::Loyalty => Some(
+                            ctx.state
+                                .permanent_counter_count(o.object, CounterKind::Loyalty),
+                        ),
+                    };
+                    let Some(val) = val else {
+                        continue;
+                    };
+                    let ours = o.controller == Some(seat);
+                    best = Some(match best {
+                        None => (val, ours),
+                        Some((cur_max, cur_ours)) => match val.cmp(&cur_max) {
+                            std::cmp::Ordering::Greater => (val, ours),
+                            std::cmp::Ordering::Equal => (cur_max, cur_ours || ours),
+                            std::cmp::Ordering::Less => (cur_max, cur_ours),
+                        },
+                    });
+                }
+                i64::from(best.is_some_and(|(_, ours)| ours)).into()
+            }
         },
     }
 }

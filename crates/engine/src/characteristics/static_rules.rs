@@ -83,6 +83,21 @@ pub enum SpellCostModifier {
         minimum: NonZeroU8,
         reduction: NonZeroU8,
     },
+    /// First spell each turn matching `filter` gets free cast, pay-life-MV alternative, or generic discount.
+    FirstSpellRule {
+        filter: SpellFilter,
+        own_turn_only: bool,
+        free: bool,
+        pay_life_mv: bool,
+        discount: u8,
+    },
+    /// Alternative mana cost for spells matching `filter` (e.g. Omniscience, Jodah, Fist of Suns).
+    AlternativeForMatching {
+        filter: SpellFilter,
+        mana: crate::mana::ManaCost,
+        once_each_turn: bool,
+        own_turn_only: bool,
+    },
 }
 
 /// Static casting, library-top, graveyard-cast, and land-play permission rule.
@@ -150,6 +165,34 @@ pub enum CastPermissionRule {
         free: bool,
         any_color: bool,
     },
+    /// Grant `keyword` (Convoke, Improvise, Delve, Rebound, Cascade, Flash, etc.) to matching spells cast by controller.
+    GrantSpellKeyword {
+        matching: SpellFilter,
+        keyword: super::KeywordAbility,
+    },
+    /// Play qualifying cards from the top of controller's library with optional per-turn and turn-ownership caps.
+    PlayLibraryTopFiltered {
+        lands_allowed: bool,
+        filter: Box<crate::program::ObjectFilter>,
+        once_each_turn: bool,
+        own_turn_only: bool,
+    },
+    /// Play qualifying cards from controller's graveyard only during controller's turn.
+    GraveyardMatchingOwnTurn {
+        lands_allowed: bool,
+        filter: Box<crate::program::ObjectFilter>,
+        once_each_turn: bool,
+    },
+    /// Play/cast qualifying cards matching `filter` from exile with land-play, per-turn, and own-turn options.
+    ExileMatchingExt {
+        filter: Box<crate::program::ObjectFilter>,
+        linked_to_source: bool,
+        free: bool,
+        any_color: bool,
+        lands_allowed: bool,
+        once_each_turn: bool,
+        own_turn_only: bool,
+    },
 }
 
 /// Which damage recipients a generalized [`StaticDamageRule::ModifyDamage`] matches.
@@ -184,6 +227,29 @@ pub enum StaticDamageKind {
     NoncombatOnly,
 }
 
+/// Amount of damage prevented by [`StaticDamageOp::PreventAndFollowup`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DamagePreventMode {
+    All,
+    UpTo(u8),
+    Half { round_up: bool },
+    UpToSourceCounters(crate::effects::CounterKind),
+}
+
+/// Immediate followup applied after damage is prevented by [`StaticDamageOp::PreventAndFollowup`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DamagePreventFollowup {
+    PutCountersOnRecipient {
+        kind: crate::effects::CounterKind,
+        per_prevented: bool,
+    },
+    RemoveCountersFromSource {
+        kind: crate::effects::CounterKind,
+        per_prevented: bool,
+    },
+    InlineBody(Box<crate::program::ExecutableBody>),
+}
+
 /// Replacement operation applied by [`StaticDamageRule::ModifyDamage`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum StaticDamageOp {
@@ -195,6 +261,13 @@ pub enum StaticDamageOp {
     Multiply(u8),
     PreventAll,
     PreventUpTo(u8),
+    /// Dynamic world-evaluable damage prevention cap (e.g. Battletide Alchemist).
+    PreventUpToExpr(Box<crate::program::ValueExpr>),
+    /// Prevent damage according to `mode` and apply an inline followup (Vigor, Phantom, Swans, Reverse Damage).
+    PreventAndFollowup {
+        mode: DamagePreventMode,
+        followup: DamagePreventFollowup,
+    },
     /// Prevent all damage from an attempt if its remaining amount is at most `max`.
     PreventAtMost(u8),
     /// Prevent half of an attempt's remaining damage (rounded up when `round_up` is true).
@@ -261,6 +334,15 @@ pub enum StaticDamageRule {
     DamageCannotBePrevented,
     /// Generalized static damage replacement or modification rule (CR 614.1, 616.1).
     ModifyDamage {
+        source: Option<crate::program::ObjectFilter>,
+        source_controller: crate::program::PlayerRelation,
+        recipient: StaticDamageRecipient,
+        kind: StaticDamageKind,
+        op: StaticDamageOp,
+    },
+    /// Generalized static damage modification gated by a rule-local world condition (works in TemporaryStatic & emblems).
+    ConditionalModifyDamage {
+        condition: Box<super::StaticSourceCondition>,
         source: Option<crate::program::ObjectFilter>,
         source_controller: crate::program::PlayerRelation,
         recipient: StaticDamageRecipient,
@@ -440,6 +522,11 @@ pub enum StaticRestriction {
     ControllerLifeTotalCantChange,
     /// Players matching this relation can't search libraries (Stranglehold, Ashiok, Shadow of Doubt).
     PlayersCantSearchLibraries(crate::program::PlayerRelation),
+    /// Players matching `player` skip their `step` each turn (e.g. Stasis, Sands of Time, Maralen).
+    SkipStep {
+        player: crate::program::PlayerRelation,
+        step: crate::turn::Step,
+    },
 }
 
 /// Static battlefield replacement, doubling, mana retention, or structural modifier.
@@ -519,6 +606,40 @@ pub enum StaticModifierRule {
     /// The "legend rule" doesn't apply to permanents this permanent's controller controls.
     IgnoreLegendRuleForController,
     RetainMana(ManaType),
+    /// Unspent mana becomes `ManaType` instead of emptying as steps and phases end (Kruphix, Horizon Stone).
+    ConvertUnspentMana(ManaType),
+    /// Modify the number of tokens matching `filter` created by players matching `controller` (Ojer Taq, Kaya).
+    ModifyTokensFiltered {
+        filter: Box<crate::program::ObjectFilter>,
+        controller: crate::program::PlayerRelation,
+        add: u8,
+        multiply: u8,
+    },
+    /// Whenever matching players create tokens matching `filter`, also create bonus tokens (Chatterfang, Queen Allenal).
+    BonusTokenFiltered {
+        filter: Box<crate::program::ObjectFilter>,
+        controller: crate::program::PlayerRelation,
+        token: Box<crate::token::TokenDefinition>,
+        count: u8,
+        per_created: bool,
+    },
+    /// Tokens that would be created under `affected`'s control are created under source controller's control instead (Crafty Cutpurse).
+    StealCreatedTokens {
+        affected: crate::program::PlayerRelation,
+        token_filter: Option<Box<crate::program::ObjectFilter>>,
+    },
+    /// Matching creatures crew Vehicles and/or saddle Mounts as though their power were `bonus` greater.
+    CrewAndSaddlePowerBonus {
+        selector: Box<PermanentSelector>,
+        crews: bool,
+        saddles: bool,
+        bonus: u8,
+    },
+    /// Modify maximum hand size of players matching `player` by signed `delta` (Locust Miser, Cursed Rack).
+    ModifyMaxHandSize {
+        player: crate::program::PlayerRelation,
+        delta: i8,
+    },
     Ascend,
     AdditionalBlockWhileMonarch,
 }
@@ -771,7 +892,11 @@ impl StaticContinuousAbility {
                         | CastPermissionRule::LookAtSourceExiledCards
                         | CastPermissionRule::GraveyardMatching { .. }
                         | CastPermissionRule::GraveyardSelfConditional { .. }
-                        | CastPermissionRule::ExileMatching { .. },
+                        | CastPermissionRule::ExileMatching { .. }
+                        | CastPermissionRule::GrantSpellKeyword { .. }
+                        | CastPermissionRule::PlayLibraryTopFiltered { .. }
+                        | CastPermissionRule::GraveyardMatchingOwnTurn { .. }
+                        | CastPermissionRule::ExileMatchingExt { .. },
                     ..
                 }
                 | Self::DamageRule { .. }
@@ -811,6 +936,7 @@ impl StaticContinuousAbility {
                         | StaticRestriction::OpponentsCantCastDuringCombat
                         | StaticRestriction::ControllerLifeTotalCantChange
                         | StaticRestriction::PlayersCantSearchLibraries(_)
+                        | StaticRestriction::SkipStep { .. }
                         | StaticRestriction::RestrictOpponentsDuringOwnTurn
                         | StaticRestriction::RestrictGraveyardAndLibrary
                         | StaticRestriction::ControllerHasHexproof
@@ -847,6 +973,12 @@ impl StaticContinuousAbility {
                         | StaticModifierRule::ModifyLifeGain { .. }
                         | StaticModifierRule::ConditionalModifyLifeGain { .. }
                         | StaticModifierRule::RetainMana(_)
+                        | StaticModifierRule::ConvertUnspentMana(_)
+                        | StaticModifierRule::ModifyTokensFiltered { .. }
+                        | StaticModifierRule::BonusTokenFiltered { .. }
+                        | StaticModifierRule::StealCreatedTokens { .. }
+                        | StaticModifierRule::CrewAndSaddlePowerBonus { .. }
+                        | StaticModifierRule::ModifyMaxHandSize { .. }
                         | StaticModifierRule::BecomesDayIfNeither
                         | StaticModifierRule::ExtraEntryLoyalty
                         | StaticModifierRule::AdditionalCreatureDeathTrigger
@@ -868,6 +1000,10 @@ impl StaticContinuousAbility {
                 SpellCostModifier::Discount { matching, .. } => {
                     matching.rewrite_creature_type(change.from, change.to);
                 }
+                SpellCostModifier::FirstSpellRule { filter, .. }
+                | SpellCostModifier::AlternativeForMatching { filter, .. } => {
+                    filter.rewrite_creature_type(change.from, change.to);
+                }
                 SpellCostModifier::SubtypeDiscountFromCommandOrBattlefield { subtype, .. }
                 | SpellCostModifier::FreeSubtypeCreatureSpells(subtype) => word(subtype),
                 _ => {}
@@ -881,9 +1017,15 @@ impl StaticContinuousAbility {
                     matching.rewrite_creature_type(change.from, change.to);
                 }
                 CastPermissionRule::PlayLibraryTopMatching { filter, .. }
+                | CastPermissionRule::PlayLibraryTopFiltered { filter, .. }
                 | CastPermissionRule::GraveyardMatching { filter, .. }
-                | CastPermissionRule::ExileMatching { filter, .. } => {
+                | CastPermissionRule::GraveyardMatchingOwnTurn { filter, .. }
+                | CastPermissionRule::ExileMatching { filter, .. }
+                | CastPermissionRule::ExileMatchingExt { filter, .. } => {
                     filter.rewrite_creature_type(change.from, change.to);
+                }
+                CastPermissionRule::GrantSpellKeyword { matching, .. } => {
+                    matching.rewrite_creature_type(change.from, change.to);
                 }
                 CastPermissionRule::GraveyardSelfConditional { condition } => {
                     condition.rewrite_creature_type(change.from, change.to);
@@ -1013,6 +1155,19 @@ impl StaticContinuousAbility {
                         .validate_vocabulary(vocabulary)
                         .map_err(|_| CharacteristicDefinitionError::ForeignCreatureType);
                 }
+                SpellCostModifier::FirstSpellRule { filter, .. } => {
+                    return filter
+                        .validate_vocabulary(vocabulary)
+                        .map_err(|_| CharacteristicDefinitionError::ForeignCreatureType);
+                }
+                SpellCostModifier::AlternativeForMatching { filter, mana, .. } => {
+                    if !mana.valid() {
+                        return Err(CharacteristicDefinitionError::EmptyParts);
+                    }
+                    return filter
+                        .validate_vocabulary(vocabulary)
+                        .map_err(|_| CharacteristicDefinitionError::ForeignCreatureType);
+                }
                 SpellCostModifier::SubtypeDiscountFromCommandOrBattlefield { subtype, .. }
                 | SpellCostModifier::FreeSubtypeCreatureSpells(subtype) => {
                     return validate_subtypes(&BTreeSet::from([*subtype]), vocabulary);
@@ -1037,9 +1192,17 @@ impl StaticContinuousAbility {
                         .map_err(|_| CharacteristicDefinitionError::ForeignCreatureType);
                 }
                 CastPermissionRule::PlayLibraryTopMatching { filter, .. }
+                | CastPermissionRule::PlayLibraryTopFiltered { filter, .. }
                 | CastPermissionRule::GraveyardMatching { filter, .. }
-                | CastPermissionRule::ExileMatching { filter, .. } => {
+                | CastPermissionRule::GraveyardMatchingOwnTurn { filter, .. }
+                | CastPermissionRule::ExileMatching { filter, .. }
+                | CastPermissionRule::ExileMatchingExt { filter, .. } => {
                     return filter
+                        .validate_vocabulary(vocabulary)
+                        .map_err(|_| CharacteristicDefinitionError::ForeignCreatureType);
+                }
+                CastPermissionRule::GrantSpellKeyword { matching, .. } => {
+                    return matching
                         .validate_vocabulary(vocabulary)
                         .map_err(|_| CharacteristicDefinitionError::ForeignCreatureType);
                 }
@@ -1079,7 +1242,18 @@ impl StaticContinuousAbility {
                         recipient,
                         op,
                         ..
+                    }
+                    | StaticDamageRule::ConditionalModifyDamage {
+                        source,
+                        recipient,
+                        op,
+                        ..
                     } => {
+                        if let StaticDamageRule::ConditionalModifyDamage { condition, .. } = rule {
+                            crate::characteristics::validate_static_source_condition(
+                                condition, vocabulary,
+                            )?;
+                        }
                         if let Some(filter) = source {
                             filter
                                 .validate_vocabulary(vocabulary)
@@ -1090,9 +1264,35 @@ impl StaticContinuousAbility {
                                 .validate_vocabulary(vocabulary)
                                 .map_err(|_| CharacteristicDefinitionError::ForeignCreatureType)?;
                         }
-                        if let StaticDamageOp::AddExpr(expr) = op {
-                            expr.validate_world_condition(vocabulary)
-                                .map_err(|_| CharacteristicDefinitionError::ForeignCreatureType)?;
+                        match op {
+                            StaticDamageOp::AddExpr(expr)
+                            | StaticDamageOp::PreventUpToExpr(expr) => {
+                                if !expr.is_chosen_x() {
+                                    expr.validate_world_condition(vocabulary).map_err(|_| {
+                                        CharacteristicDefinitionError::ForeignCreatureType
+                                    })?;
+                                }
+                            }
+                            StaticDamageOp::PreventAndFollowup { mode, followup } => {
+                                if matches!(mode, DamagePreventMode::UpTo(0)) {
+                                    return Err(CharacteristicDefinitionError::EmptyParts);
+                                }
+                                if let DamagePreventFollowup::InlineBody(body) = followup {
+                                    body.validate_in(
+                                        vocabulary,
+                                        crate::program::BodyContext::ACTIVATED,
+                                    )
+                                    .map_err(|_| {
+                                        CharacteristicDefinitionError::InvalidKeywordGrant
+                                    })?;
+                                    if !crate::effects::event_replacement::is_inline_replacement_body_supported(body) {
+                                        return Err(
+                                            CharacteristicDefinitionError::InvalidKeywordGrant,
+                                        );
+                                    }
+                                }
+                            }
+                            _ => {}
                         }
                         if matches!(
                             op,
@@ -1282,6 +1482,54 @@ impl StaticContinuousAbility {
                         if *multiply == 0 || (*add == 0 && *multiply == 1) {
                             return Err(CharacteristicDefinitionError::EmptyParts);
                         }
+                    }
+                    StaticModifierRule::ModifyTokensFiltered {
+                        filter,
+                        add,
+                        multiply,
+                        ..
+                    } => {
+                        if *multiply == 0 || (*add == 0 && *multiply == 1) {
+                            return Err(CharacteristicDefinitionError::EmptyParts);
+                        }
+                        filter
+                            .validate_vocabulary(vocabulary)
+                            .map_err(|_| CharacteristicDefinitionError::ForeignCreatureType)?;
+                    }
+                    StaticModifierRule::BonusTokenFiltered {
+                        filter,
+                        token,
+                        count,
+                        ..
+                    } => {
+                        if *count == 0 {
+                            return Err(CharacteristicDefinitionError::EmptyParts);
+                        }
+                        filter
+                            .validate_vocabulary(vocabulary)
+                            .map_err(|_| CharacteristicDefinitionError::ForeignCreatureType)?;
+                        token
+                            .validate(vocabulary)
+                            .map_err(|_| CharacteristicDefinitionError::InvalidKeywordGrant)?;
+                    }
+                    StaticModifierRule::StealCreatedTokens {
+                        token_filter: Some(filter),
+                        ..
+                    } => {
+                        filter
+                            .validate_vocabulary(vocabulary)
+                            .map_err(|_| CharacteristicDefinitionError::ForeignCreatureType)?;
+                    }
+                    StaticModifierRule::CrewAndSaddlePowerBonus {
+                        selector, bonus, ..
+                    } => {
+                        if *bonus == 0 {
+                            return Err(CharacteristicDefinitionError::EmptyParts);
+                        }
+                        selector.validate(vocabulary)?;
+                    }
+                    StaticModifierRule::ModifyMaxHandSize { delta: 0, .. } => {
+                        return Err(CharacteristicDefinitionError::EmptyParts);
                     }
                     StaticModifierRule::ModifyLifeGain {
                         add,

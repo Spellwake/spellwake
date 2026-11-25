@@ -303,27 +303,14 @@ impl EffectWindow {
                 if !relation_applies(rel, ctrl) {
                     continue;
                 }
-                let cond_ok = condition.as_deref().is_none_or(|cond| match cond {
-                    StaticSourceCondition::Eval(rc) => {
-                        let ctx = WorldEvalCtx {
-                            active_player: self.window.active_player(),
-                            participants: self.window.participants(),
-                            life: Some(&self.life),
-                            combat: self.combat.as_ref(),
-                            cards: self.window.cards(),
-                            programs: &self.programs,
-                            state: &self.characteristics,
-                            objects: &evaluated.objects,
-                            source: perm.object,
-                            controller: ctrl,
-                            name_rules: &self.name_rules,
-                            trigger_subject: None,
-                            related_player: Some(player),
-                            defending_player: None,
-                        };
-                        eval_world_condition(&ctx, rc)
-                    }
-                    _ => true,
+                let cond_ok = condition.as_deref().is_none_or(|cond| {
+                    self.eval_static_source_condition_at(
+                        evaluated,
+                        cond,
+                        Some(perm.object),
+                        ctrl,
+                        Some(player),
+                    )
                 });
                 if !cond_ok {
                     continue;
@@ -365,27 +352,14 @@ impl EffectWindow {
             if !relation_applies(rel, active.controller) {
                 continue;
             }
-            let cond_ok = condition.as_deref().is_none_or(|cond| match cond {
-                StaticSourceCondition::Eval(rc) => active.source_object.is_some_and(|src| {
-                    let ctx = WorldEvalCtx {
-                        active_player: self.window.active_player(),
-                        participants: self.window.participants(),
-                        life: Some(&self.life),
-                        combat: self.combat.as_ref(),
-                        cards: self.window.cards(),
-                        programs: &self.programs,
-                        state: &self.characteristics,
-                        objects: &evaluated.objects,
-                        source: src,
-                        controller: active.controller,
-                        name_rules: &self.name_rules,
-                        trigger_subject: None,
-                        related_player: Some(player),
-                        defending_player: None,
-                    };
-                    eval_world_condition(&ctx, rc)
-                }),
-                _ => true,
+            let cond_ok = condition.as_deref().is_none_or(|cond| {
+                self.eval_static_source_condition_at(
+                    evaluated,
+                    cond,
+                    active.source_object,
+                    active.controller,
+                    Some(player),
+                )
             });
             if !cond_ok {
                 continue;
@@ -403,6 +377,422 @@ impl EffectWindow {
         Ok(None)
     }
 
+    /// Evaluate a [`StaticSourceCondition`] against an already-evaluated characteristic cut.
+    pub(super) fn eval_static_source_condition_at(
+        &self,
+        evaluated: &EvaluatedCharacteristics,
+        condition: &StaticSourceCondition,
+        source: Option<ObjectId>,
+        controller: SeatId,
+        related_player: Option<SeatId>,
+    ) -> bool {
+        use crate::characteristics::Color;
+        use StaticSourceCondition::*;
+        match condition {
+            ControllerLifeAtMost(limit) => self
+                .life
+                .get(controller)
+                .is_some_and(|life| *life <= i64::from(*limit).into()),
+            ControllerLifeAtLeast(limit) => self
+                .life
+                .get(controller)
+                .is_some_and(|life| *life >= i64::from(*limit).into()),
+            ControllerControlsSubtype(kind) | OpponentControlsSubtype(kind) => {
+                let opponents = matches!(condition, OpponentControlsSubtype(_));
+                evaluated.objects.values().any(|card| {
+                    card.zone == ObjectZone::Battlefield
+                        && card
+                            .controller
+                            .is_some_and(|owner| (owner != controller) == opponents)
+                        && card.current_creature_subtypes.contains(kind)
+                })
+            }
+            OpponentsTurn => self.window.active_player() != controller,
+            ControllersTurn => self.window.active_player() == controller,
+            HasKeyword(keyword) => source
+                .and_then(|s| evaluated.get(s))
+                .is_some_and(|o| o.has_keyword(*keyword)),
+            Delirium => {
+                let mut types = BTreeSet::new();
+                for card in evaluated
+                    .objects
+                    .values()
+                    .filter(|c| c.zone == ObjectZone::Graveyard(controller))
+                {
+                    types.extend(card.current_types.iter().copied());
+                }
+                types.len() >= 4
+            }
+            Metalcraft => {
+                evaluated
+                    .objects
+                    .values()
+                    .filter(|c| {
+                        c.zone == ObjectZone::Battlefield
+                            && c.controller == Some(controller)
+                            && c.has_type(CardType::Artifact)
+                    })
+                    .count()
+                    >= 3
+            }
+            Threshold => {
+                evaluated
+                    .objects
+                    .values()
+                    .filter(|c| c.zone == ObjectZone::Graveyard(controller))
+                    .count()
+                    >= 7
+            }
+            ControlsCardType { kind, minimum } => {
+                evaluated
+                    .objects
+                    .values()
+                    .filter(|c| {
+                        c.zone == ObjectZone::Battlefield
+                            && c.controller == Some(controller)
+                            && c.has_type(*kind)
+                    })
+                    .count()
+                    >= usize::from(*minimum)
+            }
+            GraveyardCountAtLeast { types, minimum } => {
+                evaluated
+                    .objects
+                    .values()
+                    .filter(|c| {
+                        c.zone == ObjectZone::Graveyard(controller)
+                            && types.matches_any(&c.current_types)
+                    })
+                    .count()
+                    >= usize::from(*minimum)
+            }
+            HandCountAtMost(limit) => {
+                evaluated
+                    .objects
+                    .values()
+                    .filter(|c| c.zone == ObjectZone::Hand(controller))
+                    .count()
+                    <= usize::from(*limit)
+            }
+            HandCountAtLeast(limit) => {
+                evaluated
+                    .objects
+                    .values()
+                    .filter(|c| c.zone == ObjectZone::Hand(controller))
+                    .count()
+                    >= usize::from(*limit)
+            }
+            SourceCounterAtLeast { kind, minimum } => source.is_some_and(|s| {
+                self.characteristics.permanent_counter_count(s, *kind) >= i64::from(*minimum).into()
+            }),
+            SourceAnyCounterAtLeast(minimum) => source.is_some_and(|s| {
+                self.characteristics.total_permanent_counters(s) >= i64::from(*minimum).into()
+            }),
+            SourceIsEquipped => source.is_some_and(|s| {
+                evaluated.objects.values().any(|equipment| {
+                    equipment.zone == ObjectZone::Battlefield
+                        && equipment.attached_to == Some(TargetRef::Object(s))
+                        && equipment.has_type(CardType::Artifact)
+                        && equipment
+                            .current_artifact_subtypes
+                            .contains(&crate::program::ArtifactSubtype::Equipment)
+                })
+            }),
+            SourceIsEnchanted => source.is_some_and(|s| {
+                evaluated.objects.values().any(|aura| {
+                    aura.zone == ObjectZone::Battlefield
+                        && aura.attached_to == Some(TargetRef::Object(s))
+                        && aura.has_type(CardType::Enchantment)
+                })
+            }),
+            AttachedHostMatches(selector) => source
+                .and_then(|s| evaluated.get(s))
+                .and_then(|src| match src.attached_to {
+                    Some(TargetRef::Object(host)) => Some(host),
+                    _ => None,
+                })
+                .is_some_and(|host| {
+                    crate::characteristics::selector_matches_permanent(
+                        self.window.cards(),
+                        evaluated,
+                        source.unwrap_or(ObjectId::SENTINEL),
+                        controller,
+                        selector,
+                        host,
+                        &self.name_rules,
+                    )
+                }),
+            ControlsExactCount { selector, count } => {
+                let mut sel = selector.as_ref().clone();
+                if sel.controller == crate::characteristics::ControllerSelector::Any {
+                    sel.controller = crate::characteristics::ControllerSelector::SourceController;
+                }
+                crate::characteristics::count_permanents(
+                    self.window.cards(),
+                    evaluated,
+                    source.unwrap_or(ObjectId::SENTINEL),
+                    controller,
+                    &sel,
+                    &self.name_rules,
+                ) == i64::from(*count).into()
+            }
+            SourceIsTapped => source
+                .and_then(|s| evaluated.get(s))
+                .is_some_and(|o| o.tapped == Some(true)),
+            SourceIsUntapped => source
+                .and_then(|s| evaluated.get(s))
+                .is_some_and(|o| o.tapped == Some(false)),
+            SourceClassLevelAtLeast(min) => source.is_some_and(|s| {
+                self.characteristics
+                    .class_levels
+                    .get(&s)
+                    .copied()
+                    .unwrap_or(1)
+                    >= *min
+            }),
+            SourceIsSolved => {
+                source.is_some_and(|s| self.characteristics.solved_cases.contains(&s))
+            }
+            SourceEnteredThisTurn => {
+                source.is_some_and(|s| self.characteristics.entered_objects_this_turn.contains(&s))
+            }
+            SourcePaired => {
+                source.is_some_and(|s| self.characteristics.paired_creatures.contains_key(&s))
+            }
+            SourceIsPrepared => source.is_some_and(|s| self.characteristics.prepared.contains(&s)),
+            EntryOptionChosen(expected) => source.is_some_and(|s| {
+                self.characteristics.entry_option_choices.get(&s) == Some(expected)
+            }),
+            NonlandPermanentsEnteredThisTurnAtLeast(min) => {
+                let total = self
+                    .characteristics
+                    .permanents_entered_this_turn
+                    .get(&controller)
+                    .copied()
+                    .unwrap_or(0);
+                let lands = self
+                    .characteristics
+                    .entered_types_this_turn
+                    .get(&controller)
+                    .and_then(|by_type| by_type.get(&CardType::Land))
+                    .copied()
+                    .unwrap_or(0);
+                total.saturating_sub(lands) >= *min
+            }
+            AnyLibraryAtMost(max) => self
+                .window
+                .participants()
+                .iter()
+                .any(|&seat| self.window.cards().library(seat).len() <= usize::from(*max)),
+            AnyPlayerHandCountAtMost(max) => self.window.participants().iter().any(|&seat| {
+                evaluated
+                    .objects
+                    .values()
+                    .filter(|c| c.zone == ObjectZone::Hand(seat))
+                    .count()
+                    <= usize::from(*max)
+            }),
+            MostCommonPermanentColor { color, or_tied } => {
+                let mut counts = [0usize; 5];
+                let idx = |c: Color| match c {
+                    Color::White => 0,
+                    Color::Blue => 1,
+                    Color::Black => 2,
+                    Color::Red => 3,
+                    Color::Green => 4,
+                };
+                for perm in evaluated
+                    .objects
+                    .values()
+                    .filter(|p| p.zone == ObjectZone::Battlefield)
+                {
+                    for &c in &perm.current_colors {
+                        counts[idx(c)] += 1;
+                    }
+                }
+                let target = counts[idx(*color)];
+                let max_other = counts
+                    .iter()
+                    .enumerate()
+                    .filter(|&(i, _)| i != idx(*color))
+                    .map(|(_, &n)| n)
+                    .max()
+                    .unwrap_or(0);
+                if *or_tied {
+                    target >= max_other
+                } else {
+                    target > max_other
+                }
+            }
+            ControllerHasCityBlessing => self.characteristics.city_blessing.contains(&controller),
+            ControllerGainedLifeThisTurn => self
+                .characteristics
+                .life_gained_this_turn
+                .get(&controller)
+                .is_some_and(RulesInteger::is_positive),
+            ControllerLostLifeThisTurn => self
+                .characteristics
+                .life_lost_this_turn
+                .get(&controller)
+                .is_some_and(RulesInteger::is_positive),
+            OpponentLostLifeThisTurn => self
+                .characteristics
+                .life_lost_this_turn
+                .iter()
+                .any(|(&seat, amount)| seat != controller && amount.is_positive()),
+            ControllerAttackedThisTurn => self
+                .characteristics
+                .attacked_this_turn_players
+                .contains(&controller),
+            ControllerCastSpellsThisTurn(min) => {
+                self.characteristics
+                    .spells_cast_this_turn
+                    .get(&controller)
+                    .copied()
+                    .unwrap_or(0)
+                    >= *min
+            }
+            ControllerDiscardedThisTurn => {
+                self.characteristics
+                    .cards_discarded_this_turn
+                    .get(&controller)
+                    .copied()
+                    .unwrap_or(0)
+                    >= 1
+            }
+            ControllerSacrificedThisTurn => {
+                self.characteristics
+                    .permanents_sacrificed_this_turn
+                    .get(&controller)
+                    .copied()
+                    .unwrap_or(0)
+                    >= 1
+            }
+            PermanentLeftBattlefieldThisTurn => {
+                self.characteristics
+                    .permanents_left_battlefield_this_turn
+                    .get(&controller)
+                    .copied()
+                    .unwrap_or(0)
+                    >= 1
+            }
+            CreatureEnteredUnderControlThisTurn => {
+                self.characteristics
+                    .creatures_entered_this_turn
+                    .get(&controller)
+                    .copied()
+                    .unwrap_or(0)
+                    >= 1
+            }
+            DescendedThisTurn => self
+                .characteristics
+                .descended_this_turn
+                .contains(&controller),
+            CommittedCrimeThisTurn => self
+                .characteristics
+                .committed_crime_this_turn
+                .contains(&controller),
+            ControllerDrewCardsThisTurn(min) => {
+                self.characteristics
+                    .cards_drawn_this_turn_counts
+                    .get(&controller)
+                    .copied()
+                    .unwrap_or(0)
+                    >= *min
+            }
+            ControlsMatching { selector, minimum } => {
+                let mut sel = selector.as_ref().clone();
+                if sel.controller == crate::characteristics::ControllerSelector::Any {
+                    sel.controller = crate::characteristics::ControllerSelector::SourceController;
+                }
+                crate::characteristics::count_permanents(
+                    self.window.cards(),
+                    evaluated,
+                    source.unwrap_or(ObjectId::SENTINEL),
+                    controller,
+                    &sel,
+                    &self.name_rules,
+                ) >= i64::from(*minimum).into()
+            }
+            OpponentControlsMatching { selector, minimum } => {
+                let mut sel = selector.as_ref().clone();
+                if sel.controller == crate::characteristics::ControllerSelector::Any {
+                    sel.controller = crate::characteristics::ControllerSelector::Opponents;
+                }
+                crate::characteristics::count_permanents(
+                    self.window.cards(),
+                    evaluated,
+                    source.unwrap_or(ObjectId::SENTINEL),
+                    controller,
+                    &sel,
+                    &self.name_rules,
+                ) >= i64::from(*minimum).into()
+            }
+            Eval(rc) => {
+                let ctx = WorldEvalCtx {
+                    active_player: self.window.active_player(),
+                    participants: self.window.participants(),
+                    life: Some(&self.life),
+                    combat: self.combat.as_ref(),
+                    cards: self.window.cards(),
+                    programs: &self.programs,
+                    state: &self.characteristics,
+                    objects: &evaluated.objects,
+                    source: source.unwrap_or(ObjectId::SENTINEL),
+                    controller,
+                    name_rules: &self.name_rules,
+                    trigger_subject: None,
+                    related_player,
+                    defending_player: None,
+                };
+                eval_world_condition(&ctx, rc)
+            }
+            RoomDoorUnlocked(half) => source
+                .and_then(|s| self.characteristics.unlocked_doors.get(&s))
+                .is_some_and(|doors| doors.is_unlocked(*half)),
+            RoomFullyUnlocked => source
+                .and_then(|s| self.characteristics.unlocked_doors.get(&s))
+                .is_some_and(|doors| doors.fully_unlocked()),
+            Not(inner) => !self.eval_static_source_condition_at(
+                evaluated,
+                inner,
+                source,
+                controller,
+                related_player,
+            ),
+            And(a, b) => {
+                self.eval_static_source_condition_at(
+                    evaluated,
+                    a,
+                    source,
+                    controller,
+                    related_player,
+                ) && self.eval_static_source_condition_at(
+                    evaluated,
+                    b,
+                    source,
+                    controller,
+                    related_player,
+                )
+            }
+            Or(a, b) => {
+                self.eval_static_source_condition_at(
+                    evaluated,
+                    a,
+                    source,
+                    controller,
+                    related_player,
+                ) || self.eval_static_source_condition_at(
+                    evaluated,
+                    b,
+                    source,
+                    controller,
+                    related_player,
+                )
+            }
+        }
+    }
+
     /// Execute an inline replacement body without putting an object on the stack (CR 614.1),
     /// guarding `(rep.source, rep.ability)` against CR 614.5 self-reapplication.
     pub(super) fn execute_inline_replacement_body(
@@ -411,13 +801,91 @@ impl EffectWindow {
         cause: EventCause,
         append: &mut RulesJournal,
     ) -> Result<(), EffectError> {
+        self.execute_inline_replacement_body_with_amount(rep, None, cause, append)
+    }
+
+    /// Execute an inline replacement body with an optional event amount (such as damage prevented),
+    /// exposing it to `EventValueKind::DamagePreventedThisWay` and `EventValueKind::LastActionCount`.
+    pub(super) fn execute_inline_replacement_body_with_amount(
+        &mut self,
+        rep: &EventBodyReplacement,
+        event_amount: Option<RulesInteger>,
+        cause: EventCause,
+        append: &mut RulesJournal,
+    ) -> Result<(), EffectError> {
         let key = (rep.source, rep.ability);
         if !self.active_event_replacements.insert(key) {
             return Ok(());
         }
-        let result = self.run_inline_replacement_body(rep, cause, append);
+        let result = self.run_inline_replacement_body(rep, event_amount.as_ref(), cause, append);
         self.active_event_replacements.remove(&key);
         result
+    }
+
+    fn resolve_inline_value_expr(
+        &self,
+        rep: &EventBodyReplacement,
+        expr: &crate::program::ValueExpr,
+        event_amount: Option<&RulesInteger>,
+    ) -> Result<RulesInteger, EffectError> {
+        use crate::program::{EventValueKind, ValueExpr};
+        match expr {
+            ValueExpr::EventValue(EventValueKind::DamagePreventedThisWay) => {
+                Ok(event_amount.cloned().unwrap_or_else(|| 0.into()))
+            }
+            ValueExpr::EventValue(EventValueKind::LastActionCount) if event_amount.is_some() => {
+                Ok(event_amount.cloned().unwrap_or_else(|| 0.into()))
+            }
+            ValueExpr::Scale { expr, factor } => Ok(self
+                .resolve_inline_value_expr(rep, expr, event_amount)?
+                .times(factor)),
+            ValueExpr::DivConst {
+                expr,
+                divisor,
+                round_up,
+            } => {
+                let value = self.resolve_inline_value_expr(rep, expr, event_amount)?;
+                let d = usize::from(divisor.get());
+                if d == 2 {
+                    Ok(if *round_up {
+                        value.nonnegative_half_rounded_up()
+                    } else {
+                        value.nonnegative_half_rounded_down()
+                    })
+                } else if let Some(n) = value.to_usize() {
+                    let result = if *round_up { n.div_ceil(d) } else { n / d };
+                    Ok(RulesInteger::from_usize(result))
+                } else {
+                    Err(EffectError::InconsistentProgram)
+                }
+            }
+            ValueExpr::Add(a, b) => {
+                let lhs = self.resolve_inline_value_expr(rep, a, event_amount)?;
+                let rhs = self.resolve_inline_value_expr(rep, b, event_amount)?;
+                Ok(lhs.plus(&rhs))
+            }
+            ValueExpr::Sub(a, b) => {
+                let lhs = self.resolve_inline_value_expr(rep, a, event_amount)?;
+                let rhs = self.resolve_inline_value_expr(rep, b, event_amount)?;
+                Ok(lhs.minus(&rhs))
+            }
+            ValueExpr::Conditional {
+                left,
+                comparison,
+                right,
+                then_value,
+                else_value,
+            } => {
+                let lhs = self.resolve_inline_value_expr(rep, left, event_amount)?;
+                let rhs = self.resolve_inline_value_expr(rep, right, event_amount)?;
+                if comparison.evaluate(&lhs, &rhs) {
+                    self.resolve_inline_value_expr(rep, then_value, event_amount)
+                } else {
+                    self.resolve_inline_value_expr(rep, else_value, event_amount)
+                }
+            }
+            _ => self.resolve_value_expr_with_source(rep.controller, expr, None, rep.source),
+        }
     }
 
     fn resolve_replacement_player(
@@ -428,10 +896,38 @@ impl EffectWindow {
         match role {
             ResolvingPlayer::Controller => Ok(rep.controller),
             ResolvingPlayer::ActivePlayer => Ok(self.window.active_player()),
+            ResolvingPlayer::EnchantedPlayer => Ok(rep
+                .source
+                .and_then(|s| self.characteristics.attachments.get(&s).copied())
+                .and_then(|att| match att {
+                    TargetRef::Player(seat) => Some(seat),
+                    _ => None,
+                })
+                .unwrap_or(rep.affected_player)),
+            ResolvingPlayer::AttachedHostController => Ok(rep
+                .source
+                .and_then(|s| self.characteristics.attachments.get(&s).copied())
+                .and_then(|att| match att {
+                    TargetRef::Player(seat) => Some(seat),
+                    TargetRef::Object(host) => self
+                        .window
+                        .cards()
+                        .get(host)
+                        .and_then(GameObject::controller),
+                    TargetRef::Stack(_) => None,
+                })
+                .unwrap_or(rep.affected_player)),
+            ResolvingPlayer::SourceChosenPlayer => Ok(rep
+                .source
+                .and_then(|s| self.characteristics.entry_player_choices.get(&s).copied())
+                .unwrap_or(rep.affected_player)),
             ResolvingPlayer::UniqueRelatedPlayer
             | ResolvingPlayer::TargetPlayer
             | ResolvingPlayer::TargetController
-            | ResolvingPlayer::TargetOwner => Ok(rep.affected_player),
+            | ResolvingPlayer::TargetOwner
+            | ResolvingPlayer::CombatDamageSourceController
+            | ResolvingPlayer::TriggerSubjectController
+            | ResolvingPlayer::TriggerSubjectOwner => Ok(rep.affected_player),
             _ => Ok(rep.controller),
         }
     }
@@ -469,6 +965,7 @@ impl EffectWindow {
     fn run_inline_replacement_body(
         &mut self,
         rep: &EventBodyReplacement,
+        event_amount: Option<&RulesInteger>,
         cause: EventCause,
         append: &mut RulesJournal,
     ) -> Result<(), EffectError> {
@@ -494,18 +991,10 @@ impl EffectWindow {
                     condition,
                     destination,
                 } => {
-                    let left = self.resolve_value_expr_with_source(
-                        rep.controller,
-                        &condition.left,
-                        None,
-                        rep.source,
-                    )?;
-                    let right = self.resolve_value_expr_with_source(
-                        rep.controller,
-                        &condition.right,
-                        None,
-                        rep.source,
-                    )?;
+                    let left =
+                        self.resolve_inline_value_expr(rep, &condition.left, event_amount)?;
+                    let right =
+                        self.resolve_inline_value_expr(rep, &condition.right, event_amount)?;
                     if !condition.comparison.evaluate(&left, &right) {
                         pc = destination;
                         continue;
@@ -513,7 +1002,7 @@ impl EffectWindow {
                 }
                 Instruction::GainControllerLife { amount } => {
                     let val = self
-                        .resolve_value_expr_with_source(rep.controller, &amount, None, rep.source)?
+                        .resolve_inline_value_expr(rep, &amount, event_amount)?
                         .max(0.into());
                     self.adjust_players_at_cut(
                         synthetic_entry,
@@ -536,7 +1025,7 @@ impl EffectWindow {
                     amount,
                 } => {
                     let val = self
-                        .resolve_value_expr_with_source(rep.controller, &amount, None, rep.source)?
+                        .resolve_inline_value_expr(rep, &amount, event_amount)?
                         .max(0.into());
                     let seats = self.resolve_replacement_players(players, rep)?;
                     let adj = if gain {
@@ -549,7 +1038,7 @@ impl EffectWindow {
                 }
                 Instruction::DrainOpponents(amount) => {
                     let val = self
-                        .resolve_value_expr_with_source(rep.controller, &amount, None, rep.source)?
+                        .resolve_inline_value_expr(rep, &amount, event_amount)?
                         .max(0.into());
                     self.drain_opponents(
                         synthetic_entry,
@@ -561,7 +1050,7 @@ impl EffectWindow {
                 }
                 Instruction::DrawController { amount } => {
                     let val = self
-                        .resolve_value_expr_with_source(rep.controller, &amount, None, rep.source)?
+                        .resolve_inline_value_expr(rep, &amount, event_amount)?
                         .max(0.into());
                     if val.is_positive() && self.window.participants().contains(&rep.controller) {
                         let _ = self.draw_at_cuts(
@@ -577,7 +1066,7 @@ impl EffectWindow {
                 }
                 Instruction::DrawPlayer { players, amount } => {
                     let val = self
-                        .resolve_value_expr_with_source(rep.controller, &amount, None, rep.source)?
+                        .resolve_inline_value_expr(rep, &amount, event_amount)?
                         .max(0.into());
                     if val.is_positive() {
                         for seat in self.resolve_replacement_players(players, rep)? {
@@ -596,7 +1085,7 @@ impl EffectWindow {
                 Instruction::Mill { player, amount } => {
                     let seat = self.resolve_replacement_player(player, rep)?;
                     let val = self
-                        .resolve_value_expr_with_source(rep.controller, &amount, None, rep.source)?
+                        .resolve_inline_value_expr(rep, &amount, event_amount)?
                         .max(0.into());
                     self.inline_mill_player(seat, &val, cause.clone(), append)?;
                 }
@@ -684,7 +1173,7 @@ impl EffectWindow {
                     amount,
                 } => {
                     let val = self
-                        .resolve_value_expr_with_source(rep.controller, &amount, None, rep.source)?
+                        .resolve_inline_value_expr(rep, &amount, event_amount)?
                         .max(0.into());
                     if val.is_positive() {
                         let objects = self.inline_resolve_subject(*subject, rep)?;
@@ -712,7 +1201,7 @@ impl EffectWindow {
                     amount,
                 } => {
                     let val = self
-                        .resolve_value_expr_with_source(rep.controller, &amount, None, rep.source)?
+                        .resolve_inline_value_expr(rep, &amount, event_amount)?
                         .max(0.into());
                     if val.is_positive() {
                         for seat in self.resolve_replacement_players(players, rep)? {
@@ -727,7 +1216,13 @@ impl EffectWindow {
                     }
                 }
                 Instruction::CreateTokens { creations } => {
-                    self.inline_create_tokens(&creations, rep, cause.clone(), append)?;
+                    self.inline_create_tokens(
+                        &creations,
+                        rep,
+                        event_amount,
+                        cause.clone(),
+                        append,
+                    )?;
                 }
                 Instruction::WinGame(player) => {
                     let winner = self.resolve_replacement_player(player, rep)?;
@@ -895,7 +1390,9 @@ impl EffectWindow {
                             SubjectDestination::Library(placement) => {
                                 let dest = match placement {
                                     LibraryPlacement::Top => ObjectDestination::LibraryTop,
-                                    LibraryPlacement::Bottom => ObjectDestination::LibraryBottom,
+                                    LibraryPlacement::Bottom | LibraryPlacement::BottomRandom => {
+                                        ObjectDestination::LibraryBottom
+                                    }
                                     LibraryPlacement::FromTop(n) => {
                                         ObjectDestination::LibraryFromTop(n)
                                     }
@@ -995,7 +1492,7 @@ impl EffectWindow {
                     grant_play,
                 } => {
                     let val = self
-                        .resolve_value_expr_with_source(rep.controller, &count, None, rep.source)?
+                        .resolve_inline_value_expr(rep, &count, event_amount)?
                         .max(0.into());
                     let n = val.to_usize().unwrap_or(0);
                     if n > 0 {
@@ -1342,6 +1839,7 @@ impl EffectWindow {
         &mut self,
         creations: &[crate::token::TokenCreation],
         rep: &EventBodyReplacement,
+        event_amount: Option<&RulesInteger>,
         cause: EventCause,
         append: &mut RulesJournal,
     ) -> Result<(), EffectError> {
@@ -1365,7 +1863,7 @@ impl EffectWindow {
                 _ => vec![rep.controller],
             };
             let raw_count = self
-                .resolve_value_expr_with_source(rep.controller, &creation.amount, None, rep.source)?
+                .resolve_inline_value_expr(rep, &creation.amount, event_amount)?
                 .max(0.into())
                 .to_usize()
                 .unwrap_or(0);

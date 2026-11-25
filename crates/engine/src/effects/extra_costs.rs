@@ -20,6 +20,36 @@ impl EffectWindow {
         turn: Option<&TurnScheduler>,
         append: &mut RulesJournal,
     ) -> Result<(), EffectError> {
+        let reserved_unrestricted = BTreeMap::new();
+        self.pay_extra_costs_with_reserved_mana(
+            actor,
+            source,
+            entry,
+            cause,
+            extra_costs,
+            selected_objects,
+            chosen_x,
+            turn,
+            &reserved_unrestricted,
+            append,
+        )
+    }
+
+    // Forwards activation context and base mana reservation without an extra wrapper allocation.
+    #[allow(clippy::too_many_arguments)]
+    pub(super) fn pay_extra_costs_with_reserved_mana(
+        &mut self,
+        actor: SeatId,
+        source: Option<ObjectId>,
+        entry: StackEntryId,
+        cause: EventCause,
+        extra_costs: &[ExtraActivationCost],
+        selected_objects: &[ObjectId],
+        chosen_x: Option<&RulesInteger>,
+        turn: Option<&TurnScheduler>,
+        reserved_unrestricted: &BTreeMap<ManaType, RulesInteger>,
+        append: &mut RulesJournal,
+    ) -> Result<(), EffectError> {
         if extra_costs.is_empty() {
             return Ok(());
         }
@@ -35,6 +65,7 @@ impl EffectWindow {
                 &mut cursor,
                 chosen_x,
                 turn,
+                reserved_unrestricted,
                 append,
             )?;
         }
@@ -56,6 +87,7 @@ impl EffectWindow {
         cursor: &mut usize,
         chosen_x: Option<&RulesInteger>,
         turn: Option<&TurnScheduler>,
+        reserved_unrestricted: &BTreeMap<ManaType, RulesInteger>,
         append: &mut RulesJournal,
     ) -> Result<(), EffectError> {
         let take_n = |cursor: &mut usize, n: usize| -> Result<Vec<ObjectId>, EffectError> {
@@ -242,6 +274,10 @@ impl EffectWindow {
                     LifeCostAmount::CommanderColors => {
                         RulesInteger::from_usize(self.commander_mana_colors(actor)?.len())
                     }
+                    LifeCostAmount::ChosenX => chosen_x
+                        .filter(|x| **x >= RulesInteger::from(0))
+                        .cloned()
+                        .ok_or(EffectError::InvalidCastResource)?,
                 };
                 if life.is_positive() {
                     let evaluated = self.evaluated_characteristics()?;
@@ -320,7 +356,15 @@ impl EffectWindow {
             }
             ExtraActivationCost::SourceCounter { kind, delta } => {
                 let id = source.ok_or(EffectError::InvalidCastResource)?;
-                self.pay_counter_delta_at_cut(id, *kind, *delta, cause.clone(), turn, append)?;
+                self.pay_counter_delta_at_cut(
+                    id,
+                    *kind,
+                    *delta,
+                    chosen_x,
+                    cause.clone(),
+                    turn,
+                    append,
+                )?;
             }
             ExtraActivationCost::RemovePermanentCounters {
                 kind,
@@ -358,6 +402,7 @@ impl EffectWindow {
                         id,
                         *chosen_kind,
                         delta,
+                        None,
                         cause.clone(),
                         turn,
                         append,
@@ -379,6 +424,7 @@ impl EffectWindow {
                                 id,
                                 ck,
                                 CounterCostDelta::RemoveAll,
+                                None,
                                 cause.clone(),
                                 turn,
                                 append,
@@ -400,6 +446,7 @@ impl EffectWindow {
                             id,
                             chosen_kind,
                             CounterCostDelta::Remove(u),
+                            None,
                             cause.clone(),
                             turn,
                             append,
@@ -431,6 +478,7 @@ impl EffectWindow {
                     id,
                     *kind,
                     CounterCostDelta::Add(*count),
+                    None,
                     cause.clone(),
                     turn,
                     append,
@@ -966,6 +1014,7 @@ impl EffectWindow {
                     id,
                     CounterKind::MinusOne,
                     CounterCostDelta::Add(*count),
+                    None,
                     cause.clone(),
                     turn,
                     append,
@@ -1027,6 +1076,339 @@ impl EffectWindow {
                     self.debit_mana_at_cut(&receipt, false, turn, append)?;
                 }
             }
+            ExtraActivationCost::PaySnowMana(count) => {
+                let mut needed = RulesInteger::from(i64::from(count.get()));
+                let mut spend = Vec::new();
+                for mana_type in ManaType::ALL {
+                    if !needed.is_positive() {
+                        break;
+                    }
+                    let reserved = reserved_unrestricted
+                        .get(&mana_type)
+                        .cloned()
+                        .unwrap_or_else(|| 0.into());
+                    let available_unrestricted = self
+                        .unrestricted_mana(actor, mana_type)
+                        .minus(&reserved)
+                        .max(0.into());
+                    let snow_in_pool = self
+                        .floating_mana
+                        .source_traits
+                        .get(&(actor, mana_type))
+                        .map_or_else(|| 0.into(), |traits| traits.snow.clone());
+                    let available_snow = snow_in_pool.min(available_unrestricted);
+                    if available_snow.is_positive() {
+                        let take = needed.clone().min(available_snow);
+                        spend.push(ManaSpend {
+                            mana_type,
+                            amount: take.clone(),
+                        });
+                        needed = needed.minus(&take);
+                    }
+                }
+                if needed.is_positive() {
+                    return Err(EffectError::InsufficientMana);
+                }
+                let receipt = ManaPaymentRecord {
+                    from_lots: Default::default(),
+                    source: entry,
+                    payer: actor,
+                    cost: ManaCost::generic(RulesInteger::from(i64::from(count.get()))),
+                    spend,
+                    restricted_mana: Vec::new(),
+                };
+                self.debit_mana_at_cut(&receipt, false, turn, append)?;
+            }
+            ExtraActivationCost::RemoveCountersAmong {
+                kind,
+                count,
+                filter,
+            } => {
+                let needed = resolve_count(*count)?;
+                if needed == 0 {
+                    return Ok(());
+                }
+                let evaluated = self.evaluated_characteristics()?;
+                let excluded = BTreeSet::new();
+                let mut order: Vec<ObjectId> = Vec::new();
+                let mut avail: BTreeMap<ObjectId, Vec<(CounterKind, RulesInteger)>> =
+                    BTreeMap::new();
+                let mut planned: BTreeMap<(ObjectId, CounterKind), RulesInteger> = BTreeMap::new();
+                let mut taken: usize = 0;
+
+                // Pass 1: take 1 counter from each matching selected entry up to `needed`.
+                while *cursor < selected.len() && taken < needed {
+                    let id = selected[*cursor];
+                    let valid = evaluated.get(id).is_some_and(|view| {
+                        view.zone == ObjectZone::Battlefield
+                            && view.controller == Some(actor)
+                            && self.matches_object_filter(
+                                *filter, view, actor, source, &excluded, &evaluated,
+                            )
+                    });
+                    if !valid {
+                        break;
+                    }
+                    if let std::collections::btree_map::Entry::Vacant(slot) = avail.entry(id) {
+                        let kinds: Vec<(CounterKind, RulesInteger)> = if let Some(ck) = kind {
+                            let cnt = self.counters_of_kind(id, *ck);
+                            if cnt.is_positive() {
+                                vec![(*ck, cnt)]
+                            } else {
+                                Vec::new()
+                            }
+                        } else {
+                            self.characteristics
+                                .present_permanent_counter_kinds(id)
+                                .into_iter()
+                                .map(|ck| (ck, self.counters_of_kind(id, ck)))
+                                .filter(|(_, cnt)| cnt.is_positive())
+                                .collect()
+                        };
+                        if kinds.is_empty() {
+                            break;
+                        }
+                        slot.insert(kinds);
+                        order.push(id);
+                    }
+                    let taken_kind = avail.get_mut(&id).and_then(|kinds| {
+                        kinds.iter_mut().find_map(|(ck, rem)| {
+                            if rem.is_positive() {
+                                *rem = rem.minus(&1.into());
+                                Some(*ck)
+                            } else {
+                                None
+                            }
+                        })
+                    });
+                    let Some(ck) = taken_kind else {
+                        break;
+                    };
+                    let slot = planned.entry((id, ck)).or_insert_with(|| 0.into());
+                    *slot = slot.plus(&1.into());
+                    taken += 1;
+                    *cursor += 1;
+                }
+
+                // Pass 2: greedily take remaining counters across selected permanents in order.
+                let mut remaining = RulesInteger::from_usize(needed.saturating_sub(taken));
+                if remaining.is_positive() {
+                    for &id in &order {
+                        if !remaining.is_positive() {
+                            break;
+                        }
+                        if let Some(kinds) = avail.get_mut(&id) {
+                            for (ck, rem) in kinds.iter_mut() {
+                                if !remaining.is_positive() {
+                                    break;
+                                }
+                                if rem.is_positive() {
+                                    let take = remaining.clone().min(rem.clone());
+                                    *rem = rem.minus(&take);
+                                    let slot = planned.entry((id, *ck)).or_insert_with(|| 0.into());
+                                    *slot = slot.plus(&take);
+                                    remaining = remaining.minus(&take);
+                                }
+                            }
+                        }
+                    }
+                }
+                if remaining.is_positive() {
+                    return Err(EffectError::InvalidCastResource);
+                }
+                for id in order {
+                    let removals: Vec<(CounterKind, RulesInteger)> = planned
+                        .iter()
+                        .filter(|((obj, _), _)| *obj == id)
+                        .map(|((_, ck), amt)| (*ck, amt.clone()))
+                        .collect();
+                    for (ck, amt) in removals {
+                        self.pay_counter_delta_at_cut(
+                            id,
+                            ck,
+                            CounterCostDelta::RemoveX,
+                            Some(&amt),
+                            cause.clone(),
+                            turn,
+                            append,
+                        )?;
+                    }
+                }
+            }
+            ExtraActivationCost::ExileTopLibrary { count, face_down } => {
+                let needed = resolve_count(*count)?;
+                let library = self.window.cards().library(actor);
+                if library.len() < needed {
+                    return Err(EffectError::InvalidCastResource);
+                }
+                if needed > 0 {
+                    let moves: Vec<_> = library[..needed]
+                        .iter()
+                        .map(|&id| (id, crate::object_identity::ObjectDestination::Exile))
+                        .collect();
+                    let before = self.rules_snapshot(turn)?;
+                    let (window, movements) = self.window.record_linked_return_moves(&moves)?;
+                    self.window = window;
+                    if *face_down {
+                        for movement in &movements {
+                            if movement.after.zone() == ObjectZone::Exile {
+                                self.face_down_exile.insert(movement.after.id(), actor);
+                            }
+                        }
+                    }
+                    self.emit_from(cause.clone(), &before, turn, append, |old, cur, ctrls| {
+                        movements
+                            .iter()
+                            .map(|m| zone_occurrence_at(old, cur, m, ZoneReason::ExileCost, ctrls))
+                            .collect()
+                    })?;
+                }
+            }
+            ExtraActivationCost::RevealSource => {
+                let id = source.ok_or(EffectError::InvalidCastResource)?;
+                let card = self
+                    .window
+                    .cards()
+                    .get(id)
+                    .filter(|c| c.zone() == ObjectZone::Hand(actor))
+                    .cloned()
+                    .ok_or(EffectError::InvalidCastResource)?;
+                let before = self.rules_snapshot(turn)?;
+                self.emit_from(cause.clone(), &before, turn, append, |_, _, _| {
+                    Ok(vec![RulesOccurrence::HandCardRevealed {
+                        object: card.clone(),
+                    }])
+                })?;
+            }
+            ExtraActivationCost::SacrificeAnyNumber(filter) => {
+                let ids = if let Some(x) = chosen_x {
+                    let needed = x.to_usize().ok_or(EffectError::InvalidCastResource)?;
+                    take_n(cursor, needed)?
+                } else {
+                    let remaining = selected.len().saturating_sub(*cursor);
+                    take_n(cursor, remaining)?
+                };
+                let unique: BTreeSet<_> = ids.iter().copied().collect();
+                if unique.len() != ids.len() {
+                    return Err(EffectError::InvalidCastResource);
+                }
+                let evaluated = self.evaluated_characteristics()?;
+                let excluded = BTreeSet::new();
+                for &id in &ids {
+                    if evaluated.sacrifice_prohibited(id)
+                        || !evaluated.get(id).is_some_and(|view| {
+                            view.zone == ObjectZone::Battlefield
+                                && view.controller == Some(actor)
+                                && self.matches_object_filter(
+                                    *filter, view, actor, source, &excluded, &evaluated,
+                                )
+                        })
+                    {
+                        return Err(EffectError::InvalidCastResource);
+                    }
+                }
+                if chosen_x.is_none() {
+                    self.window
+                        .set_chosen_x(entry, RulesInteger::from_usize(ids.len()))?;
+                }
+                if !ids.is_empty() {
+                    let moves: Vec<_> = ids
+                        .iter()
+                        .map(|&id| (id, crate::object_identity::ObjectDestination::Graveyard))
+                        .collect();
+                    let before = self.rules_snapshot(turn)?;
+                    let (window, movements) = self.window.record_linked_return_moves(&moves)?;
+                    self.window = window;
+                    self.emit_from(cause.clone(), &before, turn, append, |old, cur, ctrls| {
+                        movements
+                            .iter()
+                            .map(|m| {
+                                zone_occurrence_at(old, cur, m, ZoneReason::SacrificeCost, ctrls)
+                            })
+                            .collect()
+                    })?;
+                }
+            }
+            ExtraActivationCost::ExileAnyNumber {
+                zone,
+                filter,
+                min_one,
+                face_down,
+            } => {
+                let ids = if let Some(x) = chosen_x {
+                    let needed = x.to_usize().ok_or(EffectError::InvalidCastResource)?;
+                    take_n(cursor, needed)?
+                } else {
+                    let remaining = selected.len().saturating_sub(*cursor);
+                    take_n(cursor, remaining)?
+                };
+                if *min_one && ids.is_empty() {
+                    return Err(EffectError::InvalidCastResource);
+                }
+                let unique: BTreeSet<_> = ids.iter().copied().collect();
+                if unique.len() != ids.len() {
+                    return Err(EffectError::InvalidCastResource);
+                }
+                let evaluated = self.evaluated_characteristics()?;
+                let excluded = BTreeSet::new();
+                for &id in &ids {
+                    let view = evaluated.get(id).ok_or(EffectError::InvalidCastResource)?;
+                    let zone_ok = match zone {
+                        CostExileZone::Hand => view.zone == ObjectZone::Hand(actor),
+                        CostExileZone::Graveyard => view.zone == ObjectZone::Graveyard(actor),
+                        CostExileZone::Battlefield => {
+                            view.zone == ObjectZone::Battlefield && view.controller == Some(actor)
+                        }
+                    };
+                    if !zone_ok
+                        || !self.matches_object_filter(
+                            *filter, view, actor, source, &excluded, &evaluated,
+                        )
+                    {
+                        return Err(EffectError::InvalidCastResource);
+                    }
+                }
+                if chosen_x.is_none() {
+                    self.window
+                        .set_chosen_x(entry, RulesInteger::from_usize(ids.len()))?;
+                }
+                if !ids.is_empty() {
+                    let moves: Vec<_> = ids
+                        .iter()
+                        .map(|&id| (id, crate::object_identity::ObjectDestination::Exile))
+                        .collect();
+                    let before = self.rules_snapshot(turn)?;
+                    let (window, movements) = self.window.record_linked_return_moves(&moves)?;
+                    self.window = window;
+                    if *face_down {
+                        for movement in &movements {
+                            if movement.after.zone() == ObjectZone::Exile {
+                                self.face_down_exile.insert(movement.after.id(), actor);
+                            }
+                        }
+                    } else if *zone == CostExileZone::Graveyard
+                        && let [movement] = movements.as_slice()
+                        && movement.after.zone() == ObjectZone::Exile
+                    {
+                        let exiled_id = movement.after.id();
+                        let power = self
+                            .current_characteristics(exiled_id)?
+                            .and_then(|card| card.power_toughness.map(|stats| stats.derived.power))
+                            .unwrap_or_else(|| 0.into());
+                        if let Some(StackPayload::Instructions(payload)) =
+                            self.payloads.get_mut(&entry)
+                        {
+                            payload.exiled_cost_creature = Some((exiled_id, power));
+                        }
+                    }
+                    self.emit_from(cause.clone(), &before, turn, append, |old, cur, ctrls| {
+                        movements
+                            .iter()
+                            .map(|m| zone_occurrence_at(old, cur, m, ZoneReason::ExileCost, ctrls))
+                            .collect()
+                    })?;
+                }
+            }
             ExtraActivationCost::Either(a, b) => {
                 let has_selected = *cursor < selected.len();
                 let (first, second) =
@@ -1049,6 +1431,7 @@ impl EffectWindow {
                         &mut try_cursor,
                         chosen_x,
                         turn,
+                        reserved_unrestricted,
                         &mut try_append,
                     )
                     .is_ok()
@@ -1058,7 +1441,16 @@ impl EffectWindow {
                     *append = try_append;
                 } else {
                     self.pay_one_extra_cost(
-                        actor, source, entry, cause, second, selected, cursor, chosen_x, turn,
+                        actor,
+                        source,
+                        entry,
+                        cause,
+                        second,
+                        selected,
+                        cursor,
+                        chosen_x,
+                        turn,
+                        reserved_unrestricted,
                         append,
                     )?;
                 }
@@ -1104,11 +1496,14 @@ impl EffectWindow {
         })
     }
 
+    // Internal helper takes counter target, delta, optional X amount, and journal context directly.
+    #[allow(clippy::too_many_arguments)]
     fn pay_counter_delta_at_cut(
         &mut self,
         target: ObjectId,
         kind: CounterKind,
         delta: CounterCostDelta,
+        chosen_x: Option<&RulesInteger>,
         cause: EventCause,
         turn: Option<&TurnScheduler>,
         append: &mut RulesJournal,
@@ -1122,6 +1517,15 @@ impl EffectWindow {
                     return Err(EffectError::InvalidCastResource);
                 }
                 RulesInteger::from(0).minus(&amount)
+            }
+            CounterCostDelta::RemoveX => {
+                let amount = chosen_x
+                    .filter(|x| **x >= RulesInteger::from(0))
+                    .ok_or(EffectError::InvalidCastResource)?;
+                if *amount > current_count {
+                    return Err(EffectError::InvalidCastResource);
+                }
+                RulesInteger::from(0).minus(amount)
             }
             CounterCostDelta::RemoveAll => RulesInteger::from(0).minus(&current_count),
         };

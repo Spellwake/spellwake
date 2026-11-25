@@ -167,6 +167,8 @@ fn permanent(
     Program {
         cannot_be_copied: false,
         conditional_flash: None,
+        activation_cost_reductions: BTreeMap::new(),
+        zone_replacement_extras: BTreeMap::new(),
         cast_reductions: vec![],
         activation_modes: Default::default(),
         entry_counter_abilities: vec![],

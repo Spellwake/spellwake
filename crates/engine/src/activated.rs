@@ -95,6 +95,12 @@ pub enum ActivationRestriction {
     SourceMatches(crate::program::ObjectFilter),
     /// Activate only if an arbitrary resolution condition evaluates true at activation time.
     Condition(Box<crate::program::ResolutionCondition>),
+    /// Activate only if announced X is strictly greater than zero.
+    XNonZero,
+    /// Activate only while this permanent's entry option index equals the given value (Siege modes).
+    SourceEntryOption(u8),
+    /// Spend only mana of this type to activate this ability (e.g. Crypt Rats).
+    OnlySpendManaType(crate::mana::ManaType),
     /// Activate only if every sub-restriction is satisfied.
     All(Vec<ActivationRestriction>),
 }
@@ -245,6 +251,8 @@ pub enum LifeCostAmount {
     Fixed(u16),
     /// Pay one life per distinct color in your commanders' combined color identity.
     CommanderColors,
+    /// Pay life equal to the announced value of X.
+    ChosenX,
 }
 
 /// Counter modification paid on the ability source as an activation cost.
@@ -254,6 +262,8 @@ pub enum CounterCostDelta {
     Add(std::num::NonZeroU8),
     /// Remove `n` counters of this kind from the source.
     Remove(std::num::NonZeroU8),
+    /// Remove X counters of this kind from the source (bound to announced X).
+    RemoveX,
     /// Remove all counters of this kind from the source (recording how many were removed).
     RemoveAll,
 }
@@ -1028,6 +1038,30 @@ pub enum ExtraActivationCost {
         self_source: bool,
     },
     PayMana(ManaCost),
+    /// Pay `n` snow mana (`{S}`) using mana produced by snow sources (CR 107.4h).
+    PaySnowMana(std::num::NonZeroU8),
+    /// Remove `count` (or X when `None`) counters of `kind` (or any when `None`) from among matching permanents.
+    RemoveCountersAmong {
+        kind: Option<crate::effects::CounterKind>,
+        count: Option<std::num::NonZeroU8>,
+        filter: crate::program::ObjectFilter,
+    },
+    /// Exile the top `count` (or X when `None`) cards of the activating player's library.
+    ExileTopLibrary {
+        count: Option<std::num::NonZeroU8>,
+        face_down: bool,
+    },
+    /// Reveal the ability source from hand as an activation cost.
+    RevealSource,
+    /// Sacrifice any number of matching controlled permanents (binds X to count sacrificed).
+    SacrificeAnyNumber(crate::program::ObjectFilter),
+    /// Exile any number of matching objects from `zone` (optionally requiring at least one).
+    ExileAnyNumber {
+        zone: CostExileZone,
+        filter: crate::program::ObjectFilter,
+        min_one: bool,
+        face_down: bool,
+    },
     Either(Box<ExtraActivationCost>, Box<ExtraActivationCost>),
 }
 
@@ -1047,7 +1081,8 @@ impl ExtraActivationCost {
                 }
                 Ok(())
             }
-            Self::RemovePermanentCounters { kind, filter, .. } => {
+            Self::RemovePermanentCounters { kind, filter, .. }
+            | Self::RemoveCountersAmong { kind, filter, .. } => {
                 if let Some(k) = kind
                     && !k.is_permanent()
                 {
@@ -1057,11 +1092,13 @@ impl ExtraActivationCost {
             }
             Self::DiscardCards { filter, .. } => filter.validate_vocabulary(vocabulary),
             Self::SacrificePermanent { filter, .. }
+            | Self::SacrificeAnyNumber(filter)
             | Self::TapPermanent { filter, .. }
             | Self::UntapPermanent { filter, .. }
             | Self::BouncePermanent { filter, .. }
             | Self::RevealHand { filter, .. }
-            | Self::ExileObjects { filter, .. } => filter.validate_vocabulary(vocabulary),
+            | Self::ExileObjects { filter, .. }
+            | Self::ExileAnyNumber { filter, .. } => filter.validate_vocabulary(vocabulary),
             Self::PayEnergyExpr(expr) => {
                 if expr.is_chosen_x() {
                     Ok(())
@@ -1086,10 +1123,13 @@ impl ExtraActivationCost {
             | Self::ExileSource { .. }
             | Self::ReturnSourceToHand
             | Self::DiscardSource
+            | Self::RevealSource
             | Self::ExertSource
             | Self::PayLife(_)
             | Self::PayHalfLife
             | Self::PayEnergy(_)
+            | Self::PaySnowMana(_)
+            | Self::ExileTopLibrary { .. }
             | Self::Mill(_)
             | Self::CollectEvidence(_)
             | Self::Forage
@@ -1107,14 +1147,17 @@ impl ExtraActivationCost {
     ) {
         match self {
             Self::RemovePermanentCounters { filter, .. }
+            | Self::RemoveCountersAmong { filter, .. }
             | Self::PutPermanentCounters { filter, .. }
             | Self::SacrificePermanent { filter, .. }
+            | Self::SacrificeAnyNumber(filter)
             | Self::TapPermanent { filter, .. }
             | Self::UntapPermanent { filter, .. }
             | Self::BouncePermanent { filter, .. }
             | Self::DiscardCards { filter, .. }
             | Self::RevealHand { filter, .. }
-            | Self::ExileObjects { filter, .. } => filter.rewrite_creature_type(from, to),
+            | Self::ExileObjects { filter, .. }
+            | Self::ExileAnyNumber { filter, .. } => filter.rewrite_creature_type(from, to),
             Self::PayEnergyExpr(expr) => expr.rewrite_creature_type(from, to),
             Self::Either(a, b) => {
                 a.rewrite_creature_type(from, to);
@@ -1154,6 +1197,7 @@ impl ExtraActivationCost {
         matches!(
             self,
             Self::DiscardSource
+                | Self::RevealSource
                 | Self::ExileSource {
                     from_hand: true,
                     ..
@@ -1166,8 +1210,10 @@ impl ExtraActivationCost {
     pub fn uses_selected_objects(&self) -> bool {
         match self {
             Self::RemovePermanentCounters { .. }
+            | Self::RemoveCountersAmong { .. }
             | Self::PutPermanentCounters { .. }
             | Self::SacrificePermanent { .. }
+            | Self::SacrificeAnyNumber(_)
             | Self::TapPermanent { .. }
             | Self::UntapPermanent { .. }
             | Self::BouncePermanent { .. }
@@ -1178,6 +1224,7 @@ impl ExtraActivationCost {
             }
             | Self::RevealHand { .. }
             | Self::ExileObjects { .. }
+            | Self::ExileAnyNumber { .. }
             | Self::CollectEvidence(_)
             | Self::Forage
             | Self::Waterbend(_)
@@ -1191,12 +1238,15 @@ impl ExtraActivationCost {
             | Self::ExileSource { .. }
             | Self::ReturnSourceToHand
             | Self::DiscardSource
+            | Self::RevealSource
             | Self::ExertSource
             | Self::PayLife(_)
             | Self::PayHalfLife
             | Self::PayEnergy(_)
             | Self::PayEnergyExpr(_)
             | Self::PayMana(_)
+            | Self::PaySnowMana(_)
+            | Self::ExileTopLibrary { .. }
             | Self::Mill(_)
             | Self::SourceCounter { .. }
             | Self::DiscardCards {
@@ -1216,9 +1266,18 @@ impl ExtraActivationCost {
                 all: false,
                 ..
             }
+            | Self::RemoveCountersAmong { count: None, .. }
             | Self::SacrificePermanent { count: None, .. }
+            | Self::SacrificeAnyNumber(_)
             | Self::TapPermanent { count: None, .. }
             | Self::ExileObjects { count: None, .. }
+            | Self::ExileAnyNumber { .. }
+            | Self::ExileTopLibrary { count: None, .. }
+            | Self::SourceCounter {
+                delta: CounterCostDelta::RemoveX,
+                ..
+            }
+            | Self::PayLife(LifeCostAmount::ChosenX)
             | Self::DiscardCards {
                 count: None,
                 whole_hand: false,

@@ -306,6 +306,18 @@ impl EffectWindow {
             | Instruction::ExertAbilitySource
             | Instruction::CollectEvidence { .. }
             | Instruction::Blight { .. }
+            | Instruction::ForEachPlayer { .. }
+            | Instruction::OfferAnyPlayer { .. }
+            | Instruction::DealDamageToAnnouncedTargets { .. }
+            | Instruction::GrantChosenProtection { .. }
+            | Instruction::RemoveCountersFromSubject { .. }
+            | Instruction::MoveGroupToLibrary { .. }
+            | Instruction::ExileLibraryTopLinked { .. }
+            | Instruction::UntapOrTapSelect { .. }
+            | Instruction::MoveGraveyardGroupOwned { .. }
+            | Instruction::LookTopChooseExt { .. }
+            | Instruction::RevealUntilMatchExt { .. }
+            | Instruction::CreateTokenCopyExt { .. }
             | Instruction::RevealUntilMatch { .. }
             | Instruction::ControlManaSourceThroughNextTurn
             | Instruction::GrantControllerFlashUntilCleanup
@@ -881,15 +893,8 @@ impl EffectWindow {
                     .get(target)
                     .ok_or(EffectError::InconsistentProgram)?
                     .owner();
-                let materialized = parts.materialize_with_eval(
-                    &locals,
-                    entry.controller(),
-                    owner,
-                    |expr| {
-                        self.resolve_value_expr(entry.controller(), expr)
-                            .map_err(|_| crate::characteristics::CharacteristicInvariantError::NoEligibleComponent)
-                    },
-                )?;
+                let materialized =
+                    self.materialize_resolved_parts(&entry, &parts, &locals, owner, None)?;
                 InstructionCut::Continuous(self.characteristics.add_effect(
                     entry.id(),
                     target,
@@ -969,16 +974,8 @@ impl EffectWindow {
                     | StackKind::TriggeredAbility { source } => Some(source.id()),
                     _ => None,
                 };
-                let parts = parts.materialize_with_source_and_eval(
-                    &locals,
-                    entry.controller(),
-                    owner,
-                    source_object,
-                    |expr| {
-                        self.resolve_value_expr(entry.controller(), expr)
-                            .map_err(|_| crate::characteristics::CharacteristicInvariantError::NoEligibleComponent)
-                    },
-                )?;
+                let parts =
+                    self.materialize_resolved_parts(&entry, &parts, &locals, owner, source_object)?;
                 InstructionCut::Continuous(self.characteristics.add_effect(
                     entry.id(),
                     target,
@@ -1335,10 +1332,14 @@ impl EffectWindow {
                 )?;
                 self.window = window;
                 if let crate::stack_window::StackExit::Object(movement) = &exit {
-                    self.resolution_cursor_mut()
-                        .ok_or(EffectError::WrongResolutionFrame)?
-                        .results
-                        .last_moved_objects = movement.arrivals().collect();
+                    let cursor = self
+                        .resolution_cursor_mut()
+                        .ok_or(EffectError::WrongResolutionFrame)?;
+                    let arrivals: Vec<_> = movement.arrivals().collect();
+                    cursor.results.last_action_succeeded = !arrivals.is_empty();
+                    cursor.results.last_action_count =
+                        Some(RulesInteger::from_usize(arrivals.len()));
+                    cursor.results.last_moved_objects = arrivals;
                 }
                 if matches!(
                     instruction,
@@ -1484,5 +1485,50 @@ impl EffectWindow {
             },
         )?;
         Ok(())
+    }
+
+    pub(super) fn materialize_resolved_parts(
+        &self,
+        entry: &crate::stack_window::StackEntry,
+        parts: &crate::characteristics::ResolvedPartsSpec,
+        locals: &BTreeMap<crate::program::CreatureTypeSlot, CreatureTypeId>,
+        target_owner: SeatId,
+        source_object: Option<ObjectId>,
+    ) -> Result<crate::characteristics::ResolvedParts, EffectError> {
+        let cursor = self.resolution_cursor();
+        let chosen_color = cursor
+            .and_then(|c| c.chosen_effect_color)
+            .and_then(crate::characteristics::Color::from_mana);
+        let chosen_basic_land_type = cursor
+            .and_then(|c| c.results.chosen_basic_land_type)
+            .and_then(crate::land::LandType::basic);
+        let opponents = self
+            .combat_rules
+            .opponents(self.window.participants(), entry.controller())?;
+        let subject_object = parts.0.iter().find_map(|spec| {
+            if let crate::characteristics::ResolvedPartSpec::MustBlockSubject(subj) = spec {
+                self.resolve_pass_c_move_subject(entry, *subj)
+                    .ok()
+                    .flatten()
+            } else {
+                None
+            }
+        });
+        Ok(parts.materialize_full(
+            locals,
+            entry.controller(),
+            target_owner,
+            source_object,
+            chosen_color,
+            chosen_basic_land_type,
+            &opponents,
+            subject_object,
+            |expr| {
+                self.resolve_value_expr(entry.controller(), expr)
+                    .map_err(|_| {
+                        crate::characteristics::CharacteristicInvariantError::NoEligibleComponent
+                    })
+            },
+        )?)
     }
 }

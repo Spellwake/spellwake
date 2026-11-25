@@ -236,6 +236,304 @@ pub(super) fn needs_creature_damage_pairs(program: &Program) -> bool {
     program_tree_uses_damage_pairs(program)
 }
 
+fn value_expr_uses_damage_dealt_by(expr: &crate::program::ValueExpr) -> bool {
+    use crate::program::{PlayerStatExpr, ValueExpr};
+    match expr {
+        ValueExpr::PlayerStat(PlayerStatExpr::DamageDealtThisTurn { .. }) => true,
+        ValueExpr::Scale { expr, .. } | ValueExpr::DivConst { expr, .. } => {
+            value_expr_uses_damage_dealt_by(expr)
+        }
+        ValueExpr::Add(a, b) | ValueExpr::Sub(a, b) => {
+            value_expr_uses_damage_dealt_by(a) || value_expr_uses_damage_dealt_by(b)
+        }
+        ValueExpr::Conditional {
+            left,
+            right,
+            then_value,
+            else_value,
+            ..
+        } => {
+            value_expr_uses_damage_dealt_by(left)
+                || value_expr_uses_damage_dealt_by(right)
+                || value_expr_uses_damage_dealt_by(then_value)
+                || value_expr_uses_damage_dealt_by(else_value)
+        }
+        _ => false,
+    }
+}
+
+fn condition_uses_damage_dealt_by(cond: &crate::program::ResolutionCondition) -> bool {
+    value_expr_uses_damage_dealt_by(&cond.left) || value_expr_uses_damage_dealt_by(&cond.right)
+}
+
+fn static_cond_uses_damage_dealt_by(cond: &crate::characteristics::StaticSourceCondition) -> bool {
+    use crate::characteristics::StaticSourceCondition;
+    match cond {
+        StaticSourceCondition::Eval(c) => condition_uses_damage_dealt_by(c),
+        StaticSourceCondition::Not(inner) => static_cond_uses_damage_dealt_by(inner),
+        StaticSourceCondition::And(a, b) | StaticSourceCondition::Or(a, b) => {
+            static_cond_uses_damage_dealt_by(a) || static_cond_uses_damage_dealt_by(b)
+        }
+        _ => false,
+    }
+}
+
+fn restriction_uses_damage_dealt_by(res: &crate::activated::ActivationRestriction) -> bool {
+    use crate::activated::ActivationRestriction;
+    match res {
+        ActivationRestriction::Condition(c) => condition_uses_damage_dealt_by(c),
+        ActivationRestriction::All(list) => list.iter().any(restriction_uses_damage_dealt_by),
+        _ => false,
+    }
+}
+
+fn trigger_cond_uses_damage_dealt_by(cond: &crate::program::TriggerCondition) -> bool {
+    use crate::program::TriggerCondition;
+    match cond {
+        TriggerCondition::Eval(c) => condition_uses_damage_dealt_by(c),
+        TriggerCondition::Not(inner) => trigger_cond_uses_damage_dealt_by(inner),
+        TriggerCondition::And(a, b) | TriggerCondition::Or(a, b) => {
+            trigger_cond_uses_damage_dealt_by(a) || trigger_cond_uses_damage_dealt_by(b)
+        }
+        _ => false,
+    }
+}
+
+fn static_uses_damage_dealt_by(ability: &crate::characteristics::StaticContinuousAbility) -> bool {
+    use crate::characteristics::{
+        CastPermissionRule, NumericExpression, StaticContinuousAbility, StaticDamageOp,
+        StaticDamageRule, StaticModifierRule, StaticPart, StaticReplacementAction,
+    };
+    match ability {
+        StaticContinuousAbility::EventReplacement { action, .. } => match action {
+            StaticReplacementAction::ReplaceWithBody { body, .. } => {
+                body_uses_damage_dealt_by(body)
+            }
+            StaticReplacementAction::ModifyAmount { add, .. } => {
+                value_expr_uses_damage_dealt_by(add)
+            }
+            _ => false,
+        },
+        StaticContinuousAbility::DamageRule { rule, .. } => match rule {
+            StaticDamageRule::ModifyDamage {
+                op: StaticDamageOp::AddExpr(e) | StaticDamageOp::PreventUpToExpr(e),
+                ..
+            } => value_expr_uses_damage_dealt_by(e),
+            StaticDamageRule::ConditionalModifyDamage { condition, op, .. } => {
+                static_cond_uses_damage_dealt_by(condition)
+                    || matches!(
+                        op,
+                        StaticDamageOp::AddExpr(e) | StaticDamageOp::PreventUpToExpr(e)
+                            if value_expr_uses_damage_dealt_by(e)
+                    )
+            }
+            _ => false,
+        },
+        StaticContinuousAbility::Modifier { rule, .. } => match rule {
+            StaticModifierRule::ConditionalModifyLifeGain { condition, .. } => {
+                condition_uses_damage_dealt_by(condition)
+            }
+            StaticModifierRule::OthersEnterWithCountersExpr { amount, .. } => {
+                value_expr_uses_damage_dealt_by(amount)
+            }
+            _ => false,
+        },
+        StaticContinuousAbility::CastPermission {
+            permission: CastPermissionRule::GraveyardSelfConditional { condition },
+            ..
+        } => condition_uses_damage_dealt_by(condition),
+        StaticContinuousAbility::Battlefield { parts, .. } => {
+            parts.0.iter().any(|part| match part {
+                StaticPart::GrantActivated(ab)
+                | StaticPart::GrantActivatedRestricted { ability: ab, .. } => {
+                    body_uses_damage_dealt_by(&ab.body)
+                }
+                StaticPart::GrantTrigger(trig) => {
+                    trig.condition
+                        .intervening_if
+                        .as_ref()
+                        .is_some_and(trigger_cond_uses_damage_dealt_by)
+                        || body_uses_damage_dealt_by(&trig.body)
+                }
+                StaticPart::ModifyPT(pair) | StaticPart::SetPT(pair) => {
+                    matches!(
+                        &pair.power,
+                        NumericExpression::Eval(e) if value_expr_uses_damage_dealt_by(e)
+                    ) || matches!(
+                        &pair.toughness,
+                        NumericExpression::Eval(e) if value_expr_uses_damage_dealt_by(e)
+                    )
+                }
+                _ => false,
+            })
+        }
+        _ => false,
+    }
+}
+
+fn body_uses_damage_dealt_by(body: &crate::program::ExecutableBody) -> bool {
+    if let Some(modes) = body.triggered_modes()
+        && modes.options.iter().any(body_uses_damage_dealt_by)
+    {
+        return true;
+    }
+    body.instructions.iter().any(|op| match op {
+        Instruction::BranchIfFalse { condition, .. } => condition_uses_damage_dealt_by(condition),
+        Instruction::ForEachPlayer { body, .. } => body_uses_damage_dealt_by(body),
+        Instruction::ScheduleDelayedStepTrigger { body, .. }
+        | Instruction::ScheduleDelayedEventTrigger { body, .. }
+        | Instruction::EmitReflexiveTrigger { body, .. }
+        | Instruction::FixedTargetClause(body) => body_uses_damage_dealt_by(body),
+        Instruction::OfferAnyPlayer {
+            cost_body,
+            paid_body,
+            declined_body,
+            ..
+        } => {
+            body_uses_damage_dealt_by(cost_body)
+                || body_uses_damage_dealt_by(paid_body)
+                || declined_body
+                    .as_ref()
+                    .is_some_and(body_uses_damage_dealt_by)
+        }
+        Instruction::ChooseOption { options, .. } => {
+            options.iter().any(|b| body_uses_damage_dealt_by(&b.body))
+        }
+        Instruction::CreateTemporaryRule { rule, .. } => match rule.as_ref() {
+            crate::program::TemporaryRuleKind::TemporaryStatic(ab) => {
+                static_uses_damage_dealt_by(ab)
+            }
+            _ => false,
+        },
+        Instruction::GainControllerLife { amount }
+        | Instruction::DrawController { amount }
+        | Instruction::DrawPlayer { amount, .. }
+        | Instruction::DiscardFiltered { amount, .. }
+        | Instruction::DamageAmount(amount)
+        | Instruction::DamageGroupAmount { amount, .. }
+        | Instruction::DealDamageToAnnouncedTargets { amount, .. }
+        | Instruction::PutCountersOnSubject { amount, .. }
+        | Instruction::PutNamedCounterOnTarget { amount, .. }
+        | Instruction::AdjustPlayersLife { amount, .. }
+        | Instruction::DrainOpponents(amount)
+        | Instruction::DamageOpponentsAmount(amount)
+        | Instruction::DamageRelatedPlayerAmount(amount)
+        | Instruction::BindResolutionX(amount) => value_expr_uses_damage_dealt_by(amount),
+        Instruction::RemoveCountersFromSubject { amount, .. } => {
+            amount.as_ref().is_some_and(value_expr_uses_damage_dealt_by)
+        }
+        Instruction::DealDamageFrom { amount, .. } => matches!(
+            amount.as_ref(),
+            crate::program::DamageAmountSpec::Expr(e) if value_expr_uses_damage_dealt_by(e)
+        ),
+        Instruction::CreateTokens { creations }
+        | Instruction::CreateAttackingTokens { creations, .. } => creations
+            .iter()
+            .any(|c| value_expr_uses_damage_dealt_by(&c.amount)),
+        Instruction::ModifyGroupByAmount { amount, .. } => value_expr_uses_damage_dealt_by(amount),
+        _ => false,
+    })
+}
+
+fn program_tree_uses_damage_dealt_by(program: &Program) -> bool {
+    let direct = definition_or_token_matches(program, |p| {
+        p.triggered.iter().any(|ability| {
+            ability
+                .condition
+                .intervening_if
+                .as_ref()
+                .is_some_and(trigger_cond_uses_damage_dealt_by)
+                || body_uses_damage_dealt_by(&ability.body)
+        }) || p
+            .activated
+            .iter()
+            .any(|ability| body_uses_damage_dealt_by(&ability.body))
+            || p.activation_modes.values().any(|modes| {
+                modes
+                    .prefix
+                    .as_deref()
+                    .is_some_and(body_uses_damage_dealt_by)
+                    || modes
+                        .suffix
+                        .as_deref()
+                        .is_some_and(body_uses_damage_dealt_by)
+                    || modes.additional.iter().any(body_uses_damage_dealt_by)
+            })
+            || match &p.kind {
+                ProgramKind::Spell(spell) => {
+                    body_uses_damage_dealt_by(&spell.body)
+                        || spell.modes.as_ref().is_some_and(|modes| {
+                            modes
+                                .prefix
+                                .as_deref()
+                                .is_some_and(body_uses_damage_dealt_by)
+                                || modes
+                                    .suffix
+                                    .as_deref()
+                                    .is_some_and(body_uses_damage_dealt_by)
+                                || modes.additional.iter().any(body_uses_damage_dealt_by)
+                        })
+                }
+                ProgramKind::Permanent(_) => false,
+            }
+            || p.continuous
+                .iter()
+                .chain(&p.additional_battlefield_abilities)
+                .any(static_uses_damage_dealt_by)
+            || p.static_conditions
+                .values()
+                .any(static_cond_uses_damage_dealt_by)
+            || p.activation_restrictions
+                .values()
+                .any(restriction_uses_damage_dealt_by)
+            || p.activation_cost_reductions
+                .values()
+                .any(value_expr_uses_damage_dealt_by)
+            || p.zone_replacement_extras.values().any(|extra| {
+                extra
+                    .followup_body
+                    .as_deref()
+                    .is_some_and(body_uses_damage_dealt_by)
+            })
+            || p.conditional_cost.as_ref().is_some_and(|cc| match cc {
+                crate::program::ConditionalCastCost::Alternative { condition, .. } => condition
+                    .as_deref()
+                    .is_some_and(condition_uses_damage_dealt_by),
+                _ => false,
+            })
+            || p.cast_timing.as_ref().is_some_and(|r| match r {
+                crate::program::CastTimingRestriction::Condition(c) => {
+                    condition_uses_damage_dealt_by(c)
+                }
+                _ => false,
+            })
+    });
+    if direct {
+        return true;
+    }
+    let sub_programs = [
+        program.nightbound_back.as_deref(),
+        program.transform_back.as_deref(),
+        program.modal_back.as_deref(),
+        program.flip_back.as_deref(),
+        program.prototype.as_deref(),
+        program.adventure.as_deref(),
+        program.prepare_spell.as_deref(),
+        program.split.as_ref().map(|s| &s.right),
+        program.siege_back.as_deref(),
+        program.disturb.as_ref().map(|d| &d.back),
+    ];
+    sub_programs
+        .into_iter()
+        .flatten()
+        .any(program_tree_uses_damage_dealt_by)
+}
+
+/// Whether this program (or any face/token it can create) reads per-source `DamageDealtThisTurn`.
+pub(super) fn needs_damage_dealt_by(program: &Program) -> bool {
+    program_tree_uses_damage_dealt_by(program)
+}
+
 impl EffectWindow {
     /// Actual damage dealt to each player this turn in games with a printed bloodthirst ability.
     pub fn damage_to_players_this_turn(&self) -> Option<&BTreeMap<SeatId, RulesInteger>> {

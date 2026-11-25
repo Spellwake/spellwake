@@ -2101,6 +2101,159 @@ impl ObjectFilter {
         }
     }
 
+    /// True if any clause dynamically compares power, toughness, or mana value against the resolving target permanent.
+    #[must_use]
+    pub const fn uses_target_permanent(self) -> bool {
+        const fn clause_uses(c: ObjectClause) -> bool {
+            matches!(
+                c.power,
+                PowerFilter::CompareAnchor {
+                    anchor: DynamicStatAnchor::TargetPower,
+                    ..
+                }
+            ) || matches!(
+                c.toughness,
+                ToughnessFilter::CompareAnchor {
+                    anchor: DynamicStatAnchor::TargetPower,
+                    ..
+                }
+            ) || matches!(
+                c.mana_value,
+                ManaValueFilter::CompareAnchor {
+                    anchor: DynamicStatAnchor::TargetPower,
+                    ..
+                }
+            )
+        }
+        match self {
+            Self::Clause(a) => clause_uses(a),
+            Self::Either(a, b) => clause_uses(a) || clause_uses(b),
+        }
+    }
+
+    /// Resolve `DynamicStatAnchor::TargetPower` clauses into concrete static bounds for group selection.
+    #[must_use]
+    pub fn bind_target_power(self, target_power: i64) -> Self {
+        let bind_power = |pf: PowerFilter| -> PowerFilter {
+            let PowerFilter::CompareAnchor {
+                op,
+                anchor: DynamicStatAnchor::TargetPower,
+            } = pf
+            else {
+                return pf;
+            };
+            match op {
+                super::Comparison::Equal => {
+                    PowerFilter::Equal(i16::try_from(target_power).unwrap_or(i16::MAX))
+                }
+                super::Comparison::Less => {
+                    let max = target_power.saturating_sub(1);
+                    if max < 0 {
+                        PowerFilter::Equal(i16::MIN)
+                    } else {
+                        PowerFilter::AtMost(u16::try_from(max).unwrap_or(u16::MAX))
+                    }
+                }
+                super::Comparison::LessOrEqual => {
+                    if target_power < 0 {
+                        PowerFilter::Equal(i16::MIN)
+                    } else {
+                        PowerFilter::AtMost(u16::try_from(target_power).unwrap_or(u16::MAX))
+                    }
+                }
+                super::Comparison::Greater => PowerFilter::AtLeast(
+                    i16::try_from(target_power.saturating_add(1)).unwrap_or(i16::MAX),
+                ),
+                super::Comparison::GreaterOrEqual => {
+                    PowerFilter::AtLeast(i16::try_from(target_power).unwrap_or(i16::MAX))
+                }
+                super::Comparison::NotEqual => pf,
+            }
+        };
+        let bind_toughness = |tf: ToughnessFilter| -> ToughnessFilter {
+            let ToughnessFilter::CompareAnchor {
+                op,
+                anchor: DynamicStatAnchor::TargetPower,
+            } = tf
+            else {
+                return tf;
+            };
+            match op {
+                super::Comparison::Equal => {
+                    ToughnessFilter::Equal(i16::try_from(target_power).unwrap_or(i16::MAX))
+                }
+                super::Comparison::Less => {
+                    let max = target_power.saturating_sub(1);
+                    if max < 0 {
+                        ToughnessFilter::Equal(i16::MIN)
+                    } else {
+                        ToughnessFilter::AtMost(u16::try_from(max).unwrap_or(u16::MAX))
+                    }
+                }
+                super::Comparison::LessOrEqual => {
+                    if target_power < 0 {
+                        ToughnessFilter::Equal(i16::MIN)
+                    } else {
+                        ToughnessFilter::AtMost(u16::try_from(target_power).unwrap_or(u16::MAX))
+                    }
+                }
+                super::Comparison::Greater => ToughnessFilter::AtLeast(
+                    i16::try_from(target_power.saturating_add(1)).unwrap_or(i16::MAX),
+                ),
+                super::Comparison::GreaterOrEqual => {
+                    ToughnessFilter::AtLeast(i16::try_from(target_power).unwrap_or(i16::MAX))
+                }
+                super::Comparison::NotEqual => tf,
+            }
+        };
+        let bind_mv = |mf: ManaValueFilter| -> ManaValueFilter {
+            let ManaValueFilter::CompareAnchor {
+                op,
+                anchor: DynamicStatAnchor::TargetPower,
+            } = mf
+            else {
+                return mf;
+            };
+            match op {
+                super::Comparison::Equal => {
+                    ManaValueFilter::Equal(u32::try_from(target_power.max(0)).unwrap_or(u32::MAX))
+                }
+                super::Comparison::Less => {
+                    let max = target_power.saturating_sub(1);
+                    if max < 0 {
+                        ManaValueFilter::AtLeast(u32::MAX)
+                    } else {
+                        ManaValueFilter::AtMost(u32::try_from(max).unwrap_or(u32::MAX))
+                    }
+                }
+                super::Comparison::LessOrEqual => {
+                    if target_power < 0 {
+                        ManaValueFilter::AtLeast(u32::MAX)
+                    } else {
+                        ManaValueFilter::AtMost(u32::try_from(target_power).unwrap_or(u32::MAX))
+                    }
+                }
+                super::Comparison::Greater => ManaValueFilter::AtLeast(
+                    u32::try_from(target_power.saturating_add(1).max(0)).unwrap_or(u32::MAX),
+                ),
+                super::Comparison::GreaterOrEqual => {
+                    ManaValueFilter::AtLeast(u32::try_from(target_power.max(0)).unwrap_or(u32::MAX))
+                }
+                super::Comparison::NotEqual => mf,
+            }
+        };
+        let bind_clause = |mut c: ObjectClause| -> ObjectClause {
+            c.power = bind_power(c.power);
+            c.toughness = bind_toughness(c.toughness);
+            c.mana_value = bind_mv(c.mana_value);
+            c
+        };
+        match self {
+            Self::Clause(a) => Self::Clause(bind_clause(a)),
+            Self::Either(a, b) => Self::Either(bind_clause(a), bind_clause(b)),
+        }
+    }
+
     /// Bind `ControllerFilter::TargetPlayer` / `TargetOpponent` to a concrete player seat.
     #[must_use]
     pub const fn bind_target_player(self, seat: SeatId) -> Self {

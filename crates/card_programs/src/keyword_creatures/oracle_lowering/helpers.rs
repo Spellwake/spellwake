@@ -1999,20 +1999,57 @@ fn search_count_expr_supported(expr: &ValueExpr) -> bool {
                 | ValueObjectRef::LastAmassedArmy
                 | ValueObjectRef::RevealedTop
         ),
-        ValueExpr::CounterCount { subject, .. } => matches!(
-            subject,
+        ValueExpr::CounterCount { subject, .. } => match subject {
             spellwake_engine::program::CounterSubjectRef::AbilitySource
-                | spellwake_engine::program::CounterSubjectRef::AttachedHost
-                | spellwake_engine::program::CounterSubjectRef::ControllerExperience
-                | spellwake_engine::program::CounterSubjectRef::ControllerEnergy
-                | spellwake_engine::program::CounterSubjectRef::ControllerPoison
-        ),
+            | spellwake_engine::program::CounterSubjectRef::AttachedHost
+            | spellwake_engine::program::CounterSubjectRef::ControllerExperience
+            | spellwake_engine::program::CounterSubjectRef::ControllerEnergy
+            | spellwake_engine::program::CounterSubjectRef::ControllerPoison => true,
+            spellwake_engine::program::CounterSubjectRef::PlayerCounter(r, _) => {
+                search_count_role_supported(*r)
+            }
+            _ => false,
+        },
         ValueExpr::PlayerStat(ps) => match ps {
             PlayerStatExpr::PlayerLife(r)
             | PlayerStatExpr::PlayerHandSize(r)
             | PlayerStatExpr::PlayerLibrarySize(r)
             | PlayerStatExpr::PlayerGraveyardSize(r)
-            | PlayerStatExpr::LandsEnteredThisTurn(r) => search_count_role_supported(*r),
+            | PlayerStatExpr::LandsEnteredThisTurn(r)
+            | PlayerStatExpr::ActivatedGraveyardAbilityThisTurn(r)
+            | PlayerStatExpr::PlayerLifeLostLastTurn(r) => search_count_role_supported(*r),
+            PlayerStatExpr::SpellsCastMatchingThisTurn {
+                players, filter, ..
+            }
+            | PlayerStatExpr::SacrificedMatchingThisTurn { players, filter } => {
+                let players_ok = match players {
+                    AffectedPlayers::One(r) => search_count_role_supported(*r),
+                    AffectedPlayers::EachPlayer
+                    | AffectedPlayers::EachOtherPlayer
+                    | AffectedPlayers::EachOpponent => true,
+                };
+                players_ok && !filter.has_target_player() && !filter.has_related_player()
+            }
+            PlayerStatExpr::GraveyardArrivalsMatchingThisTurn {
+                filter, controller, ..
+            } => {
+                controller.is_none_or(search_count_role_supported)
+                    && !filter.has_target_player()
+                    && !filter.has_related_player()
+            }
+            PlayerStatExpr::ControlsGreatestStat { player, filter, .. } => {
+                search_count_role_supported(*player)
+                    && !filter.has_target_player()
+                    && !filter.has_related_player()
+            }
+            PlayerStatExpr::DamageDealtThisTurn { subject, .. }
+            | PlayerStatExpr::DamageReceivedThisTurn { subject, .. } => matches!(
+                subject,
+                ValueObjectRef::AbilitySource
+                    | ValueObjectRef::AttachedHost
+                    | ValueObjectRef::LastAmassedArmy
+                    | ValueObjectRef::RevealedTop
+            ),
             _ => true,
         },
         ValueExpr::EventValue(kind) => matches!(
@@ -2030,6 +2067,7 @@ fn search_count_expr_supported(expr: &ValueExpr) -> bool {
                 | EventValueKind::LastDieRoll
                 | EventValueKind::ChosenNumber
                 | EventValueKind::AdditionalCostPaid
+                | EventValueKind::DamagePreventedThisWay
         ),
         ValueExpr::Scale {
             expr: inner,
@@ -2057,6 +2095,88 @@ fn search_count_expr_supported(expr: &ValueExpr) -> bool {
     }
 }
 
+fn search_filter_is_static_evaluable(filter: ObjectFilter) -> bool {
+    let clause_ok = |c: ObjectClause| {
+        !matches!(
+            c.power,
+            PowerFilter::AtMostX
+                | PowerFilter::EqualX
+                | PowerFilter::AtLeastX
+                | PowerFilter::AtMostControlledCreatureCount
+                | PowerFilter::CompareAnchor { .. }
+        ) && !matches!(
+            c.toughness,
+            ToughnessFilter::AtMostX
+                | ToughnessFilter::EqualX
+                | ToughnessFilter::AtLeastX
+                | ToughnessFilter::CompareAnchor { .. }
+        ) && !matches!(
+            c.mana_value,
+            ManaValueFilter::AtMostX
+                | ManaValueFilter::EqualX
+                | ManaValueFilter::AtLeastX
+                | ManaValueFilter::CompareAnchor { .. }
+        )
+    };
+    let (a, b) = filter.clauses();
+    clause_ok(a) && b.is_none_or(clause_ok)
+}
+
+fn extract_search_mana_value(
+    filter: &ObjectFilterAst,
+) -> Result<(Option<SearchManaValue>, Option<ObjectFilterAst>), &'static str> {
+    let mv_indices: Vec<usize> = filter
+        .stat_bounds
+        .iter()
+        .enumerate()
+        .filter_map(|(idx, sb)| (sb.stat == StatKind::ManaValue).then_some(idx))
+        .collect();
+    if mv_indices.len() != 1 {
+        return Ok((None, None));
+    }
+    let idx = mv_indices[0];
+    let sb = &filter.stat_bounds[idx];
+    let mv = match (sb.op, sb.value.as_ref()) {
+        (CompareOp::Le, ValueExprAst::Const(v)) if *v >= 0 => {
+            SearchManaValue::AtMost(u32::try_from(*v).map_err(|_| "oracle:mv-ovf")?)
+        }
+        (CompareOp::Lt, ValueExprAst::Const(v)) if *v > 0 => SearchManaValue::AtMost(
+            v.checked_sub(1)
+                .and_then(|n| u32::try_from(n).ok())
+                .ok_or("oracle:mv-ovf")?,
+        ),
+        (CompareOp::Ge, ValueExprAst::Const(v)) if *v >= 0 => {
+            SearchManaValue::AtLeast(u32::try_from(*v).map_err(|_| "oracle:mv-ovf")?)
+        }
+        (CompareOp::Gt, ValueExprAst::Const(v)) if *v >= 0 => SearchManaValue::AtLeast(
+            v.checked_add(1)
+                .and_then(|n| u32::try_from(n).ok())
+                .ok_or("oracle:mv-ovf")?,
+        ),
+        (CompareOp::Eq, ValueExprAst::Const(v)) if *v >= 0 => {
+            SearchManaValue::Exact(i64::from(*v).into())
+        }
+        (CompareOp::Le, ValueExprAst::ChosenX) => SearchManaValue::AtMostAnnouncedX,
+        (_, ValueExprAst::ChosenX) => return Err("oracle:unsupported-search-mv"),
+        (
+            CompareOp::Eq,
+            ValueExprAst::CounterCount {
+                subject,
+                counter_kind,
+            },
+        ) if matches!(subject.as_ref(), SubjectRefAst::SelfObject) => {
+            let ck = parse_counter_kind(counter_kind)
+                .filter(|c| c.is_permanent())
+                .ok_or("oracle:unsupported-search-mv")?;
+            SearchManaValue::EqualToSourceCounters(ck)
+        }
+        _ => return Ok((None, None)),
+    };
+    let mut stripped = filter.clone();
+    stripped.stat_bounds.remove(idx);
+    Ok((Some(mv), Some(stripped)))
+}
+
 // Internal lowering helper taking the orthogonal fields of `InstructionAst::SearchLibrary` plus lowering flags.
 #[allow(clippy::too_many_arguments)]
 pub(super) fn lower_library_search_ext(
@@ -2071,8 +2191,11 @@ pub(super) fn lower_library_search_ext(
     any_number: bool,
     extra: &SearchLibraryExtra<'_>,
 ) -> Result<LibrarySearch, &'static str> {
-    if extra.modifier.is_some() {
-        return Err("oracle:unsupported-search-modifier");
+    match extra.modifier {
+        None | Some(spellwake_oracle_compiler::ast::SearchModifierAst::Additional) => {}
+        Some(spellwake_oracle_compiler::ast::SearchModifierAst::InsteadOfOne) => {
+            return Err("oracle:unsupported-search-modifier");
+        }
     }
 
     let lib_low = library.trim().to_ascii_lowercase();
@@ -2162,6 +2285,13 @@ pub(super) fn lower_library_search_ext(
         .as_ref()
         .or(extra.secondary_filter);
 
+    let (extracted_mana_value, stripped_filter_owned) = if effective_secondary.is_none() {
+        extract_search_mana_value(effective_filter)?
+    } else {
+        (None, None)
+    };
+    let matcher_filter = stripped_filter_owned.as_ref().unwrap_or(effective_filter);
+
     let (matcher, pair_constraint, pair_count_override) = if let Some(sec) = effective_secondary {
         if extra.secondary_is_or {
             let first = lower_object_filter(effective_filter, vocabulary)?;
@@ -2169,11 +2299,11 @@ pub(super) fn lower_library_search_ext(
             let (ObjectFilter::Clause(c1), ObjectFilter::Clause(c2)) = (first, second) else {
                 return Err("oracle:unsupported-secondary-search-filter");
             };
-            (
-                SearchCardMatcher::Filtered(Box::new(ObjectFilter::Either(c1, c2))),
-                None,
-                None,
-            )
+            let combined = ObjectFilter::Either(c1, c2);
+            if !search_filter_is_static_evaluable(combined) {
+                return Err("oracle:unsupported-search-mv");
+            }
+            (SearchCardMatcher::Filtered(Box::new(combined)), None, None)
         } else {
             if any_number
                 || where_x_count.is_some()
@@ -2203,13 +2333,16 @@ pub(super) fn lower_library_search_ext(
             )
         }
     } else {
-        (
-            lower_search_matcher(effective_filter, vocabulary)?,
-            None,
-            None,
-        )
+        let m = lower_search_matcher(matcher_filter, vocabulary)?;
+        if let SearchCardMatcher::Filtered(ref obj) = m
+            && !search_filter_is_static_evaluable(**obj)
+        {
+            return Err("oracle:unsupported-search-mv");
+        }
+        (m, None, None)
     };
 
+    let is_unrestricted = matcher == SearchCardMatcher::Any && extracted_mana_value.is_none();
     let effective_count = dynamic_count_ast.unwrap_or(count);
     let search_count = if let Some(pair_cnt) = pair_count_override {
         pair_cnt
@@ -2222,12 +2355,12 @@ pub(super) fn lower_library_search_ext(
         if n_u8 == 0 {
             return Err("oracle:search-zero");
         }
-        if matcher == SearchCardMatcher::Any && !optional_search && !up_to {
+        if is_unrestricted && !optional_search && !up_to {
             SearchCount::Exact(NonZeroU8::new(n_u8).ok_or("oracle:search-zero")?)
         } else {
             SearchCount::UpTo(n_u8)
         }
-    } else if up_to || optional_search || matcher != SearchCardMatcher::Any {
+    } else if up_to || optional_search || !is_unrestricted {
         let expr = lower_value_expr(effective_count, vocabulary)
             .map_err(|_| "oracle:dynamic-search-count")?;
         if !search_count_expr_supported(&expr) {
@@ -2324,66 +2457,16 @@ pub(super) fn lower_library_search_ext(
         return Err("oracle:dynamic-search-count");
     }
 
-    let mut ls = LibrarySearch {
+    let ls = LibrarySearch {
         searcher,
         source,
         matcher,
-        mana_value: None,
+        mana_value: extracted_mana_value,
         count: search_count,
         pair_constraint,
         destination,
         reveal,
     };
-    if !matches!(ls.matcher, SearchCardMatcher::Filtered(_)) {
-        if effective_filter.stat_bounds.len() == 1 {
-            let sb = &effective_filter.stat_bounds[0];
-            if sb.stat == StatKind::ManaValue {
-                match (sb.op, sb.value.as_ref()) {
-                    (CompareOp::Le, ValueExprAst::Const(v)) if *v >= 0 => {
-                        ls.mana_value = Some(SearchManaValue::AtMost(
-                            u32::try_from(*v).map_err(|_| "oracle:mv-ovf")?,
-                        ));
-                    }
-                    (CompareOp::Ge, ValueExprAst::Const(v)) if *v >= 0 => {
-                        ls.mana_value = Some(SearchManaValue::AtLeast(
-                            u32::try_from(*v).map_err(|_| "oracle:mv-ovf")?,
-                        ));
-                    }
-                    (CompareOp::Eq, ValueExprAst::Const(v)) if *v >= 0 => {
-                        ls.mana_value = Some(SearchManaValue::Exact(i64::from(*v).into()));
-                    }
-                    (CompareOp::Le, ValueExprAst::ChosenX) => {
-                        ls.mana_value = Some(SearchManaValue::AtMostAnnouncedX);
-                    }
-                    (_, ValueExprAst::ChosenX) => {
-                        return Err("oracle:unsupported-search-mv");
-                    }
-                    (
-                        CompareOp::Eq,
-                        ValueExprAst::CounterCount {
-                            subject,
-                            counter_kind,
-                        },
-                    ) if matches!(subject.as_ref(), SubjectRefAst::SelfObject) => {
-                        let ck = parse_counter_kind(counter_kind)
-                            .filter(|c| c.is_permanent())
-                            .ok_or("oracle:unsupported-search-mv")?;
-                        ls.mana_value = Some(SearchManaValue::EqualToSourceCounters(ck));
-                    }
-                    _ => {
-                        let obj = lower_object_filter(effective_filter, vocabulary)?;
-                        ls.matcher = SearchCardMatcher::Filtered(Box::new(obj));
-                    }
-                }
-            } else {
-                let obj = lower_object_filter(effective_filter, vocabulary)?;
-                ls.matcher = SearchCardMatcher::Filtered(Box::new(obj));
-            }
-        } else if !effective_filter.stat_bounds.is_empty() {
-            let obj = lower_object_filter(effective_filter, vocabulary)?;
-            ls.matcher = SearchCardMatcher::Filtered(Box::new(obj));
-        }
-    }
     Ok(ls)
 }
 
@@ -2391,6 +2474,9 @@ pub(super) fn lower_search_matcher(
     f: &ObjectFilterAst,
     vocabulary: &CreatureTypeVocabulary,
 ) -> Result<SearchCardMatcher, &'static str> {
+    if f.owner.is_some() {
+        return Err("oracle:unsupported-search-filter");
+    }
     if let Some(named) = &f.named {
         use spellwake_oracle_compiler::ast::NameFilterAst;
         let build_extra =
@@ -2454,6 +2540,14 @@ pub(super) fn lower_search_matcher(
         || !f.required_keywords.is_empty()
         || !f.forbidden_keywords.is_empty()
         || !f.forbidden_subtypes.is_empty()
+        || !f.stat_bounds.is_empty()
+        || !f.predicates.is_empty()
+        || f.controller.is_some()
+        || f.owner.is_some()
+        || f.tapped.is_some()
+        || f.token.is_some()
+        || f.combat.is_some()
+        || f.counter_kind.is_some()
         || !f.flags.is_empty();
     if !has_complex {
         if f.any_card
@@ -2766,7 +2860,12 @@ pub(super) fn lower_token_spec(
                 let (p_val, t_val, base_size) =
                     if power.eq_ignore_ascii_case("x") && toughness.eq_ignore_ascii_case("x") {
                         let x_expr = if let Some(bx) = bound_x {
-                            lower_value_expr(bx, vocabulary)?
+                            match value_ctx {
+                                Some((builder, in_trigger)) => lower_value_expr_in_context(
+                                    bx, builder, in_trigger, vocabulary,
+                                )?,
+                                None => lower_value_expr(bx, vocabulary)?,
+                            }
                         } else {
                             ValueExpr::chosen_x()
                         };

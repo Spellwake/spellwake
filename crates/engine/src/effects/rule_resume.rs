@@ -397,9 +397,11 @@ impl EffectWindow {
                                         | crate::program::EffectManaYield::DistinctColors { .. },
                                     ),
                                 ) => !bound.colors.is_empty(),
-                                (Instruction::GrantProtectionChosenColor(_), _) => {
-                                    bound.colors == mana_domains::colored_mana()
-                                }
+                                (
+                                    Instruction::GrantProtectionChosenColor(_)
+                                    | Instruction::GrantChosenProtection { .. },
+                                    _,
+                                ) => bound.colors == mana_domains::colored_mana(),
                                 _ => false,
                             }
                         {

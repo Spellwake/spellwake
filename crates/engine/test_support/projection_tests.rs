@@ -148,6 +148,8 @@ fn current_root_projection_retains_all_locals_and_chosen_occurrences_after_compl
     let program = Program {
         cannot_be_copied: false,
         conditional_flash: None,
+        activation_cost_reductions: std::collections::BTreeMap::new(),
+        zone_replacement_extras: std::collections::BTreeMap::new(),
         cast_timing: None,
         activation_modes: Default::default(),
         cast_reductions: vec![],

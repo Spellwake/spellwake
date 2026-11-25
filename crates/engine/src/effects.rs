@@ -1982,7 +1982,7 @@ struct DiscoverState {
     bottom_order: Option<Vec<ObjectId>>,
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 struct ResolutionResults {
     target_lki: BTreeMap<ObjectId, TargetLki>,
     sampled_graveyard_cards: Option<BTreeSet<ObjectId>>,
@@ -2030,6 +2030,67 @@ struct ResolutionResults {
     clash_state: Option<ClashState>,
     discover_state: Option<DiscoverState>,
     manifest_dread_candidates: Vec<ObjectId>,
+    /// Current loop participant bound by `Instruction::ForEachPlayer` / `OfferAnyPlayer`.
+    loop_player: Option<SeatId>,
+    /// Total damage prevented during this resolution (CR 615.6, e.g. "for each 1 damage prevented this way").
+    damage_prevented_this_resolution: RulesInteger,
+    /// Whether any damage was dealt during this resolution (e.g. "if damage is dealt this way").
+    dealt_damage_this_resolution: bool,
+}
+impl Default for ResolutionResults {
+    fn default() -> Self {
+        Self {
+            target_lki: BTreeMap::new(),
+            sampled_graveyard_cards: None,
+            revealed_top_types: BTreeSet::new(),
+            revealed_top_card: None,
+            last_amassed_army: None,
+            countered_spell_controller: None,
+            counter_target_types: BTreeSet::new(),
+            shuffled_source_owner: None,
+            destroyed_target_controller: None,
+            destroyed_cards_to_graveyard: Vec::new(),
+            destruction_target_toughness: None,
+            destruction_target_controller: None,
+            power_damage_cohort: None,
+            destruction_target_subtypes: BTreeSet::new(),
+            last_sacrifice: false,
+            last_action_succeeded: false,
+            last_action_count: None,
+            discarded_types: BTreeSet::new(),
+            moved_library_types: BTreeSet::new(),
+            milled_mana_values: Vec::new(),
+            selected_graveyard_exile_creatures: 0,
+            last_sacrificed_creature: None,
+            returned_target_permanent: None,
+            last_die_roll: None,
+            last_die_rolls: Vec::new(),
+            die_roll_ready: false,
+            last_coin_flips_won: None,
+            last_coin_flip_won: None,
+            coin_flip_ready: false,
+            chosen_card_type: None,
+            chosen_basic_land_type: None,
+            chosen_card_name: None,
+            last_moved_controllers: Vec::new(),
+            last_moved_objects: Vec::new(),
+            chosen_number: None,
+            chosen_option_index: None,
+            vote_counts: Vec::new(),
+            winning_vote_option: None,
+            pending_voters: std::collections::VecDeque::new(),
+            voters_initialized: false,
+            pending_option_players: std::collections::VecDeque::new(),
+            option_players_initialized: false,
+            last_nonland_discarded: 0,
+            clash_state: None,
+            discover_state: None,
+            manifest_dread_candidates: Vec::new(),
+            loop_player: None,
+            damage_prevented_this_resolution: 0.into(),
+            dealt_damage_this_resolution: false,
+        }
+    }
 }
 /// Points into the owned payload. Tokens never own another mutable program counter.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -2385,6 +2446,9 @@ impl EffectWindow {
             .any(entry_counters::needs_creature_damage_pairs)
         {
             characteristics.creature_damage_pairs = Some(BTreeSet::new());
+        }
+        if programs.values().any(entry_counters::needs_damage_dealt_by) {
+            characteristics.track_damage_dealt_by = true;
         }
         characteristics.commander_chosen_colors = commander_chosen_colors;
         if programs.values().any(upkeep::needs_echo_history) {
@@ -7835,6 +7899,7 @@ impl EffectWindow {
             match placement {
                 crate::program::LibraryPlacement::Top => ObjectDestination::LibraryTop,
                 crate::program::LibraryPlacement::Bottom
+                | crate::program::LibraryPlacement::BottomRandom
                 | crate::program::LibraryPlacement::ChoiceTopOrBottom { .. } => {
                     ObjectDestination::LibraryBottom
                 }
@@ -9625,7 +9690,19 @@ impl EffectWindow {
             | Instruction::CollectEvidence { .. }
             | Instruction::Blight { .. }
             | Instruction::OfferDynamicManaPayment { .. }
-            | Instruction::ExchangeLifeWithSourceToughness => false,
+            | Instruction::ExchangeLifeWithSourceToughness
+            | Instruction::ForEachPlayer { .. }
+            | Instruction::OfferAnyPlayer { .. }
+            | Instruction::DealDamageToAnnouncedTargets { .. }
+            | Instruction::GrantChosenProtection { .. }
+            | Instruction::RemoveCountersFromSubject { .. }
+            | Instruction::MoveGroupToLibrary { .. }
+            | Instruction::ExileLibraryTopLinked { .. }
+            | Instruction::UntapOrTapSelect { .. }
+            | Instruction::MoveGraveyardGroupOwned { .. }
+            | Instruction::LookTopChooseExt { .. }
+            | Instruction::RevealUntilMatchExt { .. }
+            | Instruction::CreateTokenCopyExt { .. } => false,
         })
     }
 
@@ -9683,6 +9760,9 @@ impl EffectWindow {
         if !self.characteristics.named_counters.is_empty() {
             linked_counter_sources.extend(referenced.iter().copied());
             for card in self.window.cards().physical_objects() {
+                if card.zone() == ObjectZone::Exile {
+                    linked_counter_sources.insert(card.id());
+                }
                 let Some(Program {
                     continuous:
                         Some(crate::characteristics::StaticContinuousAbility::CharacteristicDefining {

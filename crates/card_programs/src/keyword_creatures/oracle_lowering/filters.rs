@@ -1,87 +1,6 @@
 use super::*;
 use spellwake_oracle_compiler::ast::FilterPredicateAst;
 
-fn condition_primary_subject(cond: &ConditionAst) -> Option<&SubjectRefAst> {
-    match cond {
-        ConditionAst::CounterCompare { subject, .. }
-        | ConditionAst::HasStatus { subject, .. }
-        | ConditionAst::HasKeyword { subject, .. }
-        | ConditionAst::MatchesFilter { subject, .. }
-        | ConditionAst::StatCompare { subject, .. } => Some(subject.as_ref()),
-        ConditionAst::Marker(GameMarker::SubjectEnteredThisTurn(subject)) => Some(subject.as_ref()),
-        ConditionAst::Not(inner) => condition_primary_subject(inner),
-        ConditionAst::And(a, b) | ConditionAst::Or(a, b) => {
-            let sa = condition_primary_subject(a);
-            let sb = condition_primary_subject(b);
-            match (sa, sb) {
-                (Some(x), Some(y)) if x == y => Some(x),
-                (Some(x), None) => Some(x),
-                (None, Some(y)) => Some(y),
-                _ => None,
-            }
-        }
-        _ => None,
-    }
-}
-
-pub(super) fn lower_permanent_selectors_with_context(
-    subject: &SubjectRefAst,
-    condition: Option<&ConditionAst>,
-    vocabulary: &CreatureTypeVocabulary,
-) -> Result<Vec<PermanentSelector>, &'static str> {
-    match subject {
-        SubjectRefAst::Compound(items) if !items.is_empty() => {
-            let mut out = Vec::with_capacity(items.len());
-            for item in items {
-                out.extend(lower_permanent_selectors_with_context(
-                    item, condition, vocabulary,
-                )?);
-            }
-            Ok(out)
-        }
-        SubjectRefAst::Anaphora(raw) => {
-            let low = raw.trim().to_ascii_lowercase();
-            if let Some(cond) = condition {
-                if matches!(
-                    low.as_str(),
-                    "that creature"
-                        | "that permanent"
-                        | "that artifact"
-                        | "that land"
-                        | "that enchantment"
-                ) && let ConditionAst::ControlsCount {
-                    player: PlayerRefAst::You,
-                    filter,
-                    op: CompareOp::Eq,
-                    value: 1,
-                } = cond
-                {
-                    let mut sel = lower_filter_to_permanent_selector(filter, vocabulary)?;
-                    sel.controller = ControllerSelector::SourceController;
-                    return Ok(vec![sel]);
-                }
-                if matches!(
-                    low.as_str(),
-                    "it" | "he"
-                        | "she"
-                        | "him"
-                        | "her"
-                        | "that creature"
-                        | "that permanent"
-                        | "that artifact"
-                        | "that land"
-                        | "that enchantment"
-                ) && let Some(primary) = condition_primary_subject(cond)
-                {
-                    return lower_permanent_selectors(primary, vocabulary);
-                }
-            }
-            Err("oracle:unsupported-permanent-selector")
-        }
-        other => lower_permanent_selectors(other, vocabulary),
-    }
-}
-
 pub(super) fn lower_permanent_selectors(
     subject: &SubjectRefAst,
     vocabulary: &CreatureTypeVocabulary,
@@ -118,15 +37,91 @@ pub(super) fn lower_permanent_selector(
     }
 }
 
+fn apply_selector_required_keyword(
+    sel: &mut PermanentSelector,
+    kw_raw: &str,
+    vocabulary: &CreatureTypeVocabulary,
+) -> Result<(), &'static str> {
+    let low = kw_raw.trim().to_ascii_lowercase();
+    if low == "toxic" {
+        sel.requires_toxic = true;
+        return Ok(());
+    }
+    let kw = lower_keyword_ability_name(kw_raw)
+        .or_else(|| {
+            if let Some(rest) = low.strip_prefix("protection from ") {
+                let quals = parse_protection_keywords(rest, vocabulary)?;
+                if quals.len() == 1 {
+                    return Some(quals[0]);
+                }
+            }
+            if let Some(rest) = low.strip_prefix("hexproof from ") {
+                let quals = parse_hexproof_from_qualities(rest, vocabulary)?;
+                if quals.len() == 1 {
+                    return Some(KeywordAbility::HexproofFrom(quals[0]));
+                }
+            }
+            None
+        })
+        .ok_or("oracle:unsupported-selector-predicate")?;
+    if kw == KeywordAbility::Flying {
+        sel.requires_flying = true;
+    } else if sel.required_keyword.is_none() || sel.required_keyword == Some(kw) {
+        sel.required_keyword = Some(kw);
+    } else if sel.extra_required_keyword.is_none() || sel.extra_required_keyword == Some(kw) {
+        sel.extra_required_keyword = Some(kw);
+    } else {
+        return Err("oracle:unsupported-selector-predicate");
+    }
+    Ok(())
+}
+
+fn apply_selector_counter_kind(
+    sel: &mut PermanentSelector,
+    ck_raw: &str,
+) -> Result<(), &'static str> {
+    match ck_raw.trim().to_ascii_lowercase().as_str() {
+        "+1/+1" => sel.plus_one_counter = true,
+        "-1/-1" => sel.minus_one_counter = true,
+        "" | "any" | "a" | "one or more" => sel.any_counter = true,
+        other => {
+            let kind = parse_counter_kind(other)
+                .filter(|k| k.is_permanent())
+                .ok_or("oracle:unsupported-selector-predicate")?;
+            if sel.required_counter_kind.is_some_and(|prev| prev != kind) {
+                return Err("oracle:unsupported-selector-predicate");
+            }
+            sel.required_counter_kind = Some(kind);
+        }
+    }
+    Ok(())
+}
+
+fn extract_state_qual_counter_kind(norm: &str) -> Option<&str> {
+    let body = norm
+        .strip_prefix("with ")
+        .or_else(|| norm.strip_prefix("that have "))
+        .or_else(|| norm.strip_prefix("that has "))?;
+    let body = body
+        .strip_suffix(" on it")
+        .or_else(|| body.strip_suffix(" on them"))?;
+    let body = body
+        .strip_suffix(" counters")
+        .or_else(|| body.strip_suffix(" counter"))?;
+    let kind = body
+        .strip_prefix("one or more ")
+        .or_else(|| body.strip_prefix("a "))
+        .or_else(|| body.strip_prefix("an "))
+        .unwrap_or(body)
+        .trim();
+    Some(kind)
+}
+
 pub(super) fn lower_filter_to_permanent_selector(
     f: &ObjectFilterAst,
     vocabulary: &CreatureTypeVocabulary,
 ) -> Result<PermanentSelector, &'static str> {
-    if !matches!(f.zone, None | Some(ZoneFilter::Battlefield))
-        || f.required_keywords.len() > 1
-        || f.any_spell
-        || f.is_ability
-    {
+    if !matches!(f.zone, None | Some(ZoneFilter::Battlefield)) || f.any_spell || f.is_ability {
         return Err("oracle:unsupported-selector-predicate");
     }
     let mut sel = PermanentSelector::default();
@@ -146,12 +141,7 @@ pub(super) fn lower_filter_to_permanent_selector(
         };
     }
     if let Some(ck_raw) = f.counter_kind.as_deref() {
-        match ck_raw.trim().to_ascii_lowercase().as_str() {
-            "+1/+1" => sel.plus_one_counter = true,
-            "-1/-1" => sel.minus_one_counter = true,
-            "any" | "a" | "one or more" => sel.any_counter = true,
-            _ => return Err("oracle:unsupported-selector-predicate"),
-        }
+        apply_selector_counter_kind(&mut sel, ck_raw)?;
     }
     for sb in &f.stat_bounds {
         let ValueExprAst::Const(v) = sb.value.as_ref() else {
@@ -228,30 +218,8 @@ pub(super) fn lower_filter_to_permanent_selector(
         return Err("oracle:unsupported-selector-flag");
     }
 
-    if let Some(kw_raw) = f.required_keywords.first() {
-        let kw = lower_keyword_ability_name(kw_raw)
-            .or_else(|| {
-                let low = kw_raw.trim().to_ascii_lowercase();
-                if let Some(rest) = low.strip_prefix("protection from ") {
-                    let quals = parse_protection_keywords(rest, vocabulary)?;
-                    if quals.len() == 1 {
-                        return Some(quals[0]);
-                    }
-                }
-                if let Some(rest) = low.strip_prefix("hexproof from ") {
-                    let quals = parse_hexproof_from_qualities(rest, vocabulary)?;
-                    if quals.len() == 1 {
-                        return Some(KeywordAbility::HexproofFrom(quals[0]));
-                    }
-                }
-                None
-            })
-            .ok_or("oracle:unsupported-selector-predicate")?;
-        if kw == KeywordAbility::Flying {
-            sel.requires_flying = true;
-        } else {
-            sel.required_keyword = Some(kw);
-        }
+    for kw_raw in &f.required_keywords {
+        apply_selector_required_keyword(&mut sel, kw_raw, vocabulary)?;
     }
     if f.forbidden_keywords.len() == 1 {
         let kw = lower_keyword_ability_name(&f.forbidden_keywords[0])
@@ -418,18 +386,10 @@ pub(super) fn lower_filter_to_permanent_selector(
                         sel.minus_one_counter = true;
                     }
                     other => {
-                        if let Some(rest) = other.strip_prefix("with ")
-                            && let Some(kw) = lower_keyword_ability_name(rest)
-                        {
-                            if kw == KeywordAbility::Flying {
-                                sel.requires_flying = true;
-                            } else if sel.required_keyword.is_none()
-                                || sel.required_keyword == Some(kw)
-                            {
-                                sel.required_keyword = Some(kw);
-                            } else {
-                                return Err("oracle:unsupported-selector-predicate");
-                            }
+                        if let Some(ck_raw) = extract_state_qual_counter_kind(other) {
+                            apply_selector_counter_kind(&mut sel, ck_raw)?;
+                        } else if let Some(rest) = other.strip_prefix("with ") {
+                            apply_selector_required_keyword(&mut sel, rest, vocabulary)?;
                         } else {
                             return Err("oracle:unsupported-selector-predicate");
                         }
@@ -933,8 +893,18 @@ pub(super) fn apply_selector_condition(
                     sel.any_counter = true;
                     Ok(())
                 }
+                other if min_val == 1 => apply_selector_counter_kind(sel, other)
+                    .map_err(|_| "oracle:unsupported-static-cond"),
                 _ => Err("oracle:unsupported-static-cond"),
             }
+        }
+        ConditionAst::HasKeyword { subject, keyword }
+            if is_pronoun_anaphora(subject)
+                && sel.controller != ControllerSelector::SourceItself
+                && !sel.attached_to_source =>
+        {
+            apply_selector_required_keyword(sel, keyword, vocabulary)
+                .map_err(|_| "oracle:unsupported-static-cond")
         }
         other => {
             if let Some(sc) = lower_selector_source_condition(sel, other, vocabulary) {
@@ -2763,11 +2733,31 @@ pub(super) fn bind_value_expr_targets(
             }
             Ok(())
         }
-        ValueExprAst::PlayerStat { player, .. } => match player {
+        ValueExprAst::PlayerStat { player, .. }
+        | ValueExprAst::PlayerCounterCount { player, .. } => match player {
             PlayerRefAst::TargetPlayer => builder.bind_target(BodyTarget::SinglePlayer),
             PlayerRefAst::TargetOpponent => builder.bind_target(BodyTarget::SingleOpponent),
             _ => Ok(()),
         },
+        ValueExprAst::EventCountThisTurn { event, player } => {
+            match player {
+                Some(PlayerRefAst::TargetPlayer) => {
+                    return builder.bind_target(BodyTarget::SinglePlayer);
+                }
+                Some(PlayerRefAst::TargetOpponent) => {
+                    return builder.bind_target(BodyTarget::SingleOpponent);
+                }
+                _ => {}
+            }
+            let low = event.trim().to_ascii_lowercase();
+            if low.contains("target opponent") {
+                builder.bind_target(BodyTarget::SingleOpponent)
+            } else if low.contains("target player") {
+                builder.bind_target(BodyTarget::SinglePlayer)
+            } else {
+                Ok(())
+            }
+        }
         ValueExprAst::Add(a, b)
         | ValueExprAst::Sub(a, b)
         | ValueExprAst::Mul(a, b)
@@ -2792,8 +2782,7 @@ pub(super) fn lower_value_expr(
     lower_value_expr_inner(expr, vocabulary, None)
 }
 
-// Context-aware entrypoint for body.rs and instructions.rs callers that have BodyBuilder and in_trigger.
-#[allow(dead_code)]
+// Context-aware entrypoint for body.rs, instructions.rs, and helpers.rs callers with BodyBuilder and in_trigger.
 pub(super) fn lower_value_expr_in_context(
     expr: &ValueExprAst,
     builder: &BodyBuilder,
@@ -3000,6 +2989,854 @@ fn resolve_that_player_for_value_expr(
     }
 }
 
+fn is_supported_player_counter_kind(kind: CounterKind) -> bool {
+    kind.is_player_counter() || kind.oracle_label() == "ticket"
+}
+
+fn resolve_player_ref_for_value_expr(
+    player: PlayerRefAst,
+    context: Option<(&BodyBuilder, bool)>,
+    allow_spell_controller: bool,
+) -> Result<ResolvingPlayer, &'static str> {
+    match player {
+        PlayerRefAst::You => Ok(ResolvingPlayer::Controller),
+        PlayerRefAst::TargetPlayer | PlayerRefAst::TargetOpponent => {
+            Ok(ResolvingPlayer::TargetPlayer)
+        }
+        PlayerRefAst::ThatPlayer => {
+            resolve_that_player_for_value_expr(context, allow_spell_controller)
+        }
+        PlayerRefAst::DefendingPlayer => Ok(ResolvingPlayer::DefendingPlayer),
+        PlayerRefAst::ActivePlayer => Ok(ResolvingPlayer::ActivePlayer),
+        PlayerRefAst::EnchantedPlayer => Ok(ResolvingPlayer::EnchantedPlayer),
+        PlayerRefAst::ChosenPlayer => Ok(ResolvingPlayer::ChosenPlayer),
+        PlayerRefAst::ItsController | PlayerRefAst::ThatObjectController => match context {
+            Some((builder, true)) if !body_has_object_or_spell_target(builder.target) => {
+                Ok(ResolvingPlayer::TriggerSubjectController)
+            }
+            Some((builder, false)) if !body_has_object_or_spell_target(builder.target) => {
+                Err("oracle:unsupported-player-stat")
+            }
+            _ => Ok(ResolvingPlayer::TargetController),
+        },
+        PlayerRefAst::ItsOwner => match context {
+            Some((builder, true)) if !body_has_object_or_spell_target(builder.target) => {
+                Ok(ResolvingPlayer::TriggerSubjectOwner)
+            }
+            Some((builder, false)) if !body_has_object_or_spell_target(builder.target) => {
+                Err("oracle:unsupported-player-stat")
+            }
+            _ => Ok(ResolvingPlayer::TargetOwner),
+        },
+        _ => Err("oracle:unsupported-player-stat"),
+    }
+}
+
+fn parse_value_expr_player_ref(raw: &str) -> Option<PlayerRefAst> {
+    match raw.trim() {
+        "you" => Some(PlayerRefAst::You),
+        "target player" => Some(PlayerRefAst::TargetPlayer),
+        "target opponent" => Some(PlayerRefAst::TargetOpponent),
+        "that player" | "they" | "he or she" => Some(PlayerRefAst::ThatPlayer),
+        "defending player" | "the defending player" => Some(PlayerRefAst::DefendingPlayer),
+        "active player" | "the active player" => Some(PlayerRefAst::ActivePlayer),
+        "enchanted player" => Some(PlayerRefAst::EnchantedPlayer),
+        "chosen player" | "the chosen player" => Some(PlayerRefAst::ChosenPlayer),
+        "its controller"
+        | "that creature's controller"
+        | "that permanent's controller"
+        | "that spell's controller" => Some(PlayerRefAst::ItsController),
+        "its owner" | "that card's owner" | "that creature's owner" => Some(PlayerRefAst::ItsOwner),
+        _ => None,
+    }
+}
+
+fn resolve_affected_players_ref(
+    player: PlayerRefAst,
+    context: Option<(&BodyBuilder, bool)>,
+) -> Result<AffectedPlayers, &'static str> {
+    match player {
+        PlayerRefAst::EachPlayer => Ok(AffectedPlayers::EachPlayer),
+        PlayerRefAst::EachOpponent => Ok(AffectedPlayers::EachOpponent),
+        PlayerRefAst::EachOtherPlayer => Ok(AffectedPlayers::EachOtherPlayer),
+        other => resolve_player_ref_for_value_expr(other, context, false).map(AffectedPlayers::One),
+    }
+}
+
+fn parse_value_expr_affected_players(
+    raw: &str,
+    context: Option<(&BodyBuilder, bool)>,
+) -> Result<AffectedPlayers, &'static str> {
+    let trimmed = raw
+        .trim()
+        .trim_end_matches(" have")
+        .trim_end_matches(" has")
+        .trim_end_matches("'ve")
+        .trim();
+    match trimmed {
+        "" | "players" | "all players" | "each player" | "a player" => {
+            Ok(AffectedPlayers::EachPlayer)
+        }
+        "your opponents" | "opponents" | "an opponent" | "each opponent" => {
+            Ok(AffectedPlayers::EachOpponent)
+        }
+        "other players" | "each other player" => Ok(AffectedPlayers::EachOtherPlayer),
+        other => {
+            let pref = parse_value_expr_player_ref(other).ok_or("oracle:unsupported-value-expr")?;
+            let rp = resolve_player_ref_for_value_expr(pref, context, false)?;
+            Ok(AffectedPlayers::One(rp))
+        }
+    }
+}
+
+fn lower_player_counter_value_expr(
+    player: PlayerRefAst,
+    counter_kind: &str,
+    context: Option<(&BodyBuilder, bool)>,
+) -> Result<ValueExpr, &'static str> {
+    let ck = parse_counter_kind(counter_kind)
+        .filter(|k| is_supported_player_counter_kind(*k))
+        .ok_or("oracle:unsupported-counter-kind")?;
+    if player == PlayerRefAst::You {
+        return Ok(match ck {
+            CounterKind::Experience => ValueExpr::CounterCount {
+                subject: spellwake_engine::program::CounterSubjectRef::ControllerExperience,
+                kind: None,
+            },
+            CounterKind::Energy => ValueExpr::CounterCount {
+                subject: spellwake_engine::program::CounterSubjectRef::ControllerEnergy,
+                kind: None,
+            },
+            CounterKind::Poison => ValueExpr::CounterCount {
+                subject: spellwake_engine::program::CounterSubjectRef::ControllerPoison,
+                kind: None,
+            },
+            other => ValueExpr::CounterCount {
+                subject: spellwake_engine::program::CounterSubjectRef::PlayerCounter(
+                    ResolvingPlayer::Controller,
+                    other,
+                ),
+                kind: Some(other),
+            },
+        });
+    }
+    let role = resolve_player_ref_for_value_expr(player, context, false)
+        .map_err(|_| "oracle:unsupported-counter-subject")?;
+    Ok(ValueExpr::CounterCount {
+        subject: spellwake_engine::program::CounterSubjectRef::PlayerCounter(role, ck),
+        kind: Some(ck),
+    })
+}
+
+fn resolve_damage_subject_ref(
+    raw: &str,
+    context: Option<(&BodyBuilder, bool)>,
+) -> Result<ValueObjectRef, &'static str> {
+    let low = raw.trim().to_ascii_lowercase();
+    if low == "~" || is_self_object_anaphora(&low) || low == "this spell" {
+        return Ok(ValueObjectRef::AbilitySource);
+    }
+    if matches!(
+        low.as_str(),
+        "equipped creature" | "enchanted creature" | "enchanted permanent" | "fortified land"
+    ) {
+        return Ok(ValueObjectRef::AttachedHost);
+    }
+    if matches!(
+        low.as_str(),
+        "it" | "that creature"
+            | "that permanent"
+            | "the creature"
+            | "the permanent"
+            | "that spell"
+            | "that planeswalker"
+            | "that battle"
+    ) {
+        return match context {
+            Some((builder, in_trigger)) => {
+                if body_has_object_or_spell_target(builder.target) {
+                    Ok(ValueObjectRef::TargetObject)
+                } else if in_trigger {
+                    Ok(ValueObjectRef::TriggerSubject)
+                } else {
+                    Err("oracle:unsupported-value-expr")
+                }
+            }
+            None => Ok(ValueObjectRef::TargetObject),
+        };
+    }
+    if matches!(
+        low.as_str(),
+        "target creature" | "target permanent" | "target planeswalker" | "target battle"
+    ) && context.is_none_or(|(b, _)| body_has_object_or_spell_target(b.target))
+    {
+        return Ok(ValueObjectRef::TargetObject);
+    }
+    Err("oracle:unsupported-value-expr")
+}
+
+fn turn_record_filter_supported(filter: ObjectFilter, allow_artifact_subtypes: bool) -> bool {
+    let empty_flags = ObjectClause::any().flags;
+    let clause_ok = |c: ObjectClause| {
+        let subtype_ok = match c.subtypes {
+            SubtypeFilter::Any
+            | SubtypeFilter::Has(_)
+            | SubtypeFilter::Lacks(_)
+            | SubtypeFilter::AnyOf(_)
+            | SubtypeFilter::NoneOf(_) => true,
+            SubtypeFilter::Artifact(_) => allow_artifact_subtypes,
+            _ => false,
+        };
+        subtype_ok
+            && c.controller == ControllerFilter::Any
+            && c.combat == CombatFilter::Any
+            && c.tapped.is_none()
+            && c.token.is_none()
+            && c.keyword.is_none()
+            && c.forbidden_keyword.is_none()
+            && c.power == PowerFilter::Any
+            && c.toughness == ToughnessFilter::Any
+            && c.mana_value == ManaValueFilter::Any
+            && c.flags == empty_flags
+            && c.source_relation == SourceRelation::Any
+    };
+    let (a, b) = filter.clauses();
+    clause_ok(a) && b.is_none_or(clause_ok)
+}
+
+fn parse_turn_event_filter(
+    raw: &str,
+    allow_artifact_subtypes: bool,
+    is_spell_context: bool,
+    vocabulary: &CreatureTypeVocabulary,
+) -> Option<ObjectFilter> {
+    let trimmed = raw.trim();
+    match trimmed {
+        "" | "card" | "cards" | "spell" | "spells" => return Some(ObjectFilter::any()),
+        "permanent" | "permanents" => return Some(ObjectFilter::permanent()),
+        "instant and sorcery" | "sorcery and instant" => {
+            return Some(ObjectFilter::instant_or_sorcery());
+        }
+        _ => {}
+    }
+    let compiler_vocab = cached_compiler_vocab(vocabulary);
+    let parsed = spellwake_oracle_compiler::filter::parse_object_filter(trimmed, &compiler_vocab)
+        .or_else(|_| {
+            let suffix = if is_spell_context { " spell" } else { " card" };
+            spellwake_oracle_compiler::filter::parse_object_filter(
+                &format!("{trimmed}{suffix}"),
+                &compiler_vocab,
+            )
+        })
+        .ok()?;
+    if parsed.zone.is_some()
+        || parsed.controller.is_some()
+        || parsed.owner.is_some()
+        || !parsed.flags.is_empty()
+        || !parsed.predicates.is_empty()
+        || (parsed.required_supertypes.0 & AstSupertypeMask::HISTORIC.0) != 0
+    {
+        return None;
+    }
+    let obj = lower_object_filter(&parsed, vocabulary).ok()?;
+    turn_record_filter_supported(obj, allow_artifact_subtypes).then_some(obj)
+}
+
+fn try_lower_spells_cast_count(
+    f: &ObjectFilterAst,
+    vocabulary: &CreatureTypeVocabulary,
+    context: Option<(&BodyBuilder, bool)>,
+) -> Result<Option<ValueExpr>, &'static str> {
+    if !f.any_spell || f.any_permanent || f.any_card || f.is_ability || f.named.is_some() {
+        return Ok(None);
+    }
+    let has_entered = (f.flags.0 & AstFilterFlags::ENTERED_THIS_TURN.0) != 0;
+    let clean_flags =
+        f.flags.0 & !(AstFilterFlags::ENTERED_THIS_TURN.0 | AstFilterFlags::LKI_PAST_TENSE.0);
+    if clean_flags != 0 {
+        return Ok(None);
+    }
+    let mut implied_ctrl: Option<ControllerRelation> = None;
+    let cast_this_turn = match f.predicates.as_slice() {
+        [] => has_entered,
+        [FilterPredicateAst::StateQualification(q)] => {
+            match q.trim().to_ascii_lowercase().as_str() {
+                "you cast this turn" => {
+                    if f.controller.is_some_and(|c| c != ControllerRelation::You) {
+                        return Ok(None);
+                    }
+                    implied_ctrl = Some(ControllerRelation::You);
+                    true
+                }
+                "that was cast this turn" | "cast this turn" => true,
+                _ => return Ok(None),
+            }
+        }
+        _ => return Ok(None),
+    };
+    if !cast_this_turn {
+        return Ok(None);
+    }
+    let from_zone = match f.zone {
+        None => None,
+        Some(
+            ZoneFilter::YourHand
+            | ZoneFilter::ThatPlayerHand
+            | ZoneFilter::TargetPlayerHand
+            | ZoneFilter::TargetOpponentHand
+            | ZoneFilter::OpponentHand
+            | ZoneFilter::OpponentsHands
+            | ZoneFilter::EachPlayerHand
+            | ZoneFilter::AnyHand,
+        ) => Some(SourceZoneFilter::Hand),
+        Some(
+            ZoneFilter::YourGraveyard
+            | ZoneFilter::ThatPlayerGraveyard
+            | ZoneFilter::TargetPlayerGraveyard
+            | ZoneFilter::TargetOpponentGraveyard
+            | ZoneFilter::OpponentGraveyard
+            | ZoneFilter::OpponentsGraveyards
+            | ZoneFilter::AnyGraveyard
+            | ZoneFilter::AllGraveyards,
+        ) => Some(SourceZoneFilter::Graveyard),
+        Some(ZoneFilter::Exile) => Some(SourceZoneFilter::Exile),
+        _ => return Ok(None),
+    };
+    let players = match f.controller.or(implied_ctrl) {
+        Some(ControllerRelation::You | ControllerRelation::YourTeam) => {
+            AffectedPlayers::One(ResolvingPlayer::Controller)
+        }
+        Some(ControllerRelation::Opponent | ControllerRelation::Opponents) => {
+            AffectedPlayers::EachOpponent
+        }
+        Some(ControllerRelation::NotYou) => AffectedPlayers::EachOtherPlayer,
+        Some(ControllerRelation::TargetPlayer | ControllerRelation::TargetOpponent) => {
+            AffectedPlayers::One(ResolvingPlayer::TargetPlayer)
+        }
+        Some(ControllerRelation::ThatPlayer) => {
+            AffectedPlayers::One(resolve_that_player_for_value_expr(context, true)?)
+        }
+        Some(ControllerRelation::DefendingPlayer) => {
+            AffectedPlayers::One(ResolvingPlayer::DefendingPlayer)
+        }
+        Some(ControllerRelation::ActivePlayer) => {
+            AffectedPlayers::One(ResolvingPlayer::ActivePlayer)
+        }
+        None => {
+            if matches!(
+                f.zone,
+                Some(ZoneFilter::YourHand | ZoneFilter::YourGraveyard)
+            ) {
+                AffectedPlayers::One(ResolvingPlayer::Controller)
+            } else {
+                AffectedPlayers::EachPlayer
+            }
+        }
+        _ => return Ok(None),
+    };
+    let mut cleaned = f.clone();
+    cleaned.controller = None;
+    cleaned.zone = None;
+    cleaned.flags = AstFilterFlags::EMPTY;
+    cleaned.predicates.clear();
+    if (cleaned.required_supertypes.0 & AstSupertypeMask::HISTORIC.0) != 0 {
+        return Ok(None);
+    }
+    let filter = if is_unrestricted_filter(&cleaned) {
+        ObjectFilter::any()
+    } else {
+        let obj = lower_object_filter(&cleaned, vocabulary)?;
+        if !turn_record_filter_supported(obj, false) {
+            return Ok(None);
+        }
+        obj
+    };
+    Ok(Some(ValueExpr::PlayerStat(
+        PlayerStatExpr::SpellsCastMatchingThisTurn {
+            players,
+            filter: Box::new(filter),
+            from_zone,
+        },
+    )))
+}
+
+fn try_lower_graveyard_arrivals_count(
+    f: &ObjectFilterAst,
+    vocabulary: &CreatureTypeVocabulary,
+    context: Option<(&BodyBuilder, bool)>,
+) -> Result<Option<ValueExpr>, &'static str> {
+    if f.any_spell || f.is_ability || f.named.is_some() || !f.predicates.is_empty() {
+        return Ok(None);
+    }
+    let has_died = (f.flags.0 & AstFilterFlags::DIED_THIS_TURN.0) != 0;
+    let has_entered = (f.flags.0 & AstFilterFlags::ENTERED_THIS_TURN.0) != 0;
+    let extra_flags = f.flags.0
+        & !(AstFilterFlags::DIED_THIS_TURN.0
+            | AstFilterFlags::ENTERED_THIS_TURN.0
+            | AstFilterFlags::LKI_PAST_TENSE.0);
+    if extra_flags != 0 {
+        return Ok(None);
+    }
+    let zone_owner = match f.zone {
+        None => {
+            if !has_died {
+                return Ok(None);
+            }
+            None
+        }
+        Some(ZoneFilter::AllGraveyards | ZoneFilter::AnyGraveyard) if has_died || has_entered => {
+            None
+        }
+        Some(ZoneFilter::YourGraveyard) if has_died || has_entered => {
+            Some(ResolvingPlayer::Controller)
+        }
+        Some(ZoneFilter::TargetPlayerGraveyard | ZoneFilter::TargetOpponentGraveyard)
+            if has_died || has_entered =>
+        {
+            Some(ResolvingPlayer::TargetPlayer)
+        }
+        Some(ZoneFilter::DefendingPlayerGraveyard) if has_died || has_entered => {
+            Some(ResolvingPlayer::DefendingPlayer)
+        }
+        Some(ZoneFilter::ThatPlayerGraveyard) if has_died || has_entered => {
+            Some(resolve_that_player_for_value_expr(context, true)?)
+        }
+        _ => return Ok(None),
+    };
+    let explicit_ctrl = match f.controller {
+        None => None,
+        Some(ControllerRelation::You | ControllerRelation::YourTeam) => {
+            Some(ResolvingPlayer::Controller)
+        }
+        Some(ControllerRelation::ThatPlayer) => {
+            Some(resolve_that_player_for_value_expr(context, true)?)
+        }
+        Some(ControllerRelation::TargetPlayer | ControllerRelation::TargetOpponent) => {
+            Some(ResolvingPlayer::TargetPlayer)
+        }
+        Some(ControllerRelation::DefendingPlayer) => Some(ResolvingPlayer::DefendingPlayer),
+        Some(ControllerRelation::ActivePlayer) => Some(ResolvingPlayer::ActivePlayer),
+        _ => return Ok(None),
+    };
+    let controller = match (explicit_ctrl, zone_owner) {
+        (Some(a), Some(b)) if a != b => return Ok(None),
+        (Some(a), _) => Some(a),
+        (None, b) => b,
+    };
+    let mut cleaned = f.clone();
+    cleaned.zone = None;
+    cleaned.controller = None;
+    cleaned.flags = AstFilterFlags::EMPTY;
+    if (cleaned.required_supertypes.0 & AstSupertypeMask::HISTORIC.0) != 0 {
+        return Ok(None);
+    }
+    let filter = if is_unrestricted_filter(&cleaned) {
+        ObjectFilter::any()
+    } else {
+        let obj = lower_object_filter(&cleaned, vocabulary)?;
+        if !turn_record_filter_supported(obj, true) {
+            return Ok(None);
+        }
+        obj
+    };
+    Ok(Some(ValueExpr::PlayerStat(
+        PlayerStatExpr::GraveyardArrivalsMatchingThisTurn {
+            filter: Box::new(filter),
+            from_battlefield_only: has_died,
+            controller,
+        },
+    )))
+}
+
+fn try_lower_event_count_this_turn_ext(
+    norm: &str,
+    player: Option<PlayerRefAst>,
+    vocabulary: &CreatureTypeVocabulary,
+    context: Option<(&BodyBuilder, bool)>,
+) -> Option<Result<ValueExpr, &'static str>> {
+    // 1. Damage prevented this way
+    if matches!(
+        norm,
+        "the amount of damage prevented this way"
+            | "the damage prevented this way"
+            | "damage prevented this way"
+            | "1 damage prevented this way"
+    ) && player.is_none()
+    {
+        return Some(Ok(ValueExpr::event(EventValueKind::DamagePreventedThisWay)));
+    }
+
+    // 2. Cards exiled this turn
+    if matches!(
+        norm,
+        "the number of cards exiled this turn"
+            | "cards exiled this turn"
+            | "card exiled this turn"
+            | "cards_exiled_this_turn"
+    ) && player.is_none()
+    {
+        return Some(Ok(ValueExpr::PlayerStat(
+            PlayerStatExpr::CardsExiledThisTurn,
+        )));
+    }
+
+    // 3. Spells cast this turn (shorthand token from Stage 1)
+    if norm == "spells_cast_this_turn" {
+        return Some(match player {
+            None | Some(PlayerRefAst::You) => Ok(ValueExpr::PlayerStat(
+                PlayerStatExpr::ControllerSpellsCastThisTurn,
+            )),
+            Some(p) => resolve_affected_players_ref(p, context).map(|players| {
+                ValueExpr::PlayerStat(PlayerStatExpr::SpellsCastMatchingThisTurn {
+                    players,
+                    filter: Box::new(ObjectFilter::any()),
+                    from_zone: None,
+                })
+            }),
+        });
+    }
+
+    // 4. Life lost last turn
+    if norm == "life_lost_last_turn"
+        && let Some(p) = player
+    {
+        return Some(
+            resolve_player_ref_for_value_expr(p, context, false)
+                .map(|rp| ValueExpr::PlayerStat(PlayerStatExpr::PlayerLifeLostLastTurn(rp))),
+        );
+    }
+    if let Some(after_life) = norm
+        .strip_prefix("the amount of life ")
+        .or_else(|| norm.strip_prefix("amount of life "))
+        .or_else(|| norm.strip_prefix("the life "))
+        .or_else(|| norm.strip_prefix("life "))
+        && let Some(who_raw) = after_life
+            .strip_suffix(" lost last turn")
+            .or_else(|| after_life.strip_suffix(" has lost last turn"))
+            .or_else(|| after_life.strip_suffix(" have lost last turn"))
+    {
+        let pref = player.or_else(|| parse_value_expr_player_ref(who_raw));
+        if let Some(p) = pref {
+            return Some(
+                resolve_player_ref_for_value_expr(p, context, false)
+                    .map(|rp| ValueExpr::PlayerStat(PlayerStatExpr::PlayerLifeLostLastTurn(rp))),
+            );
+        }
+    }
+
+    // 5. Player counters: "the number of [poison/energy/experience/rad/ticket] counters [player] has"
+    //    and "the amount of {e} [player] has/have"
+    if let Some(after_energy) = norm
+        .strip_prefix("the amount of {e} ")
+        .or_else(|| norm.strip_prefix("amount of {e} "))
+        .or_else(|| norm.strip_prefix("the amount of energy "))
+        && let Some(who_raw) = after_energy
+            .strip_suffix(" has")
+            .or_else(|| after_energy.strip_suffix(" have"))
+    {
+        let pref = player.or_else(|| parse_value_expr_player_ref(who_raw));
+        if let Some(p) = pref {
+            return Some(lower_player_counter_value_expr(p, "energy", context));
+        }
+    }
+    let after_num = norm
+        .strip_prefix("the number of ")
+        .or_else(|| norm.strip_prefix("number of "))
+        .unwrap_or(norm);
+    if let Some((ck_raw, who_part)) = after_num
+        .split_once(" counters ")
+        .or_else(|| after_num.split_once(" counter "))
+        && let Some(who_raw) = who_part
+            .strip_suffix(" has")
+            .or_else(|| who_part.strip_suffix(" have"))
+    {
+        let pref = player.or_else(|| parse_value_expr_player_ref(who_raw));
+        if let Some(p) = pref
+            && parse_counter_kind(ck_raw).is_some_and(is_supported_player_counter_kind)
+        {
+            return Some(lower_player_counter_value_expr(p, ck_raw, context));
+        }
+    }
+
+    // 6. Excess damage / damage received / damage dealt this turn
+    if player.is_none()
+        && let Some(body) = norm.strip_suffix(" this turn")
+    {
+        let body = body
+            .strip_prefix("the amount of ")
+            .or_else(|| body.strip_prefix("amount of "))
+            .or_else(|| body.strip_prefix("the "))
+            .unwrap_or(body);
+        if let Some(subj_raw) = body.strip_prefix("excess damage dealt to ") {
+            return Some(
+                resolve_damage_subject_ref(subj_raw, context).map(|subject| {
+                    ValueExpr::PlayerStat(PlayerStatExpr::DamageReceivedThisTurn {
+                        subject,
+                        excess_only: true,
+                    })
+                }),
+            );
+        }
+        if let Some(subj_raw) = body
+            .strip_prefix("damage already dealt to ")
+            .or_else(|| body.strip_prefix("damage dealt to "))
+        {
+            return Some(
+                resolve_damage_subject_ref(subj_raw, context).map(|subject| {
+                    ValueExpr::PlayerStat(PlayerStatExpr::DamageReceivedThisTurn {
+                        subject,
+                        excess_only: false,
+                    })
+                }),
+            );
+        }
+        let (combat_only, after_dmg) = if let Some(rest) = body.strip_prefix("combat damage ") {
+            (true, Some(rest))
+        } else if let Some(rest) = body.strip_prefix("damage ") {
+            (false, Some(rest))
+        } else {
+            (false, None)
+        };
+        if let Some(rest) = after_dmg {
+            let (subj_raw, to_opponent_only) = if let Some(s) = rest
+                .strip_suffix(" dealt to your opponents")
+                .or_else(|| rest.strip_suffix(" dealt to opponents"))
+                .or_else(|| rest.strip_suffix(" dealt to an opponent"))
+                .or_else(|| rest.strip_prefix("dealt to your opponents by "))
+                .or_else(|| rest.strip_prefix("dealt to opponents by "))
+                .or_else(|| rest.strip_prefix("dealt to an opponent by "))
+            {
+                (Some(s), true)
+            } else if let Some(s) = rest
+                .strip_suffix(" dealt")
+                .or_else(|| rest.strip_prefix("dealt by "))
+            {
+                (Some(s), false)
+            } else {
+                (None, false)
+            };
+            if let Some(s) = subj_raw {
+                return Some(resolve_damage_subject_ref(s, context).map(|subject| {
+                    ValueExpr::PlayerStat(PlayerStatExpr::DamageDealtThisTurn {
+                        subject,
+                        to_opponent_only,
+                        combat_only,
+                    })
+                }));
+            }
+        }
+    }
+
+    // 7. Spells cast matching this turn
+    if let Some(body) = norm.strip_suffix(" this turn") {
+        let rest = body
+            .strip_prefix("the number of ")
+            .or_else(|| body.strip_prefix("number of "))
+            .unwrap_or(body);
+        let spell_split = if let Some(after) = rest
+            .strip_prefix("spells ")
+            .or_else(|| rest.strip_prefix("spell "))
+        {
+            Some(("", after))
+        } else {
+            rest.split_once(" spells ")
+                .or_else(|| rest.split_once(" spell "))
+        };
+        if let Some((flt_raw, tail_raw)) = spell_split {
+            let (tail_no_zone, from_zone, implied_you) =
+                if let Some(t) = tail_raw.strip_suffix(" from your hand") {
+                    (t.trim(), Some(SourceZoneFilter::Hand), true)
+                } else if let Some(t) = tail_raw
+                    .strip_suffix(" from their hand")
+                    .or_else(|| tail_raw.strip_suffix(" from a hand"))
+                    .or_else(|| tail_raw.strip_suffix(" from hand"))
+                {
+                    (t.trim(), Some(SourceZoneFilter::Hand), false)
+                } else if let Some(t) = tail_raw.strip_suffix(" from your graveyard") {
+                    (t.trim(), Some(SourceZoneFilter::Graveyard), true)
+                } else if let Some(t) = tail_raw
+                    .strip_suffix(" from a graveyard")
+                    .or_else(|| tail_raw.strip_suffix(" from graveyards"))
+                    .or_else(|| tail_raw.strip_suffix(" from their graveyard"))
+                {
+                    (t.trim(), Some(SourceZoneFilter::Graveyard), false)
+                } else if let Some(t) = tail_raw.strip_suffix(" from exile") {
+                    (t.trim(), Some(SourceZoneFilter::Exile), false)
+                } else {
+                    (tail_raw.trim(), None, false)
+                };
+            if let Some(who_raw) = tail_no_zone
+                .strip_suffix(" cast")
+                .or_else(|| (tail_no_zone == "cast").then_some(""))
+            {
+                let who_clean = who_raw.trim();
+                let players_res = if let Some(p) = player {
+                    resolve_affected_players_ref(p, context)
+                } else if who_clean.is_empty() && implied_you {
+                    Ok(AffectedPlayers::One(ResolvingPlayer::Controller))
+                } else {
+                    parse_value_expr_affected_players(who_clean, context)
+                };
+                if let Ok(players) = players_res
+                    && let Some(filter) = parse_turn_event_filter(flt_raw, false, true, vocabulary)
+                {
+                    return Some(Ok(ValueExpr::PlayerStat(
+                        PlayerStatExpr::SpellsCastMatchingThisTurn {
+                            players,
+                            filter: Box::new(filter),
+                            from_zone,
+                        },
+                    )));
+                }
+            }
+        }
+    }
+
+    // 8. Graveyard arrivals matching this turn
+    if let Some(body) = norm.strip_suffix(" this turn") {
+        let rest = body
+            .strip_prefix("the number of ")
+            .or_else(|| body.strip_prefix("number of "))
+            .unwrap_or(body);
+        if let Some((flt_part, after_put)) = rest
+            .split_once(" that were put into ")
+            .or_else(|| rest.split_once(" that was put into "))
+            .or_else(|| rest.split_once(" put into "))
+        {
+            let (gy_part, from_battlefield_only) =
+                if let Some(g) = after_put.strip_suffix(" from the battlefield") {
+                    (g.trim(), true)
+                } else if let Some(g) = after_put.strip_suffix(" from anywhere") {
+                    (g.trim(), false)
+                } else if after_put.contains(" from ") {
+                    // Fail closed on restricted non-battlefield origins such as "from your library".
+                    return Some(Err("oracle:unsupported-value-expr"));
+                } else {
+                    (after_put.trim(), false)
+                };
+            let controller_res: Option<Result<Option<ResolvingPlayer>, &'static str>> =
+                match gy_part {
+                    "graveyards" | "a graveyard" | "any graveyard" => Some(Ok(None)),
+                    "your graveyard" => Some(Ok(Some(ResolvingPlayer::Controller))),
+                    "their graveyard" | "that player's graveyard" => {
+                        Some(resolve_that_player_for_value_expr(context, true).map(Some))
+                    }
+                    "target player's graveyard" | "target opponent's graveyard" => {
+                        Some(Ok(Some(ResolvingPlayer::TargetPlayer)))
+                    }
+                    _ => None,
+                };
+            if let Some(ctrl_res) = controller_res
+                && let Some(filter) = parse_turn_event_filter(flt_part, true, false, vocabulary)
+            {
+                return Some(ctrl_res.map(|controller| {
+                    ValueExpr::PlayerStat(PlayerStatExpr::GraveyardArrivalsMatchingThisTurn {
+                        filter: Box::new(filter),
+                        from_battlefield_only,
+                        controller,
+                    })
+                }));
+            }
+        }
+    }
+
+    // 9. Sacrificed matching this turn
+    if matches!(
+        norm,
+        "the number of permanents sacrificed this turn" | "permanent sacrificed this turn"
+    ) && player.is_none()
+    {
+        return Some(Ok(ValueExpr::PlayerStat(
+            PlayerStatExpr::SacrificedMatchingThisTurn {
+                players: AffectedPlayers::EachPlayer,
+                filter: Box::new(ObjectFilter::permanent()),
+            },
+        )));
+    }
+    if let Some(body) = norm.strip_suffix(" sacrificed this turn") {
+        let rest = body
+            .strip_prefix("the number of ")
+            .or_else(|| body.strip_prefix("number of "))
+            .unwrap_or(body)
+            .trim();
+        let (flt_raw, who_raw) = if let Some(r) = rest
+            .strip_suffix(" that were")
+            .or_else(|| rest.strip_suffix(" that was"))
+        {
+            (r.trim(), "")
+        } else {
+            let mut found = (rest, "");
+            for suffix in [
+                " your opponents have",
+                " opponents have",
+                " an opponent has",
+                " each opponent has",
+                " each other player has",
+                " other players have",
+                " target opponent has",
+                " target player has",
+                " the defending player has",
+                " defending player has",
+                " the active player has",
+                " active player has",
+                " that player has",
+                " all players have",
+                " each player has",
+                " players have",
+                " a player has",
+                " they have",
+                " you have",
+                " you've",
+                " they've",
+                " your opponents",
+                " target opponent",
+                " target player",
+                " each opponent",
+                " each other player",
+                " other players",
+                " the defending player",
+                " defending player",
+                " the active player",
+                " active player",
+                " that player",
+                " all players",
+                " each player",
+                " an opponent",
+                " opponents",
+                " a player",
+                " players",
+                " they",
+                " you",
+            ] {
+                if let Some(prefix) = rest.strip_suffix(suffix) {
+                    found = (prefix.trim(), suffix.trim());
+                    break;
+                }
+            }
+            found
+        };
+        let players_res = if who_raw.is_empty()
+            && let Some(p) = player
+        {
+            resolve_affected_players_ref(p, context)
+        } else {
+            parse_value_expr_affected_players(who_raw, context)
+        };
+        if let Ok(players) = players_res
+            && let Some(filter) = parse_turn_event_filter(flt_raw, true, false, vocabulary)
+        {
+            return Some(Ok(ValueExpr::PlayerStat(
+                PlayerStatExpr::SacrificedMatchingThisTurn {
+                    players,
+                    filter: Box::new(filter),
+                },
+            )));
+        }
+    }
+
+    None
+}
+
 fn lower_value_expr_inner(
     expr: &ValueExprAst,
     vocabulary: &CreatureTypeVocabulary,
@@ -3093,7 +3930,31 @@ fn lower_value_expr_inner(
                         ));
                     }
                 }
+                if let Some(expr) = try_lower_spells_cast_count(f, vocabulary, context)? {
+                    return Ok(expr);
+                }
                 return Err("oracle:unsupported-spell-count");
+            }
+            if f.zone == Some(ZoneFilter::Exile)
+                && !f.any_permanent
+                && !f.any_spell
+                && (f.flags.0 & AstFilterFlags::ENTERED_THIS_TURN.0) != 0
+                && (f.flags.0
+                    & !(AstFilterFlags::ENTERED_THIS_TURN.0 | AstFilterFlags::LKI_PAST_TENSE.0))
+                    == 0
+                && filter_only_has(
+                    f,
+                    FilterAllow {
+                        zone: true,
+                        flags: true,
+                        ..FilterAllow::NONE
+                    },
+                )
+            {
+                return Ok(ValueExpr::PlayerStat(PlayerStatExpr::CardsExiledThisTurn));
+            }
+            if let Some(expr) = try_lower_graveyard_arrivals_count(f, vocabulary, context)? {
+                return Ok(expr);
             }
             if let Some(zone) = f.zone {
                 let mut inner = f.as_ref().clone();
@@ -3523,11 +4384,7 @@ fn lower_value_expr_inner(
                         } else if has_obj_target {
                             ValueObjectRef::TargetObject
                         } else if in_trigger {
-                            if builder.target == BodyTarget::None {
-                                ValueObjectRef::TargetObject
-                            } else {
-                                ValueObjectRef::TriggerSubject
-                            }
+                            ValueObjectRef::TriggerSubject
                         } else if is_pronoun
                             && let Some(prior_ref) =
                                 find_prior_cost_object_ref(&builder.instructions)
@@ -3607,27 +4464,9 @@ fn lower_value_expr_inner(
             Ok(ValueExpr::aggregate(obj, st, agg))
         }
         ValueExprAst::PlayerCounterCount {
-            player: PlayerRefAst::You,
+            player,
             counter_kind,
-        } => {
-            let ck = parse_counter_kind(counter_kind).ok_or("oracle:unsupported-counter-kind")?;
-            let subject = match ck {
-                CounterKind::Experience => {
-                    spellwake_engine::program::CounterSubjectRef::ControllerExperience
-                }
-                CounterKind::Energy => {
-                    spellwake_engine::program::CounterSubjectRef::ControllerEnergy
-                }
-                CounterKind::Poison => {
-                    spellwake_engine::program::CounterSubjectRef::ControllerPoison
-                }
-                _ => return Err("oracle:unsupported-counter-kind"),
-            };
-            Ok(ValueExpr::CounterCount {
-                subject,
-                kind: None,
-            })
-        }
+        } => lower_player_counter_value_expr(*player, counter_kind, context),
         ValueExprAst::CounterCount {
             subject,
             counter_kind,
@@ -3908,6 +4747,24 @@ fn lower_value_expr_inner(
                 Err("oracle:unsupported-value-expr")
             }
         }
+        ValueExprAst::DamagePreventedThisWay => {
+            Ok(ValueExpr::event(EventValueKind::DamagePreventedThisWay))
+        }
+        ValueExprAst::DamageDealtToSubjectThisTurn(subj) => {
+            let obj_ref = match subj.as_ref() {
+                SubjectRefAst::SelfObject => ValueObjectRef::AbilitySource,
+                SubjectRefAst::AttachedHost(_) => ValueObjectRef::AttachedHost,
+                SubjectRefAst::TriggerSubject => ValueObjectRef::TriggerSubject,
+                SubjectRefAst::Anaphora(raw) => resolve_damage_subject_ref(raw, context)?,
+                _ => return Err("oracle:unsupported-value-expr"),
+            };
+            Ok(ValueExpr::PlayerStat(
+                PlayerStatExpr::DamageReceivedThisTurn {
+                    subject: obj_ref,
+                    excess_only: false,
+                },
+            ))
+        }
         ValueExprAst::EventCountThisTurn { event, player } => {
             let norm = event.trim().to_ascii_lowercase();
             match norm.as_str() {
@@ -4064,7 +4921,8 @@ fn lower_value_expr_inner(
                             .with_color(ObjectColorFilter::has(Color::Green)),
                     )))
                 }
-                _ => Err("oracle:unsupported-value-expr"),
+                other => try_lower_event_count_this_turn_ext(other, *player, vocabulary, context)
+                    .unwrap_or(Err("oracle:unsupported-value-expr")),
             }
         }
         ValueExprAst::CounterCountAmong {
@@ -4193,6 +5051,7 @@ pub(super) fn parse_counter_kind(raw: &str) -> Option<CounterKind> {
     let lower = raw.trim().to_ascii_lowercase();
     let normalized = match lower.as_str() {
         "{e}" | "e" | "energy" => "energy",
+        "{tk}" | "tk" | "ticket" | "tickets" => "ticket",
         other => other,
     };
     CounterKind::from_oracle_label(normalized)

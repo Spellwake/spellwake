@@ -225,6 +225,17 @@ impl EffectWindow {
                     }
                     (RulesInteger::from(0).minus(&amount), Some(amount))
                 }
+                CounterCostDelta::RemoveX => {
+                    let amount = chosen_x
+                        .as_ref()
+                        .filter(|x| **x >= RulesInteger::from(0))
+                        .ok_or(EffectError::InvalidCastResource)?
+                        .clone();
+                    if amount > current_count {
+                        return Err(EffectError::InvalidCastResource);
+                    }
+                    (RulesInteger::from(0).minus(&amount), Some(amount))
+                }
                 CounterCostDelta::RemoveAll => (
                     RulesInteger::from(0).minus(&current_count),
                     Some(current_count),
@@ -350,11 +361,29 @@ impl EffectWindow {
             .extra_activation_costs
             .get(&selected.id)
             .map_or(&[], Vec::as_slice);
+        let source_cost_uses_x = selected.source_cost.generic_x_symbols().is_some()
+            || matches!(
+                selected.source_cost,
+                SourceCost::Counter {
+                    delta: CounterCostDelta::RemoveX,
+                    ..
+                } | SourceCost::PayLife {
+                    amount: LifeCostAmount::ChosenX,
+                    ..
+                } | SourceCost::GraveyardPayLife {
+                    amount: LifeCostAmount::ChosenX,
+                }
+            );
         let extra_uses_x = extra_activation_costs
             .iter()
             .any(crate::activated::ExtraActivationCost::uses_chosen_x);
-        if (variable_loyalty || selected.source_cost.generic_x_symbols().is_some() || extra_uses_x)
-            != chosen_x.is_some()
+        let extra_requires_x = extra_activation_costs
+            .iter()
+            .any(extra_cost_requires_explicit_x);
+        let allows_x = variable_loyalty || source_cost_uses_x || extra_uses_x;
+        let requires_x = variable_loyalty || source_cost_uses_x || extra_requires_x;
+        if (chosen_x.is_some() && !allows_x)
+            || (chosen_x.is_none() && requires_x)
             || chosen_x.as_ref().is_some_and(|x| x < &0.into())
         {
             return Err(EffectError::InvalidCastResource);
@@ -533,8 +562,40 @@ impl EffectWindow {
             ability,
             terms.origin.clone(),
         );
+        let extra_selected_count = extra_activation_costs
+            .iter()
+            .filter(|c| c.uses_selected_objects())
+            .count();
+        let extra_has_any_number = extra_activation_costs.iter().any(|c| {
+            matches!(
+                c,
+                crate::activated::ExtraActivationCost::SacrificeAnyNumber(_)
+                    | crate::activated::ExtraActivationCost::ExileAnyNumber { .. }
+            )
+        });
+        let derived_any_number_x = if chosen_x.is_none()
+            && selected_tap_count.is_none()
+            && extra_has_any_number
+            && extra_selected_count == 1
+        {
+            match &origin {
+                ActivationOrigin::SelectedCost { objects, .. }
+                    if !selected.source_cost.uses_selected_cost_origin() =>
+                {
+                    Some(RulesInteger::from_usize(objects.len()))
+                }
+                _ => Some(0.into()),
+            }
+        } else {
+            None
+        };
+        let effective_x = chosen_x
+            .as_ref()
+            .or(selected_tap_count.as_ref())
+            .or(derived_any_number_x.as_ref());
+        let defer_x_nonzero = effective_x.is_none() && extra_has_any_number;
         if let Some(ref res) = restriction {
-            self.check_activation_restriction(
+            self.check_activation_restriction_with_x(
                 res,
                 actor,
                 source,
@@ -542,6 +603,8 @@ impl EffectWindow {
                 &evaluated,
                 turn,
                 &exhausted_id,
+                effective_x,
+                defer_x_nonzero,
             )?;
         }
         let returned_attacker = if selected.source_cost.is_ninjutsu() {
@@ -791,14 +854,24 @@ impl EffectWindow {
                             }
                         }
                         SourceCost::PayLife {
-                            amount: LifeCostAmount::Fixed(life),
+                            amount,
                             sacrifice: Some(filter),
                             ..
                         } => {
+                            let needed = match amount {
+                                LifeCostAmount::Fixed(life) => RulesInteger::from(i64::from(life)),
+                                LifeCostAmount::CommanderColors => RulesInteger::from_usize(
+                                    self.commander_mana_colors(actor)?.len(),
+                                ),
+                                LifeCostAmount::ChosenX => chosen_x
+                                    .as_ref()
+                                    .filter(|x| **x >= RulesInteger::from(0))
+                                    .ok_or(EffectError::InvalidCastResource)?
+                                    .clone(),
+                            };
                             if objects.len() != 1
-                                || self.life.get(actor).is_none_or(|total| {
-                                    total < &RulesInteger::from(i64::from(life))
-                                })
+                                || (needed.is_positive()
+                                    && self.life.get(actor).is_none_or(|total| *total < needed))
                             {
                                 return Err(EffectError::InvalidCastResource);
                             }
@@ -1085,14 +1158,59 @@ impl EffectWindow {
         } else {
             quoted
         };
+        let quoted = if granting_effect.is_none()
+            && let Some(reduction_expr) = current
+                .printed_text
+                .activation_cost_reductions
+                .get(&selected.id)
+        {
+            let ctx = crate::characteristics::WorldEvalCtx {
+                active_player: self.window.active_player(),
+                participants: self.window.participants(),
+                life: Some(&self.life),
+                combat: self.combat.as_ref(),
+                cards: self.window.cards(),
+                programs: &self.programs,
+                state: &self.characteristics,
+                objects: &evaluated.objects,
+                source,
+                controller: actor,
+                name_rules: &self.name_rules,
+                trigger_subject: None,
+                related_player: None,
+                defending_player: None,
+            };
+            let discount =
+                crate::characteristics::eval_world_value_expr(&ctx, reduction_expr).max(0.into());
+            let mut reduced = quoted;
+            reduced.generic = reduced.generic.minus(&discount).max(0.into());
+            reduced
+        } else {
+            quoted
+        };
+        let mut only_spend_mana_types = Vec::new();
+        if let Some(ref res) = restriction {
+            collect_only_spend_mana_types(res, &mut only_spend_mana_types);
+        }
         let pay = |cost: &ManaCost| {
-            self.prepare_restricted_mana_payment(
+            let spend = self.prepare_restricted_mana_payment(
                 cost,
                 payment.as_ref(),
                 actor,
                 restricted,
                 |rule| self.restriction_allows_ability(rule, current),
-            )
+            )?;
+            for required_type in &only_spend_mana_types {
+                if spend
+                    .iter()
+                    .any(|unit| unit.amount.is_positive() && unit.mana_type != *required_type)
+                {
+                    return Err(EffectError::InvalidManaPayment(
+                        ManaPaymentError::MissingRequired,
+                    ));
+                }
+            }
+            Ok(spend)
         };
         let (quoted, spend, selected_life) = if matches!(
             selected.source_cost,
@@ -1253,6 +1371,15 @@ impl EffectWindow {
             .entry(source)
             .or_insert(0);
         *activated_count = activated_count.saturating_add(1);
+        if selected.source_cost.is_from_graveyard()
+            || extra_activation_costs
+                .iter()
+                .any(crate::activated::ExtraActivationCost::is_from_graveyard)
+        {
+            next.characteristics
+                .activated_graveyard_ability_this_turn
+                .insert(actor);
+        }
         if restriction
             .as_ref()
             .is_some_and(|r| r.has_turn_activation_cap())
@@ -1370,6 +1497,19 @@ impl EffectWindow {
             } => Some(RulesInteger::from_usize(
                 next.commander_mana_colors(actor)?.len(),
             )),
+            SourceCost::PayLife {
+                amount: LifeCostAmount::ChosenX,
+                ..
+            }
+            | SourceCost::GraveyardPayLife {
+                amount: LifeCostAmount::ChosenX,
+            } => Some(
+                chosen_x
+                    .as_ref()
+                    .filter(|x| **x >= RulesInteger::from(0))
+                    .ok_or(EffectError::InvalidCastResource)?
+                    .clone(),
+            ),
             _ => None,
         }
         .or(selected_life);
@@ -1425,7 +1565,21 @@ impl EffectWindow {
                 }
                 _ => &[],
             };
-            next.pay_extra_costs_at_cut(
+            let mut reserved_unrestricted: BTreeMap<ManaType, RulesInteger> = BTreeMap::new();
+            for unit in &spend {
+                if unit.amount.is_positive() {
+                    let slot = reserved_unrestricted
+                        .entry(unit.mana_type)
+                        .or_insert_with(|| 0.into());
+                    *slot = slot.plus(&unit.amount);
+                }
+            }
+            for item in restricted {
+                if let Some(slot) = reserved_unrestricted.get_mut(&item.mana_type) {
+                    *slot = slot.minus(&item.amount).max(0.into());
+                }
+            }
+            next.pay_extra_costs_with_reserved_mana(
                 actor,
                 Some(source),
                 entry,
@@ -1434,8 +1588,20 @@ impl EffectWindow {
                 extra_selected,
                 chosen_x.as_ref(),
                 turn,
+                &reserved_unrestricted,
                 &mut append,
             )?;
+            if defer_x_nonzero
+                && restriction.as_ref().is_some_and(restriction_has_x_nonzero)
+                && !next
+                    .window
+                    .entries()
+                    .last()
+                    .and_then(|e| e.chosen_x())
+                    .is_some_and(RulesInteger::is_positive)
+            {
+                return Err(EffectError::ActivationConditionNotMet);
+            }
             cost_before = next.rules_snapshot(None)?;
         }
         let mut inline_counter_occurrence: Option<crate::occurrence::RulesOccurrence> = None;
@@ -1823,7 +1989,14 @@ impl EffectWindow {
                     tap_source: false,
                     sacrifice: None,
                     ..
-                }
+                } | SourceCost::GenericX {
+                    tap_source: false,
+                    ..
+                } | SourceCost::PayEnergy {
+                    tap_source: false,
+                    ..
+                } | SourceCost::GraveyardPayLife { .. }
+                    | SourceCost::GraveyardSelf { .. }
             ) {
             (next.window.clone(), card.clone())
         } else if let Some(destination) = sacrifice_destination {
@@ -2051,7 +2224,7 @@ impl EffectWindow {
         ))
     }
 
-    // Recursive helper forwards activation context references rather than cloning into a wrapper struct.
+    // Public-to-module wrapper preserving the existing signature for sibling callers such as mana_activation.
     #[allow(clippy::too_many_arguments)]
     pub(super) fn check_activation_restriction(
         &self,
@@ -2067,6 +2240,38 @@ impl EffectWindow {
             ActivatedAbilityId,
             crate::characteristics::ActivationOriginPath,
         ),
+    ) -> Result<(), EffectError> {
+        self.check_activation_restriction_with_x(
+            restriction,
+            actor,
+            source,
+            card,
+            evaluated,
+            turn,
+            exhausted_id,
+            None,
+            false,
+        )
+    }
+
+    // Recursive helper forwards activation context references rather than cloning into a wrapper struct.
+    #[allow(clippy::too_many_arguments)]
+    fn check_activation_restriction_with_x(
+        &self,
+        restriction: &crate::activated::ActivationRestriction,
+        actor: SeatId,
+        source: ObjectId,
+        card: &GameObject,
+        evaluated: &crate::characteristics::EvaluatedCharacteristics,
+        turn: Option<&TurnScheduler>,
+        exhausted_id: &(
+            ObjectId,
+            Option<crate::characteristics::CharacteristicTimestamp>,
+            ActivatedAbilityId,
+            crate::characteristics::ActivationOriginPath,
+        ),
+        chosen_x: Option<&RulesInteger>,
+        defer_x_nonzero: bool,
     ) -> Result<(), EffectError> {
         use crate::activated::ActivationRestriction;
         let controlled = || {
@@ -2375,9 +2580,20 @@ impl EffectWindow {
                     return Err(EffectError::ActivationConditionNotMet);
                 }
             }
+            ActivationRestriction::XNonZero
+                if !defer_x_nonzero && !chosen_x.is_some_and(RulesInteger::is_positive) =>
+            {
+                return Err(EffectError::ActivationConditionNotMet);
+            }
+            ActivationRestriction::SourceEntryOption(expected)
+                if self.characteristics.entry_option_choices.get(&source) != Some(expected) =>
+            {
+                return Err(EffectError::ActivationConditionNotMet);
+            }
+            ActivationRestriction::OnlySpendManaType(_) => {}
             ActivationRestriction::All(items) => {
                 for item in items {
-                    self.check_activation_restriction(
+                    self.check_activation_restriction_with_x(
                         item,
                         actor,
                         source,
@@ -2385,11 +2601,51 @@ impl EffectWindow {
                         evaluated,
                         turn,
                         exhausted_id,
+                        chosen_x,
+                        defer_x_nonzero,
                     )?;
                 }
             }
             _ => {}
         }
         Ok(())
+    }
+}
+
+fn collect_only_spend_mana_types(
+    restriction: &crate::activated::ActivationRestriction,
+    out: &mut Vec<ManaType>,
+) {
+    match restriction {
+        crate::activated::ActivationRestriction::OnlySpendManaType(mt) => out.push(*mt),
+        crate::activated::ActivationRestriction::All(items) => {
+            for item in items {
+                collect_only_spend_mana_types(item, out);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn restriction_has_x_nonzero(restriction: &crate::activated::ActivationRestriction) -> bool {
+    match restriction {
+        crate::activated::ActivationRestriction::XNonZero => true,
+        crate::activated::ActivationRestriction::All(items) => {
+            items.iter().any(restriction_has_x_nonzero)
+        }
+        _ => false,
+    }
+}
+
+fn extra_cost_requires_explicit_x(cost: &crate::activated::ExtraActivationCost) -> bool {
+    use crate::activated::ExtraActivationCost;
+    match cost {
+        ExtraActivationCost::SacrificeAnyNumber(_) | ExtraActivationCost::ExileAnyNumber { .. } => {
+            false
+        }
+        ExtraActivationCost::Either(a, b) => {
+            extra_cost_requires_explicit_x(a) && extra_cost_requires_explicit_x(b)
+        }
+        other => other.uses_chosen_x(),
     }
 }

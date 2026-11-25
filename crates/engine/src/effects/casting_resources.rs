@@ -463,7 +463,13 @@ impl EffectWindow {
                 CastResource::Emerge(_) => continue, // Chosen and priced when the total cost was locked.
                 CastResource::Bargain(_) => {
                     if bargained
-                        || !spell.has_keyword(KeywordAbility::Bargain)
+                        || !(spell.has_keyword(KeywordAbility::Bargain)
+                            || self.spell_has_granted_keyword(
+                                evaluated,
+                                spell,
+                                actor,
+                                KeywordAbility::Bargain,
+                            ))
                         || subject.zone != ObjectZone::Battlefield
                         || subject.controller != Some(actor)
                         || !(physical.is_token()
@@ -489,11 +495,23 @@ impl EffectWindow {
                                 })
                         }
                         CastResource::Retrace(_) => {
-                            spell.has_keyword(KeywordAbility::Retrace)
+                            (spell.has_keyword(KeywordAbility::Retrace)
+                                || self.spell_has_granted_keyword(
+                                    evaluated,
+                                    spell,
+                                    actor,
+                                    KeywordAbility::Retrace,
+                                ))
                                 && subject.has_type(CardType::Land)
                         }
                         _ => {
-                            spell.has_keyword(KeywordAbility::JumpStart)
+                            (spell.has_keyword(KeywordAbility::JumpStart)
+                                || self.spell_has_granted_keyword(
+                                    evaluated,
+                                    spell,
+                                    actor,
+                                    KeywordAbility::JumpStart,
+                                ))
                                 && (spell.has_type(CardType::Instant)
                                     || spell.has_type(CardType::Sorcery))
                         }
@@ -539,11 +557,35 @@ impl EffectWindow {
                 {
                     continue;
                 }
-                CastResource::ExtraCost(_) if !spell.printed_text.extra_cast_costs.is_empty() => {
+                CastResource::ExtraCost(_)
+                    if !spell.printed_text.extra_cast_costs.is_empty()
+                        || matches!(
+                            spell.printed_text.graveyard_self_cast,
+                            Some(crate::program::GraveyardSelfCast::WithExtraCost(_))
+                        )
+                        || spell.printed_text.additional_cast_costs.iter().any(|cost| {
+                            matches!(
+                                cost,
+                                crate::program::AdditionalCastCost::KickerExtra { extra, .. }
+                                    if !extra.is_empty()
+                            )
+                        })
+                        || matches!(
+                            &spell.printed_text.conditional_cost,
+                            Some(crate::program::ConditionalCastCost::Alternative { extra, .. })
+                                if !extra.is_empty()
+                        ) =>
+                {
                     continue;
                 }
                 CastResource::Delve(_)
-                    if spell.has_keyword(KeywordAbility::Delve)
+                    if (spell.has_keyword(KeywordAbility::Delve)
+                        || self.spell_has_granted_keyword(
+                            evaluated,
+                            spell,
+                            actor,
+                            KeywordAbility::Delve,
+                        ))
                         && physical.card_id().is_some()
                         && physical.zone() == ObjectZone::Graveyard(actor) =>
                 {
@@ -552,14 +594,26 @@ impl EffectWindow {
                 CastResource::Improvise(_)
                     if (spell.has_keyword(KeywordAbility::Improvise)
                         || (!spell.has_type(CardType::Artifact)
-                            && evaluated.grants_improvise(actor)))
+                            && evaluated.grants_improvise(actor))
+                        || self.spell_has_granted_keyword(
+                            evaluated,
+                            spell,
+                            actor,
+                            KeywordAbility::Improvise,
+                        ))
                         && untapped
                         && subject.has_type(CardType::Artifact) =>
                 {
                     &mut cost.generic
                 }
                 CastResource::Convoke { color, .. }
-                    if spell.has_keyword(KeywordAbility::Convoke)
+                    if (spell.has_keyword(KeywordAbility::Convoke)
+                        || self.spell_has_granted_keyword(
+                            evaluated,
+                            spell,
+                            actor,
+                            KeywordAbility::Convoke,
+                        ))
                         && untapped
                         && subject.is_creature() =>
                 {
@@ -762,15 +816,18 @@ impl EffectWindow {
                         })
                         .collect::<Vec<_>>();
                     if self.begin_cast_cost_replacement(entry, resource, &objects)? {
-                        return Ok(resources[index..]
-                            .iter()
-                            .copied()
-                            .filter(|r| {
-                                !hand_exiles_paid
-                                    || !matches!(r, CastResource::ExileHandForAlternative(_))
-                            })
-                            .filter(|r| !escape_paid || !matches!(r, CastResource::Escape(_)))
-                            .collect());
+                        return Ok(Self::preserve_earlier_extra_costs(
+                            &resources[..index],
+                            resources[index..]
+                                .iter()
+                                .copied()
+                                .filter(|r| {
+                                    !hand_exiles_paid
+                                        || !matches!(r, CastResource::ExileHandForAlternative(_))
+                                })
+                                .filter(|r| !escape_paid || !matches!(r, CastResource::Escape(_)))
+                                .collect(),
+                        ));
                     }
                     let before = self.rules_snapshot(turn)?;
                     let mut moves = Vec::new();
@@ -827,18 +884,21 @@ impl EffectWindow {
                     )?;
                     flashback_sacrifice_paid = true;
                     if self.linked_return_work.is_some() {
-                        return Ok(resources[index + 1..]
-                            .iter()
-                            .copied()
-                            .filter(|r| {
-                                !hand_exiles_paid
-                                    || !matches!(r, CastResource::ExileHandForAlternative(_))
-                            })
-                            .filter(|r| {
-                                !matches!(r, CastResource::FlashbackSacrifice(_))
-                                    && (!escape_paid || !matches!(r, CastResource::Escape(_)))
-                            })
-                            .collect());
+                        return Ok(Self::preserve_earlier_extra_costs(
+                            &resources[..index],
+                            resources[index + 1..]
+                                .iter()
+                                .copied()
+                                .filter(|r| {
+                                    !hand_exiles_paid
+                                        || !matches!(r, CastResource::ExileHandForAlternative(_))
+                                })
+                                .filter(|r| {
+                                    !matches!(r, CastResource::FlashbackSacrifice(_))
+                                        && (!escape_paid || !matches!(r, CastResource::Escape(_)))
+                                })
+                                .collect(),
+                        ));
                     }
                 }
                 continue;
@@ -865,11 +925,14 @@ impl EffectWindow {
                     .collect::<Vec<_>>();
                 let ids = selected.iter().map(|r| r.object()).collect::<Vec<_>>();
                 if self.begin_cast_cost_replacement(entry, resource, &ids)? {
-                    return Ok(resources[index..]
-                        .iter()
-                        .copied()
-                        .filter(still_unpaid)
-                        .collect());
+                    return Ok(Self::preserve_earlier_extra_costs(
+                        &resources[..index],
+                        resources[index..]
+                            .iter()
+                            .copied()
+                            .filter(still_unpaid)
+                            .collect(),
+                    ));
                 }
                 let before = self.rules_snapshot(turn)?;
                 let Some(StackKind::CardSpell(spell)) = self
@@ -953,12 +1016,15 @@ impl EffectWindow {
                         },
                     )?;
                 }
-                let remaining = resources[index + 1..]
-                    .iter()
-                    .copied()
-                    .filter(still_unpaid)
-                    .filter(|resource| !same_cost(resource))
-                    .collect::<Vec<_>>();
+                let remaining = Self::preserve_earlier_extra_costs(
+                    &resources[..index],
+                    resources[index + 1..]
+                        .iter()
+                        .copied()
+                        .filter(still_unpaid)
+                        .filter(|resource| !same_cost(resource))
+                        .collect::<Vec<_>>(),
+                );
                 return if self.linked_return_work.is_some() {
                     Ok(remaining)
                 } else {
@@ -1017,18 +1083,22 @@ impl EffectWindow {
                     | CastResource::SacrificeForSpell(_)
             ) && self.begin_cast_cost_replacement(entry, resource, &[resource.object()])?
             {
-                return Ok(resources[index..]
-                    .iter()
-                    .copied()
-                    .filter(|r| {
-                        !hand_exiles_paid || !matches!(r, CastResource::ExileHandForAlternative(_))
-                    })
-                    .filter(|r| {
-                        (!escape_paid || !matches!(r, CastResource::Escape(_)))
-                            && (!flashback_sacrifice_paid
-                                || !matches!(r, CastResource::FlashbackSacrifice(_)))
-                    })
-                    .collect());
+                return Ok(Self::preserve_earlier_extra_costs(
+                    &resources[..index],
+                    resources[index..]
+                        .iter()
+                        .copied()
+                        .filter(|r| {
+                            !hand_exiles_paid
+                                || !matches!(r, CastResource::ExileHandForAlternative(_))
+                        })
+                        .filter(|r| {
+                            (!escape_paid || !matches!(r, CastResource::Escape(_)))
+                                && (!flashback_sacrifice_paid
+                                    || !matches!(r, CastResource::FlashbackSacrifice(_)))
+                        })
+                        .collect(),
+                ));
             }
             let madness = self.settled_cast_cost_madness.remove(&resource.object());
             let replacement = if matches!(
@@ -1132,20 +1202,128 @@ impl EffectWindow {
                 },
             )?;
             if self.linked_return_work.is_some() {
-                return Ok(resources[index + 1..]
-                    .iter()
-                    .copied()
-                    .filter(|r| {
-                        !hand_exiles_paid || !matches!(r, CastResource::ExileHandForAlternative(_))
-                    })
-                    .filter(|r| {
-                        (!escape_paid || !matches!(r, CastResource::Escape(_)))
-                            && (!flashback_sacrifice_paid
-                                || !matches!(r, CastResource::FlashbackSacrifice(_)))
-                    })
-                    .collect());
+                return Ok(Self::preserve_earlier_extra_costs(
+                    &resources[..index],
+                    resources[index + 1..]
+                        .iter()
+                        .copied()
+                        .filter(|r| {
+                            !hand_exiles_paid
+                                || !matches!(r, CastResource::ExileHandForAlternative(_))
+                        })
+                        .filter(|r| {
+                            (!escape_paid || !matches!(r, CastResource::Escape(_)))
+                                && (!flashback_sacrifice_paid
+                                    || !matches!(r, CastResource::FlashbackSacrifice(_)))
+                        })
+                        .collect(),
+                ));
             }
         }
+        self.pay_supplementary_cast_extra_costs(resources, entry, turn, append)?;
         Ok(Vec::new())
+    }
+
+    fn preserve_earlier_extra_costs(
+        prefix: &[CastResource],
+        tail: Vec<CastResource>,
+    ) -> Vec<CastResource> {
+        let mut preserved: Vec<CastResource> = prefix
+            .iter()
+            .copied()
+            .filter(|r| matches!(r, CastResource::ExtraCost(_)))
+            .collect();
+        preserved.extend(tail);
+        preserved
+    }
+
+    fn pay_supplementary_cast_extra_costs(
+        &mut self,
+        resources: &[CastResource],
+        entry: StackEntryId,
+        turn: Option<&TurnScheduler>,
+        append: &mut RulesJournal,
+    ) -> Result<(), EffectError> {
+        let Some(stack_entry) = self
+            .window
+            .entries()
+            .iter()
+            .find(|e| e.id() == entry)
+            .cloned()
+        else {
+            return Ok(());
+        };
+        let Some(spell_id) = self.window.spell_object(&stack_entry) else {
+            return Ok(());
+        };
+        let Some(program) = self.copiable_program(spell_id).cloned() else {
+            return Ok(());
+        };
+        let mut supplementary = Vec::new();
+        if stack_entry.paid_conditional_cost()
+            && let Some(crate::program::ConditionalCastCost::Alternative { extra, .. }) =
+                &program.conditional_cost
+        {
+            supplementary.extend(extra.iter().cloned());
+        }
+        for &index in stack_entry.kicker_choices().keys() {
+            if let Some(crate::program::AdditionalCastCost::KickerExtra { extra, .. }) =
+                program.additional_cast_costs.get(index)
+            {
+                supplementary.extend(extra.iter().cloned());
+            }
+        }
+        let paid_other_gy_alt = stack_entry.paid_conditional_cost()
+            && matches!(
+                &program.conditional_cost,
+                Some(
+                    crate::program::ConditionalCastCost::Escape { .. }
+                        | crate::program::ConditionalCastCost::Mayhem(_)
+                        | crate::program::ConditionalCastCost::Harmonize(_)
+                )
+            );
+        if stack_entry.cast_from_graveyard
+            && !stack_entry.cast_with_flashback()
+            && !stack_entry.cast_with_jump_start()
+            && !stack_entry.exiles_if_put_into_graveyard()
+            && !paid_other_gy_alt
+            && !self.source_cast_pending.contains_key(&entry)
+            && !resources
+                .iter()
+                .any(|r| matches!(r, CastResource::Retrace(_)))
+            && let Some(crate::program::GraveyardSelfCast::WithExtraCost(extra)) =
+                &program.graveyard_self_cast
+        {
+            supplementary.extend(extra.iter().cloned());
+        }
+        let extra_objects: Vec<ObjectId> = resources
+            .iter()
+            .filter_map(|r| match r {
+                CastResource::ExtraCost(id) => Some(*id),
+                _ => None,
+            })
+            .collect();
+        if supplementary.is_empty() {
+            if program.extra_cast_costs.is_empty() && !extra_objects.is_empty() {
+                return Err(EffectError::InvalidCastResource);
+            }
+            return Ok(());
+        }
+        let selected_objects: &[ObjectId] = if program.extra_cast_costs.is_empty() {
+            &extra_objects
+        } else {
+            &[]
+        };
+        self.pay_extra_costs_at_cut(
+            stack_entry.controller(),
+            None,
+            entry,
+            EventCause::CastLifePayment { entry },
+            &supplementary,
+            selected_objects,
+            stack_entry.chosen_x(),
+            turn,
+            append,
+        )
     }
 }
