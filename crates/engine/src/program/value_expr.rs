@@ -191,6 +191,15 @@ pub enum SourceStateExpr {
     EnteredFromZone(super::SourceZoneFilter),
 }
 
+/// Coarse turn phase tested by [`PlayerStatExpr::IsInPhase`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PhaseCheck {
+    Beginning,
+    Main,
+    Combat,
+    Ending,
+}
+
 /// Turn-history statistic checked across active opponents.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum OpponentTurnStat {
@@ -339,6 +348,33 @@ pub enum PlayerStatExpr {
         player: ResolvingPlayer,
         filter: Box<ObjectFilter>,
         stat: ObjectStatKind,
+    },
+    /// `1` if `player` has the most life among active players (or tied when `allow_tie`), else `0`.
+    PlayerHasMostLife {
+        player: ResolvingPlayer,
+        allow_tie: bool,
+    },
+    /// `1` if `player` has the most objects matching `filter` in `zone` (or tied when `allow_tie`), else `0`.
+    PlayerControlsMost {
+        player: ResolvingPlayer,
+        zone: ValueZone,
+        filter: Box<ObjectFilter>,
+        allow_tie: bool,
+    },
+    /// `1` if the current turn step equals `step` (and active player matches `player` when `Some`), else `0`.
+    IsInStep {
+        step: crate::turn::Step,
+        player: Option<ResolvingPlayer>,
+    },
+    /// `1` if the current turn phase equals `phase` (and active player matches `player` when `Some`), else `0`.
+    IsInPhase {
+        phase: PhaseCheck,
+        player: Option<ResolvingPlayer>,
+    },
+    /// Number of creatures matching `filter` that attacked under `players`' control this turn.
+    AttackedMatchingThisTurn {
+        players: super::AffectedPlayers,
+        filter: Box<ObjectFilter>,
     },
 }
 
@@ -840,7 +876,8 @@ impl ValueExpr {
                 PlayerStatExpr::SpellsCastMatchingThisTurn {
                     players, filter, ..
                 }
-                | PlayerStatExpr::SacrificedMatchingThisTurn { players, filter } => {
+                | PlayerStatExpr::SacrificedMatchingThisTurn { players, filter }
+                | PlayerStatExpr::AttackedMatchingThisTurn { players, filter } => {
                     let players_ok = match players {
                         super::AffectedPlayers::One(p) => world_player(*p),
                         _ => true,
@@ -853,6 +890,26 @@ impl ValueExpr {
                 PlayerStatExpr::ControlsGreatestStat { player, filter, .. } => {
                     world_player(*player) && world_filter(filter.as_ref())
                 }
+                PlayerStatExpr::PlayerHasMostLife { player, .. } => world_player(*player),
+                PlayerStatExpr::PlayerControlsMost {
+                    player,
+                    zone,
+                    filter,
+                    ..
+                } => {
+                    let zone_ok = match *zone {
+                        ValueZone::Battlefield
+                        | ValueZone::AllGraveyards
+                        | ValueZone::Exile(None) => true,
+                        ValueZone::Graveyard(p)
+                        | ValueZone::Hand(p)
+                        | ValueZone::Library(p)
+                        | ValueZone::Exile(Some(p)) => world_player(p),
+                    };
+                    zone_ok && world_player(*player) && world_filter(filter.as_ref())
+                }
+                PlayerStatExpr::IsInStep { player, .. }
+                | PlayerStatExpr::IsInPhase { player, .. } => player.is_none_or(world_player),
                 PlayerStatExpr::DamageDealtThisTurn { subject, .. }
                 | PlayerStatExpr::DamageReceivedThisTurn { subject, .. } => matches!(
                     subject,
@@ -1003,7 +1060,8 @@ impl ValueExpr {
                 PlayerStatExpr::SpellsCastMatchingThisTurn {
                     players, filter, ..
                 }
-                | PlayerStatExpr::SacrificedMatchingThisTurn { players, filter } => {
+                | PlayerStatExpr::SacrificedMatchingThisTurn { players, filter }
+                | PlayerStatExpr::AttackedMatchingThisTurn { players, filter } => {
                     let players_ok = match players {
                         super::AffectedPlayers::One(p) => trig_player(*p),
                         _ => true,
@@ -1016,6 +1074,26 @@ impl ValueExpr {
                 PlayerStatExpr::ControlsGreatestStat { player, filter, .. } => {
                     trig_player(*player) && world_filter(filter.as_ref())
                 }
+                PlayerStatExpr::PlayerHasMostLife { player, .. } => trig_player(*player),
+                PlayerStatExpr::PlayerControlsMost {
+                    player,
+                    zone,
+                    filter,
+                    ..
+                } => {
+                    let zone_ok = match *zone {
+                        ValueZone::Battlefield
+                        | ValueZone::AllGraveyards
+                        | ValueZone::Exile(None) => true,
+                        ValueZone::Graveyard(p)
+                        | ValueZone::Hand(p)
+                        | ValueZone::Library(p)
+                        | ValueZone::Exile(Some(p)) => trig_player(p),
+                    };
+                    zone_ok && trig_player(*player) && world_filter(filter.as_ref())
+                }
+                PlayerStatExpr::IsInStep { player, .. }
+                | PlayerStatExpr::IsInPhase { player, .. } => player.is_none_or(trig_player),
                 PlayerStatExpr::DamageDealtThisTurn { subject, .. }
                 | PlayerStatExpr::DamageReceivedThisTurn { subject, .. } => matches!(
                     subject,
@@ -1119,7 +1197,9 @@ impl ValueExpr {
                 PlayerStatExpr::SpellsCastMatchingThisTurn { filter, .. }
                 | PlayerStatExpr::GraveyardArrivalsMatchingThisTurn { filter, .. }
                 | PlayerStatExpr::SacrificedMatchingThisTurn { filter, .. }
-                | PlayerStatExpr::ControlsGreatestStat { filter, .. },
+                | PlayerStatExpr::ControlsGreatestStat { filter, .. }
+                | PlayerStatExpr::PlayerControlsMost { filter, .. }
+                | PlayerStatExpr::AttackedMatchingThisTurn { filter, .. },
             ) => filter.validate_vocabulary(vocabulary),
             Self::PartyCount(roles) => {
                 if roles.iter().any(|ct| vocabulary.label(*ct).is_none()) {
@@ -1169,7 +1249,9 @@ impl ValueExpr {
                 PlayerStatExpr::SpellsCastMatchingThisTurn { filter, .. }
                 | PlayerStatExpr::GraveyardArrivalsMatchingThisTurn { filter, .. }
                 | PlayerStatExpr::SacrificedMatchingThisTurn { filter, .. }
-                | PlayerStatExpr::ControlsGreatestStat { filter, .. },
+                | PlayerStatExpr::ControlsGreatestStat { filter, .. }
+                | PlayerStatExpr::PlayerControlsMost { filter, .. }
+                | PlayerStatExpr::AttackedMatchingThisTurn { filter, .. },
             ) => filter.validate_vocabulary(vocabulary),
             Self::PartyCount(roles) => {
                 if roles.iter().any(|ct| vocabulary.label(*ct).is_none()) {
@@ -1284,19 +1366,46 @@ impl ValueExpr {
                     | PlayerStatExpr::LandsEnteredThisTurn(r)
                     | PlayerStatExpr::ActivatedGraveyardAbilityThisTurn(r)
                     | PlayerStatExpr::PlayerLifeLostLastTurn(r)
-                    | PlayerStatExpr::ControlsGreatestStat { player: r, .. } => role_uses(*r),
-                    PlayerStatExpr::SpellsCastMatchingThisTurn {
-                        players: super::AffectedPlayers::One(r),
+                    | PlayerStatExpr::PlayerHasMostLife { player: r, .. } => role_uses(*r),
+                    PlayerStatExpr::ControlsGreatestStat {
+                        player: r, filter, ..
+                    } => role_uses(*r) || filter.has_target_player(),
+                    PlayerStatExpr::PlayerControlsMost {
+                        player: r,
+                        zone,
+                        filter,
                         ..
+                    } => {
+                        role_uses(*r)
+                            || filter.has_target_player()
+                            || matches!(
+                                zone,
+                                ValueZone::Hand(p)
+                                    | ValueZone::Graveyard(p)
+                                    | ValueZone::Library(p)
+                                    | ValueZone::Exile(Some(p))
+                                    if role_uses(*p)
+                            )
                     }
-                    | PlayerStatExpr::SacrificedMatchingThisTurn {
-                        players: super::AffectedPlayers::One(r),
-                        ..
+                    PlayerStatExpr::IsInStep {
+                        player: Some(r), ..
+                    }
+                    | PlayerStatExpr::IsInPhase {
+                        player: Some(r), ..
                     } => role_uses(*r),
+                    PlayerStatExpr::SpellsCastMatchingThisTurn {
+                        players, filter, ..
+                    }
+                    | PlayerStatExpr::SacrificedMatchingThisTurn { players, filter }
+                    | PlayerStatExpr::AttackedMatchingThisTurn { players, filter } => {
+                        matches!(players, super::AffectedPlayers::One(r) if role_uses(*r))
+                            || filter.has_target_player()
+                    }
                     PlayerStatExpr::GraveyardArrivalsMatchingThisTurn {
-                        controller: Some(r),
+                        controller,
+                        filter,
                         ..
-                    } => role_uses(*r),
+                    } => controller.is_some_and(role_uses) || filter.has_target_player(),
                     PlayerStatExpr::DamageDealtThisTurn {
                         subject: ValueObjectRef::TargetObject,
                         ..
@@ -1470,9 +1579,37 @@ impl ValueExpr {
                 | PlayerStatExpr::PlayerGraveyardSize(r)
                 | PlayerStatExpr::LandsEnteredThisTurn(r)
                 | PlayerStatExpr::ActivatedGraveyardAbilityThisTurn(r)
-                | PlayerStatExpr::PlayerLifeLostLastTurn(r) => role_family(*r),
+                | PlayerStatExpr::PlayerLifeLostLastTurn(r)
+                | PlayerStatExpr::PlayerHasMostLife { player: r, .. } => role_family(*r),
+                PlayerStatExpr::IsInStep { player, .. }
+                | PlayerStatExpr::IsInPhase { player, .. } => {
+                    if let Some(r) = player {
+                        role_family(*r)
+                    } else {
+                        Ok(None)
+                    }
+                }
                 PlayerStatExpr::ControlsGreatestStat { player, filter, .. } => {
                     let mut out = role_family(*player)?;
+                    if filter.has_target_player() {
+                        merge(&mut out, Some(OperandFamily::Player))?;
+                    }
+                    Ok(out)
+                }
+                PlayerStatExpr::PlayerControlsMost {
+                    player,
+                    zone,
+                    filter,
+                    ..
+                } => {
+                    let mut out = role_family(*player)?;
+                    if let ValueZone::Hand(r)
+                    | ValueZone::Graveyard(r)
+                    | ValueZone::Library(r)
+                    | ValueZone::Exile(Some(r)) = zone
+                    {
+                        merge(&mut out, role_family(*r)?)?;
+                    }
                     if filter.has_target_player() {
                         merge(&mut out, Some(OperandFamily::Player))?;
                     }
@@ -1481,7 +1618,8 @@ impl ValueExpr {
                 PlayerStatExpr::SpellsCastMatchingThisTurn {
                     players, filter, ..
                 }
-                | PlayerStatExpr::SacrificedMatchingThisTurn { players, filter } => {
+                | PlayerStatExpr::SacrificedMatchingThisTurn { players, filter }
+                | PlayerStatExpr::AttackedMatchingThisTurn { players, filter } => {
                     let mut out = if let super::AffectedPlayers::One(r) = players {
                         role_family(*r)?
                     } else {
@@ -1632,7 +1770,9 @@ impl ValueExpr {
                 PlayerStatExpr::SpellsCastMatchingThisTurn { filter, .. }
                 | PlayerStatExpr::GraveyardArrivalsMatchingThisTurn { filter, .. }
                 | PlayerStatExpr::SacrificedMatchingThisTurn { filter, .. }
-                | PlayerStatExpr::ControlsGreatestStat { filter, .. },
+                | PlayerStatExpr::ControlsGreatestStat { filter, .. }
+                | PlayerStatExpr::PlayerControlsMost { filter, .. }
+                | PlayerStatExpr::AttackedMatchingThisTurn { filter, .. },
             ) => filter.rewrite_creature_type(from, to),
             Self::Literal(_)
             | Self::CountOtherSharingSourceSubtype
@@ -2131,10 +2271,12 @@ impl ValueExpr {
                 | PlayerStatExpr::CardsExiledThisTurn => Ok(()),
                 PlayerStatExpr::SpellsCastMatchingThisTurn { filter, .. }
                 | PlayerStatExpr::GraveyardArrivalsMatchingThisTurn { filter, .. }
-                | PlayerStatExpr::SacrificedMatchingThisTurn { filter, .. } => filter
+                | PlayerStatExpr::SacrificedMatchingThisTurn { filter, .. }
+                | PlayerStatExpr::AttackedMatchingThisTurn { filter, .. } => filter
                     .validate_vocabulary(vocabulary)
                     .map_err(|_| DefinitionError::InvalidInstruction),
-                PlayerStatExpr::ControlsGreatestStat { player, filter, .. } => {
+                PlayerStatExpr::ControlsGreatestStat { player, filter, .. }
+                | PlayerStatExpr::PlayerControlsMost { player, filter, .. } => {
                     filter
                         .validate_vocabulary(vocabulary)
                         .map_err(|_| DefinitionError::InvalidInstruction)?;
@@ -2161,6 +2303,33 @@ impl ValueExpr {
                     } else {
                         Err(DefinitionError::UnboundResolvingPlayer)
                     }
+                }
+                PlayerStatExpr::IsInStep { player, .. }
+                | PlayerStatExpr::IsInPhase { player, .. } => {
+                    if let Some(role) = player
+                        && !matches!(
+                            role,
+                            ResolvingPlayer::Controller
+                                | ResolvingPlayer::TargetPlayer
+                                | ResolvingPlayer::TargetController
+                                | ResolvingPlayer::TargetOwner
+                                | ResolvingPlayer::TargetSpellController
+                                | ResolvingPlayer::UniqueRelatedPlayer
+                                | ResolvingPlayer::ActivePlayer
+                                | ResolvingPlayer::EnchantedPlayer
+                                | ResolvingPlayer::AttachedHostController
+                                | ResolvingPlayer::TriggerSubjectController
+                                | ResolvingPlayer::TriggerSubjectOwner
+                                | ResolvingPlayer::SourceChosenPlayer
+                                | ResolvingPlayer::DefendingPlayer
+                                | ResolvingPlayer::ChosenPlayer
+                                | ResolvingPlayer::LoopPlayer
+                                | ResolvingPlayer::RandomOpponent
+                        )
+                    {
+                        return Err(DefinitionError::UnboundResolvingPlayer);
+                    }
+                    Ok(())
                 }
                 PlayerStatExpr::DamageDealtThisTurn { subject, .. }
                 | PlayerStatExpr::DamageReceivedThisTurn { subject, .. } => match subject {
@@ -2193,7 +2362,8 @@ impl ValueExpr {
                 | PlayerStatExpr::PlayerGraveyardSize(role)
                 | PlayerStatExpr::LandsEnteredThisTurn(role)
                 | PlayerStatExpr::ActivatedGraveyardAbilityThisTurn(role)
-                | PlayerStatExpr::PlayerLifeLostLastTurn(role) => {
+                | PlayerStatExpr::PlayerLifeLostLastTurn(role)
+                | PlayerStatExpr::PlayerHasMostLife { player: role, .. } => {
                     if matches!(
                         role,
                         ResolvingPlayer::Controller
@@ -2451,7 +2621,9 @@ impl ValueExpr {
                 PlayerStatExpr::SpellsCastMatchingThisTurn { filter, .. }
                 | PlayerStatExpr::GraveyardArrivalsMatchingThisTurn { filter, .. }
                 | PlayerStatExpr::SacrificedMatchingThisTurn { filter, .. }
-                | PlayerStatExpr::ControlsGreatestStat { filter, .. } => filter
+                | PlayerStatExpr::ControlsGreatestStat { filter, .. }
+                | PlayerStatExpr::PlayerControlsMost { filter, .. }
+                | PlayerStatExpr::AttackedMatchingThisTurn { filter, .. } => filter
                     .validate_vocabulary(vocabulary)
                     .map_err(|_| DefinitionError::InvalidInstruction),
                 _ => Ok(()),

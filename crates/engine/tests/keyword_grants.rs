@@ -271,7 +271,7 @@ fn one_ability_component_removes_printed_abilities_then_grants_its_own_keywords(
                         granted_exalted: 0,
                         granted_toxic: None,
                         grants_unblockable: false,
-                        granted_trigger: None,
+                        granted_triggers: vec![],
                         granted_combat_keywords: vec![],
                         granted_keywords: BTreeSet::from([Haste, Vigilance]),
                         suppressed_keywords: BTreeSet::new(),

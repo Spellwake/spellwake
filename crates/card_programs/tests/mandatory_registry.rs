@@ -295,6 +295,7 @@ fn contract_program(raw: &Value, vocabulary: &CreatureTypeVocabulary) -> Program
             "Spell" => ProgramKind::Spell(SpellDefinition {
                 modes: None,
                 cost: cost(&raw["kind"]["cost"]),
+                uncastable_mana_cost: false,
                 body: contract_body(&raw["kind"]["body"], vocabulary),
             }),
             _ => panic!("unlisted frozen program kind"),

@@ -475,8 +475,8 @@ pub struct AbilityChange {
     pub granted_exalted: u16,
     /// Grants the static ability that this creature cannot be blocked.
     pub grants_unblockable: bool,
-    /// Triggered ability granted by the same layer-six effect as the keywords.
-    pub granted_trigger: Option<Box<crate::program::TriggeredAbility>>,
+    /// Triggered abilities granted by the same layer-six effect as the keywords.
+    pub granted_triggers: Vec<crate::program::TriggeredAbility>,
     /// Total value of toxic instances granted by this effect, if any.
     pub granted_toxic: Option<RulesInteger>,
     /// Ordered, independently triggering keyword instances granted by this effect.
@@ -653,6 +653,8 @@ pub enum BlockingRestriction {
     CanAttackAsThoughNoDefender,
     /// Creature must block each combat if able (CR 509.1c).
     MustBlockEachCombatIfAble,
+    /// Creature must attack each combat if able (CR 508.1d).
+    MustAttackEachCombatIfAble,
     /// Authored restriction: affected blocker cannot block the ability source.
     CannotBlockSource,
     /// Resolved restriction: affected blocker cannot block this exact attacking object.
@@ -728,6 +730,10 @@ pub enum ResolvedPart {
     BlockingRestriction(BlockingRestriction),
     /// Layer 6 targeting restriction preventing spells/abilities of the specified colors from targeting this permanent.
     CannotBeTargetedByColors(crate::program::ColorMask),
+    /// Layer 6 targeting restriction preventing spells (but not abilities) of the specified colors from targeting this permanent.
+    CannotBeTargetedBySpellsOfColors(crate::program::ColorMask),
+    /// Layer 6 effect granting a static restriction to this permanent.
+    GrantRestriction(Box<StaticRestriction>),
     /// Multiple Layer 6 ability parts bundled by characteristic evaluation for a single effect.
     CompoundAbilities(Vec<ResolvedPart>),
     SetPT(PowerToughness),
@@ -753,6 +759,8 @@ impl ResolvedPart {
             | Self::Abilities(_)
             | Self::BlockingRestriction(_)
             | Self::CannotBeTargetedByColors(_)
+            | Self::CannotBeTargetedBySpellsOfColors(_)
+            | Self::GrantRestriction(_)
             | Self::CompoundAbilities(_) => CharacteristicBucket::Abilities,
             Self::SetPT(_) | Self::SetToughness(_) => CharacteristicBucket::SetPT,
             Self::ModifyPT(_) => CharacteristicBucket::ModifyPT,
@@ -803,6 +811,8 @@ pub enum ResolvedPartSpec {
     ProtectionFromEachOpponent,
     /// Layer 6 targeting restriction preventing spells/abilities of `ColorMask` from targeting affected permanents.
     CannotBeTargetedByColors(crate::program::ColorMask),
+    /// Layer 6 targeting restriction preventing spells (but not abilities) of `ColorMask` from targeting affected permanents.
+    CannotBeTargetedBySpellsOfColors(crate::program::ColorMask),
     /// Materializes `BlockingRestriction::MustBlockObject(id)` for a subject resolved during resolution (e.g. CreatedTokens).
     MustBlockSubject(crate::program::MoveSubjectRef),
     SetPT(PowerToughness),
@@ -838,6 +848,7 @@ impl ResolvedPartSpec {
             | Self::BlockingRestriction(_)
             | Self::ProtectionFromEachOpponent
             | Self::CannotBeTargetedByColors(_)
+            | Self::CannotBeTargetedBySpellsOfColors(_)
             | Self::MustBlockSubject(_) => CharacteristicBucket::Abilities,
             Self::SetPT(_) | Self::SetPTExpr { .. } => CharacteristicBucket::SetPT,
             Self::ModifyPT(_) | Self::ModifyPTExpr { .. } => CharacteristicBucket::ModifyPT,
@@ -897,6 +908,8 @@ pub struct PermanentSelector {
     pub any_creature_subtypes: BTreeSet<CreatureTypeId>,
     pub forbidden_creature_subtype: Option<CreatureTypeId>,
     pub land_subtype: Option<LandType>,
+    /// Disjunctive land-subtype predicate: when nonempty, recipient must have at least one of these land subtypes.
+    pub any_land_subtypes: BTreeSet<LandType>,
     pub color: ColorFilter,
     pub name: NameFilter,
     pub controller: ControllerSelector,
@@ -978,6 +991,7 @@ impl Default for PermanentSelector {
             any_creature_subtypes: BTreeSet::new(),
             forbidden_creature_subtype: None,
             land_subtype: None,
+            any_land_subtypes: BTreeSet::new(),
             color: ColorFilter::Any,
             name: NameFilter::Any,
             controller: ControllerSelector::Any,
@@ -1265,6 +1279,8 @@ pub enum StaticPart {
     GrantProtectionChosenPlayer,
     Abilities(AbilityChange),
     BlockingRestriction(BlockingRestriction),
+    /// Layer 6 effect granting a static restriction to affected permanents (for example The Book of Exalted Deeds).
+    GrantRestriction(Box<StaticRestriction>),
     /// Set each recipient’s base power and toughness to its own mana value.
     SetPTToOwnManaValue,
     SetPT(NumericPair),
@@ -1290,7 +1306,8 @@ impl StaticPart {
             | Self::GrantProtectionChosenColor
             | Self::GrantProtectionChosenPlayer
             | Self::Abilities(_)
-            | Self::BlockingRestriction(_) => CharacteristicBucket::Abilities,
+            | Self::BlockingRestriction(_)
+            | Self::GrantRestriction(_) => CharacteristicBucket::Abilities,
             Self::SetPT(_) | Self::SetPTToOwnManaValue => CharacteristicBucket::SetPT,
             Self::ModifyPT(_) => CharacteristicBucket::ModifyPT,
             Self::SwitchPT => CharacteristicBucket::SwitchPT,
@@ -1549,7 +1566,7 @@ impl ResolvedPartsSpec {
                     .map_err(|_| CharacteristicDefinitionError::ForeignCreatureType)?;
             }
             if let ResolvedPartSpec::Abilities(change) = part {
-                if let Some(trigger) = &change.granted_trigger {
+                for trigger in &change.granted_triggers {
                     trigger
                         .validate_body(vocabulary)
                         .map_err(|_| CharacteristicDefinitionError::InvalidKeywordGrant)?;
@@ -1765,6 +1782,9 @@ impl ResolvedPartsSpec {
                     }
                     ResolvedPartSpec::CannotBeTargetedByColors(mask) => {
                         ResolvedPart::CannotBeTargetedByColors(*mask)
+                    }
+                    ResolvedPartSpec::CannotBeTargetedBySpellsOfColors(mask) => {
+                        ResolvedPart::CannotBeTargetedBySpellsOfColors(*mask)
                     }
                     ResolvedPartSpec::MustBlockSubject(_) => {
                         let target_id = subject_object
@@ -2312,6 +2332,8 @@ pub struct ObjectCharacteristics {
     pub(crate) entry_creature_type: Option<CreatureTypeId>,
     /// Restrictions applied to this attacker, independent of ability removal.
     pub blocking_restrictions: Vec<BlockingRestriction>,
+    /// Static restrictions granted to this permanent by layer-six effects.
+    pub granted_restrictions: Vec<StaticRestriction>,
     /// Currently has the granted static ability that this creature cannot be blocked.
     pub granted_unblockable: bool,
     /// Active static restriction prevents sacrificing this permanent.
@@ -2328,14 +2350,16 @@ pub struct ObjectCharacteristics {
     pub cannot_be_targeted_by_auras: bool,
     /// Active static restriction prevents spells or abilities of any color in this mask from targeting this permanent.
     pub cannot_be_targeted_by_colors: crate::program::ColorMask,
+    /// Active restriction prevents spells (but not abilities) of any color in this mask from targeting this permanent.
+    pub cannot_be_targeted_by_spells_of_colors: crate::program::ColorMask,
     /// Seats that may target this permanent as though it did not have hexproof.
     pub hexproof_ignored_by: BTreeSet<SeatId>,
     /// Sum of surviving printed and granted toxic values (CR 702.164b).
     pub toxic_value: Option<RulesInteger>,
     /// Surviving grants keyed by the exact continuous effect, independent of printed definitions.
     pub granted_exalted: BTreeMap<EffectInstanceKey, u16>,
-    /// Each static effect grants a separate ordinary trigger on this permanent.
-    pub granted_triggers: BTreeMap<EffectInstanceKey, TriggeredAbility>,
+    /// Each static or resolved effect grants one or more ordinary triggers on this permanent.
+    pub granted_triggers: BTreeMap<EffectInstanceKey, Vec<TriggeredAbility>>,
     pub inherited_activation_terms: BTreeMap<EffectInstanceKey, super::ActivationTerms>,
     pub inherited_mana: BTreeMap<EffectInstanceKey, crate::mana::ManaOutput>,
     pub granted_activated: BTreeMap<EffectInstanceKey, crate::activated::ActivatedAbility>,
@@ -2362,7 +2386,7 @@ impl ObjectCharacteristics {
             .triggered
             .iter()
             .filter(|ability| self.abilities.triggered.contains(&ability.id))
-            .chain(self.granted_triggers.values())
+            .chain(self.granted_triggers.values().flatten())
             .filter_map(|ability| match ability.condition.event {
                 crate::program::TriggerEvent::CountersChanged {
                     kind: crate::program::CounterTriggerKind::SagaChapter(number),
@@ -2595,6 +2619,7 @@ impl ObjectCharacteristics {
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct CharacteristicWorld<'a> {
     pub active_player: SeatId,
+    pub step: Option<crate::turn::Step>,
     pub participants: &'a [SeatId],
     pub life: Option<&'a crate::life::LifeState>,
     pub entry_creature_types: &'a BTreeMap<ObjectId, CreatureTypeId>,

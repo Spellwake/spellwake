@@ -595,6 +595,13 @@ pub enum TriggerEvent {
         spell_only: bool,
         instant_or_sorcery_only: bool,
     },
+    /// A player matching `player` becomes the target of a spell or ability.
+    PlayerTargeted {
+        player: PlayerRelation,
+        by_opponent: bool,
+        spell_only: bool,
+        instant_or_sorcery_only: bool,
+    },
     CountersChanged {
         subject: ObjectFilter,
         kind: CounterTriggerKind,
@@ -759,6 +766,7 @@ impl TriggerEvent {
             Self::StepBegan { .. }
             | Self::StateThreshold(StateThresholdKind::SourceCounters { .. })
             | Self::PlayerAction { .. }
+            | Self::PlayerTargeted { .. }
             | Self::LifeChanged { .. }
             | Self::PlayerLosesGame(_)
             | Self::Keyword(_)
@@ -857,6 +865,7 @@ impl TriggerEvent {
             Self::StepBegan { .. }
             | Self::StateThreshold(StateThresholdKind::SourceCounters { .. })
             | Self::PlayerAction { .. }
+            | Self::PlayerTargeted { .. }
             | Self::LifeChanged { .. }
             | Self::PlayerLosesGame(_)
             | Self::Keyword(_)

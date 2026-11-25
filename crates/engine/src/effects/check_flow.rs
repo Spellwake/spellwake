@@ -227,24 +227,21 @@ impl EffectWindow {
                 && emblem.definition
                     == crate::emblem::EmblemDefinition::UnlimitedHandWithGraveyardReturn
         });
-        let temp_no_limit = self.temporary_rules.iter().any(|rule_entry| {
-            matches!(
-                &rule_entry.rule,
-                crate::program::TemporaryRuleKind::TemporaryStatic(ability)
-                    if match ability.as_ref() {
-                        crate::characteristics::StaticContinuousAbility::DrawRule {
-                            rule: crate::characteristics::StaticDrawRule::NoMaximumHandSize,
-                            ..
-                        } => rule_entry.controller == active,
-                        crate::characteristics::StaticContinuousAbility::DrawRule {
-                            rule: crate::characteristics::StaticDrawRule::AllPlayersNoMaximumHandSize,
-                            ..
-                        } => true,
-                        _ => false,
-                    }
-            )
-        });
         let evaluated = self.evaluated_characteristics()?;
+        let temp_no_limit = self.temporary_rules.iter().any(|rule_entry| {
+            self.active_temporary_static(rule_entry, &evaluated)
+                .is_some_and(|ability| match ability {
+                    crate::characteristics::StaticContinuousAbility::DrawRule {
+                        rule: crate::characteristics::StaticDrawRule::NoMaximumHandSize,
+                        ..
+                    } => rule_entry.controller == active,
+                    crate::characteristics::StaticContinuousAbility::DrawRule {
+                        rule: crate::characteristics::StaticDrawRule::AllPlayersNoMaximumHandSize,
+                        ..
+                    } => true,
+                    _ => false,
+                })
+        });
         let no_limit = emblem
             || temp_no_limit
             || self
@@ -977,9 +974,43 @@ impl EffectWindow {
         source: Option<&crate::occurrence::SupportedAppearance>,
     ) -> Result<Option<(usize, Vec<TargetRef>)>, EffectError> {
         let mut per_clause: Vec<Vec<TargetRef>> = Vec::new();
+        let evaluated = self.evaluated_characteristics()?;
         for op in &body.instructions {
             if let Instruction::FixedTargetClause(clause) = op {
-                let domain = self.trigger_target_domain(clause, controller, source)?;
+                let domain = if !per_clause.is_empty()
+                    && let BodyTarget::FilteredPermanent(filter) = clause.target
+                    && filter.uses_first_target_controller()
+                {
+                    let mut seats = BTreeSet::new();
+                    for &first in &per_clause[0] {
+                        match first {
+                            TargetRef::Player(seat) => {
+                                seats.insert(seat);
+                            }
+                            TargetRef::Object(id) => {
+                                if let Some(seat) = evaluated.get(id).and_then(|p| p.controller) {
+                                    seats.insert(seat);
+                                }
+                            }
+                            _ => {}
+                        }
+                    }
+                    let mut union = BTreeSet::new();
+                    for seat in seats {
+                        let mut bound_clause = (**clause).clone();
+                        bound_clause.target = BodyTarget::FilteredPermanent(
+                            filter.bind_first_target_controller(seat),
+                        );
+                        for target in
+                            self.trigger_target_domain(&bound_clause, controller, source)?
+                        {
+                            union.insert(target);
+                        }
+                    }
+                    union.into_iter().collect()
+                } else {
+                    self.trigger_target_domain(clause, controller, source)?
+                };
                 if domain.is_empty() {
                     return Ok(None);
                 }

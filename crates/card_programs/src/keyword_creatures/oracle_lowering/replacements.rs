@@ -501,7 +501,19 @@ pub(super) fn lower_replacement(
                 "a card type" | "card type" => EntryTap::ChooseCardType,
                 "a basic land type" | "basic land type" => EntryTap::ChooseBasicLandType,
                 "odd or even" => EntryTap::ChooseOddOrEven,
+                "even or odd" => EntryTap::ChooseOptions(&["Even", "Odd"]),
                 "khans or dragons" => EntryTap::ChooseKhansOrDragons,
+                "dragons or khans" => EntryTap::ChooseOptions(&["Dragons", "Khans"]),
+                "abzan or mardu" => EntryTap::ChooseOptions(&["Abzan", "Mardu"]),
+                "mardu or abzan" => EntryTap::ChooseOptions(&["Mardu", "Abzan"]),
+                "temur or sultai" => EntryTap::ChooseOptions(&["Temur", "Sultai"]),
+                "sultai or temur" => EntryTap::ChooseOptions(&["Sultai", "Temur"]),
+                "sultai or abzan" => EntryTap::ChooseOptions(&["Sultai", "Abzan"]),
+                "abzan or sultai" => EntryTap::ChooseOptions(&["Abzan", "Sultai"]),
+                "mardu or jeskai" => EntryTap::ChooseOptions(&["Mardu", "Jeskai"]),
+                "jeskai or mardu" => EntryTap::ChooseOptions(&["Jeskai", "Mardu"]),
+                "jeskai or temur" => EntryTap::ChooseOptions(&["Jeskai", "Temur"]),
+                "temur or jeskai" => EntryTap::ChooseOptions(&["Temur", "Jeskai"]),
                 _ => return Err("oracle:unsupported-as-enters-choose"),
             };
             if def.entry_tap.replace(entry_tap).is_some() {
@@ -1269,11 +1281,23 @@ fn lower_event_instead_replacement(
                 && s_part != "damage_source"
                 && s_part != "spell_damage"
                 && w_part != "special_replacement"
-                && let Some(res) = lower_event_instead_replacement(
-                    s_part, w_part, i_part, None, program, vocabulary, ids,
-                )
             {
-                return Some(res);
+                let forwarded_body = full
+                    .split_once(", ")
+                    .is_some_and(|(_, rhs)| rhs.trim() == i_part.trim())
+                    .then_some(instead_body)
+                    .flatten();
+                if let Some(res) = lower_event_instead_replacement(
+                    s_part,
+                    w_part,
+                    i_part,
+                    forwarded_body,
+                    program,
+                    vocabulary,
+                    ids,
+                ) {
+                    return Some(res);
+                }
             }
         }
     }
@@ -4528,6 +4552,102 @@ fn ast_has_unresolved_replacement_refs(ins: &[InstructionAst]) -> bool {
     })
 }
 
+fn parse_event_replacement_timing_or_cond(
+    tail_raw: &str,
+    vocabulary: &CreatureTypeVocabulary,
+) -> Option<Option<ResolutionCondition>> {
+    let tail = tail_raw.trim();
+    if tail.is_empty() {
+        return Some(None);
+    }
+    let eq_one = |expr: PlayerStatExpr| {
+        Some(ResolutionCondition {
+            left: ValueExpr::PlayerStat(expr),
+            comparison: Comparison::Equal,
+            right: ValueExpr::literal(1),
+        })
+    };
+    let eq_zero = |expr: PlayerStatExpr| {
+        Some(ResolutionCondition {
+            left: ValueExpr::PlayerStat(expr),
+            comparison: Comparison::Equal,
+            right: ValueExpr::literal(0),
+        })
+    };
+    if tail == "during your turn" {
+        return Some(eq_one(PlayerStatExpr::ControllerIsActivePlayer));
+    }
+    if tail == "during an opponent's turn" || tail == "during opponents' turns" {
+        return Some(eq_zero(PlayerStatExpr::ControllerIsActivePlayer));
+    }
+    if let Some(during_rest) = tail.strip_prefix("during ") {
+        if during_rest.starts_with("an opponent's ")
+            || during_rest.starts_with("each opponent's ")
+            || during_rest.starts_with("opponents' ")
+        {
+            return None;
+        }
+        let (player, phase_str) = if let Some(r) = during_rest
+            .strip_prefix("your ")
+            .or_else(|| during_rest.strip_prefix("each of your "))
+        {
+            (Some(ResolvingPlayer::Controller), r.trim())
+        } else if let Some(r) = during_rest.strip_prefix("the ") {
+            (None, r.trim())
+        } else {
+            (None, during_rest.trim())
+        };
+        let step_opt = match phase_str {
+            "untap step" | "untap steps" => Some(Step::Untap),
+            "upkeep" | "upkeep step" | "upkeep steps" => Some(Step::Upkeep),
+            "draw step" | "draw steps" => Some(Step::Draw),
+            "precombat main phase" | "first main phase" => Some(Step::PrecombatMain),
+            "beginning of combat step" | "beginning of combat" => Some(Step::BeginningCombat),
+            "declare attackers step" => Some(Step::DeclareAttackers),
+            "declare blockers step" => Some(Step::DeclareBlockers),
+            "combat damage step" => Some(Step::CombatDamage),
+            "end of combat step" | "end of combat" => Some(Step::EndCombat),
+            "postcombat main phase" | "second main phase" => Some(Step::PostcombatMain),
+            "end step" | "end steps" => Some(Step::End),
+            "cleanup step" | "cleanup steps" => Some(Step::Cleanup),
+            _ => None,
+        };
+        if let Some(step) = step_opt {
+            let rc = ResolutionCondition {
+                left: ValueExpr::PlayerStat(PlayerStatExpr::IsInStep { step, player }),
+                comparison: Comparison::Equal,
+                right: ValueExpr::literal(1),
+            };
+            if rc.is_world_evaluable() && rc.validate_world(vocabulary).is_ok() {
+                return Some(Some(rc));
+            }
+        }
+        let phase_opt = match phase_str {
+            "main phase" | "main phases" => Some(spellwake_engine::program::PhaseCheck::Main),
+            "combat" | "combat phase" => Some(spellwake_engine::program::PhaseCheck::Combat),
+            _ => None,
+        };
+        if let Some(phase) = phase_opt {
+            let rc = ResolutionCondition {
+                left: ValueExpr::PlayerStat(PlayerStatExpr::IsInPhase { phase, player }),
+                comparison: Comparison::Equal,
+                right: ValueExpr::literal(1),
+            };
+            if rc.is_world_evaluable() && rc.validate_world(vocabulary).is_ok() {
+                return Some(Some(rc));
+            }
+        }
+        return None;
+    }
+    if let Some(cond_raw) = tail
+        .strip_prefix("while ")
+        .or_else(|| tail.strip_prefix("if "))
+    {
+        return lower_world_resolution_condition(cond_raw, vocabulary).map(Some);
+    }
+    None
+}
+
 fn lower_event_replacement_ability(
     input: EventReplacementInput<'_>,
     program: &mut Program,
@@ -4627,28 +4747,9 @@ fn lower_event_replacement_ability(
 
     // Life loss skip, amount modifier, or body replacement (e.g. Bloodletter of Aclazotz)
     if let Some(player) = affected_player {
-        let life_loss_cond: Option<Option<ResolutionCondition>> = if would_norm == "lose life" {
-            Some(None)
-        } else if would_norm == "lose life during your turn" {
-            Some(Some(ResolutionCondition {
-                left: ValueExpr::PlayerStat(PlayerStatExpr::ControllerIsActivePlayer),
-                comparison: Comparison::Equal,
-                right: ValueExpr::literal(1),
-            }))
-        } else if would_norm == "lose life during an opponent's turn" {
-            Some(Some(ResolutionCondition {
-                left: ValueExpr::PlayerStat(PlayerStatExpr::ControllerIsActivePlayer),
-                comparison: Comparison::Equal,
-                right: ValueExpr::literal(0),
-            }))
-        } else if let Some(cond_raw) = would_norm
-            .strip_prefix("lose life while ")
-            .or_else(|| would_norm.strip_prefix("lose life if "))
-        {
-            lower_world_resolution_condition(cond_raw, vocabulary).map(Some)
-        } else {
-            None
-        };
+        let life_loss_cond: Option<Option<ResolutionCondition>> = would_norm
+            .strip_prefix("lose life")
+            .and_then(|tail| parse_event_replacement_timing_or_cond(tail, vocabulary));
         if let Some(cond_opt) = life_loss_cond {
             let condition = cond_opt.map(|rc| Box::new(StaticSourceCondition::Eval(Box::new(rc))));
             let single_clause = !instead_norm.contains(" and ") && !instead_norm.contains(". ");
@@ -4749,28 +4850,9 @@ fn lower_event_replacement_ability(
 
     // Life gain skip, amount modifier, or body replacement (CR 614.1a)
     if let Some(player) = affected_player {
-        let life_gain_cond: Option<Option<ResolutionCondition>> = if would_norm == "gain life" {
-            Some(None)
-        } else if would_norm == "gain life during your turn" {
-            Some(Some(ResolutionCondition {
-                left: ValueExpr::PlayerStat(PlayerStatExpr::ControllerIsActivePlayer),
-                comparison: Comparison::Equal,
-                right: ValueExpr::literal(1),
-            }))
-        } else if would_norm == "gain life during an opponent's turn" {
-            Some(Some(ResolutionCondition {
-                left: ValueExpr::PlayerStat(PlayerStatExpr::ControllerIsActivePlayer),
-                comparison: Comparison::Equal,
-                right: ValueExpr::literal(0),
-            }))
-        } else if let Some(cond_raw) = would_norm
-            .strip_prefix("gain life while ")
-            .or_else(|| would_norm.strip_prefix("gain life if "))
-        {
-            lower_world_resolution_condition(cond_raw, vocabulary).map(Some)
-        } else {
-            None
-        };
+        let life_gain_cond: Option<Option<ResolutionCondition>> = would_norm
+            .strip_prefix("gain life")
+            .and_then(|tail| parse_event_replacement_timing_or_cond(tail, vocabulary));
         if let Some(cond_opt) = life_gain_cond {
             let condition = cond_opt.map(|rc| Box::new(StaticSourceCondition::Eval(Box::new(rc))));
             let single_clause = !instead_norm.contains(" and ") && !instead_norm.contains(". ");
@@ -4961,65 +5043,19 @@ fn lower_event_replacement_ability(
             }
         }
         let body_ms_spec: Option<(ReplaceableEvent, Option<ResolutionCondition>)> =
-            if matches!(would_norm, "mill one or more cards" | "mill cards") {
-                Some((ReplaceableEvent::Mill { player }, None))
-            } else if matches!(would_norm, "scry" | "scry one or more cards") {
-                Some((ReplaceableEvent::Scry { player }, None))
-            } else if matches!(
-                would_norm,
-                "mill one or more cards during your turn" | "mill cards during your turn"
-            ) {
-                Some((
-                    ReplaceableEvent::Mill { player },
-                    Some(ResolutionCondition {
-                        left: ValueExpr::PlayerStat(PlayerStatExpr::ControllerIsActivePlayer),
-                        comparison: Comparison::Equal,
-                        right: ValueExpr::literal(1),
-                    }),
-                ))
-            } else if matches!(
-                would_norm,
-                "mill one or more cards during an opponent's turn"
-                    | "mill cards during an opponent's turn"
-            ) {
-                Some((
-                    ReplaceableEvent::Mill { player },
-                    Some(ResolutionCondition {
-                        left: ValueExpr::PlayerStat(PlayerStatExpr::ControllerIsActivePlayer),
-                        comparison: Comparison::Equal,
-                        right: ValueExpr::literal(0),
-                    }),
-                ))
-            } else if would_norm == "scry during your turn" {
-                Some((
-                    ReplaceableEvent::Scry { player },
-                    Some(ResolutionCondition {
-                        left: ValueExpr::PlayerStat(PlayerStatExpr::ControllerIsActivePlayer),
-                        comparison: Comparison::Equal,
-                        right: ValueExpr::literal(1),
-                    }),
-                ))
-            } else if would_norm == "scry during an opponent's turn" {
-                Some((
-                    ReplaceableEvent::Scry { player },
-                    Some(ResolutionCondition {
-                        left: ValueExpr::PlayerStat(PlayerStatExpr::ControllerIsActivePlayer),
-                        comparison: Comparison::Equal,
-                        right: ValueExpr::literal(0),
-                    }),
-                ))
-            } else if let Some(cond_raw) = would_norm
-                .strip_prefix("mill one or more cards while ")
-                .or_else(|| would_norm.strip_prefix("mill one or more cards if "))
+            if let Some(tail) = would_norm
+                .strip_prefix("mill one or more cards")
+                .or_else(|| would_norm.strip_prefix("mill cards"))
+                .or_else(|| would_norm.strip_prefix("mill a card"))
             {
-                lower_world_resolution_condition(cond_raw, vocabulary)
-                    .map(|rc| (ReplaceableEvent::Mill { player }, Some(rc)))
-            } else if let Some(cond_raw) = would_norm
-                .strip_prefix("scry while ")
-                .or_else(|| would_norm.strip_prefix("scry if "))
+                parse_event_replacement_timing_or_cond(tail, vocabulary)
+                    .map(|cond| (ReplaceableEvent::Mill { player }, cond))
+            } else if let Some(tail) = would_norm
+                .strip_prefix("scry one or more cards")
+                .or_else(|| would_norm.strip_prefix("scry"))
             {
-                lower_world_resolution_condition(cond_raw, vocabulary)
-                    .map(|rc| (ReplaceableEvent::Scry { player }, Some(rc)))
+                parse_event_replacement_timing_or_cond(tail, vocabulary)
+                    .map(|cond| (ReplaceableEvent::Scry { player }, cond))
             } else {
                 None
             };
@@ -5050,60 +5086,14 @@ fn lower_event_replacement_ability(
 
     // Draw skip, amount modifier (unconditional or conditional), or body replacement (CR 614.1a)
     if let Some(player) = affected_player {
-        let draw_spec: Option<(bool, Option<ResolutionCondition>)> = if would_norm == "draw a card"
-        {
-            Some((true, None))
-        } else if would_norm == "draw one or more cards" {
-            Some((false, None))
-        } else if would_norm == "draw a card during your turn" {
-            Some((
-                true,
-                Some(ResolutionCondition {
-                    left: ValueExpr::PlayerStat(PlayerStatExpr::ControllerIsActivePlayer),
-                    comparison: Comparison::Equal,
-                    right: ValueExpr::literal(1),
-                }),
-            ))
-        } else if would_norm == "draw a card during an opponent's turn" {
-            Some((
-                true,
-                Some(ResolutionCondition {
-                    left: ValueExpr::PlayerStat(PlayerStatExpr::ControllerIsActivePlayer),
-                    comparison: Comparison::Equal,
-                    right: ValueExpr::literal(0),
-                }),
-            ))
-        } else if would_norm == "draw one or more cards during your turn" {
-            Some((
-                false,
-                Some(ResolutionCondition {
-                    left: ValueExpr::PlayerStat(PlayerStatExpr::ControllerIsActivePlayer),
-                    comparison: Comparison::Equal,
-                    right: ValueExpr::literal(1),
-                }),
-            ))
-        } else if would_norm == "draw one or more cards during an opponent's turn" {
-            Some((
-                false,
-                Some(ResolutionCondition {
-                    left: ValueExpr::PlayerStat(PlayerStatExpr::ControllerIsActivePlayer),
-                    comparison: Comparison::Equal,
-                    right: ValueExpr::literal(0),
-                }),
-            ))
-        } else if let Some(cond_raw) = would_norm
-            .strip_prefix("draw a card while ")
-            .or_else(|| would_norm.strip_prefix("draw a card if "))
-        {
-            lower_world_resolution_condition(cond_raw, vocabulary).map(|rc| (true, Some(rc)))
-        } else if let Some(cond_raw) = would_norm
-            .strip_prefix("draw one or more cards while ")
-            .or_else(|| would_norm.strip_prefix("draw one or more cards if "))
-        {
-            lower_world_resolution_condition(cond_raw, vocabulary).map(|rc| (false, Some(rc)))
-        } else {
-            None
-        };
+        let draw_spec: Option<(bool, Option<ResolutionCondition>)> =
+            if let Some(tail) = would_norm.strip_prefix("draw a card") {
+                parse_event_replacement_timing_or_cond(tail, vocabulary).map(|cond| (true, cond))
+            } else if let Some(tail) = would_norm.strip_prefix("draw one or more cards") {
+                parse_event_replacement_timing_or_cond(tail, vocabulary).map(|cond| (false, cond))
+            } else {
+                None
+            };
 
         if let Some((is_single_draw, cond_opt)) = draw_spec {
             let condition = cond_opt.map(|rc| Box::new(StaticSourceCondition::Eval(Box::new(rc))));
@@ -7191,20 +7181,81 @@ fn parse_prevent_all_damage_sentence(
 
 fn parse_damage_static_condition(
     cond_raw: &str,
+    self_is_it: bool,
     vocabulary: &CreatureTypeVocabulary,
 ) -> Option<StaticSourceCondition> {
     let trimmed = cond_raw.trim();
     if trimmed.is_empty() {
         return None;
     }
+    let mut normalized = trimmed
+        .replace("this creature", "~")
+        .replace("this permanent", "~")
+        .replace("this artifact", "~")
+        .replace("this enchantment", "~");
+    if self_is_it {
+        if let Some(rest) = normalized.strip_prefix("it ") {
+            normalized = format!("~ {rest}");
+        } else if let Some(rest) = normalized.strip_prefix("it's ") {
+            normalized = format!("~'s {rest}");
+        }
+        normalized = normalized.replace(" on it", " on ~");
+    }
+    if let Some(after_has) = normalized.strip_prefix("~ has ")
+        && let Some(before_on) = after_has.strip_suffix(" on ~")
+    {
+        let before_on = before_on.trim();
+        if let Some(kind_raw) = before_on
+            .strip_prefix("a ")
+            .or_else(|| before_on.strip_prefix("an "))
+            .and_then(|s| s.strip_suffix(" counter"))
+            && let Some(kind) = parse_counter_kind(kind_raw.trim()).filter(|k| k.is_permanent())
+        {
+            return Some(StaticSourceCondition::SourceCounterAtLeast { kind, minimum: 1 });
+        }
+        if let Some(kind_raw) = before_on
+            .strip_prefix("one or more ")
+            .and_then(|s| s.strip_suffix(" counters"))
+            && let Some(kind) = parse_counter_kind(kind_raw.trim()).filter(|k| k.is_permanent())
+        {
+            return Some(StaticSourceCondition::SourceCounterAtLeast { kind, minimum: 1 });
+        }
+        if let Some((n_raw, kind_raw)) = before_on
+            .strip_prefix("at least ")
+            .and_then(|s| s.split_once(' '))
+            .and_then(|(n_tok, tail)| {
+                tail.strip_suffix(" counters")
+                    .or_else(|| tail.strip_suffix(" counter"))
+                    .map(|k| (n_tok, k))
+            })
+            && let Some(minimum) = parse_small_num(n_raw).filter(|&v| v > 0)
+            && let Some(kind) = parse_counter_kind(kind_raw.trim()).filter(|k| k.is_permanent())
+        {
+            return Some(StaticSourceCondition::SourceCounterAtLeast {
+                kind,
+                minimum: u16::from(minimum),
+            });
+        }
+        if let Some((n_raw, kind_raw)) = before_on
+            .split_once(" or more ")
+            .and_then(|(n_tok, tail)| tail.strip_suffix(" counters").map(|k| (n_tok, k)))
+            && let Some(minimum) = parse_small_num(n_raw).filter(|&v| v > 0)
+            && let Some(kind) = parse_counter_kind(kind_raw.trim()).filter(|k| k.is_permanent())
+        {
+            return Some(StaticSourceCondition::SourceCounterAtLeast {
+                kind,
+                minimum: u16::from(minimum),
+            });
+        }
+    }
     if let Ok(cond_ast) = spellwake_oracle_compiler::filter::parse_condition(
-        trimmed,
+        &normalized,
         &cached_compiler_vocab(vocabulary),
     ) && let Some(sc) = lower_static_source_condition(&cond_ast, vocabulary)
     {
         return Some(sc);
     }
-    lower_world_resolution_condition(trimmed, vocabulary)
+    lower_world_resolution_condition(&normalized, vocabulary)
         .map(|rc| StaticSourceCondition::Eval(Box::new(rc)))
 }
 
@@ -7393,13 +7444,33 @@ fn parse_damage_clause_core(
     None
 }
 
+fn rewrite_remove_counters_subject_prior_result(
+    body: &mut ExecutableBody,
+    replacement: EventValueKind,
+) {
+    for op in &mut body.instructions {
+        match op {
+            Instruction::RemoveCountersFromSubject {
+                amount: Some(amount),
+                ..
+            } => {
+                rewrite_value_expr_prior_result(amount, replacement);
+            }
+            Instruction::RemoveCountersFromPermanent { amount, .. } => {
+                rewrite_value_expr_prior_result(amount, replacement);
+            }
+            _ => {}
+        }
+    }
+}
+
 fn parse_prevent_followup(
     followup_raw: &str,
     recipient: StaticDamageRecipient,
     vocabulary: &CreatureTypeVocabulary,
     ids: &mut LoweringIds,
 ) -> Option<DamagePreventFollowup> {
-    let f = followup_raw
+    let mut f_owned = followup_raw
         .trim()
         .trim_end_matches('.')
         .trim()
@@ -7407,7 +7478,19 @@ fn parse_prevent_followup(
         .replace("this permanent", "~")
         .replace("this artifact", "~")
         .replace("this enchantment", "~");
-    let f = f.as_str();
+    if recipient == StaticDamageRecipient::SelfObject {
+        f_owned = f_owned
+            .replace(" from it,", " from ~,")
+            .replace(" from it ", " from ~ ")
+            .replace(" on it,", " on ~,")
+            .replace(" on it ", " on ~ ");
+        if let Some(stem) = f_owned.strip_suffix(" from it") {
+            f_owned = format!("{stem} from ~");
+        } else if let Some(stem) = f_owned.strip_suffix(" on it") {
+            f_owned = format!("{stem} on ~");
+        }
+    }
+    let f = f_owned.as_str();
     let f_no_you = f.strip_prefix("you ").unwrap_or(f).trim();
 
     let is_recip_ref = |r: &str| {
@@ -7631,16 +7714,33 @@ fn parse_prevent_followup(
         }
     }
 
+    // 3b. DealPreventedToSourceController ("~ deals that much damage to you")
+    if f_no_you == "~ deals that much damage to you"
+        || (recipient == StaticDamageRecipient::SelfObject
+            && f_no_you == "it deals that much damage to you")
+    {
+        return Some(DamagePreventFollowup::DealPreventedToSourceController);
+    }
+
     // 4. General InlineBody fallback
-    let (ins, fails) = spellwake_oracle_compiler::clauses::parse_effect_body(
-        f,
-        &cached_compiler_vocab(vocabulary),
-    );
+    let compiler_vocab = cached_compiler_vocab(vocabulary);
+    let (mut ins, mut fails) =
+        spellwake_oracle_compiler::clauses::parse_effect_body(f, &compiler_vocab);
+    if (!fails.is_empty() || ins.is_empty()) && f.contains(", and ") {
+        let split_f = f.replace(", and ", ". ");
+        let (ins2, fails2) =
+            spellwake_oracle_compiler::clauses::parse_effect_body(&split_f, &compiler_vocab);
+        if fails2.is_empty() && !ins2.is_empty() {
+            ins = ins2;
+            fails = fails2;
+        }
+    }
     if !fails.is_empty() || ins.is_empty() {
         return None;
     }
     let mut body = lower_effect_body(&ins, vocabulary, ids, false, true).ok()?;
     rewrite_body_prior_result(&mut body, EventValueKind::DamagePreventedThisWay);
+    rewrite_remove_counters_subject_prior_result(&mut body, EventValueKind::DamagePreventedThisWay);
     if validate_inline_followup_body(&body, vocabulary) {
         Some(DamagePreventFollowup::InlineBody(Box::new(body)))
     } else {
@@ -7722,7 +7822,7 @@ fn parse_static_damage_op_full(
         return target_suffix_ok(tail).then_some(StaticDamageOp::CapAt(k));
     }
 
-    // 2. PreventAndFollowup ("prevent ... damage. <followup>" or "prevent ... damage and <followup>")
+    // 2. PreventAndFollowup ("prevent ... damage. <followup>", "prevent ... damage and <followup>", or "prevent ... damage, <followup>")
     let prevent_followup_split: Option<(DamagePreventMode, &str)> = [
         (
             "prevent all of that combat damage and ",
@@ -7733,6 +7833,14 @@ fn parse_static_damage_op_full(
             DamagePreventMode::All,
         ),
         (
+            "prevent all of that combat damage, then ",
+            DamagePreventMode::All,
+        ),
+        (
+            "prevent all of that combat damage, ",
+            DamagePreventMode::All,
+        ),
+        (
             "prevent all of that noncombat damage and ",
             DamagePreventMode::All,
         ),
@@ -7740,16 +7848,37 @@ fn parse_static_damage_op_full(
             "prevent all of that noncombat damage. ",
             DamagePreventMode::All,
         ),
+        (
+            "prevent all of that noncombat damage, then ",
+            DamagePreventMode::All,
+        ),
+        (
+            "prevent all of that noncombat damage, ",
+            DamagePreventMode::All,
+        ),
         ("prevent all of that damage and ", DamagePreventMode::All),
         ("prevent all of that damage. ", DamagePreventMode::All),
+        ("prevent all of that damage, then ", DamagePreventMode::All),
+        ("prevent all of that damage, ", DamagePreventMode::All),
         ("prevent all that damage and ", DamagePreventMode::All),
         ("prevent all that damage. ", DamagePreventMode::All),
+        ("prevent all that damage, then ", DamagePreventMode::All),
+        ("prevent all that damage, ", DamagePreventMode::All),
         ("prevent that combat damage and ", DamagePreventMode::All),
         ("prevent that combat damage. ", DamagePreventMode::All),
+        ("prevent that combat damage, then ", DamagePreventMode::All),
+        ("prevent that combat damage, ", DamagePreventMode::All),
         ("prevent that noncombat damage and ", DamagePreventMode::All),
         ("prevent that noncombat damage. ", DamagePreventMode::All),
+        (
+            "prevent that noncombat damage, then ",
+            DamagePreventMode::All,
+        ),
+        ("prevent that noncombat damage, ", DamagePreventMode::All),
         ("prevent that damage and ", DamagePreventMode::All),
         ("prevent that damage. ", DamagePreventMode::All),
+        ("prevent that damage, then ", DamagePreventMode::All),
+        ("prevent that damage, ", DamagePreventMode::All),
         (
             "prevent half that damage, rounded up, and ",
             DamagePreventMode::Half { round_up: true },
@@ -8045,12 +8174,28 @@ fn parse_damage_rules_full(
             (would_norm, None)
         };
 
+    let self_is_it = matches!(
+        eff_subj,
+        "~" | "this creature" | "this permanent" | "this artifact" | "this enchantment"
+    ) || matches!(
+        eff_would,
+        "be dealt to ~"
+            | "be dealt to this creature"
+            | "be dealt to this permanent"
+            | "be dealt to this artifact"
+            | "be dealt to this enchantment"
+    ) || eff_would.ends_with(" to ~")
+        || eff_would.ends_with(" to this creature")
+        || eff_would.ends_with(" to this permanent")
+        || eff_would.ends_with(" to this artifact")
+        || eff_would.ends_with(" to this enchantment");
+
     let cond_lead = match cond_lead_str {
-        Some(c) => Some(parse_damage_static_condition(c, vocabulary)?),
+        Some(c) => Some(parse_damage_static_condition(c, self_is_it, vocabulary)?),
         None => None,
     };
     let cond_trail = match cond_trail_str {
-        Some(c) => Some(parse_damage_static_condition(c, vocabulary)?),
+        Some(c) => Some(parse_damage_static_condition(c, self_is_it, vocabulary)?),
         None => None,
     };
     let combined_cond = match (cond_lead, cond_trail) {

@@ -1257,16 +1257,13 @@ pub(super) struct AuthorizedZoneBatch {
 impl EffectWindow {
     pub(super) fn graveyard_and_library_restricted(evaluated: &EvaluatedCharacteristics) -> bool {
         evaluated.objects.values().any(|object| {
-            object.has_battlefield_rule(|rule| {
-                matches!(
-                    rule,
-                    crate::characteristics::StaticContinuousAbility::Restriction {
-                        rule:
-                            crate::characteristics::StaticRestriction::RestrictGraveyardAndLibrary,
-                        ..
-                    }
-                )
-            })
+            object.zone == ObjectZone::Battlefield
+                && Self::permanent_has_restriction(object, |rule| {
+                    matches!(
+                        rule,
+                        crate::characteristics::StaticRestriction::RestrictGraveyardAndLibrary
+                    )
+                })
         })
     }
     pub(super) fn zone_replacement_sources(&self) -> Result<ZoneReplacementSources, EffectError> {

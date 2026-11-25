@@ -555,6 +555,8 @@ pub enum TriggeredManaRule {
     ImprintedLandTappedSameType,
     /// Whenever controller taps a permanent for `{C}`, add an additional `{C}`.
     PermanentTappedForColorless,
+    /// Whenever a land (or a land controller controls when `controller_only` is true) is tapped for mana, add one mana of the source's chosen color.
+    LandTappedChosenColor { controller_only: bool },
 }
 
 /// Sacrifice cost paid alongside activating a mana ability.

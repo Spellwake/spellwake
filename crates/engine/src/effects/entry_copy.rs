@@ -11,6 +11,7 @@ pub(super) struct EntryCopyResult {
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct CopyWorldSnapshot {
     active_player: SeatId,
+    step: Option<crate::turn::Step>,
     participants: Vec<SeatId>,
     life: crate::life::LifeState,
     combat: Option<crate::combat::CombatState>,
@@ -145,6 +146,7 @@ impl EntryCopyPool {
         }
         pool.world = Some(Arc::new(CopyWorldSnapshot {
             active_player: window.window.active_player(),
+            step: window.current_step,
             participants: window.window.participants().to_vec(),
             life: window.life.clone(),
             combat: window.combat.clone(),
@@ -211,7 +213,8 @@ impl EntryCopyPool {
                 | crate::program::ControllerFilter::TargetPlayer
                 | crate::program::ControllerFilter::TargetOpponent
                 | crate::program::ControllerFilter::ActivePlayer
-                | crate::program::ControllerFilter::DefendingPlayer => false,
+                | crate::program::ControllerFilter::DefendingPlayer
+                | crate::program::ControllerFilter::FirstTargetController => false,
             };
             if !ctrl_ok {
                 return false;
@@ -472,6 +475,7 @@ impl EntryCopyPool {
                     };
                     let ctx = crate::characteristics::WorldEvalCtx {
                         active_player: world.active_player,
+                        step: world.step,
                         participants: &world.participants,
                         life: Some(&world.life),
                         combat: world.combat.as_ref(),

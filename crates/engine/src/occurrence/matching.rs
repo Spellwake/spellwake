@@ -443,6 +443,7 @@ fn check_intervening_if(
         TriggerCondition::Eval(cond) => {
             let ctx = crate::characteristics::WorldEvalCtx {
                 active_player: after.window.active_player(),
+                step: after.step,
                 participants: after.window.participants(),
                 life: Some(after.life),
                 combat: after.combat,
@@ -578,6 +579,7 @@ fn check_intervening_if_with_ctx(
             let (trigger_subject, related_player, defending_player) = event_ctx;
             let ctx = crate::characteristics::WorldEvalCtx {
                 active_player: after.window.active_player(),
+                step: after.step,
                 participants: after.window.participants(),
                 life: Some(after.life),
                 combat: after.combat,
@@ -691,10 +693,30 @@ fn matches_evaluated_permanent(
             | crate::program::ControllerFilter::TargetPlayer
             | crate::program::ControllerFilter::TargetOpponent
             | crate::program::ControllerFilter::ActivePlayer
-            | crate::program::ControllerFilter::DefendingPlayer => false,
+            | crate::program::ControllerFilter::DefendingPlayer
+            | crate::program::ControllerFilter::FirstTargetController => false,
             crate::program::ControllerFilter::Player(seat) => candidate.controller == Some(seat),
         };
         if !controller_ok {
+            return false;
+        }
+        let owner_ok = match c.owner {
+            crate::program::ControllerFilter::Any => true,
+            crate::program::ControllerFilter::You | crate::program::ControllerFilter::OwnerYou => {
+                candidate.owner == controller
+            }
+            crate::program::ControllerFilter::Opponent
+            | crate::program::ControllerFilter::NotYou
+            | crate::program::ControllerFilter::OwnerOpponent => candidate.owner != controller,
+            crate::program::ControllerFilter::RelatedPlayer
+            | crate::program::ControllerFilter::TargetPlayer
+            | crate::program::ControllerFilter::TargetOpponent
+            | crate::program::ControllerFilter::ActivePlayer
+            | crate::program::ControllerFilter::DefendingPlayer
+            | crate::program::ControllerFilter::FirstTargetController => false,
+            crate::program::ControllerFilter::Player(seat) => candidate.owner == seat,
+        };
+        if !owner_ok {
             return false;
         }
         if let Some(expected_token) = c.token
@@ -713,6 +735,69 @@ fn matches_evaluated_permanent(
         }
         if c.flags.contains(ObjectFilterFlags::COMMANDER_ONLY)
             && candidate.commander_owner.is_none()
+        {
+            return false;
+        }
+        if c.flags.contains(ObjectFilterFlags::NOT_COMMANDER) && candidate.commander_owner.is_some()
+        {
+            return false;
+        }
+        if c.flags
+            .contains(ObjectFilterFlags::DID_NOT_ATTACK_THIS_TURN)
+            && after
+                .characteristics
+                .attacked_objects_this_turn
+                .contains(&candidate.object)
+        {
+            return false;
+        }
+        if c.flags
+            .contains(ObjectFilterFlags::MATCHES_SOURCE_ENTRY_TYPE)
+            && !after
+                .evaluated
+                .get(source.object.id())
+                .and_then(|src| src.entry_creature_type)
+                .is_some_and(|kind| candidate.current_creature_subtypes.contains(&kind))
+        {
+            return false;
+        }
+        if c.flags
+            .contains(ObjectFilterFlags::MATCHES_CHOSEN_CARD_TYPE)
+        {
+            let chosen_type = match after
+                .characteristics
+                .entry_option_choices
+                .get(&source.object.id())
+                .copied()
+            {
+                Some(0) => Some(CardType::Artifact),
+                Some(1) => Some(CardType::Battle),
+                Some(2) => Some(CardType::Creature),
+                Some(3) => Some(CardType::Enchantment),
+                Some(4) => Some(CardType::Instant),
+                Some(5) => Some(CardType::Land),
+                Some(6) => Some(CardType::Planeswalker),
+                Some(7) => Some(CardType::Sorcery),
+                _ => None,
+            };
+            if !chosen_type.is_some_and(|ct| candidate.has_type(ct)) {
+                return false;
+            }
+        }
+        if c.flags.contains(ObjectFilterFlags::MATCHES_CHOSEN_NAME)
+            && !after
+                .characteristics
+                .named_cards
+                .get(&source.object.id())
+                .is_some_and(|name| {
+                    spellwake_contracts::names::EnglishCardName::new(name.clone())
+                        .ok()
+                        .is_some_and(|card_name| {
+                            after
+                                .name_rules
+                                .has_name(&candidate.current_names, &card_name)
+                        })
+                })
         {
             return false;
         }
@@ -2108,6 +2193,40 @@ pub(super) fn match_trigger_event(
                     related,
                 });
             }
+        }
+        TriggerEvent::PlayerTargeted {
+            player,
+            by_opponent,
+            spell_only,
+            instant_or_sorcery_only,
+        } => {
+            let RulesOccurrence::PlayerTargeted {
+                player: target_player,
+                entry,
+                controller: actor_controller,
+                spell,
+                instant_or_sorcery,
+            } = value
+            else {
+                return Ok(());
+            };
+            if !player_matches(*player, controller, *target_player, after) {
+                return Ok(());
+            }
+            if *by_opponent && *actor_controller == controller {
+                return Ok(());
+            }
+            if *spell_only && !*spell {
+                return Ok(());
+            }
+            if *instant_or_sorcery_only && !*instant_or_sorcery {
+                return Ok(());
+            }
+            members.push(TriggerCauseMember {
+                occurrence: occurrence.id,
+                related_player: Some(*actor_controller),
+                related: TriggerRelated::TargetingEntry(*entry),
+            });
         }
         TriggerEvent::SpellCast {
             caster,

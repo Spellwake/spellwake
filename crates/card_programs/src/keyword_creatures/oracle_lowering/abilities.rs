@@ -1,5 +1,127 @@
 use super::*;
 
+fn strip_each_mode_different_player(ops: &[InstructionAst]) -> (Vec<InstructionAst>, bool) {
+    let mut out = Vec::with_capacity(ops.len());
+    let mut found = false;
+    for op in ops {
+        if let InstructionAst::AbilityRestriction {
+            restriction,
+            condition: None,
+        } = op
+            && restriction.eq_ignore_ascii_case("EachModeDifferentPlayer")
+        {
+            found = true;
+            continue;
+        }
+        out.push(op.clone());
+    }
+    (out, found)
+}
+
+fn all_modes_target_single_player(modes: &[ExecutableBody]) -> bool {
+    !modes.is_empty()
+        && modes.iter().all(|b| {
+            matches!(
+                b.target,
+                BodyTarget::SinglePlayer | BodyTarget::SingleOpponent
+            )
+        })
+}
+
+fn modal_choice_requests_distinct(choice: &str) -> bool {
+    let low = choice.to_ascii_lowercase();
+    low.contains("different player") || low.contains("different target")
+}
+
+fn try_lower_triggered_mana_ability(
+    trigger: &TriggerSpecAst,
+    body: &[InstructionAst],
+    entry_tap: Option<&EntryTap>,
+) -> Option<Result<ManaOutput, &'static str>> {
+    let [
+        TriggerEventAst::LandTappedForManaColor {
+            filter,
+            mana_color_filter,
+            by_you,
+        },
+    ] = trigger.events.as_slice()
+    else {
+        return None;
+    };
+    if trigger.intervening_if.is_some()
+        || !mana_color_filter
+            .trim()
+            .eq_ignore_ascii_case("chosen_color")
+    {
+        return Some(Err("oracle:unsupported-triggered-mana"));
+    }
+    if !matches!(
+        entry_tap,
+        Some(
+            EntryTap::ChooseColor
+                | EntryTap::ChooseColorExcept(_)
+                | EntryTap::AlwaysChooseColorExcept(_)
+        )
+    ) {
+        return Some(Err("oracle:unsupported-triggered-mana"));
+    }
+    // `TriggeredManaRule::LandTappedChosenColor` checks any land (not e.g. basic-only lands),
+    // so fail closed on any extra filter restriction beyond plain land / controller matching.
+    let filter_ok = filter.any_types == AstCardTypeMask::LAND
+        && filter_only_has(
+            filter,
+            FilterAllow {
+                types: true,
+                controller: true,
+                ..FilterAllow::NONE
+            },
+        )
+        && matches!(
+            (filter.controller, *by_you),
+            (None, _) | (Some(ControllerRelation::You), true)
+        );
+    if !filter_ok {
+        return Some(Err("oracle:unsupported-triggered-mana"));
+    }
+    let body_player = match body {
+        [
+            InstructionAst::AddMana {
+                player,
+                mana: ManaSpecAst::ChosenColor,
+            },
+        ] => Some(*player),
+        [
+            InstructionAst::AddManaLandProduced {
+                player,
+                count: None,
+            },
+        ] => Some(*player),
+        [
+            InstructionAst::AddManaLandProduced {
+                player,
+                count: Some(cnt),
+            },
+        ] if matches!(cnt.as_ref(), ValueExprAst::Const(1)) => Some(*player),
+        _ => None,
+    };
+    let player_ok = matches!(
+        (body_player, *by_you),
+        (Some(PlayerRefAst::You), true)
+            | (
+                Some(PlayerRefAst::ThatPlayer | PlayerRefAst::ItsController),
+                false
+            )
+    );
+    if !player_ok {
+        return Some(Err("oracle:unsupported-triggered-mana"));
+    }
+    Some(Ok(ManaOutput::Triggered(
+        spellwake_engine::mana::TriggeredManaRule::LandTappedChosenColor {
+            controller_only: *by_you,
+        },
+    )))
+}
+
 pub(super) fn lower_ability(
     ab: &AbilityAst,
     program: &mut Program,
@@ -73,6 +195,10 @@ pub(super) fn lower_ability(
                 } else {
                     raw_max.min(u8::try_from(modes.len()).unwrap_or(u8::MAX))
                 };
+                let (pre_clean, pre_distinct) = strip_each_mode_different_player(pre);
+                let (post_clean, post_distinct) = strip_each_mode_different_player(post);
+                let mut distinct_requested =
+                    pre_distinct || post_distinct || modal_choice_requests_distinct(choice);
                 let mut mode_bodies = Vec::with_capacity(modes.len());
                 for m in modes {
                     let (stripped, mode_res, mode_red) =
@@ -83,20 +209,24 @@ pub(super) fn lower_ability(
                     if let Some(red) = mode_red {
                         cost_reduction = Some(combine_cost_reductions(cost_reduction, red));
                     }
-                    mode_bodies.push(stripped);
+                    let (mode_clean, mode_distinct) = strip_each_mode_different_player(&stripped);
+                    distinct_requested |= mode_distinct;
+                    mode_bodies.push(mode_clean);
                 }
                 let allows_modal_split = (min, max) == (1, 1)
                     && !allow_repeat
+                    && !distinct_requested
                     && uniqueness == ModalUniqueness::None
                     && !restriction
                         .as_ref()
                         .is_some_and(|r| r.has_once_each_turn() || r.has_exhaust());
                 if allows_modal_split {
                     for mb in &mode_bodies {
-                        let mut full = Vec::with_capacity(pre.len() + mb.len() + post.len());
-                        full.extend_from_slice(pre);
+                        let mut full =
+                            Vec::with_capacity(pre_clean.len() + mb.len() + post_clean.len());
+                        full.extend_from_slice(&pre_clean);
                         full.extend_from_slice(mb);
-                        full.extend_from_slice(post);
+                        full.extend_from_slice(&post_clean);
                         let mut exec_body = lower_effect_body(&full, vocabulary, ids, false, true)?;
                         rewrite_body_anaphora_stats(&mut exec_body, anaphora_ref);
                         let id = ids.activated();
@@ -125,20 +255,20 @@ pub(super) fn lower_ability(
                     }
                     return Ok(());
                 }
-                let prefix = if pre.is_empty() {
+                let prefix = if pre_clean.is_empty() {
                     None
                 } else {
-                    let mut pb = lower_effect_body(pre, vocabulary, ids, false, true)?;
+                    let mut pb = lower_effect_body(&pre_clean, vocabulary, ids, false, true)?;
                     rewrite_body_anaphora_stats(&mut pb, anaphora_ref);
                     if pb.target != BodyTarget::None {
                         return Err("oracle:modal-prefix-target");
                     }
                     Some(Box::new(pb))
                 };
-                let suffix = if post.is_empty() {
+                let suffix = if post_clean.is_empty() {
                     None
                 } else {
-                    let mut sb = lower_effect_body(post, vocabulary, ids, false, true)?;
+                    let mut sb = lower_effect_body(&post_clean, vocabulary, ids, false, true)?;
                     rewrite_body_anaphora_stats(&mut sb, anaphora_ref);
                     if sb.target != BodyTarget::None {
                         return Err("oracle:modal-suffix-target");
@@ -151,6 +281,11 @@ pub(super) fn lower_ability(
                     rewrite_body_anaphora_stats(&mut exec_body, anaphora_ref);
                     lowered_modes.push(exec_body);
                 }
+                let all_single_player = all_modes_target_single_player(&lowered_modes);
+                if distinct_requested && !all_single_player {
+                    return Err("oracle:unsupported-modal-distinct-targets");
+                }
+                let distinct_targets = distinct_requested && all_single_player;
                 let first = lowered_modes.remove(0);
                 let id = ids.activated();
                 if let Some(res) = restriction {
@@ -172,7 +307,7 @@ pub(super) fn lower_ability(
                         maximum: max,
                         conditional_maximum: None,
                         allow_repeat,
-                        distinct_targets: false,
+                        distinct_targets,
                         uniqueness,
                         mode_costs: Vec::new(),
                         escalate_mana: None,
@@ -217,6 +352,15 @@ pub(super) fn lower_ability(
             trigger,
             body,
         } => {
+            let entry_tap = program.permanent().and_then(|p| p.entry_tap.as_ref());
+            if let Some(mana_res) = try_lower_triggered_mana_ability(trigger, body, entry_tap) {
+                let output = mana_res?;
+                program.mana.push(ManaAbility {
+                    id: ids.mana(),
+                    output,
+                });
+                return Ok(());
+            }
             if trigger.events.len() >= 2 {
                 let mut branch_specs = Vec::with_capacity(trigger.events.len());
                 let mut all_branches_ok = true;
@@ -310,26 +454,40 @@ pub(super) fn lower_ability(
                 } else {
                     raw_max.min(u8::try_from(modes.len()).unwrap_or(u8::MAX))
                 };
-                if (min, max) == (1, 1) && !allow_repeat && uniqueness == ModalUniqueness::None {
-                    for m in modes {
-                        let (m_filtered, m_res, m_red) = strip_activated_restrictions_ext(
-                            &m.body,
-                            entry_tap.as_ref(),
-                            true,
-                            vocabulary,
-                        )?;
-                        if m_red.is_some() {
-                            return Err("oracle:loyalty-cost-reduction");
-                        }
+                let (pre_clean, pre_distinct) = strip_each_mode_different_player(pre);
+                let (post_clean, post_distinct) = strip_each_mode_different_player(post);
+                let mut distinct_requested =
+                    pre_distinct || post_distinct || modal_choice_requests_distinct(choice);
+                let mut prepared_modes = Vec::with_capacity(modes.len());
+                for m in modes {
+                    let (m_filtered, m_res, m_red) = strip_activated_restrictions_ext(
+                        &m.body,
+                        entry_tap.as_ref(),
+                        true,
+                        vocabulary,
+                    )?;
+                    if m_red.is_some() {
+                        return Err("oracle:loyalty-cost-reduction");
+                    }
+                    let (m_clean, m_distinct) = strip_each_mode_different_player(&m_filtered);
+                    distinct_requested |= m_distinct;
+                    prepared_modes.push((m_clean, m_res));
+                }
+                if (min, max) == (1, 1)
+                    && !allow_repeat
+                    && !distinct_requested
+                    && uniqueness == ModalUniqueness::None
+                {
+                    for (m_clean, m_res) in prepared_modes {
                         let combined_res = match (loyalty_res.clone(), m_res) {
                             (a, Some(b)) => Some(combine_activation_restrictions(a, b)),
                             (a, None) => a,
                         };
                         let mut full =
-                            Vec::with_capacity(pre.len() + m_filtered.len() + post.len());
-                        full.extend_from_slice(pre);
-                        full.extend(m_filtered);
-                        full.extend_from_slice(post);
+                            Vec::with_capacity(pre_clean.len() + m_clean.len() + post_clean.len());
+                        full.extend_from_slice(&pre_clean);
+                        full.extend(m_clean);
+                        full.extend_from_slice(&post_clean);
                         let id = ids.activated();
                         if let Some(n) = parsed_delta {
                             program.loyalty_costs.insert(id, n);
@@ -350,47 +508,37 @@ pub(super) fn lower_ability(
                     }
                     return Ok(());
                 }
-                let prefix = if pre.is_empty() {
+                let prefix = if pre_clean.is_empty() {
                     None
                 } else {
-                    let pb = lower_effect_body(pre, vocabulary, ids, false, true)?;
+                    let pb = lower_effect_body(&pre_clean, vocabulary, ids, false, true)?;
                     if pb.target != BodyTarget::None {
                         return Err("oracle:modal-prefix-target");
                     }
                     Some(Box::new(pb))
                 };
-                let suffix = if post.is_empty() {
+                let suffix = if post_clean.is_empty() {
                     None
                 } else {
-                    let sb = lower_effect_body(post, vocabulary, ids, false, true)?;
+                    let sb = lower_effect_body(&post_clean, vocabulary, ids, false, true)?;
                     if sb.target != BodyTarget::None {
                         return Err("oracle:modal-suffix-target");
                     }
                     Some(Box::new(sb))
                 };
                 let mut combined_res = loyalty_res.clone();
-                let mut lowered_modes = Vec::with_capacity(modes.len());
-                for m in modes {
-                    let (m_filtered, m_res, m_red) = strip_activated_restrictions_ext(
-                        &m.body,
-                        entry_tap.as_ref(),
-                        true,
-                        vocabulary,
-                    )?;
-                    if m_red.is_some() {
-                        return Err("oracle:loyalty-cost-reduction");
-                    }
+                let mut lowered_modes = Vec::with_capacity(prepared_modes.len());
+                for (m_clean, m_res) in prepared_modes {
                     if let Some(r) = m_res {
                         combined_res = Some(combine_activation_restrictions(combined_res, r));
                     }
-                    lowered_modes.push(lower_effect_body(
-                        &m_filtered,
-                        vocabulary,
-                        ids,
-                        false,
-                        true,
-                    )?);
+                    lowered_modes.push(lower_effect_body(&m_clean, vocabulary, ids, false, true)?);
                 }
+                let all_single_player = all_modes_target_single_player(&lowered_modes);
+                if distinct_requested && !all_single_player {
+                    return Err("oracle:unsupported-modal-distinct-targets");
+                }
+                let distinct_targets = distinct_requested && all_single_player;
                 let first = lowered_modes.remove(0);
                 let id = ids.activated();
                 if let Some(n) = parsed_delta {
@@ -409,7 +557,7 @@ pub(super) fn lower_ability(
                         maximum: max,
                         conditional_maximum: None,
                         allow_repeat,
-                        distinct_targets: false,
+                        distinct_targets,
                         uniqueness,
                         mode_costs: Vec::new(),
                         escalate_mana: None,
@@ -482,24 +630,29 @@ pub(super) fn lower_ability(
                 } else {
                     raw_max.min(u8::try_from(modes.len()).unwrap_or(u8::MAX))
                 };
-                let (prefix, suffix, embed_wrap) = if pre.is_empty() && post.is_empty() {
+                let (pre_clean, pre_distinct) = strip_each_mode_different_player(pre);
+                let (post_clean, post_distinct) = strip_each_mode_different_player(post);
+                let mut distinct_requested =
+                    pre_distinct || post_distinct || modal_choice_requests_distinct(choice);
+                let (prefix, suffix, embed_wrap) = if pre_clean.is_empty() && post_clean.is_empty()
+                {
                     (None, None, false)
                 } else if (min, max) == (1, 1) && !allow_repeat {
                     (None, None, true)
                 } else {
-                    let pb = if pre.is_empty() {
+                    let pb = if pre_clean.is_empty() {
                         None
                     } else {
-                        let b = lower_effect_body(pre, vocabulary, ids, true, true)?;
+                        let b = lower_effect_body(&pre_clean, vocabulary, ids, true, true)?;
                         if b.target != BodyTarget::None {
                             return Err("oracle:modal-prefix-target");
                         }
                         Some(Box::new(b))
                     };
-                    let sb = if post.is_empty() {
+                    let sb = if post_clean.is_empty() {
                         None
                     } else {
-                        let b = lower_effect_body(post, vocabulary, ids, true, true)?;
+                        let b = lower_effect_body(&post_clean, vocabulary, ids, true, true)?;
                         if b.target != BodyTarget::None {
                             return Err("oracle:modal-suffix-target");
                         }
@@ -515,14 +668,17 @@ pub(super) fn lower_ability(
                         &mut grouping,
                         vocabulary,
                     );
+                    let (m_clean, m_distinct) = strip_each_mode_different_player(&m_stripped);
+                    distinct_requested |= m_distinct;
                     let full = if embed_wrap {
-                        let mut f = Vec::with_capacity(pre.len() + m_stripped.len() + post.len());
-                        f.extend_from_slice(pre);
-                        f.extend(m_stripped);
-                        f.extend_from_slice(post);
+                        let mut f =
+                            Vec::with_capacity(pre_clean.len() + m_clean.len() + post_clean.len());
+                        f.extend_from_slice(&pre_clean);
+                        f.extend(m_clean);
+                        f.extend_from_slice(&post_clean);
                         f
                     } else {
-                        m_stripped
+                        m_clean
                     };
                     mode_bodies.push(full);
                 }
@@ -542,10 +698,15 @@ pub(super) fn lower_ability(
                     }
                     options.push(opt_body);
                 }
+                let all_single_player = all_modes_target_single_player(&options);
+                if distinct_requested && (min > 1 || !all_single_player) {
+                    return Err("oracle:unsupported-modal-distinct-targets");
+                }
+                let distinct_targets = distinct_requested && all_single_player;
                 ExecutableBody::with_triggered_modes(TriggeredModes {
                     minimum: min,
                     maximum: max,
-                    distinct_targets: false,
+                    distinct_targets,
                     allow_repeat,
                     uniqueness,
                     prefix,
@@ -641,83 +802,97 @@ fn build_single_triggered_ability(
     let self_pronoun = trigger_subject_is_self(&unwrapped_for_self);
     let stripped_body = strip_triggered_restrictions(body, &mut spec, &mut grouping, vocabulary);
     let body = &stripped_body;
-    let mut exec_body =
-        if let Some((pre, choice, modes, post, allow_repeat)) = extract_modal_with_wrap(body) {
-            let (min, raw_max, uniqueness) = parse_modal_choice_with_uniqueness(choice)?;
-            if modes.len() < 2 {
-                return Err("oracle:modal-too-few");
-            }
-            let max = if allow_repeat {
-                raw_max
-            } else {
-                raw_max.min(u8::try_from(modes.len()).unwrap_or(u8::MAX))
-            };
-            let (prefix, suffix, embed_wrap) = if pre.is_empty() && post.is_empty() {
-                (None, None, false)
-            } else if (min, max) == (1, 1) && !allow_repeat {
-                (None, None, true)
-            } else {
-                let pb = if pre.is_empty() {
-                    None
-                } else {
-                    let b = lower_trigger_effect_body(pre, vocabulary, ids, &spec, self_pronoun)?;
-                    if b.target != BodyTarget::None {
-                        return Err("oracle:modal-prefix-target");
-                    }
-                    Some(Box::new(b))
-                };
-                let sb = if post.is_empty() {
-                    None
-                } else {
-                    let b = lower_trigger_effect_body(post, vocabulary, ids, &spec, self_pronoun)?;
-                    if b.target != BodyTarget::None {
-                        return Err("oracle:modal-suffix-target");
-                    }
-                    Some(Box::new(b))
-                };
-                (pb, sb, false)
-            };
-            let mut options = Vec::with_capacity(modes.len());
-            for m in modes {
-                let m_stripped =
-                    strip_triggered_restrictions(&m.body, &mut spec, &mut grouping, vocabulary);
-                let full = if embed_wrap {
-                    let mut f = Vec::with_capacity(pre.len() + m_stripped.len() + post.len());
-                    f.extend_from_slice(pre);
-                    f.extend(m_stripped);
-                    f.extend_from_slice(post);
-                    f
-                } else {
-                    m_stripped
-                };
-                let mut opt_body =
-                    lower_trigger_effect_body(&full, vocabulary, ids, &spec, self_pronoun)?;
-                if let Some(cond) = guard {
-                    prepend_instruction_at(
-                        &mut opt_body.instructions,
-                        0,
-                        Instruction::RequireCondition(cond),
-                    );
-                }
-                options.push(opt_body);
-            }
-            ExecutableBody::with_triggered_modes(TriggeredModes {
-                minimum: min,
-                maximum: max,
-                distinct_targets: false,
-                allow_repeat,
-                uniqueness,
-                prefix,
-                suffix,
-                options,
-            })
+    let mut exec_body = if let Some((pre, choice, modes, post, allow_repeat)) =
+        extract_modal_with_wrap(body)
+    {
+        let (min, raw_max, uniqueness) = parse_modal_choice_with_uniqueness(choice)?;
+        if modes.len() < 2 {
+            return Err("oracle:modal-too-few");
+        }
+        let max = if allow_repeat {
+            raw_max
         } else {
-            let mut b = lower_trigger_effect_body(body, vocabulary, ids, &spec, self_pronoun)?;
-            if let Some(cond) = guard {
-                prepend_instruction_at(&mut b.instructions, 0, Instruction::RequireCondition(cond));
-            }
-            b
+            raw_max.min(u8::try_from(modes.len()).unwrap_or(u8::MAX))
         };
+        let (pre_clean, pre_distinct) = strip_each_mode_different_player(pre);
+        let (post_clean, post_distinct) = strip_each_mode_different_player(post);
+        let mut distinct_requested =
+            pre_distinct || post_distinct || modal_choice_requests_distinct(choice);
+        let (prefix, suffix, embed_wrap) = if pre_clean.is_empty() && post_clean.is_empty() {
+            (None, None, false)
+        } else if (min, max) == (1, 1) && !allow_repeat {
+            (None, None, true)
+        } else {
+            let pb = if pre_clean.is_empty() {
+                None
+            } else {
+                let b =
+                    lower_trigger_effect_body(&pre_clean, vocabulary, ids, &spec, self_pronoun)?;
+                if b.target != BodyTarget::None {
+                    return Err("oracle:modal-prefix-target");
+                }
+                Some(Box::new(b))
+            };
+            let sb = if post_clean.is_empty() {
+                None
+            } else {
+                let b =
+                    lower_trigger_effect_body(&post_clean, vocabulary, ids, &spec, self_pronoun)?;
+                if b.target != BodyTarget::None {
+                    return Err("oracle:modal-suffix-target");
+                }
+                Some(Box::new(b))
+            };
+            (pb, sb, false)
+        };
+        let mut options = Vec::with_capacity(modes.len());
+        for m in modes {
+            let m_stripped =
+                strip_triggered_restrictions(&m.body, &mut spec, &mut grouping, vocabulary);
+            let (m_clean, m_distinct) = strip_each_mode_different_player(&m_stripped);
+            distinct_requested |= m_distinct;
+            let full = if embed_wrap {
+                let mut f = Vec::with_capacity(pre_clean.len() + m_clean.len() + post_clean.len());
+                f.extend_from_slice(&pre_clean);
+                f.extend(m_clean);
+                f.extend_from_slice(&post_clean);
+                f
+            } else {
+                m_clean
+            };
+            let mut opt_body =
+                lower_trigger_effect_body(&full, vocabulary, ids, &spec, self_pronoun)?;
+            if let Some(cond) = guard {
+                prepend_instruction_at(
+                    &mut opt_body.instructions,
+                    0,
+                    Instruction::RequireCondition(cond),
+                );
+            }
+            options.push(opt_body);
+        }
+        let all_single_player = all_modes_target_single_player(&options);
+        if distinct_requested && (min > 1 || !all_single_player) {
+            return Err("oracle:unsupported-modal-distinct-targets");
+        }
+        let distinct_targets = distinct_requested && all_single_player;
+        ExecutableBody::with_triggered_modes(TriggeredModes {
+            minimum: min,
+            maximum: max,
+            distinct_targets,
+            allow_repeat,
+            uniqueness,
+            prefix,
+            suffix,
+            options,
+        })
+    } else {
+        let mut b = lower_trigger_effect_body(body, vocabulary, ids, &spec, self_pronoun)?;
+        if let Some(cond) = guard {
+            prepend_instruction_at(&mut b.instructions, 0, Instruction::RequireCondition(cond));
+        }
+        b
+    };
     apply_trigger_body_rewrites(&mut exec_body, &spec, grouping, self_pronoun);
     Ok(TriggeredAbility {
         id: ids.triggered(),
@@ -1131,6 +1306,16 @@ fn strip_activated_restrictions_ext(
     allow_spend_mana_type: bool,
     vocabulary: &CreatureTypeVocabulary,
 ) -> Result<StrippedActivatedRestrictions, &'static str> {
+    strip_activated_restrictions_inner(ins, entry_tap, allow_spend_mana_type, vocabulary, false)
+}
+
+fn strip_activated_restrictions_inner(
+    ins: &[InstructionAst],
+    entry_tap: Option<&EntryTap>,
+    allow_spend_mana_type: bool,
+    vocabulary: &CreatureTypeVocabulary,
+    mut after_exile_or_cast_perm: bool,
+) -> Result<StrippedActivatedRestrictions, &'static str> {
     let mut restriction = None;
     let mut cost_reduction = None;
     let mut filtered = Vec::with_capacity(ins.len());
@@ -1228,11 +1413,18 @@ fn strip_activated_restrictions_ext(
             InstructionAst::AbilityRestriction {
                 restriction: r,
                 condition: None,
+            } if after_exile_or_cast_perm && is_sorcery_timing_restriction(r) => {
+                filtered.push(item.clone());
+            }
+            InstructionAst::AbilityRestriction {
+                restriction: r,
+                condition: None,
             } if is_instant_only_restriction_local(r) => {}
             InstructionAst::AbilityRestriction {
                 restriction: r,
                 condition: None,
             } if is_still_type_restriction_local(r)
+                || r.eq_ignore_ascii_case("EachModeDifferentPlayer")
                 || matches!(
                     r.as_str(),
                     "ExcessDamageToController"
@@ -1272,11 +1464,12 @@ fn strip_activated_restrictions_ext(
                 restriction = Some(combine_activation_restrictions(restriction, next_r));
             }
             InstructionAst::BindX { x_expr, body } if !body.is_empty() => {
-                let (inner_filtered, inner_r, inner_red) = strip_activated_restrictions_ext(
+                let (inner_filtered, inner_r, inner_red) = strip_activated_restrictions_inner(
                     body,
                     entry_tap,
                     allow_spend_mana_type,
                     vocabulary,
+                    after_exile_or_cast_perm,
                 )?;
                 if let Some(ir) = inner_r {
                     restriction = Some(combine_activation_restrictions(restriction, ir));
@@ -1289,15 +1482,61 @@ fn strip_activated_restrictions_ext(
                     body: inner_filtered,
                 });
             }
+            InstructionAst::BindXY {
+                x_expr,
+                y_expr,
+                body,
+            } if !body.is_empty() => {
+                let (inner_filtered, inner_r, inner_red) = strip_activated_restrictions_inner(
+                    body,
+                    entry_tap,
+                    allow_spend_mana_type,
+                    vocabulary,
+                    after_exile_or_cast_perm,
+                )?;
+                if let Some(ir) = inner_r {
+                    restriction = Some(combine_activation_restrictions(restriction, ir));
+                }
+                if let Some(ired) = inner_red {
+                    cost_reduction = Some(combine_cost_reductions(cost_reduction, ired));
+                }
+                filtered.push(InstructionAst::BindXY {
+                    x_expr: x_expr.clone(),
+                    y_expr: y_expr.clone(),
+                    body: inner_filtered,
+                });
+            }
+            InstructionAst::ScopedDuration { duration, body } => {
+                let (inner_filtered, inner_r, inner_red) = strip_activated_restrictions_inner(
+                    body,
+                    entry_tap,
+                    allow_spend_mana_type,
+                    vocabulary,
+                    after_exile_or_cast_perm,
+                )?;
+                if inner_red.is_some() {
+                    return Err("oracle:unsupported-cost-reduction");
+                }
+                if let Some(ir) = inner_r {
+                    restriction = Some(combine_activation_restrictions(restriction, ir));
+                }
+                if !(inner_filtered.is_empty() && !body.is_empty()) {
+                    filtered.push(InstructionAst::ScopedDuration {
+                        duration: duration.clone(),
+                        body: inner_filtered,
+                    });
+                }
+            }
             InstructionAst::IfCondition {
                 condition,
                 then_body,
             } => {
-                let (t, tr, tred) = strip_activated_restrictions_ext(
+                let (t, tr, tred) = strip_activated_restrictions_inner(
                     then_body,
                     entry_tap,
                     allow_spend_mana_type,
                     vocabulary,
+                    after_exile_or_cast_perm,
                 )?;
                 if t.is_empty()
                     && tr.is_none()
@@ -1337,11 +1576,12 @@ fn strip_activated_restrictions_ext(
                 });
             }
             InstructionAst::Optional(inner) => {
-                let (inner_filtered, inner_r, inner_red) = strip_activated_restrictions_ext(
+                let (inner_filtered, inner_r, inner_red) = strip_activated_restrictions_inner(
                     inner,
                     entry_tap,
                     allow_spend_mana_type,
                     vocabulary,
+                    after_exile_or_cast_perm,
                 )?;
                 if inner_red.is_some() {
                     return Err("oracle:unsupported-cost-reduction");
@@ -1354,11 +1594,12 @@ fn strip_activated_restrictions_ext(
                 }
             }
             InstructionAst::IfPreviousSucceeded(inner) => {
-                let (inner_filtered, inner_r, inner_red) = strip_activated_restrictions_ext(
+                let (inner_filtered, inner_r, inner_red) = strip_activated_restrictions_inner(
                     inner,
                     entry_tap,
                     allow_spend_mana_type,
                     vocabulary,
+                    after_exile_or_cast_perm,
                 )?;
                 if inner_red.is_some() {
                     return Err("oracle:unsupported-cost-reduction");
@@ -1371,11 +1612,12 @@ fn strip_activated_restrictions_ext(
                 }
             }
             InstructionAst::IfPreviousFailed(inner) => {
-                let (inner_filtered, inner_r, inner_red) = strip_activated_restrictions_ext(
+                let (inner_filtered, inner_r, inner_red) = strip_activated_restrictions_inner(
                     inner,
                     entry_tap,
                     allow_spend_mana_type,
                     vocabulary,
+                    after_exile_or_cast_perm,
                 )?;
                 if inner_red.is_some() {
                     return Err("oracle:unsupported-cost-reduction");
@@ -1391,11 +1633,12 @@ fn strip_activated_restrictions_ext(
                 player,
                 body: inner,
             } => {
-                let (inner_filtered, inner_r, inner_red) = strip_activated_restrictions_ext(
+                let (inner_filtered, inner_r, inner_red) = strip_activated_restrictions_inner(
                     inner,
                     entry_tap,
                     allow_spend_mana_type,
                     vocabulary,
+                    after_exile_or_cast_perm,
                 )?;
                 if inner_red.is_some() {
                     return Err("oracle:unsupported-cost-reduction");
@@ -1411,11 +1654,12 @@ fn strip_activated_restrictions_ext(
                 }
             }
             InstructionAst::Otherwise(inner) => {
-                let (inner_filtered, inner_r, inner_red) = strip_activated_restrictions_ext(
+                let (inner_filtered, inner_r, inner_red) = strip_activated_restrictions_inner(
                     inner,
                     entry_tap,
                     allow_spend_mana_type,
                     vocabulary,
+                    after_exile_or_cast_perm,
                 )?;
                 if inner_red.is_some() {
                     return Err("oracle:unsupported-cost-reduction");
@@ -1428,11 +1672,12 @@ fn strip_activated_restrictions_ext(
                 }
             }
             InstructionAst::ReplaceEffect(inner) => {
-                let (inner_filtered, inner_r, inner_red) = strip_activated_restrictions_ext(
+                let (inner_filtered, inner_r, inner_red) = strip_activated_restrictions_inner(
                     inner,
                     entry_tap,
                     allow_spend_mana_type,
                     vocabulary,
+                    after_exile_or_cast_perm,
                 )?;
                 if inner_red.is_some() {
                     return Err("oracle:unsupported-cost-reduction");
@@ -1444,12 +1689,86 @@ fn strip_activated_restrictions_ext(
                     filtered.push(InstructionAst::ReplaceEffect(inner_filtered));
                 }
             }
+            InstructionAst::ReplaceEffectWith(rew) => {
+                let (inner_filtered, inner_r, inner_red) = strip_activated_restrictions_inner(
+                    &rew.body,
+                    entry_tap,
+                    allow_spend_mana_type,
+                    vocabulary,
+                    after_exile_or_cast_perm,
+                )?;
+                if inner_red.is_some() {
+                    return Err("oracle:unsupported-cost-reduction");
+                }
+                if let Some(ir) = inner_r {
+                    restriction = Some(combine_activation_restrictions(restriction, ir));
+                }
+                if !(inner_filtered.is_empty() && !rew.body.is_empty()) {
+                    let mut next = (**rew).clone();
+                    next.body = inner_filtered;
+                    filtered.push(InstructionAst::ReplaceEffectWith(Box::new(next)));
+                }
+            }
+            InstructionAst::OneShotReplacement {
+                subject,
+                event,
+                replace_with,
+                instead_body,
+            } => {
+                let new_body = match instead_body {
+                    Some(inner) => {
+                        let (inner_filtered, inner_r, inner_red) =
+                            strip_activated_restrictions_inner(
+                                inner,
+                                entry_tap,
+                                allow_spend_mana_type,
+                                vocabulary,
+                                after_exile_or_cast_perm,
+                            )?;
+                        if inner_red.is_some() {
+                            return Err("oracle:unsupported-cost-reduction");
+                        }
+                        if let Some(ir) = inner_r {
+                            restriction = Some(combine_activation_restrictions(restriction, ir));
+                        }
+                        Some(inner_filtered)
+                    }
+                    None => None,
+                };
+                filtered.push(InstructionAst::OneShotReplacement {
+                    subject: subject.clone(),
+                    event: event.clone(),
+                    replace_with: replace_with.clone(),
+                    instead_body: new_body,
+                });
+            }
+            InstructionAst::SearchLibrary { follow_up, .. } if !follow_up.is_empty() => {
+                let (inner_filtered, inner_r, inner_red) = strip_activated_restrictions_inner(
+                    follow_up,
+                    entry_tap,
+                    allow_spend_mana_type,
+                    vocabulary,
+                    after_exile_or_cast_perm,
+                )?;
+                if inner_red.is_some() {
+                    return Err("oracle:unsupported-cost-reduction");
+                }
+                if let Some(ir) = inner_r {
+                    restriction = Some(combine_activation_restrictions(restriction, ir));
+                }
+                let mut cloned = item.clone();
+                if let InstructionAst::SearchLibrary { follow_up: dst, .. } = &mut cloned {
+                    *dst = inner_filtered;
+                }
+                filtered.push(cloned);
+            }
             InstructionAst::ReflexiveTrigger(inner) => {
-                let (inner_filtered, inner_r, inner_red) = strip_activated_restrictions_ext(
+                let (inner_filtered, inner_r, inner_red) = strip_activated_restrictions_inner(
                     inner,
                     entry_tap,
                     allow_spend_mana_type,
                     vocabulary,
+                    after_exile_or_cast_perm,
                 )?;
                 if inner_red.is_some() {
                     return Err("oracle:unsupported-cost-reduction");
@@ -1461,14 +1780,55 @@ fn strip_activated_restrictions_ext(
                     filtered.push(InstructionAst::ReflexiveTrigger(inner_filtered));
                 }
             }
+            InstructionAst::ReflexiveEventTrigger {
+                trigger,
+                body: inner,
+            } => {
+                let (inner_filtered, inner_r, inner_red) = strip_activated_restrictions_inner(
+                    inner,
+                    entry_tap,
+                    allow_spend_mana_type,
+                    vocabulary,
+                    after_exile_or_cast_perm,
+                )?;
+                if inner_red.is_some() {
+                    return Err("oracle:unsupported-cost-reduction");
+                }
+                if let Some(ir) = inner_r {
+                    restriction = Some(combine_activation_restrictions(restriction, ir));
+                }
+                filtered.push(InstructionAst::ReflexiveEventTrigger {
+                    trigger: trigger.clone(),
+                    body: inner_filtered,
+                });
+            }
+            InstructionAst::Simultaneous(inner) => {
+                let (inner_filtered, inner_r, inner_red) = strip_activated_restrictions_inner(
+                    inner,
+                    entry_tap,
+                    allow_spend_mana_type,
+                    vocabulary,
+                    after_exile_or_cast_perm,
+                )?;
+                if inner_red.is_some() {
+                    return Err("oracle:unsupported-cost-reduction");
+                }
+                if let Some(ir) = inner_r {
+                    restriction = Some(combine_activation_restrictions(restriction, ir));
+                }
+                if !(inner_filtered.is_empty() && !inner.is_empty()) {
+                    filtered.push(InstructionAst::Simultaneous(inner_filtered));
+                }
+            }
             InstructionAst::Choice(branches) => {
                 let mut new_branches = Vec::with_capacity(branches.len());
                 for br in branches {
-                    let (bf, br_r, br_red) = strip_activated_restrictions_ext(
+                    let (bf, br_r, br_red) = strip_activated_restrictions_inner(
                         br,
                         entry_tap,
                         allow_spend_mana_type,
                         vocabulary,
+                        after_exile_or_cast_perm,
                     )?;
                     if br_red.is_some() {
                         return Err("oracle:unsupported-cost-reduction");
@@ -1485,11 +1845,12 @@ fn strip_activated_restrictions_ext(
                 scope,
                 body: inner,
             } => {
-                let (inner_filtered, inner_r, inner_red) = strip_activated_restrictions_ext(
+                let (inner_filtered, inner_r, inner_red) = strip_activated_restrictions_inner(
                     inner,
                     entry_tap,
                     allow_spend_mana_type,
                     vocabulary,
+                    after_exile_or_cast_perm,
                 )?;
                 if inner_red.is_some() {
                     return Err("oracle:unsupported-cost-reduction");
@@ -1507,11 +1868,12 @@ fn strip_activated_restrictions_ext(
                 trigger,
                 body: inner,
             } => {
-                let (inner_filtered, inner_r, inner_red) = strip_activated_restrictions_ext(
+                let (inner_filtered, inner_r, inner_red) = strip_activated_restrictions_inner(
                     inner,
                     entry_tap,
                     allow_spend_mana_type,
                     vocabulary,
+                    after_exile_or_cast_perm,
                 )?;
                 if inner_red.is_some() {
                     return Err("oracle:unsupported-cost-reduction");
@@ -1524,12 +1886,83 @@ fn strip_activated_restrictions_ext(
                     body: inner_filtered,
                 });
             }
-            InstructionAst::SpreeMode { cost, body: inner } => {
-                let (inner_filtered, inner_r, inner_red) = strip_activated_restrictions_ext(
+            InstructionAst::TemporaryTrigger {
+                trigger,
+                body: inner,
+                duration,
+            } => {
+                let (inner_filtered, inner_r, inner_red) = strip_activated_restrictions_inner(
                     inner,
                     entry_tap,
                     allow_spend_mana_type,
                     vocabulary,
+                    after_exile_or_cast_perm,
+                )?;
+                if inner_red.is_some() {
+                    return Err("oracle:unsupported-cost-reduction");
+                }
+                if let Some(ir) = inner_r {
+                    restriction = Some(combine_activation_restrictions(restriction, ir));
+                }
+                filtered.push(InstructionAst::TemporaryTrigger {
+                    trigger: trigger.clone(),
+                    body: inner_filtered,
+                    duration: duration.clone(),
+                });
+            }
+            InstructionAst::WhenYouNext {
+                event,
+                body: inner,
+                duration,
+            } => {
+                let (inner_filtered, inner_r, inner_red) = strip_activated_restrictions_inner(
+                    inner,
+                    entry_tap,
+                    allow_spend_mana_type,
+                    vocabulary,
+                    after_exile_or_cast_perm,
+                )?;
+                if inner_red.is_some() {
+                    return Err("oracle:unsupported-cost-reduction");
+                }
+                if let Some(ir) = inner_r {
+                    restriction = Some(combine_activation_restrictions(restriction, ir));
+                }
+                filtered.push(InstructionAst::WhenYouNext {
+                    event: event.clone(),
+                    body: inner_filtered,
+                    duration: duration.clone(),
+                });
+            }
+            InstructionAst::ForAsLongAs {
+                condition,
+                body: inner,
+            } => {
+                let (inner_filtered, inner_r, inner_red) = strip_activated_restrictions_inner(
+                    inner,
+                    entry_tap,
+                    allow_spend_mana_type,
+                    vocabulary,
+                    after_exile_or_cast_perm,
+                )?;
+                if inner_red.is_some() {
+                    return Err("oracle:unsupported-cost-reduction");
+                }
+                if let Some(ir) = inner_r {
+                    restriction = Some(combine_activation_restrictions(restriction, ir));
+                }
+                filtered.push(InstructionAst::ForAsLongAs {
+                    condition: condition.clone(),
+                    body: inner_filtered,
+                });
+            }
+            InstructionAst::SpreeMode { cost, body: inner } => {
+                let (inner_filtered, inner_r, inner_red) = strip_activated_restrictions_inner(
+                    inner,
+                    entry_tap,
+                    allow_spend_mana_type,
+                    vocabulary,
+                    after_exile_or_cast_perm,
                 )?;
                 if inner_red.is_some() {
                     return Err("oracle:unsupported-cost-reduction");
@@ -1546,11 +1979,12 @@ fn strip_activated_restrictions_ext(
                 player,
                 body: inner,
             } => {
-                let (inner_filtered, inner_r, inner_red) = strip_activated_restrictions_ext(
+                let (inner_filtered, inner_r, inner_red) = strip_activated_restrictions_inner(
                     inner,
                     entry_tap,
                     allow_spend_mana_type,
                     vocabulary,
+                    after_exile_or_cast_perm,
                 )?;
                 if inner_red.is_some() {
                     return Err("oracle:unsupported-cost-reduction");
@@ -1567,11 +2001,12 @@ fn strip_activated_restrictions_ext(
                 filter,
                 body: inner,
             } => {
-                let (inner_filtered, inner_r, inner_red) = strip_activated_restrictions_ext(
+                let (inner_filtered, inner_r, inner_red) = strip_activated_restrictions_inner(
                     inner,
                     entry_tap,
                     allow_spend_mana_type,
                     vocabulary,
+                    after_exile_or_cast_perm,
                 )?;
                 if inner_red.is_some() {
                     return Err("oracle:unsupported-cost-reduction");
@@ -1585,11 +2020,12 @@ fn strip_activated_restrictions_ext(
                 });
             }
             InstructionAst::ForEachCount { count, body: inner } => {
-                let (inner_filtered, inner_r, inner_red) = strip_activated_restrictions_ext(
+                let (inner_filtered, inner_r, inner_red) = strip_activated_restrictions_inner(
                     inner,
                     entry_tap,
                     allow_spend_mana_type,
                     vocabulary,
+                    after_exile_or_cast_perm,
                 )?;
                 if inner_red.is_some() {
                     return Err("oracle:unsupported-cost-reduction");
@@ -1602,6 +2038,28 @@ fn strip_activated_restrictions_ext(
                     body: inner_filtered,
                 });
             }
+            InstructionAst::ForEachSubjectPlayer {
+                players,
+                body: inner,
+            } => {
+                let (inner_filtered, inner_r, inner_red) = strip_activated_restrictions_inner(
+                    inner,
+                    entry_tap,
+                    allow_spend_mana_type,
+                    vocabulary,
+                    after_exile_or_cast_perm,
+                )?;
+                if inner_red.is_some() {
+                    return Err("oracle:unsupported-cost-reduction");
+                }
+                if let Some(ir) = inner_r {
+                    restriction = Some(combine_activation_restrictions(restriction, ir));
+                }
+                filtered.push(InstructionAst::ForEachSubjectPlayer {
+                    players: players.clone(),
+                    body: inner_filtered,
+                });
+            }
             InstructionAst::Unless {
                 body: inner,
                 unless_player,
@@ -1609,11 +2067,12 @@ fn strip_activated_restrictions_ext(
                 unless_action,
                 unless_condition,
             } => {
-                let (inner_filtered, inner_r, inner_red) = strip_activated_restrictions_ext(
+                let (inner_filtered, inner_r, inner_red) = strip_activated_restrictions_inner(
                     inner,
                     entry_tap,
                     allow_spend_mana_type,
                     vocabulary,
+                    after_exile_or_cast_perm,
                 )?;
                 if inner_red.is_some() {
                     return Err("oracle:unsupported-cost-reduction");
@@ -1623,11 +2082,12 @@ fn strip_activated_restrictions_ext(
                 }
                 let new_action = match unless_action {
                     Some(act) => {
-                        let (af, ar, ared) = strip_activated_restrictions_ext(
+                        let (af, ar, ared) = strip_activated_restrictions_inner(
                             act,
                             entry_tap,
                             allow_spend_mana_type,
                             vocabulary,
+                            after_exile_or_cast_perm,
                         )?;
                         if ared.is_some() {
                             return Err("oracle:unsupported-cost-reduction");
@@ -1650,11 +2110,12 @@ fn strip_activated_restrictions_ext(
             InstructionAst::Modal { choice, modes } => {
                 let mut new_modes = Vec::with_capacity(modes.len());
                 for m in modes {
-                    let (mb, mr, mred) = strip_activated_restrictions_ext(
+                    let (mb, mr, mred) = strip_activated_restrictions_inner(
                         &m.body,
                         entry_tap,
                         allow_spend_mana_type,
                         vocabulary,
+                        after_exile_or_cast_perm,
                     )?;
                     if let Some(ir) = mr {
                         restriction = Some(combine_activation_restrictions(restriction, ir));
@@ -1676,6 +2137,9 @@ fn strip_activated_restrictions_ext(
             _ => {
                 filtered.push(item.clone());
             }
+        }
+        if is_exile_or_cast_perm_instr(item) {
+            after_exile_or_cast_perm = true;
         }
     }
     Ok((filtered, restriction, cost_reduction))
@@ -3590,10 +4054,47 @@ fn combat_steps_condition() -> TriggerCondition {
     )
 }
 
+struct UnwrappedQualifiedTrigger<'a> {
+    inner: &'a TriggerEventAst,
+    first_time_each_turn: bool,
+    condition: Option<TriggerCondition>,
+    enters_tapped: Option<bool>,
+    while_exiled: bool,
+}
+
+fn apply_enters_tapped_filter(
+    event: &mut TriggerEvent,
+    expected: bool,
+) -> Result<(), &'static str> {
+    let apply_clause = |clause: &mut ObjectClause| -> Result<(), &'static str> {
+        if clause.tapped == Some(!expected) {
+            return Err("oracle:conflicting-tapped-filter");
+        }
+        clause.tapped = Some(expected);
+        Ok(())
+    };
+    match event {
+        TriggerEvent::Enters { subject, .. } => match subject {
+            ObjectFilter::Clause(c) => apply_clause(c),
+            ObjectFilter::Either(c1, c2) => {
+                apply_clause(c1)?;
+                apply_clause(c2)
+            }
+        },
+        TriggerEvent::AnyOf(events) if !events.is_empty() => {
+            for ev in events {
+                apply_enters_tapped_filter(ev, expected)?;
+            }
+            Ok(())
+        }
+        _ => Err("oracle:unsupported-trigger-qualifier"),
+    }
+}
+
 fn unwrap_qualified_trigger(
     mut ev: &TriggerEventAst,
     has_intervening_if: bool,
-) -> Result<(&TriggerEventAst, bool, Option<TriggerCondition>), &'static str> {
+) -> Result<UnwrappedQualifiedTrigger<'_>, &'static str> {
     let mut first_time_each_turn = false;
     let mut timings: Vec<&str> = Vec::new();
     while let TriggerEventAst::QualifiedTrigger {
@@ -3622,10 +4123,53 @@ fn unwrap_qualified_trigger(
             None => next,
         });
     };
+    let mut enters_tapped: Option<bool> = None;
+    let mut set_tapped = |expected: bool| -> Result<(), &'static str> {
+        if enters_tapped == Some(!expected) {
+            return Err("oracle:unsupported-trigger-qualifier");
+        }
+        enters_tapped = Some(expected);
+        Ok(())
+    };
+    let mut while_exiled = false;
     for t in timings {
-        match t.trim().to_ascii_lowercase().as_str() {
+        let low = t.trim().to_ascii_lowercase();
+        let (timing_part, tapped_part) = if let Some((prefix, suffix)) = low.split_once(':') {
+            (prefix.trim(), Some(suffix.trim()))
+        } else {
+            (low.as_str(), None)
+        };
+        if let Some(tap_tag) = tapped_part {
+            match timing_part {
+                "during_combat" => push_cond(combat_steps_condition()),
+                "during_declare_attackers_step" => {
+                    push_cond(TriggerCondition::DuringStep(Step::DeclareAttackers));
+                }
+                _ => return Err("oracle:unsupported-trigger-qualifier"),
+            }
+            match tap_tag {
+                "tapped" => set_tapped(true)?,
+                "untapped" => set_tapped(false)?,
+                _ => return Err("oracle:unsupported-trigger-qualifier"),
+            }
+            continue;
+        }
+        match timing_part {
             "during_your_turn" => push_cond(TriggerCondition::ControllersTurn),
+            "during_opponents_turn" => push_cond(TriggerCondition::OpponentsTurn),
             "during_combat" => push_cond(combat_steps_condition()),
+            "during_declare_attackers_step" => {
+                push_cond(TriggerCondition::DuringStep(Step::DeclareAttackers));
+            }
+            "enters_tapped" => set_tapped(true)?,
+            "enters_untapped" => set_tapped(false)?,
+            "while_exiled" => {
+                if matches!(ev, TriggerEventAst::CountersChanged { .. }) {
+                    while_exiled = true;
+                } else {
+                    return Err("oracle:unsupported-trigger-qualifier");
+                }
+            }
             "other_than_first_each_turn" => {
                 if matches!(
                     ev,
@@ -3646,7 +4190,13 @@ fn unwrap_qualified_trigger(
             _ => return Err("oracle:unsupported-trigger-qualifier"),
         }
     }
-    Ok((ev, first_time_each_turn, cond))
+    Ok(UnwrappedQualifiedTrigger {
+        inner: ev,
+        first_time_each_turn,
+        condition: cond,
+        enters_tapped,
+        while_exiled,
+    })
 }
 
 pub(super) fn lower_trigger_spec(
@@ -3660,15 +4210,23 @@ pub(super) fn lower_trigger_spec(
     let mut unwrapped_events = Vec::with_capacity(trig.events.len());
     let mut qualified_first_time = false;
     let mut qualified_cond: Option<TriggerCondition> = None;
+    let mut qualified_enters_tapped: Option<bool> = None;
+    let mut qualified_while_exiled = false;
     for (idx, ev) in trig.events.iter().enumerate() {
-        let (inner, ft, qcond) = unwrap_qualified_trigger(ev, has_intervening_if)?;
+        let unwrapped = unwrap_qualified_trigger(ev, has_intervening_if)?;
         if idx == 0 {
-            qualified_first_time = ft;
-            qualified_cond = qcond;
-        } else if ft != qualified_first_time || qcond != qualified_cond {
+            qualified_first_time = unwrapped.first_time_each_turn;
+            qualified_cond = unwrapped.condition;
+            qualified_enters_tapped = unwrapped.enters_tapped;
+            qualified_while_exiled = unwrapped.while_exiled;
+        } else if unwrapped.first_time_each_turn != qualified_first_time
+            || unwrapped.condition != qualified_cond
+            || unwrapped.enters_tapped != qualified_enters_tapped
+            || unwrapped.while_exiled != qualified_while_exiled
+        {
             return Err("oracle:conflicting-trigger-qualifiers");
         }
-        unwrapped_events.push(inner);
+        unwrapped_events.push(unwrapped.inner);
     }
     let mut grouping = TriggerGrouping::EachOccurrence;
     let mut events = Vec::with_capacity(unwrapped_events.len());
@@ -3898,6 +4456,9 @@ pub(super) fn lower_trigger_spec(
         });
     }
     let mut event = wrap_trigger_events_any_of(events)?;
+    if let Some(expected_tapped) = qualified_enters_tapped {
+        apply_enters_tapped_filter(&mut event, expected_tapped)?;
+    }
     let mut consumed_if = false;
     if let (
         TriggerEvent::Enters {
@@ -3977,6 +4538,20 @@ pub(super) fn lower_trigger_spec(
         }
     }
     let mut spec = TriggerSpec::new(event);
+    if qualified_while_exiled {
+        spec = spec.in_zone(spellwake_engine::program::TriggerZone::Any);
+        let exile_cond = TriggerCondition::Eval(Box::new(ResolutionCondition {
+            left: ValueExpr::SourceState(SourceStateExpr::InZone(
+                spellwake_engine::program::SourceZoneKind::Exile,
+            )),
+            comparison: Comparison::Equal,
+            right: ValueExpr::literal(1),
+        }));
+        extra_cond = Some(match extra_cond {
+            Some(prev) => TriggerCondition::And(Box::new(prev), Box::new(exile_cond)),
+            None => exile_cond,
+        });
+    }
     let mut guard = None;
     if let Some(ec) = extra_cond {
         spec = spec.only_if(ec);
@@ -3988,7 +4563,10 @@ pub(super) fn lower_trigger_spec(
                 ConditionAst::Marker(GameMarker::InZone {
                     subject,
                     zone: ZoneFilter::YourGraveyard,
-                }) if matches!(subject.as_ref(), SubjectRefAst::SelfObject)
+                }) | ConditionAst::SubjectInZone {
+                    subject,
+                    zone: ZoneFilter::YourGraveyard,
+                } if matches!(subject.as_ref(), SubjectRefAst::SelfObject)
             )
         };
         let remaining = if is_self_in_gy(cond) {
@@ -5344,6 +5922,21 @@ pub(super) fn lower_trigger_event(
                 TriggerGrouping::EachOccurrence,
             ))
         }
+        TriggerEventAst::BecomesBlockedByCount {
+            subject,
+            min_blockers,
+        } if *min_blockers >= 1 => Ok((
+            lower_subject_trigger_event(subject, vocabulary, |subj| {
+                TriggerEvent::BlocksOrBlocked {
+                    subject: subj,
+                    kind: BlockTriggerKind::BlockedByAtLeast {
+                        min_count: *min_blockers,
+                        blocker_filter: None,
+                    },
+                }
+            })?,
+            TriggerGrouping::EachOccurrence,
+        )),
         TriggerEventAst::BlocksOrBecomesBlockedBy {
             subject,
             other_filter,
@@ -6795,6 +7388,37 @@ pub(super) fn lower_trigger_event(
                 .collect();
             Ok((wrap_trigger_events_any_of(sub_events)?, grouping))
         }
+        TriggerEventAst::PlayerOrPermanentBecomesTargeted {
+            player,
+            permanent_filter,
+        } => {
+            if permanent_filter.zone.is_some() || permanent_filter.any_spell {
+                return Err("oracle:unsupported-trigger-event");
+            }
+            let rel = lower_player_relation(*player)?;
+            let subject = if is_unrestricted_filter(permanent_filter) {
+                ObjectFilter::permanent()
+            } else {
+                lower_object_filter(permanent_filter, vocabulary)?
+            };
+            Ok((
+                TriggerEvent::AnyOf(vec![
+                    TriggerEvent::PlayerTargeted {
+                        player: rel,
+                        by_opponent: false,
+                        spell_only: false,
+                        instant_or_sorcery_only: false,
+                    },
+                    TriggerEvent::Targeted {
+                        subject,
+                        by_opponent: false,
+                        spell_only: false,
+                        instant_or_sorcery_only: false,
+                    },
+                ]),
+                TriggerGrouping::OneOrMoreTogether,
+            ))
+        }
         TriggerEventAst::CountersChanged {
             subject,
             counter_kind,
@@ -7645,6 +8269,60 @@ fn try_lower_specialized_trigger_condition(
                     ))
                 }
                 PlayerRefAst::AnyPlayer | PlayerRefAst::EachPlayer => Some(step_cond),
+                _ => None,
+            }
+        }
+        ConditionAst::IsPhaseOrStep {
+            player,
+            phase,
+            first_only: false,
+        } => {
+            let step_cond = match phase.trim().to_ascii_lowercase().as_str() {
+                "untap" | "untap_step" => TriggerCondition::DuringStep(Step::Untap),
+                "upkeep" | "upkeep_step" => TriggerCondition::DuringStep(Step::Upkeep),
+                "draw" | "draw_step" => TriggerCondition::DuringStep(Step::Draw),
+                "precombat_main" | "precombat_main_phase" => {
+                    TriggerCondition::DuringStep(Step::PrecombatMain)
+                }
+                "begin_combat" | "beginning_of_combat" | "beginning_combat" => {
+                    TriggerCondition::DuringStep(Step::BeginningCombat)
+                }
+                "declare_attackers" | "declare_attackers_step" => {
+                    TriggerCondition::DuringStep(Step::DeclareAttackers)
+                }
+                "declare_blockers" | "declare_blockers_step" => {
+                    TriggerCondition::DuringStep(Step::DeclareBlockers)
+                }
+                "combat_damage" | "combat_damage_step" => {
+                    TriggerCondition::DuringStep(Step::CombatDamage)
+                }
+                "end_combat" | "end_of_combat" | "end_combat_step" => {
+                    TriggerCondition::DuringStep(Step::EndCombat)
+                }
+                "postcombat_main" | "postcombat_main_phase" => {
+                    TriggerCondition::DuringStep(Step::PostcombatMain)
+                }
+                "main_phase" | "main" => TriggerCondition::Or(
+                    Box::new(TriggerCondition::DuringStep(Step::PrecombatMain)),
+                    Box::new(TriggerCondition::DuringStep(Step::PostcombatMain)),
+                ),
+                "combat" | "combat_phase" => combat_steps_condition(),
+                "end_step" | "end" => TriggerCondition::DuringStep(Step::End),
+                "cleanup" | "cleanup_step" => TriggerCondition::DuringStep(Step::Cleanup),
+                _ => return None,
+            };
+            match player {
+                None | Some(PlayerRefAst::AnyPlayer | PlayerRefAst::EachPlayer) => Some(step_cond),
+                Some(PlayerRefAst::You) => Some(TriggerCondition::And(
+                    Box::new(TriggerCondition::ControllersTurn),
+                    Box::new(step_cond),
+                )),
+                Some(PlayerRefAst::AnyOpponent | PlayerRefAst::EachOpponent) => {
+                    Some(TriggerCondition::And(
+                        Box::new(TriggerCondition::OpponentsTurn),
+                        Box::new(step_cond),
+                    ))
+                }
                 _ => None,
             }
         }

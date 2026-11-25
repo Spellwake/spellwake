@@ -24,6 +24,7 @@ use std::collections::{BTreeMap, BTreeSet};
 #[derive(Clone, Copy)]
 pub(crate) struct WorldEvalCtx<'a> {
     pub active_player: SeatId,
+    pub step: Option<crate::turn::Step>,
     pub participants: &'a [SeatId],
     pub life: Option<&'a LifeState>,
     pub combat: Option<&'a CombatState>,
@@ -303,7 +304,17 @@ fn matches_zone_move_record(
             ControllerFilter::Player(seat) => rec.previous_controller == Some(seat),
             _ => true,
         };
+        let owner_ok = match clause.owner {
+            ControllerFilter::Any => true,
+            ControllerFilter::You | ControllerFilter::OwnerYou => rec.owner == controller,
+            ControllerFilter::Opponent
+            | ControllerFilter::NotYou
+            | ControllerFilter::OwnerOpponent => opponents.contains(&rec.owner),
+            ControllerFilter::Player(seat) => rec.owner == seat,
+            _ => true,
+        };
         ctrl_ok
+            && owner_ok
             && matches_compact_clause(
                 clause,
                 rec.types,
@@ -402,8 +413,26 @@ fn matches_world_clause(
         ControllerFilter::DefendingPlayer => ctx
             .defending_player
             .is_some_and(|seat| p.controller == Some(seat)),
+        ControllerFilter::FirstTargetController => false,
     };
     if !controller_ok {
+        return false;
+    }
+    let owner_ok = match clause.owner {
+        ControllerFilter::Any => true,
+        ControllerFilter::You | ControllerFilter::OwnerYou => p.owner == ctx.controller,
+        ControllerFilter::Opponent | ControllerFilter::NotYou | ControllerFilter::OwnerOpponent => {
+            p.owner != ctx.controller
+        }
+        ControllerFilter::RelatedPlayer
+        | ControllerFilter::TargetPlayer
+        | ControllerFilter::TargetOpponent => ctx.related_player == Some(p.owner),
+        ControllerFilter::Player(seat) => p.owner == seat,
+        ControllerFilter::ActivePlayer => p.owner == ctx.active_player,
+        ControllerFilter::DefendingPlayer => ctx.defending_player == Some(p.owner),
+        ControllerFilter::FirstTargetController => false,
+    };
+    if !owner_ok {
         return false;
     }
     if let Some(expected_token) = clause.token
@@ -517,12 +546,22 @@ fn matches_world_clause(
     {
         return false;
     }
+    if clause
+        .flags
+        .contains(ObjectFilterFlags::DID_NOT_ATTACK_THIS_TURN)
+        && ctx.state.attacked_objects_this_turn.contains(&id)
+    {
+        return false;
+    }
     if clause.flags.contains(ObjectFilterFlags::ENTERED_THIS_TURN)
         && !ctx.state.entered_objects_this_turn.contains(&id)
     {
         return false;
     }
     if clause.flags.contains(ObjectFilterFlags::COMMANDER_ONLY) && p.commander_owner.is_none() {
+        return false;
+    }
+    if clause.flags.contains(ObjectFilterFlags::NOT_COMMANDER) && p.commander_owner.is_some() {
         return false;
     }
     if clause.flags.contains(ObjectFilterFlags::FACE_DOWN)
@@ -571,6 +610,47 @@ fn matches_world_clause(
             .entry_color_choices
             .get(&ctx.source)
             .is_some_and(|color| p.current_colors.contains(color))
+    {
+        return false;
+    }
+    if clause
+        .flags
+        .contains(ObjectFilterFlags::MATCHES_SOURCE_ENTRY_TYPE)
+        && !ctx
+            .objects
+            .get(&ctx.source)
+            .and_then(|src| src.entry_creature_type)
+            .is_some_and(|kind| p.current_creature_subtypes.contains(&kind))
+    {
+        return false;
+    }
+    if clause
+        .flags
+        .contains(ObjectFilterFlags::MATCHES_CHOSEN_CARD_TYPE)
+    {
+        let chosen_type = match ctx.state.entry_option_choices.get(&ctx.source).copied() {
+            Some(0) => Some(CardType::Artifact),
+            Some(1) => Some(CardType::Battle),
+            Some(2) => Some(CardType::Creature),
+            Some(3) => Some(CardType::Enchantment),
+            Some(4) => Some(CardType::Instant),
+            Some(5) => Some(CardType::Land),
+            Some(6) => Some(CardType::Planeswalker),
+            Some(7) => Some(CardType::Sorcery),
+            _ => None,
+        };
+        if !chosen_type.is_some_and(|ct| p.has_type(ct)) {
+            return false;
+        }
+    }
+    if clause
+        .flags
+        .contains(ObjectFilterFlags::MATCHES_CHOSEN_NAME)
+        && !ctx.state.named_cards.get(&ctx.source).is_some_and(|name| {
+            spellwake_contracts::names::EnglishCardName::new(name.clone())
+                .ok()
+                .is_some_and(|card_name| ctx.name_rules.has_name(&p.current_names, &card_name))
+        })
     {
         return false;
     }
@@ -2080,9 +2160,14 @@ pub(crate) fn eval_world_value_expr(ctx: &WorldEvalCtx<'_>, expr: &ValueExpr) ->
             PlayerStatExpr::LoyaltyActivatedThisTurn => {
                 i64::from(ctx.state.loyalty_activators.contains(&ctx.controller)).into()
             }
-            PlayerStatExpr::IsOwnMainPhase => {
-                i64::from(ctx.active_player == ctx.controller && ctx.combat.is_none()).into()
-            }
+            PlayerStatExpr::IsOwnMainPhase => i64::from(
+                ctx.active_player == ctx.controller
+                    && matches!(
+                        ctx.step,
+                        Some(crate::turn::Step::PrecombatMain | crate::turn::Step::PostcombatMain)
+                    ),
+            )
+            .into(),
             PlayerStatExpr::ExhaustActivatedThisTurn => i64::from(
                 ctx.state
                     .exhausted
@@ -2408,6 +2493,108 @@ pub(crate) fn eval_world_value_expr(ctx: &WorldEvalCtx<'_>, expr: &ValueExpr) ->
                     });
                 }
                 i64::from(best.is_some_and(|(_, ours)| ours)).into()
+            }
+            PlayerStatExpr::PlayerHasMostLife { player, allow_tie } => {
+                let Some(seat) = resolve_world_player(ctx, *player) else {
+                    return 0.into();
+                };
+                if !ctx.participants.is_empty() && !ctx.participants.contains(&seat) {
+                    return 0.into();
+                }
+                let Some(life) = ctx.life else {
+                    return 0.into();
+                };
+                let Some(own_life) = life.get(seat) else {
+                    return 0.into();
+                };
+                let is_most = ctx
+                    .participants
+                    .iter()
+                    .copied()
+                    .filter(|&other| other != seat)
+                    .filter_map(|other| life.get(other))
+                    .all(|other_life| {
+                        if *allow_tie {
+                            own_life >= other_life
+                        } else {
+                            own_life > other_life
+                        }
+                    });
+                i64::from(is_most).into()
+            }
+            PlayerStatExpr::PlayerControlsMost {
+                player,
+                zone,
+                filter,
+                allow_tie,
+            } => {
+                let Some(seat) = resolve_world_player(ctx, *player) else {
+                    return 0.into();
+                };
+                if !ctx.participants.is_empty() && !ctx.participants.contains(&seat) {
+                    return 0.into();
+                }
+                let own = count_zone_for_seat(ctx, *zone, **filter, seat);
+                let is_most = ctx
+                    .participants
+                    .iter()
+                    .copied()
+                    .filter(|&other| other != seat)
+                    .all(|other| {
+                        let other_count = count_zone_for_seat(ctx, *zone, **filter, other);
+                        if *allow_tie {
+                            own >= other_count
+                        } else {
+                            own > other_count
+                        }
+                    });
+                i64::from(is_most).into()
+            }
+            PlayerStatExpr::IsInStep { step, player } => {
+                let step_ok = ctx.step == Some(*step);
+                let player_ok = player
+                    .is_none_or(|role| resolve_world_player(ctx, role) == Some(ctx.active_player));
+                i64::from(step_ok && player_ok).into()
+            }
+            PlayerStatExpr::IsInPhase { phase, player } => {
+                use crate::program::PhaseCheck;
+                use crate::turn::Step;
+                let phase_ok = ctx.step.is_some_and(|step| match phase {
+                    PhaseCheck::Beginning => {
+                        matches!(step, Step::Untap | Step::Upkeep | Step::Draw)
+                    }
+                    PhaseCheck::Main => {
+                        matches!(step, Step::PrecombatMain | Step::PostcombatMain)
+                    }
+                    PhaseCheck::Combat => matches!(
+                        step,
+                        Step::BeginningCombat
+                            | Step::DeclareAttackers
+                            | Step::DeclareBlockers
+                            | Step::CombatDamage
+                            | Step::EndCombat
+                    ),
+                    PhaseCheck::Ending => matches!(step, Step::End | Step::Cleanup),
+                });
+                let player_ok = player
+                    .is_none_or(|role| resolve_world_player(ctx, role) == Some(ctx.active_player));
+                i64::from(phase_ok && player_ok).into()
+            }
+            PlayerStatExpr::AttackedMatchingThisTurn { players, filter } => {
+                let seats = resolve_world_affected_players(ctx, *players);
+                let opp_vec: Vec<SeatId> = opponents().collect();
+                let mut count = 0usize;
+                for seat in seats {
+                    if let Some(records) = ctx.state.attacked_records_this_turn.get(&seat) {
+                        count += records
+                            .iter()
+                            .filter(|rec| {
+                                matches_zone_move_record(**filter, rec, ctx.controller, &opp_vec)
+                            })
+                            .count();
+                    }
+                }
+                RulesInteger::from_usize(count)
             }
         },
     }

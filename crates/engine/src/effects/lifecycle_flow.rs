@@ -29,14 +29,11 @@ impl EffectWindow {
     ) -> BTreeSet<(SeatId, ManaType)> {
         let mut retained = BTreeSet::new();
         for active in &self.temporary_rules {
-            if active.consumed {
-                continue;
-            }
-            if let crate::program::TemporaryRuleKind::TemporaryStatic(ability) = &active.rule
+            if let Some(ability) = self.active_temporary_static(active, current)
                 && let crate::characteristics::StaticContinuousAbility::Modifier {
                     rule: crate::characteristics::StaticModifierRule::RetainMana(kind),
                     ..
-                } = ability.as_ref()
+                } = ability
             {
                 retained.insert((active.controller, *kind));
             }
@@ -68,14 +65,11 @@ impl EffectWindow {
     ) -> BTreeMap<SeatId, ManaType> {
         let mut converted = BTreeMap::new();
         for active in &self.temporary_rules {
-            if active.consumed {
-                continue;
-            }
-            if let crate::program::TemporaryRuleKind::TemporaryStatic(ability) = &active.rule
+            if let Some(ability) = self.active_temporary_static(active, current)
                 && let crate::characteristics::StaticContinuousAbility::Modifier {
                     rule: crate::characteristics::StaticModifierRule::ConvertUnspentMana(target),
                     ..
-                } = ability.as_ref()
+                } = ability
             {
                 converted.insert(active.controller, *target);
             }
@@ -124,17 +118,14 @@ impl EffectWindow {
                 _ => Ok(false),
             }
         };
+        let evaluated = self.evaluated_characteristics()?;
         for entry in &self.temporary_rules {
-            if entry.consumed {
-                continue;
-            }
-            if let crate::program::TemporaryRuleKind::TemporaryStatic(ability) = &entry.rule
-                && check_ability(ability.as_ref(), entry.controller)?
+            if let Some(ability) = self.active_temporary_static(entry, &evaluated)
+                && check_ability(ability, entry.controller)?
             {
                 return Ok(true);
             }
         }
-        let evaluated = self.evaluated_characteristics()?;
         for object in evaluated
             .objects
             .values()
@@ -145,6 +136,17 @@ impl EffectWindow {
             };
             for ability in object.active_battlefield_rules() {
                 if check_ability(ability, rule_ctrl)? {
+                    return Ok(true);
+                }
+            }
+            for rule in &object.granted_restrictions {
+                if let crate::characteristics::StaticRestriction::SkipStep {
+                    player,
+                    step: skipped,
+                } = rule
+                    && *skipped == step
+                    && self.lifecycle_player_relation_matches(*player, rule_ctrl, active)?
+                {
                     return Ok(true);
                 }
             }
@@ -159,11 +161,9 @@ impl EffectWindow {
     /// Propagates characteristic or opponent-relation evaluation failures.
     pub fn max_hand_size_delta(&self, player: SeatId) -> Result<i32, EffectError> {
         let mut total = 0i32;
+        let evaluated = self.evaluated_characteristics()?;
         for entry in &self.temporary_rules {
-            if entry.consumed {
-                continue;
-            }
-            if let crate::program::TemporaryRuleKind::TemporaryStatic(ability) = &entry.rule
+            if let Some(ability) = self.active_temporary_static(entry, &evaluated)
                 && let crate::characteristics::StaticContinuousAbility::Modifier {
                     rule:
                         crate::characteristics::StaticModifierRule::ModifyMaxHandSize {
@@ -171,13 +171,12 @@ impl EffectWindow {
                             delta,
                         },
                     ..
-                } = ability.as_ref()
+                } = ability
                 && self.lifecycle_player_relation_matches(*rel, entry.controller, player)?
             {
                 total = total.saturating_add(i32::from(*delta));
             }
         }
-        let evaluated = self.evaluated_characteristics()?;
         for object in evaluated
             .objects
             .values()

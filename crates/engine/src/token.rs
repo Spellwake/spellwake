@@ -46,8 +46,22 @@ pub enum TemptingTokenPhase {
 pub enum TokenSize {
     /// Evaluate once while resolving the creating effect.
     AtCreation(crate::program::ValueExpr),
+    /// Evaluate independent power and toughness expressions once while resolving the creating effect.
+    AtCreationPair {
+        power: Box<crate::program::ValueExpr>,
+        toughness: Box<crate::program::ValueExpr>,
+    },
     /// Continually read counters on the exact source of the creating ability.
     AbilitySourceCounters(crate::effects::CounterKind),
+}
+
+/// Which defending player or planeswalker an attacking token or token copy may attack.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum AttackingDefenderScope {
+    #[default]
+    AnyLegal,
+    Player(crate::program::ResolvingPlayer),
+    PlayerOrTheirPlaneswalker(crate::program::ResolvingPlayer),
 }
 
 /// One authored group; every group in a CreateTokens instruction enters together.

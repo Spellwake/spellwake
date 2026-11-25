@@ -1012,6 +1012,7 @@ impl EffectWindow {
             } else {
                 let origin = LinkedReturnOrigin::ChosenExile {
                     controller: (!owner_controls).then(|| entry.controller()),
+                    tapped: false,
                     entry: entry.id(),
                     instruction: index,
                 };
@@ -1444,12 +1445,287 @@ impl EffectWindow {
             self.begin_linked_cohort_return(
                 LinkedReturnOrigin::ChosenExile {
                     controller: None,
+                    tapped: false,
                     entry: entry.id(),
                     instruction: index,
                 },
                 candidates,
                 ctx.append,
             )?;
+            self.advance_instruction()?;
+            return Ok(StepOutcome::Continue);
+        }
+        if let Instruction::ReturnCardsExiledWithLinkExt {
+            group,
+            under_controller_control,
+            tapped,
+        } = instruction
+        {
+            let source_id = match entry.kind() {
+                StackKind::TriggeredAbility { source } | StackKind::ActivatedAbility { source } => {
+                    source.id()
+                }
+                StackKind::CardSpell(id) => *id,
+                _ => return Err(EffectError::InconsistentProgram),
+            };
+            let candidates = self
+                .independent_exile_links
+                .get(&(source_id, group))
+                .into_iter()
+                .flatten()
+                .copied()
+                .collect();
+            self.begin_linked_cohort_return(
+                LinkedReturnOrigin::ChosenExile {
+                    controller: under_controller_control.then(|| entry.controller()),
+                    tapped,
+                    entry: entry.id(),
+                    instruction: index,
+                },
+                candidates,
+                ctx.append,
+            )?;
+            self.advance_instruction()?;
+            return Ok(StepOutcome::Continue);
+        }
+        if let Instruction::ExileSubjectUntilSourceLeaves { subject } = instruction {
+            let objects: Vec<ObjectId> = self.effect_group(entry, *subject)?.into_iter().collect();
+            let before_controllers: Vec<SeatId> = objects
+                .iter()
+                .filter_map(|&oid| {
+                    self.window
+                        .cards()
+                        .get(oid)
+                        .and_then(|o| o.controller().or(Some(o.owner())))
+                })
+                .collect();
+            let new_ids = self.move_objects_to_subject_destination_ids(
+                entry,
+                index,
+                entry.controller(),
+                &objects,
+                crate::program::SubjectDestination::Exile {
+                    delayed_return: Some(crate::program::DelayedReturnTiming::UntilSourceLeaves),
+                },
+                ctx.append,
+            )?;
+            let moved_count = new_ids.len();
+            if let Some(cursor) = self.resolution_cursor_mut() {
+                cursor.results.last_action_succeeded = moved_count > 0;
+                cursor.results.last_action_count = Some(RulesInteger::from_usize(moved_count));
+                cursor.results.last_moved_objects = new_ids;
+                cursor.results.last_moved_controllers = if moved_count > 0 {
+                    before_controllers
+                } else {
+                    Vec::new()
+                };
+            }
+            self.advance_instruction()?;
+            return Ok(StepOutcome::Continue);
+        }
+        if instruction == Instruction::DrawGame {
+            let participants = self.window.participants().to_vec();
+            for seat in participants {
+                self.state_based_losses.insert(seat);
+            }
+            return Ok(StepOutcome::Complete(RuleCompletion::GameEnded));
+        }
+        if let Instruction::TurnFaceUpSubject { subject } = instruction {
+            let targets: Vec<ObjectId> = self
+                .effect_group(entry, *subject)?
+                .into_iter()
+                .filter(|&id| {
+                    self.window.cards().get(id).is_some_and(|card| {
+                        card.zone() == ObjectZone::Battlefield && card.face_down().is_some()
+                    })
+                })
+                .collect();
+            let mut turned = 0usize;
+            for id in targets {
+                let before = self.rules_snapshot(None)?;
+                let Some(card) = self.window.cards().get(id).cloned() else {
+                    continue;
+                };
+                if card.zone() != ObjectZone::Battlefield || card.face_down().is_none() {
+                    continue;
+                }
+                let underlying = self
+                    .printed_face(&card)
+                    .ok_or(EffectError::InconsistentProgram)?;
+                let instant_or_sorcery = underlying.has_type(CardType::Instant)
+                    || underlying.has_type(CardType::Sorcery);
+                if !instant_or_sorcery {
+                    self.window.set_orientation(id, None)?;
+                    turned += 1;
+                }
+                self.emit_from(
+                    crate::occurrence::EventCause::Instruction {
+                        entry: entry.id(),
+                        instruction: index,
+                    },
+                    &before,
+                    None,
+                    ctx.append,
+                    |old, new, _| {
+                        Ok(vec![if instant_or_sorcery {
+                            crate::occurrence::RulesOccurrence::FaceDownRevealed { object: card }
+                        } else {
+                            crate::occurrence::RulesOccurrence::TurnedFaceUpByEffect {
+                                before: Box::new(
+                                    old.appearance(id).ok_or(EffectError::InconsistentProgram)?,
+                                ),
+                                after: Box::new(
+                                    new.appearance(id).ok_or(EffectError::InconsistentProgram)?,
+                                ),
+                            }
+                        }])
+                    },
+                )?;
+            }
+            if let Some(cursor) = self.resolution_cursor_mut() {
+                cursor.results.last_action_succeeded = turned > 0;
+                cursor.results.last_action_count = Some(RulesInteger::from_usize(turned));
+            }
+            self.advance_instruction()?;
+            return Ok(StepOutcome::Continue);
+        }
+        if let Instruction::MoveCounters {
+            from,
+            to,
+            kind,
+            all,
+            any_number,
+            amount,
+        } = instruction
+        {
+            let from_opt = self.resolve_pass_c_move_subject(entry, from)?;
+            let to_opt = self.resolve_pass_c_move_subject(entry, to)?;
+            let both_valid = from_opt.zip(to_opt).filter(|(f, t)| {
+                f != t
+                    && self
+                        .window
+                        .cards()
+                        .get(*f)
+                        .is_some_and(|c| c.zone() == ObjectZone::Battlefield)
+                    && self
+                        .window
+                        .cards()
+                        .get(*t)
+                        .is_some_and(|c| c.zone() == ObjectZone::Battlefield)
+            });
+            if let Some((from_id, to_id)) = both_valid {
+                let evaluated = self.evaluated_characteristics()?;
+                let mut present_kinds: Vec<CounterKind> = match kind {
+                    Some(ck) => {
+                        if self.counters_of_kind(from_id, ck).is_positive() {
+                            vec![ck]
+                        } else {
+                            Vec::new()
+                        }
+                    }
+                    None => self
+                        .characteristics
+                        .present_permanent_counter_kinds(from_id)
+                        .into_iter()
+                        .collect(),
+                };
+                present_kinds
+                    .retain(|&ck| !self.permanent_counter_prevented(&evaluated, to_id, ck));
+                if !present_kinds.is_empty() {
+                    if all {
+                        let mut moved = BTreeMap::new();
+                        for &ck in &present_kinds {
+                            let removed = self.remove_counters_from_objects(
+                                entry,
+                                index,
+                                &[from_id],
+                                Some(ck),
+                                None,
+                                ctx.append,
+                            )?;
+                            if removed.is_positive() {
+                                moved.insert(ck, removed);
+                            }
+                        }
+                        if !moved.is_empty() {
+                            self.place_moved_counters(
+                                entry.id(),
+                                index,
+                                to_id,
+                                &moved,
+                                ctx.append,
+                            )?;
+                        }
+                    } else if any_number {
+                        return Ok(StepOutcome::Pending(EffectDecision::CounterRemoval(
+                            self.counter_removal_choice()?,
+                        )));
+                    } else if let Some(ck) = kind {
+                        let cap = match amount.as_ref() {
+                            Some(expr) => self.resolve_value_expr(entry.controller(), expr)?,
+                            None => 1.into(),
+                        };
+                        if cap.is_positive() {
+                            let removed = self.remove_counters_from_objects(
+                                entry,
+                                index,
+                                &[from_id],
+                                Some(ck),
+                                Some(&ValueExpr::Literal(cap)),
+                                ctx.append,
+                            )?;
+                            if removed.is_positive() {
+                                let mut moved = BTreeMap::new();
+                                moved.insert(ck, removed);
+                                self.place_moved_counters(
+                                    entry.id(),
+                                    index,
+                                    to_id,
+                                    &moved,
+                                    ctx.append,
+                                )?;
+                            }
+                        }
+                    } else if present_kinds.len() == 1 {
+                        let ck = present_kinds[0];
+                        let cap = match amount.as_ref() {
+                            Some(expr) => self.resolve_value_expr(entry.controller(), expr)?,
+                            None => 1.into(),
+                        };
+                        if cap.is_positive() {
+                            let removed = self.remove_counters_from_objects(
+                                entry,
+                                index,
+                                &[from_id],
+                                Some(ck),
+                                Some(&ValueExpr::Literal(cap)),
+                                ctx.append,
+                            )?;
+                            if removed.is_positive() {
+                                let mut moved = BTreeMap::new();
+                                moved.insert(ck, removed);
+                                self.place_moved_counters(
+                                    entry.id(),
+                                    index,
+                                    to_id,
+                                    &moved,
+                                    ctx.append,
+                                )?;
+                            }
+                        }
+                    } else {
+                        let cap = match amount.as_ref() {
+                            Some(expr) => self.resolve_value_expr(entry.controller(), expr)?,
+                            None => 1.into(),
+                        };
+                        if cap.is_positive() {
+                            return Ok(StepOutcome::Pending(EffectDecision::CounterRemoval(
+                                self.counter_removal_choice()?,
+                            )));
+                        }
+                    }
+                }
+            }
             self.advance_instruction()?;
             return Ok(StepOutcome::Continue);
         }
@@ -1911,6 +2187,7 @@ impl EffectWindow {
                 if let Some(cur) = self.resolution_cursor_mut() {
                     cur.results.pending_option_players = seats.into();
                     cur.results.option_players_initialized = true;
+                    cur.results.last_action_succeeded = false;
                 }
             }
             let next_actor = self
@@ -1950,11 +2227,24 @@ impl EffectWindow {
             };
             if idx == 0 {
                 let mut combined = cost_body.instructions;
-                let shift = isize::try_from(combined.len())
-                    .map_err(|_| EffectError::InconsistentProgram)?;
-                for mut op in paid_body.instructions {
-                    op.shift_jumps(shift, 0);
-                    combined.push(op);
+                if !paid_body.instructions.is_empty() {
+                    let combined_end = combined.len() + 1 + paid_body.instructions.len();
+                    combined.push(Instruction::BranchIfFalse {
+                        condition: crate::program::ResolutionCondition {
+                            left: ValueExpr::event(
+                                crate::program::EventValueKind::LastActionSucceeded,
+                            ),
+                            comparison: crate::program::Comparison::GreaterOrEqual,
+                            right: ValueExpr::literal(1),
+                        },
+                        destination: combined_end,
+                    });
+                    let shift = isize::try_from(combined.len())
+                        .map_err(|_| EffectError::InconsistentProgram)?;
+                    for mut op in paid_body.instructions {
+                        op.shift_jumps(shift, 0);
+                        combined.push(op);
+                    }
                 }
                 if let Some(cur) = self.resolution_cursor_mut() {
                     cur.results.pending_option_players.clear();
@@ -2707,9 +2997,12 @@ impl EffectWindow {
                     .map(|t| t.choice().target);
                 let second_bound_target =
                     entry.targets().targets().get(1).map(|t| t.choice().target);
+                let source_damage = self.resolution_damage_source(entry).ok();
+                let source_entry = Some(entry.id());
                 let mut rule = *rule;
                 // CR 611.2c: lock ChosenX eagerly when creating a temporary static rule.
-                if let TemporaryRuleKind::TemporaryStatic(ability) = &mut rule
+                if let TemporaryRuleKind::TemporaryStatic(ability)
+                | TemporaryRuleKind::ConditionalTemporaryStatic { ability, .. } = &mut rule
                     && let Ok(resolved_x) =
                         self.resolve_value_expr(entry.controller(), &ValueExpr::chosen_x())
                 {
@@ -2748,6 +3041,8 @@ impl EffectWindow {
                                 id,
                                 controller: entry.controller(),
                                 source_object,
+                                source_damage: source_damage.clone(),
+                                source_entry,
                                 rule: TemporaryRuleKind::ExileIfLeavesBattlefield { subject },
                                 duration: resolved_dur,
                                 resolved_players: BTreeSet::new(),
@@ -2772,6 +3067,8 @@ impl EffectWindow {
                                 id,
                                 controller: entry.controller(),
                                 source_object,
+                                source_damage: source_damage.clone(),
+                                source_entry,
                                 rule: TemporaryRuleKind::PreventNextDamage {
                                     amount: resolved,
                                     source,
@@ -2803,6 +3100,8 @@ impl EffectWindow {
                                 id,
                                 controller: entry.controller(),
                                 source_object,
+                                source_damage: source_damage.clone(),
+                                source_entry,
                                 rule: TemporaryRuleKind::SpellCostReduction {
                                     filter,
                                     generic,
@@ -2851,6 +3150,8 @@ impl EffectWindow {
                                 id,
                                 controller: entry.controller(),
                                 source_object,
+                                source_damage: source_damage.clone(),
+                                source_entry,
                                 rule: TemporaryRuleKind::RedirectNextDamage {
                                     source,
                                     source_is_target,
@@ -2888,6 +3189,8 @@ impl EffectWindow {
                             id,
                             controller: entry.controller(),
                             source_object,
+                            source_damage: source_damage.clone(),
+                            source_entry,
                             rule: TemporaryRuleKind::RedirectNextDamage {
                                 source,
                                 source_is_target,
@@ -2933,6 +3236,8 @@ impl EffectWindow {
                             id,
                             controller: entry.controller(),
                             source_object,
+                            source_damage,
+                            source_entry,
                             rule: other,
                             duration: resolved_dur,
                             resolved_players,
@@ -3335,6 +3640,7 @@ impl EffectWindow {
             extra_keywords,
             override_pt,
             extra_colors,
+            ..
         } = instruction
         {
             let resolved_count = self
@@ -4617,6 +4923,18 @@ impl EffectWindow {
                         .map(|t| t.source.clone())
                 })
                 .ok_or(EffectError::InconsistentProgram)?;
+            let before_waiting: BTreeSet<_> = self.triggers.waiting().keys().copied().collect();
+            let reflexive_ctx =
+                self.resolution_cursor()
+                    .map(|cursor| super::ReflexiveTriggerContext {
+                        last_sacrificed_creature: cursor.results.last_sacrificed_creature.clone(),
+                        resolution_x: entry.chosen_x().cloned(),
+                        discarded_types: cursor.results.discarded_types.clone(),
+                        exiled_target: cursor.exiled_target.clone(),
+                        last_moved_objects: cursor.results.last_moved_objects.clone(),
+                        last_moved_controllers: cursor.results.last_moved_controllers.clone(),
+                        last_action_count: cursor.results.last_action_count.clone(),
+                    });
             self.emit_from(
                 crate::occurrence::EventCause::Instruction {
                     entry: entry.id(),
@@ -4634,6 +4952,18 @@ impl EffectWindow {
                     }])
                 },
             )?;
+            if let Some(captured) = reflexive_ctx {
+                let new_ids: Vec<_> = self
+                    .triggers
+                    .waiting()
+                    .keys()
+                    .copied()
+                    .filter(|id| !before_waiting.contains(id))
+                    .collect();
+                for tid in new_ids {
+                    self.pending_reflexive_context.insert(tid, captured.clone());
+                }
+            }
             self.advance_instruction()?;
             return Ok(StepOutcome::Continue);
         }
@@ -7404,13 +7734,19 @@ impl EffectWindow {
             Instruction::AdditionalCombatAfterUntappingAttackers
                 | Instruction::AdditionalCombat { .. }
         ) {
-            if !self
-                .current_step
-                .is_some_and(|step| step.phase() == crate::turn::Phase::Combat)
-            {
-                return Err(EffectError::InconsistentProgram);
-            }
+            let can_schedule_combat = self.current_step.is_some_and(|step| {
+                matches!(
+                    step.phase(),
+                    crate::turn::Phase::Beginning
+                        | crate::turn::Phase::PrecombatMain
+                        | crate::turn::Phase::Combat
+                        | crate::turn::Phase::PostcombatMain
+                )
+            });
             let mut attackers = match instruction {
+                Instruction::AdditionalCombat {
+                    untap: crate::program::CombatUntapGroup::None,
+                } => Vec::new(),
                 Instruction::AdditionalCombat {
                     untap: crate::program::CombatUntapGroup::ControlledCreatures,
                 } => self
@@ -7464,21 +7800,25 @@ impl EffectWindow {
             });
             let before = self.rules_snapshot(None)?;
             let mut values = self.untap_for_effect_with_stun(entry.id(), &attackers)?;
-            self.additional_combats = self
-                .additional_combats
-                .checked_add(1)
-                .ok_or(EffectError::InconsistentProgram)?;
-            values.push(crate::occurrence::RulesOccurrence::AdditionalCombatCreated);
-            self.emit_from(
-                crate::occurrence::EventCause::Instruction {
-                    entry: entry.id(),
-                    instruction: index,
-                },
-                &before,
-                None,
-                ctx.append,
-                |_, _, _| Ok(values),
-            )?;
+            if can_schedule_combat {
+                self.additional_combats = self
+                    .additional_combats
+                    .checked_add(1)
+                    .ok_or(EffectError::InconsistentProgram)?;
+                values.push(crate::occurrence::RulesOccurrence::AdditionalCombatCreated);
+            }
+            if !values.is_empty() {
+                self.emit_from(
+                    crate::occurrence::EventCause::Instruction {
+                        entry: entry.id(),
+                        instruction: index,
+                    },
+                    &before,
+                    None,
+                    ctx.append,
+                    |_, _, _| Ok(values),
+                )?;
+            }
             self.advance_instruction()?;
             return Ok(StepOutcome::Continue);
         }
@@ -7525,21 +7865,19 @@ impl EffectWindow {
                         )
                     })
             }) || self.temporary_rules.iter().any(|active| {
-                !active.consumed
-                    && matches!(
-                        &active.rule,
-                        crate::program::TemporaryRuleKind::TemporaryStatic(ab)
-                            if matches!(
-                                ab.as_ref(),
-                                crate::characteristics::StaticContinuousAbility::EventReplacement {
-                                    event: crate::characteristics::ReplaceableEvent::ExtraTurn {
-                                        player: rel
-                                    },
-                                    action: crate::characteristics::StaticReplacementAction::Skip,
-                                    ..
-                                } if matches_affected(rel, active.controller)
-                            )
-                    )
+                self.active_temporary_static(active, current)
+                    .is_some_and(|ab| {
+                        matches!(
+                            ab,
+                            crate::characteristics::StaticContinuousAbility::EventReplacement {
+                                event: crate::characteristics::ReplaceableEvent::ExtraTurn {
+                                    player: rel
+                                },
+                                action: crate::characteristics::StaticReplacementAction::Skip,
+                                ..
+                            } if matches_affected(rel, active.controller)
+                        )
+                    })
             });
             if !skip_extra_turn {
                 self.extra_turns.push(player);
@@ -10037,7 +10375,7 @@ impl EffectWindow {
             return Ok(StepOutcome::Continue);
         }
         if let Instruction::CreateTokens { creations }
-        | Instruction::CreateAttackingTokens { creations } = instruction
+        | Instruction::CreateAttackingTokens { creations, .. } = instruction
         {
             self.begin_token_entries(&creations, None, false)?;
             return Ok(StepOutcome::Continue);
@@ -10388,6 +10726,8 @@ impl EffectWindow {
                         id,
                         controller: entry.controller(),
                         source_object: Some(object),
+                        source_damage: None,
+                        source_entry: None,
                         target: None,
                         second_target: None,
                         rule: crate::program::TemporaryRuleKind::TemporaryStatic(Box::new(
@@ -10727,18 +11067,18 @@ impl EffectWindow {
                 crate::program::PlayerRelation::AnyParticipant => true,
             })
         };
+        let evaluated = self.evaluated_characteristics()?;
         for active in &self.temporary_rules {
-            if let crate::program::TemporaryRuleKind::TemporaryStatic(ability) = &active.rule
+            if let Some(ability) = self.active_temporary_static(active, &evaluated)
                 && let crate::characteristics::StaticContinuousAbility::Restriction {
                     rule: crate::characteristics::StaticRestriction::PlayersCantSearchLibraries(rel),
                     ..
-                } = ability.as_ref()
+                } = ability
                 && relation_matches(*rel, active.controller)?
             {
                 return Ok(true);
             }
         }
-        let evaluated = self.evaluated_characteristics()?;
         for source in evaluated
             .objects
             .values()
@@ -10747,15 +11087,11 @@ impl EffectWindow {
             let Some(controller) = source.controller else {
                 continue;
             };
-            if source.has_battlefield_rule(|ability| {
+            if Self::permanent_has_restriction(source, |rule| {
                 matches!(
-                    ability,
-                    crate::characteristics::StaticContinuousAbility::Restriction {
-                        rule: crate::characteristics::StaticRestriction::PlayersCantSearchLibraries(
-                            rel
-                        ),
-                        ..
-                    } if relation_matches(*rel, controller).unwrap_or(false)
+                    rule,
+                    crate::characteristics::StaticRestriction::PlayersCantSearchLibraries(rel)
+                        if relation_matches(*rel, controller).unwrap_or(false)
                 )
             }) {
                 return Ok(true);

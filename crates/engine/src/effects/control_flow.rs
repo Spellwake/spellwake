@@ -230,6 +230,11 @@ impl EffectWindow {
             | Instruction::LookTopChooseExt { .. }
             | Instruction::RevealUntilMatchExt { .. }
             | Instruction::CreateTokenCopyExt { .. }
+            | Instruction::MoveCounters { .. }
+            | Instruction::ExileSubjectUntilSourceLeaves { .. }
+            | Instruction::ReturnCardsExiledWithLinkExt { .. }
+            | Instruction::DrawGame
+            | Instruction::TurnFaceUpSubject { .. }
             | Instruction::ModifyAnyNumberOfPermanents { .. }
             | Instruction::AffectPermanentTargets { .. }
             | Instruction::MillEachPlayer(_)
