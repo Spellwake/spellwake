@@ -206,7 +206,9 @@ CREATE FUNCTION app.guard_deck_custom_entry() RETURNS trigger
 LANGUAGE plpgsql SECURITY DEFINER SET search_path = '' AS $$
 DECLARE
   rev_sealed timestamptz;
-  parent_deck app.deck;
+  deck_source_kind text;
+  deck_mode text;
+  deck_owner uuid;
   card_owner uuid;
 BEGIN
   IF TG_OP = 'DELETE' THEN
@@ -220,8 +222,8 @@ BEGIN
     RAISE EXCEPTION USING ERRCODE = '23514', MESSAGE = 'saved deck custom entry is immutable';
   END IF;
 
-  SELECT r.sealed_at, d.*
-  INTO rev_sealed, parent_deck
+  SELECT r.sealed_at, d.source_kind, d.mode, d.account_id
+  INTO rev_sealed, deck_source_kind, deck_mode, deck_owner
   FROM app.deck_revision r
   JOIN app.deck d ON d.id = r.deck_id
   WHERE r.id = NEW.revision_id
@@ -231,7 +233,7 @@ BEGIN
     RAISE EXCEPTION USING ERRCODE = '23514', MESSAGE = 'deck revision does not accept custom entries';
   END IF;
 
-  IF parent_deck.source_kind <> 'account' OR parent_deck.mode <> 'open' THEN
+  IF deck_source_kind <> 'account' OR deck_mode <> 'open' THEN
     RAISE EXCEPTION USING ERRCODE = '23514', MESSAGE = 'custom cards are restricted to open play account decks';
   END IF;
 
@@ -240,7 +242,7 @@ BEGIN
   JOIN app.custom_card c ON c.id = cr.custom_card_id
   WHERE cr.id = NEW.custom_card_revision_id;
 
-  IF card_owner IS NULL OR card_owner IS DISTINCT FROM parent_deck.account_id THEN
+  IF card_owner IS NULL OR card_owner IS DISTINCT FROM deck_owner THEN
     RAISE EXCEPTION USING ERRCODE = '23514', MESSAGE = 'custom card revision must belong to deck owner';
   END IF;
 
