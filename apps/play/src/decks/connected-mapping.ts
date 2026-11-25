@@ -1,5 +1,6 @@
 import type {
   CatalogueLabels,
+  CustomDeckEntry,
   DeckDetail,
   DeckSettings,
   DeckSummary,
@@ -26,10 +27,12 @@ const isShown = (section: string): section is DeckSection =>
 export function linesFrom(
   detail: DeckDetail,
   labels: CatalogueLabels,
-): { lines: DeckLine[]; kept: Entry[] } {
+  customNames: ReadonlyMap<string, string> = new Map(),
+): { lines: DeckLine[]; kept: Entry[]; keptCustom: CustomDeckEntry[] } {
   const names = new Map(labels.cards.map((card) => [card.id, card.name]));
   const lines: DeckLine[] = [];
   const kept: Entry[] = [];
+  const keptCustom: CustomDeckEntry[] = [];
   for (const entry of detail.revision?.entries ?? []) {
     if (!isShown(entry.section)) {
       kept.push(entry);
@@ -46,7 +49,22 @@ export function linesFrom(
       card: { definitionId: entry.definitionId, printingId: entry.printingId },
     });
   }
-  return { lines, kept };
+  for (const custom of detail.revision?.customEntries ?? []) {
+    if (!isShown(custom.section)) {
+      keptCustom.push(custom);
+      continue;
+    }
+    lines.push({
+      id: `custom/${custom.customCardRevisionId}/${custom.section}`,
+      name:
+        customNames.get(custom.customCardRevisionId) ??
+        `Custom card ${custom.customCardRevisionId.slice(0, 8)}`,
+      quantity: custom.quantity,
+      section: custom.section,
+      customCardRevisionId: custom.customCardRevisionId,
+    });
+  }
+  return { lines, kept, keptCustom };
 }
 
 /**
@@ -57,8 +75,17 @@ export function linesFrom(
 export function entriesFrom(
   lines: readonly DeckLine[],
   kept: readonly Entry[],
-): { status: "success"; entries: Entry[] } | { status: "fail"; name: string } {
-  const unmatched = lines.find((line) => !line.card);
+  keptCustom: readonly CustomDeckEntry[] = [],
+):
+  | {
+      status: "success";
+      entries: Entry[];
+      customEntries: CustomDeckEntry[];
+    }
+  | { status: "fail"; name: string } {
+  const unmatched = lines.find(
+    (line) => !line.card && !line.customCardRevisionId,
+  );
   if (unmatched) return { status: "fail", name: unmatched.name };
   const merged = mergeDeckEntries([
     ...lines.flatMap((line) =>
@@ -75,9 +102,62 @@ export function entriesFrom(
     ),
     ...kept,
   ]);
-  return merged.status === "success"
-    ? merged
-    : { status: "fail", name: lines[0]?.name ?? "" };
+  if (merged.status !== "success") {
+    return { status: "fail", name: lines[0]?.name ?? "" };
+  }
+
+  const customMap = new Map<string, { customCardRevisionId: string; section: string; quantity: bigint }>();
+  for (const line of lines) {
+    if (!line.customCardRevisionId) continue;
+    const key = `${line.customCardRevisionId}/${line.section}`;
+    const prev = customMap.get(key);
+    const qty = BigInt(line.quantity);
+    if (prev) prev.quantity += qty;
+    else
+      customMap.set(key, {
+        customCardRevisionId: line.customCardRevisionId,
+        section: line.section,
+        quantity: qty,
+      });
+  }
+  for (const keptItem of keptCustom) {
+    const key = `${keptItem.customCardRevisionId}/${keptItem.section}`;
+    const prev = customMap.get(key);
+    const qty = BigInt(keptItem.quantity);
+    if (prev) prev.quantity += qty;
+    else
+      customMap.set(key, {
+        customCardRevisionId: keptItem.customCardRevisionId,
+        section: keptItem.section,
+        quantity: qty,
+      });
+  }
+
+  return {
+    status: "success",
+    entries: merged.entries,
+    customEntries: [...customMap.values()].map((item) => ({
+      customCardRevisionId: item.customCardRevisionId,
+      section: item.section,
+      quantity: String(item.quantity),
+    })),
+  };
+}
+
+/** Whether two custom entry lists hold the same revisions and quantities. */
+export function sameCustomEntries(
+  a: readonly CustomDeckEntry[],
+  b: readonly CustomDeckEntry[],
+): boolean {
+  const key = (entries: readonly CustomDeckEntry[]): string =>
+    entries
+      .map(
+        (entry) =>
+          `${entry.section}/${entry.customCardRevisionId}/${entry.quantity}`,
+      )
+      .sort()
+      .join("\n");
+  return key(a) === key(b);
 }
 
 /** Whether two entry lists hold the same cards, whatever their order. */

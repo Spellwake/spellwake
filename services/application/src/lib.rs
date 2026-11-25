@@ -21,6 +21,7 @@ pub mod controller_ante;
 pub mod controller_ports;
 pub mod controller_possession;
 pub mod cosmetics;
+pub mod custom_cards;
 pub mod deadline_ports;
 pub mod decks;
 pub mod deletion;

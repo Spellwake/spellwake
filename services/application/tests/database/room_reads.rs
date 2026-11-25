@@ -48,7 +48,7 @@ async fn room_reads_keep_foreign_decks_private_and_retired_slots_out_of_current_
                 && v["deckRevisionId"] == f.revision.to_string())
     );
     for v in own_items {
-        assert_eq!(v.as_object().unwrap().len(), 6);
+        assert_eq!(v.as_object().unwrap().len(), 7);
     }
     set_auth_claims(&c, subject).await?;
     for function in ["read_visible_room", "read_current_room_slots"] {

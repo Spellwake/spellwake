@@ -1,5 +1,5 @@
 //! Caller-only saved deck content, separate from card search and legality.
-use super::{DeckEntry, validate_entries};
+use super::{CustomDeckEntry, DeckEntry, validate_all_entries};
 use crate::{
     account::{DeckSummary, FormatSummary},
     amount::Amount,
@@ -15,6 +15,12 @@ pub struct SavedRevision {
     pub number: Amount,
     #[serde(deserialize_with = "crate::provider_json::objects")]
     pub entries: Vec<DeckEntry>,
+    #[serde(
+        default,
+        skip_serializing_if = "Vec::is_empty",
+        deserialize_with = "crate::provider_json::objects"
+    )]
+    pub custom_entries: Vec<CustomDeckEntry>,
 }
 #[derive(Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -40,7 +46,7 @@ impl DeckDetail {
             if revision.id.is_nil() || revision.number.is_zero() {
                 return Err("invalid saved revision identity");
             }
-            validate_entries(&revision.entries)?;
+            validate_all_entries(&revision.entries, &revision.custom_entries)?;
         }
         Ok(())
     }

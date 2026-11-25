@@ -359,17 +359,23 @@ impl ReleaseOpeningWorker {
             return Err(invalid().into());
         }
         let runtime = &self.runtime;
+        let allow_custom = meta.allow_custom_cards
+            && meta.mode == crate::decks::PlayMode::Open
+            && !meta.competitive;
         if !manifest.binds(
             &runtime.programs,
             &meta.release,
             meta.format_id,
             &meta.profile,
             meta.legality_revision_id,
-        ) || !meta
-            .seats
-            .iter()
-            .all(|seat| manifest.validate_deck(&runtime.programs, &seat.entries))
-        {
+        ) || !meta.seats.iter().all(|seat| {
+            manifest.validate_deck_with_custom(
+                &runtime.programs,
+                &seat.entries,
+                &seat.custom_entries,
+                allow_custom,
+            )
+        }) {
             return Err(invalid().into());
         }
         let material: OpeningMaterial = self.repository.native_record(

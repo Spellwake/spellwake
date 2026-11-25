@@ -3,7 +3,7 @@ use super::*;
 use crate::{
     ai_runtime::{AiQuotaStatus, SetAiTierRequest},
     commands::CommandResponse,
-    room_controls::{BootstrapRequest, ControlAck, ControlKind, RevisionRequest},
+    room_controls::{BootstrapRequest, ControlAck, ControlKind, RevisionRequest, SetAiDeckRequest},
 };
 pub(super) async fn add(State(s): State<ApiState>, p: IdentifierPath, r: Request) -> Response {
     write(s, p, r, ControlKind::Add, false).await
@@ -58,6 +58,16 @@ pub(super) async fn set_tier_disposition(
     r: Request,
 ) -> Response {
     write(s, p, r, ControlKind::SetTier, true).await
+}
+pub(super) async fn set_deck(State(s): State<ApiState>, p: IdentifierPath, r: Request) -> Response {
+    write(s, p, r, ControlKind::SetDeck, false).await
+}
+pub(super) async fn set_deck_disposition(
+    State(s): State<ApiState>,
+    p: IdentifierPath,
+    r: Request,
+) -> Response {
+    write(s, p, r, ControlKind::SetDeck, true).await
 }
 
 /// `GET /v1/account/ai-quota`: caller's daily Advanced AI allowance and UTC reset instant.
@@ -149,6 +159,10 @@ async fn write(
             Ok(i) => (i.request_id, i.expected_revision, None, Some(i.tier)),
             Err(_) => return fail(StatusCode::BAD_REQUEST, "request", "invalid"),
         },
+        ControlKind::SetDeck => match parse_object::<SetAiDeckRequest>(&bytes) {
+            Ok(i) => (i.request_id, i.expected_revision, i.deck_revision_id, None),
+            Err(_) => return fail(StatusCode::BAD_REQUEST, "request", "invalid"),
+        },
         ControlKind::Add | ControlKind::Remove | ControlKind::Unready => {
             match parse_object::<RevisionRequest>(&bytes) {
                 Ok(i) => (i.request_id, i.expected_revision, None, None),
@@ -206,6 +220,14 @@ async fn write(
                         "set_ai_slot_tier_command"
                     },
                     json!({"p_subject":actor.subject(),"p_session":actor.session(),"p_request":request,"p_slot":target,"p_expected":basis,"p_tier":tier.map(|t|t.as_str())}),
+                ),
+                ControlKind::SetDeck => (
+                    if lookup {
+                        "read_set_ai_slot_deck_command"
+                    } else {
+                        "set_ai_slot_deck_command"
+                    },
+                    json!({"p_subject":actor.subject(),"p_session":actor.session(),"p_request":request,"p_slot":target,"p_expected":basis,"p_revision":revision}),
                 ),
             };
             let result: Result<ApiResponse<CommandResponse<ControlAck>>, _> =

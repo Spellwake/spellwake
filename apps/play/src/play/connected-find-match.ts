@@ -99,12 +99,15 @@ export function useConnectedFindMatch(
       ),
     }),
   });
+  const hasCustomCards = saved?.hasCustomCards === true;
   const choices = useMemo(
     () =>
-      saved && !profiles.isPending && configurations.settled
+      saved && !hasCustomCards && !profiles.isPending && configurations.settled
         ? queueChoices(matchmaking, configurations.byProfile, saved.format.id)
-        : null,
-    [saved, profiles.isPending, configurations, matchmaking],
+        : hasCustomCards
+          ? { single: [], three: [] }
+          : null,
+    [saved, hasCustomCards, profiles.isPending, configurations, matchmaking],
   );
 
   const [phase, setPhase] = useState<FindMatchSource["phase"]>("idle");
@@ -201,6 +204,12 @@ export function useConnectedFindMatch(
   const find = useCallback(
     (length: MatchLength, ranked: boolean) => {
       if (!owner || !services || !saved || !choices) return;
+      if (saved.hasCustomCards) {
+        setFailure(
+          "Decks with custom cards are only playable in Open Play Friend Games or Quick Test vs. Bot.",
+        );
+        return;
+      }
       const request = saved.currentRevisionId
         ? enqueueRequest({
             requestId: crypto.randomUUID(),
@@ -288,7 +297,11 @@ export function useConnectedFindMatch(
     phase,
     since: search?.since ?? null,
     terms: search?.terms ?? null,
-    failure,
+    failure:
+      failure ??
+      (hasCustomCards
+        ? "Decks with custom cards are only playable in Open Play Friend Games or Quick Test vs. Bot."
+        : null),
     find,
     cancel,
   };

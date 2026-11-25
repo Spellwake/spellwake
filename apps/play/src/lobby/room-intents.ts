@@ -30,6 +30,7 @@ export const ROOM_ACTION_KINDS = [
   "bootstrap_ai",
   "remove_ai",
   "set_ai_tier",
+  "set_ai_deck",
   "configure",
 ] as const;
 export type RoomActionKind = (typeof ROOM_ACTION_KINDS)[number] | "create";

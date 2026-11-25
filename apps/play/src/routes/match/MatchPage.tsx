@@ -726,7 +726,17 @@ function LiveMatch({ source }: { source: ReadyMatch }): ReactElement {
   const artFor = (obj: PlayerObject): string | undefined =>
     obj.identity.kind !== "known"
       ? undefined
-      : ((obj.identity.printingId
+      : ((obj.identity.customCardRevisionId
+          ? ((obj.transformFace?.backFaceUp
+              ? source.customFaceByRevisionId?.get(
+                  `${obj.identity.customCardRevisionId}:1`,
+                )
+              : undefined) ??
+            source.customFaceByRevisionId?.get(
+              obj.identity.customCardRevisionId,
+            ))
+          : undefined) ??
+        (obj.identity.printingId
           ? artByPrintingId.get(obj.identity.printingId)
           : undefined) ??
         source.faceByName?.get(obj.identity.characteristics.name));

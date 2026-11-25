@@ -3,7 +3,8 @@ use super::*;
 use crate::{
     amount::Amount,
     native_game::preparation_source::{
-        NativeReservedGameSource, PreparationEntry, PreparationPrinting, valid_entries,
+        NativeReservedGameSource, PreparationCustomEntry, PreparationEntry, PreparationPrinting,
+        valid_all_entries,
     },
     source_protocol::SourceProof,
 };
@@ -125,6 +126,12 @@ struct SelectedSeat {
         deserialize_with = "crate::provider_json::objects"
     )]
     entries: Vec<PreparationEntry>,
+    #[serde(
+        default,
+        skip_serializing_if = "Vec::is_empty",
+        deserialize_with = "crate::provider_json::objects"
+    )]
+    custom_entries: Vec<PreparationCustomEntry>,
     #[serde(deserialize_with = "crate::identifiers::uuid_list")]
     entry_ids: Vec<Uuid>,
 }
@@ -176,6 +183,7 @@ impl SelectedRoot {
                         .iter()
                         .map(copy_entry)
                         .collect::<Result<_, _>>()?,
+                    custom_entries: seat.custom_entries.clone(),
                     entry_ids: selected.entry_ids,
                 })
             })
@@ -193,7 +201,7 @@ impl SelectedRoot {
         &self,
         ids: NativeInitialIds,
         participants: &[NativeInitialParticipant],
-    ) -> Result<Vec<Vec<usize>>, NativeInitialError> {
+    ) -> Result<Vec<Vec<(bool, usize)>>, NativeInitialError> {
         if self.game_id != ids.game_id
             || self.release_id != ids.release_id
             || self.profile_id != ids.profile_id
@@ -209,7 +217,7 @@ impl SelectedRoot {
                 if seat.seat_id != participant.seat_id
                     || seat.original_revision_id.is_nil()
                     || seat.selected_revision_id.is_nil()
-                    || !valid_entries(&seat.entries)
+                    || !valid_all_entries(&seat.entries, &seat.custom_entries)
                     || seat.entry_ids.len() != participant.cards.len()
                     || if self.game_index.is_zero() {
                         seat.selected_revision_id != seat.original_revision_id
@@ -221,30 +229,41 @@ impl SelectedRoot {
                 {
                     return Err(NativeInitialError::ForeignSource);
                 }
-                let indices: BTreeMap<_, _> = seat
+                let mut indices: BTreeMap<Uuid, (bool, usize)> = seat
                     .entries
                     .iter()
                     .enumerate()
-                    .map(|(n, entry)| (entry.entry_id, n))
+                    .map(|(n, entry)| (entry.entry_id, (false, n)))
                     .collect();
+                for (n, entry) in seat.custom_entries.iter().enumerate() {
+                    indices.insert(entry.entry_id, (true, n));
+                }
                 let mut consumed: BTreeMap<Uuid, u64> = BTreeMap::new();
                 seat.entry_ids
                     .iter()
                     .zip(&participant.cards)
                     .map(|(entry_id, card)| {
-                        let index = *indices
+                        let (is_custom, index) = *indices
                             .get(entry_id)
                             .ok_or(NativeInitialError::ForeignSource)?;
-                        let entry = &seat.entries[index];
-                        // Parse exact original text. No trim, case folding or opaque-ref fallback.
-                        let oracle = OracleId::try_from(entry.oracle_ref.as_str().to_owned())
-                            .map_err(|_| NativeInitialError::ForeignSource)?;
+                        let (oracle, quantity) = if is_custom {
+                            let entry = &seat.custom_entries[index];
+                            let oracle =
+                                OracleId::try_from(entry.custom_card_revision_id.to_string())
+                                    .map_err(|_| NativeInitialError::ForeignSource)?;
+                            (oracle, &entry.quantity)
+                        } else {
+                            let entry = &seat.entries[index];
+                            let oracle = OracleId::try_from(entry.oracle_ref.as_str().to_owned())
+                                .map_err(|_| NativeInitialError::ForeignSource)?;
+                            (oracle, &entry.quantity)
+                        };
                         let count = consumed.entry(*entry_id).or_default();
                         *count = count.checked_add(1).ok_or(NativeInitialError::Invalid)?;
-                        if oracle != card.oracle_id || Amount::from(*count) > entry.quantity {
+                        if oracle != card.oracle_id || Amount::from(*count) > *quantity {
                             return Err(NativeInitialError::ForeignSource);
                         }
-                        Ok(index)
+                        Ok((is_custom, index))
                     })
                     .collect()
             })
@@ -254,25 +273,33 @@ impl SelectedRoot {
         &self,
         ids: NativeInitialIds,
         participants: &[NativeInitialParticipant],
-    ) -> Result<Vec<Vec<usize>>, NativeInitialError> {
+    ) -> Result<Vec<Vec<(bool, usize)>>, NativeInitialError> {
         if !self.game_index.is_zero() {
             return Err(NativeInitialError::ForeignSource);
         }
         let indices = self.validate(ids, participants)?;
         for ((seat, participant), selected) in self.seats.iter().zip(participants).zip(&indices) {
             let mut consumed = BTreeMap::<Uuid, u64>::new();
-            for (card, index) in participant.cards.iter().zip(selected) {
-                let entry = &seat.entries[*index];
+            for (card, &(is_custom, index)) in participant.cards.iter().zip(selected) {
+                let (entry_id, section) = if is_custom {
+                    let e = &seat.custom_entries[index];
+                    (e.entry_id, e.section.as_str())
+                } else {
+                    let e = &seat.entries[index];
+                    (e.entry_id, e.section.as_str())
+                };
                 let expected = match card.zone {
                     super::NativeInitialZone::Library => "main",
                     super::NativeInitialZone::Command => "commander",
                 };
-                if entry.section.as_str() != expected {
+                if section != expected {
                     return Err(NativeInitialError::ForeignSource);
                 }
-                *consumed.entry(entry.entry_id).or_default() += 1;
+                *consumed.entry(entry_id).or_default() += 1;
             }
             if seat.entries.iter().any(|entry| {
+                Amount::from(consumed.get(&entry.entry_id).copied().unwrap_or(0)) != entry.quantity
+            }) || seat.custom_entries.iter().any(|entry| {
                 Amount::from(consumed.get(&entry.entry_id).copied().unwrap_or(0)) != entry.quantity
             }) {
                 return Err(NativeInitialError::ForeignSource);
@@ -304,17 +331,20 @@ impl SelectedRoot {
                             .zip(serde_json::to_value(EntryRef(b)).ok())
                             .is_some_and(|(a, b)| a == b)
                     })
+                    && a.custom_entries == b.custom_entries
             })
     }
     pub(super) fn bind(
         self,
         ids: NativeInitialIds,
-        cards: BTreeMap<CardId, (usize, usize)>,
+        cards: BTreeMap<CardId, (usize, bool, usize)>,
+        overlay: Option<Arc<NativeProgramOverlay>>,
     ) -> NativeInitialProvenance {
         NativeInitialProvenance {
             ids,
             record: self,
             cards,
+            overlay,
         }
     }
 }
@@ -324,7 +354,8 @@ impl SelectedRoot {
 pub struct NativeInitialProvenance {
     ids: NativeInitialIds,
     record: SelectedRoot,
-    cards: BTreeMap<CardId, (usize, usize)>,
+    cards: BTreeMap<CardId, (usize, bool, usize)>,
+    overlay: Option<Arc<NativeProgramOverlay>>,
 }
 impl NativeInitialProvenance {
     pub(super) fn display_context(
@@ -337,35 +368,63 @@ impl NativeInitialProvenance {
     pub fn scope(&self) -> (Uuid, Uuid) {
         (self.ids.game_id, self.ids.context_id)
     }
+    /// Match-scoped custom card overlay when this match contains Open Play custom cards.
+    pub fn overlay(&self) -> Option<&NativeProgramOverlay> {
+        self.overlay.as_deref()
+    }
     /// Look up immutable card origin, never a token's copied rules or current controller.
     /// Caller must use an actual object of this checkpoint; this is not visibility.
     pub fn physical_card(&self, object: &GameObject) -> Option<NativePhysicalCardSource<'_>> {
-        let (seat, entry) = self.cards.get(&object.card_id()?)?;
-        Some(NativePhysicalCardSource {
-            entry: self.record.seats.get(*seat)?.entries.get(*entry)?,
-        })
+        let &(seat, is_custom, entry) = self.cards.get(&object.card_id()?)?;
+        let seat_ref = self.record.seats.get(seat)?;
+        if is_custom {
+            Some(NativePhysicalCardSource::Custom(
+                seat_ref.custom_entries.get(entry)?,
+            ))
+        } else {
+            Some(NativePhysicalCardSource::Official(
+                seat_ref.entries.get(entry)?,
+            ))
+        }
     }
-    /// Independently compare a new v2 opening against its sealed reservation source.
+    /// Independently compare a new v2/v4 opening against its sealed reservation source.
     /// Equality does not establish card/format qualification or provider evidence.
     pub fn matches_reserved(&self, source: &NativeReservedGameSource) -> bool {
         self.record.matches(source)
     }
 }
 /// Borrowed physical source identity. Printed rules and effective values are separate.
-pub struct NativePhysicalCardSource<'a> {
-    entry: &'a PreparationEntry,
+pub enum NativePhysicalCardSource<'a> {
+    Official(&'a PreparationEntry),
+    Custom(&'a PreparationCustomEntry),
 }
 impl NativePhysicalCardSource<'_> {
-    /// Original selected application definition, not a copied current definition.
-    pub fn definition_id(&self) -> Uuid {
-        self.entry.definition_id
+    /// Original selected official application definition, or `None` for a custom card.
+    pub fn definition_id(&self) -> Option<Uuid> {
+        match self {
+            Self::Official(entry) => Some(entry.definition_id),
+            Self::Custom(_) => None,
+        }
     }
-    /// Original selected printing; None is deliberately preserved.
+    /// Original selected official printing, or `None` when omitted or for custom cards.
     pub fn printing_id(&self) -> Option<Uuid> {
-        self.entry.printing.as_ref().map(|p| p.id)
+        match self {
+            Self::Official(entry) => entry.printing.as_ref().map(|p| p.id),
+            Self::Custom(_) => None,
+        }
+    }
+    /// Original selected immutable custom card revision, or `None` for official cards.
+    pub fn custom_card_revision_id(&self) -> Option<Uuid> {
+        match self {
+            Self::Official(_) => None,
+            Self::Custom(entry) => Some(entry.custom_card_revision_id),
+        }
     }
     /// Original selected entry identity, useful only inside trusted source joins.
     pub fn entry_id(&self) -> Uuid {
-        self.entry.entry_id
+        match self {
+            Self::Official(entry) => entry.entry_id,
+            Self::Custom(entry) => entry.entry_id,
+        }
     }
 }

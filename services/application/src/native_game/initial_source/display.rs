@@ -39,6 +39,20 @@ impl<'a> NativeImmutableDisplay<'a> {
         &self,
         definition: &Program,
     ) -> Result<crate::player_wire::PlayerCharacteristics, NativeProjectionError> {
+        if let Some(overlay) = self.provenance.overlay() {
+            if let Some(printed) = overlay
+                .printed_card(definition)
+                .map_err(NativeProjectionError::metadata)?
+            {
+                return Ok(printed);
+            }
+            if let Some(token) = overlay
+                .token_description(definition, &self.programs.vocabulary)
+                .map_err(NativeProjectionError::metadata)?
+            {
+                return Ok(token);
+            }
+        }
         if let Some(printed) = self
             .programs
             .printed_card(definition)
@@ -68,19 +82,33 @@ impl NativeDisplaySource for NativeImmutableDisplay<'_> {
         object: &GameObject,
         definition: &Program,
     ) -> Result<NativeObjectDisplay, NativeProjectionError> {
-        let characteristics = self.description(definition)?;
         let physical = self.provenance.physical_card(object);
         // A physical card lacking its retained source is corruption, not a token.
         if object.card_id().is_some() && physical.is_none() {
             return Err(NativeProjectionError::MissingDisplay);
         }
+        // Tie-break functional reprints by physical custom card revision before falling back.
+        let characteristics = if let Some(NativePhysicalCardSource::Custom(custom_entry)) =
+            physical.as_ref()
+            && let Some(overlay) = self.provenance.overlay()
+            && let Some(exact) = overlay
+                .printed_card_for_revision(custom_entry.custom_card_revision_id, definition)
+                .map_err(NativeProjectionError::metadata)?
+        {
+            exact
+        } else {
+            self.description(definition)?
+        };
         Ok(NativeObjectDisplay {
             definition_id: physical
                 .as_ref()
-                .map(NativePhysicalCardSource::definition_id),
+                .and_then(NativePhysicalCardSource::definition_id),
             printing_id: physical
                 .as_ref()
                 .and_then(NativePhysicalCardSource::printing_id),
+            custom_card_revision_id: physical
+                .as_ref()
+                .and_then(NativePhysicalCardSource::custom_card_revision_id),
             characteristics,
         })
     }

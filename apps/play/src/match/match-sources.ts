@@ -91,6 +91,8 @@ export type MatchSource =
       snapshot: PlayerSnapshot;
       seatNames: ReadonlyMap<string, string>;
       artByPrintingId: ReadonlyMap<string, string>;
+      /** Rendered 300-DPI card face blob URLs for revealed Open Play custom cards, keyed by revision ID. */
+      customFaceByRevisionId?: ReadonlyMap<string, string>;
       /** Card pictures by card name, for a table whose cards have no printing. */
       faceByName?: ReadonlyMap<string, string>;
       /** Where a modal card's modes are printed, by card name, for a table whose cards have no printing. */

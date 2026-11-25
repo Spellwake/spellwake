@@ -68,7 +68,7 @@ pub(super) async fn save(
         let actor = match config.actor().and_then(|client|client.resolve(&token)) { Ok(actor)=>actor, Err(error)=>return actor_error(error) };
         if actor.account().is_none() { return fail(StatusCode::CONFLICT,"account","unavailable"); }
         let backend = match backend(config) { Ok(client)=>client, Err(_)=>return unavailable() };
-        command_response(backend.rpc("save_deck_command", &json!({"p_subject":actor.subject(),"p_session":actor.session(),"p_request":input.request_id,"p_deck":input.deck_id,"p_expected_revision":input.expected_revision_id,"p_entries":input.entries})))
+        command_response(backend.rpc("save_deck_command", &json!({"p_subject":actor.subject(),"p_session":actor.session(),"p_request":input.request_id,"p_deck":input.deck_id,"p_expected_revision":input.expected_revision_id,"p_entries":input.entries,"p_custom_entries":input.custom_entries})))
     }).await
 }
 /// One settings command updates metadata and entitled appearance atomically.
@@ -160,6 +160,16 @@ fn canonical_failure(data: &BTreeMap<String, String>) -> bool {
                             | "too many deck entries"
                             | "invalid deck entries"
                     )
+                    | (
+                        "customEntries",
+                        "expected custom deck entry array"
+                            | "too many deck entries"
+                            | "invalid custom deck entries"
+                            | "custom cards require open play"
+                            | "custom card unavailable"
+                    )
+                    | ("faceCard", "card not in deck")
+                    | ("mode", "custom cards require open play")
                     | (
                         "cosmetics",
                         "default cosmetic unavailable" | "cosmetic selection unavailable"
