@@ -214,6 +214,62 @@ class HealthChecksTests(unittest.TestCase):
         self.assertEqual(result["localBadge"]["color"], "red")
         self.assertEqual(result["failedTests"], 1)
 
+    def test_parser_audit_badges_enforce_honest_purity_and_defect_gating(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            badges_dir = Path(tmp)
+            passing = {
+                "totalCards": 32155,
+                "strictlyCompiledCards": 32155,
+                "zeroCriticalDefectCards": 32155,
+                "fullyTypedPureCards": 29309,
+                "cardsWithCriticalDefects": 0,
+                "cardsWithOpaqueStrings": 2846,
+            }
+            eps = catalog_refresh.write_parser_audit_badges(badges_dir, passing)
+            self.assertEqual(eps["parserAuditDefects"]["color"], "green")
+            self.assertFalse(eps["parserAuditDefects"]["isError"])
+            self.assertIn("0 defects", eps["parserAuditDefects"]["message"])
+            self.assertEqual(eps["parserTypedAst"]["color"], "blue")
+            self.assertIn("91.1%", eps["parserTypedAst"]["message"])
+            self.assertNotIn("100.0%", eps["parserTypedAst"]["message"])
+
+            failing = dict(passing, zeroCriticalDefectCards=32150, cardsWithCriticalDefects=5)
+            fail_eps = catalog_refresh.write_parser_audit_badges(badges_dir, failing)
+            self.assertEqual(fail_eps["parserAuditDefects"]["color"], "red")
+            self.assertTrue(fail_eps["parserAuditDefects"]["isError"])
+            self.assertIn("fail", fail_eps["parserAuditDefects"]["message"])
+
+            empty = dict(passing, totalCards=0, strictlyCompiledCards=0, zeroCriticalDefectCards=0, fullyTypedPureCards=0)
+            empty_eps = catalog_refresh.write_parser_audit_badges(badges_dir, empty)
+            self.assertEqual(empty_eps["parserAuditDefects"]["color"], "lightgrey")
+            self.assertEqual(empty_eps["parserAuditDefects"]["message"], "unknown")
+
+    def test_oracle_parser_domain_reports_offline_live_status_honestly(self) -> None:
+        spec = next(d for d in health_checks.DOMAINS if d.slug == "oracle-parser")
+        self.assertTrue(spec.local_only)
+        synth = health_checks.DomainSpec(
+            slug="oracle-parser-synth",
+            label="Oracle Parser",
+            rust_checks=(
+                health_checks.CommandSpec(
+                    kind="cargo",
+                    label="synthetic parser pass",
+                    args=("python3", "-c", "print('test result: ok. 4 passed; 0 failed; 0 ignored;')"),
+                ),
+            ),
+            db_filters=(),
+            frontend_checks=(),
+            hosted_credentials=(),
+            local_only=True,
+        )
+        res = health_checks.evaluate_domain(
+            synth, run_db=False, run_frontend=False, db_available=False
+        )
+        self.assertEqual(res["localStatus"], "local-verified")
+        self.assertEqual(res["localBadge"]["color"], "green")
+        self.assertEqual(res["liveStatus"], "not-applicable")
+        self.assertEqual(res["liveBadge"]["message"], "n/a · offline")
+
     def test_badge_svg_renders_valid_svg_and_escapes_xml(self) -> None:
         svg = badge_svg.render_svg("AI & Pets", "unknown <unqualified>", "lightgrey")
         self.assertTrue(svg.startswith("<svg "))
