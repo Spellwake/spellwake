@@ -77,8 +77,8 @@ export type MatchSource =
       /** Where a modal card's modes are printed, by card name, for a table whose cards have no printing. */
       printedModesByName?: ReadonlyMap<string, PrintedModes>;
       /**
-       * The cards the game offers to cast now. Absent where the game does not
-       * say, which is every live match until the player view carries offers.
+       * The cards the game offers to cast now, derived from server-authored
+       * `PlayerSnapshot.castOffers` in live matches or preview offers in local mode.
        */
       castOffers?: readonly CastOffer[];
       connectionState: MatchConnectionState;
