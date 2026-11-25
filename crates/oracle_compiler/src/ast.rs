@@ -135,6 +135,18 @@ impl ObjectFilterFlags {
     pub const IS_COMMANDER: Self = Self(1 << 24);
     /// Matches a non-commander object (`The Peregrine Dynamo`).
     pub const NOT_COMMANDER: Self = Self(1 << 25);
+    /// Matches objects of the chosen creature/subtype (`Cavern of Souls`, `Kindred Discovery`).
+    pub const MATCHES_CHOSEN_TYPE: Self = Self(1 << 26);
+    /// Matches objects of the chosen color (`Caged Sun`, `Hall of Triumph`).
+    pub const MATCHES_CHOSEN_COLOR: Self = Self(1 << 27);
+    /// Matches objects of the chosen card type (`Sanctum Prelate`, `Aether Vial` variants).
+    pub const MATCHES_CHOSEN_CARD_TYPE: Self = Self(1 << 28);
+    /// Matches objects with the chosen card name (`Pithing Needle`, `Runed Halo`).
+    pub const MATCHES_CHOSEN_NAME: Self = Self(1 << 29);
+    /// Matches creatures that did not attack this turn (turn-history predicate, not instantaneous combat state).
+    pub const DID_NOT_ATTACK_THIS_TURN: Self = Self(1 << 30);
+    /// Indicates `required_keywords` uses OR semantics (`flying or reach`) rather than AND semantics (`flying and vigilance`).
+    pub const KEYWORDS_MATCH_ANY: Self = Self(1 << 31);
 
     /// Combine two flag sets.
     #[must_use]
@@ -426,6 +438,18 @@ pub enum FilterPredicateAst {
     },
     /// Matches creatures permitted to block additional creatures (`Camouflage`).
     CanBlockAdditionalCreatures,
+    /// Indicates `ObjectFilterAst.subtypes` uses OR semantics (`Ape or Monkey`) rather than AND (`Human Warrior`).
+    SubtypesMatchAny,
+    /// Preserves `"of that player's choice"` / `"of your choice"` chooser metadata.
+    ChosenByPlayer(PlayerRefAst),
+    /// Matches objects put into their current zone from `from_zone` this turn.
+    EnteredZoneFromThisTurn {
+        from_zone: ZoneFilter,
+    },
+    /// Preserves prior-action or anaphoric zone reference (`milled_this_way`, `revealed_this_way`, `in_referenced_zone`, etc.).
+    PriorActionZoneRef {
+        kind: String,
+    },
     StateQualification(String),
 }
 
@@ -877,6 +901,8 @@ pub enum ValueExprAst {
     NotedTypesCount(Box<SubjectRefAst>),
     /// Number of times an additional cost was paid (`Taste of Paradise`).
     AdditionalCostPaidCount(String),
+    /// Previously chosen, rolled, or referenced number (distinct from spell `{X}` `ChosenX`).
+    ReferencedNumber,
     /// Opt-in tabletop honor-system integer input (e.g. bystander number, dexterity count).
     ManualTabletopNumber {
         prompt: String,
@@ -1453,6 +1479,141 @@ pub enum ConditionAst {
         controller: Option<PlayerRefAst>,
         min_count: u16,
     },
+    /// Typed check that `subject` targets `target`.
+    TargetsSubject {
+        subject: Box<SubjectRefAst>,
+        target: Box<SubjectRefAst>,
+    },
+    /// Typed check that `subject` is attached to `host`.
+    AttachedTo {
+        subject: Box<SubjectRefAst>,
+        host: Box<SubjectRefAst>,
+    },
+    /// Typed check that `subject` has the same name as `other`.
+    SameNameAs {
+        subject: Box<SubjectRefAst>,
+        other: Box<SubjectRefAst>,
+    },
+    /// Typed check that at least `min_count` objects matching `blocker_filter` are blocking `subject`.
+    BlockedByFilter {
+        subject: Box<SubjectRefAst>,
+        blocker_filter: Box<ObjectFilterAst>,
+        min_count: u8,
+    },
+    /// Typed check that `player` controls the most objects matching `filter` (optionally allowing ties).
+    PlayerControlsMost {
+        player: PlayerRefAst,
+        filter: Box<ObjectFilterAst>,
+        allow_tie: bool,
+    },
+    /// Typed check that `player` controls strictly more objects matching `filter` than `than_player`.
+    ControlsMoreThan {
+        player: PlayerRefAst,
+        filter: Box<ObjectFilterAst>,
+        than_player: PlayerRefAst,
+    },
+    /// Typed check that `player` attacked with at least `min_count` objects matching `filter` this turn.
+    AttackedWithFilteredThisTurn {
+        player: PlayerRefAst,
+        filter: Box<ObjectFilterAst>,
+        min_count: u8,
+    },
+    /// Typed check that `subject` is currently controlled by `player`.
+    SubjectControlledBy {
+        subject: Box<SubjectRefAst>,
+        player: PlayerRefAst,
+    },
+    /// Typed check that `subject` is currently in `zone`.
+    SubjectInZone {
+        subject: Box<SubjectRefAst>,
+        zone: ZoneFilter,
+    },
+    /// Typed check that the top card of `zone` matches `filter`.
+    TopCardMatches {
+        zone: ZoneFilter,
+        filter: Box<ObjectFilterAst>,
+    },
+    /// Typed check that `subject` shares `property` (`color`, `card_type`, `creature_type`) with `other`.
+    SharesPropertyWith {
+        subject: Box<SubjectRefAst>,
+        other: Box<SubjectRefAst>,
+        property: String,
+    },
+    /// Typed player-scoped coin-flip outcome check (`heads`, `tails`, `win`, `lose`, `both_heads`, `both_tails`).
+    PlayerCoinFlipOutcome {
+        player: PlayerRefAst,
+        outcome: String,
+    },
+    /// Typed die-roll result comparison.
+    DieRollCompare {
+        player: PlayerRefAst,
+        op: CompareOp,
+        value: i32,
+        any_of_group: bool,
+        exact_times: Option<u8>,
+    },
+    /// Typed check on objects matching `filter` and `name_filter` in `zone`.
+    CardWithNameInZone {
+        name_filter: NameFilterAst,
+        filter: Box<ObjectFilterAst>,
+        zone: ZoneFilter,
+        op: CompareOp,
+        count: u16,
+    },
+    /// Typed parity check on a referenced/chosen number (`even` vs `odd`).
+    NumberParity {
+        even: bool,
+    },
+    /// Typed phase or step check (`main_phase`, `end_step`, etc.).
+    IsPhaseOrStep {
+        player: Option<PlayerRefAst>,
+        phase: String,
+        first_only: bool,
+    },
+    /// Typed check whether `player` is the starting player of the game.
+    IsStartingPlayer(PlayerRefAst),
+    /// Typed comparison between two players' life totals.
+    LifeComparePlayers {
+        player: PlayerRefAst,
+        op: CompareOp,
+        other: PlayerRefAst,
+    },
+    /// Typed turn-history damage-dealt check.
+    DamageDealtThisTurn {
+        source: Box<SubjectRefAst>,
+        target_filter: Option<Box<ObjectFilterAst>>,
+        combat_only: bool,
+        min_damage: Option<u16>,
+    },
+    /// Typed check on number of colors of mana spent to cast the spell/permanent.
+    ColorsOfManaSpentCompare {
+        op: CompareOp,
+        value: u8,
+    },
+    /// Typed check for a prior action occurring during this resolution (`exiled_this_way`, `countered_this_way`, etc.).
+    PriorActionOccurred {
+        action: String,
+        subject_filter: Option<Box<ObjectFilterAst>>,
+        min_count: u8,
+    },
+    /// Typed check that `subject` was cast from `zone`.
+    WasCastFromZone {
+        subject: Box<SubjectRefAst>,
+        zone: ZoneFilter,
+    },
+    /// Typed check that `subject` had an alternative/named cost paid (`sneak`, etc.).
+    PaidAltCost {
+        subject: Box<SubjectRefAst>,
+        cost_kind: String,
+    },
+    /// Typed check for the Nth resolution of this ability in the current turn.
+    ResolutionCountThisTurn {
+        count: u8,
+    },
+    /// Typed check that `subject` is all five colors.
+    AllColors(Box<SubjectRefAst>),
+    /// Typed check that `player` controls a permanent of each color.
+    ControlsEachColor(PlayerRefAst),
 }
 
 /// Mana production specification.
@@ -1894,6 +2055,22 @@ pub enum TriggerEventAst {
     CardPlayed {
         player: PlayerRefAst,
         filter: Box<ObjectFilterAst>,
+    },
+    /// Trigger firing when a matching land is tapped for or produces mana of a specific color (`Caged Sun`, `Gauntlet of Power`).
+    LandTappedForManaColor {
+        filter: Box<ObjectFilterAst>,
+        mana_color_filter: String,
+        by_you: bool,
+    },
+    /// Trigger firing when `subject` becomes blocked by at least `min_blockers` creatures.
+    BecomesBlockedByCount {
+        subject: Box<SubjectRefAst>,
+        min_blockers: u8,
+    },
+    /// Trigger firing when `player` and/or at least one permanent matching `permanent_filter` becomes targeted.
+    PlayerOrPermanentBecomesTargeted {
+        player: PlayerRefAst,
+        permanent_filter: Box<ObjectFilterAst>,
     },
 }
 
@@ -3230,8 +3407,102 @@ pub enum InstructionAst {
         target: Box<SubjectRefAst>,
         duration: DurationAst,
     },
-    /// Token creation preserving blocking status, dynamic P/T expressions, and chosen color/type qualifiers (`Skullspore Nexus`, `Volrath's Laboratory`).
+    /// Token creation preserving blocking status, attacking target, dynamic P/T expressions, and chosen color/type qualifiers.
     CreateQualifiedToken(Box<QualifiedTokenCreationAst>),
+    /// Option choice preserving the explicit choosing player (`<who> chooses <a or b>`).
+    PlayerChooseOption {
+        chooser: PlayerRefAst,
+        options: Vec<String>,
+    },
+    /// Tap an explicit count of objects matching `filter` (`tap <N> <flt>`).
+    TapCount {
+        player: PlayerRefAst,
+        count: Box<ValueExprAst>,
+        filter: Box<ObjectFilterAst>,
+    },
+    /// Return half of `subject` (with optional rounding) to `to`.
+    ReturnHalf {
+        subject: Box<SubjectRefAst>,
+        to: String,
+        rounding: Option<Rounding>,
+    },
+    /// Iterate over target players/opponents with explicit `any_number` flag.
+    ForEachTargetPlayer {
+        player: PlayerRefAst,
+        any_number: bool,
+        body: Vec<InstructionAst>,
+    },
+    /// Iterate over players matching a filter condition (`for each opponent with <cond>, <body>`).
+    ForEachMatchingPlayer {
+        player: PlayerRefAst,
+        condition_text: String,
+        condition: Option<Box<ConditionAst>>,
+        body: Vec<InstructionAst>,
+    },
+    /// Set basic land type or supertype on `subject` (replaces Debug-formatted `AbilityRestriction`).
+    SetBasicLandType {
+        subject: Box<SubjectRefAst>,
+        land_type: String,
+        duration: DurationAst,
+    },
+    /// Remove a supertype (e.g. `snow`) from `subject` (replaces Debug-formatted `AbilityRestriction`).
+    RemoveSupertype {
+        subject: Box<SubjectRefAst>,
+        supertype: String,
+        duration: DurationAst,
+    },
+    /// Exchange control among objects referenced by `subject` (replaces Debug-formatted `AbilityRestriction`).
+    ExchangeControlOf {
+        subject: Box<SubjectRefAst>,
+    },
+    /// Qualified mana addition preserving source, past-tense production, noted types/amounts, or complex multi-spec choices.
+    AddQualifiedMana(Box<QualifiedManaAst>),
+    /// Manifest preserving the explicit controller performing the manifest (`who manifests ...`).
+    ManifestByPlayer {
+        player: PlayerRefAst,
+        count: Box<ValueExprAst>,
+        dread: bool,
+        subject: Option<Box<SubjectRefAst>>,
+    },
+    /// Cloak preserving the explicit controller performing the cloak (`who cloaks ...`).
+    CloakByPlayer {
+        player: PlayerRefAst,
+        count: Box<ValueExprAst>,
+        subject: Option<Box<SubjectRefAst>>,
+    },
+    /// Choose from a group preserving the explicit choosing player (`<who> chooses <N> <flt>`).
+    PlayerChooseFromGroup {
+        chooser: PlayerRefAst,
+        count: Box<ValueExprAst>,
+        random: bool,
+        group: Box<SubjectRefAst>,
+    },
+    /// Separate a specific filtered subject into piles (`<who> separates <flt> into <N> piles`).
+    SeparateFilteredIntoPiles {
+        chooser: PlayerRefAst,
+        subject: Box<SubjectRefAst>,
+        pile_count: u8,
+        face_down_piles: u8,
+    },
+    /// Repeat process preserving the explicit choosing player (`<who> may repeat this process ...`).
+    PlayerRepeatProcess {
+        player: PlayerRefAst,
+        condition: Option<Box<ConditionAst>>,
+        max_times: Option<u8>,
+        any_number: bool,
+    },
+    /// Temporary player-scoped restriction or reveal rule preserving both `player` and optional `subject`.
+    /// Scoped duration preserving custom `Until <duration>, <body>` text when not matching a fixed `DurationAst`.
+    ScopedDurationText {
+        duration_text: String,
+        body: Vec<InstructionAst>,
+    },
+    TemporaryPlayerRestriction {
+        player: PlayerRefAst,
+        subject: Option<Box<SubjectRefAst>>,
+        rule: String,
+        duration: DurationAst,
+    },
     /// Lossless structured effect rule preserving full semantics for specialized Magic rules (`Karn Liberated`, `Global Ruin`, `Feather`, `Invert`, etc.).
     StructuredRule {
         kind: String,
@@ -3624,6 +3895,25 @@ pub enum StaticAbilityAst {
         filter: Box<ObjectFilterAst>,
         effect: Box<StaticAbilityAst>,
     },
+    /// First-time-each-turn event-gated static or replacement rule (`The first time <event> each turn, <body>`).
+    FirstTimeEachTurnAction {
+        event_text: String,
+        event: Option<Box<TriggerEventAst>>,
+        body: Vec<InstructionAst>,
+    },
+    /// Static making objects Equipment with typed granted abilities (`Armed with Proof`, `Bludgeon Brawl`).
+    BecomesEquipmentWith {
+        subject: Box<SubjectRefAst>,
+        additive_types: bool,
+        granted_text: String,
+        granted_abilities: Option<Box<FaceAst>>,
+    },
+    /// Static removing land types and abilities and granting replacements (`Alpine Moon`, `Lithoform Blight`).
+    LoseLandTypesAndGain {
+        subject: Box<SubjectRefAst>,
+        granted_text: String,
+        granted_abilities: Option<Box<FaceAst>>,
+    },
 }
 
 /// Consolidated replacement effect AST.
@@ -3701,6 +3991,23 @@ pub enum ReplacementEffectAst {
         target_filter: Box<ObjectFilterAst>,
         body: Vec<InstructionAst>,
     },
+    /// Replacement entering both tapped and with counters (`Noble's Purse`, `Sphere of the Suns`).
+    EntersTappedAndWithCounters {
+        counter_kind: String,
+        count: Box<ValueExprAst>,
+    },
+    /// Replacement looking at a player's zone and then making a choice as the permanent enters (`Anointed Peacekeeper`, `Sorcerous Spyglass`).
+    AsEntersLookAndChoose {
+        target_player: PlayerRefAst,
+        zone: ZoneFilter,
+        choice: String,
+    },
+    /// Optional enters-tapped replacement (`You may have ~ enter tapped`).
+    OptionalEntersTapped,
+    /// Replacement firing as this permanent transforms (`As ~ transforms into ~, <body>`).
+    AsTransformsAction(Vec<InstructionAst>),
+    /// Replacement firing as this permanent is turned face up (`As ~ is turned face up, <body>`).
+    AsTurnedFaceUpAction(Vec<InstructionAst>),
 }
 
 /// Parsed CR 702 keyword with optional desugared IR representation.
@@ -3855,6 +4162,8 @@ pub struct QualifiedTokenCreationAst {
     pub dynamic_pt_text: Option<String>,
     pub chosen_color: bool,
     pub chosen_type: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub attacking_target: Option<Box<SubjectRefAst>>,
 }
 
 /// Boxed payload for `ReplacementEffectAst::EntersAsCopyModified`.
@@ -3865,4 +4174,17 @@ pub struct EntersAsCopyModifiedAst {
     pub exception: Option<String>,
     pub enters_tapped: bool,
     pub duration: DurationAst,
+}
+
+/// Boxed payload for `InstructionAst::AddQualifiedMana`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct QualifiedManaAst {
+    pub player: PlayerRefAst,
+    pub kind: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub amount: Option<Box<ValueExprAst>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source: Option<Box<SubjectRefAst>>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub choices: Vec<ManaSpecAst>,
 }
