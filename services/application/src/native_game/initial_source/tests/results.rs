@@ -346,13 +346,29 @@ fn seat_knowledge_and_compact_prompt_survive_exact_cold_checkpoint_replay() {
     assert!(first_mulliganed);
 
     // Cold replay from scratch through `load_checkpoint`.
-    let mut steps = vec![];
+    // `private_storage::private_bucket` caches bucket privacy per `(origin, bucket)`, so only
+    // the first read queries `/storage/v1/bucket/native-evidence`.
+    let obj_get = |reference: &NativeArtifactRef, bytes: &[u8]| {
+        Step::get(
+            format!(
+                "/storage/v1/object/authenticated/native-evidence/{}",
+                reference.as_str()
+            ),
+            200,
+            bytes.to_vec(),
+        )
+    };
+    let mut steps = vec![Step::get(
+        "/storage/v1/bucket/native-evidence".into(),
+        200,
+        br#"{"id":"native-evidence","public":false}"#.to_vec(),
+    )];
     for (r, b) in state_records.iter().rev() {
-        steps.extend(checkpoint_read_steps(r, b));
+        steps.push(obj_get(r, b));
     }
-    steps.extend(checkpoint_read_steps(&initial_ref, &initial_bytes));
+    steps.push(obj_get(&initial_ref, &initial_bytes));
     for (r, b) in &input_records {
-        steps.extend(checkpoint_read_steps(r, b));
+        steps.push(obj_get(r, b));
     }
     let mock = Mock::new(steps);
     let recovered = load_checkpoint(
