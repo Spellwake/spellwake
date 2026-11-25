@@ -2,6 +2,21 @@
 import { z } from "zod";
 import { mountCardScene } from "./card-scene";
 import { createSceneSettings, SCENE_SETTING_IDS } from "./scene-settings";
+import { solidSleeveDesigns } from "./sleeve-colors";
+
+const sleeveSelect = z
+  .instanceof(HTMLSelectElement)
+  .parse(document.getElementById("sleeve-design"));
+const solidColorGroup = document.createElement("optgroup");
+solidColorGroup.label = "Solid colors";
+for (const design of solidSleeveDesigns) {
+  sleeveSelect.querySelector(`option[value="${design.id}"]`)?.remove();
+  solidColorGroup.append(new Option(design.label, design.id));
+}
+sleeveSelect.insertBefore(
+  solidColorGroup,
+  sleeveSelect.querySelector('option[value="dragon-gloss"]'),
+);
 const settings = createSceneSettings();
 const bindings = SCENE_SETTING_IDS.map((id) => {
   const element = z

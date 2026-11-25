@@ -108,3 +108,20 @@ test("host presentation identities survive parsing only for known faces", () => 
   };
   expect(playSetupSchema.safeParse(setup).success).toBe(false);
 });
+
+test("solid matte and glossy sleeve designs parse and map to scene settings", () => {
+  for (const sleeve of [
+    "black-matte",
+    "red-matte",
+    "blue-gloss",
+    "green-gloss",
+  ] as const) {
+    const settings = settingsForPlay({ ...SAMPLE_PLAY_SETUP, sleeve });
+    expect(settings.sleeve.checked).toBe(true);
+    expect(settings["sleeve-design"].value).toBe(sleeve);
+  }
+  expect(
+    playSetupSchema.safeParse({ ...SAMPLE_PLAY_SETUP, sleeve: "invalid-gloss" })
+      .success,
+  ).toBe(false);
+});

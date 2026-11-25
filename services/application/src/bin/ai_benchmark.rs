@@ -629,6 +629,7 @@ fn summarize_action(plan: &AiActionPlan) -> String {
             PlayerAction::CastUntargeted { .. } => "cast-untargeted".to_owned(),
             PlayerAction::CastTargeted { .. } => "cast-targeted".to_owned(),
             PlayerAction::ActivateAbility { .. } => "activate-ability".to_owned(),
+            PlayerAction::ActivateModalAbility { .. } => "activate-modal-ability".to_owned(),
             PlayerAction::ActivateUntargetedAbility { .. } => {
                 "activate-untargeted-ability".to_owned()
             }
