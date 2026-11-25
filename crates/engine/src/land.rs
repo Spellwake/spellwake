@@ -185,6 +185,12 @@ impl LandType {
         Self::Urzas,
     ];
 
+    /// Bitmask bit for this land subtype (17 variants fit within `u32`).
+    #[must_use]
+    pub const fn bit(self) -> u32 {
+        1u32 << (self as u8)
+    }
+
     /// Stable strict contract label. `Urzas` explicitly denotes CR's `Urza’s`;
     /// source catalogue spellings are not implicitly normalized by this API.
     pub const fn wire_label(self) -> &'static str {

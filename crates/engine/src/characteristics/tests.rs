@@ -86,6 +86,7 @@ impl Fixture {
         static NO_ENTRY_CHOICES: BTreeMap<ObjectId, CreatureTypeId> = BTreeMap::new();
         CharacteristicWorld {
             active_player: SeatId(0),
+            step: None,
             participants: &[],
             life: None,
             entry_creature_types: &NO_ENTRY_CHOICES,

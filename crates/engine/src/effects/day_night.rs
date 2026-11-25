@@ -11,11 +11,20 @@ impl EffectWindow {
         target: &ObjectCharacteristics,
     ) -> bool {
         target.controller.is_some_and(|controller| {
-            evaluated.controlled_rules(controller, |rule| {
-                matches!(rule, crate::characteristics::StaticContinuousAbility::Restriction { rule: crate::characteristics::StaticRestriction::PreventControlledTransform { subtype, except }, .. }
-                    if target.current_creature_subtypes.contains(subtype)
-                        && !target.current_creature_subtypes.contains(except))
-            }) != 0
+            evaluated.objects.values().any(|perm| {
+                perm.zone == ObjectZone::Battlefield
+                    && perm.controller == Some(controller)
+                    && Self::permanent_has_restriction(perm, |rule| {
+                        matches!(
+                            rule,
+                            crate::characteristics::StaticRestriction::PreventControlledTransform {
+                                subtype,
+                                except,
+                            } if target.current_creature_subtypes.contains(subtype)
+                                && !target.current_creature_subtypes.contains(except)
+                        )
+                    })
+            })
         })
     }
 

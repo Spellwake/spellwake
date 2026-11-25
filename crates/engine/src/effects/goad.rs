@@ -264,7 +264,18 @@ impl EffectWindow {
                         AttackRequirement::SourceAttacks
                             | AttackRequirement::SourceAttacksExceptOwner
                     )
-                ));
+                ))
+                + current.get(attacker).map_or(0, |p| {
+                    p.blocking_restrictions
+                        .iter()
+                        .filter(|r| {
+                            matches!(
+                            r,
+                            crate::characteristics::BlockingRestriction::MustAttackEachCombatIfAble
+                        )
+                        })
+                        .count()
+                });
             let flying = current
                 .get(attacker)
                 .is_some_and(|p| p.has_keyword(KeywordAbility::Flying));

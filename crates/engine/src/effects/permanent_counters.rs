@@ -340,6 +340,131 @@ impl EffectWindow {
             append,
         )
     }
+    /// Place counters moved from another permanent onto `destination`, applying replacement modifiers
+    /// and emitting counter-placed occurrences under the originating instruction cause.
+    pub(super) fn place_moved_counters(
+        &mut self,
+        entry: StackEntryId,
+        instruction: usize,
+        destination: ObjectId,
+        moved: &BTreeMap<CounterKind, RulesInteger>,
+        append: &mut RulesJournal,
+    ) -> Result<(), EffectError> {
+        if moved.is_empty()
+            || !self
+                .window
+                .cards()
+                .get(destination)
+                .is_some_and(|card| card.zone() == ObjectZone::Battlefield)
+        {
+            return Ok(());
+        }
+        let cause = EventCause::Instruction { entry, instruction };
+        let before = self.rules_snapshot(None)?;
+        let mut pt_raw = PowerToughnessCounters::default();
+        let mut named: Vec<(CounterKind, RulesInteger)> = Vec::new();
+        for (&kind, amount) in moved {
+            if !amount.is_positive()
+                || self.permanent_counter_prevented(&before.view().evaluated, destination, kind)
+            {
+                continue;
+            }
+            match kind {
+                CounterKind::PlusOne => pt_raw.plus_one = pt_raw.plus_one.plus(amount),
+                CounterKind::MinusOne => pt_raw.minus_one = pt_raw.minus_one.plus(amount),
+                other => named.push((other, amount.clone())),
+            }
+        }
+        let mut pt_record = None;
+        if pt_raw.valid_placement() {
+            let added =
+                self.adjusted_pt_counters(&before.view().evaluated, destination, pt_raw, None)?;
+            if added.valid_placement() {
+                let previous = self.characteristics.counters(destination);
+                self.characteristics.place_counters(destination, &added)?;
+                let after = self.characteristics.counters(destination);
+                pt_record = Some((previous, added, after));
+            }
+        }
+        let mut named_occurrences = Vec::with_capacity(named.len());
+        for (kind, amount) in named {
+            let old = self.counters_of_kind(destination, kind);
+            let multiplied =
+                effect_counter_multiplier(&before.view().evaluated, destination).times(&amount);
+            let added = self.apply_static_counter_modifiers(
+                &before.view().evaluated,
+                destination,
+                kind,
+                multiplied,
+            );
+            if !added.is_positive() {
+                continue;
+            }
+            let after = old.plus(&added);
+            self.characteristics
+                .named_permanent_counters_mut(kind)
+                .ok_or(EffectError::InconsistentProgram)?
+                .insert(destination, after.clone());
+            if kind.keyword_counter_ability().is_some() {
+                self.characteristics
+                    .refresh_keyword_counter_grant(entry, destination, kind)?;
+            }
+            named_occurrences.push(match kind {
+                CounterKind::Loyalty => RulesOccurrence::LoyaltyCountersChanged {
+                    object: destination,
+                    before: old,
+                    after,
+                },
+                CounterKind::Charge => RulesOccurrence::ChargeCountersChanged {
+                    object: destination,
+                    before: old,
+                    after,
+                },
+                CounterKind::Storage => RulesOccurrence::StorageCountersChanged {
+                    object: destination,
+                    before: old,
+                    after,
+                },
+                CounterKind::Suspect => RulesOccurrence::SuspectCountersChanged {
+                    object: destination,
+                    before: old,
+                    after,
+                },
+                _ => RulesOccurrence::PermanentCounterChanged {
+                    object: destination,
+                    kind,
+                    before: old,
+                    after,
+                },
+            });
+        }
+        if pt_record.is_none() && named_occurrences.is_empty() {
+            return Ok(());
+        }
+        self.emit_from(cause, &before, None, append, |old, new, _| {
+            let mut occurrences =
+                Vec::with_capacity(named_occurrences.len() + usize::from(pt_record.is_some()));
+            if let Some((prev, added, after)) = pt_record.clone() {
+                occurrences.push(RulesOccurrence::CountersPlaced {
+                    object: destination,
+                    before_appearance: Box::new(
+                        old.appearance(destination)
+                            .ok_or(EffectError::InconsistentProgram)?,
+                    ),
+                    after_appearance: Box::new(
+                        new.appearance(destination)
+                            .ok_or(EffectError::InconsistentProgram)?,
+                    ),
+                    before: prev,
+                    added,
+                    after,
+                });
+            }
+            occurrences.extend(named_occurrences.clone());
+            Ok(occurrences)
+        })
+    }
+
     pub(super) fn place_ability_counters(
         &mut self,
         entry: &StackEntry,

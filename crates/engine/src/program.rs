@@ -64,6 +64,11 @@ pub enum GraveyardSelfCast {
     WithExtraCost(Vec<crate::activated::ExtraActivationCost>),
     /// Cast from owner's graveyard or exile (e.g. Eternal Scourge / Squee, the Immortal).
     GraveyardOrExile,
+    /// Cast from owner's graveyard for an alternative mana cost plus optional extra costs.
+    WithAlternativeCost {
+        mana: ManaCost,
+        extra: Vec<crate::activated::ExtraActivationCost>,
+    },
 }
 
 /// Printed special action from hand and the corresponding exile permission.
@@ -347,8 +352,8 @@ pub use trigger_spec::{
 };
 pub use value_expr::{
     AttachedCountKind, CounterSubjectRef, EventValueKind, MatchObjectRef, ObjectStatKind,
-    OpponentTurnStat, PlayerStatExpr, SourceStateExpr, SourceZoneKind, StatAggregate, ValueExpr,
-    ValueObjectRef, ValueZone,
+    OpponentTurnStat, PhaseCheck, PlayerStatExpr, SourceStateExpr, SourceZoneKind, StatAggregate,
+    ValueExpr, ValueObjectRef, ValueZone,
 };
 #[cfg(test)]
 mod cast_trigger_tests;
@@ -1474,6 +1479,8 @@ pub enum SourceZoneFilter {
     YourLibrary,
     OpponentExile,
     LinkedExile,
+    /// Objects moved by the immediately preceding instruction in this resolution (for example milled cards).
+    LastMoved,
 }
 
 /// Optional secondary pick bucket for `Instruction::LookTopChoose`.
@@ -1612,6 +1619,13 @@ pub enum TemporaryRuleKind {
         controller_only: bool,
         next_only: bool,
     },
+    /// Spells matching optional `filter` cannot be countered by spells or abilities of any color in `colors`.
+    CantBeCounteredByColors {
+        colors: ColorMask,
+        filter: Option<ObjectFilter>,
+        controller_only: bool,
+        next_only: bool,
+    },
     PlayerCantGainLife {
         players: AffectedPlayers,
     },
@@ -1680,9 +1694,15 @@ pub enum TemporaryRuleKind {
         free: bool,
         any_color: bool,
         once: bool,
+        sorcery_only: bool,
     },
     /// Duration-scoped non-layer static ability installed by a resolving spell or ability (CR 611.2a).
     TemporaryStatic(Box<crate::characteristics::StaticContinuousAbility>),
+    /// Duration-scoped non-layer static ability active only while `condition` holds (CR 611.2a).
+    ConditionalTemporaryStatic {
+        condition: Box<crate::characteristics::StaticSourceCondition>,
+        ability: Box<crate::characteristics::StaticContinuousAbility>,
+    },
     /// Duration-scoped finite damage prevention shield matching optional source filter and recipient.
     PreventNextDamage {
         amount: RulesInteger,
@@ -1697,11 +1717,13 @@ pub enum TemporaryRuleKind {
         recipient: crate::characteristics::StaticDamageRecipient,
         combat_only: bool,
     },
-    /// Prevent ALL damage the next time one matching source would deal damage to `recipient` (CR 615.4).
+    /// Prevent ALL (or half rounded down when `half_round_down`) damage the next time one matching source would deal damage to `recipient` (CR 615.4).
     PreventNextTimeDamage {
         source: Option<ObjectFilter>,
         source_chosen_color: bool,
+        source_chosen_type: bool,
         source_is_target: bool,
+        half_round_down: bool,
         recipient: crate::characteristics::StaticDamageRecipient,
         combat_only: bool,
     },
@@ -1922,6 +1944,7 @@ pub enum PowerDamageSource {
 /// Creatures untapped when a resolving effect adds a combat phase.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CombatUntapGroup {
+    None,
     ControlledCreatures,
     SourceAndControlledSubtype(CreatureTypeId),
     AttackersIfSourceAttacksHighestLife,
@@ -1988,6 +2011,7 @@ pub enum LookTopKeepDest {
     Hand,
     Battlefield {
         tapped: bool,
+        attacking: bool,
     },
     LibraryTop,
     Graveyard,
@@ -2999,6 +3023,7 @@ pub enum Instruction {
     },
     CreateAttackingTokens {
         creations: Vec<crate::token::TokenCreation>,
+        defender_scope: crate::token::AttackingDefenderScope,
     },
     /// Create one token for the triggered ability's controller, then attach the source
     /// to the new token if legal (CR 702.92, 702.163 and 702.182).
@@ -3807,6 +3832,32 @@ pub enum Instruction {
         extra_keywords: BTreeSet<KeywordAbility>,
         override_pt: Option<(RulesInteger, RulesInteger)>,
         extra_colors: BTreeSet<Color>,
+        defender_scope: crate::token::AttackingDefenderScope,
+    },
+    /// Move counters from `from` to `to` (all, any number, or `amount`, optionally restricted to `kind`).
+    MoveCounters {
+        from: MoveSubjectRef,
+        to: MoveSubjectRef,
+        kind: Option<crate::effects::CounterKind>,
+        all: bool,
+        any_number: bool,
+        amount: Option<ValueExpr>,
+    },
+    /// Exile every permanent resolved by `subject` until the ability source leaves the battlefield (CR 610.3).
+    ExileSubjectUntilSourceLeaves {
+        subject: Box<EffectSubject>,
+    },
+    /// Return cards attributed to this exact source and link, optionally under controller's control and/or tapped.
+    ReturnCardsExiledWithLinkExt {
+        group: LinkedExileGroup,
+        under_controller_control: bool,
+        tapped: bool,
+    },
+    /// End the game in a draw immediately (CR 104.4).
+    DrawGame,
+    /// Turn every face-down permanent resolved by `subject` face up (CR 708.6).
+    TurnFaceUpSubject {
+        subject: Box<EffectSubject>,
     },
 }
 impl Instruction {
@@ -3898,6 +3949,11 @@ impl Instruction {
             | Self::DealDamageToAnnouncedTargets { .. }
             | Self::GrantChosenProtection { .. }
             | Self::RemoveCountersFromSubject { .. }
+            | Self::MoveCounters { .. }
+            | Self::ExileSubjectUntilSourceLeaves { .. }
+            | Self::ReturnCardsExiledWithLinkExt { .. }
+            | Self::DrawGame
+            | Self::TurnFaceUpSubject { .. }
             | Self::MoveGroupToLibrary { .. }
             | Self::ExileLibraryTopLinked { .. }
             | Self::UntapOrTapSelect { .. }
@@ -4385,8 +4441,24 @@ impl Instruction {
             )
         };
         let is_target_affected = |players: AffectedPlayers| matches!(players, AffectedPlayers::One(p) if is_target_player(p));
+        let filter_uses_target =
+            |f: &ObjectFilter| f.has_target_player() || f.uses_target_permanent();
+        let subject_uses_target = |s: &EffectSubject| match s {
+            EffectSubject::TargetObject | EffectSubject::TargetAndSameNameMatching(_) => true,
+            EffectSubject::Matching(f) => filter_uses_target(f),
+            _ => false,
+        };
+        let damage_group_uses_target = |g: &DamageGroup| match g {
+            DamageGroup::ControllerAndTargetCreature => true,
+            DamageGroup::Filtered(f) => filter_uses_target(f),
+            DamageGroup::FilteredAndPlayers { filter, players } => {
+                filter_uses_target(filter) || is_target_affected(*players)
+            }
+            DamageGroup::AffectedPlayers(players) => is_target_affected(*players),
+            _ => false,
+        };
         match self {
-            Self::CreateTokens { creations } | Self::CreateAttackingTokens { creations } => {
+            Self::CreateTokens { creations } => {
                 (!creations.is_empty()
                     && creations.iter().all(|creation| {
                         matches!(
@@ -4397,10 +4469,43 @@ impl Instruction {
                     }))
                     || creations.iter().any(|c| {
                         c.amount.uses_target()
-                            || matches!(
-                                &c.base_size,
-                                Some(crate::token::TokenSize::AtCreation(e)) if e.uses_target()
-                            )
+                            || match &c.base_size {
+                                Some(crate::token::TokenSize::AtCreation(e)) => e.uses_target(),
+                                Some(crate::token::TokenSize::AtCreationPair {
+                                    power,
+                                    toughness,
+                                }) => power.uses_target() || toughness.uses_target(),
+                                _ => false,
+                            }
+                    })
+            }
+            Self::CreateAttackingTokens {
+                creations,
+                defender_scope,
+            } => {
+                matches!(
+                    defender_scope,
+                    crate::token::AttackingDefenderScope::Player(p)
+                        | crate::token::AttackingDefenderScope::PlayerOrTheirPlaneswalker(p)
+                        if is_target_player(*p)
+                ) || (!creations.is_empty()
+                    && creations.iter().all(|creation| {
+                        matches!(
+                            creation.recipients,
+                            crate::token::TokenRecipients::ExiledTargetController
+                                | crate::token::TokenRecipients::RememberedTargetController
+                        )
+                    }))
+                    || creations.iter().any(|c| {
+                        c.amount.uses_target()
+                            || match &c.base_size {
+                                Some(crate::token::TokenSize::AtCreation(e)) => e.uses_target(),
+                                Some(crate::token::TokenSize::AtCreationPair {
+                                    power,
+                                    toughness,
+                                }) => power.uses_target() || toughness.uses_target(),
+                                _ => false,
+                            }
                     })
             }
             Self::SearchLibrary { filter } => {
@@ -4409,20 +4514,27 @@ impl Instruction {
                     SearchSource::TargetOpponentLibrary | SearchSource::TargetPlayerLibrary
                 ) || filter.curse_host() == Some(AuraSearchHost::TargetPlayer)
                     || is_target_player(filter.searcher)
+                    || matches!(&filter.count, SearchCount::UpToExpr(e) if e.uses_target())
+                    || match &filter.matcher {
+                        SearchCardMatcher::Filtered(f) => filter_uses_target(f),
+                        SearchCardMatcher::SameNameAs { reference, extra } => {
+                            matches!(reference, MoveSubjectRef::TargetObject)
+                                || extra.as_deref().is_some_and(filter_uses_target)
+                        }
+                        _ => false,
+                    }
             }
             Self::PhaseOut(subject) => matches!(subject, PhasingSubject::Target),
             Self::AttachOnEntry { entering_equipment } => *entering_equipment,
-            Self::DamageGroup { group, .. } => {
-                matches!(group, DamageGroup::ControllerAndTargetCreature)
-            }
+            Self::DamageGroup { group, .. } => damage_group_uses_target(group),
             Self::DamageGroupAmount { group, amount } => {
-                matches!(group, DamageGroup::ControllerAndTargetCreature) || amount.uses_target()
+                damage_group_uses_target(group) || amount.uses_target()
             }
             Self::GrantProtectionChosenColor(recipients) => {
                 matches!(recipients, ProtectionRecipients::TargetPermanent)
-                    || matches!(recipients, ProtectionRecipients::Matching(f) if f.has_target_player())
+                    || matches!(recipients, ProtectionRecipients::Matching(f) if filter_uses_target(f))
             }
-            Self::ExileLibraryTop { player, .. } => matches!(player, TargetPlayer),
+            Self::ExileLibraryTop { player, .. } => is_target_player(*player),
             Self::PreventDamageThisTurn(filter) => matches!(
                 filter,
                 crate::damage::TurnPreventionFilter::ToTarget
@@ -4443,11 +4555,11 @@ impl Instruction {
             Self::OptionalSequence { chooser, .. } | Self::OptionalEffect { chooser } => {
                 is_target_player(*chooser)
             }
-            Self::Scry { player, .. }
-            | Self::Surveil { player, .. }
-            | Self::Mill { player, .. } => matches!(player, TargetPlayer | TargetSpellController),
+            Self::Scry { player, amount }
+            | Self::Surveil { player, amount }
+            | Self::Mill { player, amount } => is_target_player(*player) || amount.uses_target(),
             Self::ExileCardsFromGraveyard { player, .. } | Self::DiscardOneAtRandom(player) => {
-                matches!(player, TargetPlayer)
+                is_target_player(*player)
             }
             Self::ExileFromZone { players, .. }
             | Self::TapOrUntapControlled { players, .. }
@@ -4474,13 +4586,13 @@ impl Instruction {
             | Self::DamageOpponentsAmount(amount)
             | Self::DrainOpponents(amount) => amount.uses_target(),
             Self::ModifyGroupByAmount { group, amount, .. } => {
-                matches!(group.as_ref(), EffectSubject::TargetObject) || amount.uses_target()
+                subject_uses_target(group) || amount.uses_target()
             }
             Self::PutCountersOnSubject {
                 subject, amount, ..
-            } => matches!(subject.as_ref(), EffectSubject::TargetObject) || amount.uses_target(),
+            } => subject_uses_target(subject) || amount.uses_target(),
             Self::ChangeGroup { group, parts, .. } => {
-                matches!(group.as_ref(), EffectSubject::TargetObject)
+                subject_uses_target(group)
                     || parts.0.iter().any(|part| match part {
                         crate::characteristics::ResolvedPartSpec::ModifyPTExpr {
                             power,
@@ -4490,6 +4602,9 @@ impl Instruction {
                             power,
                             toughness,
                         } => power.uses_target() || toughness.uses_target(),
+                        crate::characteristics::ResolvedPartSpec::MustBlockSubject(
+                            MoveSubjectRef::TargetObject,
+                        ) => true,
                         _ => false,
                     })
             }
@@ -4530,15 +4645,23 @@ impl Instruction {
                     )
             }
             Self::DealDamageFrom {
-                source, recipients, ..
+                source,
+                recipients,
+                amount,
             } => {
-                matches!(
-                    source.as_ref(),
-                    DamageSourceRef::TargetObject | DamageSourceRef::AllPermanentTargets
-                ) || matches!(
-                    recipients.as_ref(),
-                    DamageRecipientsRef::Target | DamageRecipientsRef::TargetController
-                )
+                let source_uses = match source.as_ref() {
+                    DamageSourceRef::TargetObject | DamageSourceRef::AllPermanentTargets => true,
+                    DamageSourceRef::Matching(f) => filter_uses_target(f),
+                    _ => false,
+                };
+                let recipients_uses = match recipients.as_ref() {
+                    DamageRecipientsRef::Target | DamageRecipientsRef::TargetController => true,
+                    DamageRecipientsRef::Group(g) => damage_group_uses_target(g),
+                    _ => false,
+                };
+                source_uses
+                    || recipients_uses
+                    || matches!(amount.as_ref(), DamageAmountSpec::Expr(e) if e.uses_target())
             }
             Self::DivideDamageAmongTargets { .. } | Self::DistributeCountersAmongTargets { .. } => {
                 true
@@ -4547,27 +4670,50 @@ impl Instruction {
                 subject,
                 controller,
                 ..
-            } => {
-                matches!(subject.as_ref(), EffectSubject::TargetObject)
-                    || matches!(
-                        controller,
-                        ResolvingPlayer::TargetPlayer
-                            | ResolvingPlayer::TargetOwner
-                            | ResolvingPlayer::TargetController
-                    )
-            }
+            } => subject_uses_target(subject) || is_target_player(*controller),
             Self::GiveFixedTargetControl { .. } | Self::BecomeCopyFixedTargets { .. } => false,
             Self::BecomeCopy {
                 receiver, donor, ..
-            } => {
-                matches!(receiver.as_ref(), EffectSubject::TargetObject)
-                    || matches!(donor, MoveSubjectRef::TargetObject)
-            }
+            } => subject_uses_target(receiver) || matches!(donor, MoveSubjectRef::TargetObject),
             Self::DoublePowerToughnessSubject { subject, .. }
             | Self::DoubleCountersOnSubject { subject, .. }
-            | Self::ShuffleSubjectIntoLibrary { subject, .. } => {
-                matches!(subject.as_ref(), EffectSubject::TargetObject)
+            | Self::ShuffleSubjectIntoLibrary { subject, .. }
+            | Self::DestroySubject { subject, .. }
+            | Self::SacrificeSubject { subject }
+            | Self::SkipNextUntap { subject }
+            | Self::RequireCombatAction { subject, .. }
+            | Self::SetSubjectTapped { subject, .. }
+            | Self::ExileSubjectUntilSourceLeaves { subject }
+            | Self::TurnFaceUpSubject { subject } => subject_uses_target(subject),
+            Self::MoveCounters {
+                from, to, amount, ..
+            } => {
+                matches!(from, MoveSubjectRef::TargetObject)
+                    || matches!(to, MoveSubjectRef::TargetObject)
+                    || amount.as_ref().is_some_and(ValueExpr::uses_target)
             }
+            Self::MoveGroup { group, .. }
+            | Self::DestroyGroup(group)
+            | Self::DestroyGroupWithoutRegeneration(group)
+            | Self::PutGroupOnLibraryBottom(group) => filter_uses_target(group),
+            Self::SetGroupTapped { filter, .. } => filter_uses_target(filter),
+            Self::SuppressGroupKeywords { group, .. }
+            | Self::ModifyGroupUntilEndOfTurn { group, .. } => subject_uses_target(group),
+            Self::LookTopChoose {
+                count,
+                library_owner,
+                filter,
+                ..
+            } => {
+                is_target_player(*library_owner)
+                    || count.uses_target()
+                    || filter.as_deref().is_some_and(filter_uses_target)
+            }
+            Self::ScheduleDelayedEventTrigger { body, .. } => {
+                body.target == BodyTarget::None
+                    && body.instructions.iter().any(Self::uses_mode_target)
+            }
+            Self::DrawGame | Self::ReturnCardsExiledWithLinkExt { .. } => false,
             Self::WinGame(player) => matches!(
                 player,
                 ResolvingPlayer::TargetPlayer
@@ -4652,18 +4798,13 @@ impl Instruction {
             }
             Self::ExileGroupFromZone {
                 players, filter, ..
-            } => is_target_affected(*players) || filter.has_target_player(),
-            Self::SacrificeSubject { subject } => match subject.as_ref() {
-                EffectSubject::TargetObject => true,
-                EffectSubject::Matching(f) => f.has_target_player(),
-                _ => false,
-            },
+            } => is_target_affected(*players) || filter_uses_target(filter),
             Self::DestroyChosen {
                 chooser,
                 filter,
                 count,
                 ..
-            } => is_target_player(*chooser) || filter.has_target_player() || count.uses_target(),
+            } => is_target_player(*chooser) || filter_uses_target(filter) || count.uses_target(),
             Self::CastLinkedFaceDownFree | Self::Ripple(_) | Self::Demonstrate | Self::Enlist => {
                 false
             }
@@ -4693,9 +4834,7 @@ impl Instruction {
             Self::RemoveCountersFromSubject {
                 subject, amount, ..
             } => {
-                matches!(subject.as_ref(), EffectSubject::TargetObject)
-                    || matches!(subject.as_ref(), EffectSubject::Matching(f) if f.has_target_player() || f.uses_target_permanent())
-                    || amount.as_ref().is_some_and(ValueExpr::uses_target)
+                subject_uses_target(subject) || amount.as_ref().is_some_and(ValueExpr::uses_target)
             }
             Self::MoveGroupToLibrary { group, placement } => {
                 group.has_target_player()
@@ -4757,6 +4896,7 @@ impl Instruction {
                 source,
                 count,
                 recipients,
+                defender_scope,
                 ..
             } => {
                 matches!(source, MoveSubjectRef::TargetObject)
@@ -4764,6 +4904,12 @@ impl Instruction {
                     || matches!(
                         recipients,
                         crate::token::TokenRecipients::Player(p) if is_target_player(*p)
+                    )
+                    || matches!(
+                        defender_scope,
+                        crate::token::AttackingDefenderScope::Player(p)
+                            | crate::token::AttackingDefenderScope::PlayerOrTheirPlaneswalker(p)
+                            if is_target_player(*p)
                     )
             }
             Self::Connive { subject, count } => {
@@ -4804,33 +4950,57 @@ impl Instruction {
                 matches!(source, MoveSubjectRef::TargetObject)
             }
             Self::CreateTemporaryRule { rule, .. } => match rule.as_ref() {
+                TemporaryRuleKind::CantBeCountered { filter, .. }
+                | TemporaryRuleKind::CantBeCounteredByColors { filter, .. }
+                | TemporaryRuleKind::NextSpellFree { filter } => {
+                    filter.as_ref().is_some_and(filter_uses_target)
+                }
                 TemporaryRuleKind::PlayerCantGainLife { players }
-                | TemporaryRuleKind::CantCastSpells { players, .. }
                 | TemporaryRuleKind::CantActivateAbilities { players, .. }
                 | TemporaryRuleKind::CantPlayLands { players }
-                | TemporaryRuleKind::PlayerGrantKeyword { players, .. }
-                | TemporaryRuleKind::SpellCostIncrease { players, .. }
-                | TemporaryRuleKind::ExileSpellOnResolve { players, .. } => {
+                | TemporaryRuleKind::PlayerGrantKeyword { players, .. } => {
                     is_target_affected(*players)
                 }
-                TemporaryRuleKind::AdditionalLandPlay { player, .. }
-                | TemporaryRuleKind::FilteredFlash { player, .. }
-                | TemporaryRuleKind::ZoneCastPermission { player, .. } => is_target_player(*player),
+                TemporaryRuleKind::CantCastSpells { players, filter }
+                | TemporaryRuleKind::ExileSpellOnResolve { players, filter } => {
+                    is_target_affected(*players) || filter.as_ref().is_some_and(filter_uses_target)
+                }
+                TemporaryRuleKind::SpellCostIncrease {
+                    players, filter, ..
+                } => is_target_affected(*players) || filter_uses_target(filter),
+                TemporaryRuleKind::SpellCostReduction { filter, .. } => filter_uses_target(filter),
+                TemporaryRuleKind::SpellCostReductionExpr { filter, amount, .. } => {
+                    filter_uses_target(filter) || amount.uses_target()
+                }
+                TemporaryRuleKind::AdditionalLandPlay { player, .. } => is_target_player(*player),
+                TemporaryRuleKind::FilteredFlash { player, filter, .. } => {
+                    is_target_player(*player) || filter_uses_target(filter)
+                }
+                TemporaryRuleKind::ZoneCastPermission { player, filter, .. } => {
+                    is_target_player(*player) || filter.as_ref().is_some_and(filter_uses_target)
+                }
                 TemporaryRuleKind::ExileIfDies { subject }
                 | TemporaryRuleKind::ExileIfLeavesBattlefield { subject } => {
-                    matches!(subject.as_ref(), EffectSubject::TargetObject)
+                    subject_uses_target(subject)
                 }
                 TemporaryRuleKind::RedirectNextDamage {
+                    source,
                     source_is_target,
                     from,
                     to,
                     ..
                 } => {
                     *source_is_target
+                        || source.as_ref().is_some_and(filter_uses_target)
                         || matches!(
                             from,
                             crate::characteristics::StaticDamageRecipient::TargetObject
                                 | crate::characteristics::StaticDamageRecipient::TargetAny
+                        )
+                        || matches!(
+                            from,
+                            crate::characteristics::StaticDamageRecipient::MatchingPermanent(f)
+                                if filter_uses_target(f)
                         )
                         || matches!(
                             to,
@@ -4840,6 +5010,7 @@ impl Instruction {
                         )
                 }
                 TemporaryRuleKind::RedirectNextDamageExpr {
+                    source,
                     source_is_target,
                     from,
                     to,
@@ -4847,11 +5018,17 @@ impl Instruction {
                     ..
                 } => {
                     *source_is_target
+                        || source.as_ref().is_some_and(filter_uses_target)
                         || amount.uses_target()
                         || matches!(
                             from,
                             crate::characteristics::StaticDamageRecipient::TargetObject
                                 | crate::characteristics::StaticDamageRecipient::TargetAny
+                        )
+                        || matches!(
+                            from,
+                            crate::characteristics::StaticDamageRecipient::MatchingPermanent(f)
+                                if filter_uses_target(f)
                         )
                         || matches!(
                             to,
@@ -4860,44 +5037,68 @@ impl Instruction {
                                 | crate::characteristics::DamageRedirectTarget::SecondTargetObject
                         )
                 }
-                TemporaryRuleKind::PreventNextDamage { recipient, .. } => matches!(
-                    recipient,
-                    crate::characteristics::StaticDamageRecipient::TargetObject
-                        | crate::characteristics::StaticDamageRecipient::TargetAny
-                ),
-                TemporaryRuleKind::PreventNextDamageExpr {
-                    amount, recipient, ..
+                TemporaryRuleKind::PreventNextDamage {
+                    source, recipient, ..
                 } => {
-                    amount.uses_target()
+                    source.as_ref().is_some_and(filter_uses_target)
                         || matches!(
                             recipient,
                             crate::characteristics::StaticDamageRecipient::TargetObject
                                 | crate::characteristics::StaticDamageRecipient::TargetAny
                         )
+                        || matches!(
+                            recipient,
+                            crate::characteristics::StaticDamageRecipient::MatchingPermanent(f)
+                                if filter_uses_target(f)
+                        )
+                }
+                TemporaryRuleKind::PreventNextDamageExpr {
+                    amount,
+                    source,
+                    recipient,
+                    ..
+                } => {
+                    amount.uses_target()
+                        || source.as_ref().is_some_and(filter_uses_target)
+                        || matches!(
+                            recipient,
+                            crate::characteristics::StaticDamageRecipient::TargetObject
+                                | crate::characteristics::StaticDamageRecipient::TargetAny
+                        )
+                        || matches!(
+                            recipient,
+                            crate::characteristics::StaticDamageRecipient::MatchingPermanent(f)
+                                if filter_uses_target(f)
+                        )
                 }
                 TemporaryRuleKind::PreventNextTimeDamage {
+                    source,
                     source_is_target,
                     recipient,
                     ..
                 } => {
                     *source_is_target
+                        || source.as_ref().is_some_and(filter_uses_target)
                         || matches!(
                             recipient,
                             crate::characteristics::StaticDamageRecipient::TargetObject
                                 | crate::characteristics::StaticDamageRecipient::TargetAny
                         )
+                        || matches!(
+                            recipient,
+                            crate::characteristics::StaticDamageRecipient::MatchingPermanent(f)
+                                if filter_uses_target(f)
+                        )
                 }
-                _ => false,
+                TemporaryRuleKind::TemporaryZoneReplacement(_)
+                | TemporaryRuleKind::DamageCantBePrevented
+                | TemporaryRuleKind::PreventAllCombatDamage
+                | TemporaryRuleKind::TemporaryStatic(_)
+                | TemporaryRuleKind::ConditionalTemporaryStatic { .. } => false,
             },
-            Self::DestroySubject { subject, .. } => {
-                matches!(subject.as_ref(), EffectSubject::TargetObject)
-            }
             Self::GrantCardPlayPermission {
                 player, subject, ..
             } => is_target_player(*player) || matches!(subject, MoveSubjectRef::TargetObject),
-            Self::SkipNextUntap { .. }
-            | Self::RequireCombatAction { .. }
-            | Self::ScheduleDelayedEventTrigger { .. } => false,
             Self::GoadTarget
             | Self::RequireTargetAttack
             | Self::RemoveTargetFromCombat
@@ -4995,12 +5196,10 @@ impl Instruction {
             | Self::SacrificeRandomUntilLand => true,
             Self::ControlManaSourceThroughNextTurn
             | Self::GrantControllerFlashUntilCleanup
-            | Self::LookTopChoose { .. }
             | Self::MoveGraveyardGroup { .. }
             | Self::ExertAbilitySource
             | Self::RevealUntilMatch { .. }
             | Self::AddExperienceCounter
-            | Self::SuppressGroupKeywords { .. }
             | Self::RevealTopAndRemoveAttackerIfForest
             | Self::RegenerateSource
             | Self::RegenerateControlledSubtype(..)
@@ -5098,11 +5297,7 @@ impl Instruction {
             | Self::DamageDamagedPlayersCreatures
             | Self::CreateEmblem(..)
             | Self::CreateOpponentEmblems(..)
-            | Self::DestroyGroup(..)
-            | Self::DestroyGroupWithoutRegeneration(..)
-            | Self::MoveGroup { .. }
             | Self::PutOwnHandCardOnLibraryBottom
-            | Self::PutGroupOnLibraryBottom(..)
             | Self::ExileCapturedGraveyardCard
             | Self::GrantGraveyardCastAndWatchAbilities
             | Self::GainCastCardAbilities { .. }
@@ -5113,7 +5308,6 @@ impl Instruction {
             | Self::AdditionalCombat { .. }
             | Self::SetControlledCreatureSizeToHand
             | Self::RequireOpponentsCreaturesBlockThisTurn
-            | Self::ModifyGroupUntilEndOfTurn { .. }
             | Self::BoostSource { .. }
             | Self::CopyOnCast(..)
             | Self::WatchNextLoyaltyCopy
@@ -5245,8 +5439,6 @@ impl Instruction {
             | Self::Cascade
             | Self::CascadeBottom
             | Self::ResolveKeywordTrigger(..)
-            | Self::SetGroupTapped { .. }
-            | Self::SetSubjectTapped { .. }
             | Self::DestroyCapturedDamageSource
             | Self::ExileCombatDamagedCreature
             | Self::DestroyCapturedCombatCreature { .. }
@@ -5488,6 +5680,11 @@ impl Instruction {
             | Self::DealDamageToAnnouncedTargets { .. }
             | Self::GrantChosenProtection { .. }
             | Self::RemoveCountersFromSubject { .. }
+            | Self::MoveCounters { .. }
+            | Self::ExileSubjectUntilSourceLeaves { .. }
+            | Self::ReturnCardsExiledWithLinkExt { .. }
+            | Self::DrawGame
+            | Self::TurnFaceUpSubject { .. }
             | Self::MoveGroupToLibrary { .. }
             | Self::ExileLibraryTopLinked { .. }
             | Self::UntapOrTapSelect { .. }
@@ -5887,6 +6084,12 @@ impl Instruction {
         {
             return (*m2, *x2) == (minimum, maximum);
         }
+        if let Self::PutCountersOnSubject { subject, .. } = self {
+            return !matches!(
+                subject.as_ref(),
+                EffectSubject::TargetObject | EffectSubject::TargetAndSameNameMatching(_)
+            ) || (minimum <= 1 && maximum == 1);
+        }
         if !self.uses_mode_target() {
             return true;
         }
@@ -5922,7 +6125,6 @@ impl Instruction {
                 | Self::CreateTemporaryRule { .. }
                 | Self::ChangeGroup { .. }
                 | Self::ChangeAbilitySource { .. }
-                | Self::PutCountersOnSubject { .. }
                 | Self::PutCountersOnSource { .. }
                 | Self::PutNamedCounterOnSource { .. }
                 | Self::SetGroupTapped { .. }
@@ -6012,6 +6214,9 @@ impl Instruction {
                 | Self::PhaseOut(PhasingSubject::Source)
                 | Self::ShuffleAbilitySourceIntoLibrary
                 | Self::ModifyGroupUntilEndOfTurn { .. }
+                | Self::MoveCounters { .. }
+                | Self::ExileSubjectUntilSourceLeaves { .. }
+                | Self::TurnFaceUpSubject { .. }
                 | Self::PreventDamageThisTurn(
                     crate::damage::TurnPreventionFilter::Combat
                         | crate::damage::TurnPreventionFilter::All
@@ -6065,6 +6270,7 @@ impl SplitCard {
             return None;
         };
         spell.cost.generic = left.cost.generic.plus(&right.cost.generic);
+        spell.uncastable_mana_cost = left.uncastable_mana_cost && right.uncastable_mana_cost;
         for (mana, amount) in &right.cost.required {
             let total = spell.cost.required.entry(*mana).or_insert_with(|| 0.into());
             *total = total.plus(amount);
@@ -6521,6 +6727,22 @@ impl ExecutableBody {
         context: BodyContext<'_>,
         initial_defined_x: bool,
     ) -> Result<(), DefinitionError> {
+        self.validate_in_with_facts(
+            vocabulary,
+            context,
+            FlowFacts {
+                defined_resolution_x: initial_defined_x,
+                ..FlowFacts::default()
+            },
+        )
+    }
+
+    fn validate_in_with_facts(
+        &self,
+        vocabulary: &CreatureTypeVocabulary,
+        context: BodyContext<'_>,
+        initial_facts: FlowFacts,
+    ) -> Result<(), DefinitionError> {
         if self.up_to_one_target {
             let valid_target = matches!(
                 self.target,
@@ -6705,10 +6927,7 @@ impl ExecutableBody {
             .checked_add(1)
             .ok_or(DefinitionError::InvalidControlFlow)?;
         let mut incoming = vec![None; points];
-        incoming[0] = Some(FlowFacts {
-            defined_resolution_x: initial_defined_x,
-            ..FlowFacts::default()
-        });
+        incoming[0] = Some(initial_facts);
         // Unreachable instructions still validate scalar/context/operand syntax.
         // Their local reads do not contribute facts or make a target reachable.
         let declared_slots: BTreeSet<_> = self
@@ -6814,7 +7033,7 @@ impl ExecutableBody {
                     destination,
                 } => {
                     condition.validate(context, vocabulary)?;
-                    if !facts.moved_library_cards
+                    if !(facts.moved_library_cards || facts.maybe_moved_library_cards)
                         && [&condition.left, &condition.right].iter().any(|value| {
                             matches!(
                                 value,
@@ -6827,7 +7046,7 @@ impl ExecutableBody {
                     {
                         return Err(DefinitionError::InvalidInstruction);
                     }
-                    if !facts.checked_destruction_target
+                    if !(facts.checked_destruction_target || facts.maybe_checked_destruction_target)
                         && [&condition.left, &condition.right].iter().any(|value| {
                             matches!(
                                 value,
@@ -6840,7 +7059,7 @@ impl ExecutableBody {
                     {
                         return Err(DefinitionError::InvalidInstruction);
                     }
-                    if !facts.definitely_discarded
+                    if !(facts.definitely_discarded || facts.maybe_discarded)
                         && [&condition.left, &condition.right].iter().any(|value| {
                             matches!(
                                 value,
@@ -6860,13 +7079,13 @@ impl ExecutableBody {
                     {
                         return Err(DefinitionError::InvalidInstruction);
                     }
-                    if !facts.definitely_sacrificed
+                    if !(facts.definitely_sacrificed || facts.maybe_sacrificed)
                         && [&condition.left, &condition.right]
                             .contains(&&ValueExpr::event(EventValueKind::LastSacrificeSucceeded))
                     {
                         return Err(DefinitionError::InvalidInstruction);
                     }
-                    if !facts.definitely_checked_top
+                    if !(facts.definitely_checked_top || facts.maybe_checked_top)
                         && [&condition.left, &condition.right].iter().any(|value| {
                             matches!(
                                 value,
@@ -7039,11 +7258,10 @@ impl ExecutableBody {
                     None
                 }
                 Instruction::CreateTokens { creations }
-                | Instruction::CreateAttackingTokens { creations } => {
+                | Instruction::CreateAttackingTokens { creations, .. } => {
                     if matches!(instruction, Instruction::CreateAttackingTokens { .. })
                         && creations.iter().any(|creation| {
-                            !creation.enters_tapped
-                                || creation.recipients != crate::token::TokenRecipients::Controller
+                            creation.recipients != crate::token::TokenRecipients::Controller
                         })
                     {
                         return Err(DefinitionError::InvalidInstruction);
@@ -7052,6 +7270,18 @@ impl ExecutableBody {
                         return Err(DefinitionError::InvalidInstruction);
                     }
                     let mut token_family = None;
+                    if let Instruction::CreateAttackingTokens {
+                        defender_scope:
+                            crate::token::AttackingDefenderScope::Player(role)
+                            | crate::token::AttackingDefenderScope::PlayerOrTheirPlaneswalker(role),
+                        ..
+                    } = instruction
+                    {
+                        token_family = merge_family(
+                            token_family,
+                            role.validate(context, self.target, facts.definitely_exiled_target)?,
+                        )?;
+                    }
                     for creation in creations {
                         if let crate::token::TokenRecipients::Player(role) = creation.recipients
                             && let Some(fam) = role.validate(context, self.target, false)?
@@ -7099,6 +7329,28 @@ impl ExecutableBody {
                                     token_family = merge_family(
                                         token_family,
                                         amount.required_operand_family(self.target)?,
+                                    )?;
+                                }
+                                crate::token::TokenSize::AtCreationPair { power, toughness } => {
+                                    power.validate_amount(
+                                        &defined_slots,
+                                        context,
+                                        &facts,
+                                        vocabulary,
+                                    )?;
+                                    toughness.validate_amount(
+                                        &defined_slots,
+                                        context,
+                                        &facts,
+                                        vocabulary,
+                                    )?;
+                                    token_family = merge_family(
+                                        token_family,
+                                        power.required_operand_family(self.target)?,
+                                    )?;
+                                    token_family = merge_family(
+                                        token_family,
+                                        toughness.required_operand_family(self.target)?,
                                     )?;
                                 }
                                 crate::token::TokenSize::AbilitySourceCounters(kind) => {
@@ -7214,7 +7466,9 @@ impl ExecutableBody {
                 }
                 Instruction::AdditionalCombat { untap } => {
                     let admitted = match untap {
-                        CombatUntapGroup::ControlledCreatures => self.target == BodyTarget::None,
+                        CombatUntapGroup::None | CombatUntapGroup::ControlledCreatures => {
+                            self.target == BodyTarget::None
+                        }
                         CombatUntapGroup::AttackersIfSourceAttacksHighestLife => matches!(
                             context,
                             BodyContext::TriggerBound {
@@ -7655,10 +7909,28 @@ impl ExecutableBody {
                             }
                             group_family = Some(OperandFamily::Permanent);
                         }
+                        EffectSubject::TargetAndSameNameMatching(filter) => {
+                            filter.validate_vocabulary(vocabulary)?;
+                            if !matches!(
+                                self.target,
+                                BodyTarget::SingleCreature
+                                    | BodyTarget::SinglePermanent
+                                    | BodyTarget::SinglePlaneswalker
+                                    | BodyTarget::FilteredPermanent(_)
+                            ) {
+                                return Err(DefinitionError::OperandFamily);
+                            }
+                            group_family = Some(OperandFamily::Permanent);
+                        }
                         EffectSubject::Matching(filter) => {
                             filter.validate_vocabulary(vocabulary)?;
                             if filter.has_target_player() {
-                                group_family = Some(OperandFamily::Player);
+                                group_family =
+                                    merge_family(group_family, Some(OperandFamily::Player))?;
+                            }
+                            if filter.uses_target_permanent() {
+                                group_family =
+                                    merge_family(group_family, Some(OperandFamily::Permanent))?;
                             }
                         }
                         EffectSubject::TriggeringAttacker
@@ -8628,20 +8900,30 @@ impl ExecutableBody {
                     None
                 }
                 Instruction::EmitReflexiveTrigger { body } => {
+                    let inherited_facts = FlowFacts {
+                        definitely_sacrificed: facts.definitely_sacrificed,
+                        maybe_sacrificed: facts.maybe_sacrificed,
+                        defined_resolution_x: facts.defined_resolution_x,
+                        definitely_discarded: facts.definitely_discarded,
+                        maybe_discarded: facts.maybe_discarded,
+                        definitely_exiled_target: facts.definitely_exiled_target,
+                        maybe_exiled_target: facts.maybe_exiled_target,
+                        ..FlowFacts::default()
+                    };
                     if matches!(context, BodyContext::TriggerBound { .. }) {
-                        body.validate_in_with_x(vocabulary, context, facts.defined_resolution_x)?;
+                        body.validate_in_with_facts(vocabulary, context, inherited_facts)?;
                     } else {
                         let reflexive_spec = TriggerSpec::new(TriggerEvent::StepBegan {
                             step: crate::turn::Step::End,
                             player: TriggerPlayerScope::Relation(PlayerRelation::AnyParticipant),
                         });
-                        body.validate_in_with_x(
+                        body.validate_in_with_facts(
                             vocabulary,
                             BodyContext::TriggerBound {
                                 condition: &reflexive_spec,
                                 grouping: TriggerGrouping::EachOccurrence,
                             },
-                            facts.defined_resolution_x,
+                            inherited_facts,
                         )?;
                     }
                     None
@@ -9784,6 +10066,23 @@ impl ExecutableBody {
                         }
                         amount.validate_amount(&defined_slots, context, &facts, vocabulary)?;
                     }
+                    if let PermanentTargetAction::MoveTo(destination) = action {
+                        let needs_source = matches!(
+                            destination,
+                            SubjectDestination::Exile {
+                                delayed_return: Some(
+                                    DelayedReturnTiming::UntilSourceLeaves
+                                        | DelayedReturnTiming::LinkedGroup(_)
+                                )
+                            } | SubjectDestination::Battlefield {
+                                attach_to_self: true,
+                                ..
+                            }
+                        );
+                        if needs_source && !context.has_source() {
+                            return Err(DefinitionError::InvalidInstruction);
+                        }
+                    }
                     if let PermanentTargetAction::Damage(amount) = action {
                         amount.validate_amount(&defined_slots, context, &facts, vocabulary)?;
                     }
@@ -10254,7 +10553,8 @@ impl ExecutableBody {
                                 return Err(DefinitionError::InvalidInstruction);
                             }
                         }
-                        EffectSubject::TargetObject => {
+                        EffectSubject::TargetObject
+                        | EffectSubject::TargetAndSameNameMatching(_) => {
                             let sf = match self.target {
                                 BodyTarget::SingleCreature
                                 | BodyTarget::SinglePermanent
@@ -10268,6 +10568,14 @@ impl ExecutableBody {
                                 return Err(DefinitionError::OperandFamily);
                             }
                             fam = Some(sf);
+                        }
+                        EffectSubject::Matching(filter) => {
+                            if filter.has_target_player() {
+                                fam = merge_family(fam, Some(OperandFamily::Player))?;
+                            }
+                            if filter.uses_target_permanent() {
+                                fam = merge_family(fam, Some(OperandFamily::Permanent))?;
+                            }
                         }
                         _ => {}
                     }
@@ -10321,7 +10629,8 @@ impl ExecutableBody {
                                 return Err(DefinitionError::InvalidInstruction);
                             }
                         }
-                        EffectSubject::TargetObject => {
+                        EffectSubject::TargetObject
+                        | EffectSubject::TargetAndSameNameMatching(_) => {
                             let sf = match self.target {
                                 BodyTarget::SingleCreature
                                 | BodyTarget::SinglePermanent
@@ -10330,6 +10639,14 @@ impl ExecutableBody {
                                 _ => return Err(DefinitionError::OperandFamily),
                             };
                             fam = Some(sf);
+                        }
+                        EffectSubject::Matching(filter) => {
+                            if filter.has_target_player() {
+                                fam = merge_family(fam, Some(OperandFamily::Player))?;
+                            }
+                            if filter.uses_target_permanent() {
+                                fam = merge_family(fam, Some(OperandFamily::Permanent))?;
+                            }
                         }
                         _ => {}
                     }
@@ -10415,13 +10732,24 @@ impl ExecutableBody {
                             }
                             None
                         }
-                        EffectSubject::TargetObject => match self.target {
+                        EffectSubject::TargetObject
+                        | EffectSubject::TargetAndSameNameMatching(_) => match self.target {
                             BodyTarget::SingleCreature
                             | BodyTarget::SinglePermanent
                             | BodyTarget::SinglePlaneswalker
                             | BodyTarget::FilteredPermanent(_) => Some(OperandFamily::Permanent),
                             _ => return Err(DefinitionError::OperandFamily),
                         },
+                        EffectSubject::Matching(filter) => {
+                            let mut fam = None;
+                            if filter.has_target_player() {
+                                fam = merge_family(fam, Some(OperandFamily::Player))?;
+                            }
+                            if filter.uses_target_permanent() {
+                                fam = merge_family(fam, Some(OperandFamily::Permanent))?;
+                            }
+                            fam
+                        }
                         _ => None,
                     }
                 }
@@ -10448,13 +10776,24 @@ impl ExecutableBody {
                             }
                             None
                         }
-                        EffectSubject::TargetObject => match self.target {
+                        EffectSubject::TargetObject
+                        | EffectSubject::TargetAndSameNameMatching(_) => match self.target {
                             BodyTarget::SingleCreature
                             | BodyTarget::SinglePermanent
                             | BodyTarget::SinglePlaneswalker
                             | BodyTarget::FilteredPermanent(_) => Some(OperandFamily::Permanent),
                             _ => return Err(DefinitionError::OperandFamily),
                         },
+                        EffectSubject::Matching(filter) => {
+                            let mut fam = None;
+                            if filter.has_target_player() {
+                                fam = merge_family(fam, Some(OperandFamily::Player))?;
+                            }
+                            if filter.uses_target_permanent() {
+                                fam = merge_family(fam, Some(OperandFamily::Permanent))?;
+                            }
+                            fam
+                        }
                         _ => None,
                     }
                 }
@@ -10478,7 +10817,8 @@ impl ExecutableBody {
                             }
                             None
                         }
-                        EffectSubject::TargetObject => match self.target {
+                        EffectSubject::TargetObject
+                        | EffectSubject::TargetAndSameNameMatching(_) => match self.target {
                             BodyTarget::SingleCreature
                             | BodyTarget::SinglePermanent
                             | BodyTarget::SinglePlaneswalker
@@ -10493,6 +10833,16 @@ impl ExecutableBody {
                             }
                             _ => return Err(DefinitionError::OperandFamily),
                         },
+                        EffectSubject::Matching(filter) => {
+                            let mut fam = None;
+                            if filter.has_target_player() {
+                                fam = merge_family(fam, Some(OperandFamily::Player))?;
+                            }
+                            if filter.uses_target_permanent() {
+                                fam = merge_family(fam, Some(OperandFamily::Permanent))?;
+                            }
+                            fam
+                        }
                         _ => None,
                     }
                 }
@@ -10861,7 +11211,10 @@ impl ExecutableBody {
                 Instruction::SacrificeSubject { subject } => {
                     subject.validate_vocabulary(vocabulary)?;
                     match subject.as_ref() {
-                        EffectSubject::TargetObject => Some(OperandFamily::Permanent),
+                        EffectSubject::TargetObject
+                        | EffectSubject::TargetAndSameNameMatching(_) => {
+                            Some(OperandFamily::Permanent)
+                        }
                         EffectSubject::AbilitySource => {
                             if !context.has_source() {
                                 return Err(DefinitionError::InvalidInstruction);
@@ -10879,7 +11232,14 @@ impl ExecutableBody {
                         }
                         EffectSubject::CreatedTokens | EffectSubject::LastMoved => None,
                         EffectSubject::Matching(filter) => {
-                            filter.has_target_player().then_some(OperandFamily::Player)
+                            let mut fam = None;
+                            if filter.has_target_player() {
+                                fam = merge_family(fam, Some(OperandFamily::Player))?;
+                            }
+                            if filter.uses_target_permanent() {
+                                fam = merge_family(fam, Some(OperandFamily::Permanent))?;
+                            }
+                            fam
                         }
                     }
                 }
@@ -10956,8 +11316,8 @@ impl ExecutableBody {
                 } => {
                     let mut family =
                         players.validate(context, self.target, facts.definitely_exiled_target)?;
-                    let validate_paid =
-                        !(paid_body.instructions.is_empty() && declined_body.is_some());
+                    let validate_paid = !(paid_body.instructions.is_empty()
+                        && (!cost_body.instructions.is_empty() || declined_body.is_some()));
                     if !validate_paid && paid_body.target != BodyTarget::None {
                         return Err(DefinitionError::InvalidInstruction);
                     }
@@ -11075,6 +11435,19 @@ impl ExecutableBody {
                             }
                         }
                         EffectSubject::TargetObject => {
+                            if !matches!(
+                                self.target,
+                                BodyTarget::SingleCreature
+                                    | BodyTarget::SinglePermanent
+                                    | BodyTarget::SinglePlaneswalker
+                                    | BodyTarget::FilteredPermanent(_)
+                            ) {
+                                return Err(DefinitionError::OperandFamily);
+                            }
+                            family = Some(OperandFamily::Permanent);
+                        }
+                        EffectSubject::TargetAndSameNameMatching(filter) => {
+                            filter.validate_vocabulary(vocabulary)?;
                             if !matches!(
                                 self.target,
                                 BodyTarget::SingleCreature
@@ -11249,6 +11622,7 @@ impl ExecutableBody {
                     count,
                     recipients,
                     extra_subtypes,
+                    defender_scope,
                     ..
                 } => {
                     if extra_subtypes
@@ -11298,7 +11672,171 @@ impl ExecutableBody {
                             p.validate(context, self.target, facts.definitely_exiled_target)?,
                         )?;
                     }
+                    if let crate::token::AttackingDefenderScope::Player(p)
+                    | crate::token::AttackingDefenderScope::PlayerOrTheirPlaneswalker(p) =
+                        defender_scope
+                    {
+                        fam = merge_family(
+                            fam,
+                            p.validate(context, self.target, facts.definitely_exiled_target)?,
+                        )?;
+                    }
                     merge_family(fam, count.required_operand_family(self.target)?)?
+                }
+                Instruction::MoveCounters {
+                    from,
+                    to,
+                    kind,
+                    all,
+                    any_number,
+                    amount,
+                } => {
+                    if !(*all || *any_number || amount.is_some()) {
+                        return Err(DefinitionError::InvalidInstruction);
+                    }
+                    if let Some(k) = kind
+                        && !k.is_permanent()
+                    {
+                        return Err(DefinitionError::InvalidInstruction);
+                    }
+                    let mut fam = None;
+                    for subj in [from, to] {
+                        match subj {
+                            MoveSubjectRef::TargetObject => {
+                                if !matches!(
+                                    self.target,
+                                    BodyTarget::SingleCreature
+                                        | BodyTarget::SinglePermanent
+                                        | BodyTarget::SinglePlaneswalker
+                                        | BodyTarget::FilteredPermanent(_)
+                                ) {
+                                    return Err(DefinitionError::OperandFamily);
+                                }
+                                fam = merge_family(fam, Some(OperandFamily::Permanent))?;
+                            }
+                            MoveSubjectRef::AbilitySource | MoveSubjectRef::AttachedHost => {
+                                if !context.has_source() {
+                                    return Err(DefinitionError::InvalidInstruction);
+                                }
+                            }
+                            MoveSubjectRef::TriggeringObject => {
+                                if !matches!(context, BodyContext::TriggerBound { .. }) {
+                                    return Err(DefinitionError::InvalidInstruction);
+                                }
+                            }
+                            MoveSubjectRef::RevealedCard => {
+                                return Err(DefinitionError::InvalidInstruction);
+                            }
+                            MoveSubjectRef::CreatedTokens
+                            | MoveSubjectRef::LastMoved
+                            | MoveSubjectRef::RememberedFirst
+                            | MoveSubjectRef::RememberedSecond => {}
+                        }
+                    }
+                    if let Some(expr) = amount {
+                        expr.validate_amount(&defined_slots, context, &facts, vocabulary)?;
+                        fam = merge_family(fam, expr.required_operand_family(self.target)?)?;
+                    }
+                    fam
+                }
+                Instruction::ExileSubjectUntilSourceLeaves { subject } => {
+                    if !context.has_source() {
+                        return Err(DefinitionError::InvalidInstruction);
+                    }
+                    subject
+                        .validate_vocabulary(vocabulary)
+                        .map_err(|_| DefinitionError::InvalidInstruction)?;
+                    donor_moved = true;
+                    match subject.as_ref() {
+                        EffectSubject::AbilitySource => None,
+                        EffectSubject::TriggerSubject
+                        | EffectSubject::TriggeringAttacker
+                        | EffectSubject::TriggeringAttackGroup
+                        | EffectSubject::TriggeringTarget => {
+                            if !matches!(context, BodyContext::TriggerBound { .. }) {
+                                return Err(DefinitionError::InvalidInstruction);
+                            }
+                            None
+                        }
+                        EffectSubject::TargetObject
+                        | EffectSubject::TargetAndSameNameMatching(_) => {
+                            if !matches!(
+                                self.target,
+                                BodyTarget::SingleCreature
+                                    | BodyTarget::SinglePermanent
+                                    | BodyTarget::SinglePlaneswalker
+                                    | BodyTarget::FilteredPermanent(_)
+                            ) {
+                                return Err(DefinitionError::OperandFamily);
+                            }
+                            facts.definitely_exiled_target = true;
+                            Some(OperandFamily::Permanent)
+                        }
+                        EffectSubject::Matching(filter) => {
+                            let mut fam = None;
+                            if filter.has_target_player() {
+                                fam = merge_family(fam, Some(OperandFamily::Player))?;
+                            }
+                            if filter.uses_target_permanent() {
+                                fam = merge_family(fam, Some(OperandFamily::Permanent))?;
+                            }
+                            fam
+                        }
+                        EffectSubject::CreatedTokens | EffectSubject::LastMoved => None,
+                    }
+                }
+                Instruction::ReturnCardsExiledWithLinkExt { .. } => {
+                    if self.target != BodyTarget::None || !context.has_source() {
+                        return Err(DefinitionError::InvalidInstruction);
+                    }
+                    None
+                }
+                Instruction::DrawGame => None,
+                Instruction::TurnFaceUpSubject { subject } => {
+                    subject
+                        .validate_vocabulary(vocabulary)
+                        .map_err(|_| DefinitionError::InvalidInstruction)?;
+                    match subject.as_ref() {
+                        EffectSubject::AbilitySource => {
+                            if !context.has_source() {
+                                return Err(DefinitionError::InvalidInstruction);
+                            }
+                            None
+                        }
+                        EffectSubject::TriggerSubject
+                        | EffectSubject::TriggeringAttacker
+                        | EffectSubject::TriggeringAttackGroup
+                        | EffectSubject::TriggeringTarget => {
+                            if !matches!(context, BodyContext::TriggerBound { .. }) {
+                                return Err(DefinitionError::InvalidInstruction);
+                            }
+                            None
+                        }
+                        EffectSubject::TargetObject
+                        | EffectSubject::TargetAndSameNameMatching(_) => {
+                            if !matches!(
+                                self.target,
+                                BodyTarget::SingleCreature
+                                    | BodyTarget::SinglePermanent
+                                    | BodyTarget::SinglePlaneswalker
+                                    | BodyTarget::FilteredPermanent(_)
+                            ) {
+                                return Err(DefinitionError::OperandFamily);
+                            }
+                            Some(OperandFamily::Permanent)
+                        }
+                        EffectSubject::Matching(filter) => {
+                            let mut fam = None;
+                            if filter.has_target_player() {
+                                fam = merge_family(fam, Some(OperandFamily::Player))?;
+                            }
+                            if filter.uses_target_permanent() {
+                                fam = merge_family(fam, Some(OperandFamily::Permanent))?;
+                            }
+                            fam
+                        }
+                        EffectSubject::CreatedTokens | EffectSubject::LastMoved => None,
+                    }
                 }
                 Instruction::Ripple(n) => {
                     if *n == 0 {
@@ -11371,7 +11909,10 @@ impl ExecutableBody {
                     {
                         return Err(DefinitionError::InvalidInstruction);
                     }
-                    if matches!(subject.as_ref(), EffectSubject::TargetObject) {
+                    if matches!(
+                        subject.as_ref(),
+                        EffectSubject::TargetObject | EffectSubject::TargetAndSameNameMatching(_)
+                    ) {
                         if !matches!(
                             self.target,
                             BodyTarget::SingleCreature
@@ -11382,17 +11923,22 @@ impl ExecutableBody {
                             return Err(DefinitionError::OperandFamily);
                         }
                         Some(OperandFamily::Permanent)
-                    } else if matches!(
-                        subject.as_ref(),
-                        EffectSubject::Matching(filter) if filter.has_target_player()
-                    ) {
-                        Some(OperandFamily::Player)
+                    } else if let EffectSubject::Matching(filter) = subject.as_ref() {
+                        let mut fam = None;
+                        if filter.has_target_player() {
+                            fam = merge_family(fam, Some(OperandFamily::Player))?;
+                        }
+                        if filter.uses_target_permanent() {
+                            fam = merge_family(fam, Some(OperandFamily::Permanent))?;
+                        }
+                        fam
                     } else {
                         None
                     }
                 }
                 Instruction::CreateTemporaryRule { rule, .. } => match rule.as_ref() {
-                    TemporaryRuleKind::CantBeCountered { filter, .. } => {
+                    TemporaryRuleKind::CantBeCountered { filter, .. }
+                    | TemporaryRuleKind::CantBeCounteredByColors { filter, .. } => {
                         if let Some(f) = filter {
                             f.validate_vocabulary(vocabulary)
                                 .map_err(|_| DefinitionError::InvalidInstruction)?;
@@ -11450,7 +11996,11 @@ impl ExecutableBody {
                         subject
                             .validate_vocabulary(vocabulary)
                             .map_err(|_| DefinitionError::InvalidInstruction)?;
-                        if matches!(subject.as_ref(), EffectSubject::TargetObject) {
+                        if matches!(
+                            subject.as_ref(),
+                            EffectSubject::TargetObject
+                                | EffectSubject::TargetAndSameNameMatching(_)
+                        ) {
                             Some(OperandFamily::Permanent)
                         } else {
                             None
@@ -11513,7 +12063,16 @@ impl ExecutableBody {
                     }
                     TemporaryRuleKind::DamageCantBePrevented
                     | TemporaryRuleKind::PreventAllCombatDamage => None,
-                    TemporaryRuleKind::TemporaryStatic(ability) => {
+                    TemporaryRuleKind::TemporaryStatic(ability)
+                    | TemporaryRuleKind::ConditionalTemporaryStatic { ability, .. } => {
+                        if let TemporaryRuleKind::ConditionalTemporaryStatic { condition, .. } =
+                            rule.as_ref()
+                        {
+                            crate::characteristics::validate_static_source_condition(
+                                condition, vocabulary,
+                            )
+                            .map_err(|_| DefinitionError::InvalidInstruction)?;
+                        }
                         ability
                             .validate(vocabulary)
                             .map_err(|_| DefinitionError::InvalidInstruction)?;
@@ -11523,6 +12082,18 @@ impl ExecutableBody {
                             StaticDamageRule, StaticDrawRule, StaticModifierRule,
                             StaticRestriction, StaticUntapRule,
                         };
+                        let selector_allowed =
+                            |selector: &crate::characteristics::PermanentSelector| {
+                                context.has_source()
+                                || (!selector.attached_to_source
+                                    && !selector.exclude_source
+                                    && !matches!(
+                                        selector.controller,
+                                        crate::characteristics::ControllerSelector::SourceItself
+                                            | crate::characteristics::ControllerSelector::SelfAtMaxSpeed
+                                            | crate::characteristics::ControllerSelector::SourcePair
+                                    ))
+                            };
                         let allowed = match ability.as_ref() {
                             StaticContinuousAbility::DamageRule { rule, .. } => match rule {
                                 StaticDamageRule::PreventNoncombat
@@ -11558,10 +12129,12 @@ impl ExecutableBody {
                             StaticContinuousAbility::DrawRule { rule, .. } => {
                                 !matches!(rule, StaticDrawRule::EmptyDrawPutCounters { .. })
                             }
-                            StaticContinuousAbility::UntapRule { rule, .. } => matches!(
-                                rule,
-                                StaticUntapRule::UntapMatchingDuringOtherPlayersUntap(_)
-                            ),
+                            StaticContinuousAbility::UntapRule { rule, .. } => match rule {
+                                StaticUntapRule::UntapMatchingDuringOtherPlayersUntap(selector) => {
+                                    selector_allowed(selector)
+                                }
+                                _ => false,
+                            },
                             StaticContinuousAbility::Restriction { rule, .. } => !matches!(
                                 rule,
                                 StaticRestriction::EnchantedPlayerCastLimit
@@ -11601,10 +12174,14 @@ impl ExecutableBody {
                                     ..
                                 } | SpellCostModifier::IncreaseExceptType { .. }
                                     | SpellCostModifier::Increase { .. }
+                                    | SpellCostModifier::SubtypeDiscountFromCommandOrBattlefield { .. }
                                     | SpellCostModifier::FreeSubtypeCreatureSpells(_)
+                                    | SpellCostModifier::FreeColorlessHandSpellOnce
+                                    | SpellCostModifier::PayLifeForEnchantmentOwnTurnOnce
                                     | SpellCostModifier::NonartifactSpellsHaveImprovise
                                     | SpellCostModifier::HighManaValueProtected { .. }
                                     | SpellCostModifier::FirstSpellRule { .. }
+                                    | SpellCostModifier::AlternativeForMatching { .. }
                             ),
                             StaticContinuousAbility::CastPermission { permission, .. } => {
                                 !matches!(
@@ -11615,15 +12192,7 @@ impl ExecutableBody {
                                 )
                             }
                             StaticContinuousAbility::Battlefield { selector, .. } => {
-                                context.has_source()
-                                    || (!selector.attached_to_source
-                                        && !selector.exclude_source
-                                        && !matches!(
-                                            selector.controller,
-                                            crate::characteristics::ControllerSelector::SourceItself
-                                                | crate::characteristics::ControllerSelector::SelfAtMaxSpeed
-                                                | crate::characteristics::ControllerSelector::SourcePair
-                                        ))
+                                selector_allowed(selector)
                             }
                             StaticContinuousAbility::EventReplacement { .. } => true,
                             StaticContinuousAbility::CharacteristicDefining { .. }
@@ -11835,11 +12404,12 @@ impl ExecutableBody {
                     TemporaryRuleKind::PreventNextTimeDamage {
                         source,
                         source_chosen_color,
+                        source_chosen_type,
                         source_is_target,
                         recipient,
                         ..
                     } => {
-                        if *source_chosen_color && !context.has_source() {
+                        if (*source_chosen_color || *source_chosen_type) && !context.has_source() {
                             return Err(DefinitionError::InvalidInstruction);
                         }
                         if let Some(f) = source {
@@ -11892,7 +12462,11 @@ impl ExecutableBody {
                         subject
                             .validate_vocabulary(vocabulary)
                             .map_err(|_| DefinitionError::InvalidInstruction)?;
-                        if matches!(subject.as_ref(), EffectSubject::TargetObject) {
+                        if matches!(
+                            subject.as_ref(),
+                            EffectSubject::TargetObject
+                                | EffectSubject::TargetAndSameNameMatching(_)
+                        ) {
                             Some(OperandFamily::Permanent)
                         } else {
                             None
@@ -11908,7 +12482,10 @@ impl ExecutableBody {
                     {
                         return Err(DefinitionError::InvalidInstruction);
                     }
-                    if matches!(subject.as_ref(), EffectSubject::TargetObject) {
+                    if matches!(
+                        subject.as_ref(),
+                        EffectSubject::TargetObject | EffectSubject::TargetAndSameNameMatching(_)
+                    ) {
                         if !matches!(
                             self.target,
                             BodyTarget::SingleCreature
@@ -11919,11 +12496,15 @@ impl ExecutableBody {
                             return Err(DefinitionError::OperandFamily);
                         }
                         Some(OperandFamily::Permanent)
-                    } else if matches!(
-                        subject.as_ref(),
-                        EffectSubject::Matching(filter) if filter.has_target_player()
-                    ) {
-                        Some(OperandFamily::Player)
+                    } else if let EffectSubject::Matching(filter) = subject.as_ref() {
+                        let mut fam = None;
+                        if filter.has_target_player() {
+                            fam = merge_family(fam, Some(OperandFamily::Player))?;
+                        }
+                        if filter.uses_target_permanent() {
+                            fam = merge_family(fam, Some(OperandFamily::Permanent))?;
+                        }
+                        fam
                     } else {
                         None
                     }
@@ -12367,7 +12948,12 @@ impl ExecutableBody {
                         return Err(DefinitionError::InvalidInstruction);
                     }
                     group.validate_vocabulary(vocabulary)?;
-                    if let EffectSubject::Matching(filter) = group.as_ref() {
+                    if matches!(
+                        group.as_ref(),
+                        EffectSubject::TargetObject | EffectSubject::TargetAndSameNameMatching(_)
+                    ) {
+                        Some(OperandFamily::Permanent)
+                    } else if let EffectSubject::Matching(filter) = group.as_ref() {
                         let mut fam = None;
                         if filter.has_target_player() {
                             fam = merge_family(fam, Some(OperandFamily::Player))?;
@@ -12822,6 +13408,19 @@ impl ExecutableBody {
                             }
                             family = Some(OperandFamily::Permanent);
                         }
+                        EffectSubject::TargetAndSameNameMatching(filter) => {
+                            filter.validate_vocabulary(vocabulary)?;
+                            if !matches!(
+                                self.target,
+                                BodyTarget::SingleCreature
+                                    | BodyTarget::SinglePermanent
+                                    | BodyTarget::SinglePlaneswalker
+                                    | BodyTarget::FilteredPermanent(_)
+                            ) {
+                                return Err(DefinitionError::OperandFamily);
+                            }
+                            family = Some(OperandFamily::Permanent);
+                        }
                         EffectSubject::Matching(filter) => {
                             filter.validate_vocabulary(vocabulary)?;
                             if filter.has_target_player() {
@@ -12875,7 +13474,8 @@ impl ExecutableBody {
                             }
                             None
                         }
-                        EffectSubject::TargetObject => match self.target {
+                        EffectSubject::TargetObject
+                        | EffectSubject::TargetAndSameNameMatching(_) => match self.target {
                             BodyTarget::SingleCreature
                             | BodyTarget::SinglePermanent
                             | BodyTarget::SinglePlaneswalker
@@ -12883,11 +13483,14 @@ impl ExecutableBody {
                             _ => return Err(DefinitionError::OperandFamily),
                         },
                         EffectSubject::Matching(filter) => {
+                            let mut fam = None;
                             if filter.has_target_player() {
-                                Some(OperandFamily::Player)
-                            } else {
-                                None
+                                fam = merge_family(fam, Some(OperandFamily::Player))?;
                             }
+                            if filter.uses_target_permanent() {
+                                fam = merge_family(fam, Some(OperandFamily::Permanent))?;
+                            }
+                            fam
                         }
                         EffectSubject::CreatedTokens | EffectSubject::LastMoved => None,
                     }
@@ -13918,7 +14521,10 @@ impl ExecutableBody {
                         .validate_vocabulary(vocabulary)
                         .map_err(|_| DefinitionError::InvalidInstruction)?;
                     amount.validate_amount(&defined_slots, context, &facts, vocabulary)?;
-                    let mut base = if matches!(group.as_ref(), EffectSubject::TargetObject) {
+                    let mut base = if matches!(
+                        group.as_ref(),
+                        EffectSubject::TargetObject | EffectSubject::TargetAndSameNameMatching(_)
+                    ) {
                         Some(OperandFamily::Permanent)
                     } else {
                         None
@@ -14000,7 +14606,12 @@ impl ExecutableBody {
                     if power_toughness.is_none() && keywords.is_empty() {
                         return Err(DefinitionError::InvalidInstruction);
                     }
-                    if let EffectSubject::Matching(filter) = group.as_ref() {
+                    if matches!(
+                        group.as_ref(),
+                        EffectSubject::TargetObject | EffectSubject::TargetAndSameNameMatching(_)
+                    ) {
+                        Some(OperandFamily::Permanent)
+                    } else if let EffectSubject::Matching(filter) = group.as_ref() {
                         let mut fam = None;
                         if filter.has_target_player() {
                             fam = merge_family(fam, Some(OperandFamily::Player))?;
@@ -14586,14 +15197,20 @@ impl ExecutableBody {
                         let guards_last_action = matches!(
                             (&condition.left, condition.comparison, &condition.right),
                             (
-                                ValueExpr::EventValue(EventValueKind::LastActionSucceeded),
+                                ValueExpr::EventValue(
+                                    EventValueKind::LastActionSucceeded
+                                        | EventValueKind::LastSacrificeSucceeded
+                                ),
                                 Comparison::GreaterOrEqual | Comparison::Equal,
                                 ValueExpr::Literal(v)
                             ) if *v == 1.into()
                         ) || matches!(
                             (&condition.left, condition.comparison, &condition.right),
                             (
-                                ValueExpr::EventValue(EventValueKind::LastActionSucceeded),
+                                ValueExpr::EventValue(
+                                    EventValueKind::LastActionSucceeded
+                                        | EventValueKind::LastSacrificeSucceeded
+                                ),
                                 Comparison::NotEqual | Comparison::Greater,
                                 ValueExpr::Literal(v)
                             ) if *v == 0.into()
@@ -15161,7 +15778,14 @@ impl ExecutableBody {
                     | Instruction::SacrificeToContinue { .. }
                     | Instruction::SacrificeMatching(_)
                     | Instruction::Discard { .. }
-                    | Instruction::DiscardFiltered { .. } => facts.merge_into(&mut incoming[next]),
+                    | Instruction::DiscardFiltered { .. }
+                    | Instruction::MoveCounters { .. }
+                    | Instruction::ExileSubjectUntilSourceLeaves { .. }
+                    | Instruction::ReturnCardsExiledWithLinkExt { .. }
+                    | Instruction::DrawGame
+                    | Instruction::TurnFaceUpSubject { .. } => {
+                        facts.merge_into(&mut incoming[next])
+                    }
                 }
             }
         }
@@ -15256,6 +15880,8 @@ pub struct SpellDefinition {
     /// On a modal spell, `body` is the first printed mode and this field contains the rest.
     pub modes: Option<SpellModes>,
     pub cost: ManaCost,
+    /// True when this spell has no printed mana cost (CR 118.6, unpayable except via alternative costs).
+    pub uncastable_mana_cost: bool,
     pub body: ExecutableBody,
 }
 // ProgramKind carries SpellDefinition and PermanentDefinition inline as the top-level program payload.
@@ -16202,7 +16828,7 @@ impl Program {
     /// Printed mana cost of this face, including the distinction between an absent and a zero cost.
     pub fn printed_mana_cost(&self) -> Option<&ManaCost> {
         match &self.kind {
-            ProgramKind::Spell(spell) => Some(&spell.cost),
+            ProgramKind::Spell(spell) => (!spell.uncastable_mana_cost).then_some(&spell.cost),
             ProgramKind::Permanent(permanent) => permanent.casting_cost.as_ref(),
         }
     }
@@ -16573,6 +17199,7 @@ impl Program {
             BTreeSet::new(),
             ProgramKind::Spell(SpellDefinition {
                 cost,
+                uncastable_mana_cost: false,
                 body,
                 modes: None,
             }),
@@ -16585,6 +17212,7 @@ impl Program {
             BTreeSet::new(),
             ProgramKind::Spell(SpellDefinition {
                 cost,
+                uncastable_mana_cost: false,
                 body,
                 modes: None,
             }),
@@ -17018,7 +17646,11 @@ impl Program {
             return Err(DefinitionError::CastingCost);
         }
         if let Some(permission) = &self.graveyard_self_cast {
-            if self.has_type(CardType::Land) || self.printed_mana_cost().is_none() {
+            let allows_no_mana_cost =
+                matches!(permission, GraveyardSelfCast::WithAlternativeCost { .. });
+            if self.has_type(CardType::Land)
+                || (!allows_no_mana_cost && self.printed_mana_cost().is_none())
+            {
                 return Err(DefinitionError::CastingCost);
             }
             match permission {
@@ -17033,6 +17665,14 @@ impl Program {
                         return Err(DefinitionError::CastingCost);
                     }
                     for cost in costs {
+                        cost.validate(vocabulary)?;
+                    }
+                }
+                GraveyardSelfCast::WithAlternativeCost { mana, extra } => {
+                    if !mana.valid() {
+                        return Err(DefinitionError::CastingCost);
+                    }
+                    for cost in extra {
                         cost.validate(vocabulary)?;
                     }
                 }
@@ -17554,6 +18194,8 @@ impl Program {
                         | Instruction::ImprintTargetCreature
                         | Instruction::ExileTargetAsAbilityDonor
                         | Instruction::ExileTargetUntilSourceLeaves
+                        | Instruction::ExileSubjectUntilSourceLeaves { .. }
+                        | Instruction::ReturnCardsExiledWithLinkExt { .. }
                         | Instruction::PutNamedCounterOnSource { .. }
                         | Instruction::PutChargeCounterOnSource
                         | Instruction::PutBlessingCounterOnSource
@@ -18144,7 +18786,7 @@ impl Program {
                     ) || matches!(
                         op,
                         Instruction::CreateTokens { creations }
-                            | Instruction::CreateAttackingTokens { creations }
+                            | Instruction::CreateAttackingTokens { creations, .. }
                             if creations.iter().any(|c| expr_uses_source(&c.amount))
                     ) || matches!(
                         op,
@@ -18778,6 +19420,8 @@ impl Program {
                             | Instruction::DiscardUpTo { .. }
                             | Instruction::Ascend
                             | Instruction::ReturnCardsExiledWithLink(_)
+                            | Instruction::ReturnCardsExiledWithLinkExt { .. }
+                            | Instruction::DrawGame
                             | Instruction::AddExperienceCounter
                             | Instruction::RequireOpponentsCreaturesBlockThisTurn
                             | Instruction::SetControlledCreatureSizeToHand
@@ -18806,7 +19450,10 @@ impl Program {
                             | Instruction::BecomeCopy { .. }
                             | Instruction::Exchange(_)
                             | Instruction::DoubleCountersOnSubject { .. }
-                            | Instruction::DoublePowerToughnessSubject { .. } => {
+                            | Instruction::DoublePowerToughnessSubject { .. }
+                            | Instruction::MoveCounters { .. }
+                            | Instruction::ExileSubjectUntilSourceLeaves { .. }
+                            | Instruction::TurnFaceUpSubject { .. } => {
                                 !operation.uses_mode_target()
                             }
                             Instruction::Scry { player, .. }

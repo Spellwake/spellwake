@@ -451,7 +451,7 @@ impl EffectWindow {
                                     crate::program::TriggerKeywordEvent::Soulbond { .. }
                                 )
                             )
-                    }) || partner.granted_triggers.values().any(|trigger| {
+                    }) || partner.granted_triggers.values().flatten().any(|trigger| {
                         matches!(
                             trigger.condition.event,
                             crate::program::TriggerEvent::Keyword(

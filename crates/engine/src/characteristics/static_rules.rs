@@ -87,6 +87,7 @@ pub enum SpellCostModifier {
     FirstSpellRule {
         filter: SpellFilter,
         own_turn_only: bool,
+        each_player: bool,
         free: bool,
         pay_life_mv: bool,
         discount: u8,
@@ -165,10 +166,17 @@ pub enum CastPermissionRule {
         free: bool,
         any_color: bool,
     },
-    /// Grant `keyword` (Convoke, Improvise, Delve, Rebound, Cascade, Flash, etc.) to matching spells cast by controller.
+    /// Grant `keyword` (Convoke, Improvise, Delve, Rebound, Cascade, Flash, etc.) to matching spells cast by controller (or any player when `any_player` is true).
     GrantSpellKeyword {
+        any_player: bool,
         matching: SpellFilter,
         keyword: super::KeywordAbility,
+    },
+    /// Grant `count` instances of cascade to matching spells cast by controller (or any player when `any_player` is true).
+    GrantSpellCascade {
+        any_player: bool,
+        matching: SpellFilter,
+        count: NonZeroU8,
     },
     /// Play qualifying cards from the top of controller's library with optional per-turn and turn-ownership caps.
     PlayLibraryTopFiltered {
@@ -248,6 +256,8 @@ pub enum DamagePreventFollowup {
         per_prevented: bool,
     },
     InlineBody(Box<crate::program::ExecutableBody>),
+    /// Deal damage equal to the prevented amount to the source permanent's controller.
+    DealPreventedToSourceController,
 }
 
 /// Replacement operation applied by [`StaticDamageRule::ModifyDamage`].
@@ -845,6 +855,7 @@ impl StaticContinuousAbility {
                 CastPermissionRule::GraveyardCreatureCast
                     | CastPermissionRule::GraveyardSelfConditional { .. }
                     | CastPermissionRule::ColorlessHandSpellsHaveCascade { .. }
+                    | CastPermissionRule::GrantSpellCascade { .. }
                     | CastPermissionRule::ControllerSpellsCannotBeCountered(_)
                     | CastPermissionRule::ControllerSpellsCannotBeCounteredFiltered(_)
                     | CastPermissionRule::AllSpellsCannotBeCounteredFiltered(_)
@@ -894,6 +905,7 @@ impl StaticContinuousAbility {
                         | CastPermissionRule::GraveyardSelfConditional { .. }
                         | CastPermissionRule::ExileMatching { .. }
                         | CastPermissionRule::GrantSpellKeyword { .. }
+                        | CastPermissionRule::GrantSpellCascade { .. }
                         | CastPermissionRule::PlayLibraryTopFiltered { .. }
                         | CastPermissionRule::GraveyardMatchingOwnTurn { .. }
                         | CastPermissionRule::ExileMatchingExt { .. },
@@ -1024,7 +1036,8 @@ impl StaticContinuousAbility {
                 | CastPermissionRule::ExileMatchingExt { filter, .. } => {
                     filter.rewrite_creature_type(change.from, change.to);
                 }
-                CastPermissionRule::GrantSpellKeyword { matching, .. } => {
+                CastPermissionRule::GrantSpellKeyword { matching, .. }
+                | CastPermissionRule::GrantSpellCascade { matching, .. } => {
                     matching.rewrite_creature_type(change.from, change.to);
                 }
                 CastPermissionRule::GraveyardSelfConditional { condition } => {
@@ -1201,7 +1214,8 @@ impl StaticContinuousAbility {
                         .validate_vocabulary(vocabulary)
                         .map_err(|_| CharacteristicDefinitionError::ForeignCreatureType);
                 }
-                CastPermissionRule::GrantSpellKeyword { matching, .. } => {
+                CastPermissionRule::GrantSpellKeyword { matching, .. }
+                | CastPermissionRule::GrantSpellCascade { matching, .. } => {
                     return matching
                         .validate_vocabulary(vocabulary)
                         .map_err(|_| CharacteristicDefinitionError::ForeignCreatureType);
@@ -1384,49 +1398,9 @@ impl StaticContinuousAbility {
                 }
                 return Ok(());
             }
-            Self::Restriction { rule, .. } => match rule {
-                StaticRestriction::ProhibitCasting { filter, .. } => {
-                    return filter
-                        .validate_vocabulary(vocabulary)
-                        .map_err(|_| CharacteristicDefinitionError::ForeignCreatureType);
-                }
-                StaticRestriction::ProhibitCastingChosenName(names) => {
-                    if names.options().is_empty() {
-                        return Err(CharacteristicDefinitionError::EmptyParts);
-                    }
-                    return Ok(());
-                }
-                StaticRestriction::PreventControlledTransform { subtype, except } => {
-                    if vocabulary.label(*subtype).is_none() || vocabulary.label(*except).is_none() {
-                        return Err(CharacteristicDefinitionError::ForeignCreatureType);
-                    }
-                    return Ok(());
-                }
-                StaticRestriction::OthersEnterTapped(selector)
-                | StaticRestriction::PreventMatchingActivations(selector)
-                | StaticRestriction::PreventMatchingNonManaActivations(selector)
-                | StaticRestriction::IgnoreOpponentsHexproof(selector)
-                | StaticRestriction::ActivateAbilitiesAsThoughHaste(selector)
-                | StaticRestriction::CannotBeSacrificed(selector)
-                | StaticRestriction::CannotBeUntapped(selector)
-                | StaticRestriction::CantBeTargetedBy { selector, .. }
-                | StaticRestriction::EnterUntapped(selector)
-                | StaticRestriction::ProhibitEntering(selector) => {
-                    return selector.validate(vocabulary);
-                }
-                StaticRestriction::PreventCounters {
-                    selector, players, ..
-                } => {
-                    if selector.is_none() && players.is_none() {
-                        return Err(CharacteristicDefinitionError::EmptyParts);
-                    }
-                    if let Some(sel) = selector {
-                        sel.validate(vocabulary)?;
-                    }
-                    return Ok(());
-                }
-                _ => return Ok(()),
-            },
+            Self::Restriction { rule, .. } => {
+                return validate_static_restriction(rule, vocabulary);
+            }
             Self::Modifier { rule, .. } => {
                 match rule {
                     StaticModifierRule::IgnoreLegendForSubtype(subtype) => {
@@ -1629,7 +1603,7 @@ impl StaticContinuousAbility {
                 return Err(CharacteristicDefinitionError::UnsupportedTypeOperation);
             }
             if let StaticPart::Abilities(change) = part {
-                if let Some(trigger) = &change.granted_trigger {
+                for trigger in &change.granted_triggers {
                     trigger
                         .validate_body(vocabulary)
                         .map_err(|_| CharacteristicDefinitionError::InvalidKeywordGrant)?;
@@ -1808,6 +1782,9 @@ impl StaticContinuousAbility {
                         expression.validate(vocabulary)?;
                     }
                 }
+                StaticPart::GrantRestriction(restriction) => {
+                    validate_static_restriction(restriction, vocabulary)?;
+                }
                 StaticPart::Names(_)
                 | StaticPart::InheritCounteredCreatureAbilities
                 | StaticPart::InheritExiledCreatureAbilities
@@ -1826,5 +1803,50 @@ impl StaticContinuousAbility {
             }
         }
         Ok(())
+    }
+}
+
+fn validate_static_restriction(
+    rule: &StaticRestriction,
+    vocabulary: &CreatureTypeVocabulary,
+) -> Result<(), CharacteristicDefinitionError> {
+    match rule {
+        StaticRestriction::ProhibitCasting { filter, .. } => filter
+            .validate_vocabulary(vocabulary)
+            .map_err(|_| CharacteristicDefinitionError::ForeignCreatureType),
+        StaticRestriction::ProhibitCastingChosenName(names) => {
+            if names.options().is_empty() {
+                return Err(CharacteristicDefinitionError::EmptyParts);
+            }
+            Ok(())
+        }
+        StaticRestriction::PreventControlledTransform { subtype, except } => {
+            if vocabulary.label(*subtype).is_none() || vocabulary.label(*except).is_none() {
+                return Err(CharacteristicDefinitionError::ForeignCreatureType);
+            }
+            Ok(())
+        }
+        StaticRestriction::OthersEnterTapped(selector)
+        | StaticRestriction::PreventMatchingActivations(selector)
+        | StaticRestriction::PreventMatchingNonManaActivations(selector)
+        | StaticRestriction::IgnoreOpponentsHexproof(selector)
+        | StaticRestriction::ActivateAbilitiesAsThoughHaste(selector)
+        | StaticRestriction::CannotBeSacrificed(selector)
+        | StaticRestriction::CannotBeUntapped(selector)
+        | StaticRestriction::CantBeTargetedBy { selector, .. }
+        | StaticRestriction::EnterUntapped(selector)
+        | StaticRestriction::ProhibitEntering(selector) => selector.validate(vocabulary),
+        StaticRestriction::PreventCounters {
+            selector, players, ..
+        } => {
+            if selector.is_none() && players.is_none() {
+                return Err(CharacteristicDefinitionError::EmptyParts);
+            }
+            if let Some(sel) = selector {
+                sel.validate(vocabulary)?;
+            }
+            Ok(())
+        }
+        _ => Ok(()),
     }
 }

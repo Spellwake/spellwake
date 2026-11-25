@@ -108,6 +108,8 @@ pub struct SupportedAppearance {
     pub attached_to: Option<crate::targets::TargetRef>,
     /// This exact permanent has resolved a saddle ability this turn.
     pub saddled: bool,
+    /// Physical owner if this object is a commander in this game.
+    pub commander_owner: Option<SeatId>,
     pub object: GameObject,
     pub copiable_names: spellwake_contracts::names::ObjectNames,
     pub current_names: spellwake_contracts::names::ObjectNames,
@@ -146,7 +148,8 @@ pub struct SupportedAppearance {
     /// Current independent exalted grants at this cut.
     pub granted_exalted: BTreeMap<crate::characteristics::EffectInstanceKey, u16>,
     /// Ordinary triggers keyed by the effect granting each instance at this cut.
-    pub granted_triggers: BTreeMap<crate::characteristics::EffectInstanceKey, TriggeredAbility>,
+    pub granted_triggers:
+        BTreeMap<crate::characteristics::EffectInstanceKey, Vec<TriggeredAbility>>,
     /// Surviving combat keyword instances indexed by the effect that granted them.
     pub granted_combat_keywords: BTreeMap<
         crate::characteristics::EffectInstanceKey,
@@ -181,6 +184,7 @@ impl SupportedAppearance {
             kicker_choices: BTreeMap::new(),
             attached_to: None,
             saddled: false,
+            commander_owner: None,
             object: GameObject::synthetic_emblem(controller),
             copiable_names: spellwake_contracts::names::ObjectNames::nameless(),
             current_names: spellwake_contracts::names::ObjectNames::nameless(),
@@ -964,6 +968,14 @@ pub enum RulesOccurrence {
         object: ObjectId,
         entry: StackEntryId,
         controller: SeatId,
+        instant_or_sorcery: bool,
+    },
+    /// Actual player and targeting entry captured when a player was chosen as a target.
+    PlayerTargeted {
+        player: SeatId,
+        entry: StackEntryId,
+        controller: SeatId,
+        spell: bool,
         instant_or_sorcery: bool,
     },
     /// An extra turn was scheduled for this player.
@@ -1963,6 +1975,7 @@ impl RulesView<'_> {
             kicker_choices: stack_spell
                 .map(|entry| entry.kicker_choices().clone())
                 .unwrap_or_default(),
+            commander_owner: current.commander_owner,
             object: physical.clone(),
             copiable_names: current.defined.names.clone(),
             current_names: current.current_names.clone(),
@@ -2899,16 +2912,15 @@ impl TriggerState {
             RulesOccurrence::TimeCounterRemoved { after, .. } => !after.is_positive(),
             _ => false,
         });
-        let check_graveyard_planeswalker=event.occurrences.iter().any(|row|matches!(&row.value,RulesOccurrence::CastCompleted(cast) if cast.spell().types.contains(&CardType::Planeswalker)));
-        let check_graveyard_upkeep = event.occurrences.iter().any(|row| matches!(&row.value, RulesOccurrence::StepBegan { position, .. } if position.step == crate::turn::Step::Upkeep));
         for (view, lookback) in [(before, true), (after, false)] {
             for object in view.cards.iter().filter(|object| {
-                matches!(object.zone(), ObjectZone::Battlefield | ObjectZone::Stack)
-                    || (!lookback
-                        && (((check_graveyard_upkeep || check_graveyard_planeswalker)
-                            && matches!(object.zone(), ObjectZone::Graveyard(_)))
-                            || (check_suspended && object.zone() == ObjectZone::Exile)
-                            || cycled.contains(&object.id())))
+                matches!(
+                    object.zone(),
+                    ObjectZone::Battlefield
+                        | ObjectZone::Stack
+                        | ObjectZone::Graveyard(_)
+                        | ObjectZone::Exile
+                ) || (!lookback && cycled.contains(&object.id()))
             }) {
                 let current = view
                     .evaluated
@@ -2921,22 +2933,18 @@ impl TriggerState {
                 {
                     return Err(TriggerError::InvalidWorld);
                 }
-                let suspend = object.zone() == ObjectZone::Exile
+                let suspend = !lookback
+                    && object.zone() == ObjectZone::Exile
                     && check_suspended
                     && matches!(
                         current.printed_text.exile_action,
                         Some(crate::program::ExileAction::Suspend { .. })
                     );
-                if object.zone() == ObjectZone::Exile && !suspend && !cycled.contains(&object.id())
-                {
-                    continue;
-                }
-                if !suspend
-                    && current.abilities.triggered.is_empty()
-                    && current.granted_triggers.is_empty()
-                    && current.granted_exalted.is_empty()
-                    && current.granted_combat_keywords.is_empty()
-                {
+                let has_triggers = !current.abilities.triggered.is_empty()
+                    || !current.granted_triggers.is_empty()
+                    || !current.granted_exalted.is_empty()
+                    || !current.granted_combat_keywords.is_empty();
+                if !suspend && !has_triggers {
                     continue;
                 }
                 let mut abilities = Vec::new();
@@ -2959,11 +2967,13 @@ impl TriggerState {
                         abilities.push((None, std::borrow::Cow::Owned(kind.ability(id))));
                     }
                 }
-                for (effect, ability) in &current.granted_triggers {
-                    if ability.condition.functions_in_zone(object.zone())
-                        && ability.condition.is_lookback() == lookback
-                    {
-                        abilities.push((Some(*effect), std::borrow::Cow::Borrowed(ability)));
+                for (effect, granted) in &current.granted_triggers {
+                    for ability in granted {
+                        if ability.condition.functions_in_zone(object.zone())
+                            && ability.condition.is_lookback() == lookback
+                        {
+                            abilities.push((Some(*effect), std::borrow::Cow::Borrowed(ability)));
+                        }
                     }
                 }
                 for definition in &current.abilities.triggered {
@@ -3036,7 +3046,10 @@ impl TriggerState {
                     .or_else(|| {
                         (suspend
                             || cycled.contains(&object.id())
-                            || matches!(object.zone(), ObjectZone::Graveyard(_)))
+                            || matches!(
+                                object.zone(),
+                                ObjectZone::Graveyard(_) | ObjectZone::Exile
+                            ))
                         .then_some(object.owner())
                     })
                     .ok_or(TriggerError::InvalidWorld)?;
@@ -3055,41 +3068,65 @@ impl TriggerState {
                 continue;
             };
             let spell = cast.spell();
-            if !spell.colors.is_empty() || spell.cast_origin != Some((cast.controller(), true)) {
-                continue;
-            }
-            for permanent in after.evaluated.objects.values().filter(|p| {
-                p.zone == ObjectZone::Battlefield && p.controller == Some(cast.controller())
-            }) {
+            for permanent in after
+                .evaluated
+                .objects
+                .values()
+                .filter(|p| p.zone == ObjectZone::Battlefield)
+            {
                 for rule in permanent
                     .printed_text
                     .continuous
                     .iter()
                     .chain(&permanent.printed_text.additional_battlefield_abilities)
                 {
-                    let crate::characteristics::StaticContinuousAbility::CastPermission {
-                        id,
-                        permission:
-                            crate::characteristics::CastPermissionRule::ColorlessHandSpellsHaveCascade {
-                                minimum_mana_value,
-                                count,
-                            },
-                    } = rule
-                    else {
-                        continue;
+                    let (id, count) = match rule {
+                        crate::characteristics::StaticContinuousAbility::CastPermission {
+                            id,
+                            permission:
+                                crate::characteristics::CastPermissionRule::ColorlessHandSpellsHaveCascade {
+                                    minimum_mana_value,
+                                    count,
+                                },
+                        } => {
+                            if permanent.controller != Some(cast.controller())
+                                || !spell.colors.is_empty()
+                                || spell.cast_origin != Some((cast.controller(), true))
+                                || cast.mana_value() < &i64::from(*minimum_mana_value).into()
+                            {
+                                continue;
+                            }
+                            (*id, *count)
+                        }
+                        crate::characteristics::StaticContinuousAbility::CastPermission {
+                            id,
+                            permission:
+                                crate::characteristics::CastPermissionRule::GrantSpellCascade {
+                                    any_player,
+                                    matching,
+                                    count,
+                                },
+                        } => {
+                            if (!*any_player && permanent.controller != Some(cast.controller()))
+                                || !matching.matches_spell_appearance(spell)
+                            {
+                                continue;
+                            }
+                            (*id, *count)
+                        }
+                        _ => continue,
                     };
-                    if !(permanent.abilities.continuous == Some(*id)
+                    if !(permanent.abilities.continuous == Some(id)
                         || permanent
                             .abilities
                             .additional_battlefield_abilities
-                            .contains(id))
-                        || cast.mana_value() < &i64::from(*minimum_mana_value).into()
+                            .contains(&id))
                     {
                         continue;
                     }
                     let grant = crate::characteristics::EffectInstanceKey::Static {
                         source: permanent.object,
-                        ability: *id,
+                        ability: id,
                     };
                     for n in 0..count.get() {
                         let ability = TriggeredAbility::cascade(TriggeredAbilityId(u64::from(n)));

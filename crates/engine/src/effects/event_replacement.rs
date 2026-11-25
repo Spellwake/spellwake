@@ -56,6 +56,19 @@ pub(crate) fn is_inline_replacement_body_supported(body: &ExecutableBody) -> boo
                 EffectSubject::AbilitySource | EffectSubject::Matching(_)
             )
         }
+        Instruction::RemoveCountersFromPermanent {
+            target_self: true,
+            kind: Some(_),
+            ..
+        } => true,
+        Instruction::RemoveCountersFromSubject {
+            subject,
+            kind: Some(_),
+            ..
+        } => matches!(
+            subject.as_ref(),
+            EffectSubject::AbilitySource | EffectSubject::Matching(_)
+        ),
         Instruction::CreateTokens { creations } => creations.iter().all(|c| {
             c.base_size.is_none()
                 && matches!(
@@ -144,7 +157,11 @@ impl EffectWindow {
             !active.consumed
                 && matches!(
                     &active.rule,
-                    crate::program::TemporaryRuleKind::TemporaryStatic(ab) if is_draw_body(ab)
+                    crate::program::TemporaryRuleKind::TemporaryStatic(ab)
+                        | crate::program::TemporaryRuleKind::ConditionalTemporaryStatic {
+                            ability: ab,
+                            ..
+                        } if is_draw_body(ab)
                 )
         }) || self.programs.values().any(|program| {
             program
@@ -327,10 +344,7 @@ impl EffectWindow {
         }
 
         for active in &self.temporary_rules {
-            if active.consumed {
-                continue;
-            }
-            let crate::program::TemporaryRuleKind::TemporaryStatic(ab) = &active.rule else {
+            let Some(ab) = self.active_temporary_static(active, evaluated) else {
                 continue;
             };
             let StaticContinuousAbility::EventReplacement {
@@ -338,7 +352,7 @@ impl EffectWindow {
                 event,
                 condition,
                 action: StaticReplacementAction::ReplaceWithBody { optional, body },
-            } = ab.as_ref()
+            } = ab
             else {
                 continue;
             };
@@ -731,6 +745,7 @@ impl EffectWindow {
             Eval(rc) => {
                 let ctx = WorldEvalCtx {
                     active_player: self.window.active_player(),
+                    step: self.current_step,
                     participants: self.window.participants(),
                     life: Some(&self.life),
                     combat: self.combat.as_ref(),
@@ -1185,6 +1200,52 @@ impl EffectWindow {
                             append,
                         )?;
                     }
+                }
+                Instruction::RemoveCountersFromPermanent {
+                    target_self: true,
+                    kind: Some(kind),
+                    amount,
+                } => {
+                    if let Some(source) = rep.source {
+                        let val = self
+                            .resolve_inline_value_expr(rep, &amount, event_amount)?
+                            .max(0.into());
+                        if val.is_positive() {
+                            self.inline_remove_permanent_counters(
+                                &[source],
+                                kind,
+                                Some(&val),
+                                cause.clone(),
+                                append,
+                            )?;
+                        }
+                    }
+                }
+                Instruction::RemoveCountersFromSubject {
+                    subject,
+                    kind: Some(kind),
+                    amount,
+                } => {
+                    let cap = match amount {
+                        Some(expr) => {
+                            let val = self
+                                .resolve_inline_value_expr(rep, &expr, event_amount)?
+                                .max(0.into());
+                            if !val.is_positive() {
+                                continue;
+                            }
+                            Some(val)
+                        }
+                        None => None,
+                    };
+                    let objects = self.inline_resolve_subject(*subject, rep)?;
+                    self.inline_remove_permanent_counters(
+                        &objects,
+                        kind,
+                        cap.as_ref(),
+                        cause.clone(),
+                        append,
+                    )?;
                 }
                 Instruction::AddExperienceCounter => {
                     self.inline_add_player_counter(
@@ -1695,6 +1756,118 @@ impl EffectWindow {
             )?])
         })?;
         Ok(Some(moved_id))
+    }
+
+    fn inline_remove_permanent_counters(
+        &mut self,
+        objects: &[ObjectId],
+        kind: CounterKind,
+        amount: Option<&RulesInteger>,
+        cause: EventCause,
+        append: &mut RulesJournal,
+    ) -> Result<(), EffectError> {
+        if objects.is_empty() || amount.is_some_and(|a| !a.is_positive()) {
+            return Ok(());
+        }
+        let before = self.rules_snapshot(None)?;
+        let mut events = Vec::new();
+        for &object in objects {
+            if !self
+                .window
+                .cards()
+                .get(object)
+                .is_some_and(|c| c.zone() == ObjectZone::Battlefield)
+            {
+                continue;
+            }
+            let current_count = self.counters_of_kind(object, kind);
+            if !current_count.is_positive() {
+                continue;
+            }
+            let to_remove = match amount {
+                Some(cap) if cap < &current_count => cap.clone(),
+                _ => current_count.clone(),
+            };
+            if !to_remove.is_positive() {
+                continue;
+            }
+            match kind {
+                CounterKind::PlusOne | CounterKind::MinusOne => {
+                    let prev = self.characteristics.counters(object);
+                    let delta = PowerToughnessCounters {
+                        plus_one: if kind == CounterKind::PlusOne {
+                            to_remove.clone()
+                        } else {
+                            0.into()
+                        },
+                        minus_one: if kind == CounterKind::MinusOne {
+                            to_remove.clone()
+                        } else {
+                            0.into()
+                        },
+                    };
+                    let after = self
+                        .characteristics
+                        .take_power_toughness_counters(object, &delta)
+                        .map_err(|_| EffectError::InconsistentProgram)?;
+                    events.push(RulesOccurrence::PermanentCounterChanged {
+                        object,
+                        kind,
+                        before: if kind == CounterKind::PlusOne {
+                            prev.plus_one
+                        } else {
+                            prev.minus_one
+                        },
+                        after: if kind == CounterKind::PlusOne {
+                            after.plus_one
+                        } else {
+                            after.minus_one
+                        },
+                    });
+                }
+                other => {
+                    let after = current_count.minus(&to_remove);
+                    if let Some(map) = self.characteristics.named_permanent_counters_mut(other) {
+                        if after.is_positive() {
+                            map.insert(object, after.clone());
+                        } else {
+                            map.remove(&object);
+                            if other.keyword_counter_ability().is_some() {
+                                self.characteristics
+                                    .clear_keyword_counter_grant(object, other);
+                            }
+                        }
+                        events.push(match other {
+                            CounterKind::Loyalty => RulesOccurrence::LoyaltyCountersChanged {
+                                object,
+                                before: current_count,
+                                after,
+                            },
+                            CounterKind::Charge => RulesOccurrence::ChargeCountersChanged {
+                                object,
+                                before: current_count,
+                                after,
+                            },
+                            CounterKind::Suspect => RulesOccurrence::SuspectCountersChanged {
+                                object,
+                                before: current_count,
+                                after,
+                            },
+                            _ => RulesOccurrence::PermanentCounterChanged {
+                                object,
+                                kind: other,
+                                before: current_count,
+                                after,
+                            },
+                        });
+                    }
+                }
+            }
+        }
+        if !events.is_empty() {
+            self.emit_from(cause, &before, None, append, |_, _, _| Ok(events))?;
+        }
+        Ok(())
     }
 
     fn inline_put_permanent_counters(

@@ -163,6 +163,7 @@ pub(crate) struct CharacteristicState {
     pub(crate) tokens_created_this_turn: BTreeMap<SeatId, u16>,
     pub(crate) attacking_creatures_this_turn: BTreeMap<SeatId, BTreeSet<ObjectId>>,
     pub(crate) attacked_objects_this_turn: BTreeSet<ObjectId>,
+    pub(crate) attacked_records_this_turn: BTreeMap<SeatId, Vec<ZoneMoveTurnRecord>>,
     pub(crate) blocked_objects_this_turn: BTreeSet<ObjectId>,
     pub(crate) entered_objects_this_turn: BTreeSet<ObjectId>,
     /// Number of combat phases that have begun this turn (1 during the first combat phase).
@@ -346,6 +347,7 @@ impl Default for CharacteristicState {
             tokens_created_this_turn: BTreeMap::new(),
             attacking_creatures_this_turn: BTreeMap::new(),
             attacked_objects_this_turn: BTreeSet::new(),
+            attacked_records_this_turn: BTreeMap::new(),
             blocked_objects_this_turn: BTreeSet::new(),
             entered_objects_this_turn: BTreeSet::new(),
             combat_phases_this_turn: 0,
@@ -953,6 +955,7 @@ impl CharacteristicState {
         self.lands_entered_this_turn.clear();
         self.dice_rolled_this_turn.clear();
         self.other_spells_mv_this_turn.clear();
+        self.attacked_records_this_turn.clear();
     }
 
     pub(crate) fn expire_at_turn_start(

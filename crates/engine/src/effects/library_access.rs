@@ -236,10 +236,7 @@ impl EffectWindow {
             apply_ability(&mut access, ability, Some(*seat), None, None);
         }
         for active in &self.temporary_rules {
-            if active.consumed {
-                continue;
-            }
-            if let crate::program::TemporaryRuleKind::TemporaryStatic(ability) = &active.rule {
+            if let Some(ability) = self.active_temporary_static(active, evaluated) {
                 apply_ability(
                     &mut access,
                     ability,
@@ -401,13 +398,13 @@ impl EffectWindow {
             }
         }
         for active in &self.temporary_rules {
-            if active.consumed || active.controller != actor {
+            if active.controller != actor {
                 continue;
             }
-            let crate::program::TemporaryRuleKind::TemporaryStatic(ability) = &active.rule else {
+            let Some(ability) = self.active_temporary_static(active, evaluated) else {
                 continue;
             };
-            match ability.as_ref() {
+            match ability {
                 crate::characteristics::StaticContinuousAbility::CastPermission {
                     permission: crate::characteristics::CastPermissionRule::PlayLibraryTop(matching),
                     ..
@@ -520,65 +517,65 @@ impl EffectWindow {
             if active.consumed {
                 return false;
             }
-            match &active.rule {
-                crate::program::TemporaryRuleKind::ZoneCastPermission {
-                    zone,
-                    filter,
-                    cast_only: false,
-                    ..
-                } if active.resolved_players.contains(&actor) => {
-                    let zone_ok = match zone {
-                        crate::program::SourceZoneFilter::Exile => true,
-                        crate::program::SourceZoneFilter::OpponentExile => card.owner() != actor,
-                        crate::program::SourceZoneFilter::LinkedExile => active
-                            .source_object
-                            .is_some_and(|src| self.is_linked_exile_of(src, id)),
-                        _ => false,
-                    };
-                    zone_ok
-                        && filter.is_none_or(|f| {
-                            self.matches_zone_play_filter(
-                                true,
-                                f,
-                                view,
-                                active.controller,
-                                active.source_object,
-                                &evaluated,
-                            )
-                        })
-                }
-                crate::program::TemporaryRuleKind::TemporaryStatic(ability)
-                    if active.controller == actor =>
-                {
-                    matches!(
-                        ability.as_ref(),
-                        crate::characteristics::StaticContinuousAbility::CastPermission {
-                            permission:
-                                crate::characteristics::CastPermissionRule::ExileMatchingExt {
-                                    filter,
-                                    linked_to_source,
-                                    lands_allowed: true,
-                                    own_turn_only,
-                                    ..
-                                },
-                            ..
-                        } if (!*own_turn_only || self.window.active_player() == actor)
-                            && (!*linked_to_source
-                                || active
-                                    .source_object
-                                    .is_some_and(|src| self.is_linked_exile_of(src, id)))
-                            && self.matches_zone_play_filter(
-                                true,
-                                **filter,
-                                view,
-                                actor,
-                                active.source_object,
-                                &evaluated,
-                            )
-                    )
-                }
-                _ => false,
+            if let crate::program::TemporaryRuleKind::ZoneCastPermission {
+                zone,
+                filter,
+                cast_only: false,
+                ..
+            } = &active.rule
+                && active.resolved_players.contains(&actor)
+            {
+                let zone_ok = match zone {
+                    crate::program::SourceZoneFilter::Exile => true,
+                    crate::program::SourceZoneFilter::OpponentExile => card.owner() != actor,
+                    crate::program::SourceZoneFilter::LinkedExile => active
+                        .source_object
+                        .is_some_and(|src| self.is_linked_exile_of(src, id)),
+                    _ => false,
+                };
+                return zone_ok
+                    && filter.is_none_or(|f| {
+                        self.matches_zone_play_filter(
+                            true,
+                            f,
+                            view,
+                            active.controller,
+                            active.source_object,
+                            &evaluated,
+                        )
+                    });
             }
+            active.controller == actor
+                && self
+                    .active_temporary_static(active, &evaluated)
+                    .is_some_and(|ability| {
+                        matches!(
+                            ability,
+                            crate::characteristics::StaticContinuousAbility::CastPermission {
+                                permission:
+                                    crate::characteristics::CastPermissionRule::ExileMatchingExt {
+                                        filter,
+                                        linked_to_source,
+                                        lands_allowed: true,
+                                        own_turn_only,
+                                        ..
+                                    },
+                                ..
+                            } if (!*own_turn_only || self.window.active_player() == actor)
+                                && (!*linked_to_source
+                                    || active
+                                        .source_object
+                                        .is_some_and(|src| self.is_linked_exile_of(src, id)))
+                                && self.matches_zone_play_filter(
+                                    true,
+                                    **filter,
+                                    view,
+                                    actor,
+                                    active.source_object,
+                                    &evaluated,
+                                )
+                        )
+                    })
         }) {
             return Ok(true);
         }
@@ -808,13 +805,13 @@ impl EffectWindow {
             }
         }
         for active in &self.temporary_rules {
-            if active.consumed || active.controller != actor {
+            if active.controller != actor {
                 continue;
             }
-            let crate::program::TemporaryRuleKind::TemporaryStatic(ab) = &active.rule else {
+            let Some(ab) = self.active_temporary_static(active, current) else {
                 continue;
             };
-            let matched = match ab.as_ref() {
+            let matched = match ab {
                 crate::characteristics::StaticContinuousAbility::CastPermission {
                     permission:
                         crate::characteristics::CastPermissionRule::ExileMatching {
@@ -912,15 +909,17 @@ impl EffectWindow {
             if active.consumed {
                 return false;
             }
-            match &active.rule {
-                crate::program::TemporaryRuleKind::ZoneCastPermission {
-                    zone:
-                        crate::program::SourceZoneFilter::Graveyard
-                        | crate::program::SourceZoneFilter::AnyGraveyard,
-                    cast_only: false,
-                    filter,
-                    ..
-                } if active.resolved_players.contains(&actor) => filter.is_none_or(|f| {
+            if let crate::program::TemporaryRuleKind::ZoneCastPermission {
+                zone:
+                    crate::program::SourceZoneFilter::Graveyard
+                    | crate::program::SourceZoneFilter::AnyGraveyard,
+                cast_only: false,
+                filter,
+                ..
+            } = &active.rule
+                && active.resolved_players.contains(&actor)
+            {
+                return filter.is_none_or(|f| {
                     self.matches_object_filter(
                         f,
                         view,
@@ -929,11 +928,12 @@ impl EffectWindow {
                         &BTreeSet::new(),
                         &evaluated,
                     )
-                }),
-                crate::program::TemporaryRuleKind::TemporaryStatic(ability)
-                    if active.controller == actor =>
-                {
-                    match ability.as_ref() {
+                });
+            }
+            active.controller == actor
+                && self
+                    .active_temporary_static(active, &evaluated)
+                    .is_some_and(|ability| match ability {
                         crate::characteristics::StaticContinuousAbility::CastPermission {
                             permission:
                                 crate::characteristics::CastPermissionRule::GraveyardLandPlay,
@@ -975,10 +975,7 @@ impl EffectWindow {
                                 )
                         }
                         _ => false,
-                    }
-                }
-                _ => false,
-            }
+                    })
         }) {
             return Ok(true);
         }

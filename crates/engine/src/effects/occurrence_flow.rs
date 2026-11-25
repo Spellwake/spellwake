@@ -57,6 +57,7 @@ impl RulesSnapshot {
             state: &self.characteristics,
             vocabulary: &self.vocabulary,
             name_rules: &self.name_rules,
+            step: self.step,
         })?);
         Ok(self.view_with_evaluated(cards, evaluated))
     }
@@ -692,9 +693,14 @@ impl EffectWindow {
                     let crate::mana::ManaOutput::Triggered(rule) = mana.output else {
                         continue;
                     };
-                    let imprinted =
-                        rule == crate::mana::TriggeredManaRule::ImprintedLandTappedSameType;
-                    if !imprinted && mana_controller != controller {
+                    let allow_any_controller = matches!(
+                        rule,
+                        crate::mana::TriggeredManaRule::ImprintedLandTappedSameType
+                            | crate::mana::TriggeredManaRule::LandTappedChosenColor {
+                                controller_only: false
+                            }
+                    );
+                    if !allow_any_controller && mana_controller != controller {
                         continue;
                     }
                     let colors = match rule {
@@ -727,6 +733,19 @@ impl EffectWindow {
                         }
                         crate::mana::TriggeredManaRule::LandTappedSameType if was_land => {
                             production.produced.keys().copied().collect()
+                        }
+                        crate::mana::TriggeredManaRule::LandTappedChosenColor { .. }
+                            if was_land =>
+                        {
+                            let Some(chosen) =
+                                self.entry_color_choices.get(&object.object).copied()
+                            else {
+                                continue;
+                            };
+                            if !production.produced.contains_key(&chosen) {
+                                continue;
+                            }
+                            BTreeSet::from([chosen])
                         }
                         crate::mana::TriggeredManaRule::PermanentTappedForColorless
                             if production.produced.contains_key(&ManaType::Colourless) =>
@@ -962,6 +981,7 @@ impl EffectWindow {
                             }
                             let ctx = crate::characteristics::WorldEvalCtx {
                                 active_player: self.window.active_player(),
+                                step: self.current_step,
                                 participants: self.window.participants(),
                                 life: Some(&self.life),
                                 combat: self.combat.as_ref(),
@@ -1031,16 +1051,13 @@ impl EffectWindow {
                 }
             }
             for active in &self.temporary_rules {
-                if active.consumed {
-                    continue;
-                }
-                if let crate::program::TemporaryRuleKind::TemporaryStatic(ab) = &active.rule
+                if let Some(ab) = self.active_temporary_static(active, &context.evaluated)
                     && let crate::characteristics::StaticContinuousAbility::EventReplacement {
                         id,
                         event: crate::characteristics::ReplaceableEvent::Draw { player: rel },
                         action,
                         ..
-                    } = ab.as_ref()
+                    } = ab
                 {
                     let applies = match rel {
                         crate::program::AffectedPlayers::One(
@@ -1528,8 +1545,27 @@ impl EffectWindow {
     fn needs_departed_ability_source(&self, object: ObjectId) -> bool {
         let needs_source = |op: &Instruction| {
             matches!(op, Instruction::GiveEquippedCreatureToUpkeepPlayer)
-                || matches!(op, Instruction::CreateTokens { creations } if creations.iter().any(|creation|
-                creation.amount.references_trigger_source_stat() || matches!(&creation.base_size, Some(crate::token::TokenSize::AtCreation(expr)) if expr.references_trigger_source_stat())))
+                || matches!(
+                    op,
+                    Instruction::CreateTokens { creations }
+                        | Instruction::CreateAttackingTokens { creations, .. }
+                        if creations.iter().any(|creation| {
+                            creation.amount.references_trigger_source_stat()
+                                || match &creation.base_size {
+                                    Some(crate::token::TokenSize::AtCreation(expr)) => {
+                                        expr.references_trigger_source_stat()
+                                    }
+                                    Some(crate::token::TokenSize::AtCreationPair {
+                                        power,
+                                        toughness,
+                                    }) => {
+                                        power.references_trigger_source_stat()
+                                            || toughness.references_trigger_source_stat()
+                                    }
+                                    _ => false,
+                                }
+                        })
+                )
         };
         if self.triggers.waiting().values().any(|waiting| waiting.source.object.id() == object && waiting.body.instructions.iter().any(needs_source))
             || self.payloads.values().any(|payload| matches!(payload, StackPayload::Instructions(p) if p.bindings.trigger.as_ref().is_some_and(|b|b.source.object.id()==object) && p.body.instructions.iter().any(needs_source))) {
@@ -2052,8 +2088,19 @@ impl EffectWindow {
                 }
                 RulesOccurrence::StackTargetsChanged { entry, before, .. } => {
                     let previous: BTreeSet<_> = before.iter().map(|bound| bound.target).collect();
-                    target_events.extend(self.permanent_target_events(*entry, &evaluated)?.into_iter().filter(|event|
-                        matches!(event, RulesOccurrence::PermanentTargeted { object, .. } if !previous.contains(&TargetRef::Object(*object)))));
+                    target_events.extend(
+                        self.permanent_target_events(*entry, &evaluated)?
+                            .into_iter()
+                            .filter(|event| match event {
+                                RulesOccurrence::PermanentTargeted { object, .. } => {
+                                    !previous.contains(&TargetRef::Object(*object))
+                                }
+                                RulesOccurrence::PlayerTargeted { player, .. } => {
+                                    !previous.contains(&TargetRef::Player(*player))
+                                }
+                                _ => false,
+                            }),
+                    );
                     let extra: Vec<_> = self
                         .extra_targeted_by_controller_events(*entry, &evaluated, &target_events)
                         .into_iter()
@@ -2110,10 +2157,10 @@ impl EffectWindow {
                 .iter()
                 .filter(|definition| current.abilities.triggered.contains(&definition.id))
                 .map(|definition| (None, definition));
-            let granted = current
-                .granted_triggers
-                .iter()
-                .map(|(grant, definition)| (Some(*grant), definition));
+            let granted = current.granted_triggers.iter().flat_map(|(grant, defs)| {
+                defs.iter()
+                    .map(move |definition| (Some(*grant), definition))
+            });
             for (grant, definition) in printed.chain(granted) {
                 let candidate = match definition.condition.event {
                     TriggerEvent::StateThreshold(StateThresholdKind::SourceCounters {
@@ -2164,6 +2211,7 @@ impl EffectWindow {
                     TriggerEvent::StateThreshold(StateThresholdKind::Eval(ref cond)) => {
                         let ctx = crate::characteristics::WorldEvalCtx {
                             active_player: self.window.active_player(),
+                            step: self.current_step,
                             participants: self.window.participants(),
                             life: Some(&self.life),
                             combat: self.combat.as_ref(),
@@ -2312,8 +2360,9 @@ impl EffectWindow {
                                 && is_targeting_only_source(trigger)
                         }) || view
                             .granted_triggers
-                            .iter()
-                            .any(|(_, trigger)| is_targeting_only_source(trigger)))
+                            .values()
+                            .flatten()
+                            .any(is_targeting_only_source))
                 })
             {
                 cast.copy_source =
@@ -2773,10 +2822,8 @@ impl EffectWindow {
                         self.characteristics
                             .attacked_objects_this_turn
                             .insert(attack.attacker);
-                        if let Some(ctrl) = before
-                            .evaluated
-                            .get(attack.attacker)
-                            .and_then(|o| o.controller)
+                        if let Some(view) = before.evaluated.get(attack.attacker)
+                            && let Some(ctrl) = view.controller
                         {
                             self.characteristics.attacked_this_turn_players.insert(ctrl);
                             self.characteristics
@@ -2784,6 +2831,33 @@ impl EffectWindow {
                                 .entry(ctrl)
                                 .or_default()
                                 .insert(attack.attacker);
+                            let mut types = crate::program::CardTypeMask::EMPTY;
+                            for &kind in &view.current_types {
+                                types = types.with(kind);
+                            }
+                            let mut colors = crate::program::ColorMask::EMPTY;
+                            for &color in &view.current_colors {
+                                colors = colors.with(color);
+                            }
+                            let mut supertypes = crate::program::SupertypeMask::EMPTY;
+                            for &sup in &view.current_supertypes {
+                                supertypes = supertypes
+                                    .union(crate::program::SupertypeMask::from_supertype(sup));
+                            }
+                            self.characteristics
+                                .attacked_records_this_turn
+                                .entry(ctrl)
+                                .or_default()
+                                .push(crate::characteristics::ZoneMoveTurnRecord {
+                                    owner: view.owner,
+                                    previous_controller: Some(ctrl),
+                                    from_battlefield: true,
+                                    types,
+                                    colors,
+                                    supertypes,
+                                    subtypes: view.current_creature_subtypes.clone(),
+                                    artifact_subtypes: view.current_artifact_subtypes.clone(),
+                                });
                         }
                     }
                 }
@@ -2811,6 +2885,15 @@ impl EffectWindow {
                         .and_then(|o| o.controller)
                         .is_some_and(|owner| owner != *controller)
                     {
+                        self.characteristics
+                            .committed_crime_this_turn
+                            .insert(*controller);
+                    }
+                }
+                RulesOccurrence::PlayerTargeted {
+                    player, controller, ..
+                } => {
+                    if *player != *controller {
                         self.characteristics
                             .committed_crime_this_turn
                             .insert(*controller);
@@ -3439,7 +3522,7 @@ impl EffectWindow {
                             is_spell,
                             instant_or_sorcery,
                         )
-                }) || watcher.granted_triggers.values().any(|ability| {
+                }) || watcher.granted_triggers.values().flatten().any(|ability| {
                     Self::trigger_watches_targeted_by_controller(
                         &ability.condition.event,
                         is_spell,
@@ -4222,6 +4305,7 @@ impl EffectWindow {
                 LinkedReturnOrigin::LibraryTop { tapped: true, .. }
                     | LinkedReturnOrigin::Hand { tapped: true, .. }
                     | LinkedReturnOrigin::Graveyard { tapped: true, .. }
+                    | LinkedReturnOrigin::ChosenExile { tapped: true, .. }
             ) {
                 self.window.enter_tapped(movement.after.id())?;
             }

@@ -48,18 +48,28 @@ fn filter_uses_damage_pairs(filter: crate::program::ObjectFilter) -> bool {
 fn subject_uses_damage_pairs(subject: &crate::program::EffectSubject) -> bool {
     matches!(
         subject,
-        crate::program::EffectSubject::Matching(filter) if filter_uses_damage_pairs(*filter)
+        crate::program::EffectSubject::Matching(filter)
+            | crate::program::EffectSubject::TargetAndSameNameMatching(filter)
+            if filter_uses_damage_pairs(*filter)
     )
 }
 
 fn value_expr_uses_damage_pairs(expr: &crate::program::ValueExpr) -> bool {
-    use crate::program::ValueExpr;
+    use crate::program::{PlayerStatExpr, ValueExpr};
     match expr {
         ValueExpr::Count { filter, .. }
         | ValueExpr::OpponentMaxCount { filter, .. }
         | ValueExpr::OpponentMinCount { filter, .. }
         | ValueExpr::DistinctColors { filter }
-        | ValueExpr::Aggregate { filter, .. } => filter_uses_damage_pairs(**filter),
+        | ValueExpr::Aggregate { filter, .. }
+        | ValueExpr::ObjectMatches { filter, .. } => filter_uses_damage_pairs(**filter),
+        ValueExpr::PlayerStat(
+            PlayerStatExpr::PlayerControlsMost { filter, .. }
+            | PlayerStatExpr::AttackedMatchingThisTurn { filter, .. }
+            | PlayerStatExpr::ControlsGreatestStat { filter, .. }
+            | PlayerStatExpr::GraveyardArrivalsMatchingThisTurn { filter, .. }
+            | PlayerStatExpr::SacrificedMatchingThisTurn { filter, .. },
+        ) => filter_uses_damage_pairs(**filter),
         ValueExpr::Scale { expr, .. } | ValueExpr::DivConst { expr, .. } => {
             value_expr_uses_damage_pairs(expr)
         }
@@ -82,6 +92,43 @@ fn value_expr_uses_damage_pairs(expr: &crate::program::ValueExpr) -> bool {
     }
 }
 
+fn condition_uses_damage_pairs(cond: &crate::program::ResolutionCondition) -> bool {
+    value_expr_uses_damage_pairs(&cond.left) || value_expr_uses_damage_pairs(&cond.right)
+}
+
+fn static_cond_uses_damage_pairs(cond: &crate::characteristics::StaticSourceCondition) -> bool {
+    use crate::characteristics::StaticSourceCondition;
+    match cond {
+        StaticSourceCondition::Eval(c) => condition_uses_damage_pairs(c),
+        StaticSourceCondition::Not(inner) => static_cond_uses_damage_pairs(inner),
+        StaticSourceCondition::And(a, b) | StaticSourceCondition::Or(a, b) => {
+            static_cond_uses_damage_pairs(a) || static_cond_uses_damage_pairs(b)
+        }
+        _ => false,
+    }
+}
+
+fn restriction_uses_damage_pairs(res: &crate::activated::ActivationRestriction) -> bool {
+    use crate::activated::ActivationRestriction;
+    match res {
+        ActivationRestriction::Condition(c) => condition_uses_damage_pairs(c),
+        ActivationRestriction::All(list) => list.iter().any(restriction_uses_damage_pairs),
+        _ => false,
+    }
+}
+
+fn trigger_cond_uses_damage_pairs(cond: &crate::program::TriggerCondition) -> bool {
+    use crate::program::TriggerCondition;
+    match cond {
+        TriggerCondition::Eval(c) => condition_uses_damage_pairs(c),
+        TriggerCondition::Not(inner) => trigger_cond_uses_damage_pairs(inner),
+        TriggerCondition::And(a, b) | TriggerCondition::Or(a, b) => {
+            trigger_cond_uses_damage_pairs(a) || trigger_cond_uses_damage_pairs(b)
+        }
+        _ => false,
+    }
+}
+
 fn body_uses_damage_pairs(body: &crate::program::ExecutableBody) -> bool {
     let target_uses = match body.target {
         BodyTarget::FilteredPermanent(f)
@@ -89,6 +136,11 @@ fn body_uses_damage_pairs(body: &crate::program::ExecutableBody) -> bool {
         | BodyTarget::FilteredAnyGraveyardCard { filter: f, .. } => filter_uses_damage_pairs(f),
         _ => false,
     };
+    if let Some(modes) = body.triggered_modes()
+        && modes.options.iter().any(body_uses_damage_pairs)
+    {
+        return true;
+    }
     target_uses
         || body.instructions.iter().any(|op| match op {
             Instruction::CreateTemporaryRule { rule, .. } => match rule.as_ref() {
@@ -99,6 +151,10 @@ fn body_uses_damage_pairs(body: &crate::program::ExecutableBody) -> bool {
                 crate::program::TemporaryRuleKind::TemporaryStatic(ab) => {
                     static_uses_damage_pairs(ab)
                 }
+                crate::program::TemporaryRuleKind::ConditionalTemporaryStatic {
+                    condition,
+                    ability,
+                } => static_cond_uses_damage_pairs(condition) || static_uses_damage_pairs(ability),
                 _ => false,
             },
             Instruction::DestroyGroup(f)
@@ -106,13 +162,10 @@ fn body_uses_damage_pairs(body: &crate::program::ExecutableBody) -> bool {
             | Instruction::PutGroupOnLibraryBottom(f) => filter_uses_damage_pairs(**f),
             Instruction::MoveGroup { group, .. } => filter_uses_damage_pairs(**group),
             Instruction::SetGroupTapped { filter, .. } => filter_uses_damage_pairs(**filter),
-            Instruction::SetSubjectTapped { subject, .. } => match subject.as_ref() {
-                crate::program::EffectSubject::Matching(filter) => {
-                    filter_uses_damage_pairs(*filter)
-                }
-                _ => false,
-            },
-            Instruction::PutCountersOnSubject { subject, .. } => subject_uses_damage_pairs(subject),
+            Instruction::SetSubjectTapped { subject, .. }
+            | Instruction::PutCountersOnSubject { subject, .. }
+            | Instruction::ExileSubjectUntilSourceLeaves { subject }
+            | Instruction::TurnFaceUpSubject { subject } => subject_uses_damage_pairs(subject),
             Instruction::DamageGroupAmount { group, amount } => {
                 value_expr_uses_damage_pairs(amount)
                     || matches!(
@@ -137,14 +190,31 @@ fn body_uses_damage_pairs(body: &crate::program::ExecutableBody) -> bool {
                 )
             }
             Instruction::ScheduleDelayedStepTrigger { body, .. }
-            | Instruction::EmitReflexiveTrigger { body, .. } => body_uses_damage_pairs(body),
+            | Instruction::EmitReflexiveTrigger { body, .. }
+            | Instruction::FixedTargetClause(body) => body_uses_damage_pairs(body),
+            Instruction::ForEachPlayer { body, .. } => body_uses_damage_pairs(body),
+            Instruction::OfferAnyPlayer {
+                cost_body,
+                paid_body,
+                declined_body,
+                ..
+            } => {
+                body_uses_damage_pairs(cost_body)
+                    || body_uses_damage_pairs(paid_body)
+                    || declined_body.as_ref().is_some_and(body_uses_damage_pairs)
+            }
+            Instruction::ChooseOption { options, .. } => {
+                options.iter().any(|b| body_uses_damage_pairs(&b.body))
+            }
             Instruction::ScheduleDelayedEventTrigger { trigger, body, .. } => {
-                trigger_event_uses_damage_pairs(&trigger.event) || body_uses_damage_pairs(body)
+                trigger_event_uses_damage_pairs(&trigger.event)
+                    || trigger
+                        .intervening_if
+                        .as_ref()
+                        .is_some_and(trigger_cond_uses_damage_pairs)
+                    || body_uses_damage_pairs(body)
             }
-            Instruction::BranchIfFalse { condition, .. } => {
-                value_expr_uses_damage_pairs(&condition.left)
-                    || value_expr_uses_damage_pairs(&condition.right)
-            }
+            Instruction::BranchIfFalse { condition, .. } => condition_uses_damage_pairs(condition),
             _ => false,
         })
 }
@@ -163,12 +233,55 @@ fn trigger_event_uses_damage_pairs(event: &crate::program::TriggerEvent) -> bool
 }
 
 fn static_uses_damage_pairs(ability: &crate::characteristics::StaticContinuousAbility) -> bool {
-    use crate::characteristics::{StaticContinuousAbility, StaticPart, StaticReplacementAction};
+    use crate::characteristics::{
+        CastPermissionRule, NumericExpression, StaticContinuousAbility, StaticDamageOp,
+        StaticDamageRule, StaticModifierRule, StaticPart, StaticReplacementAction,
+    };
     match ability {
         StaticContinuousAbility::EventReplacement {
-            action: StaticReplacementAction::ReplaceWithBody { body, .. },
+            condition, action, ..
+        } => {
+            condition
+                .as_deref()
+                .is_some_and(static_cond_uses_damage_pairs)
+                || match action {
+                    StaticReplacementAction::ReplaceWithBody { body, .. } => {
+                        body_uses_damage_pairs(body)
+                    }
+                    StaticReplacementAction::ModifyAmount { add, .. } => {
+                        value_expr_uses_damage_pairs(add)
+                    }
+                    _ => false,
+                }
+        }
+        StaticContinuousAbility::DamageRule { rule, .. } => match rule {
+            StaticDamageRule::ModifyDamage {
+                op: StaticDamageOp::AddExpr(e) | StaticDamageOp::PreventUpToExpr(e),
+                ..
+            } => value_expr_uses_damage_pairs(e),
+            StaticDamageRule::ConditionalModifyDamage { condition, op, .. } => {
+                static_cond_uses_damage_pairs(condition)
+                    || matches!(
+                        op,
+                        StaticDamageOp::AddExpr(e) | StaticDamageOp::PreventUpToExpr(e)
+                            if value_expr_uses_damage_pairs(e)
+                    )
+            }
+            _ => false,
+        },
+        StaticContinuousAbility::Modifier { rule, .. } => match rule {
+            StaticModifierRule::ConditionalModifyLifeGain { condition, .. } => {
+                condition_uses_damage_pairs(condition)
+            }
+            StaticModifierRule::OthersEnterWithCountersExpr { amount, .. } => {
+                value_expr_uses_damage_pairs(amount)
+            }
+            _ => false,
+        },
+        StaticContinuousAbility::CastPermission {
+            permission: CastPermissionRule::GraveyardSelfConditional { condition },
             ..
-        } => body_uses_damage_pairs(body),
+        } => condition_uses_damage_pairs(condition),
         StaticContinuousAbility::Battlefield { parts, .. } => {
             parts.0.iter().any(|part| match part {
                 StaticPart::GrantActivated(ab)
@@ -177,7 +290,21 @@ fn static_uses_damage_pairs(ability: &crate::characteristics::StaticContinuousAb
                 }
                 StaticPart::GrantTrigger(trig) => {
                     trigger_event_uses_damage_pairs(&trig.condition.event)
+                        || trig
+                            .condition
+                            .intervening_if
+                            .as_ref()
+                            .is_some_and(trigger_cond_uses_damage_pairs)
                         || body_uses_damage_pairs(&trig.body)
+                }
+                StaticPart::ModifyPT(pair) | StaticPart::SetPT(pair) => {
+                    matches!(
+                        &pair.power,
+                        NumericExpression::Eval(e) if value_expr_uses_damage_pairs(e)
+                    ) || matches!(
+                        &pair.toughness,
+                        NumericExpression::Eval(e) if value_expr_uses_damage_pairs(e)
+                    )
                 }
                 _ => false,
             })
@@ -190,19 +317,57 @@ fn program_tree_uses_damage_pairs(program: &Program) -> bool {
     let direct = definition_or_token_matches(program, |p| {
         p.triggered.iter().any(|ability| {
             trigger_event_uses_damage_pairs(&ability.condition.event)
+                || ability
+                    .condition
+                    .intervening_if
+                    .as_ref()
+                    .is_some_and(trigger_cond_uses_damage_pairs)
                 || body_uses_damage_pairs(&ability.body)
         }) || p
             .activated
             .iter()
             .any(|ability| body_uses_damage_pairs(&ability.body))
+            || p.activation_modes.values().any(|modes| {
+                modes.prefix.as_deref().is_some_and(body_uses_damage_pairs)
+                    || modes.suffix.as_deref().is_some_and(body_uses_damage_pairs)
+                    || modes.additional.iter().any(body_uses_damage_pairs)
+            })
             || match &p.kind {
-                ProgramKind::Spell(spell) => body_uses_damage_pairs(&spell.body),
+                ProgramKind::Spell(spell) => {
+                    body_uses_damage_pairs(&spell.body)
+                        || spell.modes.as_ref().is_some_and(|modes| {
+                            modes.prefix.as_deref().is_some_and(body_uses_damage_pairs)
+                                || modes.suffix.as_deref().is_some_and(body_uses_damage_pairs)
+                                || modes.additional.iter().any(body_uses_damage_pairs)
+                        })
+                }
                 ProgramKind::Permanent(_) => false,
             }
             || p.continuous
                 .iter()
                 .chain(&p.additional_battlefield_abilities)
                 .any(static_uses_damage_pairs)
+            || p.static_conditions
+                .values()
+                .any(static_cond_uses_damage_pairs)
+            || p.activation_restrictions
+                .values()
+                .any(restriction_uses_damage_pairs)
+            || p.conditional_cost.as_ref().is_some_and(|cc| match cc {
+                crate::program::ConditionalCastCost::Alternative { condition, .. } => condition
+                    .as_deref()
+                    .is_some_and(condition_uses_damage_pairs),
+                crate::program::ConditionalCastCost::Condition { condition, .. } => {
+                    condition_uses_damage_pairs(condition)
+                }
+                _ => false,
+            })
+            || p.cast_timing.as_ref().is_some_and(|r| match r {
+                crate::program::CastTimingRestriction::Condition(c) => {
+                    condition_uses_damage_pairs(c)
+                }
+                _ => false,
+            })
             || p.zone_replacements.iter().any(|rep| {
                 matches!(
                     rep.subject,
@@ -402,6 +567,12 @@ fn body_uses_damage_dealt_by(body: &crate::program::ExecutableBody) -> bool {
         Instruction::CreateTemporaryRule { rule, .. } => match rule.as_ref() {
             crate::program::TemporaryRuleKind::TemporaryStatic(ab) => {
                 static_uses_damage_dealt_by(ab)
+            }
+            crate::program::TemporaryRuleKind::ConditionalTemporaryStatic {
+                condition,
+                ability,
+            } => {
+                static_cond_uses_damage_dealt_by(condition) || static_uses_damage_dealt_by(ability)
             }
             _ => false,
         },
@@ -863,6 +1034,7 @@ impl EffectWindow {
             let previous = before.view();
             let ctx = crate::characteristics::WorldEvalCtx {
                 active_player: previous.window.active_player(),
+                step: self.current_step,
                 participants: previous.window.participants(),
                 life: Some(previous.life),
                 combat: self.combat.as_ref(),
@@ -886,23 +1058,17 @@ impl EffectWindow {
             let has_others_tapped_rule = previous.evaluated.objects.values().any(|perm| {
                 perm.zone == ObjectZone::Battlefield
                     && perm.object != object
-                    && perm.has_battlefield_rule(|rule| {
+                    && Self::permanent_has_restriction(perm, |rule| {
                         matches!(
                             rule,
-                            crate::characteristics::StaticContinuousAbility::Restriction {
-                                rule: crate::characteristics::StaticRestriction::OthersEnterTapped(
-                                    _
-                                ),
-                                ..
-                            }
+                            crate::characteristics::StaticRestriction::OthersEnterTapped(_)
                         )
                     })
             }) || self.temporary_rules.iter().any(|active| {
-                matches!(
-                    &active.rule,
-                    crate::program::TemporaryRuleKind::TemporaryStatic(ab)
-                        if matches!(
-                            ab.as_ref(),
+                self.active_temporary_static(active, &previous.evaluated)
+                    .is_some_and(|ab| {
+                        matches!(
+                            ab,
                             crate::characteristics::StaticContinuousAbility::Restriction {
                                 rule: crate::characteristics::StaticRestriction::OthersEnterTapped(
                                     _
@@ -910,107 +1076,78 @@ impl EffectWindow {
                                 ..
                             }
                         )
-                )
+                    })
             });
             if has_others_tapped_rule {
                 let evaluated_now = self.evaluated_characteristics()?;
-                tapped =
-                    previous.evaluated.objects.values().any(|perm| {
-                        if perm.zone != ObjectZone::Battlefield || perm.object == object {
-                            return false;
-                        }
-                        let Some(perm_ctrl) = perm.controller else {
-                            return false;
-                        };
-                        perm.printed_text
-                        .continuous
-                        .iter()
-                        .chain(&perm.printed_text.additional_battlefield_abilities)
-                        .any(|ability| {
-                            let active = perm.abilities.continuous == Some(ability.id())
-                                || perm
-                                    .abilities
-                                    .additional_battlefield_abilities
-                                    .contains(&ability.id());
-                            if !active {
-                                return false;
-                            }
-                            if let crate::characteristics::StaticContinuousAbility::Restriction {
-                                rule:
-                                    crate::characteristics::StaticRestriction::OthersEnterTapped(
-                                        selector,
-                                    ),
-                                ..
-                            } = ability
-                            {
-                                crate::characteristics::selector_matches_permanent(
-                                    self.window.cards(),
-                                    &evaluated_now,
-                                    perm.object,
-                                    perm_ctrl,
-                                    selector,
-                                    object,
-                                    &self.name_rules,
-                                )
-                            } else {
-                                false
-                            }
-                        })
-                    })
-                        || self.temporary_rules.iter().any(|active| {
-                            let crate::program::TemporaryRuleKind::TemporaryStatic(ab) =
-                                &active.rule
-                            else {
-                                return false;
-                            };
-                            let crate::characteristics::StaticContinuousAbility::Restriction {
-                                rule:
-                                    crate::characteristics::StaticRestriction::OthersEnterTapped(
-                                        selector,
-                                    ),
-                                ..
-                            } = ab.as_ref()
-                            else {
-                                return false;
-                            };
-                            let src = active.source_object.unwrap_or(object);
+                tapped = previous.evaluated.objects.values().any(|perm| {
+                    if perm.zone != ObjectZone::Battlefield || perm.object == object {
+                        return false;
+                    }
+                    let Some(perm_ctrl) = perm.controller else {
+                        return false;
+                    };
+                    Self::permanent_has_restriction(perm, |rule| {
+                        if let crate::characteristics::StaticRestriction::OthersEnterTapped(
+                            selector,
+                        ) = rule
+                        {
                             crate::characteristics::selector_matches_permanent(
                                 self.window.cards(),
                                 &evaluated_now,
-                                src,
-                                active.controller,
+                                perm.object,
+                                perm_ctrl,
                                 selector,
                                 object,
                                 &self.name_rules,
                             )
-                        });
+                        } else {
+                            false
+                        }
+                    })
+                }) || self.temporary_rules.iter().any(|active| {
+                    let Some(crate::characteristics::StaticContinuousAbility::Restriction {
+                        rule:
+                            crate::characteristics::StaticRestriction::OthersEnterTapped(selector),
+                        ..
+                    }) = self.active_temporary_static(active, &previous.evaluated)
+                    else {
+                        return false;
+                    };
+                    let src = active.source_object.unwrap_or(object);
+                    crate::characteristics::selector_matches_permanent(
+                        self.window.cards(),
+                        &evaluated_now,
+                        src,
+                        active.controller,
+                        selector,
+                        object,
+                        &self.name_rules,
+                    )
+                });
             }
         }
         if tapped {
             let previous = before.view();
             let has_enter_untapped_rule = previous.evaluated.objects.values().any(|perm| {
                 perm.zone == ObjectZone::Battlefield
-                    && perm.has_battlefield_rule(|rule| {
+                    && Self::permanent_has_restriction(perm, |rule| {
                         matches!(
                             rule,
+                            crate::characteristics::StaticRestriction::EnterUntapped(_)
+                        )
+                    })
+            }) || self.temporary_rules.iter().any(|active| {
+                self.active_temporary_static(active, &previous.evaluated)
+                    .is_some_and(|ab| {
+                        matches!(
+                            ab,
                             crate::characteristics::StaticContinuousAbility::Restriction {
                                 rule: crate::characteristics::StaticRestriction::EnterUntapped(_),
                                 ..
                             }
                         )
                     })
-            }) || self.temporary_rules.iter().any(|active| {
-                matches!(
-                    &active.rule,
-                    crate::program::TemporaryRuleKind::TemporaryStatic(ab)
-                        if matches!(
-                            ab.as_ref(),
-                            crate::characteristics::StaticContinuousAbility::Restriction {
-                                rule: crate::characteristics::StaticRestriction::EnterUntapped(_),
-                                ..
-                            }
-                        )
-                )
             });
             if has_enter_untapped_rule {
                 let evaluated_now = self.evaluated_characteristics()?;
@@ -1021,49 +1158,28 @@ impl EffectWindow {
                     let Some(perm_ctrl) = perm.controller else {
                         return false;
                     };
-                    perm.printed_text
-                        .continuous
-                        .iter()
-                        .chain(&perm.printed_text.additional_battlefield_abilities)
-                        .any(|ability| {
-                            let active = perm.abilities.continuous == Some(ability.id())
-                                || perm
-                                    .abilities
-                                    .additional_battlefield_abilities
-                                    .contains(&ability.id());
-                            if !active {
-                                return false;
-                            }
-                            if let crate::characteristics::StaticContinuousAbility::Restriction {
-                                rule:
-                                    crate::characteristics::StaticRestriction::EnterUntapped(
-                                        selector,
-                                    ),
-                                ..
-                            } = ability
-                            {
-                                crate::characteristics::selector_matches_permanent(
-                                    self.window.cards(),
-                                    &evaluated_now,
-                                    perm.object,
-                                    perm_ctrl,
-                                    selector,
-                                    object,
-                                    &self.name_rules,
-                                )
-                            } else {
-                                false
-                            }
-                        })
+                    Self::permanent_has_restriction(perm, |rule| {
+                        if let crate::characteristics::StaticRestriction::EnterUntapped(selector) =
+                            rule
+                        {
+                            crate::characteristics::selector_matches_permanent(
+                                self.window.cards(),
+                                &evaluated_now,
+                                perm.object,
+                                perm_ctrl,
+                                selector,
+                                object,
+                                &self.name_rules,
+                            )
+                        } else {
+                            false
+                        }
+                    })
                 }) || self.temporary_rules.iter().any(|active| {
-                    let crate::program::TemporaryRuleKind::TemporaryStatic(ab) = &active.rule
-                    else {
-                        return false;
-                    };
-                    let crate::characteristics::StaticContinuousAbility::Restriction {
+                    let Some(crate::characteristics::StaticContinuousAbility::Restriction {
                         rule: crate::characteristics::StaticRestriction::EnterUntapped(selector),
                         ..
-                    } = ab.as_ref()
+                    }) = self.active_temporary_static(active, &previous.evaluated)
                     else {
                         return false;
                     };
@@ -1244,6 +1360,7 @@ impl EffectWindow {
                         } => {
                             let ctx = crate::characteristics::WorldEvalCtx {
                                 active_player: previous.window.active_player(),
+                                step: self.current_step,
                                 participants: previous.window.participants(),
                                 life: Some(previous.life),
                                 combat: self.combat.as_ref(),

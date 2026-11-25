@@ -325,6 +325,10 @@ pub enum SubtypeFilter {
     Land(LandType),
     /// Object lacks this land subtype.
     NotLand(LandType),
+    /// Object has at least one land subtype in this `LandType::bit()` bitmask.
+    AnyLandMask(u32),
+    /// Object lacks every land subtype in this `LandType::bit()` bitmask.
+    NotLandMask(u32),
     /// Object has this artifact subtype (for example Equipment, Treasure, Food, Clue).
     Artifact(ArtifactSubtype),
     /// Object has this enchantment subtype (for example Saga, Curse).
@@ -358,6 +362,8 @@ impl SubtypeFilter {
             | Self::OutsideNamedSlots
             | Self::Land(_)
             | Self::NotLand(_)
+            | Self::AnyLandMask(_)
+            | Self::NotLandMask(_)
             | Self::Artifact(_)
             | Self::Enchantment(_)
             | Self::Planeswalker(_)
@@ -392,6 +398,8 @@ impl SubtypeFilter {
             | Self::OutsideNamedSlots
             | Self::Land(_)
             | Self::NotLand(_)
+            | Self::AnyLandMask(_)
+            | Self::NotLandMask(_)
             | Self::Artifact(_)
             | Self::Enchantment(_)
             | Self::Planeswalker(_)
@@ -426,6 +434,8 @@ pub enum ControllerFilter {
     ActivePlayer,
     /// Controlled by the defending player in combat (or opponent of active player if none).
     DefendingPlayer,
+    /// Controlled by the controller of the first target permanent in a fixed-target sequence.
+    FirstTargetController,
     /// Controlled by this exact player.
     Player(SeatId),
 }
@@ -618,6 +628,16 @@ impl ObjectFilterFlags {
     pub const DIED_THIS_TURN: Self = Self(1 << 16);
     /// Matches the color chosen as the ability source entered the battlefield.
     pub const MATCHES_SOURCE_ENTRY_COLOR: Self = Self(1 << 17);
+    /// Non-commander object (excludes commanders).
+    pub const NOT_COMMANDER: Self = Self(1 << 18);
+    /// Matches the creature subtype chosen as the ability source entered the battlefield.
+    pub const MATCHES_SOURCE_ENTRY_TYPE: Self = Self(1 << 19);
+    /// Matches the card type chosen during resolution or on source entry.
+    pub const MATCHES_CHOSEN_CARD_TYPE: Self = Self(1 << 20);
+    /// Matches the card name chosen during resolution or on source entry.
+    pub const MATCHES_CHOSEN_NAME: Self = Self(1 << 21);
+    /// Creature that did not attack this turn.
+    pub const DID_NOT_ATTACK_THIS_TURN: Self = Self(1 << 22);
 
     #[must_use]
     pub const fn union(self, other: Self) -> Self {
@@ -640,6 +660,7 @@ pub struct ObjectClause {
     pub forbidden_supertypes: SupertypeMask,
     pub subtypes: SubtypeFilter,
     pub controller: ControllerFilter,
+    pub owner: ControllerFilter,
     pub source_relation: SourceRelation,
     pub color: ObjectColorFilter,
     pub combat: CombatFilter,
@@ -664,6 +685,7 @@ impl ObjectClause {
             forbidden_supertypes: SupertypeMask::EMPTY,
             subtypes: SubtypeFilter::Any,
             controller: ControllerFilter::Any,
+            owner: ControllerFilter::Any,
             source_relation: SourceRelation::Any,
             color: ObjectColorFilter::Any,
             combat: CombatFilter::Any,
@@ -831,6 +853,12 @@ impl ObjectClause {
     #[must_use]
     pub const fn of_player(mut self, seat: SeatId) -> Self {
         self.controller = ControllerFilter::Player(seat);
+        self
+    }
+
+    #[must_use]
+    pub const fn with_owner(mut self, owner: ControllerFilter) -> Self {
+        self.owner = owner;
         self
     }
 
@@ -1070,6 +1098,9 @@ impl ObjectClause {
         if matches!(self.controller, ControllerFilter::RelatedPlayer) {
             self.controller = ControllerFilter::Player(seat);
         }
+        if matches!(self.owner, ControllerFilter::RelatedPlayer) {
+            self.owner = ControllerFilter::Player(seat);
+        }
         self
     }
 
@@ -1134,6 +1165,14 @@ impl ObjectClause {
             SubtypeFilter::MatchesChosenSlot(_) => false,
             SubtypeFilter::Land(kind) => p.current_land_subtypes.contains(&kind),
             SubtypeFilter::NotLand(kind) => !p.current_land_subtypes.contains(&kind),
+            SubtypeFilter::AnyLandMask(mask) => p
+                .current_land_subtypes
+                .iter()
+                .any(|lt| (mask & lt.bit()) != 0),
+            SubtypeFilter::NotLandMask(mask) => p
+                .current_land_subtypes
+                .iter()
+                .all(|lt| (mask & lt.bit()) == 0),
             SubtypeFilter::Artifact(kind) => p.current_artifact_subtypes.contains(&kind),
             SubtypeFilter::Enchantment(kind) => p.current_enchantment_subtypes.contains(&kind),
             SubtypeFilter::Planeswalker(kind) => p.current_planeswalker_subtypes.contains(&kind),
@@ -1172,6 +1211,12 @@ impl ObjectClause {
                 .current_enchantment_subtypes
                 .contains(&EnchantmentSubtype::Saga)
         {
+            return false;
+        }
+        if self.flags.contains(ObjectFilterFlags::COMMANDER_ONLY) && p.commander_owner.is_none() {
+            return false;
+        }
+        if self.flags.contains(ObjectFilterFlags::NOT_COMMANDER) && p.commander_owner.is_some() {
             return false;
         }
         let power_ok = match self.power {
@@ -1478,6 +1523,14 @@ impl ObjectFilter {
         match self {
             Self::Clause(a) => Self::Clause(a.of_player(seat)),
             Self::Either(a, b) => Self::Either(a.of_player(seat), b.of_player(seat)),
+        }
+    }
+
+    #[must_use]
+    pub const fn with_owner(self, owner: ControllerFilter) -> Self {
+        match self {
+            Self::Clause(a) => Self::Clause(a.with_owner(owner)),
+            Self::Either(a, b) => Self::Either(a.with_owner(owner), b.with_owner(owner)),
         }
     }
 
@@ -2077,12 +2130,13 @@ impl ObjectFilter {
     /// True if any clause references an unbound related player.
     #[must_use]
     pub const fn has_related_player(self) -> bool {
+        const fn has_rp(c: ObjectClause) -> bool {
+            matches!(c.controller, ControllerFilter::RelatedPlayer)
+                || matches!(c.owner, ControllerFilter::RelatedPlayer)
+        }
         match self {
-            Self::Clause(a) => matches!(a.controller, ControllerFilter::RelatedPlayer),
-            Self::Either(a, b) => {
-                matches!(a.controller, ControllerFilter::RelatedPlayer)
-                    || matches!(b.controller, ControllerFilter::RelatedPlayer)
-            }
+            Self::Clause(a) => has_rp(a),
+            Self::Either(a, b) => has_rp(a) || has_rp(b),
         }
     }
 
@@ -2093,6 +2147,9 @@ impl ObjectFilter {
             matches!(
                 c.controller,
                 ControllerFilter::TargetPlayer | ControllerFilter::TargetOpponent
+            ) || matches!(
+                c.owner,
+                ControllerFilter::TargetPlayer | ControllerFilter::TargetOpponent
             )
         }
         match self {
@@ -2101,29 +2158,65 @@ impl ObjectFilter {
         }
     }
 
-    /// True if any clause dynamically compares power, toughness, or mana value against the resolving target permanent.
+    /// True if any clause references `ControllerFilter::FirstTargetController`.
+    #[must_use]
+    pub const fn uses_first_target_controller(self) -> bool {
+        const fn uses_ftc(c: ObjectClause) -> bool {
+            matches!(c.controller, ControllerFilter::FirstTargetController)
+                || matches!(c.owner, ControllerFilter::FirstTargetController)
+        }
+        match self {
+            Self::Clause(a) => uses_ftc(a),
+            Self::Either(a, b) => uses_ftc(a) || uses_ftc(b),
+        }
+    }
+
+    /// Bind `ControllerFilter::FirstTargetController` to a concrete player seat.
+    #[must_use]
+    pub const fn bind_first_target_controller(self, seat: SeatId) -> Self {
+        const fn bind(mut c: ObjectClause, seat: SeatId) -> ObjectClause {
+            if matches!(c.controller, ControllerFilter::FirstTargetController) {
+                c.controller = ControllerFilter::Player(seat);
+            }
+            if matches!(c.owner, ControllerFilter::FirstTargetController) {
+                c.owner = ControllerFilter::Player(seat);
+            }
+            c
+        }
+        match self {
+            Self::Clause(a) => Self::Clause(bind(a, seat)),
+            Self::Either(a, b) => Self::Either(bind(a, seat), bind(b, seat)),
+        }
+    }
+
+    /// True if any clause dynamically compares power, toughness, or mana value against the resolving target permanent,
+    /// or references the first target permanent's controller.
     #[must_use]
     pub const fn uses_target_permanent(self) -> bool {
         const fn clause_uses(c: ObjectClause) -> bool {
-            matches!(
-                c.power,
-                PowerFilter::CompareAnchor {
-                    anchor: DynamicStatAnchor::TargetPower,
-                    ..
-                }
-            ) || matches!(
-                c.toughness,
-                ToughnessFilter::CompareAnchor {
-                    anchor: DynamicStatAnchor::TargetPower,
-                    ..
-                }
-            ) || matches!(
-                c.mana_value,
-                ManaValueFilter::CompareAnchor {
-                    anchor: DynamicStatAnchor::TargetPower,
-                    ..
-                }
-            )
+            matches!(c.controller, ControllerFilter::FirstTargetController)
+                || matches!(c.owner, ControllerFilter::FirstTargetController)
+                || matches!(
+                    c.power,
+                    PowerFilter::CompareAnchor {
+                        anchor: DynamicStatAnchor::TargetPower,
+                        ..
+                    }
+                )
+                || matches!(
+                    c.toughness,
+                    ToughnessFilter::CompareAnchor {
+                        anchor: DynamicStatAnchor::TargetPower,
+                        ..
+                    }
+                )
+                || matches!(
+                    c.mana_value,
+                    ManaValueFilter::CompareAnchor {
+                        anchor: DynamicStatAnchor::TargetPower,
+                        ..
+                    }
+                )
         }
         match self {
             Self::Clause(a) => clause_uses(a),
@@ -2264,6 +2357,12 @@ impl ObjectFilter {
             ) {
                 c.controller = ControllerFilter::Player(seat);
             }
+            if matches!(
+                c.owner,
+                ControllerFilter::TargetPlayer | ControllerFilter::TargetOpponent
+            ) {
+                c.owner = ControllerFilter::Player(seat);
+            }
             c
         }
         match self {
@@ -2275,12 +2374,13 @@ impl ObjectFilter {
     /// True if any clause references a concrete player seat.
     #[must_use]
     pub const fn has_concrete_player(self) -> bool {
+        const fn has_cp(c: ObjectClause) -> bool {
+            matches!(c.controller, ControllerFilter::Player(_))
+                || matches!(c.owner, ControllerFilter::Player(_))
+        }
         match self {
-            Self::Clause(a) => matches!(a.controller, ControllerFilter::Player(_)),
-            Self::Either(a, b) => {
-                matches!(a.controller, ControllerFilter::Player(_))
-                    || matches!(b.controller, ControllerFilter::Player(_))
-            }
+            Self::Clause(a) => has_cp(a),
+            Self::Either(a, b) => has_cp(a) || has_cp(b),
         }
     }
 
@@ -2506,6 +2606,15 @@ impl ObjectFilter {
             {
                 return false;
             }
+            if c.flags.contains(ObjectFilterFlags::COMMANDER_ONLY)
+                && spell.commander_owner.is_none()
+            {
+                return false;
+            }
+            if c.flags.contains(ObjectFilterFlags::NOT_COMMANDER) && spell.commander_owner.is_some()
+            {
+                return false;
+            }
             if !c.color.matches(&spell.colors) {
                 return false;
             }
@@ -2521,6 +2630,12 @@ impl ObjectFilter {
                     .all(|kind| !spell.creature_subtypes.contains(kind)),
                 SubtypeFilter::Land(kind) => spell.land_subtypes.contains(&kind),
                 SubtypeFilter::NotLand(kind) => !spell.land_subtypes.contains(&kind),
+                SubtypeFilter::AnyLandMask(mask) => {
+                    spell.land_subtypes.iter().any(|lt| (mask & lt.bit()) != 0)
+                }
+                SubtypeFilter::NotLandMask(mask) => {
+                    spell.land_subtypes.iter().all(|lt| (mask & lt.bit()) == 0)
+                }
                 SubtypeFilter::Artifact(kind) => spell.artifact_subtypes.contains(&kind),
                 SubtypeFilter::Enchantment(kind) => spell.enchantment_subtypes.contains(&kind),
                 SubtypeFilter::Planeswalker(kind) => spell.planeswalker_subtypes.contains(&kind),
@@ -2591,10 +2706,30 @@ impl ObjectFilter {
                 | ControllerFilter::TargetPlayer
                 | ControllerFilter::TargetOpponent
                 | ControllerFilter::ActivePlayer
-                | ControllerFilter::DefendingPlayer => false,
+                | ControllerFilter::DefendingPlayer
+                | ControllerFilter::FirstTargetController => false,
                 ControllerFilter::Player(seat) => object.object.controller() == Some(seat),
             };
             if !controller_ok {
+                return false;
+            }
+            let owner_ok = match c.owner {
+                ControllerFilter::Any => true,
+                ControllerFilter::You | ControllerFilter::OwnerYou => {
+                    object.object.owner() == controller
+                }
+                ControllerFilter::Opponent
+                | ControllerFilter::NotYou
+                | ControllerFilter::OwnerOpponent => object.object.owner() != controller,
+                ControllerFilter::RelatedPlayer
+                | ControllerFilter::TargetPlayer
+                | ControllerFilter::TargetOpponent
+                | ControllerFilter::ActivePlayer
+                | ControllerFilter::DefendingPlayer
+                | ControllerFilter::FirstTargetController => false,
+                ControllerFilter::Player(seat) => object.object.owner() == seat,
+            };
+            if !owner_ok {
                 return false;
             }
             if let Some(expected_token) = c.token
@@ -2628,6 +2763,16 @@ impl ObjectFilter {
                 && !object
                     .enchantment_subtypes
                     .contains(&EnchantmentSubtype::Saga)
+            {
+                return false;
+            }
+            if c.flags.contains(ObjectFilterFlags::COMMANDER_ONLY)
+                && object.commander_owner.is_none()
+            {
+                return false;
+            }
+            if c.flags.contains(ObjectFilterFlags::NOT_COMMANDER)
+                && object.commander_owner.is_some()
             {
                 return false;
             }
@@ -2670,6 +2815,12 @@ impl ObjectFilter {
                     .all(|kind| !object.creature_subtypes.contains(kind)),
                 SubtypeFilter::Land(kind) => object.land_subtypes.contains(&kind),
                 SubtypeFilter::NotLand(kind) => !object.land_subtypes.contains(&kind),
+                SubtypeFilter::AnyLandMask(mask) => {
+                    object.land_subtypes.iter().any(|lt| (mask & lt.bit()) != 0)
+                }
+                SubtypeFilter::NotLandMask(mask) => {
+                    object.land_subtypes.iter().all(|lt| (mask & lt.bit()) == 0)
+                }
                 SubtypeFilter::Artifact(kind) => object.artifact_subtypes.contains(&kind),
                 SubtypeFilter::Enchantment(kind) => object.enchantment_subtypes.contains(&kind),
                 SubtypeFilter::Planeswalker(kind) => object.planeswalker_subtypes.contains(&kind),
@@ -2772,6 +2923,8 @@ pub enum EffectSubject {
     LastMoved,
     /// Every battlefield permanent matching this composable filter at resolution.
     Matching(ObjectFilter),
+    /// The targeted permanent plus every other battlefield permanent matching this filter with the same name as the target.
+    TargetAndSameNameMatching(ObjectFilter),
 }
 
 impl EffectSubject {
@@ -2779,14 +2932,16 @@ impl EffectSubject {
     #[must_use]
     pub const fn chosen_type_slot(self) -> Option<CreatureTypeSlot> {
         match self {
-            Self::Matching(filter) => filter.chosen_type_slot(),
+            Self::Matching(filter) | Self::TargetAndSameNameMatching(filter) => {
+                filter.chosen_type_slot()
+            }
             _ => None,
         }
     }
 
     /// Rewrite printed creature-type words when a text-changing effect applies.
     pub(crate) fn rewrite_creature_type(&mut self, from: CreatureTypeId, to: CreatureTypeId) {
-        if let Self::Matching(filter) = self {
+        if let Self::Matching(filter) | Self::TargetAndSameNameMatching(filter) = self {
             filter.rewrite_creature_type(from, to);
         }
     }
@@ -2797,7 +2952,9 @@ impl EffectSubject {
         vocabulary: &CreatureTypeVocabulary,
     ) -> Result<(), DefinitionError> {
         match self {
-            Self::Matching(filter) => filter.validate_vocabulary(vocabulary),
+            Self::Matching(filter) | Self::TargetAndSameNameMatching(filter) => {
+                filter.validate_vocabulary(vocabulary)
+            }
             _ => Ok(()),
         }
     }
