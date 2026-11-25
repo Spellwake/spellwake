@@ -72,6 +72,12 @@ export interface StackTriggerFrameInput {
   typeLabel: string;
   effect: string;
   artUrl?: string | null;
+  /**
+   * Whether `artUrl` is already cropped artwork (`"art"`, default) or a full
+   * 5:7 printed card face scan (`"full_card"`) that should be cropped into the
+   * standard Magic artwork window.
+   */
+  artSourceKind?: "art" | "full_card";
   illustrated?: boolean;
   frameAccent?: CardFrameAccent;
   idPrefix?: string;
@@ -505,6 +511,9 @@ function renderWrappedRichLines(
           `<text x="${cursorX.toFixed(1)}" y="${baselineY.toFixed(1)}" font-family="Baskerville, Georgia, 'Times New Roman', serif" font-size="${fontSize.toFixed(1)}" fill="${fill}"${fontStyle} xml:space="preserve">${escapeXml(seg.value)}</text>`,
         );
         cursorX += estimateTextWidth(seg.value, fontSize);
+        if (seg.value.endsWith(" ")) {
+          cursorX += fontSize * 0.16;
+        }
       }
     }
   });
@@ -1013,6 +1022,14 @@ function renderStackTriggerSvg(input: StackTriggerFrameInput): string {
   const pinGradId = `${prefix}-pin-grad`;
   const trimmedEffect = input.effect.trim();
   const illustrated = Boolean(input.illustrated && input.artUrl && trimmedEffect.length <= 100);
+  const titleSize =
+    input.name.length > 32
+      ? 38
+      : input.name.length > 26
+        ? 44
+        : input.name.length > 20
+          ? 50
+          : 56;
 
   const typeY = illustrated ? 912 : 196;
   const rulesY = typeY + 104;
@@ -1021,28 +1038,65 @@ function renderStackTriggerSvg(input: StackTriggerFrameInput): string {
   const padX = 36;
   const padY = 34;
   const innerW = 934 - padX * 2;
+  const paragraphs = trimmedEffect
+    .replace(/\r\n/g, "\n")
+    .split("\n")
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0);
   let triggerFontSize = trimmedEffect.length <= 60 ? 74 : trimmedEffect.length <= 140 ? 66 : 62;
   let triggerTextSvg = "";
-  for (let attempt = 0; attempt < 10; attempt += 1) {
+  for (let attempt = 0; attempt < 16; attempt += 1) {
     const lh = triggerFontSize * 1.24;
-    const wrapped = wrapParagraph(trimmedEffect, innerW, triggerFontSize, false);
-    const totalH = wrapped.length * lh;
-    if (totalH <= rulesH - padY * 2 || triggerFontSize <= 32) {
-      const startY =
+    const paraGap = triggerFontSize * 0.42;
+    const blocks: WrappedLine[][] = [];
+    let totalH = 0;
+    for (let idx = 0; idx < paragraphs.length; idx += 1) {
+      const wrapped = wrapParagraph(paragraphs[idx] ?? "", innerW, triggerFontSize, false);
+      blocks.push(wrapped);
+      totalH += wrapped.length * lh + (idx > 0 ? paraGap : 0);
+    }
+    if (totalH <= rulesH - padY * 2 || triggerFontSize <= 24) {
+      let cursorY =
         illustrated && totalH < (rulesH - padY * 2) * 0.55
           ? rulesY + (rulesH - totalH) / 2 + triggerFontSize * 0.85
           : rulesY + padY + triggerFontSize * 0.88;
-      triggerTextSvg = renderWrappedRichLines(
-        wrapped,
-        64 + padX,
-        startY,
-        triggerFontSize,
-        lh,
-        "#f7f2e8",
-      );
+      const renderedBlocks: string[] = [];
+      for (const block of blocks) {
+        renderedBlocks.push(
+          renderWrappedRichLines(
+            block,
+            64 + padX,
+            cursorY,
+            triggerFontSize,
+            lh,
+            "#f7f2e8",
+          ),
+        );
+        cursorY += block.length * lh + paraGap;
+      }
+      triggerTextSvg = renderedBlocks.join("");
       break;
     }
     triggerFontSize -= 3;
+  }
+
+  let artSvg = "";
+  if (illustrated) {
+    if (input.artSourceKind === "full_card" && input.artUrl && input.artUrl.trim().length > 0) {
+      // Crop a full 5:7 printed card face cleanly onto its upper artwork window.
+      const fullW = 934 * 1.24;
+      const fullH = fullW * 1.4;
+      const fullX = 64 + (934 - fullW) / 2;
+      const fullY = 182 - fullH * 0.116;
+      artSvg = `<g clip-path="url(#${clipId})">
+        <rect x="64" y="182" width="934" height="718" fill="#0d1117"/>
+        <image href="${escapeXml(input.artUrl)}" x="${fullX.toFixed(1)}" y="${fullY.toFixed(1)}" width="${fullW.toFixed(1)}" height="${fullH.toFixed(1)}" preserveAspectRatio="xMidYMid slice"/>
+      </g>
+      <rect x="64" y="182" width="934" height="718" rx="12" fill="none" stroke="url(#${pinGradId})" stroke-width="4"/>`;
+    } else {
+      artSvg = `${renderArtWindow(input.artUrl, 64, 182, 934, 718, 0, 0, 1, palette, clipId)}
+         <rect x="64" y="182" width="934" height="718" rx="12" fill="none" stroke="url(#${pinGradId})" stroke-width="4"/>`;
+    }
   }
 
   return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${CARD_WIDTH} ${CARD_HEIGHT}" width="${CARD_WIDTH}" height="${CARD_HEIGHT}" style="display:block;width:100%;height:100%">
@@ -1063,14 +1117,9 @@ function renderStackTriggerSvg(input: StackTriggerFrameInput): string {
 
   <!-- Name Band -->
   <rect x="64" y="66" width="934" height="106" rx="18" fill="#181c24" stroke="url(#${pinGradId})" stroke-width="4.5"/>
-  <text x="102" y="138" font-family="Baskerville, Georgia, serif" font-weight="700" font-size="56" fill="#faf5ec">${escapeXml(input.name)}</text>
+  <text x="102" y="138" font-family="Baskerville, Georgia, serif" font-weight="700" font-size="${titleSize}" fill="#faf5ec">${escapeXml(input.name)}</text>
 
-  ${
-    illustrated
-      ? `${renderArtWindow(input.artUrl, 64, 182, 934, 718, 0, 0, 1, palette, clipId)}
-         <rect x="64" y="182" width="934" height="718" rx="12" fill="none" stroke="url(#${pinGradId})" stroke-width="4"/>`
-      : ""
-  }
+  ${artSvg}
 
   <!-- Type Label Band -->
   <rect x="64" y="${typeY}" width="934" height="90" rx="16" fill="#1e2430" stroke="url(#${pinGradId})" stroke-width="4"/>

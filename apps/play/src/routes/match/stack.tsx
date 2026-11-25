@@ -13,7 +13,12 @@ import type {
   PlayerObject,
   PlayerSnapshot,
 } from "@spellwake/application-contracts";
-import { CompactSpellStack, type StackEntry } from "@spellwake/ui";
+import {
+  CompactSpellStack,
+  resolveFramePalette,
+  type CardFrameAccent,
+  type StackEntry,
+} from "@spellwake/ui";
 import { useAnchors } from "./anchors";
 import type { CardMark, SeatMark } from "./combat";
 import * as s from "./match-table.css";
@@ -28,14 +33,37 @@ const CARD = { width: 178, height: 224 };
 /** How far each older card shows above and to the left of the one in front. */
 const PEEK = { x: 21, y: 20, most: 5 };
 
-/** Shows only the picture of a printed face inside the ability frame's window. */
-const ART_WINDOW = {
-  width: "119%",
-  height: "auto",
-  maxWidth: "none",
-  marginLeft: "-9.5%",
-  marginTop: "-18.3%",
-} as const;
+/** Map a known object's printed characteristics to a stack trigger frame accent. */
+function stackFrameAccent(
+  characteristics:
+    | { name: string; typeLine: string; rulesText: string; manaCost: string | null }
+    | undefined,
+): CardFrameAccent {
+  if (!characteristics) return "gold";
+  const key = resolveFramePalette(
+    {
+      name: characteristics.name,
+      typeLine: characteristics.typeLine,
+      oracleText: characteristics.rulesText,
+      manaCost: characteristics.manaCost,
+    },
+    "auto",
+  ).key;
+  if (
+    key === "W" ||
+    key === "U" ||
+    key === "B" ||
+    key === "R" ||
+    key === "G" ||
+    key === "gold" ||
+    key === "artifact" ||
+    key === "colorless" ||
+    key === "land"
+  ) {
+    return key;
+  }
+  return "gold";
+}
 
 const nameOf = (object: PlayerObject | undefined): string | null =>
   object?.identity.kind === "known"
@@ -361,21 +389,24 @@ export function MatchStack({
         image: { src: face, name, width: 500, height: 700 },
       };
     const known = source?.identity.kind === "known" ? source.identity : null;
+    const frameAccent = stackFrameAccent(known?.characteristics);
     if (isSpell && known)
-      // A spell with no picture: its printed words on the same plain frame.
+      // A spell with no picture: its printed words on the unified stack frame.
       return {
         ...base,
         kind: "ability",
         name: known.characteristics.name,
         typeLabel: known.characteristics.typeLine,
         effect: known.characteristics.rulesText,
+        frameAccent,
       };
     const typeLabel = abilityType(entry.label);
     return {
       ...base,
       kind: "ability",
       name: name ?? entry.label,
-      ...(face ? { art: <img src={face} alt="" style={ART_WINDOW} /> } : {}),
+      ...(face ? { artUrl: face, artSourceKind: "full_card" as const } : {}),
+      frameAccent,
       typeLabel,
       effect: entry.label === typeLabel ? "" : entry.label,
     };
