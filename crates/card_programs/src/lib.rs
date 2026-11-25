@@ -14,6 +14,7 @@ use spellwake_engine::{
 };
 use std::collections::{BTreeMap, BTreeSet};
 
+pub mod catalog_support;
 pub mod commander;
 mod keyword_creatures;
 pub use keyword_creatures::{

@@ -29,6 +29,7 @@ pub mod deletion_workflow;
 pub mod economy_commands;
 pub mod exchange;
 pub mod exchange_reads;
+pub mod formats;
 pub mod game_chat;
 pub mod handoffs;
 mod http_transport;

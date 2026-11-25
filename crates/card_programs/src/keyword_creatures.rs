@@ -248,111 +248,14 @@ impl Registry {
                     .is_none_or(|ids| card.oracle_id.as_ref().is_some_and(|id| ids.contains(id)))
             })
         {
-            let transforming = (profile == Profile::Current && card.layout == "transform")
-                .then(|| {
-                    let indicator = card
-                        .oracle_id
-                        .as_deref()
-                        .and_then(|id| inventory.back_color_indicator(id));
-                    daybound::compile(card, vocabulary, indicator)
-                        .or_else(|| battles::compile(card, inventory, vocabulary))
-                        .or_else(|| disturb::compile(card, vocabulary, indicator))
-                        .or_else(|| transforming::compile(card, vocabulary, indicator))
-                        .or_else(|| {
-                            planeswalkers::compile_transforming(
-                                card,
-                                inventory,
-                                vocabulary,
-                                indicator,
-                                loyalty_source_verified,
-                            )
-                        })
-                        .or_else(|| {
-                            oracle_lowering::compile_transforming(
-                                card,
-                                inventory,
-                                vocabulary,
-                                indicator,
-                                loyalty_source_verified,
-                            )
-                        })
-                })
-                .flatten();
-            let modal_dfc = (profile == Profile::Current && card.layout == "modal_dfc")
-                .then(|| {
-                    let indicator = card
-                        .oracle_id
-                        .as_deref()
-                        .and_then(|id| inventory.back_color_indicator(id));
-                    oracle_lowering::compile_modal_dfc(
-                        card,
-                        inventory,
-                        vocabulary,
-                        indicator,
-                        loyalty_source_verified,
-                    )
-                })
-                .flatten();
-            // The existing compilers read the first side as the base price. Preserve all
-            // printed alternatives on the resulting program for announcement and devotion.
-            let hybrid_face = (profile == Profile::Current && card.faces.len() == 1)
-                .then(|| split_hybrid_cost(card.faces[0].mana_cost.as_deref()?))
-                .flatten();
-            let normalized = hybrid_face.as_ref().map(|(cost, _)| {
-                let mut normal = card.clone();
-                normal.faces[0].mana_cost = Some(cost.clone());
-                normal
-            });
-            let compiler_input = normalized.as_ref().unwrap_or(card);
-            let walker = (profile == Profile::Current)
-                .then(|| {
-                    planeswalkers::compile(
-                        compiler_input,
-                        inventory,
-                        vocabulary,
-                        loyalty_source_verified,
-                    )
-                    .or_else(|| {
-                        oracle_lowering::compile_planeswalker(
-                            compiler_input,
-                            inventory,
-                            vocabulary,
-                            loyalty_source_verified,
-                        )
-                    })
-                })
-                .flatten();
-            let meld = (profile == Profile::Current && card.layout == "meld")
-                .then(|| {
-                    meld::compile(
-                        compiler_input,
-                        inventory,
-                        vocabulary,
-                        loyalty_source_verified,
-                    )
-                })
-                .flatten();
-            let name_restriction = (profile == Profile::Current && card.name == "Nevermore")
-                .then(|| {
-                    innistrad::compile_name_restriction(
-                        compiler_input,
-                        inventory,
-                        &mut nonland_names,
-                    )
-                })
-                .flatten();
-            let definition = walker
-                .or(transforming)
-                .or(modal_dfc)
-                .or(meld)
-                .or(name_restriction)
-                .map_or_else(|| compile(compiler_input, vocabulary, profile), Ok)
-                .map(|mut program| {
-                    if let Some((_, symbols)) = hybrid_face {
-                        program.hybrid_symbols = symbols;
-                    }
-                    program
-                });
+            let definition = compile_card_for_profile(
+                card,
+                inventory,
+                vocabulary,
+                profile,
+                loyalty_source_verified,
+                &mut nonland_names,
+            );
             let binding = match definition {
                 Err(reason) => BindingStatus::Blocked { reason },
                 Ok(mut program) => {
@@ -461,6 +364,161 @@ impl Registry {
         };
         Ok(Self { bindings, coverage })
     }
+}
+
+/// Compile and validate one card using the current rolling compiler pipeline (identical to
+/// `Profile::Current`), without hardcoding a dated October 29 snapshot hash.
+#[inline(never)]
+pub(crate) fn compile_current_card_for_refresh(
+    card: &InventoryCard,
+    inventory: &Inventory,
+    vocabulary: &CreatureTypeVocabulary,
+    nonland_names: &mut Option<std::sync::Arc<spellwake_engine::land::NonlandCardNames>>,
+) -> Result<(), String> {
+    let mut program = Box::new(
+        compile_card_for_profile(
+            card,
+            inventory,
+            vocabulary,
+            Profile::Current,
+            true,
+            nonland_names,
+        )
+        .map_err(str::to_owned)?,
+    );
+    if program.split.is_none() {
+        let primary_name = if program.back_face().is_some()
+            || program.adventure.is_some()
+            || program.prepare_spell.is_some()
+        {
+            card.faces[0].name.clone()
+        } else {
+            card.name.clone()
+        };
+        program.names = ObjectNames::single(
+            EnglishCardName::new(primary_name).map_err(|_| "invalid-english-name".to_owned())?,
+        );
+    }
+    program
+        .validate(vocabulary)
+        .map_err(|err| format!("validation:{err:?}"))?;
+    Ok(())
+}
+
+#[inline(never)]
+fn compile_card_for_profile(
+    card: &InventoryCard,
+    inventory: &Inventory,
+    vocabulary: &CreatureTypeVocabulary,
+    profile: Profile,
+    loyalty_source_verified: bool,
+    nonland_names: &mut Option<std::sync::Arc<spellwake_engine::land::NonlandCardNames>>,
+) -> Result<Program, &'static str> {
+    // The existing compilers read the first side as the base price. Preserve all
+    // printed alternatives on the resulting program for announcement and devotion.
+    let hybrid_face = (profile == Profile::Current && card.faces.len() == 1)
+        .then(|| split_hybrid_cost(card.faces[0].mana_cost.as_deref()?))
+        .flatten();
+    let normalized = hybrid_face.as_ref().map(|(cost, _)| {
+        let mut normal = card.clone();
+        normal.faces[0].mana_cost = Some(cost.clone());
+        normal
+    });
+    let compiler_input = normalized.as_ref().unwrap_or(card);
+
+    let specialized = if profile == Profile::Current {
+        planeswalkers::compile(
+            compiler_input,
+            inventory,
+            vocabulary,
+            loyalty_source_verified,
+        )
+        .or_else(|| {
+            oracle_lowering::compile_planeswalker(
+                compiler_input,
+                inventory,
+                vocabulary,
+                loyalty_source_verified,
+            )
+        })
+        .or_else(|| {
+            if card.layout != "transform" {
+                return None;
+            }
+            let indicator = card
+                .oracle_id
+                .as_deref()
+                .and_then(|id| inventory.back_color_indicator(id));
+            daybound::compile(card, vocabulary, indicator)
+                .or_else(|| battles::compile(card, inventory, vocabulary))
+                .or_else(|| disturb::compile(card, vocabulary, indicator))
+                .or_else(|| transforming::compile(card, vocabulary, indicator))
+                .or_else(|| {
+                    planeswalkers::compile_transforming(
+                        card,
+                        inventory,
+                        vocabulary,
+                        indicator,
+                        loyalty_source_verified,
+                    )
+                })
+                .or_else(|| {
+                    oracle_lowering::compile_transforming(
+                        card,
+                        inventory,
+                        vocabulary,
+                        indicator,
+                        loyalty_source_verified,
+                    )
+                })
+        })
+        .or_else(|| {
+            if card.layout != "modal_dfc" {
+                return None;
+            }
+            let indicator = card
+                .oracle_id
+                .as_deref()
+                .and_then(|id| inventory.back_color_indicator(id));
+            oracle_lowering::compile_modal_dfc(
+                card,
+                inventory,
+                vocabulary,
+                indicator,
+                loyalty_source_verified,
+            )
+        })
+        .or_else(|| {
+            (card.layout == "meld")
+                .then(|| {
+                    meld::compile(
+                        compiler_input,
+                        inventory,
+                        vocabulary,
+                        loyalty_source_verified,
+                    )
+                })
+                .flatten()
+        })
+        .or_else(|| {
+            (card.name == "Nevermore")
+                .then(|| {
+                    innistrad::compile_name_restriction(compiler_input, inventory, nonland_names)
+                })
+                .flatten()
+        })
+    } else {
+        None
+    };
+
+    specialized
+        .map_or_else(|| compile(compiler_input, vocabulary, profile), Ok)
+        .map(|mut program| {
+            if let Some((_, symbols)) = hybrid_face {
+                program.hybrid_symbols = symbols;
+            }
+            program
+        })
 }
 
 fn compile(
