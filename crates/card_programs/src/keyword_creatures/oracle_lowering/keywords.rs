@@ -729,6 +729,49 @@ pub(super) fn lower_keyword(
                 .insert(id, ActivationRestriction::Sorcery);
             Ok(())
         }
+        "transfigure" if !is_spell => {
+            use spellwake_engine::program::SearchBattlefieldPostEntry;
+            let (cost, 0, hybrids, snow) = param
+                .and_then(parse_mana_cost_with_snow)
+                .ok_or("oracle:transfigure-cost")?
+            else {
+                return Err("oracle:transfigure-cost");
+            };
+            let id = ids.activated();
+            if !hybrids.is_empty() {
+                program.activation_hybrid_symbols.insert(id, hybrids);
+            }
+            if let Some(nz_snow) = NonZeroU8::new(snow) {
+                program
+                    .extra_activation_costs
+                    .insert(id, vec![ExtraActivationCost::PaySnowMana(nz_snow)]);
+            }
+            program.activated.push(ActivatedAbility {
+                id,
+                mana_cost: cost,
+                source_cost: SourceCost::Sacrifice,
+                body: ExecutableBody::new(
+                    BodyTarget::None,
+                    vec![Instruction::SearchLibrary {
+                        filter: Box::new(
+                            LibrarySearch::to_battlefield(
+                                SearchCardMatcher::CardTypes(BTreeSet::from([CardType::Creature])),
+                                false,
+                            )
+                            .with_destination(SearchDestination::Battlefield {
+                                tapped: false,
+                                post_entry: SearchBattlefieldPostEntry::Transfigure,
+                            })
+                            .with_mana_value(SearchManaValue::Exact(program.mana_value())),
+                        ),
+                    }],
+                ),
+            });
+            program
+                .activation_restrictions
+                .insert(id, ActivationRestriction::Sorcery);
+            Ok(())
+        }
         "unearth" => {
             let (cost, 0, hybrids, snow) = param
                 .and_then(parse_mana_cost_with_snow)
@@ -1686,6 +1729,26 @@ pub(super) fn lower_keyword(
                 return Err("oracle:duplicate-entry-tap");
             }
             Ok(())
+        }
+        "living metal" if param.is_none() && !is_spell => {
+            let selector = PermanentSelector {
+                controller: ControllerSelector::SourceItself,
+                source_condition: Some(StaticSourceCondition::ControllersTurn),
+                ..PermanentSelector::default()
+            };
+            push_static_ability(
+                program,
+                StaticContinuousAbility::Battlefield {
+                    id: ids.static_id(),
+                    selector,
+                    parts: StaticParts(vec![StaticPart::Type(StaticTypeChange {
+                        land_subtypes: SubtypeOperation::Keep,
+                        supertypes: TypeOperation::Keep,
+                        types: TypeOperation::Add(BTreeSet::from([CardType::Creature])),
+                        subtypes: SubtypeOperation::Keep,
+                    })]),
+                },
+            )
         }
         "firebending" => {
             let p = param.ok_or("oracle:kw-param")?;

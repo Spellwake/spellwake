@@ -3,6 +3,12 @@ mod departure;
 mod legend;
 mod replacements;
 use replacements::CheckMoves;
+fn body_has_fixed_target_clauses(body: &ExecutableBody) -> bool {
+    body.instructions
+        .iter()
+        .any(|op| matches!(op, Instruction::FixedTargetClause(_)))
+}
+
 #[cfg(test)]
 mod tests;
 use super::*;
@@ -930,6 +936,80 @@ impl EffectWindow {
                 .map(|waiting| (&waiting.body, None))
         }
     }
+
+    fn bound_trigger_fixed_clause_body(
+        &self,
+        body: &ExecutableBody,
+        instance: TriggerInstanceId,
+        source: Option<&crate::occurrence::SupportedAppearance>,
+    ) -> Result<ExecutableBody, EffectError> {
+        let mut bound = body.clone();
+        let Some(src) = source else {
+            return Ok(bound);
+        };
+        let related_player = self.triggers.waiting().get(&instance).and_then(|waiting| {
+            let first = waiting.causes.members().first()?.related_player?;
+            waiting
+                .causes
+                .members()
+                .iter()
+                .all(|member| member.related_player == Some(first))
+                .then_some(first)
+        });
+        for op in &mut bound.instructions {
+            if let Instruction::FixedTargetClause(clause) = op {
+                clause.target = clause.target.with_ability_source(src.object.id());
+                if let BodyTarget::FilteredPermanent(filter) = &mut clause.target
+                    && filter.has_related_player()
+                {
+                    let player = related_player.ok_or(EffectError::InconsistentProgram)?;
+                    *filter = filter.bind_related_player(player);
+                }
+            }
+        }
+        Ok(bound)
+    }
+
+    fn trigger_fixed_clause_domains(
+        &self,
+        body: &ExecutableBody,
+        controller: SeatId,
+        source: Option<&crate::occurrence::SupportedAppearance>,
+    ) -> Result<Option<(usize, Vec<TargetRef>)>, EffectError> {
+        let mut per_clause: Vec<Vec<TargetRef>> = Vec::new();
+        for op in &body.instructions {
+            if let Instruction::FixedTargetClause(clause) = op {
+                let domain = self.trigger_target_domain(clause, controller, source)?;
+                if domain.is_empty() {
+                    return Ok(None);
+                }
+                per_clause.push(domain);
+            }
+        }
+        if per_clause.is_empty() {
+            return Ok(None);
+        }
+        let distinct_pair = matches!(
+            body.instructions.last(),
+            Some(Instruction::CopyOtherTargetAsArtifact)
+        ) || body.instructions.contains(&Instruction::FightFixedTargets);
+        if distinct_pair
+            && per_clause.len() == 2
+            && per_clause[0].len() == 1
+            && per_clause[1].len() == 1
+            && per_clause[0][0] == per_clause[1][0]
+        {
+            return Ok(None);
+        }
+        let count = per_clause.len();
+        let union: Vec<TargetRef> = per_clause
+            .into_iter()
+            .flatten()
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .collect();
+        Ok(Some((count, union)))
+    }
     /// Privileged metadata for one provisional entry whose payload remains waiting.
     /// Returns None outside a suspended placement-target stage; it does not expose
     /// a completed ability or confer authority to a player.
@@ -961,7 +1041,9 @@ impl EffectWindow {
         if self
             .waiting_target_body(placement.instance)
             .is_none_or(|(body, _)| {
-                body.target == BodyTarget::None && body.triggered_modes().is_none()
+                body.target == BodyTarget::None
+                    && body.triggered_modes().is_none()
+                    && !body_has_fixed_target_clauses(body)
             })
             || process.boundary != CheckBoundary::Priority
             || !matches!(
@@ -978,6 +1060,7 @@ impl EffectWindow {
     fn trigger_modes_domain(
         &self,
         spec: &crate::program::TriggeredModes,
+        instance: TriggerInstanceId,
         controller: SeatId,
         source: Option<&crate::occurrence::SupportedAppearance>,
         ability_id: Option<crate::program::TriggeredAbilityId>,
@@ -995,6 +1078,20 @@ impl EffectWindow {
         for (index, body) in spec.options.iter().enumerate() {
             let mode_idx = u8::try_from(index).map_err(|_| EffectError::InconsistentProgram)?;
             if excluded_modes.is_some_and(|used| used.contains(&mode_idx)) {
+                continue;
+            }
+            if body_has_fixed_target_clauses(body) {
+                let bound_body = self.bound_trigger_fixed_clause_body(body, instance, source)?;
+                if let Some((count, targets)) =
+                    self.trigger_fixed_clause_domains(&bound_body, controller, source)?
+                {
+                    modes.push(crate::occurrence::TriggerModeOption {
+                        index: mode_idx,
+                        multiple: Some((count, count)),
+                        target_required: true,
+                        targets,
+                    });
+                }
                 continue;
             }
             let target_required = body.target != BodyTarget::None;
@@ -1052,22 +1149,41 @@ impl EffectWindow {
             .map(|waiting| waiting.definition);
         let modal = body
             .triggered_modes()
-            .map(|spec| self.trigger_modes_domain(spec, placement.controller, source, ability_id))
+            .map(|spec| {
+                self.trigger_modes_domain(
+                    spec,
+                    placement.instance,
+                    placement.controller,
+                    source,
+                    ability_id,
+                )
+            })
             .transpose()?;
-        let domain = if modal.is_some() {
-            Vec::new()
+        let has_fixed = modal.is_none() && body_has_fixed_target_clauses(body);
+        let (domain, bounds) = if modal.is_some() {
+            (Vec::new(), None)
+        } else if has_fixed {
+            let bound_body =
+                self.bound_trigger_fixed_clause_body(body, placement.instance, source)?;
+            let Some((count, union)) =
+                self.trigger_fixed_clause_domains(&bound_body, placement.controller, source)?
+            else {
+                return Ok(None);
+            };
+            (union, Some((count, count)))
         } else {
-            self.trigger_target_domain(body, placement.controller, source)?
+            let domain = self.trigger_target_domain(body, placement.controller, source)?;
+            let bounds = body
+                .permanent_target_bounds()
+                .or_else(|| body.ordered_any_target_bounds());
+            if domain.len() < bounds.map_or(1, |(min, _)| min) || body.target == BodyTarget::None {
+                return Ok(None);
+            }
+            (domain, bounds)
         };
-        let bounds = body
-            .permanent_target_bounds()
-            .or_else(|| body.ordered_any_target_bounds());
         if modal
             .as_ref()
             .is_some_and(|modal| modal.maximum < modal.minimum)
-            || (modal.is_none()
-                && (domain.len() < bounds.map_or(1, |(min, _)| min)
-                    || body.target == BodyTarget::None))
         {
             return Ok(None);
         }
@@ -1148,9 +1264,85 @@ impl EffectWindow {
         if !(minimum..=maximum).contains(&targets.len()) {
             return Err(EffectError::IllegalTarget);
         }
-        let (body, _) = self
+        let (body, source) = self
             .waiting_target_body(frame.instance())
             .ok_or(EffectError::InconsistentProgram)?;
+        if body_has_fixed_target_clauses(body) {
+            let bound_body =
+                self.bound_trigger_fixed_clause_body(body, frame.instance(), source)?;
+            let evaluated = self.evaluated_characteristics()?;
+            let protection_source = source
+                .map(|s| self.waiting_protection_source(s, &evaluated))
+                .unwrap_or_default();
+            let source_ctx = TargetSourceContext {
+                id: source.map(|s| s.object.id()),
+                names: source.map(|s| &s.current_names),
+            };
+            let mode_choice = crate::mana::CastMode {
+                mode: 0,
+                target: None,
+                targets,
+            };
+            let (expanded_body, selected, choices) = self.compose_modes_with_wrap(
+                &[&bound_body],
+                &[mode_choice],
+                (1, 1),
+                false,
+                None,
+                None,
+                |_, clause, target| {
+                    self.mentor_target(clause, target, source, &evaluated)
+                        && !Self::protected_target(target, &protection_source, &evaluated)
+                        && self.legal_body_target_in_with_source(
+                            clause,
+                            target,
+                            frame.chooser(),
+                            source_ctx,
+                            &evaluated,
+                        )
+                },
+            )?;
+            let placement = self
+                .pending_trigger_placement()?
+                .ok_or(EffectError::InconsistentProgram)?;
+            let mut next = self.clone();
+            next.revision = revision;
+            let clauses = selected
+                .iter()
+                .filter_map(|mode| mode.clause.clone())
+                .collect();
+            next.window = next.window.bind_trigger_mode_targets(
+                next.window.revision(),
+                frame.entry(),
+                clauses,
+                choices.clone(),
+            )?;
+            let mut append = RulesJournal::default();
+            for target in choices {
+                append.records.push(RulesRecord::TriggerTargetSelected {
+                    placement: placement.clone(),
+                    target,
+                });
+            }
+            let target_entry = placement.entry;
+            next.finish_trigger_with_modes(
+                placement,
+                None,
+                Some((expanded_body, selected)),
+                &mut append,
+            )?;
+            let before = next.rules_snapshot(turn)?;
+            next.emit_from(
+                crate::occurrence::EventCause::TriggerTargetsBound {
+                    entry: target_entry,
+                },
+                &before,
+                turn,
+                &mut append,
+                |_, _, _| Ok(Vec::new()),
+            )?;
+            return next.progress_checks(CheckJournal::default(), append, turn);
+        }
         let dependent = frame.secondary_targets();
         if let Some(dependent) = dependent {
             let Some((&first, rest)) = targets.split_first() else {
@@ -1163,11 +1355,22 @@ impl EffectWindow {
                 return Err(EffectError::IllegalTarget);
             }
         }
+        let evaluated = self.evaluated_characteristics()?;
+        let source_ctx = TargetSourceContext {
+            id: source.map(|s| s.object.id()),
+            names: source.map(|s| &s.current_names),
+        };
         let mut choices = Vec::new();
         for (ordinal, target) in targets.into_iter().enumerate() {
             if dependent.is_none()
                 && (!frame.domain().contains(&target)
-                    || !self.legal_body_target(body, target, frame.chooser())?)
+                    || !self.legal_body_target_in_with_source(
+                        body,
+                        target,
+                        frame.chooser(),
+                        source_ctx,
+                        &evaluated,
+                    ))
             {
                 return Err(EffectError::IllegalTarget);
             }
@@ -1254,13 +1457,24 @@ impl EffectWindow {
         modes: &[crate::mana::CastMode],
         turn: Option<&TurnScheduler>,
     ) -> Result<RuleProgress, EffectError> {
-        let (body, _) = self
+        let (body, source) = self
             .waiting_target_body(frame.instance())
             .ok_or(EffectError::InconsistentProgram)?;
         let spec = body
             .triggered_modes()
             .ok_or(EffectError::InconsistentProgram)?;
-        let bodies = spec.options.iter().collect::<Vec<_>>();
+        let bound_options: Vec<ExecutableBody> = spec
+            .options
+            .iter()
+            .map(|option| {
+                if body_has_fixed_target_clauses(option) {
+                    self.bound_trigger_fixed_clause_body(option, frame.instance(), source)
+                } else {
+                    Ok(option.clone())
+                }
+            })
+            .collect::<Result<_, _>>()?;
+        let bodies = bound_options.iter().collect::<Vec<_>>();
         if modes
             .iter()
             .any(|mode| !modal.modes.iter().any(|offered| offered.index == mode.mode))
@@ -1274,12 +1488,20 @@ impl EffectWindow {
             spec.allow_repeat,
             spec.prefix.as_deref(),
             spec.suffix.as_deref(),
-            |index, _, target| {
-                modal
-                    .modes
-                    .iter()
-                    .find(|offered| offered.index == index)
-                    .is_some_and(|offered| offered.targets.contains(&target))
+            |index, clause, target| {
+                if bodies
+                    .get(usize::from(index))
+                    .is_some_and(|option| body_has_fixed_target_clauses(option))
+                {
+                    self.trigger_target_domain(clause, frame.chooser(), source)
+                        .is_ok_and(|domain| domain.contains(&target))
+                } else {
+                    modal
+                        .modes
+                        .iter()
+                        .find(|offered| offered.index == index)
+                        .is_some_and(|offered| offered.targets.contains(&target))
+                }
             },
         )?;
         if modal.distinct_targets
@@ -1513,19 +1735,28 @@ impl EffectWindow {
             append
                 .records
                 .push(RulesRecord::TriggerPlacementStarted(placement.clone()));
-            if waiting.body.triggered_modes().is_none() && waiting.body.target == BodyTarget::None {
+            let has_fixed = body_has_fixed_target_clauses(&waiting.body);
+            if waiting.body.triggered_modes().is_none()
+                && waiting.body.target == BodyTarget::None
+                && !has_fixed
+            {
                 return self.finish_trigger_placement(placement, None, append);
             }
-            if waiting.body.triggered_modes().is_none()
-                && self
-                    .trigger_target_domain(&waiting.body, waiting.controller, None)?
+            let emblem_has_legal_choice = if waiting.body.triggered_modes().is_some() {
+                true
+            } else if has_fixed {
+                self.trigger_fixed_clause_domains(&waiting.body, waiting.controller, None)?
+                    .is_some()
+            } else {
+                self.trigger_target_domain(&waiting.body, waiting.controller, None)?
                     .len()
-                    < waiting
+                    >= waiting
                         .body
                         .permanent_target_bounds()
                         .or_else(|| waiting.body.ordered_any_target_bounds())
                         .map_or(1, |(min, _)| min)
-            {
+            };
+            if !emblem_has_legal_choice {
                 self.window = self
                     .window
                     .remove_unbound_trigger(self.window.revision(), entry)?;
@@ -1625,14 +1856,28 @@ impl EffectWindow {
             .waiting()
             .get(&instance)
             .ok_or(EffectError::InconsistentProgram)?;
+        let has_fixed = body_has_fixed_target_clauses(&waiting.body);
         let has_legal_choice = if let Some(spec) = waiting.body.triggered_modes() {
             let domain = self.trigger_modes_domain(
                 spec,
+                placement.instance,
                 placement.controller,
                 Some(&waiting.source),
                 Some(waiting.definition),
             )?;
             domain.maximum >= domain.minimum
+        } else if has_fixed {
+            let bound_body = self.bound_trigger_fixed_clause_body(
+                &waiting.body,
+                placement.instance,
+                Some(&waiting.source),
+            )?;
+            self.trigger_fixed_clause_domains(
+                &bound_body,
+                placement.controller,
+                Some(&waiting.source),
+            )?
+            .is_some()
         } else if waiting.body.target == BodyTarget::None {
             return self.finish_trigger_placement(placement, None, append);
         } else {

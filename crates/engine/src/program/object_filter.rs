@@ -2566,8 +2566,14 @@ impl ObjectFilter {
                     !same
                 }
                 SourceRelation::OtherThanBound(id) => object.object.id() != id,
-                SourceRelation::SharingNameWithAbilitySource
-                | SourceRelation::MatchesNamedAgendaSlot => false,
+                SourceRelation::SharingNameWithAbilitySource => {
+                    !source.current_names.is_empty()
+                        && source
+                            .current_names
+                            .iter()
+                            .any(|name| object.current_names.iter().any(|other| other == name))
+                }
+                SourceRelation::MatchesNamedAgendaSlot => false,
             };
             if !source_ok {
                 return false;

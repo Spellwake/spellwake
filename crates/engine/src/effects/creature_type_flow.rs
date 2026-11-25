@@ -363,6 +363,7 @@ impl EffectWindow {
                 Some(
                     StackKind::ActivatedAbility { source } | StackKind::TriggeredAbility { source },
                 ) => Some(source.id()),
+                Some(StackKind::CardSpell(id)) => Some(*id),
                 _ => None,
             }
         };
