@@ -63,6 +63,68 @@ impl SearchEntryWork {
 }
 
 impl EffectWindow {
+    fn object_names_for_search(
+        &self,
+        entry: &crate::stack_window::StackEntry,
+        reference: crate::program::MoveSubjectRef,
+        evaluated: &crate::characteristics::EvaluatedCharacteristics,
+    ) -> Result<Option<spellwake_contracts::names::ObjectNames>, EffectError> {
+        use crate::program::MoveSubjectRef;
+        let obj_opt = match reference {
+            MoveSubjectRef::AbilitySource => match entry.kind() {
+                StackKind::ActivatedAbility { source } | StackKind::TriggeredAbility { source } => {
+                    Some(source.id())
+                }
+                StackKind::CardSpell(id) => Some(*id),
+                _ => None,
+            },
+            MoveSubjectRef::TriggeringObject => {
+                if let Some(binding) = self
+                    .execution_bindings(entry.id())
+                    .and_then(|b| b.trigger.as_ref())
+                    && let Some(cause) = binding.causes.members().first()
+                {
+                    if let Some(id) = cause.subject_object_id()
+                        && let Some(view) = evaluated.get(id)
+                    {
+                        return Ok(Some(view.current_names.clone()));
+                    }
+                    if let crate::occurrence::TriggerRelated::ZoneChange { before, .. } =
+                        &cause.related
+                    {
+                        return Ok(Some(before.current_names.clone()));
+                    }
+                    if let crate::occurrence::TriggerRelated::TokenCreated { after, .. } =
+                        &cause.related
+                    {
+                        return Ok(Some(after.current_names.clone()));
+                    }
+                    if let crate::occurrence::TriggerRelated::Discard { before, .. } =
+                        &cause.related
+                    {
+                        return Ok(Some(before.current_names.clone()));
+                    }
+                    return Ok(None);
+                }
+                None
+            }
+            other => self.resolve_pass_c_move_subject(entry, other)?,
+        };
+        if let Some(obj) = obj_opt
+            && let Some(view) = evaluated.get(obj)
+        {
+            return Ok(Some(view.current_names.clone()));
+        }
+        if reference == MoveSubjectRef::AbilitySource
+            && let Some(binding) = self
+                .execution_bindings(entry.id())
+                .and_then(|b| b.trigger.as_ref())
+        {
+            return Ok(Some(binding.source.current_names.clone()));
+        }
+        Ok(None)
+    }
+
     pub(crate) fn search_reveals_selected(&self) -> Result<bool, EffectError> {
         match self.current_instruction()? {
             Instruction::SearchLibrary { filter } => Ok(filter.reveal),
@@ -219,6 +281,19 @@ impl EffectWindow {
                 SearchCardMatcher::AnyOfNames(names) => names
                     .iter()
                     .any(|name| self.name_rules.has_name(&current.current_names, name)),
+                SearchCardMatcher::SameNameAs { reference, extra } => {
+                    let ref_names = self.object_names_for_search(entry, *reference, &evaluated)?;
+                    let name_ok = ref_names.as_ref().is_some_and(|names| {
+                        self.name_rules.shares_name(names, &current.current_names)
+                    });
+                    let extra_ok = extra.as_deref().is_none_or(|obj_filter| {
+                        let excluded = BTreeSet::new();
+                        obj_filter.matches_static_characteristics(current, &excluded, || {
+                            self.copiable_program(id).map(Program::mana_value)
+                        })
+                    });
+                    name_ok && extra_ok
+                }
                 SearchCardMatcher::Filtered(obj_filter) => {
                     let excluded = BTreeSet::new();
                     obj_filter.matches_static_characteristics(current, &excluded, || {

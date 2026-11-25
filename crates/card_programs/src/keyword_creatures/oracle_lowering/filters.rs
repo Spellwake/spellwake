@@ -1,6 +1,87 @@
 use super::*;
 use spellwake_oracle_compiler::ast::FilterPredicateAst;
 
+fn condition_primary_subject(cond: &ConditionAst) -> Option<&SubjectRefAst> {
+    match cond {
+        ConditionAst::CounterCompare { subject, .. }
+        | ConditionAst::HasStatus { subject, .. }
+        | ConditionAst::HasKeyword { subject, .. }
+        | ConditionAst::MatchesFilter { subject, .. }
+        | ConditionAst::StatCompare { subject, .. } => Some(subject.as_ref()),
+        ConditionAst::Marker(GameMarker::SubjectEnteredThisTurn(subject)) => Some(subject.as_ref()),
+        ConditionAst::Not(inner) => condition_primary_subject(inner),
+        ConditionAst::And(a, b) | ConditionAst::Or(a, b) => {
+            let sa = condition_primary_subject(a);
+            let sb = condition_primary_subject(b);
+            match (sa, sb) {
+                (Some(x), Some(y)) if x == y => Some(x),
+                (Some(x), None) => Some(x),
+                (None, Some(y)) => Some(y),
+                _ => None,
+            }
+        }
+        _ => None,
+    }
+}
+
+pub(super) fn lower_permanent_selectors_with_context(
+    subject: &SubjectRefAst,
+    condition: Option<&ConditionAst>,
+    vocabulary: &CreatureTypeVocabulary,
+) -> Result<Vec<PermanentSelector>, &'static str> {
+    match subject {
+        SubjectRefAst::Compound(items) if !items.is_empty() => {
+            let mut out = Vec::with_capacity(items.len());
+            for item in items {
+                out.extend(lower_permanent_selectors_with_context(
+                    item, condition, vocabulary,
+                )?);
+            }
+            Ok(out)
+        }
+        SubjectRefAst::Anaphora(raw) => {
+            let low = raw.trim().to_ascii_lowercase();
+            if let Some(cond) = condition {
+                if matches!(
+                    low.as_str(),
+                    "that creature"
+                        | "that permanent"
+                        | "that artifact"
+                        | "that land"
+                        | "that enchantment"
+                ) && let ConditionAst::ControlsCount {
+                    player: PlayerRefAst::You,
+                    filter,
+                    op: CompareOp::Eq,
+                    value: 1,
+                } = cond
+                {
+                    let mut sel = lower_filter_to_permanent_selector(filter, vocabulary)?;
+                    sel.controller = ControllerSelector::SourceController;
+                    return Ok(vec![sel]);
+                }
+                if matches!(
+                    low.as_str(),
+                    "it" | "he"
+                        | "she"
+                        | "him"
+                        | "her"
+                        | "that creature"
+                        | "that permanent"
+                        | "that artifact"
+                        | "that land"
+                        | "that enchantment"
+                ) && let Some(primary) = condition_primary_subject(cond)
+                {
+                    return lower_permanent_selectors(primary, vocabulary);
+                }
+            }
+            Err("oracle:unsupported-permanent-selector")
+        }
+        other => lower_permanent_selectors(other, vocabulary),
+    }
+}
+
 pub(super) fn lower_permanent_selectors(
     subject: &SubjectRefAst,
     vocabulary: &CreatureTypeVocabulary,
@@ -650,31 +731,121 @@ pub(super) fn apply_selector_condition(
             Ok(())
         }
         ConditionAst::HasStatus { subject, status }
-            if matches!(subject.as_ref(), SubjectRefAst::SelfObject)
-                && status.eq_ignore_ascii_case("tapped") =>
+            if matches!(subject.as_ref(), SubjectRefAst::SelfObject) =>
         {
-            sel.source_condition = Some(StaticSourceCondition::SourceIsTapped);
-            Ok(())
+            let cond_opt = match status.trim().to_ascii_lowercase().as_str() {
+                "tapped" => Some(StaticSourceCondition::SourceIsTapped),
+                "untapped" => Some(StaticSourceCondition::SourceIsUntapped),
+                "equipped" => Some(StaticSourceCondition::SourceIsEquipped),
+                "enchanted" => Some(StaticSourceCondition::SourceIsEnchanted),
+                "attacking" if sel.controller == ControllerSelector::SourceItself => {
+                    sel.combat_role =
+                        Some(spellwake_engine::characteristics::CombatSelector::Attacking);
+                    return Ok(());
+                }
+                "blocking" if sel.controller == ControllerSelector::SourceItself => {
+                    sel.combat_role =
+                        Some(spellwake_engine::characteristics::CombatSelector::Blocking);
+                    return Ok(());
+                }
+                _ => None,
+            };
+            if let Some(sc) = cond_opt {
+                sel.source_condition = Some(match sel.source_condition.take() {
+                    Some(prev) => StaticSourceCondition::And(Box::new(prev), Box::new(sc)),
+                    None => sc,
+                });
+                return Ok(());
+            }
+            if let Some(sc) = lower_static_source_condition(cond, vocabulary) {
+                sel.source_condition = Some(match sel.source_condition.take() {
+                    Some(prev) => StaticSourceCondition::And(Box::new(prev), Box::new(sc)),
+                    None => sc,
+                });
+                Ok(())
+            } else {
+                Err("oracle:unsupported-static-cond")
+            }
         }
         ConditionAst::HasStatus { subject, status }
-            if matches!(subject.as_ref(), SubjectRefAst::SelfObject)
-                && status.eq_ignore_ascii_case("untapped") =>
+            if matches!(subject.as_ref(), SubjectRefAst::AttachedHost(_))
+                && sel.attached_to_source =>
         {
-            sel.source_condition = Some(StaticSourceCondition::SourceIsUntapped);
+            match status.trim().to_ascii_lowercase().as_str() {
+                "tapped" => sel.requires_tapped = true,
+                "untapped" => sel.requires_untapped = true,
+                "equipped" => sel.equipped_by_at_least = sel.equipped_by_at_least.max(1),
+                "enchanted" => sel.requires_enchanted = true,
+                "attacking" => {
+                    sel.combat_role =
+                        Some(spellwake_engine::characteristics::CombatSelector::Attacking)
+                }
+                "blocking" => {
+                    sel.combat_role =
+                        Some(spellwake_engine::characteristics::CombatSelector::Blocking)
+                }
+                _ => return Err("oracle:unsupported-static-cond"),
+            }
+            Ok(())
+        }
+        ConditionAst::MatchesFilter { subject, filter }
+            if matches!(subject.as_ref(), SubjectRefAst::AttachedHost(_)) =>
+        {
+            let host_sel = lower_filter_to_permanent_selector(filter, vocabulary)
+                .map_err(|_| "oracle:unsupported-static-cond")?;
+            let sc = StaticSourceCondition::AttachedHostMatches(Box::new(host_sel));
+            sel.source_condition = Some(match sel.source_condition.take() {
+                Some(prev) => StaticSourceCondition::And(Box::new(prev), Box::new(sc)),
+                None => sc,
+            });
             Ok(())
         }
         ConditionAst::CounterCompare {
             subject,
             counter_kind,
-            op: CompareOp::Ge,
+            op: op @ (CompareOp::Ge | CompareOp::Gt),
             value,
-        } if matches!(subject.as_ref(), SubjectRefAst::SelfObject)
-            && counter_kind == "+1/+1"
-            && *value >= 1 =>
-        {
-            sel.source_condition = Some(StaticSourceCondition::SourceCounterAtLeast {
-                kind: CounterKind::PlusOne,
-                minimum: *value,
+        } if matches!(subject.as_ref(), SubjectRefAst::SelfObject) => {
+            let min_val = if *op == CompareOp::Gt {
+                value.saturating_add(1)
+            } else {
+                *value
+            };
+            if min_val == 0 {
+                return Err("oracle:unsupported-static-cond");
+            }
+            let ck_low = counter_kind.trim().to_ascii_lowercase();
+            let sc = if matches!(ck_low.as_str(), "" | "any" | "a" | "one or more") {
+                StaticSourceCondition::SourceAnyCounterAtLeast(min_val)
+            } else if let Some(kind) = parse_counter_kind(&ck_low).filter(|k| k.is_permanent()) {
+                StaticSourceCondition::SourceCounterAtLeast {
+                    kind,
+                    minimum: min_val,
+                }
+            } else {
+                return Err("oracle:unsupported-static-cond");
+            };
+            sel.source_condition = Some(match sel.source_condition.take() {
+                Some(prev) => StaticSourceCondition::And(Box::new(prev), Box::new(sc)),
+                None => sc,
+            });
+            Ok(())
+        }
+        ConditionAst::ControlsCount {
+            player: PlayerRefAst::You,
+            filter,
+            op: CompareOp::Eq,
+            value,
+        } if *value > 0 => {
+            let f_sel = lower_filter_to_permanent_selector(filter, vocabulary)
+                .map_err(|_| "oracle:unsupported-static-cond")?;
+            let sc = StaticSourceCondition::ControlsExactCount {
+                selector: Box::new(f_sel),
+                count: *value,
+            };
+            sel.source_condition = Some(match sel.source_condition.take() {
+                Some(prev) => StaticSourceCondition::And(Box::new(prev), Box::new(sc)),
+                None => sc,
             });
             Ok(())
         }
@@ -896,6 +1067,62 @@ fn try_specialized_static_source_condition(
             if matches!(subj.as_ref(), SubjectRefAst::SelfObject) =>
         {
             Some(StaticSourceCondition::SourceEnteredThisTurn)
+        }
+        ConditionAst::HasStatus { subject, status }
+            if matches!(subject.as_ref(), SubjectRefAst::SelfObject) =>
+        {
+            match status.trim().to_ascii_lowercase().as_str() {
+                "tapped" => Some(StaticSourceCondition::SourceIsTapped),
+                "untapped" => Some(StaticSourceCondition::SourceIsUntapped),
+                "equipped" => Some(StaticSourceCondition::SourceIsEquipped),
+                "enchanted" => Some(StaticSourceCondition::SourceIsEnchanted),
+                _ => None,
+            }
+        }
+        ConditionAst::MatchesFilter { subject, filter }
+            if matches!(subject.as_ref(), SubjectRefAst::AttachedHost(_)) =>
+        {
+            let host_sel = lower_filter_to_permanent_selector(filter, vocabulary).ok()?;
+            Some(StaticSourceCondition::AttachedHostMatches(Box::new(
+                host_sel,
+            )))
+        }
+        ConditionAst::CounterCompare {
+            subject,
+            counter_kind,
+            op: op @ (CompareOp::Ge | CompareOp::Gt),
+            value,
+        } if matches!(subject.as_ref(), SubjectRefAst::SelfObject) => {
+            let min_val = if *op == CompareOp::Gt {
+                value.saturating_add(1)
+            } else {
+                *value
+            };
+            if min_val == 0 {
+                return None;
+            }
+            let ck_low = counter_kind.trim().to_ascii_lowercase();
+            if matches!(ck_low.as_str(), "" | "any" | "a" | "one or more") {
+                Some(StaticSourceCondition::SourceAnyCounterAtLeast(min_val))
+            } else {
+                let kind = parse_counter_kind(&ck_low).filter(|k| k.is_permanent())?;
+                Some(StaticSourceCondition::SourceCounterAtLeast {
+                    kind,
+                    minimum: min_val,
+                })
+            }
+        }
+        ConditionAst::ControlsCount {
+            player: PlayerRefAst::You,
+            filter,
+            op: CompareOp::Eq,
+            value,
+        } if *value > 0 => {
+            let f_sel = lower_filter_to_permanent_selector(filter, vocabulary).ok()?;
+            Some(StaticSourceCondition::ControlsExactCount {
+                selector: Box::new(f_sel),
+                count: *value,
+            })
         }
         ConditionAst::LifeCompare {
             player: PlayerRefAst::You,
@@ -2520,7 +2747,43 @@ fn lower_value_expr_inner(
                 SubjectRefAst::SelfObject => ValueObjectRef::AbilitySource,
                 SubjectRefAst::TriggerSubject => ValueObjectRef::DyingCreature,
                 SubjectRefAst::AttachedHost(_) => ValueObjectRef::AttachedHost,
-                SubjectRefAst::Anaphora(_) => ValueObjectRef::TargetObject,
+                SubjectRefAst::Anaphora(raw) => {
+                    let low = raw.trim().to_ascii_lowercase();
+                    let has_prior_reveal = context.is_some_and(|(b, _)| {
+                        b.instructions.iter().any(|op| {
+                            matches!(
+                                op,
+                                Instruction::LookTopChoose { .. }
+                                    | Instruction::MayRevealLibraryTop
+                                    | Instruction::RevealPlayerHand(_)
+                            )
+                        })
+                    });
+                    let has_prior_exile = context.is_some_and(|(b, _)| {
+                        b.instructions.iter().any(|op| {
+                            matches!(
+                                op,
+                                Instruction::ExileTarget
+                                    | Instruction::ExileGraveyardTarget
+                                    | Instruction::ExileFromZone { .. }
+                                    | Instruction::ExileLibraryTop { .. }
+                            )
+                        })
+                    });
+                    let no_target = context.is_none_or(|(b, _)| b.target == BodyTarget::None);
+                    if !has_prior_reveal
+                        && (low.contains("revealed card") || low.contains("revealed creature"))
+                    {
+                        ValueObjectRef::RevealedCostCard
+                    } else if !has_prior_exile
+                        && no_target
+                        && (low.contains("exiled card") || low.contains("exiled creature"))
+                    {
+                        ValueObjectRef::ExiledCostCreature
+                    } else {
+                        ValueObjectRef::TargetObject
+                    }
+                }
                 _ => return Err("oracle:unsupported-stat-subject"),
             };
             Ok(ValueExpr::ObjectStat {
@@ -2881,10 +3144,36 @@ fn lower_value_expr_inner(
                     };
                     Ok(ValueExpr::object_stat(subject, ObjectStatKind::Power))
                 }
-                "the exiled creature card's power" if player.is_none() => {
+                "the exiled creature card's power" | "the exiled card's power"
+                    if player.is_none() =>
+                {
                     Ok(ValueExpr::object_stat(
                         ValueObjectRef::ExiledCostCreature,
                         ObjectStatKind::Power,
+                    ))
+                }
+                "the exiled card's mana value" | "the exiled creature card's mana value"
+                    if player.is_none() =>
+                {
+                    Ok(ValueExpr::object_stat(
+                        ValueObjectRef::ExiledCostCreature,
+                        ObjectStatKind::ManaValue,
+                    ))
+                }
+                "the revealed card's power" | "the revealed creature card's power"
+                    if player.is_none() =>
+                {
+                    Ok(ValueExpr::object_stat(
+                        ValueObjectRef::RevealedCostCard,
+                        ObjectStatKind::Power,
+                    ))
+                }
+                "the revealed card's mana value" | "the revealed creature card's mana value"
+                    if player.is_none() =>
+                {
+                    Ok(ValueExpr::object_stat(
+                        ValueObjectRef::RevealedCostCard,
+                        ObjectStatKind::ManaValue,
                     ))
                 }
                 "half x" if player.is_none() => Ok(ValueExpr::chosen_x().half_down()),

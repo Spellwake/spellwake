@@ -861,7 +861,8 @@ impl EffectWindow {
                             .and_then(StackPayload::instructions)
                             .and_then(|p| p.get(instruction)),
                         Some(
-                            Instruction::FightSourceWithTarget
+                            Instruction::Fight { .. }
+                                | Instruction::FightSourceWithTarget
                                 | Instruction::FightFixedTargets
                                 | Instruction::FightPairedCreatures(_)
                                 | Instruction::ImpulseCastOrDamage(_)

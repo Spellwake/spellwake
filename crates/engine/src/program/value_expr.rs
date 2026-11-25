@@ -57,6 +57,8 @@ pub enum ValueObjectRef {
     LastSacrificedCreature,
     SacrificedPermanent,
     ExiledCostCreature,
+    /// Card revealed as an additional cost to cast the resolving spell.
+    RevealedCostCard,
     TriggeringSpell,
     FinalSaga,
     /// Top card revealed by `LookTopChoose { reveal_only: true }` or `MayRevealLibraryTop`.
@@ -1246,7 +1248,11 @@ impl ValueExpr {
                 if let Some(r) = controller_scope {
                     merge(&mut out, role_family(*r)?)?;
                 }
-                if let ValueZone::Hand(r) | ValueZone::Graveyard(r) | ValueZone::Library(r) = zone {
+                if let ValueZone::Hand(r)
+                | ValueZone::Graveyard(r)
+                | ValueZone::Library(r)
+                | ValueZone::Exile(Some(r)) = zone
+                {
                     merge(&mut out, role_family(*r)?)?;
                 }
                 if filter.has_target_player() {
@@ -1610,6 +1616,13 @@ impl ValueExpr {
                 }
                 ValueObjectRef::ExiledCostCreature => {
                     if matches!(context, BodyContext::ExiledCreatureCost) {
+                        Ok(())
+                    } else {
+                        Err(DefinitionError::InvalidInstruction)
+                    }
+                }
+                ValueObjectRef::RevealedCostCard => {
+                    if matches!(context, BodyContext::RevealedCreature) {
                         Ok(())
                     } else {
                         Err(DefinitionError::InvalidInstruction)

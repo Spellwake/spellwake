@@ -12,6 +12,7 @@ pub(super) struct GraveyardShuffleWork {
     pub(super) batch: ZoneReplacementBatch,
     player: SeatId,
     remaining_players: std::collections::VecDeque<SeatId>,
+    remaining_owner_batches: std::collections::VecDeque<(SeatId, Vec<ObjectId>)>,
     collective: bool,
     ability_source: Option<ObjectId>,
     objects: Vec<ObjectId>,
@@ -182,6 +183,7 @@ impl EffectWindow {
                 batch,
                 player: first_player,
                 remaining_players,
+                remaining_owner_batches: std::collections::VecDeque::new(),
                 collective: true,
                 ability_source: None,
                 objects: movable,
@@ -194,19 +196,33 @@ impl EffectWindow {
 
     pub(super) fn begin_target_into_library_shuffle(
         &mut self,
-        entry: &crate::stack_window::StackEntry,
+        _entry: &crate::stack_window::StackEntry,
     ) -> Result<(), EffectError> {
-        let TargetRef::Object(target) = self.instruction_target(entry)?.choice().target else {
-            return Err(EffectError::InconsistentProgram);
-        };
-        let Some(object) = self.window.cards().get(target).filter(|object| {
-            (object.zone() == ObjectZone::Battlefield
-                && self.window.cards().phased_out_under(target).is_none())
-                || matches!(object.zone(), ObjectZone::Graveyard(_))
-        }) else {
+        let targets = self.legal_permanent_targets()?;
+        let mut by_owner: std::collections::BTreeMap<SeatId, Vec<ObjectId>> =
+            std::collections::BTreeMap::new();
+        for target in targets {
+            let Some(object) = self.window.cards().get(target).filter(|object| {
+                (object.zone() == ObjectZone::Battlefield
+                    && self.window.cards().phased_out_under(target).is_none())
+                    || matches!(object.zone(), ObjectZone::Graveyard(_))
+            }) else {
+                continue;
+            };
+            by_owner.entry(object.owner()).or_default().push(target);
+        }
+        let mut batches: std::collections::VecDeque<(SeatId, Vec<ObjectId>)> = self
+            .window
+            .apnap_players()?
+            .filter_map(|seat| by_owner.remove(&seat).map(|cards| (seat, cards)))
+            .collect();
+        for (seat, cards) in by_owner {
+            batches.push_back((seat, cards));
+        }
+        let Some((first_owner, first_cards)) = batches.pop_front() else {
             return self.advance_instruction();
         };
-        self.begin_shuffle_with_cards(object.owner(), false, Some(vec![target]), None)
+        self.begin_shuffle_with_owner_batches(first_owner, false, Some(first_cards), None, batches)
     }
 
     pub(super) fn begin_ability_source_shuffle(
@@ -277,6 +293,23 @@ impl EffectWindow {
         targets: Option<Vec<ObjectId>>,
         ability_source: Option<ObjectId>,
     ) -> Result<(), EffectError> {
+        self.begin_shuffle_with_owner_batches(
+            player,
+            continue_reveals,
+            targets,
+            ability_source,
+            std::collections::VecDeque::new(),
+        )
+    }
+
+    fn begin_shuffle_with_owner_batches(
+        &mut self,
+        player: SeatId,
+        continue_reveals: bool,
+        targets: Option<Vec<ObjectId>>,
+        ability_source: Option<ObjectId>,
+        remaining_owner_batches: std::collections::VecDeque<(SeatId, Vec<ObjectId>)>,
+    ) -> Result<(), EffectError> {
         let cursor = self
             .resolution_cursor()
             .ok_or(EffectError::WrongResolutionFrame)?
@@ -336,6 +369,7 @@ impl EffectWindow {
                 batch,
                 player,
                 remaining_players,
+                remaining_owner_batches,
                 collective,
                 ability_source,
                 objects,
@@ -501,6 +535,35 @@ impl EffectWindow {
             .search_shuffle(work.player, tape)
             .map_err(EffectError::from)?;
         self.window = window;
+        if let Some((next_owner, next_objects)) = work.remaining_owner_batches.pop_front() {
+            work.player = next_owner;
+            work.objects = next_objects;
+            work.ready = false;
+            work.batch = self.begin_zone_replacements(zone_replacement::AuthorizedZoneBatch {
+                cause: EventCause::Instruction {
+                    entry: work.cursor.entry,
+                    instruction: work.cursor.instruction,
+                },
+                action: shuffle_action(ability_source),
+                intents: work
+                    .objects
+                    .iter()
+                    .map(|id| zone_replacement::ZoneMoveIntent {
+                        before: *id,
+                        reason: shuffle_reason(collective, ability_source),
+                    })
+                    .collect(),
+            })?;
+            self.pending_work = Some(PendingWork::GraveyardShuffle(work));
+            let progress = self.progress_rules(
+                DamageJournal::default(),
+                vec![],
+                vec![],
+                DrawJournal::default(),
+                append,
+            )?;
+            return Ok((progress, entropy, shuffle));
+        }
         if let Some(player) = work.remaining_players.pop_front() {
             work.player = player;
             work.objects.clear();

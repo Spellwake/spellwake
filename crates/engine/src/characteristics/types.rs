@@ -140,6 +140,26 @@ pub enum ResolvedDuration {
         controller: SeatId,
         epoch: crate::object_identity::ControlEpoch,
     },
+    /// Authored duration lasting while the source remains on the battlefield (CR 611.2b).
+    WhileAbilitySourceOnBattlefield,
+    /// Materialized duration lasting while the specific source incarnation stays on the battlefield.
+    WhileSourceOnBattlefield {
+        source: ObjectId,
+    },
+    /// Authored duration lasting while the source remains tapped on the battlefield (CR 611.2b).
+    WhileAbilitySourceTapped,
+    /// Materialized duration lasting while the specific source incarnation stays tapped on the battlefield.
+    WhileSourceTapped {
+        source: ObjectId,
+    },
+    /// Authored duration lasting while you control the source and it remains tapped (CR 611.2b).
+    WhileControllingTappedAbilitySource,
+    /// Materialized duration lasting while the source stays under continuous control and tapped.
+    WhileSourceControlledAndTapped {
+        source: ObjectId,
+        controller: SeatId,
+        epoch: crate::object_identity::ControlEpoch,
+    },
     /// Expire during the given player's first cleanup after the creation turn.
     ThroughNextTurn {
         player: SeatId,
@@ -147,6 +167,30 @@ pub enum ResolvedDuration {
     },
 }
 impl ResolvedDuration {
+    /// Whether this authored duration requires an ability source permanent to bind against.
+    #[must_use]
+    pub const fn requires_ability_source(self) -> bool {
+        matches!(
+            self,
+            Self::WhileControllingAbilitySource
+                | Self::WhileAbilitySourceOnBattlefield
+                | Self::WhileAbilitySourceTapped
+                | Self::WhileControllingTappedAbilitySource
+        )
+    }
+
+    /// Whether this is a runtime-materialized duration that must not appear in authored programs.
+    #[must_use]
+    pub const fn is_materialized_source_bound(self) -> bool {
+        matches!(
+            self,
+            Self::WhileSourceControlled { .. }
+                | Self::WhileSourceOnBattlefield { .. }
+                | Self::WhileSourceTapped { .. }
+                | Self::WhileSourceControlledAndTapped { .. }
+        )
+    }
+
     pub(crate) fn expires_at_cleanup(self, active: SeatId, turn: u64) -> bool {
         match self {
             Self::NoStatedDuration
@@ -154,7 +198,13 @@ impl ResolvedDuration {
             | Self::UntilPlayerNextTurn { .. }
             | Self::ThroughControllerNextTurn
             | Self::WhileControllingAbilitySource
-            | Self::WhileSourceControlled { .. } => false,
+            | Self::WhileSourceControlled { .. }
+            | Self::WhileAbilitySourceOnBattlefield
+            | Self::WhileSourceOnBattlefield { .. }
+            | Self::WhileAbilitySourceTapped
+            | Self::WhileSourceTapped { .. }
+            | Self::WhileControllingTappedAbilitySource
+            | Self::WhileSourceControlledAndTapped { .. } => false,
             Self::UntilEndOfTurn | Self::UntilEndOfCombat => true,
             Self::ThroughNextTurn {
                 player,
@@ -956,6 +1006,19 @@ pub enum StaticSourceCondition {
     SourceCounterAtLeast {
         kind: crate::effects::CounterKind,
         minimum: u16,
+    },
+    /// Active while this permanent has at least `minimum` total counters of any kind.
+    SourceAnyCounterAtLeast(u16),
+    /// Active while at least one Equipment is attached to this permanent.
+    SourceIsEquipped,
+    /// Active while at least one Aura enchantment is attached to this permanent.
+    SourceIsEnchanted,
+    /// Active while this Aura or Equipment is attached to a permanent matching `selector`.
+    AttachedHostMatches(Box<PermanentSelector>),
+    /// Active while the source controller controls exactly `count` permanents matching `selector`.
+    ControlsExactCount {
+        selector: Box<PermanentSelector>,
+        count: u16,
     },
     SourceIsTapped,
     SourceIsUntapped,

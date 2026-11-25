@@ -914,8 +914,11 @@ impl EffectWindow {
                     });
                 }
                 self.settled_cast_cost_order.clear();
-                if matches!(resource, CastResource::ExileGraveyardCreatureForSpell(_))
-                    && let [movement] = moves.as_slice()
+                if matches!(
+                    resource,
+                    CastResource::ExileGraveyardCreatureForSpell(_)
+                        | CastResource::ExileGraveyardCardForSpell(_)
+                ) && let [movement] = moves.as_slice()
                     && movement.after.zone() == ObjectZone::Exile
                 {
                     let object = movement.after.id();

@@ -1905,6 +1905,7 @@ fn lower_face(
     // Lower static abilities (deferring PrototypeStats, StationBand, and DieRollBand for post-ability wiring)
     let mut station_bands: Vec<(u8, &str)> = Vec::new();
     let mut die_roll_bands_raw: Vec<(&str, &str)> = Vec::new();
+    let mut prev_static_subject: Option<SubjectRefAst> = None;
     for st in &face_ast.statics {
         match st {
             StaticAbilityAst::PrototypeStats {
@@ -1939,7 +1940,22 @@ fn lower_face(
             StaticAbilityAst::DieRollBand { roll, payload } => {
                 die_roll_bands_raw.push((roll.as_str(), payload.as_str()));
             }
-            _ => lower_static(st, &mut program, vocabulary, &mut ids, is_spell)?,
+            _ => {
+                if let Some(prev) = &prev_static_subject
+                    && matches!(static_ast_subject(st), Some(SubjectRefAst::Anaphora(_)))
+                {
+                    let mut resolved = st.clone();
+                    resolve_static_anaphora_subject_across_statics(&mut resolved, prev);
+                    lower_static(&resolved, &mut program, vocabulary, &mut ids, is_spell)?;
+                } else {
+                    if let Some(subj) = static_ast_subject(st)
+                        && !matches!(subj, SubjectRefAst::Anaphora(_))
+                    {
+                        prev_static_subject = Some(subj.clone());
+                    }
+                    lower_static(st, &mut program, vocabulary, &mut ids, is_spell)?;
+                }
+            }
         }
     }
 

@@ -961,7 +961,7 @@ impl CharacteristicState {
         expired
     }
 
-    /// Remove effects whose exact source left, phased out, or changed controller.
+    /// Remove effects whose exact source left, phased out, untapped, or changed controller.
     pub(crate) fn expire_source_control(
         &mut self,
         cards: &GameObjects,
@@ -969,21 +969,51 @@ impl CharacteristicState {
     ) -> Vec<ContinuousEffectId> {
         let mut expired = Vec::new();
         let still_ok = |duration: ResolvedDuration| -> bool {
-            let ResolvedDuration::WhileSourceControlled {
-                source,
-                controller,
-                epoch,
-            } = duration
-            else {
-                return true;
-            };
-            cards.get(source).is_some_and(|card| {
-                card.zone() == crate::object_identity::ObjectZone::Battlefield
-                    && card.control_epoch() == Some(epoch)
-            }) && evaluated.get(source).is_some_and(|object| {
-                object.controller == Some(controller)
-                    && object.zone == crate::object_identity::ObjectZone::Battlefield
-            })
+            match duration {
+                ResolvedDuration::WhileSourceControlled {
+                    source,
+                    controller,
+                    epoch,
+                } => {
+                    cards.get(source).is_some_and(|card| {
+                        card.zone() == crate::object_identity::ObjectZone::Battlefield
+                            && cards.phased_out_under(source).is_none()
+                            && card.control_epoch() == Some(epoch)
+                    }) && evaluated.get(source).is_some_and(|object| {
+                        object.controller == Some(controller)
+                            && object.zone == crate::object_identity::ObjectZone::Battlefield
+                    })
+                }
+                ResolvedDuration::WhileSourceOnBattlefield { source } => {
+                    cards.get(source).is_some_and(|card| {
+                        card.zone() == crate::object_identity::ObjectZone::Battlefield
+                            && cards.phased_out_under(source).is_none()
+                    })
+                }
+                ResolvedDuration::WhileSourceTapped { source } => {
+                    cards.get(source).is_some_and(|card| {
+                        card.zone() == crate::object_identity::ObjectZone::Battlefield
+                            && cards.phased_out_under(source).is_none()
+                            && card.tapped() == Some(true)
+                    })
+                }
+                ResolvedDuration::WhileSourceControlledAndTapped {
+                    source,
+                    controller,
+                    epoch,
+                } => {
+                    cards.get(source).is_some_and(|card| {
+                        card.zone() == crate::object_identity::ObjectZone::Battlefield
+                            && cards.phased_out_under(source).is_none()
+                            && card.control_epoch() == Some(epoch)
+                            && card.tapped() == Some(true)
+                    }) && evaluated.get(source).is_some_and(|object| {
+                        object.controller == Some(controller)
+                            && object.zone == crate::object_identity::ObjectZone::Battlefield
+                    })
+                }
+                _ => true,
+            }
         };
         self.resolved.retain(|id, effect| {
             let keep = still_ok(effect.duration);

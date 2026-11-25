@@ -212,6 +212,7 @@ impl EffectWindow {
             | Instruction::UntapControlledLands
             | Instruction::UntapControlledCreatures
             | Instruction::SetGroupTapped { .. }
+            | Instruction::SetSubjectTapped { .. }
             | Instruction::TapAttackersAndSkipNextUntap
             | Instruction::AttachOnEntry { .. }
             | Instruction::ControlledSubtypeDamagesAttacker(_)
@@ -444,6 +445,7 @@ impl EffectWindow {
             | Instruction::SacrificeStateTriggerSource
             | Instruction::SacrificeUpkeepSource(_)
             | Instruction::CounterWardSource
+            | Instruction::CounterTriggeringStackObject
             | Instruction::ResolveKeywordTrigger(_)
             | Instruction::BoostSourceByCastManaValue
             | Instruction::BoostLoneAttacker

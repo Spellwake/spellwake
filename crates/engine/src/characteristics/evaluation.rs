@@ -386,6 +386,36 @@ pub(crate) fn evaluate(
         if matches!(effect.parts.0.as_slice(), [ResolvedPart::Copy(_)]) {
             continue;
         }
+        let duration_live = match effect.duration {
+            ResolvedDuration::WhileSourceOnBattlefield { source } => {
+                world.cards.get(source).is_some_and(|card| {
+                    card.zone() == ObjectZone::Battlefield
+                        && world.cards.phased_out_under(source).is_none()
+                })
+            }
+            ResolvedDuration::WhileSourceTapped { source } => {
+                world.cards.get(source).is_some_and(|card| {
+                    card.zone() == ObjectZone::Battlefield
+                        && world.cards.phased_out_under(source).is_none()
+                        && card.tapped() == Some(true)
+                })
+            }
+            ResolvedDuration::WhileSourceControlledAndTapped {
+                source,
+                controller,
+                epoch,
+            } => world.cards.get(source).is_some_and(|card| {
+                card.zone() == ObjectZone::Battlefield
+                    && world.cards.phased_out_under(source).is_none()
+                    && card.control_epoch() == Some(epoch)
+                    && card.controller() == Some(controller)
+                    && card.tapped() == Some(true)
+            }),
+            _ => true,
+        };
+        if !duration_live {
+            continue;
+        }
         let key = EffectInstanceKey::Resolved(effect.id);
         instances.insert(
             key,
@@ -1306,6 +1336,59 @@ fn static_source_condition_met(
         }
         SourceCounterAtLeast { kind, minimum } => {
             world.state.permanent_counter_count(source, *kind) >= i64::from(*minimum).into()
+        }
+        SourceAnyCounterAtLeast(minimum) => {
+            world.state.total_permanent_counters(source) >= i64::from(*minimum).into()
+        }
+        SourceIsEquipped => battlefield
+            .iter()
+            .filter_map(|id| objects.get(id))
+            .any(|equipment| {
+                equipment.attached_to == Some(crate::targets::TargetRef::Object(source))
+                    && equipment.has_type(CardType::Artifact)
+                    && equipment
+                        .current_artifact_subtypes
+                        .contains(&crate::program::ArtifactSubtype::Equipment)
+            }),
+        SourceIsEnchanted => battlefield
+            .iter()
+            .filter_map(|id| objects.get(id))
+            .any(|aura| {
+                aura.attached_to == Some(crate::targets::TargetRef::Object(source))
+                    && aura.has_type(CardType::Enchantment)
+            }),
+        AttachedHostMatches(selector) => objects
+            .get(&source)
+            .and_then(|src| match src.attached_to {
+                Some(crate::targets::TargetRef::Object(host)) => Some(host),
+                _ => None,
+            })
+            .is_some_and(|host| {
+                select_affected(
+                    selector,
+                    source,
+                    controller,
+                    objects,
+                    battlefield,
+                    world.name_rules,
+                    world.combat,
+                )
+                .contains(&host)
+            }),
+        ControlsExactCount { selector, count } => {
+            let mut sel = selector.as_ref().clone();
+            if sel.controller == ControllerSelector::Any {
+                sel.controller = ControllerSelector::SourceController;
+            }
+            count_matching(
+                &sel,
+                source,
+                controller,
+                objects,
+                battlefield,
+                world.name_rules,
+                world.combat,
+            ) == i64::from(*count).into()
         }
         SourceIsTapped => objects.get(&source).is_some_and(|o| o.tapped == Some(true)),
         SourceIsUntapped => objects

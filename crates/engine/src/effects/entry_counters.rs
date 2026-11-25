@@ -106,6 +106,12 @@ fn body_uses_damage_pairs(body: &crate::program::ExecutableBody) -> bool {
             | Instruction::PutGroupOnLibraryBottom(f) => filter_uses_damage_pairs(**f),
             Instruction::MoveGroup { group, .. } => filter_uses_damage_pairs(**group),
             Instruction::SetGroupTapped { filter, .. } => filter_uses_damage_pairs(**filter),
+            Instruction::SetSubjectTapped { subject, .. } => match subject.as_ref() {
+                crate::program::EffectSubject::Matching(filter) => {
+                    filter_uses_damage_pairs(*filter)
+                }
+                _ => false,
+            },
             Instruction::PutCountersOnSubject { subject, .. } => subject_uses_damage_pairs(subject),
             Instruction::DamageGroupAmount { group, amount } => {
                 value_expr_uses_damage_pairs(amount)

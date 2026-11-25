@@ -2708,7 +2708,7 @@ impl EffectWindow {
                             .and_then(|o| o.controller().or(Some(o.owner())))
                     })
                     .collect();
-                let moved = self.move_objects_to_subject_destination(
+                let moved_ids = self.move_objects_to_subject_destination_ids(
                     entry,
                     index,
                     entry.controller(),
@@ -2717,9 +2717,10 @@ impl EffectWindow {
                     ctx.append,
                 )?;
                 if let Some(cursor) = self.resolution_cursor_mut() {
-                    cursor.results.last_action_succeeded = moved > 0;
-                    cursor.results.last_action_count = Some(RulesInteger::from_usize(moved));
-                    cursor.results.last_moved_objects = target_objs;
+                    cursor.results.last_action_succeeded = !moved_ids.is_empty();
+                    cursor.results.last_action_count =
+                        Some(RulesInteger::from_usize(moved_ids.len()));
+                    cursor.results.last_moved_objects = moved_ids;
                     cursor.results.last_moved_controllers = before_controllers;
                 }
             } else if let Some(cursor) = self.resolution_cursor_mut() {
@@ -5850,6 +5851,11 @@ impl EffectWindow {
             self.advance_instruction()?;
             return Ok(StepOutcome::Continue);
         }
+        if instruction == Instruction::CounterTriggeringStackObject {
+            self.counter_triggering_stack_object(entry.id(), index, ctx.append)?;
+            self.advance_instruction()?;
+            return Ok(StepOutcome::Continue);
+        }
         if instruction == Instruction::BoostSourceByCastManaValue {
             self.boost_source_by_cast_mana_value(entry, index, ctx.append)?;
             self.advance_instruction()?;
@@ -7682,6 +7688,7 @@ impl EffectWindow {
             Instruction::UntapControlledCreatures
                 | Instruction::TapAttackersAndSkipNextUntap
                 | Instruction::SetGroupTapped { .. }
+                | Instruction::SetSubjectTapped { .. }
         ) {
             use crate::program::{EffectSubject, ObjectFilter};
             let (tap, skip_untap, group) = match &instruction {
@@ -7697,6 +7704,9 @@ impl EffectWindow {
                 ),
                 Instruction::SetGroupTapped { filter, tapped } => {
                     (*tapped, false, EffectSubject::Matching(*filter.as_ref()))
+                }
+                Instruction::SetSubjectTapped { subject, tapped } => {
+                    (*tapped, false, *subject.as_ref())
                 }
                 _ => return Err(EffectError::InconsistentProgram),
             };
@@ -8040,7 +8050,7 @@ impl EffectWindow {
                     }
                     if !selected.is_empty() {
                         let selected_vec: Vec<ObjectId> = selected.iter().copied().collect();
-                        let moved = self.move_objects_to_subject_destination(
+                        let moved_ids = self.move_objects_to_subject_destination_ids(
                             entry,
                             index,
                             entry.controller(),
@@ -8049,9 +8059,10 @@ impl EffectWindow {
                             ctx.append,
                         )?;
                         if let Some(cursor) = self.resolution_cursor_mut() {
-                            cursor.results.last_action_succeeded = moved > 0;
+                            cursor.results.last_action_succeeded = !moved_ids.is_empty();
                             cursor.results.last_action_count =
-                                Some(RulesInteger::from_usize(moved));
+                                Some(RulesInteger::from_usize(moved_ids.len()));
+                            cursor.results.last_moved_objects = moved_ids;
                         }
                     }
                 }

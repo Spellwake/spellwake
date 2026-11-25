@@ -1416,6 +1416,47 @@ impl EffectWindow {
                         .unwrap_or_else(|| last_power.clone());
                     Ok(power.max(0.into()))
                 }
+                (ValueObjectRef::ExiledCostCreature, ObjectStatKind::ManaValue) => {
+                    let entry = cursor.ok_or(EffectError::WrongResolutionFrame)?.entry;
+                    let Some(StackPayload::Instructions(payload)) = self.payloads.get(&entry)
+                    else {
+                        return Err(EffectError::InconsistentProgram);
+                    };
+                    let Some((object, _)) = &payload.exiled_cost_creature else {
+                        return Ok(0.into());
+                    };
+                    let mv = self
+                        .copiable_program(*object)
+                        .map(Program::mana_value)
+                        .unwrap_or_else(|| 0.into());
+                    Ok(mv.max(0.into()))
+                }
+                (ValueObjectRef::RevealedCostCard, ObjectStatKind::Power) => {
+                    let entry = cursor.ok_or(EffectError::WrongResolutionFrame)?.entry;
+                    let Some(StackPayload::Instructions(payload)) = self.payloads.get(&entry)
+                    else {
+                        return Err(EffectError::InconsistentProgram);
+                    };
+                    let Some(cost) = &payload.revealed_cost_card else {
+                        return Ok(0.into());
+                    };
+                    let power = self
+                        .current_characteristics(cost.object)?
+                        .and_then(|card| card.power_toughness.map(|stats| stats.derived.power))
+                        .unwrap_or_else(|| cost.last_power.clone());
+                    Ok(power.max(0.into()))
+                }
+                (ValueObjectRef::RevealedCostCard, ObjectStatKind::ManaValue) => {
+                    let entry = cursor.ok_or(EffectError::WrongResolutionFrame)?.entry;
+                    let Some(StackPayload::Instructions(payload)) = self.payloads.get(&entry)
+                    else {
+                        return Err(EffectError::InconsistentProgram);
+                    };
+                    let Some(cost) = &payload.revealed_cost_card else {
+                        return Ok(0.into());
+                    };
+                    Ok(cost.mana_value.clone().max(0.into()))
+                }
                 (ValueObjectRef::TriggeringSpell, ObjectStatKind::ManaValue) => {
                     let binding = cursor
                         .and_then(|c| self.execution_bindings(c.entry))

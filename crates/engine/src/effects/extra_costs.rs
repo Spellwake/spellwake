@@ -699,6 +699,26 @@ impl EffectWindow {
                     }
                 }
                 if !revealed.is_empty() {
+                    if let [only] = revealed.as_slice() {
+                        let last_power = evaluated
+                            .get(only.id())
+                            .and_then(|o| o.power_toughness.as_ref())
+                            .map(|stats| stats.derived.power.clone())
+                            .unwrap_or_else(|| 0.into());
+                        let mana_value = self
+                            .copiable_program(only.id())
+                            .map(Program::mana_value)
+                            .unwrap_or_else(|| 0.into());
+                        if let Some(StackPayload::Instructions(payload)) =
+                            self.payloads.get_mut(&entry)
+                        {
+                            payload.revealed_cost_card = Some(RevealedCostCard {
+                                object: only.id(),
+                                last_power,
+                                mana_value,
+                            });
+                        }
+                    }
                     let before = self.rules_snapshot(turn)?;
                     self.emit_from(cause.clone(), &before, turn, append, |_, _, _| {
                         Ok(revealed
@@ -753,6 +773,21 @@ impl EffectWindow {
                         &moves,
                     )?;
                     self.window = window;
+                    if *zone == CostExileZone::Graveyard
+                        && let [movement] = movements.as_slice()
+                        && movement.after.zone() == ObjectZone::Exile
+                    {
+                        let exiled_id = movement.after.id();
+                        let power = self
+                            .current_characteristics(exiled_id)?
+                            .and_then(|card| card.power_toughness.map(|stats| stats.derived.power))
+                            .unwrap_or_else(|| 0.into());
+                        if let Some(StackPayload::Instructions(payload)) =
+                            self.payloads.get_mut(&entry)
+                        {
+                            payload.exiled_cost_creature = Some((exiled_id, power));
+                        }
+                    }
                     self.emit_from(cause.clone(), &before, turn, append, |old, cur, ctrls| {
                         movements
                             .iter()

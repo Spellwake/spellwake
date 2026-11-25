@@ -2803,6 +2803,7 @@ impl EffectWindow {
             | Instruction::UntapControlledLands
             | Instruction::UntapControlledCreatures
             | Instruction::SetGroupTapped { .. }
+            | Instruction::SetSubjectTapped { .. }
             | Instruction::ReturnCardsExiledWithLink(_)
             | Instruction::ChooseAndReturnOwnGraveyardCardsByType
             | Instruction::TargetDamagesItsControllersOtherCreatures
@@ -2993,6 +2994,7 @@ impl EffectWindow {
             | Instruction::SacrificeStateTriggerSource
             | Instruction::SacrificeUpkeepSource(_)
             | Instruction::CounterWardSource
+            | Instruction::CounterTriggeringStackObject
             | Instruction::BoostSourceByCastManaValue
             | Instruction::BoostLoneAttacker
             | Instruction::Attach(_)
@@ -3211,6 +3213,29 @@ impl EffectWindow {
         destination: crate::program::SubjectDestination,
         append: &mut RulesJournal,
     ) -> Result<usize, EffectError> {
+        Ok(self
+            .move_objects_to_subject_destination_ids(
+                entry,
+                instruction,
+                actor,
+                objects,
+                destination,
+                append,
+            )?
+            .len())
+    }
+
+    /// Move resolved `objects` to `destination` and return the post-move `ObjectId`s
+    /// (CR 400.7) so subsequent `LastMoved` instructions resolve the new incarnations.
+    pub(super) fn move_objects_to_subject_destination_ids(
+        &mut self,
+        entry: &StackEntry,
+        instruction: usize,
+        actor: SeatId,
+        objects: &[ObjectId],
+        destination: crate::program::SubjectDestination,
+        append: &mut RulesJournal,
+    ) -> Result<Vec<ObjectId>, EffectError> {
         use crate::program::{DelayedReturnTiming, LibraryPlacement, SubjectDestination};
         let mut live: Vec<ObjectId> = objects
             .iter()
@@ -3220,7 +3245,7 @@ impl EffectWindow {
         live.sort();
         live.dedup();
         if live.is_empty() {
-            return Ok(0);
+            return Ok(Vec::new());
         }
         let source_id = match entry.kind() {
             StackKind::ActivatedAbility { source } | StackKind::TriggeredAbility { source } => {
@@ -3303,7 +3328,6 @@ impl EffectWindow {
         let before = self.rules_snapshot(None)?;
         let (window, movements) = self.window.record_linked_return_moves(&moves)?;
         self.window = window;
-        let moved_count = movements.len();
         let new_ids: Vec<ObjectId> = movements.iter().map(|m| m.after.id()).collect();
         if let SubjectDestination::Battlefield {
             tapped,
@@ -3400,7 +3424,7 @@ impl EffectWindow {
                             entry: entry.id(),
                             instruction,
                         },
-                        new_ids,
+                        new_ids.clone(),
                         append,
                     )?;
                 }
@@ -3426,14 +3450,17 @@ impl EffectWindow {
                             false,
                             Box::new(ExecutableBody::new(
                                 BodyTarget::None,
-                                vec![Instruction::ReturnDelayedExile(new_ids)],
+                                vec![Instruction::ReturnDelayedExile(new_ids.clone())],
                             )),
                         );
                     }
                 }
                 DelayedReturnTiming::UntilSourceLeaves => {
                     if let Some(src) = source_id {
-                        self.linked_exiles.entry(src).or_default().extend(new_ids);
+                        self.linked_exiles
+                            .entry(src)
+                            .or_default()
+                            .extend(new_ids.iter().copied());
                     }
                 }
                 DelayedReturnTiming::LinkedGroup(group) => {
@@ -3441,12 +3468,12 @@ impl EffectWindow {
                         self.independent_exile_links
                             .entry((src, group))
                             .or_default()
-                            .extend(new_ids);
+                            .extend(new_ids.iter().copied());
                     }
                 }
             }
         }
-        Ok(moved_count)
+        Ok(new_ids)
     }
     /// Advance only this instruction's owned stages. No player choice changes cards.
     ///
@@ -3967,10 +3994,10 @@ impl EffectWindow {
                             .resolving()
                             .cloned()
                             .ok_or(EffectError::WrongResolutionFrame)?;
-                        let moved = if selection.objects.is_empty() {
-                            0
+                        let moved_ids = if selection.objects.is_empty() {
+                            Vec::new()
                         } else {
-                            self.move_objects_to_subject_destination(
+                            self.move_objects_to_subject_destination_ids(
                                 &entry,
                                 cursor.instruction,
                                 selection.player,
@@ -3979,8 +4006,10 @@ impl EffectWindow {
                                 append,
                             )?
                         };
-                        cursor.results.last_action_succeeded = moved > 0;
-                        cursor.results.last_action_count = Some(RulesInteger::from_usize(moved));
+                        cursor.results.last_action_succeeded = !moved_ids.is_empty();
+                        cursor.results.last_action_count =
+                            Some(RulesInteger::from_usize(moved_ids.len()));
+                        cursor.results.last_moved_objects = moved_ids;
                         self.pending_work = Some(PendingWork::Resolution(cursor));
                         self.advance_instruction()?;
                         return Ok(None);

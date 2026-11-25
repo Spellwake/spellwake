@@ -1783,22 +1783,9 @@ impl EffectWindow {
                 }
             }
         }
-        if matches!(
-            self.stack_body(entry)
-                .and_then(|body| body.instructions.get(instruction + 1)),
-            Some(
-                Instruction::ScheduleCreatedTokenExile(_)
-                    | Instruction::ScheduleCreatedTokenSacrifice
-                    | Instruction::GrantNewTokensHaste
-                    | Instruction::EquipNewToken
-                    | Instruction::RegisterTokenLinkedExile
-                    | Instruction::ReplaceSourceCreatedTokens
-            )
-        ) {
-            self.resolution_cursor_mut()
-                .ok_or(EffectError::WrongResolutionFrame)?
-                .last_created_tokens = objects.iter().map(GameObject::id).collect();
-        }
+        self.resolution_cursor_mut()
+            .ok_or(EffectError::WrongResolutionFrame)?
+            .last_created_tokens = objects.iter().map(GameObject::id).collect();
         self.advance_instruction()?;
         #[cfg(test)]
         characteristic_observations::instruction(self, "Completed", entry, instruction, None);

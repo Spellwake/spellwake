@@ -333,9 +333,33 @@ pub(super) fn lower_duration(d: &DurationAst) -> Result<ResolvedDuration, &'stat
         DurationAst::UntilEndOfNextTurn => Ok(ResolvedDuration::ThroughControllerNextTurn),
         DurationAst::Permanent | DurationAst::Instant => Ok(ResolvedDuration::NoStatedDuration),
         DurationAst::UntilSourceLeaves => Ok(ResolvedDuration::WhileControllingAbilitySource),
-        DurationAst::ForAsLongAs(_) | DurationAst::UntilEndOfPlayersNextTurn(_) => {
-            Err("oracle:unsupported-duration")
-        }
+        DurationAst::ForAsLongAs(cond) => match cond.as_ref() {
+            ConditionAst::Marker(GameMarker::ControlsSelf) => {
+                Ok(ResolvedDuration::WhileControllingAbilitySource)
+            }
+            ConditionAst::Marker(GameMarker::RemainsOnBattlefield) => {
+                Ok(ResolvedDuration::WhileAbilitySourceOnBattlefield)
+            }
+            ConditionAst::Marker(GameMarker::RemainsTapped) => {
+                Ok(ResolvedDuration::WhileAbilitySourceTapped)
+            }
+            ConditionAst::And(a, b)
+                if matches!(
+                    (a.as_ref(), b.as_ref()),
+                    (
+                        ConditionAst::Marker(GameMarker::ControlsSelf),
+                        ConditionAst::Marker(GameMarker::RemainsTapped)
+                    ) | (
+                        ConditionAst::Marker(GameMarker::RemainsTapped),
+                        ConditionAst::Marker(GameMarker::ControlsSelf)
+                    )
+                ) =>
+            {
+                Ok(ResolvedDuration::WhileControllingTappedAbilitySource)
+            }
+            _ => Err("oracle:unsupported-duration"),
+        },
+        DurationAst::UntilEndOfPlayersNextTurn(_) => Err("oracle:unsupported-duration"),
     }
 }
 
@@ -6009,24 +6033,73 @@ pub(super) fn lower_instruction(
                     });
                 Ok(())
             }
-            SubjectRefAst::Anaphora(_) if builder.target != BodyTarget::None => {
+            SubjectRefAst::Anaphora(_)
+                if builder.target != BodyTarget::None
+                    && !matches!(
+                        builder.target,
+                        BodyTarget::SinglePlayer | BodyTarget::SingleOpponent
+                    ) =>
+            {
+                let (minimum, maximum) = builder
+                    .instructions
+                    .iter()
+                    .rev()
+                    .find_map(|op| match op {
+                        Instruction::AffectPermanentTargets {
+                            minimum, maximum, ..
+                        } => Some((*minimum, *maximum)),
+                        _ => None,
+                    })
+                    .unwrap_or((1, 1));
                 builder
                     .instructions
                     .push(Instruction::AffectPermanentTargets {
-                        minimum: 1,
-                        maximum: 1,
+                        minimum,
+                        maximum,
                         action: PermanentTargetAction::Tap,
                     });
                 Ok(())
             }
-            SubjectRefAst::Anaphora(_)
-                if builder.target == BodyTarget::None && builder.last_group_filter.is_some() =>
-            {
+            SubjectRefAst::Anaphora(_) if builder.last_group_filter.is_some() => {
                 let obj = builder
                     .last_group_filter
                     .ok_or("oracle:unsupported-tap-perm")?;
                 builder.instructions.push(Instruction::SetGroupTapped {
                     filter: Box::new(obj),
+                    tapped: true,
+                });
+                Ok(())
+            }
+            SubjectRefAst::Anaphora(_)
+                if last_instruction_created_tokens(&builder.instructions) =>
+            {
+                builder.instructions.push(Instruction::SetSubjectTapped {
+                    subject: Box::new(EffectSubject::CreatedTokens),
+                    tapped: true,
+                });
+                Ok(())
+            }
+            SubjectRefAst::Anaphora(_) if last_instruction_moved_object(&builder.instructions) => {
+                builder.instructions.push(Instruction::SetSubjectTapped {
+                    subject: Box::new(EffectSubject::LastMoved),
+                    tapped: true,
+                });
+                Ok(())
+            }
+            SubjectRefAst::TriggerSubject if in_trigger => {
+                builder.instructions.push(Instruction::SetSubjectTapped {
+                    subject: Box::new(EffectSubject::TriggerSubject),
+                    tapped: true,
+                });
+                Ok(())
+            }
+            SubjectRefAst::Anaphora(raw)
+                if in_trigger
+                    && (!self_pronoun_valid || !is_self_anaphora_label(raw))
+                    && builder.target == BodyTarget::None =>
+            {
+                builder.instructions.push(Instruction::SetSubjectTapped {
+                    subject: Box::new(EffectSubject::TriggerSubject),
                     tapped: true,
                 });
                 Ok(())
@@ -6126,24 +6199,73 @@ pub(super) fn lower_instruction(
                     });
                 Ok(())
             }
-            SubjectRefAst::Anaphora(_) if builder.target != BodyTarget::None => {
+            SubjectRefAst::Anaphora(_)
+                if builder.target != BodyTarget::None
+                    && !matches!(
+                        builder.target,
+                        BodyTarget::SinglePlayer | BodyTarget::SingleOpponent
+                    ) =>
+            {
+                let (minimum, maximum) = builder
+                    .instructions
+                    .iter()
+                    .rev()
+                    .find_map(|op| match op {
+                        Instruction::AffectPermanentTargets {
+                            minimum, maximum, ..
+                        } => Some((*minimum, *maximum)),
+                        _ => None,
+                    })
+                    .unwrap_or((1, 1));
                 builder
                     .instructions
                     .push(Instruction::AffectPermanentTargets {
-                        minimum: 1,
-                        maximum: 1,
+                        minimum,
+                        maximum,
                         action: PermanentTargetAction::Untap,
                     });
                 Ok(())
             }
-            SubjectRefAst::Anaphora(_)
-                if builder.target == BodyTarget::None && builder.last_group_filter.is_some() =>
-            {
+            SubjectRefAst::Anaphora(_) if builder.last_group_filter.is_some() => {
                 let obj = builder
                     .last_group_filter
                     .ok_or("oracle:unsupported-untap-perm")?;
                 builder.instructions.push(Instruction::SetGroupTapped {
                     filter: Box::new(obj),
+                    tapped: false,
+                });
+                Ok(())
+            }
+            SubjectRefAst::Anaphora(_)
+                if last_instruction_created_tokens(&builder.instructions) =>
+            {
+                builder.instructions.push(Instruction::SetSubjectTapped {
+                    subject: Box::new(EffectSubject::CreatedTokens),
+                    tapped: false,
+                });
+                Ok(())
+            }
+            SubjectRefAst::Anaphora(_) if last_instruction_moved_object(&builder.instructions) => {
+                builder.instructions.push(Instruction::SetSubjectTapped {
+                    subject: Box::new(EffectSubject::LastMoved),
+                    tapped: false,
+                });
+                Ok(())
+            }
+            SubjectRefAst::TriggerSubject if in_trigger => {
+                builder.instructions.push(Instruction::SetSubjectTapped {
+                    subject: Box::new(EffectSubject::TriggerSubject),
+                    tapped: false,
+                });
+                Ok(())
+            }
+            SubjectRefAst::Anaphora(raw)
+                if in_trigger
+                    && (!self_pronoun_valid || !is_self_anaphora_label(raw))
+                    && builder.target == BodyTarget::None =>
+            {
+                builder.instructions.push(Instruction::SetSubjectTapped {
+                    subject: Box::new(EffectSubject::TriggerSubject),
                     tapped: false,
                 });
                 Ok(())
@@ -6437,7 +6559,8 @@ pub(super) fn lower_instruction(
                 false,
                 had_perm_target,
             )?;
-            if first == MoveSubjectRef::AbilitySource
+            if !builder.up_to_one_target
+                && first == MoveSubjectRef::AbilitySource
                 && second == MoveSubjectRef::TargetObject
                 && builder.target.guarantees_creature()
             {
@@ -6457,6 +6580,57 @@ pub(super) fn lower_instruction(
             unless_pay,
             unless_action: None,
         } => {
+            if in_trigger
+                && builder.target == BodyTarget::None
+                && matches!(target.as_ref(), SubjectRefAst::Anaphora(raw) if matches!(
+                    raw.trim().to_ascii_lowercase().as_str(),
+                    "that spell" | "that spell or ability" | "that ability" | "it"
+                ))
+            {
+                if let Some(cost_atom) = unless_pay {
+                    match cost_atom {
+                        CostAtomAst::PayMana(raw) => {
+                            let idx = builder.instructions.len();
+                            if let Some(cost) = parse_fixed_mana_cost(raw) {
+                                builder.instructions.push(Instruction::OfferManaPayment {
+                                    payer: ResolvingPlayer::TriggerSubjectController,
+                                    cost,
+                                    paid_destination: idx + 2,
+                                    declined_destination: idx + 1,
+                                });
+                            } else if let Some((fixed, x_cnt)) = parse_mana_cost_with_x(raw)
+                                && x_cnt > 0
+                            {
+                                let x_val = match bound_x {
+                                    Some(expr) => lower_value_expr(expr, vocabulary)?,
+                                    None => ValueExpr::chosen_x(),
+                                };
+                                let extra_generic = scale_value_expr(x_val, i64::from(x_cnt));
+                                builder
+                                    .instructions
+                                    .push(Instruction::OfferDynamicManaPayment {
+                                        payer: ResolvingPlayer::TriggerSubjectController,
+                                        fixed,
+                                        extra_generic,
+                                        paid_destination: idx + 2,
+                                        declined_destination: idx + 1,
+                                    });
+                            } else {
+                                return Err("oracle:counter-unless-x");
+                            }
+                            builder
+                                .instructions
+                                .push(Instruction::CounterTriggeringStackObject);
+                            return Ok(());
+                        }
+                        _ => return Err("oracle:counter-unless-non-mana"),
+                    }
+                }
+                builder
+                    .instructions
+                    .push(Instruction::CounterTriggeringStackObject);
+                return Ok(());
+            }
             let bt = lower_target_subject(target, vocabulary)?;
             builder.bind_target(bt)?;
             if let Some(cost_atom) = unless_pay {
@@ -7433,7 +7607,12 @@ pub(super) fn lower_instruction(
                 kind_clean = rest.trim_start();
             }
             let ck = parse_counter_kind(kind_clean).ok_or("oracle:put-counter-kind")?;
-            let amt = lower_value_expr(resolve_x(count, bound_x), vocabulary)?;
+            let amt = lower_value_expr_in_context(
+                resolve_x(count, bound_x),
+                builder,
+                in_trigger,
+                vocabulary,
+            )?;
             if ck.is_player_counter() {
                 if let SubjectRefAst::Player(p) = subject.as_ref() {
                     let players = lower_affected_players_in_context(*p, builder, in_trigger)?;
@@ -7607,7 +7786,28 @@ pub(super) fn lower_instruction(
                         });
                     Ok(())
                 }
-                SubjectRefAst::Anaphora(_) if builder.target != BodyTarget::None => {
+                SubjectRefAst::Anaphora(_)
+                    if last_instruction_created_tokens(&builder.instructions) =>
+                {
+                    builder
+                        .instructions
+                        .push(Instruction::PutCountersOnSubject {
+                            subject: Box::new(EffectSubject::CreatedTokens),
+                            kind: ck,
+                            amount: amt,
+                        });
+                    Ok(())
+                }
+                SubjectRefAst::Anaphora(_)
+                    if is_permanent_body_target(builder.target)
+                        || matches!(
+                            builder.target,
+                            BodyTarget::SingleAnyTarget
+                                | BodyTarget::SingleCreatureOrPlayer
+                                | BodyTarget::SinglePlayerOrPlaneswalker
+                                | BodyTarget::SingleOpponentOrPlaneswalker
+                        ) =>
+                {
                     if ck == CounterKind::Indestructible && const_n == Some(1) {
                         builder
                             .instructions
@@ -7641,19 +7841,6 @@ pub(super) fn lower_instruction(
                         .instructions
                         .push(Instruction::PutCountersOnSubject {
                             subject: Box::new(EffectSubject::TriggerSubject),
-                            kind: ck,
-                            amount: amt,
-                        });
-                    Ok(())
-                }
-                SubjectRefAst::Anaphora(_)
-                    if builder.target == BodyTarget::None
-                        && last_instruction_created_tokens(&builder.instructions) =>
-                {
-                    builder
-                        .instructions
-                        .push(Instruction::PutCountersOnSubject {
-                            subject: Box::new(EffectSubject::CreatedTokens),
                             kind: ck,
                             amount: amt,
                         });
@@ -8169,8 +8356,14 @@ pub(super) fn lower_instruction(
                 },
                 _ => return Err("oracle:unsupported-token-controller"),
             };
-            let (creation, attacking) =
-                lower_token_spec(token, recipients, vocabulary, ids, bound_x)?;
+            let (creation, attacking) = lower_token_spec(
+                token,
+                recipients,
+                vocabulary,
+                ids,
+                bound_x,
+                Some((builder, in_trigger)),
+            )?;
             if attacking {
                 if !creation.enters_tapped || creation.recipients != TokenRecipients::Controller {
                     return Err("oracle:unsupported-attacking-token");
@@ -10152,7 +10345,12 @@ pub(super) fn lower_instruction(
             if !ck.is_player_counter() {
                 return Err("oracle:player-counter-kind");
             }
-            let amt = lower_value_expr(resolve_x(count, bound_x), vocabulary)?;
+            let amt = lower_value_expr_in_context(
+                resolve_x(count, bound_x),
+                builder,
+                in_trigger,
+                vocabulary,
+            )?;
             if matches!(player, PlayerRefAst::You)
                 && ck == CounterKind::Experience
                 && amt == ValueExpr::literal(1)
@@ -10801,6 +10999,37 @@ pub(super) fn lower_instruction(
             {
                 let bt = lower_target_subject(subject, vocabulary)?;
                 builder.bind_target(bt)?;
+                builder
+                    .instructions
+                    .push(Instruction::ShuffleTargetIntoLibrary);
+                Ok(())
+            }
+            SubjectRefAst::TargetObject { filter, count }
+                if matches!(
+                    filter.zone,
+                    Some(
+                        ZoneFilter::YourGraveyard
+                            | ZoneFilter::OpponentGraveyard
+                            | ZoneFilter::AnyGraveyard
+                    )
+                ) && matches!(
+                    count,
+                    TargetCountAst::Exact(_) | TargetCountAst::UpTo(_) | TargetCountAst::AnyNumber
+                ) =>
+            {
+                let (min_t, max_t) = match *count {
+                    TargetCountAst::Exact(n) if n > 0 => (usize::from(n), usize::from(n)),
+                    TargetCountAst::UpTo(n) if n > 0 => (0, usize::from(n)),
+                    TargetCountAst::AnyNumber => (0, usize::from(u16::MAX)),
+                    _ => return Err("oracle:unsupported-shuffle-into-library"),
+                };
+                let single_subj = SubjectRefAst::TargetObject {
+                    filter: filter.clone(),
+                    count: TargetCountAst::Exact(1),
+                };
+                let bt = lower_target_subject(&single_subj, vocabulary)?;
+                builder.bind_target(bt)?;
+                builder.graveyard_target_bounds = Some((min_t, max_t));
                 builder
                     .instructions
                     .push(Instruction::ShuffleTargetIntoLibrary);
@@ -15187,7 +15416,7 @@ fn lower_fight_or_exchange_subject(
         SubjectRefAst::SelfObject if has_source => Ok(MoveSubjectRef::AbilitySource),
         SubjectRefAst::TargetObject {
             filter,
-            count: TargetCountAst::Exact(1),
+            count: count @ (TargetCountAst::Exact(1) | TargetCountAst::UpTo(1)),
         } if filter.zone.is_none() => {
             let bt = lower_battlefield_body_target(filter, vocabulary)?;
             let valid_bt = matches!(
@@ -15200,6 +15429,9 @@ fn lower_fight_or_exchange_subject(
                 return Err("oracle:unsupported-fight");
             }
             builder.bind_target(bt)?;
+            if *count == TargetCountAst::UpTo(1) {
+                builder.up_to_one_target = true;
+            }
             Ok(MoveSubjectRef::TargetObject)
         }
         SubjectRefAst::TriggerSubject if in_trigger => Ok(MoveSubjectRef::TriggeringObject),
@@ -17367,11 +17599,25 @@ fn lower_search_library_instruction<'a>(
         return Err("oracle:unsupported-search-follow-up");
     }
 
+    let mut effective_filter_owned: Option<ObjectFilterAst> = None;
+    if let Some(spellwake_oracle_compiler::ast::NameFilterAst::SameAs(ref_subj)) = &filter.named
+        && let SubjectRefAst::TargetObject {
+            filter: tf,
+            count: TargetCountAst::Exact(1),
+        } = ref_subj.as_ref()
+        && tf.zone.is_none()
+    {
+        let bt = lower_battlefield_body_target(tf, vocabulary)?;
+        builder.bind_target(bt)?;
+        let mut cloned = filter.clone();
+        cloned.named = Some(spellwake_oracle_compiler::ast::NameFilterAst::SameAsReferenced);
+        effective_filter_owned = Some(cloned);
+    }
     let resolved_where_x = where_x.map(|e| resolve_x(e, bound_x));
     let mut search = lower_library_search_ext(
         library,
         resolve_x(count, bound_x),
-        filter,
+        effective_filter_owned.as_ref().unwrap_or(filter),
         eff_reveal,
         eff_to_zone.as_str(),
         vocabulary,
@@ -17387,6 +17633,22 @@ fn lower_search_library_instruction<'a>(
             modifier,
         },
     )?;
+    if let spellwake_engine::program::SearchCardMatcher::SameNameAs { reference, .. } =
+        &mut search.matcher
+        && *reference == MoveSubjectRef::TriggeringObject
+    {
+        if matches!(
+            builder.target,
+            BodyTarget::SingleCreature
+                | BodyTarget::SinglePermanent
+                | BodyTarget::SinglePlaneswalker
+                | BodyTarget::FilteredPermanent(_)
+        ) {
+            *reference = MoveSubjectRef::TargetObject;
+        } else if !in_trigger {
+            return Err("oracle:unsupported-search-named");
+        }
+    }
     if let Some(pe) = post_entry {
         if let SearchDestination::Battlefield {
             post_entry: ref mut slot,
@@ -17695,10 +17957,7 @@ fn emit_resolved_parts_for_subject(
                 });
             Ok(())
         }
-        SubjectRefAst::Anaphora(_)
-            if builder.target == BodyTarget::None
-                && last_instruction_created_tokens(&builder.instructions) =>
-        {
+        SubjectRefAst::Anaphora(_) if last_instruction_created_tokens(&builder.instructions) => {
             builder.instructions.push(Instruction::ChangeGroup {
                 group: Box::new(EffectSubject::CreatedTokens),
                 parts,
@@ -17706,10 +17965,7 @@ fn emit_resolved_parts_for_subject(
             });
             Ok(())
         }
-        SubjectRefAst::Anaphora(_)
-            if builder.target == BodyTarget::None
-                && last_instruction_moved_object(&builder.instructions) =>
-        {
+        SubjectRefAst::Anaphora(_) if last_instruction_moved_object(&builder.instructions) => {
             builder.instructions.push(Instruction::ChangeGroup {
                 group: Box::new(EffectSubject::LastMoved),
                 parts,

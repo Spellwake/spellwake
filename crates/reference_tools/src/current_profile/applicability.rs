@@ -834,7 +834,9 @@ native!(ExecutableBody, self, {
         | Instruction::Ripple(_)
         | Instruction::Demonstrate
         | Instruction::Enlist
-        | Instruction::CounterSpellToLibrary { .. } => Ok(()),
+        | Instruction::CounterSpellToLibrary { .. }
+        | Instruction::CounterTriggeringStackObject
+        | Instruction::SetSubjectTapped { .. } => Ok(()),
     })
 });
 native!(TriggeredAbility, self, {

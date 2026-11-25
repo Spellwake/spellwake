@@ -29,7 +29,8 @@ pub(super) fn lower_static(
             condition,
             paired_rule,
         } => {
-            let mut selectors = lower_permanent_selectors(subject, vocabulary)?;
+            let mut selectors =
+                lower_permanent_selectors_with_context(subject, condition.as_deref(), vocabulary)?;
             for sel in &mut selectors {
                 if let Some(cond) = condition {
                     apply_selector_condition(sel, cond, vocabulary)?;
@@ -180,7 +181,8 @@ pub(super) fn lower_static(
                 }
                 return Ok(());
             }
-            let mut selectors = lower_permanent_selectors(subject, vocabulary)?;
+            let mut selectors =
+                lower_permanent_selectors_with_context(subject, condition.as_deref(), vocabulary)?;
             for sel in &mut selectors {
                 if let Some(cond) = condition {
                     apply_selector_condition(sel, cond, vocabulary)?;
@@ -215,7 +217,8 @@ pub(super) fn lower_static(
             compiled: Some(compiled_face),
             condition,
         } => {
-            let mut selectors = lower_permanent_selectors(subject, vocabulary)?;
+            let mut selectors =
+                lower_permanent_selectors_with_context(subject, condition.as_deref(), vocabulary)?;
             for sel in &mut selectors {
                 if let Some(cond) = condition {
                     apply_selector_condition(sel, cond, vocabulary)?;
@@ -242,7 +245,8 @@ pub(super) fn lower_static(
             additive,
             condition,
         } => {
-            let mut selectors = lower_permanent_selectors(subject, vocabulary)?;
+            let mut selectors =
+                lower_permanent_selectors_with_context(subject, condition.as_deref(), vocabulary)?;
             for sel in &mut selectors {
                 if let Some(cond) = condition {
                     apply_selector_condition(sel, cond, vocabulary)?;
@@ -278,7 +282,8 @@ pub(super) fn lower_static(
             lose_all_abilities,
             condition,
         } => {
-            let mut selectors = lower_permanent_selectors(subject, vocabulary)?;
+            let mut selectors =
+                lower_permanent_selectors_with_context(subject, condition.as_deref(), vocabulary)?;
             for sel in &mut selectors {
                 if let Some(cond) = condition {
                     apply_selector_condition(sel, cond, vocabulary)?;
@@ -1587,7 +1592,9 @@ pub(super) fn lower_static(
                 && let Some(cond) = condition.as_deref()
             {
                 let selectors = match subject.as_deref() {
-                    Some(s) => lower_permanent_selectors(s, vocabulary)?,
+                    Some(s) => {
+                        lower_permanent_selectors_with_context(s, condition.as_deref(), vocabulary)?
+                    }
                     None => vec![PermanentSelector {
                         controller: ControllerSelector::SourceItself,
                         ..PermanentSelector::default()
@@ -1644,7 +1651,9 @@ pub(super) fn lower_static(
                 parse_cant_block_or_be_blocked_by_filter(rule, filter.as_deref(), vocabulary)
             {
                 let selectors = match subject.as_deref() {
-                    Some(s) => lower_permanent_selectors(s, vocabulary)?,
+                    Some(s) => {
+                        lower_permanent_selectors_with_context(s, condition.as_deref(), vocabulary)?
+                    }
                     None => vec![PermanentSelector {
                         controller: ControllerSelector::SourceItself,
                         ..PermanentSelector::default()
@@ -1674,7 +1683,9 @@ pub(super) fn lower_static(
             }
             if filter.is_none() && is_menace_blocking_rule(rule) {
                 let selectors = match subject.as_deref() {
-                    Some(s) => lower_permanent_selectors(s, vocabulary)?,
+                    Some(s) => {
+                        lower_permanent_selectors_with_context(s, condition.as_deref(), vocabulary)?
+                    }
                     None => vec![PermanentSelector {
                         controller: ControllerSelector::SourceItself,
                         ..PermanentSelector::default()
@@ -1704,7 +1715,9 @@ pub(super) fn lower_static(
                 && extra_blocks >= 2
             {
                 let selectors = match subject.as_deref() {
-                    Some(s) => lower_permanent_selectors(s, vocabulary)?,
+                    Some(s) => {
+                        lower_permanent_selectors_with_context(s, condition.as_deref(), vocabulary)?
+                    }
                     None => vec![PermanentSelector {
                         controller: ControllerSelector::SourceItself,
                         ..PermanentSelector::default()
@@ -1732,7 +1745,9 @@ pub(super) fn lower_static(
             }
             if let Some(br) = lower_rule_blocking_restriction(rule, filter.as_deref(), vocabulary) {
                 let selectors = match subject.as_deref() {
-                    Some(s) => lower_permanent_selectors(s, vocabulary)?,
+                    Some(s) => {
+                        lower_permanent_selectors_with_context(s, condition.as_deref(), vocabulary)?
+                    }
                     None => vec![PermanentSelector {
                         controller: ControllerSelector::SourceItself,
                         ..PermanentSelector::default()
@@ -1904,7 +1919,9 @@ pub(super) fn lower_static(
                 && filter.is_none()
             {
                 let selectors = match subject.as_deref() {
-                    Some(s) => lower_permanent_selectors(s, vocabulary)?,
+                    Some(s) => {
+                        lower_permanent_selectors_with_context(s, condition.as_deref(), vocabulary)?
+                    }
                     None => vec![PermanentSelector {
                         controller: ControllerSelector::SourceItself,
                         ..PermanentSelector::default()
@@ -2039,13 +2056,20 @@ pub(super) fn lower_static(
                 };
                 if let Some(kws) = granted_kws {
                     let selectors = match subject.as_deref() {
-                        Some(s) => lower_permanent_selectors(s, vocabulary)?,
+                        Some(s) => lower_permanent_selectors_with_context(
+                            s,
+                            condition.as_deref(),
+                            vocabulary,
+                        )?,
                         None => vec![PermanentSelector {
                             controller: ControllerSelector::SourceItself,
                             ..PermanentSelector::default()
                         }],
                     };
-                    for selector in selectors {
+                    for mut selector in selectors {
+                        if let Some(cond) = condition {
+                            apply_selector_condition(&mut selector, cond, vocabulary)?;
+                        }
                         push_static_ability(
                             program,
                             StaticContinuousAbility::Battlefield {
@@ -2072,13 +2096,18 @@ pub(super) fn lower_static(
             }
             if r_low == "blockseachcombatifable" || r_low == "blocks each combat if able" {
                 let selectors = match subject.as_deref() {
-                    Some(s) => lower_permanent_selectors(s, vocabulary)?,
+                    Some(s) => {
+                        lower_permanent_selectors_with_context(s, condition.as_deref(), vocabulary)?
+                    }
                     None => vec![PermanentSelector {
                         controller: ControllerSelector::SourceItself,
                         ..PermanentSelector::default()
                     }],
                 };
-                for selector in selectors {
+                for mut selector in selectors {
+                    if let Some(cond) = condition {
+                        apply_selector_condition(&mut selector, cond, vocabulary)?;
+                    }
                     push_static_ability(
                         program,
                         StaticContinuousAbility::Battlefield {
@@ -2127,13 +2156,18 @@ pub(super) fn lower_static(
                     return Ok(());
                 }
                 let selectors = match subject.as_deref() {
-                    Some(s) => lower_permanent_selectors(s, vocabulary)?,
+                    Some(s) => {
+                        lower_permanent_selectors_with_context(s, condition.as_deref(), vocabulary)?
+                    }
                     None => vec![PermanentSelector {
                         controller: ControllerSelector::SourceItself,
                         ..PermanentSelector::default()
                     }],
                 };
-                for selector in selectors {
+                for mut selector in selectors {
+                    if let Some(cond) = condition {
+                        apply_selector_condition(&mut selector, cond, vocabulary)?;
+                    }
                     push_static_ability(
                         program,
                         StaticContinuousAbility::Battlefield {
@@ -3541,7 +3575,7 @@ fn try_lower_exile_matching_permission(
     })
 }
 
-fn static_ast_subject(st: &StaticAbilityAst) -> Option<&SubjectRefAst> {
+pub(super) fn static_ast_subject(st: &StaticAbilityAst) -> Option<&SubjectRefAst> {
     match st {
         StaticAbilityAst::ContinuousModifyPT { subject, .. }
         | StaticAbilityAst::GrantKeywords { subject, .. }
@@ -3551,6 +3585,36 @@ fn static_ast_subject(st: &StaticAbilityAst) -> Option<&SubjectRefAst> {
         | StaticAbilityAst::PreventCounters { subject, .. } => Some(subject.as_ref()),
         StaticAbilityAst::RuleOrCombatRestriction { subject, .. } => subject.as_deref(),
         _ => None,
+    }
+}
+
+pub(super) fn resolve_static_anaphora_subject_across_statics(
+    st: &mut StaticAbilityAst,
+    prev: &SubjectRefAst,
+) {
+    let slot: Option<&mut SubjectRefAst> = match st {
+        StaticAbilityAst::ContinuousModifyPT { subject, .. }
+        | StaticAbilityAst::GrantKeywords { subject, .. }
+        | StaticAbilityAst::GrantAbilityText { subject, .. }
+        | StaticAbilityAst::SetOrAddType { subject, .. }
+        | StaticAbilityAst::ContinuousLayerEffect { subject, .. }
+        | StaticAbilityAst::PreventCounters { subject, .. } => Some(subject.as_mut()),
+        StaticAbilityAst::RuleOrCombatRestriction {
+            subject: Some(subject),
+            ..
+        } => Some(subject.as_mut()),
+        _ => None,
+    };
+    if let Some(s) = slot
+        && let SubjectRefAst::Anaphora(raw) = s
+    {
+        let low = raw.trim().to_ascii_lowercase();
+        if matches!(
+            low.as_str(),
+            "they" | "that creature" | "those creatures" | "that permanent" | "those permanents"
+        ) {
+            *s = prev.clone();
+        }
     }
 }
 

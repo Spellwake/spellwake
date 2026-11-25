@@ -336,6 +336,7 @@ impl EffectWindow {
             | Instruction::PutNamedCounterOnSource { .. }
             | Instruction::PutCountersOnSubject { .. }
             | Instruction::SetGroupTapped { .. }
+            | Instruction::SetSubjectTapped { .. }
             | Instruction::PutQuestCounterOnSource
             | Instruction::PutStorageCounterOnSource
             | Instruction::AbilitySourceControllerLosesLife(_)
@@ -571,6 +572,7 @@ impl EffectWindow {
             | Instruction::SacrificeStateTriggerSource
             | Instruction::SacrificeUpkeepSource(_)
             | Instruction::CounterWardSource
+            | Instruction::CounterTriggeringStackObject
             | Instruction::BoostSourceByCastManaValue
             | Instruction::BoostLoneAttacker
             | Instruction::Attach(_)

@@ -56,7 +56,9 @@ pub(crate) fn static_source_condition(
         StaticSourceCondition::ControllerControlsSubtype(kind)
         | StaticSourceCondition::OpponentControlsSubtype(kind) => word(change, kind),
         StaticSourceCondition::ControlsMatching { selector: sel, .. }
-        | StaticSourceCondition::OpponentControlsMatching { selector: sel, .. } => {
+        | StaticSourceCondition::OpponentControlsMatching { selector: sel, .. }
+        | StaticSourceCondition::AttachedHostMatches(sel)
+        | StaticSourceCondition::ControlsExactCount { selector: sel, .. } => {
             selector(change, sel);
         }
         StaticSourceCondition::Eval(rc) => rc.rewrite_creature_type(change.from, change.to),
@@ -489,6 +491,9 @@ fn body(change: CreatureTypeTextChange, value: &mut ExecutableBody) {
             | Instruction::SetGroupTapped { filter: group, .. } => {
                 group.rewrite_creature_type(change.from, change.to);
             }
+            Instruction::SetSubjectTapped { subject, .. } => {
+                subject.rewrite_creature_type(change.from, change.to);
+            }
             Instruction::PutCountersOnSubject { subject, .. } => {
                 if let crate::program::EffectSubject::Matching(group) = subject.as_mut() {
                     group.rewrite_creature_type(change.from, change.to);
@@ -904,6 +909,7 @@ fn body(change: CreatureTypeTextChange, value: &mut ExecutableBody) {
             | Instruction::SacrificeStateTriggerSource
             | Instruction::SacrificeUpkeepSource(_)
             | Instruction::CounterWardSource
+            | Instruction::CounterTriggeringStackObject
             | Instruction::BoostSourceByCastManaValue
             | Instruction::BoostLoneAttacker
             | Instruction::BoostSaddledAttacker { .. }

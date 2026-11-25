@@ -5689,6 +5689,7 @@ impl EffectWindow {
                     .get(source)
                     .filter(|card| {
                         card.zone() == ObjectZone::Battlefield
+                            && self.window.cards().phased_out_under(source).is_none()
                             && card.controller() == Some(controller)
                     })
                     .and_then(GameObject::control_epoch)
@@ -5696,6 +5697,65 @@ impl EffectWindow {
                     return Ok(None);
                 };
                 Some(ResolvedDuration::WhileSourceControlled {
+                    source,
+                    controller,
+                    epoch,
+                })
+            }
+            ResolvedDuration::WhileAbilitySourceOnBattlefield => {
+                let (StackKind::ActivatedAbility { source }
+                | StackKind::TriggeredAbility { source }) = entry.kind()
+                else {
+                    return Err(EffectError::InconsistentProgram);
+                };
+                let source = source.id();
+                if !self.window.cards().get(source).is_some_and(|card| {
+                    card.zone() == ObjectZone::Battlefield
+                        && self.window.cards().phased_out_under(source).is_none()
+                }) {
+                    return Ok(None);
+                }
+                Some(ResolvedDuration::WhileSourceOnBattlefield { source })
+            }
+            ResolvedDuration::WhileAbilitySourceTapped => {
+                let (StackKind::ActivatedAbility { source }
+                | StackKind::TriggeredAbility { source }) = entry.kind()
+                else {
+                    return Err(EffectError::InconsistentProgram);
+                };
+                let source = source.id();
+                if !self.window.cards().get(source).is_some_and(|card| {
+                    card.zone() == ObjectZone::Battlefield
+                        && self.window.cards().phased_out_under(source).is_none()
+                        && card.tapped() == Some(true)
+                }) {
+                    return Ok(None);
+                }
+                Some(ResolvedDuration::WhileSourceTapped { source })
+            }
+            ResolvedDuration::WhileControllingTappedAbilitySource => {
+                let (StackKind::ActivatedAbility { source }
+                | StackKind::TriggeredAbility { source }) = entry.kind()
+                else {
+                    return Err(EffectError::InconsistentProgram);
+                };
+                let source = source.id();
+                let controller = entry.controller();
+                let Some(epoch) = self
+                    .window
+                    .cards()
+                    .get(source)
+                    .filter(|card| {
+                        card.zone() == ObjectZone::Battlefield
+                            && self.window.cards().phased_out_under(source).is_none()
+                            && card.controller() == Some(controller)
+                            && card.tapped() == Some(true)
+                    })
+                    .and_then(GameObject::control_epoch)
+                else {
+                    return Ok(None);
+                };
+                Some(ResolvedDuration::WhileSourceControlledAndTapped {
                     source,
                     controller,
                     epoch,
@@ -9143,6 +9203,7 @@ impl EffectWindow {
             | Instruction::SacrificeStateTriggerSource
             | Instruction::SacrificeUpkeepSource(_)
             | Instruction::CounterWardSource
+            | Instruction::CounterTriggeringStackObject
             | Instruction::ResolveKeywordTrigger(_)
             | Instruction::BoostSourceByCastManaValue
             | Instruction::BoostLoneAttacker
@@ -9294,6 +9355,7 @@ impl EffectWindow {
             | Instruction::PutNamedCounterOnSource { .. }
             | Instruction::PutCountersOnSubject { .. }
             | Instruction::SetGroupTapped { .. }
+            | Instruction::SetSubjectTapped { .. }
             | Instruction::PutQuestCounterOnSource
             | Instruction::PutStorageCounterOnSource
             | Instruction::AbilitySourceControllerLosesLife(_)

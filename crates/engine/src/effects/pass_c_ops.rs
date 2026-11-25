@@ -11,7 +11,7 @@ use crate::program::{
 };
 
 impl EffectWindow {
-    fn resolve_pass_c_move_subject(
+    pub(super) fn resolve_pass_c_move_subject(
         &self,
         entry: &crate::stack_window::StackEntry,
         subject: MoveSubjectRef,

@@ -8787,6 +8787,26 @@ pub fn duration(value: ResolvedDuration) -> Value {
         } => {
             json!({"tag":"WhileSourceControlled","source":format!("{source:?}"),"controller":controller.0,"epoch":format!("{epoch:?}")})
         }
+        ResolvedDuration::WhileAbilitySourceOnBattlefield => {
+            json!("WhileAbilitySourceOnBattlefield")
+        }
+        ResolvedDuration::WhileSourceOnBattlefield { source } => {
+            json!({"tag":"WhileSourceOnBattlefield","source":format!("{source:?}")})
+        }
+        ResolvedDuration::WhileAbilitySourceTapped => json!("WhileAbilitySourceTapped"),
+        ResolvedDuration::WhileSourceTapped { source } => {
+            json!({"tag":"WhileSourceTapped","source":format!("{source:?}")})
+        }
+        ResolvedDuration::WhileControllingTappedAbilitySource => {
+            json!("WhileControllingTappedAbilitySource")
+        }
+        ResolvedDuration::WhileSourceControlledAndTapped {
+            source,
+            controller,
+            epoch,
+        } => {
+            json!({"tag":"WhileSourceControlledAndTapped","source":format!("{source:?}"),"controller":controller.0,"epoch":format!("{epoch:?}")})
+        }
         ResolvedDuration::ThroughNextTurn {
             player,
             created_in_turn,
@@ -10616,6 +10636,11 @@ pub fn body(value: &ExecutableBody) -> Value {
                         "tag":"AnyOfNames",
                         "names": names.iter().map(|n| n.as_str()).collect::<Vec<_>>()
                     }),
+                    SearchCardMatcher::SameNameAs { reference, extra } => json!({
+                        "tag":"SameNameAs",
+                        "reference": format!("{reference:?}"),
+                        "extra": extra.as_deref().map(|f| permanent_group_wire(*f))
+                    }),
                     SearchCardMatcher::Filtered(obj_filter) => json!({
                         "tag":"Filtered",
                         "filter": permanent_group_wire(**obj_filter)
@@ -11302,6 +11327,8 @@ pub fn body(value: &ExecutableBody) -> Value {
             Instruction::Demonstrate => json!({"op":"Demonstrate"}),
             Instruction::Enlist => json!({"op":"Enlist"}),
             Instruction::CounterSpellToLibrary { top } => json!({"op":"CounterSpellToLibrary","top":top}),
+            Instruction::CounterTriggeringStackObject => json!({"op":"CounterTriggeringStackObject"}),
+            Instruction::SetSubjectTapped { subject, tapped } => json!({"op":"SetSubjectTapped","subject":format!("{subject:?}"),"tapped":tapped}),
         })
         .collect::<Vec<_>>();
     let mut result = json!({"target":target,"instructions":instructions});

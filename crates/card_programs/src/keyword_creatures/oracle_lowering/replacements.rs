@@ -2113,8 +2113,14 @@ fn lower_event_instead_replacement(
                 && let ValueExprAst::Const(n) = count.as_ref()
                 && let Ok(count) = u8::try_from(*n)
                 && count > 0
-                && let Ok((creation, false)) =
-                    lower_token_spec(&tok_ast, TokenRecipients::Controller, vocabulary, ids, None)
+                && let Ok((creation, false)) = lower_token_spec(
+                    &tok_ast,
+                    TokenRecipients::Controller,
+                    vocabulary,
+                    ids,
+                    None,
+                    None,
+                )
                 && !creation.enters_tapped
                 && creation.base_size.is_none()
             {

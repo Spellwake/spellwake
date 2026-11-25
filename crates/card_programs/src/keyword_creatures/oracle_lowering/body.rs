@@ -30,6 +30,7 @@ pub(super) struct BodyBuilder {
     pub(super) instructions: Vec<Instruction>,
     pub(super) graveyard_target_bounds: Option<(usize, usize)>,
     pub(super) x_target_count: bool,
+    pub(super) up_to_one_target: bool,
     pub(super) last_group_filter: Option<ObjectFilter>,
     pub(super) trigger_hint: TriggerHint,
 }
@@ -41,6 +42,7 @@ impl BodyBuilder {
             instructions: Vec::new(),
             graveyard_target_bounds: None,
             x_target_count: false,
+            up_to_one_target: false,
             last_group_filter: None,
             trigger_hint: TriggerHint::None,
         }
@@ -83,6 +85,9 @@ impl BodyBuilder {
         };
         if self.x_target_count {
             body = body.with_x_target_count();
+        }
+        if self.up_to_one_target {
+            body = body.with_up_to_one_target();
         }
         Ok(body)
     }
@@ -547,6 +552,9 @@ fn instruction_has_upto_one_target(ins: &InstructionAst) -> bool {
         InstructionAst::MoveCounters { from, to, .. } => {
             subject_has_upto_one_target(from) || subject_has_upto_one_target(to)
         }
+        InstructionAst::Fight { a, b } => {
+            subject_has_upto_one_target(a) || subject_has_upto_one_target(b)
+        }
         InstructionAst::Optional(inner) => inner.iter().any(instruction_has_upto_one_target),
         _ => false,
     }
@@ -623,6 +631,11 @@ fn rewrite_instruction_upto_one_to_exact_one(ins: &mut InstructionAst) -> bool {
             let a = rewrite_subject_upto_one_to_exact_one(from);
             let b = rewrite_subject_upto_one_to_exact_one(to);
             a || b
+        }
+        InstructionAst::Fight { a, b } => {
+            let x = rewrite_subject_upto_one_to_exact_one(a);
+            let y = rewrite_subject_upto_one_to_exact_one(b);
+            x || y
         }
         InstructionAst::Optional(inner) => {
             let mut changed = false;
@@ -3141,7 +3154,11 @@ pub(super) fn is_self_pronoun(
         SubjectRefAst::Anaphora(p) if self_pronoun_valid && builder.target == BodyTarget::None => {
             matches!(
                 p.to_ascii_lowercase().as_str(),
-                "it" | "this creature"
+                "it" | "him"
+                    | "her"
+                    | "he"
+                    | "she"
+                    | "this creature"
                     | "this permanent"
                     | "this artifact"
                     | "this enchantment"
@@ -12173,8 +12190,14 @@ pub(super) fn lower_instruction_seq(
             } = &ins[i + 1]
             && is_self_pronoun(subject, builder, self_pronoun_valid)
             && matches!(target.as_ref(), SubjectRefAst::Anaphora(_))
-            && let Ok((creation, false)) =
-                lower_token_spec(token, TokenRecipients::Controller, vocabulary, ids, bound_x)
+            && let Ok((creation, false)) = lower_token_spec(
+                token,
+                TokenRecipients::Controller,
+                vocabulary,
+                ids,
+                bound_x,
+                Some((builder, in_trigger)),
+            )
             && !creation.enters_tapped
             && creation.amount == ValueExpr::literal(1)
             && creation.base_size.is_none()

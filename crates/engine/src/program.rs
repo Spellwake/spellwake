@@ -834,6 +834,12 @@ pub enum SearchCardMatcher {
     CurseForHost(AuraSearchHost),
     /// A card having any of the specified English names.
     AnyOfNames(Vec<spellwake_contracts::names::EnglishCardName>),
+    /// A card sharing a name with a runtime-resolved reference object (CR 201.3),
+    /// optionally further filtered by `extra`.
+    SameNameAs {
+        reference: MoveSubjectRef,
+        extra: Option<Box<ObjectFilter>>,
+    },
     /// Any card matching a general orthogonal object filter.
     Filtered(Box<ObjectFilter>),
 }
@@ -2995,6 +3001,8 @@ pub enum Instruction {
     DrainOpponents(ValueExpr),
     /// Counter the opposing stack entry captured by this ward trigger.
     CounterWardSource,
+    /// Counter the triggering spell or ability captured by a `SpellCast` or `Targeted` trigger.
+    CounterTriggeringStackObject,
     /// Resolve an unearth activation against the exact graveyard incarnation.
     /// Resolve a revealed hand card's ninjutsu ability (CR 702.49).
     Ninjutsu,
@@ -3059,6 +3067,11 @@ pub enum Instruction {
     /// Tap or untap every battlefield permanent matching `filter`.
     SetGroupTapped {
         filter: Box<ObjectFilter>,
+        tapped: bool,
+    },
+    /// Tap or untap every battlefield permanent resolved by `subject`.
+    SetSubjectTapped {
+        subject: Box<EffectSubject>,
         tapped: bool,
     },
     /// Destroy the targeted permanent if it can be destroyed.
@@ -3936,6 +3949,7 @@ impl Instruction {
             | Self::ExtortDrain
             | Self::DrainOpponents(..)
             | Self::CounterWardSource
+            | Self::CounterTriggeringStackObject
             | Self::Ninjutsu
             | Self::IncreaseSpeed
             | Self::BecomeMonarch(..)
@@ -3971,6 +3985,7 @@ impl Instruction {
             | Self::ResolveKeywordTrigger(..)
             | Self::PutCountersOnSubject { .. }
             | Self::SetGroupTapped { .. }
+            | Self::SetSubjectTapped { .. }
             | Self::DestroyTarget
             | Self::DestroyTargetWithoutRegeneration
             | Self::DestroyCapturedDamageSource
@@ -4738,6 +4753,7 @@ impl Instruction {
             | Self::ResolveTransfer(..)
             | Self::ExtortDrain
             | Self::CounterWardSource
+            | Self::CounterTriggeringStackObject
             | Self::Ninjutsu
             | Self::IncreaseSpeed
             | Self::BecomeMonarch(..)
@@ -4767,6 +4783,7 @@ impl Instruction {
             | Self::CascadeBottom
             | Self::ResolveKeywordTrigger(..)
             | Self::SetGroupTapped { .. }
+            | Self::SetSubjectTapped { .. }
             | Self::DestroyCapturedDamageSource
             | Self::ExileCombatDamagedCreature
             | Self::DestroyCapturedCombatCreature { .. }
@@ -4945,6 +4962,7 @@ impl Instruction {
             | Self::PutNamedCounterOnSource { .. }
             | Self::PutCountersOnSubject { .. }
             | Self::SetGroupTapped { .. }
+            | Self::SetSubjectTapped { .. }
             | Self::ChangeGroup { .. }
             | Self::PutStorageCounterOnSource
             | Self::ExileAbilitySource
@@ -5280,6 +5298,7 @@ impl Instruction {
             | Self::ReturnDelayedExile(_)
             | Self::ExileUnearthed(_)
             | Self::CounterWardSource
+            | Self::CounterTriggeringStackObject
             | Self::BoostSourceByCastManaValue
             | Self::BoostLoneAttacker
             | Self::BoostSaddledAttacker { .. }
@@ -5525,6 +5544,7 @@ pub struct ExecutableBody {
     pub(crate) triggered_modes: Option<TriggeredModes>,
     graveyard_target_bounds: Option<(usize, usize)>,
     x_target_count: bool,
+    up_to_one_target: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -5624,6 +5644,9 @@ impl ExecutableBody {
         }
         if self.target == BodyTarget::None {
             return None;
+        }
+        if self.up_to_one_target {
+            return Some((0, 1));
         }
         match self.instructions.as_slice() {
             [Instruction::BindOrderedPermanents { minimum, maximum }, ..] => {
@@ -5768,7 +5791,14 @@ impl ExecutableBody {
             triggered_modes: None,
             graveyard_target_bounds: None,
             x_target_count: false,
+            up_to_one_target: false,
         }
+    }
+
+    /// Allow 0 or 1 permanent target to be chosen ("up to one target ...").
+    pub fn with_up_to_one_target(mut self) -> Self {
+        self.up_to_one_target = true;
+        self
     }
 
     /// Require the spell's chosen X to equal the number of permanent/graveyard targets chosen.
@@ -5827,6 +5857,28 @@ impl ExecutableBody {
         context: BodyContext<'_>,
         initial_defined_x: bool,
     ) -> Result<(), DefinitionError> {
+        if self.up_to_one_target {
+            let valid_target = matches!(
+                self.target,
+                BodyTarget::SingleCreature
+                    | BodyTarget::SinglePermanent
+                    | BodyTarget::SinglePlaneswalker
+                    | BodyTarget::FilteredPermanent(_)
+            );
+            let has_safe_consumer = self.instructions.iter().any(|op| {
+                matches!(
+                    op,
+                    Instruction::Fight { .. } | Instruction::AffectPermanentTargets { .. }
+                )
+            });
+            if !valid_target
+                || !has_safe_consumer
+                || self.graveyard_target_bounds.is_some()
+                || self.x_target_count
+            {
+                return Err(DefinitionError::InvalidInstruction);
+            }
+        }
         if self.x_target_count {
             let valid_bounds = self
                 .permanent_target_bounds()
@@ -5856,6 +5908,7 @@ impl ExecutableBody {
                     } | Instruction::ReturnTargetGraveyardCreatureToHand
                         | Instruction::ReturnOwnGraveyardPermanentToBattlefield { .. }
                         | Instruction::ExileGraveyardTarget
+                        | Instruction::ShuffleTargetIntoLibrary
                 )
             });
             let valid_gy_target_and_ops = match self.target {
@@ -5869,7 +5922,8 @@ impl ExecutableBody {
                             ]
                         )
                 }
-                BodyTarget::AnyGraveyardCard
+                BodyTarget::SingleOwnGraveyardCard
+                | BodyTarget::AnyGraveyardCard
                 | BodyTarget::AnyGraveyardCreature
                 | BodyTarget::FilteredAnyGraveyardCard { .. } => has_multi_gy_move,
                 _ => false,
@@ -7639,6 +7693,44 @@ impl ExecutableBody {
                         {
                             return Err(DefinitionError::InvalidInstruction);
                         }
+                        SearchCardMatcher::SameNameAs { reference, extra } => {
+                            match reference {
+                                MoveSubjectRef::AbilitySource | MoveSubjectRef::AttachedHost => {
+                                    if !context.has_source() {
+                                        return Err(DefinitionError::InvalidInstruction);
+                                    }
+                                }
+                                MoveSubjectRef::TriggeringObject => {
+                                    if !matches!(context, BodyContext::TriggerBound { .. }) {
+                                        return Err(DefinitionError::InvalidInstruction);
+                                    }
+                                }
+                                MoveSubjectRef::TargetObject => {
+                                    if !matches!(
+                                        self.target,
+                                        BodyTarget::SingleCreature
+                                            | BodyTarget::SinglePermanent
+                                            | BodyTarget::SinglePlaneswalker
+                                            | BodyTarget::FilteredPermanent(_)
+                                    ) {
+                                        return Err(DefinitionError::OperandFamily);
+                                    }
+                                }
+                                MoveSubjectRef::RevealedCard
+                                | MoveSubjectRef::CreatedTokens
+                                | MoveSubjectRef::LastMoved
+                                | MoveSubjectRef::RememberedFirst
+                                | MoveSubjectRef::RememberedSecond => {}
+                            }
+                            if let Some(obj_filter) = extra {
+                                if obj_filter.uses_outside_named_slots() {
+                                    return Err(DefinitionError::InvalidInstruction);
+                                }
+                                obj_filter
+                                    .validate_vocabulary(vocabulary)
+                                    .map_err(|_| DefinitionError::InvalidInstruction)?;
+                            }
+                        }
                         SearchCardMatcher::CreatureSubtype(kind)
                             if vocabulary.label(*kind).is_none() =>
                         {
@@ -7698,6 +7790,14 @@ impl ExecutableBody {
                             self.target,
                             facts.definitely_exiled_target,
                         )?
+                    } else if matches!(
+                        &filter.matcher,
+                        SearchCardMatcher::SameNameAs {
+                            reference: MoveSubjectRef::TargetObject,
+                            ..
+                        }
+                    ) {
+                        Some(OperandFamily::Permanent)
                     } else {
                         None
                     }
@@ -8911,6 +9011,7 @@ impl ExecutableBody {
                                         | Instruction::PutCountersOnSource { .. }
                                         | Instruction::PutNamedCounterOnSource { .. }
                                         | Instruction::SetGroupTapped { .. }
+                                        | Instruction::SetSubjectTapped { .. }
                                         | Instruction::PutNamedCounterOnTarget { .. }
                                         | Instruction::PutPowerToughnessCounters { .. }
                                         | Instruction::DealDamageFrom { .. }
@@ -8993,6 +9094,17 @@ impl ExecutableBody {
                                         | Instruction::ExileGraveyardTarget
                                         | Instruction::CounterSpell
                                         | Instruction::CounterSpellToLibrary { .. }
+                                        | Instruction::PhaseOut(PhasingSubject::Source)
+                                        | Instruction::ShuffleAbilitySourceIntoLibrary
+                                        | Instruction::ModifyGroupUntilEndOfTurn { .. }
+                                        | Instruction::PreventDamageThisTurn(
+                                            crate::damage::TurnPreventionFilter::Combat
+                                                | crate::damage::TurnPreventionFilter::All
+                                                | crate::damage::TurnPreventionFilter::ToAbilitySource
+                                                | crate::damage::TurnPreventionFilter::CombatToOrFromAbilitySource
+                                                | crate::damage::TurnPreventionFilter::CombatToControlledCreatures
+                                                | crate::damage::TurnPreventionFilter::CreaturesControlledByOpponents,
+                                        )
                                 )
                                 || matches!(
                                     op,
@@ -9499,8 +9611,8 @@ impl ExecutableBody {
                     controller,
                     duration,
                 } => {
-                    if *duration == ResolvedDuration::WhileControllingAbilitySource
-                        && !context.has_source()
+                    if duration.is_materialized_source_bound()
+                        || (duration.requires_ability_source() && !context.has_source())
                     {
                         return Err(DefinitionError::InvalidInstruction);
                     }
@@ -9546,8 +9658,8 @@ impl ExecutableBody {
                     fam
                 }
                 Instruction::GiveFixedTargetControl { duration } => {
-                    if *duration == ResolvedDuration::WhileControllingAbilitySource
-                        && !context.has_source()
+                    if duration.is_materialized_source_bound()
+                        || (duration.requires_ability_source() && !context.has_source())
                     {
                         return Err(DefinitionError::InvalidInstruction);
                     }
@@ -9559,8 +9671,8 @@ impl ExecutableBody {
                     duration,
                     exceptions,
                 } => {
-                    if *duration == ResolvedDuration::WhileControllingAbilitySource
-                        && !context.has_source()
+                    if duration.is_materialized_source_bound()
+                        || (duration.requires_ability_source() && !context.has_source())
                     {
                         return Err(DefinitionError::InvalidInstruction);
                     }
@@ -9638,8 +9750,8 @@ impl ExecutableBody {
                     duration,
                     exceptions,
                 } => {
-                    if *duration == ResolvedDuration::WhileControllingAbilitySource
-                        && !context.has_source()
+                    if duration.is_materialized_source_bound()
+                        || (duration.requires_ability_source() && !context.has_source())
                     {
                         return Err(DefinitionError::InvalidInstruction);
                     }
@@ -9663,8 +9775,8 @@ impl ExecutableBody {
                     duration,
                 } => {
                     if (!*power && !*toughness)
-                        || (*duration == ResolvedDuration::WhileControllingAbilitySource
-                            && !context.has_source())
+                        || duration.is_materialized_source_bound()
+                        || (duration.requires_ability_source() && !context.has_source())
                     {
                         return Err(DefinitionError::InvalidInstruction);
                     }
@@ -10961,7 +11073,7 @@ impl ExecutableBody {
                     let family =
                         players.validate(context, self.target, facts.definitely_exiled_target)?;
                     amount.validate_amount(&defined_slots, context, &facts, vocabulary)?;
-                    family
+                    merge_family(family, amount.required_operand_family(self.target)?)?
                 }
                 Instruction::GrantControllerFlashUntilCleanup => {
                     if self.target != BodyTarget::None {
@@ -11501,6 +11613,43 @@ impl ExecutableBody {
                         None
                     }
                 }
+                Instruction::SetSubjectTapped { subject, .. } => {
+                    subject
+                        .validate_vocabulary(vocabulary)
+                        .map_err(|_| DefinitionError::InvalidInstruction)?;
+                    match subject.as_ref() {
+                        EffectSubject::AbilitySource => {
+                            if !context.has_source() {
+                                return Err(DefinitionError::InvalidInstruction);
+                            }
+                            None
+                        }
+                        EffectSubject::TriggerSubject
+                        | EffectSubject::TriggeringAttacker
+                        | EffectSubject::TriggeringAttackGroup
+                        | EffectSubject::TriggeringTarget => {
+                            if !matches!(context, BodyContext::TriggerBound { .. }) {
+                                return Err(DefinitionError::InvalidInstruction);
+                            }
+                            None
+                        }
+                        EffectSubject::TargetObject => match self.target {
+                            BodyTarget::SingleCreature
+                            | BodyTarget::SinglePermanent
+                            | BodyTarget::SinglePlaneswalker
+                            | BodyTarget::FilteredPermanent(_) => Some(OperandFamily::Permanent),
+                            _ => return Err(DefinitionError::OperandFamily),
+                        },
+                        EffectSubject::Matching(filter) => {
+                            if filter.has_target_player() {
+                                Some(OperandFamily::Player)
+                            } else {
+                                None
+                            }
+                        }
+                        EffectSubject::CreatedTokens | EffectSubject::LastMoved => None,
+                    }
+                }
                 Instruction::UntapControlledCreatures => None,
                 Instruction::TapAttackersAndSkipNextUntap => {
                     if self.target != BodyTarget::None {
@@ -11778,9 +11927,8 @@ impl ExecutableBody {
                     Some(OperandFamily::Permanent)
                 }
                 Instruction::CreateContinuousEffect { parts, duration } => {
-                    if matches!(duration, ResolvedDuration::WhileSourceControlled { .. })
-                        || (*duration == ResolvedDuration::WhileControllingAbilitySource
-                            && !context.has_source())
+                    if duration.is_materialized_source_bound()
+                        || (duration.requires_ability_source() && !context.has_source())
                     {
                         return Err(DefinitionError::InvalidInstruction);
                     }
@@ -12446,6 +12594,27 @@ impl ExecutableBody {
                                 ..
                             },
                             grouping: TriggerGrouping::EachOccurrence,
+                        }
+                    ) {
+                        return Err(DefinitionError::InvalidInstruction);
+                    }
+                    None
+                }
+                Instruction::CounterTriggeringStackObject => {
+                    if !matches!(
+                        context,
+                        BodyContext::TriggerBound {
+                            condition: TriggerSpec {
+                                event: TriggerEvent::SpellCast { .. }
+                                    | TriggerEvent::Targeted {
+                                        instant_or_sorcery_only: false,
+                                        ..
+                                    },
+                                ..
+                            },
+                            grouping: TriggerGrouping::EachOccurrence
+                                | TriggerGrouping::OneOrMoreTogether
+                                | TriggerGrouping::OneOrMoreOnceEachTurn,
                         }
                     ) {
                         return Err(DefinitionError::InvalidInstruction);
@@ -13275,6 +13444,7 @@ impl ExecutableBody {
                     | Instruction::UntapControlledLands
                     | Instruction::UntapControlledCreatures
                     | Instruction::SetGroupTapped { .. }
+                    | Instruction::SetSubjectTapped { .. }
                     | Instruction::TapAttackersAndSkipNextUntap
                     | Instruction::AttachOnEntry { .. }
                     | Instruction::ControlledSubtypeDamagesAttacker(_)
@@ -13439,6 +13609,7 @@ impl ExecutableBody {
                     | Instruction::SacrificeStateTriggerSource
                     | Instruction::SacrificeUpkeepSource(_)
                     | Instruction::CounterWardSource
+                    | Instruction::CounterTriggeringStackObject
                     | Instruction::BoostSourceByCastManaValue
                     | Instruction::BoostLoneAttacker
                     | Instruction::SetControlledCreatureSizeToHand
@@ -16046,9 +16217,27 @@ impl Program {
                 {
                     return Err(DefinitionError::InvalidInstruction);
                 }
-                let cost_context = if self.reveal_colorless_creature_cast_cost {
+                let has_reveal_cost = self.reveal_colorless_creature_cast_cost
+                    || self.extra_cast_costs.iter().any(|cost| {
+                        matches!(
+                            cost,
+                            crate::activated::ExtraActivationCost::RevealHand { .. }
+                        )
+                    });
+                let has_exile_gy_cost = self.graveyard_creature_exile_cost == 1
+                    || self.extra_cast_costs.iter().any(|cost| {
+                        matches!(
+                            cost,
+                            crate::activated::ExtraActivationCost::ExileObjects {
+                                zone: crate::activated::CostExileZone::Graveyard,
+                                count: Some(n),
+                                ..
+                            } if n.get() == 1
+                        )
+                    });
+                let cost_context = if has_reveal_cost {
                     BodyContext::RevealedCreature
-                } else if self.graveyard_creature_exile_cost == 1 {
+                } else if has_exile_gy_cost {
                     BodyContext::ExiledCreatureCost
                 } else if self.sacrifice_creature_cast_cost {
                     BodyContext::SacrificedCreature
@@ -16395,6 +16584,28 @@ impl Program {
             if !ability.mana_cost.valid() {
                 return Err(DefinitionError::CastingCost);
             }
+            let extra_costs = self
+                .extra_activation_costs
+                .get(&ability.id)
+                .map(Vec::as_slice)
+                .unwrap_or(&[]);
+            let has_reveal_extra = extra_costs.iter().any(|cost| {
+                matches!(
+                    cost,
+                    crate::activated::ExtraActivationCost::RevealHand { count, .. }
+                        if count.get() == 1
+                )
+            });
+            let has_exile_gy_extra = extra_costs.iter().any(|cost| {
+                matches!(
+                    cost,
+                    crate::activated::ExtraActivationCost::ExileObjects {
+                        zone: crate::activated::CostExileZone::Graveyard,
+                        count: Some(n),
+                        ..
+                    } if n.get() == 1
+                )
+            });
             let context = match ability.source_cost {
                 SourceCost::Counter { kind, .. } if !kind.is_permanent() => {
                     return Err(DefinitionError::InvalidInstruction);
@@ -16404,6 +16615,22 @@ impl Program {
                 }
                 SourceCost::ExileGraveyard { filter: GraveyardExileCost::Creature { pay_mana_cost: true }, .. }
                 | SourceCost::Discard { mode: DiscardCostMode::WholeHand, .. } => BodyContext::ACTIVATED,
+                SourceCost::ExileGraveyard {
+                    filter: GraveyardExileCost::Creature { pay_mana_cost: false },
+                    ..
+                }
+                | SourceCost::GraveyardExileOther {
+                    filter: GraveyardExileCost::Creature { pay_mana_cost: false },
+                } => BodyContext::ExiledCreatureCost,
+                SourceCost::ExileGraveyard {
+                    filter: GraveyardExileCost::Filtered { count, .. },
+                    ..
+                }
+                | SourceCost::GraveyardExileOther {
+                    filter: GraveyardExileCost::Filtered { count, .. },
+                } if count.get() == 1 => BodyContext::ExiledCreatureCost,
+                _ if has_reveal_extra => BodyContext::RevealedCreature,
+                _ if has_exile_gy_extra => BodyContext::ExiledCreatureCost,
                 SourceCost::SacrificeSelected {
                     filter:
                         SelectedSacrificeFilter::Creature
@@ -16919,6 +17146,7 @@ impl Program {
                                 | Instruction::UntapControlledLands
                                 | Instruction::UntapControlledCreatures
                                 | Instruction::SetGroupTapped { .. }
+                                | Instruction::SetSubjectTapped { .. }
                                 | Instruction::PutCountersOnSubject { .. }
                                 | Instruction::PutHandPermanentsOntoBattlefield { .. }
                                 | Instruction::TapAttackersAndSkipNextUntap

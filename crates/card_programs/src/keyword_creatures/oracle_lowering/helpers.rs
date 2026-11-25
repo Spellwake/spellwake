@@ -2234,13 +2234,44 @@ pub(super) fn lower_search_matcher(
 ) -> Result<SearchCardMatcher, &'static str> {
     if let Some(named) = &f.named {
         use spellwake_oracle_compiler::ast::NameFilterAst;
+        let build_extra =
+            |base: &ObjectFilterAst| -> Result<Option<Box<ObjectFilter>>, &'static str> {
+                let mut stripped = base.clone();
+                stripped.named = None;
+                stripped.zone = None;
+                if is_unrestricted_filter(&stripped) {
+                    Ok(None)
+                } else {
+                    Ok(Some(Box::new(lower_object_filter(&stripped, vocabulary)?)))
+                }
+            };
         return match named {
             NameFilterAst::Exact(n) => {
                 let card_name = EnglishCardName::new(n.clone())
                     .map_err(|_| "oracle:unsupported-search-named")?;
                 Ok(SearchCardMatcher::AnyOfNames(vec![card_name]))
             }
-            _ => Err("oracle:unsupported-search-named"),
+            NameFilterAst::SelfName => Ok(SearchCardMatcher::SameNameAs {
+                reference: MoveSubjectRef::AbilitySource,
+                extra: build_extra(f)?,
+            }),
+            NameFilterAst::SameAsReferenced => Ok(SearchCardMatcher::SameNameAs {
+                reference: MoveSubjectRef::TriggeringObject,
+                extra: build_extra(f)?,
+            }),
+            NameFilterAst::SameAs(ref_subj) => {
+                let reference = match ref_subj.as_ref() {
+                    SubjectRefAst::SelfObject => MoveSubjectRef::AbilitySource,
+                    SubjectRefAst::TriggerSubject => MoveSubjectRef::TriggeringObject,
+                    SubjectRefAst::AttachedHost(_) => MoveSubjectRef::AttachedHost,
+                    SubjectRefAst::Anaphora(_) => MoveSubjectRef::TriggeringObject,
+                    _ => return Err("oracle:unsupported-search-named"),
+                };
+                Ok(SearchCardMatcher::SameNameAs {
+                    reference,
+                    extra: build_extra(f)?,
+                })
+            }
         };
     }
     let has_complex = !f.any_colors.is_empty()
@@ -2444,14 +2475,21 @@ pub(super) fn lower_token_spec(
     vocabulary: &CreatureTypeVocabulary,
     ids: &mut LoweringIds,
     bound_x: Option<&ValueExprAst>,
+    value_ctx: Option<(&BodyBuilder, bool)>,
 ) -> Result<(TokenCreation, bool), &'static str> {
+    let lower_amt = |expr: &ValueExprAst| match value_ctx {
+        Some((builder, in_trigger)) => {
+            lower_value_expr_in_context(resolve_x(expr, bound_x), builder, in_trigger, vocabulary)
+        }
+        None => lower_value_expr(resolve_x(expr, bound_x), vocabulary),
+    };
     match spec {
         TokenSpecAst::Predefined {
             name,
             count,
             tapped,
         } => {
-            let amt = lower_value_expr(resolve_x(count, bound_x), vocabulary)?;
+            let amt = lower_amt(count)?;
             let def = predefined_token_def(name, vocabulary, ids)?;
             Ok((
                 TokenCreation {
@@ -2477,7 +2515,7 @@ pub(super) fn lower_token_spec(
             attacking,
             named,
         } => {
-            let amt = lower_value_expr(resolve_x(count, bound_x), vocabulary)?;
+            let amt = lower_amt(count)?;
 
             let mut creature_subtypes = BTreeSet::new();
             let mut artifact_subtypes = BTreeSet::new();
