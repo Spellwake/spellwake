@@ -54,6 +54,20 @@ pub struct OptionalEffectFrame {
     token_offer: Option<super::token_offers::TemptingTokenOffer>,
 }
 impl OptionalEffectFrame {
+    /// Optional event-replacement prompt (CR 614.1, e.g. `StaticReplacementAction::ReplaceWithBody`).
+    pub(super) fn event_replacement(revision: u64, chooser: SeatId) -> Self {
+        Self {
+            rebound_or_buyback: false,
+            cast: None,
+            revision,
+            entry: StackEntryId::entry_replacement_creator(),
+            instruction: 0,
+            chooser,
+            options: BTreeSet::from([OptionalEffectChoice::Take, OptionalEffectChoice::Decline]),
+            token_offer: None,
+        }
+    }
+
     /// The card owner is choosing between two replacements of the same spell exit.
     pub fn rebound_or_buyback(&self) -> bool {
         self.rebound_or_buyback
@@ -281,6 +295,9 @@ impl EffectWindow {
     /// Current actual effect-time choice, derived at the latest executor revision.
     /// A color child exposes its own decision until its mana ability completes.
     pub fn pending_resolution_decision(&self) -> Option<EffectDecision> {
+        if let Some(frame) = self.pending_life_replacement_decision() {
+            return Some(frame);
+        }
         match self.pending_work.as_ref() {
             Some(PendingWork::Combat(cursor)) if cursor.attack_payment.is_some() => {
                 match &cursor.frame {
@@ -720,6 +737,147 @@ impl EffectWindow {
                     _ => return Err(EffectError::InvalidResolvingPlayer),
                 }
             }
+            ResolvingPlayer::AttachedHostController => {
+                let src = match entry.kind() {
+                    StackKind::ActivatedAbility { source, .. }
+                    | StackKind::TriggeredAbility { source, .. } => source.id(),
+                    _ => return Err(EffectError::InvalidResolvingPlayer),
+                };
+                match self.attached_to(src) {
+                    Some(TargetRef::Player(seat)) => seat,
+                    Some(TargetRef::Object(host)) => self
+                        .evaluated_characteristics()?
+                        .get(host)
+                        .and_then(|view| view.controller)
+                        .or_else(|| self.window.cards().get(host).map(GameObject::owner))
+                        .ok_or(EffectError::InvalidResolvingPlayer)?,
+                    _ => {
+                        // Fall back to captured trigger attachment LKI when source left battlefield.
+                        let lki_host = self
+                            .execution_bindings(entry.id())
+                            .and_then(|b| b.trigger.as_ref())
+                            .and_then(|t| t.source.attached_to);
+                        match lki_host {
+                            Some(TargetRef::Player(seat)) => seat,
+                            Some(TargetRef::Object(host)) => self
+                                .evaluated_characteristics()?
+                                .get(host)
+                                .and_then(|view| view.controller)
+                                .or_else(|| self.window.cards().get(host).map(GameObject::owner))
+                                .ok_or(EffectError::InvalidResolvingPlayer)?,
+                            _ => return Err(EffectError::InvalidResolvingPlayer),
+                        }
+                    }
+                }
+            }
+            ResolvingPlayer::TriggerSubjectController => {
+                let binding = self
+                    .execution_bindings(entry.id())
+                    .and_then(|b| b.trigger.as_ref())
+                    .ok_or(EffectError::InvalidResolvingPlayer)?;
+                let member = binding
+                    .causes
+                    .members()
+                    .first()
+                    .ok_or(EffectError::InvalidResolvingPlayer)?;
+                let from_related = match &member.related {
+                    crate::occurrence::TriggerRelated::ZoneChange { before, after } => {
+                        if before.object.zone() == ObjectZone::Battlefield
+                            && after.object.zone() != ObjectZone::Battlefield
+                        {
+                            before.object.controller().or(Some(before.object.owner()))
+                        } else {
+                            after
+                                .object
+                                .controller()
+                                .or_else(|| before.object.controller())
+                                .or(Some(after.object.owner()))
+                        }
+                    }
+                    crate::occurrence::TriggerRelated::StatusChange(sc) => {
+                        sc.after.controller().or_else(|| sc.before.controller())
+                    }
+                    crate::occurrence::TriggerRelated::TokenCreated { creator, after } => {
+                        after.object.controller().or(Some(*creator))
+                    }
+                    crate::occurrence::TriggerRelated::Discard { player, .. } => Some(*player),
+                    crate::occurrence::TriggerRelated::SpellCast(cast) => Some(cast.controller()),
+                    crate::occurrence::TriggerRelated::CardDrawn { player }
+                    | crate::occurrence::TriggerRelated::PlayerLost(player) => Some(*player),
+                    _ => None,
+                };
+                if let Some(seat) = from_related {
+                    seat
+                } else if let Some(subject_id) = member.subject_object_id() {
+                    self.evaluated_characteristics()?
+                        .get(subject_id)
+                        .and_then(|view| view.controller)
+                        .or_else(|| self.window.cards().get(subject_id).map(GameObject::owner))
+                        .or(member.related_player)
+                        .ok_or(EffectError::InvalidResolvingPlayer)?
+                } else {
+                    member
+                        .related_player
+                        .ok_or(EffectError::InvalidResolvingPlayer)?
+                }
+            }
+            ResolvingPlayer::TriggerSubjectOwner => {
+                let binding = self
+                    .execution_bindings(entry.id())
+                    .and_then(|b| b.trigger.as_ref())
+                    .ok_or(EffectError::InvalidResolvingPlayer)?;
+                let member = binding
+                    .causes
+                    .members()
+                    .first()
+                    .ok_or(EffectError::InvalidResolvingPlayer)?;
+                let from_related = match &member.related {
+                    crate::occurrence::TriggerRelated::ZoneChange { before, .. } => {
+                        Some(before.object.owner())
+                    }
+                    crate::occurrence::TriggerRelated::StatusChange(sc) => Some(sc.after.owner()),
+                    crate::occurrence::TriggerRelated::TokenCreated { after, .. } => {
+                        Some(after.object.owner())
+                    }
+                    crate::occurrence::TriggerRelated::Discard { before, .. } => {
+                        Some(before.object.owner())
+                    }
+                    crate::occurrence::TriggerRelated::SpellCast(cast) => {
+                        Some(cast.spell().object.owner())
+                    }
+                    _ => None,
+                };
+                if let Some(seat) = from_related {
+                    seat
+                } else if let Some(subject_id) = member.subject_object_id() {
+                    self.window
+                        .cards()
+                        .get(subject_id)
+                        .map(GameObject::owner)
+                        .or(member.related_player)
+                        .ok_or(EffectError::InvalidResolvingPlayer)?
+                } else {
+                    member
+                        .related_player
+                        .ok_or(EffectError::InvalidResolvingPlayer)?
+                }
+            }
+            ResolvingPlayer::SourceChosenPlayer => {
+                let src = match entry.kind() {
+                    StackKind::ActivatedAbility { source, .. }
+                    | StackKind::TriggeredAbility { source, .. } => source.id(),
+                    _ => return Err(EffectError::InvalidResolvingPlayer),
+                };
+                self.characteristics
+                    .entry_player_choices
+                    .get(&src)
+                    .copied()
+                    .or_else(|| match self.entry_choices.get(&src) {
+                        Some(crate::land::EntryChoice::Opponent(seat)) => Some(*seat),
+                        _ => None,
+                    })
+                    .ok_or(EffectError::InvalidResolvingPlayer)?
+            }
             ResolvingPlayer::DefendingPlayer => {
                 let combat = self
                     .combat
@@ -739,6 +897,38 @@ impl EffectWindow {
                 .or_else(|| self.resolution_cursor())
                 .and_then(|cursor| cursor.chosen_opponent)
                 .ok_or(EffectError::InvalidResolvingPlayer)?,
+            ResolvingPlayer::LoopPlayer => selection_cursor
+                .or_else(|| self.resolution_cursor())
+                .and_then(|cursor| cursor.results.loop_player)
+                .ok_or(EffectError::InvalidResolvingPlayer)?,
+            ResolvingPlayer::RandomOpponent => {
+                let opponents = self
+                    .combat_rules
+                    .opponents(self.window.participants(), entry.controller())?;
+                if opponents.is_empty() {
+                    return Err(EffectError::InvalidResolvingPlayer);
+                }
+                let pick = if opponents.len() == 1 {
+                    0
+                } else {
+                    let mut h = self.revision
+                        ^ u64::from(entry.controller().0).wrapping_mul(0x9E37_79B9_7F4A_7C15)
+                        ^ u64::try_from(self.window.entries().len())
+                            .unwrap_or(0)
+                            .wrapping_mul(0xBF58_476D_1CE4_E5B9)
+                        ^ u64::try_from(index.unwrap_or(0))
+                            .unwrap_or(0)
+                            .wrapping_mul(0x94D0_49BB_1331_11EB);
+                    h ^= h >> 30;
+                    h = h.wrapping_mul(0xBF58_476D_1CE4_E5B9);
+                    h ^= h >> 27;
+                    h = h.wrapping_mul(0x94D0_49BB_1331_11EB);
+                    h ^= h >> 31;
+                    let denom = u64::try_from(opponents.len()).unwrap_or(1);
+                    usize::try_from(h % denom).unwrap_or(0)
+                };
+                opponents[pick]
+            }
         };
         if !self.window.original_participants().contains(&player) {
             return Err(EffectError::InvalidResolvingPlayer);
@@ -1369,6 +1559,7 @@ impl EffectWindow {
             | Instruction::UntapControlledLands
             | Instruction::UntapControlledCreatures
             | Instruction::SetGroupTapped { .. }
+            | Instruction::SetSubjectTapped { .. }
             | Instruction::PutCountersOnSubject { .. }
             | Instruction::ChangeGroup { .. }
             | Instruction::DestroyGroup(_)
@@ -1430,6 +1621,10 @@ impl EffectWindow {
             | Instruction::DestroySubject { .. }
             | Instruction::GrantCardPlayPermission { .. }
             | Instruction::CreateTokenCopy { .. }
+            | Instruction::BindResolutionX(_)
+            | Instruction::PutResolvingSpellInLibrary(_)
+            | Instruction::PutSubjectIntoLibraryFromTop { .. }
+            | Instruction::SetDayNight(_)
             | Instruction::CreateAuraTokenAttached { .. }
             | Instruction::ExploreSubject(_)
             | Instruction::ScheduleDelayedEventTrigger { .. }
@@ -1575,7 +1770,21 @@ impl EffectWindow {
             | Instruction::OfferOpponentsDamage
             | Instruction::TemptWithTokens { .. }
             | Instruction::CreateTokens { .. }
-            | Instruction::CreateAttackingTokens { .. } => Ok(true),
+            | Instruction::CreateAttackingTokens { .. }
+            | Instruction::ForEachPlayer { .. }
+            | Instruction::OfferAnyPlayer { .. }
+            | Instruction::DealDamageToAnnouncedTargets { .. }
+            | Instruction::GrantChosenProtection { .. }
+            | Instruction::RemoveCountersFromSubject { .. }
+            | Instruction::MoveGroupToLibrary { .. }
+            | Instruction::ExileLibraryTopLinked { .. }
+            | Instruction::UntapOrTapSelect { .. }
+            | Instruction::MoveGraveyardGroupOwned { .. }
+            | Instruction::LookTopChooseExt { .. }
+            | Instruction::RevealUntilMatchExt { .. }
+            | Instruction::CreateTokenCopyExt { .. }
+            | Instruction::ExileResolvingSpell
+            | Instruction::ReturnResolvingSpellToHand => Ok(true),
             Instruction::ChooseCreatureType { excluding, .. } => {
                 Ok(excluding.len() < self.creature_vocabulary.len())
             }
@@ -1677,8 +1886,6 @@ impl EffectWindow {
             | Instruction::ExileUntilOtherTargetLeaves
             | Instruction::CopyOtherTargetAsArtifact
             | Instruction::FixedTargetClause(_)
-            | Instruction::ExileResolvingSpell
-            | Instruction::ReturnResolvingSpellToHand
             | Instruction::Ascend
             | Instruction::DestroyFixedTargets
             | Instruction::DestroyTargetAndAttachedEquipment
@@ -1792,6 +1999,7 @@ impl EffectWindow {
             | Instruction::SacrificeStateTriggerSource
             | Instruction::SacrificeUpkeepSource(_)
             | Instruction::CounterWardSource
+            | Instruction::CounterTriggeringStackObject
             | Instruction::BoostSourceByCastManaValue
             | Instruction::BoostLoneAttacker
             | Instruction::Attach(_)
@@ -1833,6 +2041,7 @@ impl EffectWindow {
             | Instruction::ReturnAnyGraveyardCreatureOrPlaneswalker
             | Instruction::ReturnOwnGraveyardPermanentToBattlefield { .. }
             | Instruction::CounterSpellToExile
+            | Instruction::CounterSpellToLibrary { .. }
             | Instruction::CounterSpell
             | Instruction::GainControlOfSpell
             | Instruction::ChangeOnlyTarget
@@ -2400,6 +2609,10 @@ impl EffectWindow {
             | Instruction::DestroySubject { .. }
             | Instruction::GrantCardPlayPermission { .. }
             | Instruction::CreateTokenCopy { .. }
+            | Instruction::BindResolutionX(_)
+            | Instruction::PutResolvingSpellInLibrary(_)
+            | Instruction::PutSubjectIntoLibraryFromTop { .. }
+            | Instruction::SetDayNight(_)
             | Instruction::CreateAuraTokenAttached { .. }
             | Instruction::ExploreSubject(_)
             | Instruction::ScheduleDelayedEventTrigger { .. }
@@ -2478,6 +2691,7 @@ impl EffectWindow {
             | Instruction::PutNamedCounterOnSource { .. }
             | Instruction::PutCountersOnSubject { .. }
             | Instruction::SetGroupTapped { .. }
+            | Instruction::SetSubjectTapped { .. }
             | Instruction::PutQuestCounterOnSource
             | Instruction::PutStorageCounterOnSource
             | Instruction::AbilitySourceControllerLosesLife(_)
@@ -2680,6 +2894,7 @@ impl EffectWindow {
             | Instruction::SacrificeStateTriggerSource
             | Instruction::SacrificeUpkeepSource(_)
             | Instruction::CounterWardSource
+            | Instruction::CounterTriggeringStackObject
             | Instruction::BoostSourceByCastManaValue
             | Instruction::BoostLoneAttacker
             | Instruction::Attach(_)
@@ -2726,6 +2941,7 @@ impl EffectWindow {
             | Instruction::ReturnAnyGraveyardCreatureOrPlaneswalker
             | Instruction::ReturnOwnGraveyardPermanentToBattlefield { .. }
             | Instruction::CounterSpellToExile
+            | Instruction::CounterSpellToLibrary { .. }
             | Instruction::CounterSpell
             | Instruction::GainControlOfSpell
             | Instruction::ChangeOnlyTarget
@@ -2771,7 +2987,19 @@ impl EffectWindow {
             | Instruction::DestroyTargetWithoutRegeneration
             | Instruction::ExileCardsFromGraveyard { .. }
             | Instruction::EndControllerTurn
-            | Instruction::DrawController { .. } => return Ok(false),
+            | Instruction::DrawController { .. }
+            | Instruction::ForEachPlayer { .. }
+            | Instruction::OfferAnyPlayer { .. }
+            | Instruction::DealDamageToAnnouncedTargets { .. }
+            | Instruction::GrantChosenProtection { .. }
+            | Instruction::RemoveCountersFromSubject { .. }
+            | Instruction::MoveGroupToLibrary { .. }
+            | Instruction::ExileLibraryTopLinked { .. }
+            | Instruction::UntapOrTapSelect { .. }
+            | Instruction::MoveGraveyardGroupOwned { .. }
+            | Instruction::LookTopChooseExt { .. }
+            | Instruction::RevealUntilMatchExt { .. }
+            | Instruction::CreateTokenCopyExt { .. } => return Ok(false),
         }
         Ok(true)
     }

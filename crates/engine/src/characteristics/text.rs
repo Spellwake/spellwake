@@ -48,12 +48,17 @@ fn static_subtype(change: CreatureTypeTextChange, value: &mut StaticSubtypeOpera
         | StaticSubtypeOperand::AllCreatureTypes => {}
     }
 }
-fn static_source_condition(change: CreatureTypeTextChange, cond: &mut StaticSourceCondition) {
+pub(crate) fn static_source_condition(
+    change: CreatureTypeTextChange,
+    cond: &mut StaticSourceCondition,
+) {
     match cond {
         StaticSourceCondition::ControllerControlsSubtype(kind)
         | StaticSourceCondition::OpponentControlsSubtype(kind) => word(change, kind),
         StaticSourceCondition::ControlsMatching { selector: sel, .. }
-        | StaticSourceCondition::OpponentControlsMatching { selector: sel, .. } => {
+        | StaticSourceCondition::OpponentControlsMatching { selector: sel, .. }
+        | StaticSourceCondition::AttachedHostMatches(sel)
+        | StaticSourceCondition::ControlsExactCount { selector: sel, .. } => {
             selector(change, sel);
         }
         StaticSourceCondition::Eval(rc) => rc.rewrite_creature_type(change.from, change.to),
@@ -143,6 +148,11 @@ fn parts(change: CreatureTypeTextChange, value: &mut ResolvedPartsSpec) {
             ResolvedPartSpec::Names(_)
             | ResolvedPartSpec::Control(_)
             | ResolvedPartSpec::Color(_)
+            | ResolvedPartSpec::ChosenColor { .. }
+            | ResolvedPartSpec::ChosenBasicLandType { .. }
+            | ResolvedPartSpec::ProtectionFromEachOpponent
+            | ResolvedPartSpec::CannotBeTargetedByColors(_)
+            | ResolvedPartSpec::MustBlockSubject(_)
             | ResolvedPartSpec::Abilities(crate::characteristics::AbilityChange {
                 granted_trigger: None,
                 ..
@@ -361,15 +371,22 @@ fn body(change: CreatureTypeTextChange, value: &mut ExecutableBody) {
             },
             Instruction::GrantCardPlayPermission { .. } => {}
             Instruction::CreateTokenCopy {
-                count, add_subtype, ..
+                count,
+                add_subtypes,
+                ..
             } => {
                 count.rewrite_creature_type(change.from, change.to);
-                if let Some(sub) = add_subtype
-                    && *sub == change.from
-                {
-                    *sub = change.to;
+                if add_subtypes.remove(&change.from) {
+                    add_subtypes.insert(change.to);
                 }
             }
+            Instruction::BindResolutionX(expr) => {
+                expr.rewrite_creature_type(change.from, change.to);
+            }
+            Instruction::PutSubjectIntoLibraryFromTop { offset, .. } => {
+                offset.rewrite_creature_type(change.from, change.to);
+            }
+            Instruction::PutResolvingSpellInLibrary(_) | Instruction::SetDayNight(_) => {}
             Instruction::CreateAuraTokenAttached { definition, .. } => {
                 definition.rewrite_creature_types(change);
             }
@@ -486,6 +503,9 @@ fn body(change: CreatureTypeTextChange, value: &mut ExecutableBody) {
             | Instruction::SetGroupTapped { filter: group, .. } => {
                 group.rewrite_creature_type(change.from, change.to);
             }
+            Instruction::SetSubjectTapped { subject, .. } => {
+                subject.rewrite_creature_type(change.from, change.to);
+            }
             Instruction::PutCountersOnSubject { subject, .. } => {
                 if let crate::program::EffectSubject::Matching(group) = subject.as_mut() {
                     group.rewrite_creature_type(change.from, change.to);
@@ -592,6 +612,78 @@ fn body(change: CreatureTypeTextChange, value: &mut ExecutableBody) {
             Instruction::ChangeControlledPlaneswalkers { parts: value, .. }
             | Instruction::CreateContinuousEffect { parts: value, .. }
             | Instruction::ChangeAbilitySource { parts: value, .. } => parts(change, value),
+            Instruction::AffectPermanentTargets { action, .. } => match action {
+                crate::program::PermanentTargetAction::PutCounters { amount, .. }
+                | crate::program::PermanentTargetAction::Damage(amount) => {
+                    rewrite_amount(amount);
+                }
+                crate::program::PermanentTargetAction::RemoveCounters {
+                    amount: Some(amount),
+                    ..
+                } => {
+                    rewrite_amount(amount);
+                }
+                crate::program::PermanentTargetAction::Modify { parts: value, .. }
+                | crate::program::PermanentTargetAction::ModifyWithPartner {
+                    parts: value, ..
+                } => {
+                    parts(change, value);
+                }
+                _ => {}
+            },
+            Instruction::ForEachPlayer { body: inner, .. } => body(change, inner),
+            Instruction::OfferAnyPlayer {
+                cost_body,
+                paid_body,
+                declined_body,
+                ..
+            } => {
+                body(change, cost_body);
+                body(change, paid_body);
+                if let Some(declined) = declined_body {
+                    body(change, declined);
+                }
+            }
+            Instruction::DealDamageToAnnouncedTargets { amount, .. }
+            | Instruction::ExileLibraryTopLinked { amount, .. } => rewrite_amount(amount),
+            Instruction::GrantChosenProtection { recipients, .. } => {
+                if let crate::program::ProtectionRecipients::Matching(filter) = recipients {
+                    filter.rewrite_creature_type(change.from, change.to);
+                }
+            }
+            Instruction::RemoveCountersFromSubject {
+                subject, amount, ..
+            } => {
+                subject.rewrite_creature_type(change.from, change.to);
+                if let Some(expr) = amount {
+                    rewrite_amount(expr);
+                }
+            }
+            Instruction::MoveGroupToLibrary { group, .. } => {
+                group.rewrite_creature_type(change.from, change.to);
+            }
+            Instruction::UntapOrTapSelect { filter, count, .. }
+            | Instruction::RevealUntilMatchExt { filter, count, .. } => {
+                filter.rewrite_creature_type(change.from, change.to);
+                rewrite_amount(count);
+            }
+            Instruction::MoveGraveyardGroupOwned { filter, .. } => {
+                filter.rewrite_creature_type(change.from, change.to);
+            }
+            Instruction::LookTopChooseExt { count, filter, .. } => {
+                rewrite_amount(count);
+                if let Some(filter) = filter {
+                    filter.rewrite_creature_type(change.from, change.to);
+                }
+            }
+            Instruction::CreateTokenCopyExt {
+                count,
+                extra_subtypes,
+                ..
+            } => {
+                rewrite_amount(count);
+                words(change, extra_subtypes);
+            }
             // These admitted instructions contain no literal creature-type words.
             // Draw's chosen-type reference remains a runtime local value.
             Instruction::AttachOnEntry { .. }
@@ -601,7 +693,6 @@ fn body(change: CreatureTypeTextChange, value: &mut ExecutableBody) {
             | Instruction::FightPairedCreatures(_)
             | Instruction::OfferManaPayment { .. }
             | Instruction::ModifyAnyNumberOfPermanents { .. }
-            | Instruction::AffectPermanentTargets { .. }
             | Instruction::MillEachPlayer(_)
             | Instruction::PutLibraryCohortIntoGraveyard(_)
             | Instruction::ExileOnePerPlayerUntilSourceLeaves
@@ -901,6 +992,7 @@ fn body(change: CreatureTypeTextChange, value: &mut ExecutableBody) {
             | Instruction::SacrificeStateTriggerSource
             | Instruction::SacrificeUpkeepSource(_)
             | Instruction::CounterWardSource
+            | Instruction::CounterTriggeringStackObject
             | Instruction::BoostSourceByCastManaValue
             | Instruction::BoostLoneAttacker
             | Instruction::BoostSaddledAttacker { .. }
@@ -966,6 +1058,7 @@ fn body(change: CreatureTypeTextChange, value: &mut ExecutableBody) {
             | Instruction::ReturnAnyGraveyardCreatureOrPlaneswalker
             | Instruction::ReturnOwnGraveyardPermanentToBattlefield { .. }
             | Instruction::CounterSpellToExile
+            | Instruction::CounterSpellToLibrary { .. }
             | Instruction::CounterSpell
             | Instruction::GainControlOfSpell
             | Instruction::ChangeOnlyTarget
@@ -1017,13 +1110,35 @@ pub(crate) fn rewrite_program(
     printed(change, &mut text);
     program.entry_counter_abilities = text.entry_counter_abilities;
     program.conditional_cost = text.conditional_cost;
+    program.additional_cast_costs = text.additional_cast_costs;
+    program.graveyard_self_cast = text.graveyard_self_cast;
     program.cast_reductions = text.cast_reductions;
+    program.extra_activation_costs = text.extra_activation_costs;
+    program.activation_cost_reductions = text.activation_cost_reductions;
+    program.extra_cast_costs = text.extra_cast_costs;
     program.zone_replacements = text.zone_replacements;
+    program.zone_replacement_extras = text.zone_replacement_extras;
     program.mana = text.mana;
     program.activated = text.activated;
     program.triggered = text.triggered;
     program.continuous = text.continuous;
     program.additional_battlefield_abilities = text.additional_battlefield_abilities;
+    if let Some(crate::program::EntryCopyRule::MatchingExt(spec)) = &mut program.entry_copy {
+        spec.filter.rewrite_creature_type(change.from, change.to);
+        words(change, &mut spec.extra_creature_subtypes);
+        for (cond, _, _) in &mut spec.conditional_counters {
+            cond.rewrite_creature_type(change.from, change.to);
+        }
+        for ability in &mut spec.extra_activated {
+            body(change, &mut ability.body);
+        }
+        for ability in &mut spec.extra_triggered {
+            trigger(change, ability);
+        }
+        for ability in &mut spec.extra_static {
+            ability.rewrite_creature_type_in_rule(change);
+        }
+    }
     if let crate::program::ProgramKind::Spell(value) = &mut program.kind {
         body(change, &mut value.body);
     }
@@ -1051,6 +1166,35 @@ fn printed(change: CreatureTypeTextChange, text: &mut PrintedText) {
         condition
             .right
             .rewrite_creature_type(change.from, change.to);
+    }
+    if let Some(crate::program::ConditionalCastCost::Alternative {
+        condition, extra, ..
+    }) = &mut text.conditional_cost
+    {
+        if let Some(cond) = condition {
+            cond.rewrite_creature_type(change.from, change.to);
+        }
+        for cost in extra {
+            cost.rewrite_creature_type(change.from, change.to);
+        }
+    }
+    for cost in &mut text.additional_cast_costs {
+        if let crate::program::AdditionalCastCost::KickerExtra { extra, .. } = cost {
+            for item in extra {
+                item.rewrite_creature_type(change.from, change.to);
+            }
+        }
+    }
+    match &mut text.graveyard_self_cast {
+        Some(crate::program::GraveyardSelfCast::WhileControllingSubtype(kind)) => {
+            word(change, kind);
+        }
+        Some(crate::program::GraveyardSelfCast::WithExtraCost(costs)) => {
+            for cost in costs {
+                cost.rewrite_creature_type(change.from, change.to);
+            }
+        }
+        _ => {}
     }
     for reduction in &mut text.cast_reductions {
         match reduction {
@@ -1163,6 +1307,9 @@ fn printed(change: CreatureTypeTextChange, text: &mut PrintedText) {
             cost.rewrite_creature_type(change.from, change.to);
         }
     }
+    for expr in text.activation_cost_reductions.values_mut() {
+        expr.rewrite_creature_type(change.from, change.to);
+    }
     for cost in &mut text.extra_cast_costs {
         cost.rewrite_creature_type(change.from, change.to);
     }
@@ -1170,10 +1317,16 @@ fn printed(change: CreatureTypeTextChange, text: &mut PrintedText) {
         trigger(change, ability);
     }
     for replacement in &mut text.zone_replacements {
-        if let crate::program::ZoneReplacementSubject::Matching { filter, .. } =
+        if let crate::program::ZoneReplacementSubject::Matching { filter, .. }
+        | crate::program::ZoneReplacementSubject::MatchingNotCast { filter, .. } =
             &mut replacement.subject
         {
             filter.rewrite_creature_type(change.from, change.to);
+        }
+    }
+    for extra in text.zone_replacement_extras.values_mut() {
+        if let Some(followup) = &mut extra.followup_body {
+            body(change, followup);
         }
     }
     for ability in text

@@ -217,6 +217,7 @@ fn contract_program(raw: &Value, vocabulary: &CreatureTypeVocabulary) -> Program
         flashback_life: 0,
         additional_cast_costs: vec![],
         activation_restrictions: Default::default(),
+        activation_cost_reductions: Default::default(),
         activation_hybrid_symbols: Default::default(),
         extra_activation_costs: Default::default(),
         extra_cast_costs: Vec::new(),
@@ -239,6 +240,7 @@ fn contract_program(raw: &Value, vocabulary: &CreatureTypeVocabulary) -> Program
         printed_defense: None,
         printed_loyalty: None,
         zone_replacements: vec![],
+        zone_replacement_extras: Default::default(),
         card_types: raw["card_types"]
             .as_array()
             .unwrap()

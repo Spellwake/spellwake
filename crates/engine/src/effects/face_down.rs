@@ -240,7 +240,7 @@ impl EffectWindow {
         } else {
             counters
         };
-        if mega {
+        if mega && counters.valid_placement() {
             next.characteristics.place_counters(object, &counters)?;
         }
         next.revision = revision;

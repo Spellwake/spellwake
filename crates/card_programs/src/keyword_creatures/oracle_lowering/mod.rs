@@ -23,9 +23,10 @@ use spellwake_engine::{
     attachment::{AttachAbility, AttachmentKind, EnchantRestriction},
     characteristics::{
         AbilityChange, AbilityRemoval, BlockingRestriction, CastPermissionRule, Color, ColorFilter,
-        ColorOperation, ControllerSelector, DamageRedirectTarget, DefiningPart, DefiningParts,
-        HexproofQuality, InstructionSubtypeOperand, KeywordAbility, LibraryTopPermission,
-        NumericExpression, NumericPair, PermanentSelector, PowerToughness, PowerToughnessCounters,
+        ColorOperation, ControllerSelector, DamagePreventFollowup, DamagePreventMode,
+        DamageRedirectTarget, DefiningPart, DefiningParts, HexproofQuality,
+        InstructionSubtypeOperand, KeywordAbility, LibraryTopPermission, NumericExpression,
+        NumericPair, PermanentSelector, PowerToughness, PowerToughnessCounters,
         PrintedPowerToughness, PrintedStat, ReplaceableEvent, ResolvedDuration, ResolvedPartSpec,
         ResolvedPartsSpec, SpellCostModifier, SpellDiscount, StaticAbilityId, StaticColorOperand,
         StaticContinuousAbility, StaticDamageKind, StaticDamageOp, StaticDamageRecipient,
@@ -48,29 +49,30 @@ use spellwake_engine::{
     program::{
         AdditionalCastCost, AffectedPlayers, ArtifactSubtype, AttackRequirement, AttackTriggerMode,
         BlockTriggerKind, BodyTarget, CardType, CardTypeMask, CastCopyKeyword, CastCostCount,
-        CastEntryKind, CastReduction, ChooseOptionBranch, ChosenHandAction, ColorMask,
-        CombatActionKind, CombatFilter, CombatTriggerKeyword, CombatUntapGroup, Comparison,
-        ConditionalCastCost, ControllerFilter, CopyExceptions, CounterKeyword, CounterTriggerKind,
-        DamageAmountSpec, DamageGroup, DamageRecipientsRef, DamageSourceRef,
+        CastEntryKind, CastReduction, CastTimingRestriction, ChooseOptionBranch, ChosenHandAction,
+        ColorMask, CombatActionKind, CombatFilter, CombatTriggerKeyword, CombatUntapGroup,
+        Comparison, ConditionalCastCost, ControllerFilter, CopyExceptions, CounterKeyword,
+        CounterTriggerKind, DamageAmountSpec, DamageGroup, DamageRecipientsRef, DamageSourceRef,
         DamageTriggerRecipient, DiesTriggerMode, Disturb, EffectManaYield, EffectSubject,
-        EnchantmentSubtype, EndStepCast, EntryCopyRule, EntryCounterAbility, EventValueKind,
-        ExecutableBody, ExileAction, GrowthKeyword, Instruction, InterveningCondition,
-        LibraryPlacement, LibrarySearch, ManaValueFilter, MatchObjectRef, MiracleCost,
-        ModalUniqueness, MoveSubjectRef, ObjectClause, ObjectColorFilter, ObjectFilter,
-        ObjectFilterFlags, ObjectStatKind, PermanentDefinition, PermanentTargetAction,
-        PermanentTypeFilter, PhasingSubject, PlanarTriggerEvent, PlaneswalkerSubtype,
-        PlayerRelation, PlayerStatExpr, PlayerTriggerAction, PowerDamageSource, PowerFilter,
-        Program, ProgramKind, ProtectionRecipients, PublicZoneDestination, ResolutionCondition,
-        ResolvingPlayer, SearchCardMatcher, SearchCount, SearchDestination, SearchExileLink,
-        SearchManaValue, SearchSource, SourceRelation, SourceStateExpr, SourceZoneFilter,
-        SpellDefinition, SpellFilter, SpellModes, SpellSubtype, SpliceAbility, SpliceQuality,
-        SplitCard, StatAggregate, StateThresholdKind, StatusTriggerKind, SubjectDestination,
-        SubtypeFilter, Supertype, SupertypeMask, TemporaryRuleKind, ToughnessFilter,
-        TransferKeyword, TriggerCondition, TriggerEvent, TriggerFromZone, TriggerGrouping,
-        TriggerKeywordEvent, TriggerPlayerScope, TriggerSpec, TriggeredAbility, TriggeredAbilityId,
-        TriggeredModes, UpkeepKeyword, ValueExpr, ValueObjectRef, ValueZone, ZoneActionKind,
-        ZoneActionPredicate, ZoneObjectKind, ZoneReplacementAbility, ZoneReplacementAbilityId,
-        ZoneReplacementChoice, ZoneReplacementSubject,
+        EnchantmentSubtype, EndStepCast, EntryCopyRule, EntryCopySpecExt, EntryCopyZone,
+        EntryCounterAbility, EventValueKind, ExecutableBody, ExileAction, GrowthKeyword,
+        Instruction, InterveningCondition, LibraryPlacement, LibrarySearch, ManaValueFilter,
+        MatchObjectRef, MiracleCost, ModalUniqueness, MoveSubjectRef, ObjectClause,
+        ObjectColorFilter, ObjectFilter, ObjectFilterFlags, ObjectStatKind, PermanentDefinition,
+        PermanentTargetAction, PermanentTypeFilter, PhasingSubject, PlanarTriggerEvent,
+        PlaneswalkerSubtype, PlayerRelation, PlayerStatExpr, PlayerTriggerAction,
+        PowerDamageSource, PowerFilter, Program, ProgramKind, ProtectionRecipients,
+        PublicZoneDestination, ResolutionCondition, ResolvingPlayer, SearchCardMatcher,
+        SearchCount, SearchDestination, SearchExileLink, SearchManaValue, SearchSource,
+        SelfFlashPermission, SourceRelation, SourceStateExpr, SourceZoneFilter, SpellDefinition,
+        SpellFilter, SpellModes, SpellSubtype, SpliceAbility, SpliceQuality, SplitCard,
+        StatAggregate, StateThresholdKind, StatusTriggerKind, SubjectDestination, SubtypeFilter,
+        Supertype, SupertypeMask, TemporaryRuleKind, ToughnessFilter, TransferKeyword,
+        TriggerCondition, TriggerEvent, TriggerFromZone, TriggerGrouping, TriggerKeywordEvent,
+        TriggerPlayerScope, TriggerSpec, TriggeredAbility, TriggeredAbilityId, TriggeredModes,
+        UpkeepKeyword, ValueExpr, ValueObjectRef, ValueZone, ZoneActionKind, ZoneActionPredicate,
+        ZoneObjectKind, ZoneReplacementAbility, ZoneReplacementAbilityId, ZoneReplacementChoice,
+        ZoneReplacementExtra, ZoneReplacementSubject,
     },
     token::{TokenCreation, TokenDefinition, TokenName, TokenRecipients, TokenSize, TokenSubtype},
     turn::Step,
@@ -1415,23 +1417,28 @@ fn lower_face(
         return Err("oracle:unsupported-card-type");
     }
 
-    let (casting_cost, x_symbols, hybrid_symbols) = if is_land {
+    let (casting_cost, x_symbols, hybrid_symbols, snow_mana_count) = if is_land {
         if face.mana_cost.as_deref().is_some_and(|s| !s.is_empty()) {
             return Err("oracle:land-with-mana-cost");
         }
-        (None, 0, Vec::new())
+        (None, 0, Vec::new(), 0u8)
     } else {
         let raw_cost = face.mana_cost.as_deref().unwrap_or("");
         if raw_cost.is_empty() {
             if options.allow_empty_mana_cost {
-                (None, 0, Vec::new())
+                (None, 0, Vec::new(), 0u8)
             } else {
                 return Err("oracle:missing-mana-cost");
             }
         } else {
-            let (cost, x, hybrids) =
-                parse_mana_cost_full(raw_cost).ok_or("oracle:unsupported-mana-cost")?;
-            (Some(cost), x, hybrids)
+            let (stripped_cost, snow_count) =
+                strip_snow_mana_symbols(raw_cost).ok_or("oracle:unsupported-mana-cost")?;
+            let (cost, x, hybrids) = if stripped_cost.is_empty() {
+                (ManaCost::free(), 0, Vec::new())
+            } else {
+                parse_mana_cost_full(&stripped_cost).ok_or("oracle:unsupported-mana-cost")?
+            };
+            (Some(cost), x, hybrids, snow_count)
         }
     };
 
@@ -1443,10 +1450,70 @@ fn lower_face(
             casting_cost.ok_or("oracle:spell-without-cost")?
         };
         let mut cast_during_own_combat = false;
-        let mut cast_timings: Vec<spellwake_engine::program::CastTimingRestriction> = Vec::new();
+        let mut cannot_be_copied = false;
+        let mut conditional_flash: Option<SelfFlashPermission> = None;
+        let mut cast_timings: Vec<CastTimingRestriction> = Vec::new();
         let mut conditional_free_cast: Option<ConditionalCastCost> = None;
-        let mut filtered_spell_effects = Vec::with_capacity(face_ast.spell_effects.len());
+        let mut pre_filtered_spell_effects = Vec::with_capacity(face_ast.spell_effects.len());
         for ins in &face_ast.spell_effects {
+            if let InstructionAst::CombatRuleMod {
+                subject,
+                rule,
+                duration: DurationAst::Instant,
+            } = ins
+                && matches!(subject.as_ref(), SubjectRefAst::SelfObject)
+                && rule.eq_ignore_ascii_case("cant_be_copied")
+            {
+                cannot_be_copied = true;
+                continue;
+            }
+            if let InstructionAst::TemporaryStatic { static_ability, .. } = ins
+                && let StaticAbilityAst::PlayOrCastPermission {
+                    cast_only: true,
+                    filter,
+                    permission,
+                    condition: Some(cond),
+                } = static_ability.as_ref()
+                && permission
+                    .trim()
+                    .trim_end_matches('.')
+                    .eq_ignore_ascii_case("as though it had flash")
+                && is_self_flash_filter(filter)
+            {
+                if conditional_flash.is_some() {
+                    return Err("oracle:duplicate-conditional-flash");
+                }
+                conditional_flash = Some(lower_self_flash_condition(cond, vocabulary)?);
+                continue;
+            }
+            if let InstructionAst::IfCondition {
+                condition,
+                then_body,
+            } = ins
+                && let [InstructionAst::TemporaryStatic { static_ability, .. }] =
+                    then_body.as_slice()
+                && let StaticAbilityAst::PlayOrCastPermission {
+                    cast_only: true,
+                    filter,
+                    permission,
+                    condition: inner_cond,
+                } = static_ability.as_ref()
+                && permission
+                    .trim()
+                    .trim_end_matches('.')
+                    .eq_ignore_ascii_case("as though it had flash")
+                && is_self_flash_filter(filter)
+            {
+                if conditional_flash.is_some() {
+                    return Err("oracle:duplicate-conditional-flash");
+                }
+                let combined_cond = match inner_cond.as_deref() {
+                    Some(ic) => ConditionAst::And(condition.clone(), Box::new(ic.clone())),
+                    None => condition.as_ref().clone(),
+                };
+                conditional_flash = Some(lower_self_flash_condition(&combined_cond, vocabulary)?);
+                continue;
+            }
             if let InstructionAst::TemporaryStatic { static_ability, .. } = ins
                 && conditional_free_cast.is_none()
                 && let StaticAbilityAst::AlternativeCastCost {
@@ -1548,36 +1615,18 @@ fn lower_face(
                     }
                 }
             }
-            if let InstructionAst::AbilityRestriction {
-                restriction,
-                condition,
-            } = ins
-            {
-                let low = restriction.to_ascii_lowercase();
-                if condition.is_none()
-                    && (low == "during combat+during your turn"
-                        || low == "during your turn+during combat"
-                        || low == "during combat on your turn"
-                        || low == "cast this spell only during combat on your turn")
-                {
-                    cast_during_own_combat = true;
-                    continue;
-                }
-                if let Some(timing) =
-                    parse_cast_timing_restriction(restriction, condition.as_deref(), vocabulary)
-                {
-                    cast_timings.push(timing);
-                    continue;
-                }
-            }
-            filtered_spell_effects.push(ins.clone());
+            pre_filtered_spell_effects.push(ins.clone());
         }
+        let filtered_spell_effects = strip_spell_cast_restrictions(
+            &pre_filtered_spell_effects,
+            &mut cast_during_own_combat,
+            &mut cast_timings,
+            vocabulary,
+        );
         let cast_timing = match cast_timings.len() {
             0 => None,
             1 => cast_timings.pop(),
-            _ => Some(spellwake_engine::program::CastTimingRestriction::All(
-                cast_timings,
-            )),
+            _ => Some(CastTimingRestriction::All(cast_timings)),
         };
         let (body, modes) = lower_spell_effects(&filtered_spell_effects, vocabulary, &mut ids)?;
         let mut p = Program::new(
@@ -1591,6 +1640,8 @@ fn lower_face(
         p.x_mana_symbols = x_symbols;
         p.hybrid_symbols = hybrid_symbols;
         p.cast_during_own_combat = cast_during_own_combat;
+        p.cannot_be_copied = cannot_be_copied;
+        p.conditional_flash = conditional_flash;
         p.cast_timing = cast_timing;
         if let Some(cc) = conditional_free_cast {
             p.conditional_cost = Some(cc);
@@ -1667,6 +1718,12 @@ fn lower_face(
         }
         p
     };
+
+    if let Some(snow_nz) = NonZeroU8::new(snow_mana_count) {
+        program
+            .extra_cast_costs
+            .push(ExtraActivationCost::PaySnowMana(snow_nz));
+    }
 
     // Track Saga Read Ahead and Prototype keywords for post-lowering attachment
     let mut has_read_ahead = false;
@@ -1780,13 +1837,108 @@ fn lower_face(
     }
 
     // Lower replacement effects
+    let raw_oracle_low = face
+        .oracle_text
+        .as_deref()
+        .unwrap_or("")
+        .to_ascii_lowercase();
     for rep in &face_ast.replacements {
+        if replacement_contains_enters_as_copy(rep)
+            && (raw_oracle_low.contains("tapped") || raw_oracle_low.contains("until end of turn"))
+        {
+            return Err("oracle:unsupported-enters-as-copy");
+        }
+        if let ReplacementEffectAst::AsEntersAction(ins) = rep {
+            if raw_oracle_low.contains("becomes attached")
+                || as_enters_action_mentions_attachment(ins)
+            {
+                return Err("oracle:unsupported-replacement");
+            }
+            if let [InstructionAst::Modal { choice, modes }] = ins.as_slice()
+                && modes.len() >= 2
+            {
+                let entry_tap = match choice
+                    .trim()
+                    .trim_end_matches('.')
+                    .to_ascii_lowercase()
+                    .as_str()
+                {
+                    "khans or dragons" => EntryTap::ChooseKhansOrDragons,
+                    "dragons or khans" => EntryTap::ChooseOptions(&["Dragons", "Khans"]),
+                    "odd or even" => EntryTap::ChooseOddOrEven,
+                    "even or odd" => EntryTap::ChooseOptions(&["Even", "Odd"]),
+                    "abzan or mardu" => EntryTap::ChooseOptions(&["Abzan", "Mardu"]),
+                    "mardu or abzan" => EntryTap::ChooseOptions(&["Mardu", "Abzan"]),
+                    "temur or sultai" => EntryTap::ChooseOptions(&["Temur", "Sultai"]),
+                    "sultai or temur" => EntryTap::ChooseOptions(&["Sultai", "Temur"]),
+                    "sultai or abzan" => EntryTap::ChooseOptions(&["Sultai", "Abzan"]),
+                    "abzan or sultai" => EntryTap::ChooseOptions(&["Abzan", "Sultai"]),
+                    "mardu or jeskai" => EntryTap::ChooseOptions(&["Mardu", "Jeskai"]),
+                    "jeskai or mardu" => EntryTap::ChooseOptions(&["Jeskai", "Mardu"]),
+                    "jeskai or temur" => EntryTap::ChooseOptions(&["Jeskai", "Temur"]),
+                    "temur or jeskai" => EntryTap::ChooseOptions(&["Temur", "Jeskai"]),
+                    "brotherhood or enclave" => {
+                        EntryTap::ChooseOptions(&["Brotherhood", "Enclave"])
+                    }
+                    "mirran or phyrexian" => EntryTap::ChooseOptions(&["Mirran", "Phyrexian"]),
+                    "ncr or legion" => EntryTap::ChooseOptions(&["NCR", "Legion"]),
+                    "flavorful or bland" => EntryTap::ChooseOptions(&["Flavorful", "Bland"]),
+                    "believe or doubt" => EntryTap::ChooseOptions(&["Believe", "Doubt"]),
+                    "anchors or sails" => EntryTap::ChooseOptions(&["Anchors", "Sails"]),
+                    "friends or foes" => EntryTap::ChooseOptions(&["Friends", "Foes"]),
+                    "left or right" => EntryTap::ChooseOptions(&["Left", "Right"]),
+                    _ => return Err("oracle:unsupported-replacement"),
+                };
+                if entry_tap
+                    .option_labels()
+                    .is_some_and(|labels| labels.len() != modes.len())
+                {
+                    return Err("oracle:unsupported-replacement");
+                }
+                let ProgramKind::Permanent(def) = &mut program.kind else {
+                    return Err("oracle:replacement-on-spell");
+                };
+                if def.entry_tap.replace(entry_tap).is_some() {
+                    return Err("oracle:duplicate-entry-tap");
+                }
+                for (idx, mode) in modes.iter().enumerate() {
+                    let idx_u8 = u8::try_from(idx).map_err(|_| "oracle:unsupported-replacement")?;
+                    if let Some(gf) = mode.granted.as_deref() {
+                        if !gf.spell_effects.is_empty() {
+                            return Err("oracle:unsupported-replacement");
+                        }
+                        lower_gated_section(
+                            face_ast,
+                            &gf.keywords,
+                            &gf.statics,
+                            &gf.abilities,
+                            &gf.replacements,
+                            GatedSectionMode::EntryOption(idx_u8),
+                            &mut program,
+                            vocabulary,
+                            &mut ids,
+                        )?;
+                    } else {
+                        lower_as_enters_modal_body(
+                            face_ast,
+                            mode,
+                            idx_u8,
+                            &mut program,
+                            vocabulary,
+                            &mut ids,
+                        )?;
+                    }
+                }
+                continue;
+            }
+        }
         lower_replacement(rep, &mut program, vocabulary, &mut ids)?;
     }
 
     // Lower static abilities (deferring PrototypeStats, StationBand, and DieRollBand for post-ability wiring)
     let mut station_bands: Vec<(u8, &str)> = Vec::new();
     let mut die_roll_bands_raw: Vec<(&str, &str)> = Vec::new();
+    let mut prev_static_subject: Option<SubjectRefAst> = None;
     for st in &face_ast.statics {
         match st {
             StaticAbilityAst::PrototypeStats {
@@ -1821,7 +1973,115 @@ fn lower_face(
             StaticAbilityAst::DieRollBand { roll, payload } => {
                 die_roll_bands_raw.push((roll.as_str(), payload.as_str()));
             }
-            _ => lower_static(st, &mut program, vocabulary, &mut ids, is_spell)?,
+            StaticAbilityAst::PlayOrCastPermission {
+                cast_only: true,
+                filter,
+                permission,
+                condition: Some(cond),
+            } if permission
+                .trim()
+                .trim_end_matches('.')
+                .eq_ignore_ascii_case("as though it had flash")
+                && is_self_flash_filter(filter) =>
+            {
+                if program.conditional_flash.is_some() {
+                    return Err("oracle:duplicate-conditional-flash");
+                }
+                program.conditional_flash = Some(lower_self_flash_condition(cond, vocabulary)?);
+            }
+            StaticAbilityAst::RuleOrCombatRestriction {
+                subject,
+                rule,
+                filter: None,
+                condition: None,
+            } if matches!(subject.as_deref(), None | Some(SubjectRefAst::SelfObject))
+                && matches!(
+                    rule.trim()
+                        .trim_end_matches('.')
+                        .to_ascii_lowercase()
+                        .as_str(),
+                    "cant_be_copied"
+                        | "~ can't be copied"
+                        | "can't be copied"
+                        | "this spell can't be copied"
+                ) =>
+            {
+                program.cannot_be_copied = true;
+            }
+            StaticAbilityAst::Compound(parts)
+                if parts.iter().any(|part| {
+                    is_hoistable_self_flash_static(part)
+                        || (parts.iter().any(|other| {
+                            matches!(
+                                other,
+                                StaticAbilityAst::AlternativeCastCost {
+                                    for_spells: None,
+                                    next_only: false,
+                                    ..
+                                }
+                            )
+                        }) && is_self_conditional_flash_keyword_grant(part))
+                }) =>
+            {
+                let has_self_alt_cost = parts.iter().any(|other| {
+                    matches!(
+                        other,
+                        StaticAbilityAst::AlternativeCastCost {
+                            for_spells: None,
+                            next_only: false,
+                            ..
+                        }
+                    )
+                });
+                let mut remaining = Vec::with_capacity(parts.len());
+                for part in parts {
+                    if let StaticAbilityAst::PlayOrCastPermission {
+                        condition: Some(cond),
+                        ..
+                    } = part
+                        && is_hoistable_self_flash_static(part)
+                    {
+                        if program.conditional_flash.is_some() {
+                            return Err("oracle:duplicate-conditional-flash");
+                        }
+                        program.conditional_flash =
+                            Some(lower_self_flash_condition(cond, vocabulary)?);
+                    } else if has_self_alt_cost
+                        && let StaticAbilityAst::GrantKeywords {
+                            condition: Some(cond),
+                            ..
+                        } = part
+                        && is_self_conditional_flash_keyword_grant(part)
+                    {
+                        if program.conditional_flash.is_some() {
+                            return Err("oracle:duplicate-conditional-flash");
+                        }
+                        program.conditional_flash =
+                            Some(lower_self_flash_condition(cond, vocabulary)?);
+                    } else {
+                        remaining.push(part.clone());
+                    }
+                }
+                for rem in &remaining {
+                    lower_static(rem, &mut program, vocabulary, &mut ids, is_spell)?;
+                }
+            }
+            _ => {
+                if let Some(prev) = &prev_static_subject
+                    && matches!(static_ast_subject(st), Some(SubjectRefAst::Anaphora(_)))
+                {
+                    let mut resolved = st.clone();
+                    resolve_static_anaphora_subject_across_statics(&mut resolved, prev);
+                    lower_static(&resolved, &mut program, vocabulary, &mut ids, is_spell)?;
+                } else {
+                    if let Some(subj) = static_ast_subject(st)
+                        && !matches!(subj, SubjectRefAst::Anaphora(_))
+                    {
+                        prev_static_subject = Some(subj.clone());
+                    }
+                    lower_static(st, &mut program, vocabulary, &mut ids, is_spell)?;
+                }
+            }
         }
     }
 
@@ -2097,6 +2357,7 @@ enum GatedSectionMode {
     LevelerBand(StaticSourceCondition),
     ClassLevel(u8),
     CaseSolved,
+    EntryOption(u8),
 }
 
 fn strip_cleave_brackets(raw: &str) -> Result<String, &'static str> {
@@ -2226,10 +2487,8 @@ fn lower_gated_section(
     vocabulary: &CreatureTypeVocabulary,
     ids: &mut LoweringIds,
 ) -> Result<(), &'static str> {
-    if !replacements.is_empty() {
-        return Err("oracle:gated-section-replacement");
-    }
-    if keywords.is_empty() && statics.is_empty() && abilities.is_empty() {
+    if keywords.is_empty() && statics.is_empty() && abilities.is_empty() && replacements.is_empty()
+    {
         return Ok(());
     }
     let mut scratch = Program::new(
@@ -2242,8 +2501,12 @@ fn lower_gated_section(
     scratch.enchantment_subtypes = program.enchantment_subtypes.clone();
     scratch.planeswalker_subtypes = program.planeswalker_subtypes.clone();
     scratch.supertypes = program.supertypes.clone();
+    let baseline_kind = scratch.kind.clone();
     for (idx, kw) in keywords.iter().enumerate() {
         lower_keyword(kw, idx, face_ast, &mut scratch, vocabulary, ids, false)?;
+    }
+    for rep in replacements {
+        lower_replacement(rep, &mut scratch, vocabulary, ids)?;
     }
     for st in statics {
         lower_static(st, &mut scratch, vocabulary, ids, false)?;
@@ -2251,10 +2514,15 @@ fn lower_gated_section(
     for ab in abilities {
         lower_ability(ab, &mut scratch, vocabulary, ids)?;
     }
-    if !scratch.zone_replacements.is_empty()
+    if scratch.kind != baseline_kind
+        || scratch.entry_copy.is_some()
+        || scratch.entry_tap_unless.is_some()
+        || !scratch.zone_replacements.is_empty()
         || !scratch.cast_reductions.is_empty()
         || !scratch.entry_counter_abilities.is_empty()
         || scratch.cannot_be_countered
+        || scratch.cannot_be_copied
+        || scratch.conditional_flash.is_some()
         || scratch.attack_requirement.is_some()
         || scratch.combat_limits != Default::default()
         || scratch.conditional_cost.is_some()
@@ -2267,6 +2535,7 @@ fn lower_gated_section(
         GatedSectionMode::LevelerBand(c) => c.clone(),
         GatedSectionMode::ClassLevel(lvl) => StaticSourceCondition::SourceClassLevelAtLeast(*lvl),
         GatedSectionMode::CaseSolved => StaticSourceCondition::SourceIsSolved,
+        GatedSectionMode::EntryOption(idx) => StaticSourceCondition::EntryOptionChosen(*idx),
     };
     if !scratch.printed_keywords.is_empty() {
         push_static_ability(
@@ -2379,7 +2648,9 @@ fn lower_gated_section(
                 )?;
             }
         }
-        GatedSectionMode::ClassLevel(_) | GatedSectionMode::CaseSolved => {
+        GatedSectionMode::ClassLevel(_)
+        | GatedSectionMode::CaseSolved
+        | GatedSectionMode::EntryOption(_) => {
             if !scratch.mana.is_empty() {
                 return Err("oracle:gated-section-mana");
             }
@@ -2391,6 +2662,10 @@ fn lower_gated_section(
                 GatedSectionMode::CaseSolved => (
                     TriggerCondition::SourceIsSolved,
                     ActivationRestriction::SourceIsSolved,
+                ),
+                GatedSectionMode::EntryOption(idx) => (
+                    TriggerCondition::SourceEntryOption(idx),
+                    ActivationRestriction::SourceEntryOption(idx),
                 ),
                 GatedSectionMode::LevelerBand(_) => unreachable!(),
             };
@@ -2574,4 +2849,1022 @@ fn push_primary_static_ability(
         program.continuous = Some(ability);
         Ok(())
     }
+}
+
+fn is_self_flash_filter(filter: &ObjectFilterAst) -> bool {
+    !filter.any_spell && !filter.any_permanent && is_unrestricted_filter(filter)
+}
+
+fn is_hoistable_self_flash_static(st: &StaticAbilityAst) -> bool {
+    matches!(
+        st,
+        StaticAbilityAst::PlayOrCastPermission {
+            cast_only: true,
+            filter,
+            permission,
+            condition: Some(_),
+        } if permission
+            .trim()
+            .trim_end_matches('.')
+            .eq_ignore_ascii_case("as though it had flash")
+            && is_self_flash_filter(filter)
+    )
+}
+
+fn is_self_conditional_flash_keyword_grant(st: &StaticAbilityAst) -> bool {
+    matches!(
+        st,
+        StaticAbilityAst::GrantKeywords {
+            subject,
+            keywords,
+            condition: Some(_),
+            paired_rule: None,
+        } if matches!(subject.as_ref(), SubjectRefAst::SelfObject)
+            && keywords.len() == 1
+            && keywords[0].trim().eq_ignore_ascii_case("flash")
+    )
+}
+
+fn value_expr_needs_cast_source(expr: &ValueExpr) -> bool {
+    if expr.references_ability_source() {
+        return true;
+    }
+    let bad_player = |p: ResolvingPlayer| {
+        matches!(
+            p,
+            ResolvingPlayer::EnchantedPlayer
+                | ResolvingPlayer::AttachedHostController
+                | ResolvingPlayer::SourceChosenPlayer
+        )
+    };
+    match expr {
+        ValueExpr::CountOtherSharingSourceSubtype
+        | ValueExpr::AttachedCount(_)
+        | ValueExpr::EventValue(
+            EventValueKind::SourceAttackedThisTurn
+            | EventValueKind::ManaSpentToCast
+            | EventValueKind::ColorsSpentToCast
+            | EventValueKind::ManaTypeSpentToCast(_)
+            | EventValueKind::SnowManaSpentToCast
+            | EventValueKind::TreasureManaSpentToCast
+            | EventValueKind::CreatureManaSpentToCast
+            | EventValueKind::CastFromOutsideHand
+            | EventValueKind::CastFromExile
+            | EventValueKind::CastFromGraveyard
+            | EventValueKind::CastDuringOwnMain
+            | EventValueKind::Bargained
+            | EventValueKind::GiftPromised
+            | EventValueKind::Cleaved
+            | EventValueKind::EvidenceCollected
+            | EventValueKind::PaidAlternative
+            | EventValueKind::KickerCount(_)
+            | EventValueKind::AdditionalCostPaid,
+        ) => true,
+        ValueExpr::Count {
+            zone,
+            controller_scope,
+            ..
+        } => {
+            let bad_zone = match *zone {
+                ValueZone::Graveyard(p)
+                | ValueZone::Hand(p)
+                | ValueZone::Library(p)
+                | ValueZone::Exile(Some(p)) => bad_player(p),
+                _ => false,
+            };
+            bad_zone || controller_scope.is_some_and(bad_player)
+        }
+        ValueExpr::DistinctManaValuesInGraveyard(p)
+        | ValueExpr::PlayerStat(
+            PlayerStatExpr::PlayerLife(p)
+            | PlayerStatExpr::PlayerHandSize(p)
+            | PlayerStatExpr::PlayerLibrarySize(p)
+            | PlayerStatExpr::PlayerGraveyardSize(p)
+            | PlayerStatExpr::LandsEnteredThisTurn(p),
+        ) => bad_player(*p),
+        ValueExpr::ObjectStat { subject, .. } => matches!(
+            subject,
+            ValueObjectRef::AbilitySource
+                | ValueObjectRef::TriggerSource
+                | ValueObjectRef::AttachedHost
+        ),
+        ValueExpr::CounterCount { subject, .. } => matches!(
+            subject,
+            spellwake_engine::program::CounterSubjectRef::AbilitySource
+                | spellwake_engine::program::CounterSubjectRef::TriggerSource
+                | spellwake_engine::program::CounterSubjectRef::AttachedHost
+        ),
+        ValueExpr::Scale { expr, .. } | ValueExpr::DivConst { expr, .. } => {
+            value_expr_needs_cast_source(expr)
+        }
+        ValueExpr::Add(a, b) | ValueExpr::Sub(a, b) => {
+            value_expr_needs_cast_source(a) || value_expr_needs_cast_source(b)
+        }
+        ValueExpr::Conditional {
+            left,
+            right,
+            then_value,
+            else_value,
+            ..
+        } => {
+            value_expr_needs_cast_source(left)
+                || value_expr_needs_cast_source(right)
+                || value_expr_needs_cast_source(then_value)
+                || value_expr_needs_cast_source(else_value)
+        }
+        _ => false,
+    }
+}
+
+fn lower_self_flash_condition(
+    cond: &ConditionAst,
+    vocabulary: &CreatureTypeVocabulary,
+) -> Result<SelfFlashPermission, &'static str> {
+    if let ConditionAst::Marker(GameMarker::PayCostCondition(cost_atom)) = cond {
+        if let CostAtomAst::PayMana(raw) = cost_atom.as_ref()
+            && let Some(extra_cost) = parse_fixed_mana_cost(&raw.trim().to_ascii_uppercase())
+            && extra_cost.total().is_positive()
+        {
+            return Ok(SelfFlashPermission::PayExtraMana(extra_cost));
+        }
+        return Err("oracle:unsupported-conditional-flash");
+    }
+    let mut tmp = BodyBuilder::new();
+    let rc = lower_resolution_condition(cond, &mut tmp, vocabulary, false, None)
+        .map_err(|_| "oracle:unsupported-conditional-flash")?;
+    if tmp.target != BodyTarget::None
+        || !rc.is_world_evaluable()
+        || rc.validate_world(vocabulary).is_err()
+        || value_expr_needs_cast_source(&rc.left)
+        || value_expr_needs_cast_source(&rc.right)
+    {
+        return Err("oracle:unsupported-conditional-flash");
+    }
+    Ok(SelfFlashPermission::Condition(Box::new(rc)))
+}
+
+fn strip_snow_mana_symbols(raw: &str) -> Option<(String, u8)> {
+    let trimmed = raw.trim();
+    let symbols = trimmed.strip_prefix('{')?.strip_suffix('}')?;
+    let mut out = String::with_capacity(trimmed.len());
+    let mut snow_count: u8 = 0;
+    for sym in symbols.split("}{") {
+        if sym.eq_ignore_ascii_case("S") {
+            snow_count = snow_count.checked_add(1)?;
+        } else {
+            out.push('{');
+            out.push_str(sym);
+            out.push('}');
+        }
+    }
+    Some((out, snow_count))
+}
+
+fn replacement_contains_enters_as_copy(rep: &ReplacementEffectAst) -> bool {
+    match rep {
+        ReplacementEffectAst::EntersAsCopy { .. } => true,
+        ReplacementEffectAst::Compound(items) => {
+            items.iter().any(replacement_contains_enters_as_copy)
+        }
+        ReplacementEffectAst::ScaledBy { inner, .. } => replacement_contains_enters_as_copy(inner),
+        _ => false,
+    }
+}
+
+fn text_mentions_attachment(raw: &str) -> bool {
+    let low = raw.to_ascii_lowercase();
+    low.contains("attached") || low.contains("equipped") || low.contains("enchanted creature")
+}
+
+fn as_enters_action_mentions_attachment(ins: &[InstructionAst]) -> bool {
+    ins.iter().any(|item| {
+        if matches!(item, InstructionAst::Attach { .. }) {
+            return true;
+        }
+        let debug_repr = format!("{item:?}");
+        let low = debug_repr.to_ascii_lowercase();
+        low.contains("attachedhost")
+            || low.contains("attached_to_self")
+            || low.contains("attachedto(")
+            || low.contains("attachedby(")
+            || text_mentions_attachment(&low)
+    })
+}
+
+fn is_permanent_siege_duration(dur: &DurationAst) -> bool {
+    matches!(
+        dur,
+        DurationAst::Permanent | DurationAst::UntilSourceLeaves | DurationAst::Instant
+    )
+}
+
+fn lower_as_enters_modal_body(
+    face_ast: &FaceAst,
+    mode: &spellwake_oracle_compiler::ast::ModalModeAst,
+    idx_u8: u8,
+    program: &mut Program,
+    vocabulary: &CreatureTypeVocabulary,
+    ids: &mut LoweringIds,
+) -> Result<(), &'static str> {
+    if mode.body.is_empty() {
+        return Err("oracle:unsupported-replacement");
+    }
+    let delayed_step_trigger =
+        |step: TurnStepAst, scope: DelayedStepScope, body: Vec<InstructionAst>| {
+            let whose = match scope {
+                DelayedStepScope::YourNext | DelayedStepScope::EachOfYour => "you",
+                DelayedStepScope::EachOpponents => "each opponent",
+                DelayedStepScope::EachPlayers | DelayedStepScope::Each | DelayedStepScope::Next => {
+                    "each player"
+                }
+                _ => return Err("oracle:unsupported-replacement"),
+            };
+            Ok(AbilityAst::Triggered {
+                ability_word: mode.label.clone(),
+                trigger: TriggerSpecAst {
+                    events: vec![TriggerEventAst::StepBegan {
+                        step,
+                        whose: whose.to_string(),
+                    }],
+                    intervening_if: None,
+                },
+                body,
+            })
+        };
+
+    match mode.body.as_slice() {
+        [
+            InstructionAst::DelayedTrigger {
+                step,
+                scope,
+                body: trig_body,
+            },
+            rest @ ..,
+        ] => {
+            let mut full_body = trig_body.clone();
+            full_body.extend_from_slice(rest);
+            let ab = delayed_step_trigger(*step, *scope, full_body)?;
+            return lower_gated_section(
+                face_ast,
+                &[],
+                &[],
+                &[ab],
+                &[],
+                GatedSectionMode::EntryOption(idx_u8),
+                program,
+                vocabulary,
+                ids,
+            );
+        }
+        [
+            InstructionAst::DelayedEventTrigger {
+                trigger,
+                body: trig_body,
+            },
+            rest @ ..,
+        ] => {
+            let mut full_body = trig_body.clone();
+            full_body.extend_from_slice(rest);
+            let ab = AbilityAst::Triggered {
+                ability_word: mode.label.clone(),
+                trigger: trigger.clone(),
+                body: full_body,
+            };
+            return lower_gated_section(
+                face_ast,
+                &[],
+                &[],
+                &[ab],
+                &[],
+                GatedSectionMode::EntryOption(idx_u8),
+                program,
+                vocabulary,
+                ids,
+            );
+        }
+        [
+            InstructionAst::TemporaryTrigger {
+                trigger,
+                body: trig_body,
+                duration,
+            },
+            rest @ ..,
+        ] if is_permanent_siege_duration(duration) => {
+            let mut full_body = trig_body.clone();
+            full_body.extend_from_slice(rest);
+            let ab = AbilityAst::Triggered {
+                ability_word: mode.label.clone(),
+                trigger: trigger.clone(),
+                body: full_body,
+            };
+            return lower_gated_section(
+                face_ast,
+                &[],
+                &[],
+                &[ab],
+                &[],
+                GatedSectionMode::EntryOption(idx_u8),
+                program,
+                vocabulary,
+                ids,
+            );
+        }
+        _ => {}
+    }
+
+    let mut keywords: Vec<KeywordAst> = Vec::new();
+    let mut statics: Vec<StaticAbilityAst> = Vec::new();
+    let mut abilities: Vec<AbilityAst> = Vec::new();
+    let mut replacements: Vec<ReplacementEffectAst> = Vec::new();
+
+    for item in &mode.body {
+        match item {
+            InstructionAst::TemporaryStatic {
+                static_ability,
+                duration,
+            } if is_permanent_siege_duration(duration) => {
+                statics.push(static_ability.as_ref().clone());
+            }
+            InstructionAst::TemporaryTrigger {
+                trigger,
+                body: trig_body,
+                duration,
+            } if is_permanent_siege_duration(duration) => {
+                abilities.push(AbilityAst::Triggered {
+                    ability_word: mode.label.clone(),
+                    trigger: trigger.clone(),
+                    body: trig_body.clone(),
+                });
+            }
+            InstructionAst::DelayedTrigger {
+                step,
+                scope,
+                body: trig_body,
+            } => {
+                abilities.push(delayed_step_trigger(*step, *scope, trig_body.clone())?);
+            }
+            InstructionAst::DelayedEventTrigger {
+                trigger,
+                body: trig_body,
+            } => {
+                abilities.push(AbilityAst::Triggered {
+                    ability_word: mode.label.clone(),
+                    trigger: trigger.clone(),
+                    body: trig_body.clone(),
+                });
+            }
+            InstructionAst::TemporaryReplacement {
+                replacement,
+                duration,
+            } if is_permanent_siege_duration(duration) => {
+                replacements.push(replacement.as_ref().clone());
+            }
+            InstructionAst::GrantKeywords {
+                subject,
+                keywords: kws,
+                duration,
+            } if matches!(subject.as_ref(), SubjectRefAst::SelfObject)
+                && is_permanent_siege_duration(duration)
+                && !kws.is_empty() =>
+            {
+                statics.push(StaticAbilityAst::GrantKeywords {
+                    subject: subject.clone(),
+                    keywords: kws.clone(),
+                    condition: None,
+                    paired_rule: None,
+                });
+            }
+            InstructionAst::GrantAbilityText {
+                subject,
+                compiled: Some(gf),
+                duration,
+                ..
+            } if matches!(subject.as_ref(), SubjectRefAst::SelfObject)
+                && is_permanent_siege_duration(duration)
+                && gf.spell_effects.is_empty() =>
+            {
+                keywords.extend(gf.keywords.clone());
+                statics.extend(gf.statics.clone());
+                abilities.extend(gf.abilities.clone());
+                replacements.extend(gf.replacements.clone());
+            }
+            _ => return Err("oracle:unsupported-replacement"),
+        }
+    }
+
+    if keywords.is_empty() && statics.is_empty() && abilities.is_empty() && replacements.is_empty()
+    {
+        return Err("oracle:unsupported-replacement");
+    }
+
+    lower_gated_section(
+        face_ast,
+        &keywords,
+        &statics,
+        &abilities,
+        &replacements,
+        GatedSectionMode::EntryOption(idx_u8),
+        program,
+        vocabulary,
+        ids,
+    )
+}
+
+fn push_cast_timing_flat(acc: &mut Vec<CastTimingRestriction>, timing: CastTimingRestriction) {
+    match timing {
+        CastTimingRestriction::All(items) => {
+            for item in items {
+                push_cast_timing_flat(acc, item);
+            }
+        }
+        other => acc.push(other),
+    }
+}
+
+fn is_x_nonzero_condition_ast(cond: &ConditionAst) -> bool {
+    match cond {
+        ConditionAst::Compare { lhs, op, rhs } => {
+            matches!(
+                (lhs.as_ref(), *op, rhs.as_ref()),
+                (ValueExprAst::ChosenX, CompareOp::Gt, ValueExprAst::Const(0))
+                    | (ValueExprAst::ChosenX, CompareOp::Ge, ValueExprAst::Const(1))
+                    | (ValueExprAst::Const(0), CompareOp::Lt, ValueExprAst::ChosenX)
+                    | (ValueExprAst::Const(1), CompareOp::Le, ValueExprAst::ChosenX)
+            )
+        }
+        ConditionAst::Not(inner) => matches!(
+            inner.as_ref(),
+            ConditionAst::Compare {
+                lhs,
+                op: CompareOp::Eq,
+                rhs,
+            } if matches!(
+                (lhs.as_ref(), rhs.as_ref()),
+                (ValueExprAst::ChosenX, ValueExprAst::Const(0))
+                    | (ValueExprAst::Const(0), ValueExprAst::ChosenX)
+            )
+        ),
+        _ => false,
+    }
+}
+
+fn split_spell_restriction_clauses(low: &str) -> Vec<&str> {
+    let mut parts: Vec<&str> = Vec::new();
+    for seg in low.split(['+', ';']) {
+        for sent in seg.split(". ") {
+            let trimmed = sent.trim().trim_end_matches('.').trim();
+            if trimmed.is_empty() {
+                continue;
+            }
+            let mut cursor = trimmed;
+            loop {
+                let mut found: Option<(&str, &str)> = None;
+                for sep in [", and only ", " and only ", ", but only ", " but only "] {
+                    if let Some((lhs, rhs)) = cursor.split_once(sep) {
+                        found = Some((lhs, rhs));
+                        break;
+                    }
+                }
+                if let Some((lhs, rhs)) = found {
+                    let lhs_t = lhs.trim();
+                    if !lhs_t.is_empty() {
+                        parts.push(lhs_t);
+                    }
+                    cursor = rhs.trim();
+                } else {
+                    if !cursor.is_empty() {
+                        parts.push(cursor);
+                    }
+                    break;
+                }
+            }
+        }
+    }
+    parts
+}
+
+fn parse_spell_cast_timing_restriction(
+    restriction: &str,
+    condition: Option<&ConditionAst>,
+    vocabulary: &CreatureTypeVocabulary,
+) -> Option<CastTimingRestriction> {
+    use CastTimingRestriction as R;
+
+    let low = restriction
+        .trim()
+        .trim_end_matches('.')
+        .trim()
+        .to_ascii_lowercase();
+
+    if let Some(cond) = condition {
+        let cond_r = if is_x_nonzero_condition_ast(cond) {
+            R::XNonZero
+        } else {
+            let mut dummy = BodyBuilder::new();
+            let rc = lower_resolution_condition(cond, &mut dummy, vocabulary, false, None).ok()?;
+            if dummy.target != BodyTarget::None
+                || !rc.is_world_evaluable()
+                || rc.validate_world(vocabulary).is_err()
+            {
+                return None;
+            }
+            R::Condition(Box::new(rc))
+        };
+        let base_tag = low
+            .strip_prefix("conditional+")
+            .or_else(|| low.strip_prefix("conditional"))
+            .unwrap_or(&low)
+            .trim();
+        if base_tag.is_empty() || matches!(base_tag, "condition" | "only_if" | "if") {
+            return Some(cond_r);
+        }
+        let timing = parse_spell_cast_timing_restriction(base_tag, None, vocabulary)?;
+        let mut flat = Vec::new();
+        push_cast_timing_flat(&mut flat, timing);
+        push_cast_timing_flat(&mut flat, cond_r);
+        return match flat.len() {
+            0 => None,
+            1 => flat.pop(),
+            _ => Some(R::All(flat)),
+        };
+    }
+
+    if low == "during combat+during opponent's turn"
+        || low == "during opponent's turn+during combat"
+    {
+        return Some(R::DuringCombatOnOpponentsTurn);
+    }
+    if (low.contains("declare attackers step") && low.contains("attacked"))
+        || low == "duringdeclareattackersifattacked"
+    {
+        return Some(R::DuringDeclareAttackersIfAttacked);
+    }
+
+    let compound = split_spell_restriction_clauses(&low);
+    if compound.len() >= 2 {
+        let mut parts = Vec::with_capacity(compound.len());
+        for part in compound {
+            let parsed = parse_spell_cast_timing_restriction(part, None, vocabulary)?;
+            push_cast_timing_flat(&mut parts, parsed);
+        }
+        return match parts.len() {
+            0 => None,
+            1 => parts.pop(),
+            _ => Some(R::All(parts)),
+        };
+    }
+
+    let core = low
+        .strip_prefix("cast this spell ")
+        .or_else(|| low.strip_prefix("cast ~ "))
+        .unwrap_or(&low)
+        .trim();
+    let core = core.strip_prefix("only ").unwrap_or(core).trim();
+
+    if matches!(
+        core,
+        "xcantbezero"
+            | "xnonzero"
+            | "x can't be 0"
+            | "x can't be zero"
+            | "x is not 0"
+            | "x isn't 0"
+            | "x is not zero"
+            | "x isn't zero"
+            | "if x is not 0"
+            | "if x isn't 0"
+            | "if x is not zero"
+            | "if x isn't zero"
+            | "if x is greater than 0"
+            | "if x is 1 or more"
+    ) {
+        return Some(R::XNonZero);
+    }
+
+    if matches!(
+        core,
+        "after combat" | "aftercombat" | "after the combat phase"
+    ) {
+        return Some(R::AfterCombat);
+    }
+
+    if matches!(
+        core,
+        "after combat on your turn"
+            | "during your turn after combat"
+            | "during your turn, after combat"
+            | "after combat during your turn"
+    ) {
+        return Some(R::All(vec![R::DuringYourTurn, R::AfterCombat]));
+    }
+
+    if matches!(
+        core,
+        "after combat on an opponent's turn"
+            | "during an opponent's turn after combat"
+            | "during an opponent's turn, after combat"
+            | "after combat during an opponent's turn"
+    ) {
+        return Some(R::All(vec![R::DuringOpponentsTurn, R::AfterCombat]));
+    }
+
+    if core == "during opponent's turn" {
+        return Some(R::DuringOpponentsTurn);
+    }
+
+    if let Some(cond_raw) = core.strip_prefix("if ")
+        && let Ok(cond_ast) = spellwake_oracle_compiler::filter::parse_condition(
+            cond_raw.trim(),
+            &cached_compiler_vocab(vocabulary),
+        )
+    {
+        if is_x_nonzero_condition_ast(&cond_ast) {
+            return Some(R::XNonZero);
+        }
+        let mut dummy = BodyBuilder::new();
+        if let Ok(rc) = lower_resolution_condition(&cond_ast, &mut dummy, vocabulary, false, None)
+            && dummy.target == BodyTarget::None
+            && rc.is_world_evaluable()
+            && rc.validate_world(vocabulary).is_ok()
+        {
+            return Some(R::Condition(Box::new(rc)));
+        }
+    }
+
+    parse_cast_timing_restriction(restriction, None, vocabulary)
+}
+
+fn strip_spell_cast_restrictions(
+    ins: &[InstructionAst],
+    cast_during_own_combat: &mut bool,
+    cast_timings: &mut Vec<CastTimingRestriction>,
+    vocabulary: &CreatureTypeVocabulary,
+) -> Vec<InstructionAst> {
+    let mut filtered = Vec::with_capacity(ins.len());
+    for item in ins {
+        match item {
+            InstructionAst::AbilityRestriction {
+                restriction,
+                condition,
+            } => {
+                let low = restriction
+                    .trim()
+                    .trim_end_matches('.')
+                    .trim()
+                    .to_ascii_lowercase();
+                if condition.is_none()
+                    && matches!(
+                        low.as_str(),
+                        "during combat+during your turn"
+                            | "during your turn+during combat"
+                            | "during combat on your turn"
+                            | "cast this spell only during combat on your turn"
+                            | "cast ~ only during combat on your turn"
+                    )
+                {
+                    *cast_during_own_combat = true;
+                    continue;
+                }
+                if let Some(timing) = parse_spell_cast_timing_restriction(
+                    restriction,
+                    condition.as_deref(),
+                    vocabulary,
+                ) {
+                    push_cast_timing_flat(cast_timings, timing);
+                    continue;
+                }
+                filtered.push(item.clone());
+            }
+            InstructionAst::BindX { x_expr, body } if !body.is_empty() => {
+                let inner = strip_spell_cast_restrictions(
+                    body,
+                    cast_during_own_combat,
+                    cast_timings,
+                    vocabulary,
+                );
+                filtered.push(InstructionAst::BindX {
+                    x_expr: x_expr.clone(),
+                    body: inner,
+                });
+            }
+            InstructionAst::BindXY {
+                x_expr,
+                y_expr,
+                body,
+            } if !body.is_empty() => {
+                let inner = strip_spell_cast_restrictions(
+                    body,
+                    cast_during_own_combat,
+                    cast_timings,
+                    vocabulary,
+                );
+                filtered.push(InstructionAst::BindXY {
+                    x_expr: x_expr.clone(),
+                    y_expr: y_expr.clone(),
+                    body: inner,
+                });
+            }
+            InstructionAst::Optional(inner) => {
+                let inner_f = strip_spell_cast_restrictions(
+                    inner,
+                    cast_during_own_combat,
+                    cast_timings,
+                    vocabulary,
+                );
+                if !(inner_f.is_empty() && !inner.is_empty()) {
+                    filtered.push(InstructionAst::Optional(inner_f));
+                }
+            }
+            InstructionAst::OptionalPlayer { player, body } => {
+                let inner_f = strip_spell_cast_restrictions(
+                    body,
+                    cast_during_own_combat,
+                    cast_timings,
+                    vocabulary,
+                );
+                if !(inner_f.is_empty() && !body.is_empty()) {
+                    filtered.push(InstructionAst::OptionalPlayer {
+                        player: *player,
+                        body: inner_f,
+                    });
+                }
+            }
+            InstructionAst::IfPreviousSucceeded(inner) => {
+                let inner_f = strip_spell_cast_restrictions(
+                    inner,
+                    cast_during_own_combat,
+                    cast_timings,
+                    vocabulary,
+                );
+                if !(inner_f.is_empty() && !inner.is_empty()) {
+                    filtered.push(InstructionAst::IfPreviousSucceeded(inner_f));
+                }
+            }
+            InstructionAst::IfPreviousFailed(inner) => {
+                let inner_f = strip_spell_cast_restrictions(
+                    inner,
+                    cast_during_own_combat,
+                    cast_timings,
+                    vocabulary,
+                );
+                if !(inner_f.is_empty() && !inner.is_empty()) {
+                    filtered.push(InstructionAst::IfPreviousFailed(inner_f));
+                }
+            }
+            InstructionAst::IfCondition {
+                condition,
+                then_body,
+            } => {
+                let inner_f = strip_spell_cast_restrictions(
+                    then_body,
+                    cast_during_own_combat,
+                    cast_timings,
+                    vocabulary,
+                );
+                filtered.push(InstructionAst::IfCondition {
+                    condition: condition.clone(),
+                    then_body: inner_f,
+                });
+            }
+            InstructionAst::Otherwise(inner) => {
+                let inner_f = strip_spell_cast_restrictions(
+                    inner,
+                    cast_during_own_combat,
+                    cast_timings,
+                    vocabulary,
+                );
+                if !(inner_f.is_empty() && !inner.is_empty()) {
+                    filtered.push(InstructionAst::Otherwise(inner_f));
+                }
+            }
+            InstructionAst::ReplaceEffect(inner) => {
+                let inner_f = strip_spell_cast_restrictions(
+                    inner,
+                    cast_during_own_combat,
+                    cast_timings,
+                    vocabulary,
+                );
+                if !(inner_f.is_empty() && !inner.is_empty()) {
+                    filtered.push(InstructionAst::ReplaceEffect(inner_f));
+                }
+            }
+            InstructionAst::ReflexiveTrigger(inner) => {
+                let inner_f = strip_spell_cast_restrictions(
+                    inner,
+                    cast_during_own_combat,
+                    cast_timings,
+                    vocabulary,
+                );
+                if !(inner_f.is_empty() && !inner.is_empty()) {
+                    filtered.push(InstructionAst::ReflexiveTrigger(inner_f));
+                }
+            }
+            InstructionAst::Choice(branches) => {
+                let new_branches = branches
+                    .iter()
+                    .map(|br| {
+                        strip_spell_cast_restrictions(
+                            br,
+                            cast_during_own_combat,
+                            cast_timings,
+                            vocabulary,
+                        )
+                    })
+                    .collect();
+                filtered.push(InstructionAst::Choice(new_branches));
+            }
+            InstructionAst::DelayedTrigger { step, scope, body } => {
+                let inner_f = strip_spell_cast_restrictions(
+                    body,
+                    cast_during_own_combat,
+                    cast_timings,
+                    vocabulary,
+                );
+                filtered.push(InstructionAst::DelayedTrigger {
+                    step: *step,
+                    scope: *scope,
+                    body: inner_f,
+                });
+            }
+            InstructionAst::DelayedEventTrigger { trigger, body } => {
+                let inner_f = strip_spell_cast_restrictions(
+                    body,
+                    cast_during_own_combat,
+                    cast_timings,
+                    vocabulary,
+                );
+                filtered.push(InstructionAst::DelayedEventTrigger {
+                    trigger: trigger.clone(),
+                    body: inner_f,
+                });
+            }
+            InstructionAst::TemporaryTrigger {
+                trigger,
+                body,
+                duration,
+            } => {
+                let inner_f = strip_spell_cast_restrictions(
+                    body,
+                    cast_during_own_combat,
+                    cast_timings,
+                    vocabulary,
+                );
+                filtered.push(InstructionAst::TemporaryTrigger {
+                    trigger: trigger.clone(),
+                    body: inner_f,
+                    duration: duration.clone(),
+                });
+            }
+            InstructionAst::SpreeMode { cost, body } => {
+                let inner_f = strip_spell_cast_restrictions(
+                    body,
+                    cast_during_own_combat,
+                    cast_timings,
+                    vocabulary,
+                );
+                filtered.push(InstructionAst::SpreeMode {
+                    cost: cost.clone(),
+                    body: inner_f,
+                });
+            }
+            InstructionAst::ForEachPlayer { player, body } => {
+                let inner_f = strip_spell_cast_restrictions(
+                    body,
+                    cast_during_own_combat,
+                    cast_timings,
+                    vocabulary,
+                );
+                filtered.push(InstructionAst::ForEachPlayer {
+                    player: *player,
+                    body: inner_f,
+                });
+            }
+            InstructionAst::ForEachObject { filter, body } => {
+                let inner_f = strip_spell_cast_restrictions(
+                    body,
+                    cast_during_own_combat,
+                    cast_timings,
+                    vocabulary,
+                );
+                filtered.push(InstructionAst::ForEachObject {
+                    filter: filter.clone(),
+                    body: inner_f,
+                });
+            }
+            InstructionAst::ForEachCount { count, body } => {
+                let inner_f = strip_spell_cast_restrictions(
+                    body,
+                    cast_during_own_combat,
+                    cast_timings,
+                    vocabulary,
+                );
+                filtered.push(InstructionAst::ForEachCount {
+                    count: count.clone(),
+                    body: inner_f,
+                });
+            }
+            InstructionAst::ForEachSubjectPlayer { players, body } => {
+                let inner_f = strip_spell_cast_restrictions(
+                    body,
+                    cast_during_own_combat,
+                    cast_timings,
+                    vocabulary,
+                );
+                filtered.push(InstructionAst::ForEachSubjectPlayer {
+                    players: players.clone(),
+                    body: inner_f,
+                });
+            }
+            InstructionAst::ForAsLongAs { condition, body } => {
+                let inner_f = strip_spell_cast_restrictions(
+                    body,
+                    cast_during_own_combat,
+                    cast_timings,
+                    vocabulary,
+                );
+                filtered.push(InstructionAst::ForAsLongAs {
+                    condition: condition.clone(),
+                    body: inner_f,
+                });
+            }
+            InstructionAst::WhenYouNext {
+                event,
+                body,
+                duration,
+            } => {
+                let inner_f = strip_spell_cast_restrictions(
+                    body,
+                    cast_during_own_combat,
+                    cast_timings,
+                    vocabulary,
+                );
+                filtered.push(InstructionAst::WhenYouNext {
+                    event: event.clone(),
+                    body: inner_f,
+                    duration: duration.clone(),
+                });
+            }
+            InstructionAst::Simultaneous(inner) => {
+                let inner_f = strip_spell_cast_restrictions(
+                    inner,
+                    cast_during_own_combat,
+                    cast_timings,
+                    vocabulary,
+                );
+                if !(inner_f.is_empty() && !inner.is_empty()) {
+                    filtered.push(InstructionAst::Simultaneous(inner_f));
+                }
+            }
+            InstructionAst::Unless {
+                body,
+                unless_player,
+                unless_cost,
+                unless_action,
+                unless_condition,
+            } => {
+                let inner_f = strip_spell_cast_restrictions(
+                    body,
+                    cast_during_own_combat,
+                    cast_timings,
+                    vocabulary,
+                );
+                let new_action = unless_action.as_ref().map(|act| {
+                    strip_spell_cast_restrictions(
+                        act,
+                        cast_during_own_combat,
+                        cast_timings,
+                        vocabulary,
+                    )
+                });
+                filtered.push(InstructionAst::Unless {
+                    body: inner_f,
+                    unless_player: *unless_player,
+                    unless_cost: unless_cost.clone(),
+                    unless_action: new_action,
+                    unless_condition: unless_condition.clone(),
+                });
+            }
+            InstructionAst::Modal { choice, modes } => {
+                let new_modes = modes
+                    .iter()
+                    .map(|m| spellwake_oracle_compiler::ast::ModalModeAst {
+                        body: strip_spell_cast_restrictions(
+                            &m.body,
+                            cast_during_own_combat,
+                            cast_timings,
+                            vocabulary,
+                        ),
+                        label: m.label.clone(),
+                        granted: m.granted.clone(),
+                    })
+                    .collect();
+                filtered.push(InstructionAst::Modal {
+                    choice: choice.clone(),
+                    modes: new_modes,
+                });
+            }
+            _ => filtered.push(item.clone()),
+        }
+    }
+    filtered
 }

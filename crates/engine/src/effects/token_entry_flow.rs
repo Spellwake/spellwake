@@ -52,6 +52,273 @@ impl EffectWindow {
         self.trigger_entrant_definition(trigger)
     }
 
+    fn token_player_relation_matches(
+        &self,
+        rel: crate::program::PlayerRelation,
+        rule_ctrl: SeatId,
+        candidate: SeatId,
+    ) -> Result<bool, EffectError> {
+        Ok(match rel {
+            crate::program::PlayerRelation::Controller => candidate == rule_ctrl,
+            crate::program::PlayerRelation::Opponent => self
+                .combat_rules
+                .opponents(self.window.participants(), rule_ctrl)?
+                .contains(&candidate),
+            crate::program::PlayerRelation::AnyParticipant => true,
+        })
+    }
+
+    fn token_program_matches_filter(
+        program: &Program,
+        filter: crate::program::ObjectFilter,
+    ) -> bool {
+        fn clause_ok(c: crate::program::ObjectClause, program: &Program) -> bool {
+            if let Some(expected_token) = c.token
+                && !expected_token
+            {
+                return false;
+            }
+            if !c.any_types.matches_any(&program.card_types)
+                || !c.required_types.matches_all(&program.card_types)
+                || !c.forbidden_types.matches_none(&program.card_types)
+            {
+                return false;
+            }
+            if !c.required_supertypes.matches_all(&program.supertypes)
+                || !c.forbidden_supertypes.matches_none(&program.supertypes)
+            {
+                return false;
+            }
+            let attachment = program.permanent().and_then(|p| p.attachment);
+            let subtype_ok = match c.subtypes {
+                crate::program::SubtypeFilter::Any => true,
+                crate::program::SubtypeFilter::Has(k) => program.creature_subtypes.contains(&k),
+                crate::program::SubtypeFilter::Lacks(k) => !program.creature_subtypes.contains(&k),
+                crate::program::SubtypeFilter::AnyOf(ks) => {
+                    ks.iter().any(|k| program.creature_subtypes.contains(k))
+                }
+                crate::program::SubtypeFilter::NoneOf(ks) => {
+                    ks.iter().all(|k| !program.creature_subtypes.contains(k))
+                }
+                crate::program::SubtypeFilter::Land(k) => program.land_subtypes.contains(&k),
+                crate::program::SubtypeFilter::NotLand(k) => !program.land_subtypes.contains(&k),
+                crate::program::SubtypeFilter::Artifact(k) => {
+                    program.artifact_subtypes.contains(&k)
+                }
+                crate::program::SubtypeFilter::Enchantment(k) => {
+                    program.enchantment_subtypes.contains(&k)
+                }
+                crate::program::SubtypeFilter::Planeswalker(k) => {
+                    program.planeswalker_subtypes.contains(&k)
+                }
+                crate::program::SubtypeFilter::Spell(k) => program.spell_subtypes.contains(&k),
+                crate::program::SubtypeFilter::Aura => {
+                    matches!(attachment, Some(crate::attachment::AttachmentKind::Aura(_)))
+                }
+                crate::program::SubtypeFilter::ExceptChosenSlot(_)
+                | crate::program::SubtypeFilter::MatchesChosenSlot(_)
+                | crate::program::SubtypeFilter::OutsideNamedSlots => false,
+            };
+            if !subtype_ok {
+                return false;
+            }
+            let colors = program.defined_colors();
+            if !c.color.matches(&colors) {
+                return false;
+            }
+            if let Some(keyword) = c.keyword
+                && !program.printed_keywords.contains(&keyword)
+            {
+                return false;
+            }
+            if let Some(keyword) = c.forbidden_keyword
+                && program.printed_keywords.contains(&keyword)
+            {
+                return false;
+            }
+            if !c.matches_enchantment_exclusions(attachment, &program.enchantment_subtypes) {
+                return false;
+            }
+            if c.flags
+                .contains(crate::program::ObjectFilterFlags::HISTORIC)
+                && !program.card_types.contains(&CardType::Artifact)
+                && !program
+                    .supertypes
+                    .contains(&crate::program::Supertype::Legendary)
+                && !program
+                    .enchantment_subtypes
+                    .contains(&crate::program::EnchantmentSubtype::Saga)
+            {
+                return false;
+            }
+            let pt = program
+                .permanent()
+                .and_then(|p| p.printed_pt.as_ref())
+                .map(crate::characteristics::PrintedPowerToughness::baseline);
+            let power_ok = match c.power {
+                crate::program::PowerFilter::Any => true,
+                crate::program::PowerFilter::AtLeast(min) => pt
+                    .as_ref()
+                    .is_some_and(|stats| stats.power >= i64::from(min).into()),
+                crate::program::PowerFilter::AtMost(max) => pt
+                    .as_ref()
+                    .is_some_and(|stats| stats.power <= i64::from(max).into()),
+                crate::program::PowerFilter::Equal(exact) => pt
+                    .as_ref()
+                    .is_some_and(|stats| stats.power == i64::from(exact).into()),
+                crate::program::PowerFilter::PowerOrToughnessAtMost(max) => {
+                    pt.as_ref().is_some_and(|stats| {
+                        stats.power <= i64::from(max).into()
+                            || stats.toughness <= i64::from(max).into()
+                    })
+                }
+                crate::program::PowerFilter::AtMostX
+                | crate::program::PowerFilter::EqualX
+                | crate::program::PowerFilter::AtLeastX
+                | crate::program::PowerFilter::CompareAnchor { .. }
+                | crate::program::PowerFilter::AtMostControlledCreatureCount => false,
+            };
+            if !power_ok {
+                return false;
+            }
+            let toughness_ok = match c.toughness {
+                crate::program::ToughnessFilter::Any => true,
+                crate::program::ToughnessFilter::AtLeast(min) => pt
+                    .as_ref()
+                    .is_some_and(|stats| stats.toughness >= i64::from(min).into()),
+                crate::program::ToughnessFilter::AtMost(max) => pt
+                    .as_ref()
+                    .is_some_and(|stats| stats.toughness <= i64::from(max).into()),
+                crate::program::ToughnessFilter::Equal(exact) => pt
+                    .as_ref()
+                    .is_some_and(|stats| stats.toughness == i64::from(exact).into()),
+                crate::program::ToughnessFilter::AtMostX
+                | crate::program::ToughnessFilter::EqualX
+                | crate::program::ToughnessFilter::AtLeastX
+                | crate::program::ToughnessFilter::CompareAnchor { .. } => false,
+            };
+            if !toughness_ok {
+                return false;
+            }
+            let mv = program.mana_value();
+            match c.mana_value {
+                crate::program::ManaValueFilter::Any => true,
+                crate::program::ManaValueFilter::AtMost(max) => mv <= i64::from(max).into(),
+                crate::program::ManaValueFilter::AtLeast(min) => mv >= i64::from(min).into(),
+                crate::program::ManaValueFilter::Equal(exact) => mv == i64::from(exact).into(),
+                crate::program::ManaValueFilter::Even => {
+                    mv.nonnegative_half_rounded_up() == mv.nonnegative_half_rounded_down()
+                }
+                crate::program::ManaValueFilter::Odd => {
+                    mv.nonnegative_half_rounded_up() != mv.nonnegative_half_rounded_down()
+                }
+                crate::program::ManaValueFilter::AtMostX
+                | crate::program::ManaValueFilter::EqualX
+                | crate::program::ManaValueFilter::AtLeastX
+                | crate::program::ManaValueFilter::CompareAnchor { .. } => false,
+            }
+        }
+        match filter {
+            crate::program::ObjectFilter::Clause(a) => clause_ok(a, program),
+            crate::program::ObjectFilter::Either(a, b) => {
+                clause_ok(a, program) || clause_ok(b, program)
+            }
+        }
+    }
+
+    /// Apply active `StaticModifierRule::StealCreatedTokens` replacements (CR 614.1, e.g. Crafty Cutpurse)
+    /// from both `temporary_rules` and battlefield permanents. Each rule applies at most once (CR 614.5).
+    fn resolve_token_creator(
+        &self,
+        current: &EvaluatedCharacteristics,
+        mut creator: SeatId,
+        token_program: Option<&Program>,
+    ) -> Result<SeatId, EffectError> {
+        let mut applied_temp = BTreeSet::new();
+        let mut applied_perm = BTreeSet::new();
+        loop {
+            let mut changed = false;
+            for (idx, active) in self.temporary_rules.iter().enumerate() {
+                if active.consumed || applied_temp.contains(&idx) {
+                    continue;
+                }
+                if let crate::program::TemporaryRuleKind::TemporaryStatic(ab) = &active.rule
+                    && let crate::characteristics::StaticContinuousAbility::Modifier {
+                        rule:
+                            crate::characteristics::StaticModifierRule::StealCreatedTokens {
+                                affected,
+                                token_filter,
+                            },
+                        ..
+                    } = ab.as_ref()
+                    && self.token_player_relation_matches(*affected, active.controller, creator)?
+                    && token_filter.as_deref().is_none_or(|filter| {
+                        token_program
+                            .is_some_and(|prog| Self::token_program_matches_filter(prog, *filter))
+                    })
+                {
+                    applied_temp.insert(idx);
+                    if active.controller != creator
+                        && self.window.participants().contains(&active.controller)
+                    {
+                        creator = active.controller;
+                        changed = true;
+                        break;
+                    }
+                }
+            }
+            if changed {
+                continue;
+            }
+            for source in current
+                .objects
+                .values()
+                .filter(|perm| perm.zone == ObjectZone::Battlefield)
+            {
+                let Some(source_ctrl) = source.controller else {
+                    continue;
+                };
+                for ab in source.active_battlefield_rules() {
+                    let key = (source.object, ab.id());
+                    if applied_perm.contains(&key) {
+                        continue;
+                    }
+                    if let crate::characteristics::StaticContinuousAbility::Modifier {
+                        rule:
+                            crate::characteristics::StaticModifierRule::StealCreatedTokens {
+                                affected,
+                                token_filter,
+                            },
+                        ..
+                    } = ab
+                        && self.token_player_relation_matches(*affected, source_ctrl, creator)?
+                        && token_filter.as_deref().is_none_or(|filter| {
+                            token_program.is_some_and(|prog| {
+                                Self::token_program_matches_filter(prog, *filter)
+                            })
+                        })
+                    {
+                        applied_perm.insert(key);
+                        if source_ctrl != creator
+                            && self.window.participants().contains(&source_ctrl)
+                        {
+                            creator = source_ctrl;
+                            changed = true;
+                            break;
+                        }
+                    }
+                }
+                if changed {
+                    break;
+                }
+            }
+            if !changed {
+                break;
+            }
+        }
+        Ok(creator)
+    }
+
     pub(super) fn adjusted_token_count(
         &self,
         current: &EvaluatedCharacteristics,
@@ -73,15 +340,15 @@ impl EffectWindow {
         });
         let mut total_add = 0usize;
         let mut factors: Vec<usize> = Vec::new();
-        for active in &self.temporary_rules {
-            let crate::program::TemporaryRuleKind::TemporaryStatic(ability) = &active.rule else {
-                continue;
-            };
-            match ability.as_ref() {
+        let mut apply_rule = |ability: &crate::characteristics::StaticContinuousAbility,
+                              rule_ctrl: SeatId,
+                              count_doubler: bool|
+         -> Result<(), EffectError> {
+            match ability {
                 crate::characteristics::StaticContinuousAbility::Modifier {
                     rule: crate::characteristics::StaticModifierRule::DoubleCreatedTokens,
                     ..
-                } if active.controller == creator => {
+                } if count_doubler && rule_ctrl == creator => {
                     doublers = doublers.saturating_add(1);
                 }
                 crate::characteristics::StaticContinuousAbility::Modifier {
@@ -93,15 +360,7 @@ impl EffectWindow {
                         },
                     ..
                 } => {
-                    let applies = match controller {
-                        crate::program::PlayerRelation::Controller => creator == active.controller,
-                        crate::program::PlayerRelation::Opponent => self
-                            .combat_rules
-                            .opponents(self.window.participants(), active.controller)?
-                            .contains(&creator),
-                        crate::program::PlayerRelation::AnyParticipant => true,
-                    };
-                    if applies {
+                    if self.token_player_relation_matches(*controller, rule_ctrl, creator)? {
                         total_add = total_add
                             .checked_add(usize::from(*add))
                             .ok_or(EffectError::TokenCapacity)?;
@@ -122,18 +381,32 @@ impl EffectWindow {
                 } => {
                     let subtype_ok =
                         token_program.is_some_and(|p| p.artifact_subtypes.contains(subtype));
-                    let applies = subtype_ok
-                        && match controller {
-                            crate::program::PlayerRelation::Controller => {
-                                creator == active.controller
-                            }
-                            crate::program::PlayerRelation::Opponent => self
-                                .combat_rules
-                                .opponents(self.window.participants(), active.controller)?
-                                .contains(&creator),
-                            crate::program::PlayerRelation::AnyParticipant => true,
-                        };
-                    if applies {
+                    if subtype_ok
+                        && self.token_player_relation_matches(*controller, rule_ctrl, creator)?
+                    {
+                        total_add = total_add
+                            .checked_add(usize::from(*add))
+                            .ok_or(EffectError::TokenCapacity)?;
+                        if *multiply > 1 {
+                            factors.push(usize::from(*multiply));
+                        }
+                    }
+                }
+                crate::characteristics::StaticContinuousAbility::Modifier {
+                    rule:
+                        crate::characteristics::StaticModifierRule::ModifyTokensFiltered {
+                            filter,
+                            controller,
+                            add,
+                            multiply,
+                        },
+                    ..
+                } => {
+                    let filter_ok = token_program
+                        .is_some_and(|p| Self::token_program_matches_filter(p, **filter));
+                    if filter_ok
+                        && self.token_player_relation_matches(*controller, rule_ctrl, creator)?
+                    {
                         total_add = total_add
                             .checked_add(usize::from(*add))
                             .ok_or(EffectError::TokenCapacity)?;
@@ -144,6 +417,16 @@ impl EffectWindow {
                 }
                 _ => {}
             }
+            Ok(())
+        };
+        for active in &self.temporary_rules {
+            if active.consumed {
+                continue;
+            }
+            let crate::program::TemporaryRuleKind::TemporaryStatic(ability) = &active.rule else {
+                continue;
+            };
+            apply_rule(ability.as_ref(), active.controller, true)?;
         }
         for source in current
             .objects
@@ -153,81 +436,8 @@ impl EffectWindow {
             let Some(source_ctrl) = source.controller else {
                 continue;
             };
-            for ability in source
-                .printed_text
-                .continuous
-                .iter()
-                .chain(&source.printed_text.additional_battlefield_abilities)
-            {
-                let active = source.abilities.continuous == Some(ability.id())
-                    || source
-                        .abilities
-                        .additional_battlefield_abilities
-                        .contains(&ability.id());
-                if !active {
-                    continue;
-                }
-                match ability {
-                    crate::characteristics::StaticContinuousAbility::Modifier {
-                        rule:
-                            crate::characteristics::StaticModifierRule::ModifyTokens {
-                                controller,
-                                add,
-                                multiply,
-                            },
-                        ..
-                    } => {
-                        let applies = match controller {
-                            crate::program::PlayerRelation::Controller => creator == source_ctrl,
-                            crate::program::PlayerRelation::Opponent => self
-                                .combat_rules
-                                .opponents(self.window.participants(), source_ctrl)?
-                                .contains(&creator),
-                            crate::program::PlayerRelation::AnyParticipant => true,
-                        };
-                        if applies {
-                            total_add = total_add
-                                .checked_add(usize::from(*add))
-                                .ok_or(EffectError::TokenCapacity)?;
-                            if *multiply > 1 {
-                                factors.push(usize::from(*multiply));
-                            }
-                        }
-                    }
-                    crate::characteristics::StaticContinuousAbility::Modifier {
-                        rule:
-                            crate::characteristics::StaticModifierRule::ModifyTokenSubtype {
-                                subtype,
-                                controller,
-                                add,
-                                multiply,
-                            },
-                        ..
-                    } => {
-                        let subtype_ok =
-                            token_program.is_some_and(|p| p.artifact_subtypes.contains(subtype));
-                        let applies = subtype_ok
-                            && match controller {
-                                crate::program::PlayerRelation::Controller => {
-                                    creator == source_ctrl
-                                }
-                                crate::program::PlayerRelation::Opponent => self
-                                    .combat_rules
-                                    .opponents(self.window.participants(), source_ctrl)?
-                                    .contains(&creator),
-                                crate::program::PlayerRelation::AnyParticipant => true,
-                            };
-                        if applies {
-                            total_add = total_add
-                                .checked_add(usize::from(*add))
-                                .ok_or(EffectError::TokenCapacity)?;
-                            if *multiply > 1 {
-                                factors.push(usize::from(*multiply));
-                            }
-                        }
-                    }
-                    _ => {}
-                }
+            for ability in source.active_battlefield_rules() {
+                apply_rule(ability, source_ctrl, false)?;
             }
         }
         let mut count = base
@@ -245,6 +455,112 @@ impl EffectWindow {
                 .ok_or(EffectError::TokenCapacity)?;
         }
         Ok(count)
+    }
+
+    /// Collect bonus token batches generated by active `StaticModifierRule::BonusTokenOnCreate`
+    /// and `StaticModifierRule::BonusTokenFiltered` rules (CR 614.1, e.g. Peregrin Took, Chatterfang)
+    /// when `creator` creates `created_count > 0` tokens.
+    pub(super) fn bonus_tokens_for_creation(
+        &self,
+        current: &EvaluatedCharacteristics,
+        creator: SeatId,
+        created_count: usize,
+    ) -> Result<Vec<(Program, usize)>, EffectError> {
+        self.bonus_tokens_for_creation_with_program(current, creator, created_count, None)
+    }
+
+    fn bonus_tokens_for_creation_with_program(
+        &self,
+        current: &EvaluatedCharacteristics,
+        creator: SeatId,
+        created_count: usize,
+        token_program: Option<&Program>,
+    ) -> Result<Vec<(Program, usize)>, EffectError> {
+        if created_count == 0 {
+            return Ok(Vec::new());
+        }
+        let mut out = Vec::new();
+        let mut collect_bonus = |ab: &crate::characteristics::StaticContinuousAbility,
+                                 rule_ctrl: SeatId|
+         -> Result<(), EffectError> {
+            match ab {
+                crate::characteristics::StaticContinuousAbility::Modifier {
+                    rule:
+                        crate::characteristics::StaticModifierRule::BonusTokenOnCreate {
+                            controller,
+                            token,
+                            count,
+                            per_created,
+                        },
+                    ..
+                } if self.token_player_relation_matches(*controller, rule_ctrl, creator)? => {
+                    let bonus = if *per_created {
+                        created_count
+                            .checked_mul(usize::from(*count))
+                            .ok_or(EffectError::TokenCapacity)?
+                    } else {
+                        usize::from(*count)
+                    };
+                    if bonus > 0 {
+                        let materialized = token
+                            .materialize(&self.creature_vocabulary)
+                            .unwrap_or_else(|_| token.program().clone());
+                        out.push((materialized, bonus));
+                    }
+                }
+                crate::characteristics::StaticContinuousAbility::Modifier {
+                    rule:
+                        crate::characteristics::StaticModifierRule::BonusTokenFiltered {
+                            filter,
+                            controller,
+                            token,
+                            count,
+                            per_created,
+                        },
+                    ..
+                } if token_program
+                    .is_some_and(|p| Self::token_program_matches_filter(p, **filter))
+                    && self.token_player_relation_matches(*controller, rule_ctrl, creator)? =>
+                {
+                    let bonus = if *per_created {
+                        created_count
+                            .checked_mul(usize::from(*count))
+                            .ok_or(EffectError::TokenCapacity)?
+                    } else {
+                        usize::from(*count)
+                    };
+                    if bonus > 0 {
+                        let materialized = token
+                            .materialize(&self.creature_vocabulary)
+                            .unwrap_or_else(|_| token.program().clone());
+                        out.push((materialized, bonus));
+                    }
+                }
+                _ => {}
+            }
+            Ok(())
+        };
+        for active in &self.temporary_rules {
+            if active.consumed {
+                continue;
+            }
+            if let crate::program::TemporaryRuleKind::TemporaryStatic(ab) = &active.rule {
+                collect_bonus(ab.as_ref(), active.controller)?;
+            }
+        }
+        for source in current
+            .objects
+            .values()
+            .filter(|perm| perm.zone == ObjectZone::Battlefield)
+        {
+            let Some(source_ctrl) = source.controller else {
+                continue;
+            };
+            for ab in source.active_battlefield_rules() {
+                collect_bonus(ab, source_ctrl)?;
+            }
+        }
+        Ok(out)
     }
 
     pub(super) fn trigger_entrant_definition(
@@ -439,6 +755,11 @@ impl EffectWindow {
             BTreeMap::new()
         };
         let mut groups = groups;
+        for (creator, count, definition, _) in &mut groups {
+            if *count > 0 && self.window.participants().contains(creator) {
+                *creator = self.resolve_token_creator(&current, *creator, Some(definition))?;
+            }
+        }
         groups.retain(|(creator, _, definition, _)| {
             self.window.participants().contains(creator)
                 && (definition.entry_copy.is_some()
@@ -449,12 +770,26 @@ impl EffectWindow {
                         .token_aura_domain(definition, *creator, &current)
                         .is_none_or(|hosts| !hosts.is_empty()))
         });
+        let mut bonus_groups: Vec<(SeatId, usize, Program, bool)> = Vec::new();
         for (creator, count, definition, _) in &mut groups {
             if *count == 0 {
                 continue;
             }
             *count = self.adjusted_token_count(&current, *creator, *count, Some(definition))?;
+            if *count > 0 {
+                for (bonus_prog, bonus_count) in self.bonus_tokens_for_creation_with_program(
+                    &current,
+                    *creator,
+                    *count,
+                    Some(definition),
+                )? {
+                    if bonus_count > 0 {
+                        bonus_groups.push((*creator, bonus_count, bonus_prog, false));
+                    }
+                }
+            }
         }
+        groups.extend(bonus_groups);
         let total = groups.iter().try_fold(0usize, |sum, (_, count, _, _)| {
             sum.checked_add(*count).ok_or(EffectError::TokenCapacity)
         })?;
@@ -926,6 +1261,7 @@ impl EffectWindow {
                 | crate::land::EntryTap::ChooseBasicLandType
                 | crate::land::EntryTap::ChooseOddOrEven
                 | crate::land::EntryTap::ChooseKhansOrDragons
+                | crate::land::EntryTap::ChooseOptions(_)
                 | crate::land::EntryTap::Unleash
                 | crate::land::EntryTap::Riot
                 | crate::land::EntryTap::Tribute(_)
@@ -1373,6 +1709,9 @@ impl EffectWindow {
             {
                 self.entry_choices
                     .insert(id, crate::land::EntryChoice::Opponent(controller));
+                self.characteristics
+                    .entry_player_choices
+                    .insert(id, controller);
             } else {
                 self.window.set_entering_controller(id, controller)?;
             }
@@ -1395,6 +1734,11 @@ impl EffectWindow {
                 | crate::land::EntryChoice::CardName(_)
                 | crate::land::EntryChoice::PayLife(_)
                 | crate::land::EntryChoice::OptionIndex(_)) => {
+                    if let crate::land::EntryChoice::OptionIndex(idx) = reveal {
+                        self.characteristics.entry_option_choices.insert(id, idx);
+                    } else if let crate::land::EntryChoice::Opponent(seat) = reveal {
+                        self.characteristics.entry_player_choices.insert(id, seat);
+                    }
                     self.entry_choices.insert(id, reveal);
                 }
                 crate::land::EntryChoice::CreatureType(kind) => {
@@ -1621,16 +1965,18 @@ impl EffectWindow {
                 }
             }
         }
-        if let Some(&Instruction::CreateTokenCopy {
+        if let Some(Instruction::CreateTokenCopy {
             sacrifice_at_end_step,
             exile_at_end_step,
             ..
         }) = self
             .stack_body(entry)
             .and_then(|body| body.instructions.get(instruction))
-            && (sacrifice_at_end_step || exile_at_end_step)
+            && (*sacrifice_at_end_step || *exile_at_end_step)
             && !objects.is_empty()
         {
+            let sacrifice_at_end_step = *sacrifice_at_end_step;
+            let exile_at_end_step = *exile_at_end_step;
             let ids: Vec<ObjectId> = objects.iter().map(GameObject::id).collect();
             let resolving = self.window.resolving().cloned();
             if let Some(resolving) = resolving {
@@ -1673,22 +2019,9 @@ impl EffectWindow {
                 }
             }
         }
-        if matches!(
-            self.stack_body(entry)
-                .and_then(|body| body.instructions.get(instruction + 1)),
-            Some(
-                Instruction::ScheduleCreatedTokenExile(_)
-                    | Instruction::ScheduleCreatedTokenSacrifice
-                    | Instruction::GrantNewTokensHaste
-                    | Instruction::EquipNewToken
-                    | Instruction::RegisterTokenLinkedExile
-                    | Instruction::ReplaceSourceCreatedTokens
-            )
-        ) {
-            self.resolution_cursor_mut()
-                .ok_or(EffectError::WrongResolutionFrame)?
-                .last_created_tokens = objects.iter().map(GameObject::id).collect();
-        }
+        self.resolution_cursor_mut()
+            .ok_or(EffectError::WrongResolutionFrame)?
+            .last_created_tokens = objects.iter().map(GameObject::id).collect();
         self.advance_instruction()?;
         #[cfg(test)]
         characteristic_observations::instruction(self, "Completed", entry, instruction, None);

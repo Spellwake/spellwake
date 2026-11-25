@@ -1417,6 +1417,19 @@ impl StackWindow {
             .set_tapped_batch(self.cards.revision(), objects, true)?;
         Ok((self.with_cards(revision, cards), changes))
     }
+    /// Tap or untap battlefield objects during an inline event-replacement body (CR 614.1),
+    /// which may execute outside stack resolution (e.g. draw step or combat damage lifelink).
+    pub(crate) fn record_inline_replacement_status(
+        &self,
+        objects: &[ObjectId],
+        tapped: bool,
+    ) -> Result<(Self, Vec<ObjectStatusChange>), StackWindowError> {
+        let revision = self.next_revision(self.revision)?;
+        let (cards, changes) =
+            self.cards
+                .set_tapped_batch(self.cards.revision(), objects, tapped)?;
+        Ok((self.with_cards(revision, cards), changes))
+    }
     /// Trusted resolution-time mana tap after the executor proves payment authority.
     /// This preserves the resolving entry and does not create priority/check work.
     ///
@@ -2340,6 +2353,17 @@ impl StackWindow {
             .chosen_x = Some(x);
         Ok(())
     }
+    /// Bind X on the currently resolving stack entry (for `Instruction::BindResolutionX`).
+    pub(crate) fn set_resolving_chosen_x(
+        &mut self,
+        x: RulesInteger,
+    ) -> Result<(), StackWindowError> {
+        let Status::Resolving { entry, .. } = &mut self.status else {
+            return Err(StackWindowError::InconsistentStack);
+        };
+        entry.chosen_x = Some(x);
+        Ok(())
+    }
     pub(crate) fn mark_sunburst_colors(
         &mut self,
         entry: StackEntryId,
@@ -2387,8 +2411,23 @@ impl StackWindow {
             .ok_or(StackWindowError::InconsistentStack)?;
         entry.bargained = bargained;
         entry.cast_summary.bargained = bargained;
+        if buyback || bargained || !kicked.is_empty() {
+            entry.cast_summary.additional_cost_paid = true;
+        }
         entry.buyback = buyback;
         entry.kicked = kicked;
+        Ok(())
+    }
+    pub(crate) fn mark_additional_cost_paid(
+        &mut self,
+        id: StackEntryId,
+    ) -> Result<(), StackWindowError> {
+        let entry = self
+            .stack
+            .last_mut()
+            .filter(|s| s.id == id)
+            .ok_or(StackWindowError::InconsistentStack)?;
+        entry.cast_summary.additional_cost_paid = true;
         Ok(())
     }
     /// Mark the freshly announced physical spell. Copies allocate their own entry.
@@ -2525,6 +2564,7 @@ impl StackWindow {
         entry.cast_summary.cleaved = source.cast_summary.cleaved;
         entry.cast_summary.evidence_collected = source.cast_summary.evidence_collected;
         entry.cast_summary.paid_alternative = source.cast_summary.paid_alternative;
+        entry.cast_summary.additional_cost_paid = source.cast_summary.additional_cost_paid;
         entry.cast_summary.squad_count = source.cast_summary.squad_count;
         entry.buyback = buyback;
         entry.kicked = kicked;
@@ -3317,7 +3357,10 @@ impl StackWindow {
             {
                 match placement {
                     crate::program::LibraryPlacement::Top => ObjectDestination::LibraryTop,
-                    crate::program::LibraryPlacement::Bottom => ObjectDestination::LibraryBottom,
+                    crate::program::LibraryPlacement::Bottom
+                    | crate::program::LibraryPlacement::BottomRandom => {
+                        ObjectDestination::LibraryBottom
+                    }
                     crate::program::LibraryPlacement::FromTop(offset) => {
                         ObjectDestination::LibraryFromTop(offset)
                     }
@@ -3326,8 +3369,11 @@ impl StackWindow {
                     }
                 }
             } else {
+                let controller = (destination
+                    == crate::program::PublicZoneDestination::Battlefield)
+                    .then_some(object.owner());
                 destination
-                    .physical(None)
+                    .physical(controller)
                     .ok_or(StackWindowError::InvalidResolutionMove)?
             };
             moves.push((id, physical));
@@ -3415,6 +3461,26 @@ impl StackWindow {
         moves: &[(ObjectId, ObjectDestination)],
     ) -> Result<(Self, Vec<ObjectMovement>), StackWindowError> {
         self.apply_recorded_zone_moves(self.next_revision(self.revision())?, moves)
+    }
+    /// Move one object to a non-stack destination during an inline event-replacement body (CR 614.1).
+    pub(crate) fn record_inline_replacement_move(
+        &self,
+        card: ObjectId,
+        destination: ObjectDestination,
+    ) -> Result<(Self, Option<ObjectMovement>), StackWindowError> {
+        if self.cards.get(card).is_none() {
+            return Ok((self.clone(), None));
+        }
+        match destination {
+            ObjectDestination::Stack { .. } => {
+                return Err(StackWindowError::UnsupportedStackInsertion);
+            }
+            ObjectDestination::Battlefield { controller } => self.validate_player(controller)?,
+            _ => {}
+        }
+        let revision = self.next_revision(self.revision())?;
+        let (next, mut moves) = self.apply_recorded_zone_moves(revision, &[(card, destination)])?;
+        Ok((next, moves.pop()))
     }
     fn apply_recorded_zone_moves(
         &self,

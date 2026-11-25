@@ -846,6 +846,10 @@ impl EffectWindow {
         if !amount.is_positive() {
             return Ok(None);
         }
+        let evaluated = self.evaluated_characteristics()?;
+        if self.player_counter_prevented(&evaluated, player, kind)? {
+            return Ok(None);
+        }
         match kind {
             CounterKind::Poison => {
                 let before = self.poison_counters(player);
@@ -1210,8 +1214,10 @@ impl EffectWindow {
                     if pt != PowerToughnessCounters::default() {
                         let pt =
                             self.adjusted_pt_counters(&before.view().evaluated, object, pt, None)?;
-                        self.characteristics.place_counters(object, &pt)?;
-                        pt_updates.push((object, pt));
+                        if pt.valid_placement() {
+                            self.characteristics.place_counters(object, &pt)?;
+                            pt_updates.push((object, pt));
+                        }
                     }
                 }
                 TargetRef::Stack(_) => return Err(EffectError::IllegalTarget),

@@ -174,13 +174,24 @@ impl EffectWindow {
                 *must_block.entry(blocker.object).or_default() += 1;
             }
             for rule in &blocker.blocking_restrictions {
-                if let crate::characteristics::BlockingRestriction::MustBlockObject(attacker_id) =
-                    rule
-                    && attackers.contains(attacker_id)
-                {
-                    *must_block_pairs
-                        .entry((blocker.object, *attacker_id))
-                        .or_default() += 1;
+                match rule {
+                    crate::characteristics::BlockingRestriction::MustBlockObject(attacker_id)
+                        if attackers.contains(attacker_id) =>
+                    {
+                        *must_block_pairs
+                            .entry((blocker.object, *attacker_id))
+                            .or_default() += 1;
+                    }
+                    crate::characteristics::BlockingRestriction::MustBlockAllAttackers => {
+                        if let Some(legal_attackers) = choices.get(&blocker.object) {
+                            for &attacker_id in legal_attackers {
+                                *must_block_pairs
+                                    .entry((blocker.object, attacker_id))
+                                    .or_default() += 1;
+                            }
+                        }
+                    }
+                    _ => {}
                 }
             }
         }

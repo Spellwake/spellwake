@@ -2,6 +2,206 @@
 use super::*;
 use crate::occurrence::{EventCause, RulesOccurrence};
 
+fn source_zone_matches(
+    recorded: crate::program::SourceZoneFilter,
+    required: crate::program::SourceZoneFilter,
+) -> bool {
+    use crate::program::SourceZoneFilter;
+    if recorded == required {
+        return true;
+    }
+    match required {
+        SourceZoneFilter::HandOrGraveyard => matches!(
+            recorded,
+            SourceZoneFilter::Hand
+                | SourceZoneFilter::Graveyard
+                | SourceZoneFilter::OpponentGraveyard
+                | SourceZoneFilter::AnyGraveyard
+                | SourceZoneFilter::HandOrGraveyard
+        ),
+        SourceZoneFilter::AnyGraveyard => matches!(
+            recorded,
+            SourceZoneFilter::Graveyard
+                | SourceZoneFilter::OpponentGraveyard
+                | SourceZoneFilter::AnyGraveyard
+        ),
+        SourceZoneFilter::Exile => matches!(
+            recorded,
+            SourceZoneFilter::Exile
+                | SourceZoneFilter::OpponentExile
+                | SourceZoneFilter::LinkedExile
+        ),
+        _ => false,
+    }
+}
+
+fn supertypes_from_mask(
+    mask: crate::program::SupertypeMask,
+) -> BTreeSet<crate::program::Supertype> {
+    use crate::program::Supertype;
+    let mut out = BTreeSet::new();
+    if !mask.is_empty() {
+        for kind in [
+            Supertype::Basic,
+            Supertype::Legendary,
+            Supertype::Ongoing,
+            Supertype::Snow,
+            Supertype::World,
+        ] {
+            let single = BTreeSet::from([kind]);
+            if !mask.matches_none(&single) {
+                out.insert(kind);
+            }
+        }
+    }
+    out
+}
+
+fn colors_from_mask(mask: crate::program::ColorMask) -> BTreeSet<crate::characteristics::Color> {
+    use crate::characteristics::Color;
+    let mut out = BTreeSet::new();
+    if !mask.is_empty() {
+        for color in [
+            Color::White,
+            Color::Blue,
+            Color::Black,
+            Color::Red,
+            Color::Green,
+        ] {
+            if mask.contains(color) {
+                out.insert(color);
+            }
+        }
+    }
+    out
+}
+
+fn matches_compact_clause(
+    clause: crate::program::ObjectClause,
+    types: crate::program::CardTypeMask,
+    colors: crate::program::ColorMask,
+    supertypes: crate::program::SupertypeMask,
+    subtypes: &BTreeSet<CreatureTypeId>,
+    artifact_subtypes: Option<&BTreeSet<crate::program::ArtifactSubtype>>,
+) -> bool {
+    use crate::program::{ObjectFilterFlags, SubtypeFilter, Supertype};
+    if !clause.any_types.is_empty() && (types.bits() & clause.any_types.bits()) == 0 {
+        return false;
+    }
+    if (types.bits() & clause.required_types.bits()) != clause.required_types.bits() {
+        return false;
+    }
+    if (types.bits() & clause.forbidden_types.bits()) != 0 {
+        return false;
+    }
+    let super_set = supertypes_from_mask(supertypes);
+    if !clause.required_supertypes.matches_all(&super_set)
+        || !clause.forbidden_supertypes.matches_none(&super_set)
+    {
+        return false;
+    }
+    let color_set = colors_from_mask(colors);
+    if !clause.color.matches(&color_set) {
+        return false;
+    }
+    let subtype_ok = match clause.subtypes {
+        SubtypeFilter::Any => true,
+        SubtypeFilter::Has(ct) => subtypes.contains(&ct),
+        SubtypeFilter::Lacks(ct) => !subtypes.contains(&ct),
+        SubtypeFilter::AnyOf(cts) => cts.iter().any(|ct| subtypes.contains(ct)),
+        SubtypeFilter::NoneOf(cts) => cts.iter().all(|ct| !subtypes.contains(ct)),
+        SubtypeFilter::Artifact(art) => artifact_subtypes.is_some_and(|set| set.contains(&art)),
+        _ => false,
+    };
+    if !subtype_ok {
+        return false;
+    }
+    if clause.flags.contains(ObjectFilterFlags::HISTORIC)
+        && !types.contains(CardType::Artifact)
+        && !super_set.contains(&Supertype::Legendary)
+    {
+        return false;
+    }
+    true
+}
+
+fn matches_cast_spell_record(
+    filter: crate::program::ObjectFilter,
+    rec: &crate::characteristics::CastSpellTurnRecord,
+    from_zone: Option<crate::program::SourceZoneFilter>,
+) -> bool {
+    use crate::program::{ObjectFilter, SourceZoneFilter};
+    let zone_ok = match from_zone {
+        None => true,
+        Some(SourceZoneFilter::Hand) => rec.from_hand,
+        Some(
+            SourceZoneFilter::Graveyard
+            | SourceZoneFilter::AnyGraveyard
+            | SourceZoneFilter::OpponentGraveyard,
+        ) => rec.from_graveyard,
+        Some(SourceZoneFilter::HandOrGraveyard) => rec.from_hand || rec.from_graveyard,
+        Some(
+            SourceZoneFilter::Exile
+            | SourceZoneFilter::OpponentExile
+            | SourceZoneFilter::LinkedExile,
+        ) => rec.from_exile,
+        Some(_) => false,
+    };
+    if !zone_ok {
+        return false;
+    }
+    let check = |clause| {
+        matches_compact_clause(
+            clause,
+            rec.types,
+            rec.colors,
+            rec.supertypes,
+            &rec.subtypes,
+            None,
+        )
+    };
+    match filter {
+        ObjectFilter::Clause(c) => check(c),
+        ObjectFilter::Either(a, b) => check(a) || check(b),
+    }
+}
+
+fn matches_zone_move_record(
+    filter: crate::program::ObjectFilter,
+    rec: &crate::characteristics::ZoneMoveTurnRecord,
+    controller: SeatId,
+    opponents: &[SeatId],
+) -> bool {
+    use crate::program::{ControllerFilter, ObjectFilter};
+    let check = |clause: crate::program::ObjectClause| {
+        let ctrl_ok = match clause.controller {
+            ControllerFilter::Any => true,
+            ControllerFilter::You => rec.previous_controller == Some(controller),
+            ControllerFilter::Opponent => rec
+                .previous_controller
+                .is_some_and(|seat| opponents.contains(&seat)),
+            ControllerFilter::NotYou => rec.previous_controller != Some(controller),
+            ControllerFilter::OwnerYou => rec.owner == controller,
+            ControllerFilter::OwnerOpponent => opponents.contains(&rec.owner),
+            ControllerFilter::Player(seat) => rec.previous_controller == Some(seat),
+            _ => true,
+        };
+        ctrl_ok
+            && matches_compact_clause(
+                clause,
+                rec.types,
+                rec.colors,
+                rec.supertypes,
+                &rec.subtypes,
+                Some(&rec.artifact_subtypes),
+            )
+    };
+    match filter {
+        ObjectFilter::Clause(c) => check(c),
+        ObjectFilter::Either(a, b) => check(a) || check(b),
+    }
+}
+
 impl EffectWindow {
     pub(super) fn creature_type_frame(&self) -> Result<CreatureTypeChoice, EffectError> {
         let cursor = self
@@ -726,6 +926,62 @@ impl EffectWindow {
                             }),
                     )
                     .into(),
+                    SourceStateExpr::WasCast {
+                        by_controller,
+                        from_hand,
+                    } => {
+                        let on_stack_cast = self.window.resolving().is_some_and(
+                            |e| matches!(e.kind(), StackKind::CardSpell(id) if *id == source_id),
+                        );
+                        let was_cast = on_stack_cast
+                            || self.characteristics.cast_summaries.contains_key(&source_id)
+                            || self
+                                .characteristics
+                                .cast_by_controller_objects
+                                .contains(&source_id)
+                            || self
+                                .characteristics
+                                .cast_from_hand_objects
+                                .contains(&source_id);
+                        let ctrl_ok = !*by_controller
+                            || self
+                                .characteristics
+                                .cast_by_controller_objects
+                                .contains(&source_id)
+                            || self.window.resolving().is_some_and(|e| {
+                                matches!(e.kind(), StackKind::CardSpell(id) if *id == source_id && e.controller() == controller)
+                            });
+                        let hand_ok = !*from_hand
+                            || self
+                                .characteristics
+                                .cast_from_hand_objects
+                                .contains(&source_id)
+                            || self
+                                .characteristics
+                                .cast_summaries
+                                .get(&source_id)
+                                .is_some_and(|s| !s.cast_from_outside_hand)
+                            || self.window.resolving().is_some_and(|e| {
+                                matches!(e.kind(), StackKind::CardSpell(id) if *id == source_id && !e.cast_summary().cast_from_outside_hand)
+                            });
+                        i64::from(was_cast && ctrl_ok && hand_ok).into()
+                    }
+                    SourceStateExpr::EnteredFromZone(zone) => {
+                        let matched = self
+                            .characteristics
+                            .entered_from_zone
+                            .get(&source_id)
+                            .is_some_and(|recorded| source_zone_matches(*recorded, *zone))
+                            || (self
+                                .characteristics
+                                .entered_from_graveyard
+                                .contains(&source_id)
+                                && source_zone_matches(
+                                    crate::program::SourceZoneFilter::Graveyard,
+                                    *zone,
+                                ));
+                        i64::from(matched).into()
+                    }
                 };
                 Ok(val)
             }
@@ -1005,6 +1261,7 @@ impl EffectWindow {
                 });
                 match op {
                     StatAggregate::Max => Ok(values.max().unwrap_or_else(|| 0.into())),
+                    StatAggregate::Min => Ok(values.min().unwrap_or_else(|| 0.into())),
                     StatAggregate::Sum => {
                         Ok(values.fold(0.into(), |total: RulesInteger, v| total.plus(&v)))
                     }
@@ -1060,6 +1317,31 @@ impl EffectWindow {
                     let Some(id) = cursor
                         .or_else(|| self.resolution_cursor())
                         .and_then(|c| c.results.revealed_top_card)
+                    else {
+                        return Ok(0.into());
+                    };
+                    match stat {
+                        ObjectStatKind::Power => Ok(self
+                            .current_characteristics(id)?
+                            .and_then(|value| value.power_toughness)
+                            .map_or_else(|| 0.into(), |pt| pt.derived.power)),
+                        ObjectStatKind::Toughness => Ok(self
+                            .current_characteristics(id)?
+                            .and_then(|value| value.power_toughness)
+                            .map_or_else(|| 0.into(), |pt| pt.derived.toughness)),
+                        ObjectStatKind::ManaValue => Ok(self
+                            .copiable_program(id)
+                            .map(Program::mana_value)
+                            .unwrap_or_else(|| 0.into())),
+                        ObjectStatKind::Loyalty => {
+                            Ok(self.counters_of_kind(id, CounterKind::Loyalty))
+                        }
+                    }
+                }
+                (ValueObjectRef::LastAmassedArmy, stat) => {
+                    let Some(id) = cursor
+                        .or_else(|| self.resolution_cursor())
+                        .and_then(|c| c.results.last_amassed_army)
                     else {
                         return Ok(0.into());
                     };
@@ -1191,8 +1473,12 @@ impl EffectWindow {
                         .window
                         .resolving()
                         .ok_or(EffectError::WrongResolutionFrame)?;
-                    let TargetRef::Object(id) = self.instruction_target(entry)?.choice().target
-                    else {
+                    let bound = match self.instruction_target(entry) {
+                        Ok(bound) => bound,
+                        Err(_) if entry.targets().targets().is_empty() => return Ok(0.into()),
+                        Err(err) => return Err(err),
+                    };
+                    let TargetRef::Object(id) = bound.choice().target else {
                         return Err(EffectError::InconsistentProgram);
                     };
                     if let Some(stats) = self
@@ -1223,7 +1509,12 @@ impl EffectWindow {
                         .window
                         .resolving()
                         .ok_or(EffectError::WrongResolutionFrame)?;
-                    match self.instruction_target(entry)?.choice().target {
+                    let bound = match self.instruction_target(entry) {
+                        Ok(bound) => bound,
+                        Err(_) if entry.targets().targets().is_empty() => return Ok(0.into()),
+                        Err(err) => return Err(err),
+                    };
+                    match bound.choice().target {
                         TargetRef::Object(id) => self
                             .copiable_program(id)
                             .map(Program::mana_value)
@@ -1254,8 +1545,12 @@ impl EffectWindow {
                         .window
                         .resolving()
                         .ok_or(EffectError::WrongResolutionFrame)?;
-                    let TargetRef::Object(id) = self.instruction_target(entry)?.choice().target
-                    else {
+                    let bound = match self.instruction_target(entry) {
+                        Ok(bound) => bound,
+                        Err(_) if entry.targets().targets().is_empty() => return Ok(0.into()),
+                        Err(err) => return Err(err),
+                    };
+                    let TargetRef::Object(id) = bound.choice().target else {
                         return Err(EffectError::InconsistentProgram);
                     };
                     Ok(self.counters_of_kind(id, CounterKind::Loyalty))
@@ -1401,6 +1696,47 @@ impl EffectWindow {
                         .and_then(|card| card.power_toughness.map(|stats| stats.derived.power))
                         .unwrap_or_else(|| last_power.clone());
                     Ok(power.max(0.into()))
+                }
+                (ValueObjectRef::ExiledCostCreature, ObjectStatKind::ManaValue) => {
+                    let entry = cursor.ok_or(EffectError::WrongResolutionFrame)?.entry;
+                    let Some(StackPayload::Instructions(payload)) = self.payloads.get(&entry)
+                    else {
+                        return Err(EffectError::InconsistentProgram);
+                    };
+                    let Some((object, _)) = &payload.exiled_cost_creature else {
+                        return Ok(0.into());
+                    };
+                    let mv = self
+                        .copiable_program(*object)
+                        .map(Program::mana_value)
+                        .unwrap_or_else(|| 0.into());
+                    Ok(mv.max(0.into()))
+                }
+                (ValueObjectRef::RevealedCostCard, ObjectStatKind::Power) => {
+                    let entry = cursor.ok_or(EffectError::WrongResolutionFrame)?.entry;
+                    let Some(StackPayload::Instructions(payload)) = self.payloads.get(&entry)
+                    else {
+                        return Err(EffectError::InconsistentProgram);
+                    };
+                    let Some(cost) = &payload.revealed_cost_card else {
+                        return Ok(0.into());
+                    };
+                    let power = self
+                        .current_characteristics(cost.object)?
+                        .and_then(|card| card.power_toughness.map(|stats| stats.derived.power))
+                        .unwrap_or_else(|| cost.last_power.clone());
+                    Ok(power.max(0.into()))
+                }
+                (ValueObjectRef::RevealedCostCard, ObjectStatKind::ManaValue) => {
+                    let entry = cursor.ok_or(EffectError::WrongResolutionFrame)?.entry;
+                    let Some(StackPayload::Instructions(payload)) = self.payloads.get(&entry)
+                    else {
+                        return Err(EffectError::InconsistentProgram);
+                    };
+                    let Some(cost) = &payload.revealed_cost_card else {
+                        return Ok(0.into());
+                    };
+                    Ok(cost.mana_value.clone().max(0.into()))
                 }
                 (ValueObjectRef::TriggeringSpell, ObjectStatKind::ManaValue) => {
                     let binding = cursor
@@ -1563,6 +1899,14 @@ impl EffectWindow {
                     Ok(self.player_counters_of_kind(controller, CounterKind::Energy))
                 }
                 CounterSubjectRef::ControllerPoison => Ok(self.poison_counters(controller)),
+                CounterSubjectRef::PlayerCounter(role, counter_kind) => {
+                    let seat = if *role == crate::program::ResolvingPlayer::Controller {
+                        controller
+                    } else {
+                        self.resolving_player_at(*role, cursor)?
+                    };
+                    Ok(self.player_counters_of_kind(seat, *counter_kind))
+                }
             },
             ValueExpr::AttachedCount(kind) => match kind {
                 AttachedCountKind::EquipmentOnSource
@@ -2232,6 +2576,381 @@ impl EffectWindow {
                         .map_or(0u32, |n| u32::try_from(n).unwrap_or(u32::MAX));
                     Ok(i64::from(total.saturating_sub(own_mv)).into())
                 }
+                PlayerStatExpr::OtherSpellsCastThisTurn => {
+                    let total = self
+                        .characteristics
+                        .spells_cast_this_turn
+                        .get(&controller)
+                        .copied()
+                        .unwrap_or(0);
+                    let self_on_stack = u16::from(self.window.resolving().is_some_and(|entry| {
+                        entry.controller() == controller
+                            && matches!(entry.kind(), StackKind::CardSpell(_))
+                    }));
+                    Ok(i64::from(total.saturating_sub(self_on_stack)).into())
+                }
+                PlayerStatExpr::MaxPlayerLifeLostThisTurn => Ok(self
+                    .characteristics
+                    .life_lost_this_turn
+                    .values()
+                    .max()
+                    .cloned()
+                    .unwrap_or_else(|| 0.into())),
+                PlayerStatExpr::SpellsCastMatchingThisTurn {
+                    players,
+                    filter,
+                    from_zone,
+                } => {
+                    let seats = match *players {
+                        crate::program::AffectedPlayers::One(role) => {
+                            vec![if role == crate::program::ResolvingPlayer::Controller {
+                                controller
+                            } else {
+                                self.resolving_player_at(role, cursor)?
+                            }]
+                        }
+                        crate::program::AffectedPlayers::EachPlayer => {
+                            self.window.participants().to_vec()
+                        }
+                        crate::program::AffectedPlayers::EachOtherPlayer => self
+                            .window
+                            .participants()
+                            .iter()
+                            .copied()
+                            .filter(|&p| p != controller)
+                            .collect(),
+                        crate::program::AffectedPlayers::EachOpponent => self
+                            .combat_rules
+                            .opponents(self.window.participants(), controller)?,
+                    };
+                    let mut count = 0usize;
+                    for seat in seats {
+                        if let Some(records) = self.characteristics.cast_spells_this_turn.get(&seat)
+                        {
+                            count += records
+                                .iter()
+                                .filter(|rec| matches_cast_spell_record(**filter, rec, *from_zone))
+                                .count();
+                        }
+                    }
+                    Ok(RulesInteger::from_usize(count))
+                }
+                PlayerStatExpr::ActivatedGraveyardAbilityThisTurn(role) => {
+                    let seat = if *role == crate::program::ResolvingPlayer::Controller {
+                        controller
+                    } else {
+                        self.resolving_player_at(*role, cursor)?
+                    };
+                    Ok(i64::from(
+                        self.characteristics
+                            .activated_graveyard_ability_this_turn
+                            .contains(&seat),
+                    )
+                    .into())
+                }
+                PlayerStatExpr::PlayerLifeLostLastTurn(role) => {
+                    let seat = if *role == crate::program::ResolvingPlayer::Controller {
+                        controller
+                    } else {
+                        self.resolving_player_at(*role, cursor)?
+                    };
+                    Ok(self
+                        .characteristics
+                        .life_lost_last_turn
+                        .get(&seat)
+                        .cloned()
+                        .unwrap_or_else(|| 0.into()))
+                }
+                PlayerStatExpr::CardsExiledThisTurn => {
+                    Ok(i64::from(self.characteristics.cards_exiled_this_turn).into())
+                }
+                PlayerStatExpr::GraveyardArrivalsMatchingThisTurn {
+                    filter,
+                    from_battlefield_only,
+                    controller: ctrl_role,
+                } => {
+                    let req_ctrl = match ctrl_role {
+                        None => None,
+                        Some(role) => {
+                            Some(if *role == crate::program::ResolvingPlayer::Controller {
+                                controller
+                            } else {
+                                self.resolving_player_at(*role, cursor)?
+                            })
+                        }
+                    };
+                    let opp_vec = self
+                        .combat_rules
+                        .opponents(self.window.participants(), controller)?;
+                    let count = self
+                        .characteristics
+                        .cards_put_into_graveyard_this_turn
+                        .iter()
+                        .filter(|rec| {
+                            (!*from_battlefield_only || rec.from_battlefield)
+                                && req_ctrl.is_none_or(|seat| {
+                                    rec.previous_controller == Some(seat)
+                                        || (rec.previous_controller.is_none() && rec.owner == seat)
+                                })
+                                && matches_zone_move_record(**filter, rec, controller, &opp_vec)
+                        })
+                        .count();
+                    Ok(RulesInteger::from_usize(count))
+                }
+                PlayerStatExpr::SacrificedMatchingThisTurn { players, filter } => {
+                    let seats = match *players {
+                        crate::program::AffectedPlayers::One(role) => {
+                            vec![if role == crate::program::ResolvingPlayer::Controller {
+                                controller
+                            } else {
+                                self.resolving_player_at(role, cursor)?
+                            }]
+                        }
+                        crate::program::AffectedPlayers::EachPlayer => {
+                            self.window.participants().to_vec()
+                        }
+                        crate::program::AffectedPlayers::EachOtherPlayer => self
+                            .window
+                            .participants()
+                            .iter()
+                            .copied()
+                            .filter(|&p| p != controller)
+                            .collect(),
+                        crate::program::AffectedPlayers::EachOpponent => self
+                            .combat_rules
+                            .opponents(self.window.participants(), controller)?,
+                    };
+                    let opp_vec = self
+                        .combat_rules
+                        .opponents(self.window.participants(), controller)?;
+                    let mut count = 0usize;
+                    for seat in seats {
+                        if let Some(records) = self.characteristics.sacrificed_this_turn.get(&seat)
+                        {
+                            count += records
+                                .iter()
+                                .filter(|rec| {
+                                    matches_zone_move_record(**filter, rec, controller, &opp_vec)
+                                })
+                                .count();
+                        }
+                    }
+                    Ok(RulesInteger::from_usize(count))
+                }
+                PlayerStatExpr::DamageDealtThisTurn {
+                    subject,
+                    to_opponent_only,
+                    combat_only,
+                } => {
+                    let target_id = match subject {
+                        ValueObjectRef::AbilitySource => resolve_ability_source(),
+                        ValueObjectRef::TriggerSource => cursor
+                            .and_then(|c| self.execution_bindings(c.entry))
+                            .and_then(|b| b.trigger.as_ref())
+                            .map(|t| t.source.object.id())
+                            .or_else(resolve_ability_source),
+                        ValueObjectRef::AttachedHost => {
+                            resolve_ability_source().and_then(|src| match self.attached_to(src) {
+                                Some(TargetRef::Object(host)) => Some(host),
+                                _ => None,
+                            })
+                        }
+                        ValueObjectRef::TargetObject => self
+                            .window
+                            .resolving()
+                            .and_then(|entry| self.instruction_target(entry).ok())
+                            .and_then(|bound| match bound.choice().target {
+                                TargetRef::Object(id) => Some(id),
+                                _ => None,
+                            }),
+                        ValueObjectRef::TriggerSubject
+                        | ValueObjectRef::DyingSource
+                        | ValueObjectRef::DyingCreature
+                        | ValueObjectRef::EnteringPermanent
+                        | ValueObjectRef::TriggeringSpell => cursor
+                            .and_then(|c| self.execution_bindings(c.entry))
+                            .and_then(|b| b.trigger.as_ref())
+                            .and_then(|t| t.causes.members().first())
+                            .and_then(|m| m.subject_object_id()),
+                        ValueObjectRef::RevealedTop => {
+                            cursor.and_then(|c| c.results.revealed_top_card)
+                        }
+                        ValueObjectRef::LastAmassedArmy => {
+                            cursor.and_then(|c| c.results.last_amassed_army)
+                        }
+                        _ => None,
+                    };
+                    let Some(id) = target_id else {
+                        return Ok(0.into());
+                    };
+                    if *combat_only {
+                        if !self
+                            .characteristics
+                            .combat_damage_dealt_to_player_this_turn
+                            .contains(&id)
+                        {
+                            return Ok(0.into());
+                        }
+                        if *to_opponent_only
+                            && !self
+                                .characteristics
+                                .damage_dealt_to_opponents_this_turn
+                                .get(&id)
+                                .is_some_and(|s| !s.is_empty())
+                        {
+                            return Ok(0.into());
+                        }
+                        Ok(self
+                            .characteristics
+                            .damage_dealt_this_turn_by
+                            .get(&id)
+                            .cloned()
+                            .filter(RulesInteger::is_positive)
+                            .unwrap_or_else(|| 1.into()))
+                    } else if *to_opponent_only {
+                        Ok(
+                            match self
+                                .characteristics
+                                .damage_dealt_to_opponents_this_turn
+                                .get(&id)
+                            {
+                                Some(opps) if !opps.is_empty() => self
+                                    .characteristics
+                                    .damage_dealt_this_turn_by
+                                    .get(&id)
+                                    .cloned()
+                                    .filter(RulesInteger::is_positive)
+                                    .unwrap_or_else(|| RulesInteger::from_usize(opps.len())),
+                                _ => 0.into(),
+                            },
+                        )
+                    } else {
+                        Ok(self
+                            .characteristics
+                            .damage_dealt_this_turn_by
+                            .get(&id)
+                            .cloned()
+                            .unwrap_or_else(|| 0.into()))
+                    }
+                }
+                PlayerStatExpr::DamageReceivedThisTurn {
+                    subject,
+                    excess_only,
+                } => {
+                    let target_id = match subject {
+                        ValueObjectRef::AbilitySource => resolve_ability_source(),
+                        ValueObjectRef::TriggerSource => cursor
+                            .and_then(|c| self.execution_bindings(c.entry))
+                            .and_then(|b| b.trigger.as_ref())
+                            .map(|t| t.source.object.id())
+                            .or_else(resolve_ability_source),
+                        ValueObjectRef::AttachedHost => {
+                            resolve_ability_source().and_then(|src| match self.attached_to(src) {
+                                Some(TargetRef::Object(host)) => Some(host),
+                                _ => None,
+                            })
+                        }
+                        ValueObjectRef::TargetObject => self
+                            .window
+                            .resolving()
+                            .and_then(|entry| self.instruction_target(entry).ok())
+                            .and_then(|bound| match bound.choice().target {
+                                TargetRef::Object(id) => Some(id),
+                                _ => None,
+                            }),
+                        ValueObjectRef::TriggerSubject
+                        | ValueObjectRef::DyingSource
+                        | ValueObjectRef::DyingCreature
+                        | ValueObjectRef::EnteringPermanent
+                        | ValueObjectRef::TriggeringSpell => cursor
+                            .and_then(|c| self.execution_bindings(c.entry))
+                            .and_then(|b| b.trigger.as_ref())
+                            .and_then(|t| t.causes.members().first())
+                            .and_then(|m| m.subject_object_id()),
+                        ValueObjectRef::RevealedTop => {
+                            cursor.and_then(|c| c.results.revealed_top_card)
+                        }
+                        ValueObjectRef::LastAmassedArmy => {
+                            cursor.and_then(|c| c.results.last_amassed_army)
+                        }
+                        _ => None,
+                    };
+                    let Some(id) = target_id else {
+                        return Ok(0.into());
+                    };
+                    if *excess_only {
+                        Ok(i64::from(
+                            self.characteristics
+                                .excess_damage_received_this_turn
+                                .contains(&id),
+                        )
+                        .into())
+                    } else {
+                        Ok(self
+                            .characteristics
+                            .object_damage_taken_this_turn
+                            .get(&id)
+                            .cloned()
+                            .or_else(|| self.battlefield_marked_damage(id))
+                            .unwrap_or_else(|| 0.into()))
+                    }
+                }
+                PlayerStatExpr::ControlsGreatestStat {
+                    player,
+                    filter,
+                    stat,
+                } => {
+                    let seat = if *player == crate::program::ResolvingPlayer::Controller {
+                        controller
+                    } else {
+                        self.resolving_player_at(*player, cursor)?
+                    };
+                    let ability_source = resolve_ability_source();
+                    let evaluated = self.evaluated_characteristics()?;
+                    let excluded = BTreeSet::new();
+                    let mut best: Option<(RulesInteger, bool)> = None;
+                    for object in evaluated.objects.values() {
+                        if object.zone != ObjectZone::Battlefield
+                            || !self.matches_object_filter(
+                                **filter,
+                                object,
+                                controller,
+                                ability_source,
+                                &excluded,
+                                &evaluated,
+                            )
+                        {
+                            continue;
+                        }
+                        let val = match stat {
+                            ObjectStatKind::Power => object
+                                .power_toughness
+                                .as_ref()
+                                .map(|pt| pt.derived.power.clone()),
+                            ObjectStatKind::Toughness => object
+                                .power_toughness
+                                .as_ref()
+                                .map(|pt| pt.derived.toughness.clone()),
+                            ObjectStatKind::ManaValue => self.permanent_mana_value(object.object),
+                            ObjectStatKind::Loyalty => {
+                                Some(self.counters_of_kind(object.object, CounterKind::Loyalty))
+                            }
+                        };
+                        let Some(val) = val else {
+                            continue;
+                        };
+                        let ours = object.controller == Some(seat);
+                        best = Some(match best {
+                            None => (val, ours),
+                            Some((cur_max, cur_ours)) => match val.cmp(&cur_max) {
+                                std::cmp::Ordering::Greater => (val, ours),
+                                std::cmp::Ordering::Equal => (cur_max, cur_ours || ours),
+                                std::cmp::Ordering::Less => (cur_max, cur_ours),
+                            },
+                        });
+                    }
+                    Ok(i64::from(best.is_some_and(|(_, ours)| ours)).into())
+                }
             },
             ValueExpr::ObjectMatches { subject, filter } => {
                 let (clause_a, _) = filter.clauses();
@@ -2371,6 +3090,63 @@ impl EffectWindow {
                             _ => false,
                         }
                     }
+                    MatchObjectRef::LastAffected
+                    | MatchObjectRef::LastMovedToGraveyard
+                    | MatchObjectRef::LastMovedToExile
+                    | MatchObjectRef::LastMovedToHand
+                    | MatchObjectRef::LastMovedToBattlefield => {
+                        let evaluated = self.evaluated_characteristics()?;
+                        let excluded = BTreeSet::new();
+                        let source_id = resolve_ability_source();
+                        let check_zone = |zone: ObjectZone| match subject {
+                            MatchObjectRef::LastAffected => true,
+                            MatchObjectRef::LastMovedToGraveyard => {
+                                matches!(zone, ObjectZone::Graveyard(_))
+                            }
+                            MatchObjectRef::LastMovedToExile => zone == ObjectZone::Exile,
+                            MatchObjectRef::LastMovedToHand => matches!(zone, ObjectZone::Hand(_)),
+                            MatchObjectRef::LastMovedToBattlefield => {
+                                zone == ObjectZone::Battlefield
+                            }
+                            _ => true,
+                        };
+                        cursor.is_some_and(|c| {
+                            let candidates = if !c.results.last_moved_objects.is_empty() {
+                                c.results.last_moved_objects.as_slice()
+                            } else if !c.results.destroyed_cards_to_graveyard.is_empty() {
+                                c.results.destroyed_cards_to_graveyard.as_slice()
+                            } else {
+                                &[]
+                            };
+                            candidates.iter().any(|&id| {
+                                evaluated.get(id).is_some_and(|permanent| {
+                                    check_zone(permanent.zone)
+                                        && self.matches_object_filter(
+                                            **filter, permanent, controller, source_id, &excluded,
+                                            &evaluated,
+                                        )
+                                })
+                            })
+                        })
+                    }
+                    MatchObjectRef::LibraryTop(role) => {
+                        let seat = if *role == crate::program::ResolvingPlayer::Controller {
+                            controller
+                        } else {
+                            self.resolving_player_at(*role, cursor)?
+                        };
+                        let Some(&top_id) = self.window.cards().library(seat).first() else {
+                            return Ok(0.into());
+                        };
+                        let evaluated = self.evaluated_characteristics()?;
+                        let excluded = BTreeSet::new();
+                        let source_id = resolve_ability_source();
+                        evaluated.get(top_id).is_some_and(|card| {
+                            self.matches_object_filter(
+                                **filter, card, controller, source_id, &excluded, &evaluated,
+                            )
+                        })
+                    }
                 };
                 Ok(i64::from(matched).into())
             }
@@ -2487,7 +3263,8 @@ impl EffectWindow {
                 | EventValueKind::CastFromExile
                 | EventValueKind::GiftPromised
                 | EventValueKind::Cleaved
-                | EventValueKind::EvidenceCollected => {
+                | EventValueKind::EvidenceCollected
+                | EventValueKind::AdditionalCostPaid => {
                     let summary = self
                         .window
                         .resolving()
@@ -2537,8 +3314,33 @@ impl EffectWindow {
                         EventValueKind::EvidenceCollected => {
                             i64::from(summary.is_some_and(|s| s.evidence_collected)).into()
                         }
+                        EventValueKind::AdditionalCostPaid => {
+                            i64::from(summary.is_some_and(|s| s.additional_cost_paid)).into()
+                        }
                         _ => 0.into(),
                     };
+                    Ok(val)
+                }
+                EventValueKind::TriggeringSpellManaSpent => {
+                    let val = cursor
+                        .and_then(|c| self.execution_bindings(c.entry))
+                        .and_then(|b| b.trigger.as_ref())
+                        .and_then(|t| t.causes.members().first())
+                        .and_then(|cause| match &cause.related {
+                            crate::occurrence::TriggerRelated::SpellCast(cast) => {
+                                Some(cast.total_mana_spent().clone())
+                            }
+                            crate::occurrence::TriggerRelated::ZoneChange { before, after } => self
+                                .characteristics
+                                .cast_summaries
+                                .get(&after.object.id())
+                                .or_else(|| {
+                                    self.characteristics.cast_summaries.get(&before.object.id())
+                                })
+                                .map(|s| s.total_mana.clone()),
+                            _ => None,
+                        })
+                        .unwrap_or_else(|| 0.into());
                     Ok(val)
                 }
                 EventValueKind::MatchedOccurrences => {
@@ -2768,6 +3570,167 @@ impl EffectWindow {
                     .map_or_else(|| (-1).into(), |idx| i64::from(idx).into())),
                 EventValueKind::LastNonlandDiscarded => {
                     Ok(i64::from(cursor.map_or(0, |c| c.results.last_nonland_discarded)).into())
+                }
+                EventValueKind::DamagePreventedThisWay => Ok(cursor.map_or_else(
+                    || 0.into(),
+                    |c| c.results.damage_prevented_this_resolution.clone(),
+                )),
+                EventValueKind::DealtDamageThisWay { combat_only } => {
+                    let dealt = if *combat_only {
+                        cursor
+                            .and_then(|c| self.execution_bindings(c.entry))
+                            .and_then(|b| b.trigger.as_ref())
+                            .is_some_and(|t| {
+                                t.causes.members().iter().any(|m| {
+                                    matches!(
+                                        &m.related,
+                                        crate::occurrence::TriggerRelated::CombatDamageToPlayer { .. }
+                                            | crate::occurrence::TriggerRelated::CombatDamageToPlaneswalker { .. }
+                                            | crate::occurrence::TriggerRelated::SubtypeCombatDamage { .. }
+                                    )
+                                })
+                            })
+                    } else {
+                        cursor.is_some_and(|c| c.results.dealt_damage_this_resolution)
+                    };
+                    Ok(i64::from(dealt).into())
+                }
+                EventValueKind::SharesCardTypeWithLinkedExile(subject) => {
+                    let Some(source_id) = resolve_ability_source() else {
+                        return Ok(0.into());
+                    };
+                    let evaluated = self.evaluated_characteristics()?;
+                    let mut exiled_types = BTreeSet::new();
+                    for list in [
+                        self.linked_exiles.get(&source_id),
+                        self.characteristics.imprinted_cards.get(&source_id),
+                        self.characteristics.ability_donors_in_exile.get(&source_id),
+                    ]
+                    .into_iter()
+                    .flatten()
+                    {
+                        for id in list {
+                            if let Some(card) = evaluated.get(*id)
+                                && card.zone == ObjectZone::Exile
+                            {
+                                exiled_types.extend(card.current_types.iter().copied());
+                            }
+                        }
+                    }
+                    for ((src, _), ids) in &self.independent_exile_links {
+                        if *src == source_id {
+                            for id in ids {
+                                if let Some(card) = evaluated.get(*id)
+                                    && card.zone == ObjectZone::Exile
+                                {
+                                    exiled_types.extend(card.current_types.iter().copied());
+                                }
+                            }
+                        }
+                    }
+                    if exiled_types.is_empty() {
+                        return Ok(0.into());
+                    }
+                    let mut subject_types = BTreeSet::new();
+                    match subject {
+                        MatchObjectRef::AbilitySource => {
+                            if let Some(card) = evaluated.get(source_id) {
+                                subject_types.extend(card.current_types.iter().copied());
+                            }
+                        }
+                        MatchObjectRef::TargetObject => {
+                            if let Some(entry) = self.window.resolving()
+                                && let Ok(bound) = self.instruction_target(entry)
+                            {
+                                match bound.choice().target {
+                                    TargetRef::Object(id) => {
+                                        if let Some(card) = evaluated.get(id) {
+                                            subject_types
+                                                .extend(card.current_types.iter().copied());
+                                        }
+                                    }
+                                    TargetRef::Stack(sid) => {
+                                        if let Some(traits) = self.stack_copiable_traits(sid) {
+                                            subject_types.extend(traits.card_types.iter().copied());
+                                        }
+                                    }
+                                    TargetRef::Player(_) => {}
+                                }
+                            }
+                        }
+                        MatchObjectRef::TriggerSubject => {
+                            if let Some(id) = cursor
+                                .and_then(|c| self.execution_bindings(c.entry))
+                                .and_then(|b| b.trigger.as_ref())
+                                .and_then(|t| t.causes.members().first())
+                                .and_then(|m| m.subject_object_id())
+                                && let Some(card) = evaluated.get(id)
+                            {
+                                subject_types.extend(card.current_types.iter().copied());
+                            }
+                        }
+                        MatchObjectRef::AttachedHost => {
+                            if let Some(TargetRef::Object(host)) = self.attached_to(source_id)
+                                && let Some(card) = evaluated.get(host)
+                            {
+                                subject_types.extend(card.current_types.iter().copied());
+                            }
+                        }
+                        MatchObjectRef::RevealedTop => {
+                            if let Some(c) = cursor {
+                                subject_types.extend(c.results.revealed_top_types.iter().copied());
+                            }
+                        }
+                        MatchObjectRef::DiscardedCard => {
+                            if let Some(c) = cursor {
+                                subject_types.extend(c.results.discarded_types.iter().copied());
+                            }
+                        }
+                        MatchObjectRef::MovedLibraryCard => {
+                            if let Some(c) = cursor {
+                                subject_types.extend(c.results.moved_library_types.iter().copied());
+                            }
+                        }
+                        MatchObjectRef::LibraryTop(role) => {
+                            let seat = if *role == crate::program::ResolvingPlayer::Controller {
+                                controller
+                            } else {
+                                self.resolving_player_at(*role, cursor)?
+                            };
+                            if let Some(&top_id) = self.window.cards().library(seat).first()
+                                && let Some(card) = evaluated.get(top_id)
+                            {
+                                subject_types.extend(card.current_types.iter().copied());
+                            }
+                        }
+                        MatchObjectRef::LastAffected
+                        | MatchObjectRef::LastMovedToGraveyard
+                        | MatchObjectRef::LastMovedToExile
+                        | MatchObjectRef::LastMovedToHand
+                        | MatchObjectRef::LastMovedToBattlefield => {
+                            if let Some(c) = cursor {
+                                for &id in &c.results.last_moved_objects {
+                                    if let Some(card) = evaluated.get(id) {
+                                        subject_types.extend(card.current_types.iter().copied());
+                                    }
+                                }
+                            }
+                        }
+                        MatchObjectRef::DyingCreature => {
+                            if let Some(binding) = cursor
+                                .and_then(|c| self.execution_bindings(c.entry))
+                                .and_then(|b| b.trigger.as_ref())
+                                && let Some(member) = binding.causes.members().first()
+                                && let crate::occurrence::TriggerRelated::ZoneChange {
+                                    before, ..
+                                } = &member.related
+                            {
+                                subject_types.extend(before.types.iter().copied());
+                            }
+                        }
+                        MatchObjectRef::DestructionTarget | MatchObjectRef::SacrificedCreature => {}
+                    }
+                    Ok(i64::from(!subject_types.is_disjoint(&exiled_types)).into())
                 }
             },
         }

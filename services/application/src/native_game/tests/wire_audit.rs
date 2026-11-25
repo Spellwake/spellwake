@@ -146,6 +146,7 @@ fn can_seed_directly_on_battlefield(prog: &Program) -> bool {
                     | EntryTap::ChooseBasicLandType
                     | EntryTap::ChooseOddOrEven
                     | EntryTap::ChooseKhansOrDragons
+                    | EntryTap::ChooseOptions(_)
                     | EntryTap::Unleash
                     | EntryTap::Riot
                     | EntryTap::Tribute(_)
@@ -183,6 +184,7 @@ fn entry_tap_wire_supported(tap: EntryTap) -> bool {
         | EntryTap::ChooseBasicLandType
         | EntryTap::ChooseOddOrEven
         | EntryTap::ChooseKhansOrDragons
+        | EntryTap::ChooseOptions(_)
         | EntryTap::Unleash
         | EntryTap::Riot
         | EntryTap::Tribute(_)

@@ -119,12 +119,14 @@ pub struct SupportedAppearance {
     pub copiable_spell_subtypes: BTreeSet<crate::program::SpellSubtype>,
     pub copiable_artifact_subtypes: BTreeSet<crate::program::ArtifactSubtype>,
     pub copiable_enchantment_subtypes: BTreeSet<crate::program::EnchantmentSubtype>,
+    pub copiable_planeswalker_subtypes: BTreeSet<crate::program::PlaneswalkerSubtype>,
     pub types: BTreeSet<CardType>,
     pub creature_subtypes: BTreeSet<CreatureTypeId>,
     pub land_subtypes: BTreeSet<crate::land::LandType>,
     pub spell_subtypes: BTreeSet<crate::program::SpellSubtype>,
     pub artifact_subtypes: BTreeSet<crate::program::ArtifactSubtype>,
     pub enchantment_subtypes: BTreeSet<crate::program::EnchantmentSubtype>,
+    pub planeswalker_subtypes: BTreeSet<crate::program::PlaneswalkerSubtype>,
     pub intrinsic_mana: BTreeSet<crate::land::BasicLandType>,
     pub colors: BTreeSet<Color>,
     pub abilities: PrintedAbilityRoster,
@@ -190,12 +192,14 @@ impl SupportedAppearance {
             copiable_spell_subtypes: BTreeSet::new(),
             copiable_artifact_subtypes: BTreeSet::new(),
             copiable_enchantment_subtypes: BTreeSet::new(),
+            copiable_planeswalker_subtypes: BTreeSet::new(),
             types: BTreeSet::new(),
             creature_subtypes: BTreeSet::new(),
             land_subtypes: BTreeSet::new(),
             spell_subtypes: BTreeSet::new(),
             artifact_subtypes: BTreeSet::new(),
             enchantment_subtypes: BTreeSet::new(),
+            planeswalker_subtypes: BTreeSet::new(),
             intrinsic_mana: BTreeSet::new(),
             colors: BTreeSet::new(),
             abilities: PrintedAbilityRoster::empty_emblem(ObjectId::SENTINEL),
@@ -241,6 +245,7 @@ pub struct CastOccurrence {
     pub(crate) copy_source: Option<Box<crate::effects::cast_copies::CastCopySource>>,
     cast_original_object: Option<ObjectId>,
     spent_for_increment: Option<RulesInteger>,
+    total_mana_spent: RulesInteger,
     entry: StackEntryId,
     controller: SeatId,
     spell: SupportedAppearance,
@@ -256,6 +261,10 @@ impl CastOccurrence {
     /// Actual mana spent when an increment ability could observe this cast.
     pub fn spent_for_increment(&self) -> Option<&RulesInteger> {
         self.spent_for_increment.as_ref()
+    }
+    /// Total mana spent to cast this spell at cast completion (CR 601.2i).
+    pub fn total_mana_spent(&self) -> &RulesInteger {
+        &self.total_mana_spent
     }
 
     /// The actual canonical stack entry created by this cast.
@@ -1911,6 +1920,7 @@ impl RulesView<'_> {
                     .iter()
                     .fold(RulesInteger::from(0), |sum, mana| sum.plus(&mana.amount))
             }),
+            total_mana_spent: actual.cast_summary.total_mana.clone(),
             entry,
             controller,
             spell,
@@ -1964,12 +1974,14 @@ impl RulesView<'_> {
             copiable_spell_subtypes: current.defined.spell_subtypes.clone(),
             copiable_artifact_subtypes: current.defined.artifact_subtypes.clone(),
             copiable_enchantment_subtypes: current.defined.enchantment_subtypes.clone(),
+            copiable_planeswalker_subtypes: current.defined.planeswalker_subtypes.clone(),
             types: current.current_types.clone(),
             creature_subtypes: current.current_creature_subtypes.clone(),
             land_subtypes: current.current_land_subtypes.clone(),
             spell_subtypes: current.current_spell_subtypes.clone(),
             artifact_subtypes: current.current_artifact_subtypes.clone(),
             enchantment_subtypes: current.current_enchantment_subtypes.clone(),
+            planeswalker_subtypes: current.current_planeswalker_subtypes.clone(),
             intrinsic_mana: current.intrinsic_mana.clone(),
             colors: current.current_colors.clone(),
             abilities: current.abilities.clone(),

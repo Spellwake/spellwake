@@ -87,6 +87,8 @@ pub enum EntryTap {
     ChooseOddOrEven,
     /// Choose Khans or Dragons as this permanent enters.
     ChooseKhansOrDragons,
+    /// Choose one of a fixed set of named entry options (CR 614.1c), indexed `0..labels.len()`.
+    ChooseOptions(&'static [&'static str]),
     /// CR 702.98 Unleash: optionally enter with a +1/+1 counter.
     Unleash,
     /// CR 702.136 Riot: choose a +1/+1 counter or haste on entry.
@@ -130,6 +132,7 @@ impl EntryTap {
             Self::ChooseBasicLandType => Some(&["Plains", "Island", "Swamp", "Mountain", "Forest"]),
             Self::ChooseOddOrEven => Some(&["Odd", "Even"]),
             Self::ChooseKhansOrDragons => Some(&["Khans", "Dragons"]),
+            Self::ChooseOptions(labels) => Some(labels),
             Self::Unleash => Some(&["No +1/+1 counter", "+1/+1 counter"]),
             Self::Riot => Some(&["+1/+1 counter", "Haste"]),
             Self::Tribute(_) => Some(&["Pay tribute", "Decline tribute"]),

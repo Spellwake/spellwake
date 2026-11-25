@@ -4,11 +4,117 @@ use crate::{
     activated::{PowerAbility, SourceCost},
     characteristics::{
         AbilityChange, PowerToughness, ResolvedDuration, ResolvedPart, ResolvedParts,
-        SubtypeOperation, TypeChange, TypeOperation,
+        StaticContinuousAbility, StaticModifierRule, SubtypeOperation, TypeChange, TypeOperation,
+        selector_matches_permanent,
     },
     occurrence::{EventCause, RulesOccurrence},
 };
 impl EffectWindow {
+    fn crew_or_saddle_power_bonus(
+        &self,
+        kind: PowerAbility,
+        contributor: ObjectId,
+        current: &EvaluatedCharacteristics,
+    ) -> RulesInteger {
+        if kind == PowerAbility::Station {
+            return 0.into();
+        }
+        let applies_to_kind = |crews: bool, saddles: bool| match kind {
+            PowerAbility::Crew => crews,
+            PowerAbility::Saddle => saddles,
+            PowerAbility::Station => false,
+        };
+        let mut total_bonus = RulesInteger::from(0);
+        for perm in current.objects.values() {
+            if perm.zone != ObjectZone::Battlefield {
+                continue;
+            }
+            let Some(perm_ctrl) = perm.controller else {
+                continue;
+            };
+            for rule in perm.active_battlefield_rules() {
+                if let StaticContinuousAbility::Modifier {
+                    rule:
+                        StaticModifierRule::CrewAndSaddlePowerBonus {
+                            selector,
+                            crews,
+                            saddles,
+                            bonus,
+                        },
+                    ..
+                } = rule
+                    && applies_to_kind(*crews, *saddles)
+                    && selector_matches_permanent(
+                        self.window.cards(),
+                        current,
+                        perm.object,
+                        perm_ctrl,
+                        selector,
+                        contributor,
+                        &self.name_rules,
+                    )
+                {
+                    total_bonus = total_bonus.plus(&RulesInteger::from(i64::from(*bonus)));
+                }
+            }
+        }
+        for active in &self.temporary_rules {
+            if active.consumed {
+                continue;
+            }
+            if let crate::program::TemporaryRuleKind::TemporaryStatic(ab) = &active.rule
+                && let StaticContinuousAbility::Modifier {
+                    rule:
+                        StaticModifierRule::CrewAndSaddlePowerBonus {
+                            selector,
+                            crews,
+                            saddles,
+                            bonus,
+                        },
+                    ..
+                } = ab.as_ref()
+                && applies_to_kind(*crews, *saddles)
+                && selector_matches_permanent(
+                    self.window.cards(),
+                    current,
+                    active.source_object.unwrap_or(ObjectId::SENTINEL),
+                    active.controller,
+                    selector,
+                    contributor,
+                    &self.name_rules,
+                )
+            {
+                total_bonus = total_bonus.plus(&RulesInteger::from(i64::from(*bonus)));
+            }
+        }
+        for (owner, rule) in &current.emblem_rules {
+            if let StaticContinuousAbility::Modifier {
+                rule:
+                    StaticModifierRule::CrewAndSaddlePowerBonus {
+                        selector,
+                        crews,
+                        saddles,
+                        bonus,
+                    },
+                ..
+            } = rule
+                && applies_to_kind(*crews, *saddles)
+                && selector_matches_permanent(
+                    self.window.cards(),
+                    current,
+                    ObjectId::SENTINEL,
+                    *owner,
+                    selector,
+                    contributor,
+                    &self.name_rules,
+                )
+            {
+                total_bonus = total_bonus.plus(&RulesInteger::from(i64::from(*bonus)));
+            }
+        }
+        total_bonus
+    }
+
     pub(super) fn validate_power_contributors(
         &self,
         cost: SourceCost,
@@ -44,14 +150,14 @@ impl EffectWindow {
             {
                 return Err(EffectError::InvalidPowerContributors);
             }
-            power = power.plus(
-                &view
-                    .power_toughness
-                    .as_ref()
-                    .ok_or(EffectError::InconsistentProgram)?
-                    .derived
-                    .power,
-            );
+            let base_power = &view
+                .power_toughness
+                .as_ref()
+                .ok_or(EffectError::InconsistentProgram)?
+                .derived
+                .power;
+            let bonus = self.crew_or_saddle_power_bonus(kind, member, current);
+            power = power.plus(&base_power.plus(&bonus));
         }
         let required = RulesInteger::try_from(minimum.to_string())
             .map_err(|_| EffectError::InconsistentProgram)?;

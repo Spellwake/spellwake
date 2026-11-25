@@ -181,20 +181,36 @@ impl EffectWindow {
                 .plus(&doubling_factor(doublers - doublers_before_addition));
         }
         if counters.plus_one.is_positive() {
-            counters.plus_one = self.apply_static_counter_modifiers(
+            counters.plus_one = if self.permanent_counter_prevented(
                 battlefield_before,
                 object,
                 CounterKind::PlusOne,
-                counters.plus_one,
-            );
+            ) {
+                0.into()
+            } else {
+                self.apply_static_counter_modifiers(
+                    battlefield_before,
+                    object,
+                    CounterKind::PlusOne,
+                    counters.plus_one,
+                )
+            };
         }
         if counters.minus_one.is_positive() {
-            counters.minus_one = self.apply_static_counter_modifiers(
+            counters.minus_one = if self.permanent_counter_prevented(
                 battlefield_before,
                 object,
                 CounterKind::MinusOne,
-                counters.minus_one,
-            );
+            ) {
+                0.into()
+            } else {
+                self.apply_static_counter_modifiers(
+                    battlefield_before,
+                    object,
+                    CounterKind::MinusOne,
+                    counters.minus_one,
+                )
+            };
         }
         Ok(counters)
     }
@@ -206,8 +222,10 @@ impl EffectWindow {
         kind: CounterKind,
         mut amount: RulesInteger,
     ) -> RulesInteger {
-        if !amount.is_positive() {
-            return amount;
+        if !amount.is_positive()
+            || self.permanent_counter_prevented(battlefield_before, object, kind)
+        {
+            return 0.into();
         }
         let mut total_add = 0i64;
         let mut factors: Vec<u8> = Vec::new();
@@ -405,10 +423,16 @@ impl EffectWindow {
                         raw.clone(),
                         None,
                     )?;
+                    if !added.valid_placement() {
+                        continue;
+                    }
                     let previous = self.characteristics.counters(object);
                     self.characteristics.place_counters(object, &added)?;
                     let after = self.characteristics.counters(object);
                     records.push((object, previous, added, after));
+                }
+                if records.is_empty() {
+                    return Ok(());
                 }
                 return self.emit_from(cause, &before, None, append, |old, new, _| {
                     records
@@ -443,6 +467,9 @@ impl EffectWindow {
                     *kind,
                     multiplied,
                 );
+                if !added.is_positive() {
+                    continue;
+                }
                 let after = old.plus(&added);
                 self.characteristics
                     .named_permanent_counters_mut(*kind)
@@ -690,13 +717,14 @@ impl EffectWindow {
             plus_one: 1.into(),
             minus_one: 0.into(),
         };
-        let creatures = creatures
+        let mut creatures = creatures
             .into_iter()
             .map(|object| {
                 self.adjusted_pt_counters(&before.view().evaluated, object, added.clone(), None)
                     .map(|counters| (object, counters))
             })
             .collect::<Result<Vec<_>, _>>()?;
+        creatures.retain(|(_, added)| added.valid_placement());
         for (object, added) in &creatures {
             self.characteristics.place_counters(*object, added)?;
         }
@@ -708,7 +736,16 @@ impl EffectWindow {
                 .get(&object)
                 .cloned()
                 .unwrap_or_else(|| 0.into());
-            let added = effect_counter_multiplier(&before.view().evaluated, object);
+            let multiplied = effect_counter_multiplier(&before.view().evaluated, object);
+            let added = self.apply_static_counter_modifiers(
+                &before.view().evaluated,
+                object,
+                CounterKind::Loyalty,
+                multiplied,
+            );
+            if !added.is_positive() {
+                continue;
+            }
             let new = old.plus(&added);
             self.characteristics.loyalty.insert(object, new.clone());
             loyalty.push((object, old, new));
@@ -813,6 +850,10 @@ impl EffectWindow {
                         .map(|counters| (object, counters))
                 })
                 .collect::<Result<Vec<_>, _>>()?;
+            let selected: Vec<_> = selected
+                .into_iter()
+                .filter(|(_, added)| added.valid_placement())
+                .collect();
             for (object, added) in &selected {
                 self.characteristics.place_counters(*object, added)?;
             }
@@ -849,6 +890,9 @@ impl EffectWindow {
                 kind,
                 multiplied,
             );
+            if !added.is_positive() {
+                continue;
+            }
             let after = old.plus(&added);
             self.characteristics
                 .named_permanent_counters_mut(kind)

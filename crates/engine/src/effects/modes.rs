@@ -124,7 +124,15 @@ impl EffectWindow {
         let bounds = if entwined {
             (bodies.len(), bodies.len())
         } else {
-            (usize::from(spec.minimum), usize::from(spec.maximum))
+            let mut max_modes = usize::from(spec.maximum);
+            if let Some((cond, cond_max)) = &spec.conditional_maximum {
+                let lhs = self.resolve_value_expr_at(actor, &cond.left, None)?;
+                let rhs = self.resolve_value_expr_at(actor, &cond.right, None)?;
+                if cond.comparison.evaluate(&lhs, &rhs) {
+                    max_modes = max_modes.max(usize::from(*cond_max));
+                }
+            }
+            (usize::from(spec.minimum), max_modes)
         };
         let (body, modes, targets) = self.compose_modes_with_wrap(
             &bodies,
@@ -136,7 +144,7 @@ impl EffectWindow {
             |_, body, target| {
                 !Self::protected_target(
                     target,
-                    &super::protection::ProtectionSource::from(source),
+                    &super::protection::ProtectionSource::from(source).with_controller(actor),
                     current,
                 ) && self.legal_body_target_in(body, target, actor, current)
             },
@@ -456,7 +464,7 @@ impl EffectWindow {
             |clause, target| {
                 !Self::protected_target(
                     target,
-                    &super::protection::ProtectionSource::from(source),
+                    &super::protection::ProtectionSource::from(source).with_controller(actor),
                     current,
                 ) && self.legal_body_target_in(clause, target, actor, current)
             },
