@@ -718,7 +718,10 @@ pub fn parse_object_filter(phrase: &str, vocab: &Vocabulary) -> Result<ObjectFil
             }
         }
         if let Some(prefix) = s.strip_suffix(" with the same name as another card in their hand") {
-            flt.flags = flt.flags.union(ObjectFilterFlags::MATCHES_NAMED_AGENDA);
+            flt.named = Some(NameFilterAst::SameAsReferenced);
+            flt.predicates.push(FilterPredicateAst::StateQualification(
+                "same_name_as_another_card_in_their_hand".to_string(),
+            ));
             s = prefix.trim().to_string();
             continue;
         }
@@ -2006,17 +2009,17 @@ pub fn parse_object_filter(phrase: &str, vocab: &Vocabulary) -> Result<ObjectFil
             (" other than ~", ObjectFilterFlags::EXCLUDE_SELF, None),
             (
                 " with the same name as that land",
-                ObjectFilterFlags::MATCHES_NAMED_AGENDA,
+                ObjectFilterFlags::EMPTY,
                 None,
             ),
             (
                 " with the same name as that creature",
-                ObjectFilterFlags::MATCHES_NAMED_AGENDA,
+                ObjectFilterFlags::EMPTY,
                 None,
             ),
             (
                 " with the same name as another card in their hand",
-                ObjectFilterFlags::MATCHES_NAMED_AGENDA,
+                ObjectFilterFlags::EMPTY,
                 None,
             ),
             (" with the same controller", ObjectFilterFlags::EMPTY, None),
@@ -2123,7 +2126,7 @@ pub fn parse_object_filter(phrase: &str, vocab: &Vocabulary) -> Result<ObjectFil
             ),
             (
                 " with the same name as a nontoken permanent",
-                ObjectFilterFlags::MATCHES_NAMED_AGENDA,
+                ObjectFilterFlags::EMPTY,
                 None,
             ),
             (
@@ -2677,7 +2680,7 @@ pub fn parse_object_filter(phrase: &str, vocab: &Vocabulary) -> Result<ObjectFil
                 ObjectFilterFlags::MATCHES_NAMED_AGENDA,
                 None,
             ),
-            (" named ~", ObjectFilterFlags::MATCHES_NAMED_AGENDA, None),
+            (" named ~", ObjectFilterFlags::EMPTY, None),
             (" with different names", ObjectFilterFlags::EMPTY, None),
             (" with different powers", ObjectFilterFlags::EMPTY, None),
             (
@@ -2814,11 +2817,7 @@ pub fn parse_object_filter(phrase: &str, vocab: &Vocabulary) -> Result<ObjectFil
                 ObjectFilterFlags::MATCHES_CHOSEN_TYPE_OR_COLOR,
                 None,
             ),
-            (
-                " with that name",
-                ObjectFilterFlags::MATCHES_NAMED_AGENDA,
-                None,
-            ),
+            (" with that name", ObjectFilterFlags::EMPTY, None),
             (
                 " attached to that creature",
                 ObjectFilterFlags::ATTACHED_TO_SELF,
@@ -2851,27 +2850,27 @@ pub fn parse_object_filter(phrase: &str, vocab: &Vocabulary) -> Result<ObjectFil
             (" with different names", ObjectFilterFlags::EMPTY, None),
             (
                 " with the same name as that spell",
-                ObjectFilterFlags::MATCHES_NAMED_AGENDA,
+                ObjectFilterFlags::EMPTY,
                 None,
             ),
             (
                 " with the same name as that creature",
-                ObjectFilterFlags::MATCHES_NAMED_AGENDA,
+                ObjectFilterFlags::EMPTY,
                 None,
             ),
             (
                 " with the same name as that permanent",
-                ObjectFilterFlags::MATCHES_NAMED_AGENDA,
+                ObjectFilterFlags::EMPTY,
                 None,
             ),
             (
                 " with the same name as that card",
-                ObjectFilterFlags::MATCHES_NAMED_AGENDA,
+                ObjectFilterFlags::EMPTY,
                 None,
             ),
             (
                 " with the same name as the exiled card",
-                ObjectFilterFlags::MATCHES_NAMED_AGENDA,
+                ObjectFilterFlags::EMPTY,
                 None,
             ),
             (
@@ -3020,11 +3019,7 @@ pub fn parse_object_filter(phrase: &str, vocab: &Vocabulary) -> Result<ObjectFil
                 ObjectFilterFlags::EMPTY,
                 None,
             ),
-            (
-                " with the same name",
-                ObjectFilterFlags::MATCHES_NAMED_AGENDA,
-                None,
-            ),
+            (" with the same name", ObjectFilterFlags::EMPTY, None),
             (" with different powers", ObjectFilterFlags::EMPTY, None),
             (" that wasn't cast", ObjectFilterFlags::EMPTY, None),
             (
@@ -3681,6 +3676,7 @@ pub fn parse_object_filter(phrase: &str, vocab: &Vocabulary) -> Result<ObjectFil
                 if let Some(c) = combat {
                     flt.combat = Some(*c);
                 }
+                apply_rel_suffix_predicate(suf, *flag, *combat, &mut flt);
                 s = prefix.trim().to_string();
                 changed = true;
                 break;
@@ -8816,7 +8812,9 @@ pub fn parse_condition(phrase: &str, vocab: &Vocabulary) -> Result<ConditionAst,
         }
         "it isn't a mana ability" => return Ok(ConditionAst::Marker(GameMarker::NotManaAbility)),
         "it's not their turn" | "it isn't that player's turn" => {
-            return Ok(ConditionAst::Not(Box::new(ConditionAst::IsYourTurn)));
+            return Ok(ConditionAst::Not(Box::new(ConditionAst::IsPlayersTurn(
+                PlayerRefAst::ThatPlayer,
+            ))));
         }
         "it's on the battlefield" | "it is on the battlefield" => {
             return Ok(ConditionAst::Marker(GameMarker::InZone {
@@ -8922,9 +8920,15 @@ pub fn parse_condition(phrase: &str, vocab: &Vocabulary) -> Result<ConditionAst,
         "it's bargained" | "~ is bargained" => {
             return Ok(ConditionAst::Marker(GameMarker::Bargained));
         }
-        "it's attacking the player with the most life or tied for most life"
-        | "it's attacking the player with the most life" => {
-            return Ok(ConditionAst::Marker(GameMarker::AttackingAlone));
+        "it's attacking the player with the most life or tied for most life" => {
+            return Ok(ConditionAst::Marker(
+                GameMarker::AttackingPlayerWithMostLife { or_tied: true },
+            ));
+        }
+        "it's attacking the player with the most life" => {
+            return Ok(ConditionAst::Marker(
+                GameMarker::AttackingPlayerWithMostLife { or_tied: false },
+            ));
         }
         "you have more life than an opponent" | "you have more life than each opponent" => {
             return Ok(ConditionAst::Compare {
@@ -8970,7 +8974,9 @@ pub fn parse_condition(phrase: &str, vocab: &Vocabulary) -> Result<ConditionAst,
             return Ok(ConditionAst::Marker(GameMarker::PairedWithAnotherCreature));
         }
         "a permanent's ability is countered this way" => {
-            return Ok(ConditionAst::Marker(GameMarker::NotManaAbility));
+            return Ok(ConditionAst::Marker(GameMarker::AbilityCounteredThisWay {
+                permanent_only: true,
+            }));
         }
         "~ attacked this turn" => {
             return Ok(ConditionAst::Marker(GameMarker::AttackedThisTurn {
@@ -8990,17 +8996,42 @@ pub fn parse_condition(phrase: &str, vocab: &Vocabulary) -> Result<ConditionAst,
             }));
         }
         "it's not that player's turn" => {
-            return Ok(ConditionAst::Not(Box::new(ConditionAst::IsYourTurn)));
+            return Ok(ConditionAst::Not(Box::new(ConditionAst::IsPlayersTurn(
+                PlayerRefAst::ThatPlayer,
+            ))));
         }
         "that spell targets only ~" | "it targets only ~" => {
             return Ok(ConditionAst::Marker(GameMarker::SingleTarget));
         }
-        "that card remains exiled"
-        | "those cards remain exiled"
-        | "any of those cards remain exiled"
-        | "it remains exiled"
-        | "they remain exiled" => {
-            return Ok(ConditionAst::Marker(GameMarker::RemainsExiled));
+        "that card remains exiled" => {
+            return Ok(ConditionAst::Marker(GameMarker::SubjectRemainsExiled {
+                subject: Box::new(SubjectRefAst::Anaphora("that card".to_string())),
+                any_of: false,
+            }));
+        }
+        "those cards remain exiled" => {
+            return Ok(ConditionAst::Marker(GameMarker::SubjectRemainsExiled {
+                subject: Box::new(SubjectRefAst::Anaphora("those cards".to_string())),
+                any_of: false,
+            }));
+        }
+        "any of those cards remain exiled" => {
+            return Ok(ConditionAst::Marker(GameMarker::SubjectRemainsExiled {
+                subject: Box::new(SubjectRefAst::Anaphora("those cards".to_string())),
+                any_of: true,
+            }));
+        }
+        "it remains exiled" => {
+            return Ok(ConditionAst::Marker(GameMarker::SubjectRemainsExiled {
+                subject: Box::new(SubjectRefAst::Anaphora("it".to_string())),
+                any_of: false,
+            }));
+        }
+        "they remain exiled" => {
+            return Ok(ConditionAst::Marker(GameMarker::SubjectRemainsExiled {
+                subject: Box::new(SubjectRefAst::Anaphora("they".to_string())),
+                any_of: false,
+            }));
         }
         "it attacked this turn" => {
             return Ok(ConditionAst::Marker(GameMarker::AttackedThisTurn {
@@ -9363,14 +9394,15 @@ pub fn parse_condition(phrase: &str, vocab: &Vocabulary) -> Result<ConditionAst,
     if let Some(flt_raw) = low
         .strip_suffix(" is in your graveyard")
         .or_else(|| low.strip_suffix(" is in a graveyard"))
-        && parse_object_filter(flt_raw, vocab).is_ok()
+        && let Ok(mut flt) = parse_object_filter(flt_raw, vocab)
     {
-        return Ok(ConditionAst::GraveyardCount {
-            player: if low.ends_with(" is in a graveyard") {
-                PlayerRefAst::AnyPlayer
-            } else {
-                PlayerRefAst::You
-            },
+        flt.zone = Some(if low.ends_with(" is in a graveyard") {
+            ZoneFilter::AnyGraveyard
+        } else {
+            ZoneFilter::YourGraveyard
+        });
+        return Ok(ConditionAst::ZoneObjectCount {
+            filter: Box::new(flt),
             op: CompareOp::Ge,
             value: 1,
         });
@@ -9400,11 +9432,9 @@ pub fn parse_condition(phrase: &str, vocab: &Vocabulary) -> Result<ConditionAst,
             })));
         }
         if let Ok(flt) = parse_object_filter(flt_raw, vocab) {
-            return Ok(ConditionAst::Not(Box::new(ConditionAst::ControlsCount {
-                player: PlayerRefAst::You,
+            return Ok(ConditionAst::Not(Box::new(ConditionAst::MatchesFilter {
+                subject: Box::new(SubjectRefAst::Anaphora("it".to_string())),
                 filter: Box::new(flt),
-                op: CompareOp::Ge,
-                value: 1,
             })));
         }
     }
@@ -9489,16 +9519,36 @@ pub fn parse_condition(phrase: &str, vocab: &Vocabulary) -> Result<ConditionAst,
     if let Some((cnt_raw, tail)) = low.split_once(" or more ")
         && let Some(n) = parse_number_word(cnt_raw)
     {
-        if matches!(
-            tail,
-            "creatures died this turn"
-                | "creatures died under your control this turn"
-                | "cards have been exiled with ~"
-        ) {
-            return Ok(ConditionAst::Compare {
-                lhs: Box::new(ValueExprAst::PriorResult),
+        if tail == "creatures died this turn"
+            || tail == "creatures died under your control this turn"
+        {
+            let creature_flt = ObjectFilterAst {
+                any_types: CardTypeMask::CREATURE,
+                ..Default::default()
+            };
+            return Ok(ConditionAst::ZoneChangeThisTurn {
+                filter: Box::new(creature_flt),
+                from_zone: Some(ZoneFilter::Battlefield),
+                to_zone: Some(ZoneFilter::AnyGraveyard),
+                controller: if tail.contains("under your control") {
+                    Some(PlayerRefAst::You)
+                } else {
+                    None
+                },
+                min_count: u16::try_from(n.max(0)).unwrap_or(1),
+            });
+        }
+        if tail == "cards have been exiled with ~" {
+            let exiled_flt = ObjectFilterAst {
+                any_card: true,
+                zone: Some(ZoneFilter::Exile),
+                flags: ObjectFilterFlags::EXILED_WITH_SELF,
+                ..Default::default()
+            };
+            return Ok(ConditionAst::ZoneObjectCount {
+                filter: Box::new(exiled_flt),
                 op: CompareOp::Ge,
-                rhs: Box::new(ValueExprAst::Const(n)),
+                value: u16::try_from(n.max(0)).unwrap_or(1),
             });
         }
         if let Some(flt_raw) = tail.strip_suffix(" are in your graveyard")
@@ -9871,13 +9921,47 @@ pub fn parse_condition(phrase: &str, vocab: &Vocabulary) -> Result<ConditionAst,
     if let Some(flt_raw) = low
         .strip_suffix(" entered the battlefield under an opponent's control this turn")
         .or_else(|| low.strip_suffix(" entered under an opponent's control this turn"))
-        .or_else(|| low.strip_suffix(" left the battlefield under your control this turn"))
-        .or_else(|| low.strip_suffix(" left the battlefield this turn"))
-        .or_else(|| low.strip_suffix(" was put into a graveyard from the battlefield this turn"))
         && let Ok(flt) = parse_object_filter(flt_raw, vocab)
     {
-        return Ok(ConditionAst::EnteredUnderYourControlThisTurn {
+        return Ok(ConditionAst::ZoneChangeThisTurn {
             filter: Box::new(flt),
+            from_zone: None,
+            to_zone: Some(ZoneFilter::Battlefield),
+            controller: Some(PlayerRefAst::AnyOpponent),
+            min_count: 1,
+        });
+    }
+    if let Some(flt_raw) = low.strip_suffix(" left the battlefield under your control this turn")
+        && let Ok(flt) = parse_object_filter(flt_raw, vocab)
+    {
+        return Ok(ConditionAst::ZoneChangeThisTurn {
+            filter: Box::new(flt),
+            from_zone: Some(ZoneFilter::Battlefield),
+            to_zone: None,
+            controller: Some(PlayerRefAst::You),
+            min_count: 1,
+        });
+    }
+    if let Some(flt_raw) = low.strip_suffix(" left the battlefield this turn")
+        && let Ok(flt) = parse_object_filter(flt_raw, vocab)
+    {
+        return Ok(ConditionAst::ZoneChangeThisTurn {
+            filter: Box::new(flt),
+            from_zone: Some(ZoneFilter::Battlefield),
+            to_zone: None,
+            controller: None,
+            min_count: 1,
+        });
+    }
+    if let Some(flt_raw) =
+        low.strip_suffix(" was put into a graveyard from the battlefield this turn")
+        && let Ok(flt) = parse_object_filter(flt_raw, vocab)
+    {
+        return Ok(ConditionAst::ZoneChangeThisTurn {
+            filter: Box::new(flt),
+            from_zone: Some(ZoneFilter::Battlefield),
+            to_zone: Some(ZoneFilter::AnyGraveyard),
+            controller: None,
             min_count: 1,
         });
     }
@@ -11297,17 +11381,28 @@ pub fn parse_condition(phrase: &str, vocab: &Vocabulary) -> Result<ConditionAst,
     if let Some(after) = low.strip_prefix("you've cast ")
         && let Some((cnt_raw, rest)) = after.split_once(" or more ")
         && let Some(flt_raw) = rest.strip_suffix(" this turn")
-        && let (Some(n), Ok(_flt)) = (
+        && let (Some(n), Ok(flt)) = (
             parse_number_word(cnt_raw.trim()),
             parse_object_filter(flt_raw, vocab),
         )
     {
-        return Ok(ConditionAst::Marker(GameMarker::CastSpellsThisTurn {
-            player: PlayerRefAst::You,
-            op: CompareOp::Ge,
-            value: u16::try_from(n.max(0)).unwrap_or(0),
-            from_hand_only: false,
-        }));
+        let value = u16::try_from(n.max(0)).unwrap_or(0);
+        if flt_raw.trim() == "spells" {
+            return Ok(ConditionAst::Marker(GameMarker::CastSpellsThisTurn {
+                player: PlayerRefAst::You,
+                op: CompareOp::Ge,
+                value,
+                from_hand_only: false,
+            }));
+        }
+        return Ok(ConditionAst::Marker(
+            GameMarker::CastFilteredSpellsThisTurn {
+                player: PlayerRefAst::You,
+                filter: Box::new(flt),
+                op: CompareOp::Ge,
+                value,
+            },
+        ));
     }
     if let Some(cost_kind) = low
         .strip_prefix("the ")
@@ -11332,16 +11427,18 @@ pub fn parse_condition(phrase: &str, vocab: &Vocabulary) -> Result<ConditionAst,
     if low.starts_with("damage ") && low.ends_with(" is prevented this way") {
         return Ok(ConditionAst::Marker(GameMarker::DamagePreventedThisWay));
     }
-    if low.ends_with(" is the most common color among all permanents or is tied for most common")
-        || low.ends_with(" is the most common color among all permanents")
+    if let Some((color_raw, or_tied)) = low
+        .strip_suffix(" is the most common color among all permanents or is tied for most common")
+        .map(|c| (c.trim(), true))
+        .or_else(|| {
+            low.strip_suffix(" is the most common color among all permanents")
+                .map(|c| (c.trim(), false))
+        })
+        && let Some(color) = lookup_color(color_raw)
     {
-        return Ok(ConditionAst::Marker(GameMarker::ControlsGreatestStat {
-            player: PlayerRefAst::AnyPlayer,
-            filter: Box::new(ObjectFilterAst {
-                any_permanent: true,
-                ..Default::default()
-            }),
-            stat: StatKind::ManaValue,
+        return Ok(ConditionAst::Marker(GameMarker::MostCommonPermanentColor {
+            color,
+            or_tied,
         }));
     }
     if let Some(after) = low.strip_prefix("you have ")
@@ -11450,8 +11547,11 @@ pub fn parse_condition(phrase: &str, vocab: &Vocabulary) -> Result<ConditionAst,
             )
         };
         if let Ok(flt) = parse_object_filter(clean, vocab) {
-            return Ok(ConditionAst::EnteredUnderYourControlThisTurn {
+            return Ok(ConditionAst::ZoneChangeThisTurn {
                 filter: Box::new(flt),
+                from_zone: None,
+                to_zone: Some(ZoneFilter::Battlefield),
+                controller: Some(PlayerRefAst::AnyOpponent),
                 min_count,
             });
         }
@@ -11543,9 +11643,8 @@ pub fn parse_condition(phrase: &str, vocab: &Vocabulary) -> Result<ConditionAst,
         && let Ok(flt) = parse_object_filter(flt_raw, vocab)
     {
         return Ok(ConditionAst::Marker(
-            GameMarker::ControlsMoreThanOpponents {
+            GameMarker::AnyPlayerControlsMoreThanEachOther {
                 filter: Box::new(flt),
-                than_each_other: true,
             },
         ));
     }
@@ -11859,10 +11958,19 @@ pub fn parse_condition(phrase: &str, vocab: &Vocabulary) -> Result<ConditionAst,
         .strip_prefix("a ")
         .or_else(|| low.strip_prefix("an "))
         .and_then(|r| r.strip_suffix(" died this turn"))
-        && parse_object_filter(flt_raw, vocab).is_ok()
+        && let Ok(flt) = parse_object_filter(flt_raw, vocab)
     {
-        return Ok(ConditionAst::Morbid {
-            your_control_only: false,
+        if flt_raw.trim() == "creature" {
+            return Ok(ConditionAst::Morbid {
+                your_control_only: false,
+            });
+        }
+        return Ok(ConditionAst::ZoneChangeThisTurn {
+            filter: Box::new(flt),
+            from_zone: Some(ZoneFilter::Battlefield),
+            to_zone: Some(ZoneFilter::AnyGraveyard),
+            controller: None,
+            min_count: 1,
         });
     }
 
@@ -12440,11 +12548,53 @@ const PREDEFINED_TOKENS: &[&str] = &[
 ];
 
 /// Strictly parse the object of `create ...` into a typed `TokenSpecAst`.
+/// Rich token creation parse result preserving blocking status, dynamic P/T expressions, and chosen color/type qualifiers.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RichTokenCreationAst {
+    pub token: TokenSpecAst,
+    pub blocking: bool,
+    pub dynamic_power: Option<ValueExprAst>,
+    pub dynamic_toughness: Option<ValueExprAst>,
+    pub dynamic_pt_text: Option<String>,
+    pub chosen_color: bool,
+    pub chosen_type: bool,
+}
+
+impl RichTokenCreationAst {
+    /// True when no extra qualifiers beyond plain `TokenSpecAst` are attached.
+    #[must_use]
+    pub const fn is_plain(&self) -> bool {
+        !self.blocking
+            && self.dynamic_power.is_none()
+            && self.dynamic_toughness.is_none()
+            && self.dynamic_pt_text.is_none()
+            && !self.chosen_color
+            && !self.chosen_type
+    }
+}
+
 pub fn parse_token_creation(phrase: &str, vocab: &Vocabulary) -> Result<TokenSpecAst, String> {
+    parse_token_creation_rich(phrase, vocab).map(|r| r.token)
+}
+
+pub fn parse_token_creation_rich(
+    phrase: &str,
+    vocab: &Vocabulary,
+) -> Result<RichTokenCreationAst, String> {
     let raw = trim_punct(phrase);
     let mut low = raw.to_ascii_lowercase();
     let mut tapped = false;
     let mut attacking = false;
+    let mut blocking = false;
+    let wrap_plain = |token: TokenSpecAst, blk: bool| RichTokenCreationAst {
+        token,
+        blocking: blk,
+        dynamic_power: None,
+        dynamic_toughness: None,
+        dynamic_pt_text: None,
+        chosen_color: false,
+        chosen_type: false,
+    };
 
     if let Some((before, _)) = low
         .split_once(" that's tapped and attacking")
@@ -12480,10 +12630,15 @@ pub fn parse_token_creation(phrase: &str, vocab: &Vocabulary) -> Result<TokenSpe
         .or_else(|| low.split_once(" attacking that opponent"))
         .or_else(|| low.split_once(" attacking that player"))
         .or_else(|| low.split_once(" attacking defending player"))
-        .or_else(|| low.split_once(" that's blocking"))
-        .or_else(|| low.split_once(" that are blocking"))
     {
         attacking = true;
+        low = before.to_string();
+    }
+    if let Some((before, _)) = low
+        .split_once(" that's blocking")
+        .or_else(|| low.split_once(" that are blocking"))
+    {
+        blocking = true;
         low = before.to_string();
     }
     if low.contains(" that's tapped") {
@@ -12497,20 +12652,26 @@ pub fn parse_token_creation(phrase: &str, vocab: &Vocabulary) -> Result<TokenSpe
 
     // "N/X of those tokens" / "another one of those tokens" (Wurmquake, etc.)
     if low == "another one of those tokens" {
-        return Ok(TokenSpecAst::Predefined {
-            name: "those_tokens".to_string(),
-            count: Box::new(ValueExprAst::Const(1)),
-            tapped,
-        });
+        return Ok(wrap_plain(
+            TokenSpecAst::Predefined {
+                name: "those_tokens".to_string(),
+                count: Box::new(ValueExprAst::Const(1)),
+                tapped,
+            },
+            blocking,
+        ));
     }
     if let Some(cnt_part) = low.strip_suffix(" of those tokens")
         && let Ok(cnt) = parse_value_expr(cnt_part, vocab)
     {
-        return Ok(TokenSpecAst::Predefined {
-            name: "those_tokens".to_string(),
-            count: Box::new(cnt),
-            tapped,
-        });
+        return Ok(wrap_plain(
+            TokenSpecAst::Predefined {
+                name: "those_tokens".to_string(),
+                count: Box::new(cnt),
+                tapped,
+            },
+            blocking,
+        ));
     }
 
     // "half X <desc> tokens, rounded up/down" (The Goose Mother, etc.)
@@ -12535,7 +12696,7 @@ pub fn parse_token_creation(phrase: &str, vocab: &Vocabulary) -> Result<TokenSpe
             | TokenSpecAst::Copy { count, .. } => **count = div_val,
             TokenSpecAst::Role { .. } => {}
         }
-        return Ok(tok);
+        return Ok(wrap_plain(tok, blocking));
     }
 
     // Copy token: "a token that's a copy of <subject> [tapped and attacking ...][, except <exception>]"
@@ -12556,35 +12717,105 @@ pub fn parse_token_creation(phrase: &str, vocab: &Vocabulary) -> Result<TokenSpe
             parse_value_expr(cnt_part, vocab),
             parse_subject_or_target(src_raw, vocab),
         ) {
-            return Ok(TokenSpecAst::Copy {
-                count: Box::new(cnt),
-                source: Box::new(subj),
-                tapped: tapped || src_raw_full.contains("tapped"),
-                attacking: attacking || src_raw_full.contains("attacking"),
-                exception,
-            });
+            return Ok(wrap_plain(
+                TokenSpecAst::Copy {
+                    count: Box::new(cnt),
+                    source: Box::new(subj),
+                    tapped: tapped || src_raw_full.contains("tapped"),
+                    attacking: attacking || src_raw_full.contains("attacking"),
+                    exception,
+                },
+                blocking || src_raw_full.contains("blocking"),
+            ));
         }
     }
     // Dynamic P/T creature token: "<cnt> <colors> <subtypes> creature token with [base] power and toughness each equal to <val>"
     // or "with power equal to <v1> and toughness equal to <v2>" (Skullspore Nexus, Soul Separator)
-    if let Some((left_desc, _rhs)) = low
+    if let Some((left_desc, rhs, is_each_equal)) = low
         .split_once(" creature token with base power and toughness each equal to ")
-        .or_else(|| low.split_once(" creature token with power equal to "))
+        .map(|(l, r)| (l, r, true))
+        .or_else(|| {
+            low.split_once(" creature token with power and toughness each equal to ")
+                .map(|(l, r)| (l, r, true))
+        })
+        .or_else(|| {
+            low.split_once(" creature token with power equal to ")
+                .map(|(l, r)| (l, r, false))
+        })
         && let Some((cnt_tok, rest_desc)) = left_desc.split_once(' ')
         && let Ok(cnt) = parse_value_expr(cnt_tok, vocab)
     {
-        return Ok(TokenSpecAst::Creature {
-            count: Box::new(cnt),
-            power: "X".to_string(),
-            toughness: "X".to_string(),
-            colors: ColorMask::EMPTY,
-            supertypes: SupertypeMask::EMPTY,
-            card_types: CardTypeMask::CREATURE,
-            subtypes: vec![rest_desc.trim().to_string()],
-            keywords: Vec::new(),
-            tapped,
-            attacking,
-            named: None,
+        let mut colors = ColorMask::EMPTY;
+        let mut supertypes = SupertypeMask::EMPTY;
+        let mut card_types = CardTypeMask::CREATURE;
+        let mut subtypes = Vec::new();
+        for w in rest_desc.split_whitespace() {
+            let tok = w.trim_matches(',');
+            if tok == "and" || tok == "colorless" {
+                continue;
+            }
+            if let Some(c) = lookup_color(tok) {
+                colors = colors.union(c);
+            } else if let Some(st) = lookup_supertype(tok) {
+                supertypes = supertypes.union(st);
+            } else if let Some(ct) = lookup_card_type(tok) {
+                card_types = card_types.union(ct);
+            } else if let Some(sub) = vocab.lookup_subtype(tok) {
+                subtypes.push(sub.to_string());
+            } else {
+                subtypes.push(tok.to_string());
+            }
+        }
+        let (rhs_clean, extra_kws) = if let Some((expr_part, kw_part)) = rhs
+            .split_once(" that has ")
+            .or_else(|| rhs.split_once(" with "))
+        {
+            let kws = parse_keyword_list(kw_part.trim(), vocab)
+                .unwrap_or_else(|| vec![kw_part.trim().to_string()]);
+            (expr_part.trim(), kws)
+        } else {
+            (rhs.trim(), Vec::new())
+        };
+        let (dyn_p, dyn_t, dyn_text) = if is_each_equal {
+            match parse_value_expr(rhs_clean, vocab) {
+                Ok(v) => (Some(v.clone()), Some(v), None),
+                Err(_) => (None, None, Some(rhs_clean.to_string())),
+            }
+        } else if let Some((p_raw, t_raw)) = rhs_clean.split_once(" and toughness equal to ") {
+            let pv = parse_value_expr(p_raw.trim(), vocab).ok();
+            let tv = parse_value_expr(t_raw.trim(), vocab).ok();
+            let txt = if pv.is_none() || tv.is_none() {
+                Some(rhs_clean.to_string())
+            } else {
+                None
+            };
+            (pv, tv, txt)
+        } else {
+            match parse_value_expr(rhs_clean, vocab) {
+                Ok(v) => (Some(v), None, None),
+                Err(_) => (None, None, Some(rhs_clean.to_string())),
+            }
+        };
+        return Ok(RichTokenCreationAst {
+            token: TokenSpecAst::Creature {
+                count: Box::new(cnt),
+                power: "X".to_string(),
+                toughness: "X".to_string(),
+                colors,
+                supertypes,
+                card_types,
+                subtypes,
+                keywords: extra_kws,
+                tapped,
+                attacking,
+                named: None,
+            },
+            blocking,
+            dynamic_power: dyn_p,
+            dynamic_toughness: dyn_t,
+            dynamic_pt_text: dyn_text,
+            chosen_color: false,
+            chosen_type: false,
         });
     }
 
@@ -12637,10 +12868,13 @@ pub fn parse_token_creation(phrase: &str, vocab: &Vocabulary) -> Result<TokenSpe
             .trim()
             .to_string();
         if !role_name.is_empty() {
-            return Ok(TokenSpecAst::Role {
-                role_name,
-                attached_to: Box::new(attached_to),
-            });
+            return Ok(wrap_plain(
+                TokenSpecAst::Role {
+                    role_name,
+                    attached_to: Box::new(attached_to),
+                },
+                blocking,
+            ));
         }
     }
 
@@ -12657,11 +12891,14 @@ pub fn parse_token_creation(phrase: &str, vocab: &Vocabulary) -> Result<TokenSpe
                 Some(c) => format!("{}{}", c.to_ascii_uppercase(), chars.as_str()),
                 None => String::new(),
             };
-            return Ok(TokenSpecAst::Predefined {
-                name: cap,
-                count: Box::new(count),
-                tapped,
-            });
+            return Ok(wrap_plain(
+                TokenSpecAst::Predefined {
+                    name: cap,
+                    count: Box::new(count),
+                    tapped,
+                },
+                blocking,
+            ));
         }
     }
 
@@ -12677,7 +12914,7 @@ pub fn parse_token_creation(phrase: &str, vocab: &Vocabulary) -> Result<TokenSpe
             | TokenSpecAst::Copy { count, .. } => **count = eq_val,
             TokenSpecAst::Role { .. } => {}
         }
-        return Ok(inner);
+        return Ok(wrap_plain(inner, blocking));
     }
 
     // Prefix-named token: "<Name>, a [legendary] [P/T] <desc> token [with <kws/abilities>]"
@@ -12705,8 +12942,11 @@ pub fn parse_token_creation(phrase: &str, vocab: &Vocabulary) -> Result<TokenSpe
 
     // "<count> P/T creature token(s) of the chosen color and type" (Volrath's Laboratory, Riptide Replicator)
     if let Some((before, _)) = body.split_once(" of the chosen color and type")
-        && let Ok(inner) = parse_token_creation(before.trim(), vocab)
+        && let Ok(mut inner) = parse_token_creation_rich(before.trim(), vocab)
     {
+        inner.blocking = inner.blocking || blocking;
+        inner.chosen_color = true;
+        inner.chosen_type = true;
         return Ok(inner);
     }
 
@@ -12850,19 +13090,22 @@ pub fn parse_token_creation(phrase: &str, vocab: &Vocabulary) -> Result<TokenSpe
         }
     }
 
-    Ok(TokenSpecAst::Creature {
-        count: Box::new(for_each_expr.unwrap_or(count_expr)),
-        power,
-        toughness,
-        colors,
-        supertypes,
-        card_types,
-        subtypes,
-        keywords,
-        tapped,
-        attacking,
-        named,
-    })
+    Ok(wrap_plain(
+        TokenSpecAst::Creature {
+            count: Box::new(for_each_expr.unwrap_or(count_expr)),
+            power,
+            toughness,
+            colors,
+            supertypes,
+            card_types,
+            subtypes,
+            keywords,
+            tapped,
+            attacking,
+            named,
+        },
+        blocking,
+    ))
 }
 
 /// Split a keyword line on `,` or `;` outside quotes.
@@ -12900,4 +13143,153 @@ fn split_named_card_list(names_orig: &str) -> Vec<String> {
             .collect();
     }
     vec![s.to_string()]
+}
+
+/// Preserves lossless typed flags, name filters, and structured predicates for relative suffixes
+/// stripped in `REL_SUFFIXES` (Pass E11: eliminates silent `ObjectFilterFlags::EMPTY` drops and
+/// splits `named ~` / `same name` out of `MATCHES_NAMED_AGENDA`).
+fn apply_rel_suffix_predicate(
+    suf: &str,
+    flag: ObjectFilterFlags,
+    combat: Option<CombatState>,
+    flt: &mut ObjectFilterAst,
+) {
+    match suf {
+        " named ~" => {
+            flt.named = Some(NameFilterAst::SelfName);
+        }
+        " with the same name" | " with that name" => {
+            flt.named = Some(NameFilterAst::SameAsReferenced);
+        }
+        " with the same name as that land"
+        | " with the same name as that creature"
+        | " with the same name as that spell"
+        | " with the same name as that permanent"
+        | " with the same name as that card"
+        | " with the same name as the exiled card"
+        | " with the same name as a nontoken permanent"
+        | " with the same name as another card in their hand" => {
+            flt.named = Some(NameFilterAst::SameAsReferenced);
+            flt.predicates.push(FilterPredicateAst::StateQualification(
+                suf.trim().to_string(),
+            ));
+        }
+        " with different names" => {
+            flt.flags = flt.flags.union(ObjectFilterFlags::DIFFERENT_NAMES);
+        }
+        " with different mana values" => {
+            flt.flags = flt.flags.union(ObjectFilterFlags::DIFFERENT_MANA_VALUES);
+        }
+        " with different colors" => {
+            flt.flags = flt.flags.union(ObjectFilterFlags::DIFFERENT_COLORS);
+        }
+        " with different card types" => {
+            flt.flags = flt.flags.union(ObjectFilterFlags::DIFFERENT_CARD_TYPES);
+        }
+        " with different powers" => {
+            flt.predicates.push(FilterPredicateAst::StateQualification(
+                "different_powers".to_string(),
+            ));
+        }
+        " with {x} in its mana cost" | " with {x} in their mana costs" => {
+            flt.predicates
+                .push(FilterPredicateAst::HasManaSymbolInCost("{x}".to_string()));
+        }
+        " with a basic land type" => {
+            flt.predicates.push(FilterPredicateAst::HasBasicLandType);
+        }
+        " with a mana ability" => {
+            flt.predicates.push(FilterPredicateAst::HasAbilityKind {
+                kind: "mana_ability".to_string(),
+                negated: false,
+            });
+        }
+        " sacrificed this way" | " they sacrificed this way" | " you sacrificed this way" => {
+            flt.predicates
+                .push(FilterPredicateAst::AffectedByPriorAction(
+                    PriorActionRefKind::SacrificedThisWay,
+                ));
+        }
+        " exiled this way" | " they exiled this way" | " you exiled this way" => {
+            flt.predicates
+                .push(FilterPredicateAst::AffectedByPriorAction(
+                    PriorActionRefKind::ExiledThisWay,
+                ));
+        }
+        " exiled from their hand this way" | " exiled from your hand this way" => {
+            flt.predicates
+                .push(FilterPredicateAst::AffectedByPriorAction(
+                    PriorActionRefKind::ExiledThisWay,
+                ));
+            flt.predicates.push(FilterPredicateAst::StateQualification(
+                suf.trim().to_string(),
+            ));
+        }
+        " revealed this way" | " they revealed this way" | " you revealed this way" => {
+            flt.predicates
+                .push(FilterPredicateAst::AffectedByPriorAction(
+                    PriorActionRefKind::RevealedThisWay,
+                ));
+        }
+        " discarded this way" | " they discarded this way" | " you discarded this way" => {
+            flt.predicates
+                .push(FilterPredicateAst::AffectedByPriorAction(
+                    PriorActionRefKind::DiscardedThisWay,
+                ));
+        }
+        " destroyed this way" => {
+            flt.predicates
+                .push(FilterPredicateAst::AffectedByPriorAction(
+                    PriorActionRefKind::DestroyedThisWay,
+                ));
+        }
+        " returned this way" => {
+            flt.predicates
+                .push(FilterPredicateAst::AffectedByPriorAction(
+                    PriorActionRefKind::ReturnedToHandThisWay,
+                ));
+        }
+        " tapped this way" => {
+            flt.predicates
+                .push(FilterPredicateAst::AffectedByPriorAction(
+                    PriorActionRefKind::TappedThisWay,
+                ));
+        }
+        " put into a graveyard this way" => {
+            flt.predicates
+                .push(FilterPredicateAst::AffectedByPriorAction(
+                    PriorActionRefKind::PutIntoGraveyardThisWay,
+                ));
+        }
+        " milled this way"
+        | " they milled this way"
+        | " dealt damage this way"
+        | " created this way"
+        | " put onto the battlefield this way"
+        | " with greater power"
+        | " with power less than ~'s"
+        | " with lesser mana value"
+        | " with equal or lesser mana value"
+        | " with lesser mana value than the creature that died"
+        | " that don't have a name"
+        | " that has an adventure"
+        | " that have an adventure"
+        | " cast from a graveyard"
+        | " that's not historic"
+        | " in your party"
+        | " other than that creature"
+        | " other than that permanent"
+        | " other than that card"
+        | " that didn't attack this turn"
+        | " that were put there from the battlefield this turn"
+        | " controlled by the same player"
+        | " or suspended card" => {
+            flt.predicates.push(FilterPredicateAst::StateQualification(
+                suf.trim().to_string(),
+            ));
+        }
+        _ => {
+            let _ = (flag, combat);
+        }
+    }
 }
