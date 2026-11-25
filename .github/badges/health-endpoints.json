@@ -1,0 +1,100 @@
+{
+  "patreon": {
+    "schemaVersion": 1,
+    "label": "Patreon",
+    "message": "local verified (141 tests)",
+    "color": "green",
+    "isError": false
+  },
+  "patreon-live": {
+    "schemaVersion": 1,
+    "label": "Patreon live",
+    "message": "unknown (needs hosted creds)",
+    "color": "lightgrey",
+    "isError": false
+  },
+  "stripe": {
+    "schemaVersion": 1,
+    "label": "Stripe",
+    "message": "local verified (42 tests)",
+    "color": "green",
+    "isError": false
+  },
+  "stripe-live": {
+    "schemaVersion": 1,
+    "label": "Stripe live",
+    "message": "unknown (needs hosted creds)",
+    "color": "lightgrey",
+    "isError": false
+  },
+  "ai": {
+    "schemaVersion": 1,
+    "label": "AI",
+    "message": "local verified (35 tests)",
+    "color": "green",
+    "isError": false
+  },
+  "ai-live": {
+    "schemaVersion": 1,
+    "label": "AI live",
+    "message": "unknown (needs hosted creds)",
+    "color": "lightgrey",
+    "isError": false
+  },
+  "matchmaking": {
+    "schemaVersion": 1,
+    "label": "Matchmaking",
+    "message": "local verified (51 tests)",
+    "color": "green",
+    "isError": false
+  },
+  "matchmaking-live": {
+    "schemaVersion": 1,
+    "label": "Matchmaking live",
+    "message": "unknown (needs hosted creds)",
+    "color": "lightgrey",
+    "isError": false
+  },
+  "predictions": {
+    "schemaVersion": 1,
+    "label": "Predictions",
+    "message": "local verified (89 tests)",
+    "color": "green",
+    "isError": false
+  },
+  "predictions-live": {
+    "schemaVersion": 1,
+    "label": "Predictions live",
+    "message": "unknown (needs hosted creds)",
+    "color": "lightgrey",
+    "isError": false
+  },
+  "market": {
+    "schemaVersion": 1,
+    "label": "Market",
+    "message": "local verified (104 tests)",
+    "color": "green",
+    "isError": false
+  },
+  "market-live": {
+    "schemaVersion": 1,
+    "label": "Market live",
+    "message": "unknown (needs hosted creds)",
+    "color": "lightgrey",
+    "isError": false
+  },
+  "pet-cosmetics": {
+    "schemaVersion": 1,
+    "label": "Pet cosmetics",
+    "message": "unknown (unqualified)",
+    "color": "lightgrey",
+    "isError": false
+  },
+  "pet-cosmetics-live": {
+    "schemaVersion": 1,
+    "label": "Pet cosmetics live",
+    "message": "unknown",
+    "color": "lightgrey",
+    "isError": false
+  }
+}
