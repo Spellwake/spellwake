@@ -2835,8 +2835,25 @@ impl GameState {
                     } else {
                         PriorityCompleted::Ordinary
                     };
-                    let skip_draw = turn.position().step==Step::Upkeep && self.execution.evaluated_characteristics()?.controlled_rules(self.execution.window().active_player(),|rule|matches!(rule,crate::characteristics::StaticContinuousAbility::DrawRule { rule: crate::characteristics::StaticDrawRule::SkipControllerDrawStep, .. }))>0;
-                    let mut next = turn.complete_priority_with_draw_skip(completed, skip_draw)?;
+                    let active_player = self.execution.window().active_player();
+                    let skip_draw = turn.position().step == Step::Upkeep
+                        && self.execution.should_skip_step(active_player, Step::Draw)?;
+                    let mut skip_err: Option<crate::effects::EffectError> = None;
+                    let mut next =
+                        turn.complete_priority_with_step_skip(completed, skip_draw, |candidate| {
+                            match self.execution.should_skip_step(active_player, candidate) {
+                                Ok(skip) => skip,
+                                Err(err) => {
+                                    if skip_err.is_none() {
+                                        skip_err = Some(err);
+                                    }
+                                    false
+                                }
+                            }
+                        })?;
+                    if let Some(err) = skip_err {
+                        return Err(err.into());
+                    }
                     if turn.position().step == Step::EndCombat
                         && self.execution.take_additional_combat()
                     {

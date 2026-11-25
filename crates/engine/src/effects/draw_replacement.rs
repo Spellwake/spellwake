@@ -55,6 +55,10 @@ pub(super) struct DrawReplacement {
     reply: Option<DrawReplacementChoice>,
     revealed: Option<Revealed>,
     miracle: Option<ObjectId>,
+    body_decision: Option<OptionalEffectFrame>,
+    pending_body: Option<event_replacement::EventBodyReplacement>,
+    body_reply: Option<OptionalEffectChoice>,
+    declined_body: BTreeSet<(Option<ObjectId>, crate::characteristics::StaticAbilityId)>,
 }
 impl DrawReplacement {
     fn new(origin: DrawOrigin) -> Self {
@@ -68,6 +72,10 @@ impl DrawReplacement {
             reply: None,
             revealed: None,
             miracle: None,
+            body_decision: None,
+            pending_body: None,
+            body_reply: None,
+            declined_body: BTreeSet::new(),
         }
     }
     fn spend_one(&mut self) -> Result<(), EffectError> {
@@ -79,6 +87,7 @@ impl DrawReplacement {
         if !chunk.count.is_positive() {
             self.queue.pop_front();
         }
+        self.declined_body.clear();
         Ok(())
     }
     fn prompt(
@@ -122,6 +131,9 @@ impl EffectWindow {
     }
     pub(crate) fn draw_decision(&self) -> Option<EffectDecision> {
         let work = self.draw_replacement.as_ref()?;
+        if let Some(frame) = &work.body_decision {
+            return Some(EffectDecision::OptionalEffect(frame.clone()));
+        }
         if let Some(frame) = &work.decision {
             return Some(EffectDecision::DrawReplacement(frame.clone()));
         }
@@ -181,6 +193,16 @@ impl EffectWindow {
                 }
                 work.reply = Some(reply);
                 work.decision = None;
+            }
+            (EffectDecision::OptionalEffect(_), DecisionReply::OptionalEffect(choice)) => {
+                if !matches!(
+                    choice,
+                    OptionalEffectChoice::Take | OptionalEffectChoice::Decline
+                ) {
+                    return Err(EffectError::IllegalOptionalEffect);
+                }
+                work.body_reply = Some(choice);
+                work.body_decision = None;
             }
             (EffectDecision::ZoneReplacement(frame), DecisionReply::ZoneReplacement(reply)) => {
                 work.revealed
@@ -282,6 +304,7 @@ impl EffectWindow {
             self.draw_replacement = None;
         }
         if self.draw_replacement.is_none()
+            && !self.has_draw_body_replacement_source()
             && !self.programs.values().any(|program| {
                 program.miracle.is_some() || program
                     .continuous
@@ -345,6 +368,22 @@ impl EffectWindow {
                 player,
                 origin: work.origin,
             };
+            if let Some(rep) = work.pending_body.take() {
+                let Some(choice) = work.body_reply.take() else {
+                    return Err(EffectError::WrongDecisionKind);
+                };
+                match choice {
+                    OptionalEffectChoice::Take => {
+                        work.spend_one()?;
+                        self.execute_inline_replacement_body(&rep, cause, append)?;
+                    }
+                    OptionalEffectChoice::Decline => {
+                        work.declined_body.insert((rep.source, rep.ability));
+                    }
+                    _ => return Err(EffectError::IllegalOptionalEffect),
+                }
+                continue;
+            }
             if let Some(card) = work.miracle.take() {
                 let Some(DrawReplacementChoice::Miracle(reveal)) = work.reply.take() else {
                     return Err(EffectError::WrongDecisionKind);
@@ -484,13 +523,47 @@ impl EffectWindow {
                 work.queue.pop_front();
                 continue;
             }
+            if !matches!(work.origin, DrawOrigin::Opening) {
+                let current = self.evaluated_characteristics()?;
+                if let Some(rep) = self.find_event_body_replacement(
+                    &current,
+                    event_replacement::ReplacementEventKind::Draw,
+                    player,
+                    &work.declined_body,
+                )? {
+                    if rep.optional {
+                        let frame = OptionalEffectFrame::event_replacement(self.revision, player);
+                        work.pending_body = Some(rep);
+                        work.body_decision = Some(frame.clone());
+                        return Ok(Some(EffectDecision::OptionalEffect(frame)));
+                    }
+                    work.spend_one()?;
+                    self.execute_inline_replacement_body(&rep, cause, append)?;
+                    continue;
+                }
+            }
             if !abundance {
                 if let Some(frame) = self.offer_miracle(player, work) {
                     return Ok(Some(frame));
                 }
-                work.queue.pop_front();
-                work.journal
-                    .append(self.draw_at_cuts(player, chunk.count, work.origin, append)?);
+                if !work.declined_body.is_empty() && chunk.count > 1.into() {
+                    work.journal.append(self.draw_at_cuts(
+                        player,
+                        1.into(),
+                        work.origin,
+                        append,
+                    )?);
+                    work.spend_one()?;
+                } else {
+                    work.queue.pop_front();
+                    work.declined_body.clear();
+                    work.journal.append(self.draw_at_cuts(
+                        player,
+                        chunk.count,
+                        work.origin,
+                        append,
+                    )?);
+                }
                 continue;
             }
             let land = match work.reply.take() {

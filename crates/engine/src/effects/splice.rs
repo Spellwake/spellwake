@@ -60,7 +60,7 @@ impl EffectWindow {
                     (_, Some(target))
                         if Self::protected_target(
                             target,
-                            &super::protection::ProtectionSource::from(host),
+                            &super::protection::ProtectionSource::from(host).with_controller(actor),
                             current,
                         ) || !self.legal_body_target_in(&spell.body, target, actor, current) =>
                     {

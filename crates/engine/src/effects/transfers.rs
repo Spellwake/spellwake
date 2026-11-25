@@ -130,15 +130,17 @@ impl EffectWindow {
                     minus_one: 0.into(),
                 };
                 let one = self.adjusted_pt_counters(&old.view().evaluated, target, one, None)?;
-                self.characteristics.place_counters(target, &one)?;
+                if one.valid_placement() {
+                    self.characteristics.place_counters(target, &one)?;
+                }
                 self.emit_from(cause, &old, None, append, |before, after, _| {
-                    Ok(vec![
-                        RulesOccurrence::CounterRemovedForGraft {
-                            object: source,
-                            before: before.characteristics.counters(source),
-                            after: after.characteristics.counters(source),
-                        },
-                        RulesOccurrence::CountersPlaced {
+                    let mut events = vec![RulesOccurrence::CounterRemovedForGraft {
+                        object: source,
+                        before: before.characteristics.counters(source),
+                        after: after.characteristics.counters(source),
+                    }];
+                    if one.valid_placement() {
+                        events.push(RulesOccurrence::CountersPlaced {
                             object: target,
                             before: before.characteristics.counters(target),
                             added: one,
@@ -151,8 +153,9 @@ impl EffectWindow {
                             after_appearance: Box::new(
                                 after.appearance(target).ok_or(EffectError::UnknownObject)?,
                             ),
-                        },
-                    ])
+                        });
+                    }
+                    Ok(events)
                 })
             }
             TransferKeyword::Modular(_) => {

@@ -3304,6 +3304,9 @@ fn zone_instance(value: spellwake_engine::effects::ZoneEffectInstance) -> Value 
             CreatedZoneEffect::UmbraArmor { aura } => {
                 return json!({"source":opaque(value.source),"effect":"UmbraArmor","aura":opaque(aura)});
             }
+            CreatedZoneEffect::TemporaryZoneReplacement(rule_id) => {
+                return json!({"source":opaque(value.source),"effect":"TemporaryZoneReplacement","ruleId":rule_id});
+            }
             CreatedZoneEffect::FinalityCounter => {
                 return json!({"source":opaque(value.source),"effect":"FinalityCounter"});
             }

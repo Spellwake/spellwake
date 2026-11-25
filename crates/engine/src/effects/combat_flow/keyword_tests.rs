@@ -309,6 +309,8 @@ fn block_legality_reads_the_current_layer_six_removal_and_grant() {
             granted_trigger: None,
             granted_combat_keywords: vec![],
             granted_keywords: BTreeSet::from([Reach]),
+            suppressed_activations: None,
+            doesnt_untap: false,
         })]),
     });
     let (state, turn) = defender_step(

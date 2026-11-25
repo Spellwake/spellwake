@@ -35,6 +35,8 @@ pub enum CreatedZoneEffect {
     FinalityCounter,
     /// Duration-scoped temporary rule replacing any battlefield departure with exile.
     TemporaryLeaveExile(u64),
+    /// Duration-scoped generalized zone replacement ability installed by a resolving effect.
+    TemporaryZoneReplacement(u64),
 }
 /// Actual source incarnation plus its copiable definition-local identity.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -544,6 +546,37 @@ impl ZoneReplacementBatch {
             .find(|(id, _)| *id == object)
             .map(|(_, seat)| *seat)
     }
+    // Exposed for Wave 7 discard-to-battlefield commit callers outside this module.
+    #[allow(dead_code)]
+    pub(super) fn entering_controller_for(&self, object: ObjectId) -> Option<SeatId> {
+        self.entry_controller(object).or_else(|| {
+            self.candidates
+                .values()
+                .find(|candidate| candidate.before.id() == object)
+                .and_then(|candidate| candidate.entering_controller)
+        })
+    }
+    // Exposed for Wave 7 zone-move commit callers handling replaced Hand/Battlefield moves.
+    #[allow(dead_code)]
+    pub(super) fn physical_destination(
+        &self,
+        object: ObjectId,
+    ) -> Result<ObjectDestination, EffectError> {
+        let destination = self.destination(object)?;
+        let controller = if destination == PublicZoneDestination::Battlefield {
+            self.entering_controller_for(object).or_else(|| {
+                self.candidates
+                    .values()
+                    .find(|candidate| candidate.before.id() == object)
+                    .map(|candidate| candidate.before.owner())
+            })
+        } else {
+            None
+        };
+        destination
+            .physical(controller)
+            .ok_or(ZoneReplacementError::InconsistentBatch.into())
+    }
     pub(super) fn entry_controllers(&self) -> impl Iterator<Item = (ObjectId, SeatId)> + '_ {
         self.selected_controllers
             .iter()
@@ -667,7 +700,15 @@ impl ZoneReplacementBatch {
                     .or_default()
                     .push(rule.clone());
                 donor
-                    .map(|id| self.copy_pool.select(&rule, controller, id, previous))
+                    .map(|id| {
+                        self.copy_pool.select_for_entrant(
+                            &rule,
+                            controller,
+                            id,
+                            previous,
+                            Some(object),
+                        )
+                    })
                     .transpose()?
             }
             ZoneReplacementReply::EntryCopyFromPermanent(aura) => {
@@ -792,7 +833,15 @@ impl ZoneReplacementBatch {
             let prohibited = matches!(
                 source.instance.created,
                 Some(CreatedZoneEffect::Regenerate { .. })
-            ) && self.regeneration_prohibited;
+            ) && (self.regeneration_prohibited
+                || self
+                    .evaluated
+                    .get(candidate.before.id())
+                    .is_some_and(|view| {
+                        view.blocking_restrictions.contains(
+                            &crate::characteristics::BlockingRestriction::CannotBeRegenerated,
+                        )
+                    }));
             if prohibited || !destroyed {
                 return false;
             }
@@ -834,7 +883,15 @@ impl ZoneReplacementBatch {
                 ZoneReplacementSubject::SourceSelf => {
                     candidate.before.id() == source.instance.source
                 }
+                ZoneReplacementSubject::SourceSelfDiscardByOpponent => {
+                    candidate.before.id() == source.instance.source
+                        && candidate.action == ZoneActionKind::EffectDiscard
+                        && self
+                            .matching_subjects
+                            .contains(&(application.effect, candidate.before.id()))
+                }
                 ZoneReplacementSubject::Matching { .. }
+                | ZoneReplacementSubject::MatchingNotCast { .. }
                 | ZoneReplacementSubject::DamagedBySourceThisTurn => self
                     .matching_subjects
                     .contains(&(application.effect, candidate.before.id())),
@@ -897,10 +954,17 @@ impl ZoneReplacementBatch {
             self.optional.insert(application, answer);
         }
         if answer != Some(ZoneOptionalAnswer::Decline) {
-            self.candidates
+            let candidate = self
+                .candidates
                 .get_mut(&application.event)
-                .ok_or(ZoneReplacementError::InconsistentBatch)?
-                .current = destination;
+                .ok_or(ZoneReplacementError::InconsistentBatch)?;
+            candidate.current = destination;
+            if destination == PublicZoneDestination::Battlefield
+                && candidate.entering_controller.is_none()
+                && candidate.before.zone() != ObjectZone::Battlefield
+            {
+                candidate.entering_controller = Some(candidate.before.owner());
+            }
             self.applied
                 .entry(application.event)
                 .or_default()
@@ -1095,6 +1159,9 @@ impl ZoneReplacementBatch {
             let mut original = held.clone();
             if !original.entry_prohibited {
                 original.current = original.original;
+                if original.original != PublicZoneDestination::Battlefield {
+                    original.entering_controller = None;
+                }
             }
             if fresh.candidates.get(key) != Some(&original) {
                 return Err(ZoneReplacementError::InconsistentBatch.into());
@@ -1246,6 +1313,41 @@ impl EffectWindow {
                         definition,
                     },
                 );
+            }
+            for &ability in &current.abilities.zone_replacements {
+                let definition = current
+                    .printed_text
+                    .zone_replacements
+                    .iter()
+                    .find(|value| value.id == ability)
+                    .ok_or(ZoneReplacementError::InconsistentBatch)?;
+                if !matches!(
+                    definition.subject,
+                    ZoneReplacementSubject::SourceSelf
+                        | ZoneReplacementSubject::SourceSelfDiscardByOpponent
+                ) {
+                    continue;
+                }
+                let instance = ZoneEffectInstance {
+                    source: before.id(),
+                    ability,
+                    unearth: false,
+                    madness: false,
+                    created: None,
+                };
+                if sources
+                    .insert(
+                        instance,
+                        ZoneReplacementSource {
+                            instance,
+                            before: before.clone(),
+                            definition: definition.clone(),
+                        },
+                    )
+                    .is_some()
+                {
+                    return Err(ZoneReplacementError::InconsistentBatch.into());
+                }
             }
         }
         for before in self
@@ -1519,6 +1621,34 @@ impl EffectWindow {
                 }
             }
         }
+        for active in &self.temporary_rules {
+            if active.consumed {
+                continue;
+            }
+            if let crate::program::TemporaryRuleKind::TemporaryZoneReplacement(ability) =
+                &active.rule
+            {
+                let before = active
+                    .source_object
+                    .and_then(|id| self.window.cards().get(id).cloned())
+                    .unwrap_or_else(|| GameObject::synthetic_emblem(active.controller));
+                let instance = ZoneEffectInstance {
+                    source: before.id(),
+                    ability: ability.id,
+                    unearth: false,
+                    madness: false,
+                    created: Some(CreatedZoneEffect::TemporaryZoneReplacement(active.id)),
+                };
+                sources.insert(
+                    instance,
+                    ZoneReplacementSource {
+                        instance,
+                        before,
+                        definition: (**ability).clone(),
+                    },
+                );
+            }
+        }
         Ok(ZoneReplacementSources { evaluated, sources })
     }
     pub(super) fn begin_selection_replacements(
@@ -1648,6 +1778,51 @@ impl EffectWindow {
             evaluated,
             mut sources,
         } = self.zone_replacement_sources()?;
+        for intent in &input.intents {
+            if input.action == ZoneActionKind::EffectEnterBattlefield
+                && self.face_down_entry_for(intent.before).is_some()
+            {
+                continue;
+            }
+            let Some(before) = self.window.cards().get(intent.before) else {
+                continue;
+            };
+            if before.zone() == ObjectZone::Battlefield {
+                continue;
+            }
+            let current = evaluated
+                .get(before.id())
+                .ok_or(ZoneReplacementError::InconsistentBatch)?;
+            for &ability in &current.abilities.zone_replacements {
+                let definition = current
+                    .printed_text
+                    .zone_replacements
+                    .iter()
+                    .find(|value| value.id == ability)
+                    .ok_or(ZoneReplacementError::InconsistentBatch)?;
+                if !matches!(
+                    definition.subject,
+                    ZoneReplacementSubject::SourceSelf
+                        | ZoneReplacementSubject::SourceSelfDiscardByOpponent
+                ) {
+                    continue;
+                }
+                let instance = ZoneEffectInstance {
+                    source: before.id(),
+                    ability,
+                    unearth: false,
+                    madness: false,
+                    created: None,
+                };
+                sources
+                    .entry(instance)
+                    .or_insert_with(|| ZoneReplacementSource {
+                        instance,
+                        before: before.clone(),
+                        definition: definition.clone(),
+                    });
+            }
+        }
         if input.action == ZoneActionKind::EffectEnterBattlefield {
             for intent in &input.intents {
                 if self.face_down_entry_for(intent.before).is_some() {
@@ -1709,7 +1884,8 @@ impl EffectWindow {
                 | ZoneActionKind::EffectSearchToGraveyard
                 | ZoneActionKind::EffectMill
                 | ZoneActionKind::EffectSurveil
-                | ZoneActionKind::EffectEnterBattlefield,
+                | ZoneActionKind::EffectEnterBattlefield
+                | ZoneActionKind::Countered,
             ) if self
                 .window
                 .resolving()
@@ -1736,6 +1912,13 @@ impl EffectWindow {
                 .resolving()
                 .is_some_and(|actual| actual.id() == *entry)
                 && entering_controllers.is_some() => {}
+            (
+                EventCause::ResolutionCompleted { entry, .. },
+                ZoneActionKind::ResolutionExit | ZoneActionKind::Countered,
+            ) if self
+                .window
+                .resolving()
+                .is_some_and(|actual| actual.id() == *entry) => {}
             (
                 EventCause::ActivatedAbilityCost { entry, .. },
                 ZoneActionKind::MillCost
@@ -1781,6 +1964,8 @@ impl EffectWindow {
                     | ZoneActionKind::EffectMill
                     | ZoneActionKind::EffectRevealedToGraveyard
                     | ZoneActionKind::EffectSearchToGraveyard
+                    | ZoneActionKind::ResolutionExit
+                    | ZoneActionKind::Countered
             )
         {
             for intent in &input.intents {
@@ -1848,6 +2033,11 @@ impl EffectWindow {
                         | (ZoneActionKind::SacrificeCost, ZoneReason::SacrificeCost)
                         | (ZoneActionKind::ExileCost, ZoneReason::ExileCost)
                         | (ZoneActionKind::StateBased, ZoneReason::StateBased(_))
+                        | (
+                            ZoneActionKind::ResolutionExit,
+                            ZoneReason::ResolutionExit | ZoneReason::AllTargetsIllegalExit,
+                        )
+                        | (ZoneActionKind::Countered, ZoneReason::Countered)
                 );
                 if !reason_ok {
                     return Err(ZoneReplacementError::InconsistentBatch.into());
@@ -1894,7 +2084,12 @@ impl EffectWindow {
                         ZoneEventKey::LandPlay { before: object }
                     }
                     EventCause::ResolutionCompleted { entry, .. }
-                        if action == ZoneActionKind::EffectEnterBattlefield =>
+                        if matches!(
+                            action,
+                            ZoneActionKind::EffectEnterBattlefield
+                                | ZoneActionKind::ResolutionExit
+                                | ZoneActionKind::Countered
+                        ) =>
                     {
                         ZoneEventKey::PermanentEntry {
                             entry,
@@ -2105,6 +2300,14 @@ impl EffectWindow {
                         .and_then(devour::multiplier)
                         .is_some()
                 }));
+        let effect_controller = match &input.cause {
+            EventCause::Instruction { entry, .. } => self
+                .window
+                .resolving()
+                .filter(|actual| actual.id() == *entry)
+                .map(|actual| actual.controller()),
+            _ => None,
+        };
         let mut matching_subjects = BTreeSet::new();
         let empty_excluded = BTreeSet::new();
         for (&instance, source) in &sources {
@@ -2112,12 +2315,28 @@ impl EffectWindow {
                 ZoneReplacementSubject::Matching {
                     filter,
                     owner_relation,
+                }
+                | ZoneReplacementSubject::MatchingNotCast {
+                    filter,
+                    owner_relation,
                 } => {
-                    let Some(source_ctrl) = evaluated
+                    let is_not_cast = matches!(
+                        source.definition.subject,
+                        ZoneReplacementSubject::MatchingNotCast { .. }
+                    );
+                    let source_ctrl = evaluated
                         .get(instance.source)
                         .and_then(|v| v.controller)
-                        .or(source.before.controller())
-                    else {
+                        .or_else(|| source.before.controller())
+                        .or_else(|| match instance.created {
+                            Some(CreatedZoneEffect::TemporaryZoneReplacement(rule_id)) => self
+                                .temporary_rules
+                                .iter()
+                                .find(|rule| rule.id == rule_id)
+                                .map(|rule| rule.controller),
+                            _ => None,
+                        });
+                    let Some(source_ctrl) = source_ctrl else {
                         continue;
                     };
                     let opponents = self
@@ -2125,6 +2344,29 @@ impl EffectWindow {
                         .opponents(self.window.participants(), source_ctrl)?;
                     for candidate in candidates.values() {
                         let cid = candidate.before.id();
+                        if is_not_cast {
+                            let was_cast = if candidate.reason == ZoneReason::PermanentResolution {
+                                match &input.cause {
+                                    EventCause::ResolutionCompleted { entry, .. } => self
+                                        .window
+                                        .entries()
+                                        .iter()
+                                        .find(|e| e.id() == *entry)
+                                        .is_none_or(|e| {
+                                            !matches!(e.kind(), StackKind::SpellCopy { .. })
+                                        }),
+                                    _ => true,
+                                }
+                            } else {
+                                self.characteristics
+                                    .cast_by_controller_objects
+                                    .contains(&cid)
+                                    || self.characteristics.cast_from_hand_objects.contains(&cid)
+                            };
+                            if was_cast {
+                                continue;
+                            }
+                        }
                         let owner_ok = match owner_relation {
                             None => true,
                             Some(crate::program::PlayerRelation::Controller) => {
@@ -2138,8 +2380,50 @@ impl EffectWindow {
                         if !owner_ok {
                             continue;
                         }
-                        let Some(view) = evaluated.get(cid) else {
+                        let Some(base_view) = evaluated.get(cid) else {
                             continue;
+                        };
+                        let adjusted_view;
+                        let view = if candidate.action == ZoneActionKind::EffectEnterBattlefield {
+                            let mut entry_view = base_view.clone();
+                            if entry_view.controller.is_none() {
+                                entry_view.controller = candidate.entering_controller;
+                            }
+                            if self.face_down_entry_for(cid).is_some() {
+                                let two_two = crate::characteristics::PowerToughness {
+                                    power: 2.into(),
+                                    toughness: 2.into(),
+                                };
+                                entry_view.current_types = BTreeSet::from([CardType::Creature]);
+                                entry_view.current_supertypes.clear();
+                                entry_view.current_creature_subtypes.clear();
+                                entry_view.current_colors.clear();
+                                entry_view.power_toughness = Some(PowerToughnessEvaluation {
+                                    object: cid,
+                                    copiable: Some(two_two.clone().into()),
+                                    base: two_two.clone(),
+                                    derived: two_two,
+                                    applied_effects: Vec::new(),
+                                });
+                            } else if !self.characteristics.bestowed_spells.contains(&cid)
+                                && self.linked_return_work.as_ref().is_some_and(|work| {
+                                    matches!(
+                                        work.origin,
+                                        LinkedReturnOrigin::GraveyardTransformed { .. }
+                                    ) && work.objects.contains(&cid)
+                                })
+                                && let Some(face) = self.prospective_entry_face(cid)
+                            {
+                                entry_view.current_types = face.card_types.clone();
+                                entry_view.current_supertypes = face.supertypes.clone();
+                                entry_view.current_creature_subtypes =
+                                    face.creature_subtypes.clone();
+                                entry_view.current_colors = face.defined_colors();
+                            }
+                            adjusted_view = entry_view;
+                            &adjusted_view
+                        } else {
+                            base_view
                         };
                         if self.matches_object_filter(
                             **filter,
@@ -2150,6 +2434,24 @@ impl EffectWindow {
                             &evaluated,
                         ) {
                             matching_subjects.insert((instance, cid));
+                        }
+                    }
+                }
+                ZoneReplacementSubject::SourceSelfDiscardByOpponent => {
+                    if action == ZoneActionKind::EffectDiscard
+                        && let Some(actor) = effect_controller
+                    {
+                        for candidate in candidates.values() {
+                            let cid = candidate.before.id();
+                            if cid == instance.source {
+                                let owner = candidate.before.owner();
+                                let opponents = self
+                                    .combat_rules
+                                    .opponents(self.window.participants(), owner)?;
+                                if opponents.contains(&actor) {
+                                    matching_subjects.insert((instance, cid));
+                                }
+                            }
                         }
                     }
                 }
@@ -2288,25 +2590,30 @@ impl EffectWindow {
         orders: &[ZoneOwnerOrder],
         replacements: Option<&ZoneReplacementBatch>,
     ) -> Result<ZoneMovePlan, EffectError> {
-        let moving: Vec<_> = objects
-            .iter()
-            .copied()
-            .filter(|id| {
-                !replacements.is_some_and(|batch| {
-                    batch.saved_from_destruction(*id)
-                        || (batch.destination(*id) == Ok(PublicZoneDestination::Command)
-                            && self
-                                .window
-                                .cards()
-                                .get(*id)
-                                .is_some_and(|object| object.zone() == ObjectZone::Command))
-                        || (batch.destination(*id) == Ok(PublicZoneDestination::Graveyard)
-                            && self.window.cards().get(*id).is_some_and(|object| {
-                                matches!(object.zone(), ObjectZone::Graveyard(_))
-                            }))
+        let moving: Vec<_> =
+            objects
+                .iter()
+                .copied()
+                .filter(|id| {
+                    !replacements.is_some_and(|batch| {
+                        batch.saved_from_destruction(*id)
+                            || (batch.destination(*id) == Ok(PublicZoneDestination::Command)
+                                && self
+                                    .window
+                                    .cards()
+                                    .get(*id)
+                                    .is_some_and(|object| object.zone() == ObjectZone::Command))
+                            || (batch.destination(*id) == Ok(PublicZoneDestination::Graveyard)
+                                && self.window.cards().get(*id).is_some_and(|object| {
+                                    matches!(object.zone(), ObjectZone::Graveyard(_))
+                                }))
+                            || (batch.destination(*id) == Ok(PublicZoneDestination::Hand)
+                                && self.window.cards().get(*id).is_some_and(|object| {
+                                    matches!(object.zone(), ObjectZone::Hand(_))
+                                }))
+                    })
                 })
-            })
-            .collect();
+                .collect();
         let objects = moving.as_slice();
         let groups = self.zone_arrival_groups(objects, replacements)?;
         if orders.len() != groups.len() {
@@ -2386,5 +2693,277 @@ impl EffectWindow {
             return Err(EffectError::InconsistentSelectionWork);
         }
         Ok(plan)
+    }
+
+    // Exposed for Wave 7 zone-move commit hooks outside this module.
+    #[allow(dead_code)]
+    pub(super) fn apply_zone_replacement_extras_from_movements(
+        &mut self,
+        batch: Option<&ZoneReplacementBatch>,
+        movements: &[crate::object_identity::ObjectMovement],
+        cause: EventCause,
+        append: &mut RulesJournal,
+    ) -> Result<(), EffectError> {
+        let Some(batch) = batch else {
+            return Ok(());
+        };
+        let moved: Vec<(ObjectId, ObjectId)> = movements
+            .iter()
+            .map(|movement| (movement.before.id(), movement.after.id()))
+            .collect();
+        self.apply_zone_replacement_extras(batch, &moved, cause, append)
+    }
+
+    /// Apply `Program.zone_replacement_extras` (exile/battlefield counters and inline followup bodies)
+    /// for every zone replacement ability that actually applied in `batch`.
+    // Exposed for Wave 7 zone-move commit hooks outside this module.
+    #[allow(dead_code)]
+    pub(super) fn apply_zone_replacement_extras(
+        &mut self,
+        batch: &ZoneReplacementBatch,
+        moved: &[(ObjectId, ObjectId)],
+        cause: EventCause,
+        append: &mut RulesJournal,
+    ) -> Result<(), EffectError> {
+        for step in batch.history() {
+            if step.optional == Some(ZoneOptionalAnswer::Decline) {
+                continue;
+            }
+            let Some(source) = batch.sources().get(&step.application.effect) else {
+                continue;
+            };
+            if source.instance.unearth
+                || source.instance.madness
+                || source.instance.created.is_some()
+            {
+                continue;
+            }
+            let extra = batch
+                .evaluated()
+                .get(source.instance.source)
+                .and_then(|view| {
+                    view.printed_text
+                        .zone_replacement_extras
+                        .get(&source.instance.ability)
+                })
+                .or_else(|| {
+                    self.copiable_program(source.instance.source)
+                        .and_then(|program| {
+                            program
+                                .zone_replacement_extras
+                                .get(&source.instance.ability)
+                        })
+                })
+                .cloned();
+            let Some(extra) = extra else {
+                continue;
+            };
+            if let Some((kind, count)) = extra.exile_counters
+                && count > 0
+                && let Some(after_id) = moved.iter().find_map(|&(before_id, after_id)| {
+                    (before_id == step.application.event.before()).then_some(after_id)
+                })
+                && let Some(after_zone) = self.window.cards().get(after_id).map(GameObject::zone)
+                && matches!(after_zone, ObjectZone::Exile | ObjectZone::Battlefield)
+            {
+                self.place_zone_replacement_counters(
+                    after_id,
+                    after_zone,
+                    kind,
+                    count,
+                    cause.clone(),
+                    append,
+                )?;
+            }
+            if let Some(body) = &extra.followup_body {
+                let source_controller = batch
+                    .evaluated()
+                    .get(source.instance.source)
+                    .and_then(|view| view.controller)
+                    .or_else(|| source.before.controller())
+                    .unwrap_or_else(|| source.before.owner());
+                let affected_player = batch
+                    .candidates()
+                    .get(&step.application.event)
+                    .map_or(source_controller, |candidate| batch.chooser(candidate));
+                let rep = super::event_replacement::EventBodyReplacement {
+                    source: Some(source.instance.source),
+                    ability: crate::characteristics::StaticAbilityId(
+                        source.instance.ability.0 | (1_u64 << 63),
+                    ),
+                    controller: source_controller,
+                    affected_player,
+                    optional: false,
+                    body: (**body).clone(),
+                };
+                self.execute_inline_replacement_body(&rep, cause.clone(), append)?;
+            }
+        }
+        Ok(())
+    }
+
+    // Helper for apply_zone_replacement_extras (Wave 7 commit hooks outside this module).
+    #[allow(dead_code)]
+    fn place_zone_replacement_counters(
+        &mut self,
+        object: ObjectId,
+        zone: ObjectZone,
+        kind: CounterKind,
+        count: u8,
+        cause: EventCause,
+        append: &mut RulesJournal,
+    ) -> Result<(), EffectError> {
+        let amount = RulesInteger::from(i64::from(count));
+        if !amount.is_positive() {
+            return Ok(());
+        }
+        let grant_entry = match &cause {
+            EventCause::Instruction { entry, .. }
+            | EventCause::ResolutionCompleted { entry, .. }
+            | EventCause::ActivatedAbilityCost { entry, .. }
+            | EventCause::CastObjectPayment { entry, .. } => *entry,
+            _ => self
+                .window
+                .resolving()
+                .map(crate::stack_window::StackEntry::id)
+                .unwrap_or_else(StackEntryId::entry_replacement_creator),
+        };
+        if zone == ObjectZone::Battlefield {
+            let before = self.rules_snapshot(None)?;
+            if self.permanent_counter_prevented(&before.view().evaluated, object, kind) {
+                return Ok(());
+            }
+            if kind == CounterKind::PlusOne {
+                return self.place_plus_one_counter_amount(vec![object], amount, cause, append);
+            }
+            let mult = super::permanent_counters::effect_counter_multiplier(
+                &before.view().evaluated,
+                object,
+            );
+            let added = amount.times(&mult);
+            if !added.is_positive() {
+                return Ok(());
+            }
+            if kind == CounterKind::MinusOne {
+                let prev = self.characteristics.counters(object);
+                let delta = PowerToughnessCounters {
+                    plus_one: 0.into(),
+                    minus_one: added,
+                };
+                self.characteristics.place_counters(object, &delta)?;
+                let after = self.characteristics.counters(object);
+                let before_appearance = before
+                    .view()
+                    .appearance(object)
+                    .ok_or(EffectError::InconsistentProgram)?;
+                let after_appearance = self
+                    .rules_snapshot(None)?
+                    .view()
+                    .appearance(object)
+                    .ok_or(EffectError::InconsistentProgram)?;
+                self.emit_from(cause, &before, None, append, |_, _, _| {
+                    Ok(vec![crate::occurrence::RulesOccurrence::CountersPlaced {
+                        object,
+                        before: prev,
+                        added: delta,
+                        after,
+                        before_appearance: Box::new(before_appearance),
+                        after_appearance: Box::new(after_appearance),
+                    }])
+                })?;
+            } else if let Some(map) = self.characteristics.named_permanent_counters_mut(kind) {
+                let prev = map.get(&object).cloned().unwrap_or_else(|| 0.into());
+                let after = prev.plus(&added);
+                map.insert(object, after.clone());
+                self.characteristics
+                    .refresh_keyword_counter_grant(grant_entry, object, kind)?;
+                let occurrence = match kind {
+                    CounterKind::Charge => {
+                        crate::occurrence::RulesOccurrence::ChargeCountersChanged {
+                            object,
+                            before: prev,
+                            after,
+                        }
+                    }
+                    CounterKind::Suspect => {
+                        crate::occurrence::RulesOccurrence::SuspectCountersChanged {
+                            object,
+                            before: prev,
+                            after,
+                        }
+                    }
+                    _ => crate::occurrence::RulesOccurrence::PermanentCounterChanged {
+                        object,
+                        kind,
+                        before: prev,
+                        after,
+                    },
+                };
+                self.emit_from(cause, &before, None, append, |_, _, _| Ok(vec![occurrence]))?;
+            }
+            return Ok(());
+        }
+        let before = self.rules_snapshot(None)?;
+        if kind == CounterKind::PlusOne || kind == CounterKind::MinusOne {
+            let prev = self.characteristics.counters(object);
+            let delta = if kind == CounterKind::PlusOne {
+                PowerToughnessCounters {
+                    plus_one: amount,
+                    minus_one: 0.into(),
+                }
+            } else {
+                PowerToughnessCounters {
+                    plus_one: 0.into(),
+                    minus_one: amount,
+                }
+            };
+            self.characteristics.place_counters(object, &delta)?;
+            let after = self.characteristics.counters(object);
+            let before_appearance = before
+                .view()
+                .appearance(object)
+                .ok_or(EffectError::InconsistentProgram)?;
+            let after_appearance = self
+                .rules_snapshot(None)?
+                .view()
+                .appearance(object)
+                .ok_or(EffectError::InconsistentProgram)?;
+            self.emit_from(cause, &before, None, append, |_, _, _| {
+                Ok(vec![crate::occurrence::RulesOccurrence::CountersPlaced {
+                    object,
+                    before: prev,
+                    added: delta,
+                    after,
+                    before_appearance: Box::new(before_appearance),
+                    after_appearance: Box::new(after_appearance),
+                }])
+            })?;
+        } else if let Some(map) = self.characteristics.named_permanent_counters_mut(kind) {
+            let prev = map.get(&object).cloned().unwrap_or_else(|| 0.into());
+            let after = prev.plus(&amount);
+            map.insert(object, after.clone());
+            let occurrence = match kind {
+                CounterKind::Charge => crate::occurrence::RulesOccurrence::ChargeCountersChanged {
+                    object,
+                    before: prev,
+                    after,
+                },
+                CounterKind::Suspect => {
+                    crate::occurrence::RulesOccurrence::SuspectCountersChanged {
+                        object,
+                        before: prev,
+                        after,
+                    }
+                }
+                _ => crate::occurrence::RulesOccurrence::PermanentCounterChanged {
+                    object,
+                    kind,
+                    before: prev,
+                    after,
+                },
+            };
+            self.emit_from(cause, &before, None, append, |_, _, _| Ok(vec![occurrence]))?;
+        }
+        Ok(())
     }
 }

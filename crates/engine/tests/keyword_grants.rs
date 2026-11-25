@@ -275,6 +275,8 @@ fn one_ability_component_removes_printed_abilities_then_grants_its_own_keywords(
                         granted_combat_keywords: vec![],
                         granted_keywords: BTreeSet::from([Haste, Vigilance]),
                         suppressed_keywords: BTreeSet::new(),
+                        suppressed_activations: None,
+                        doesnt_untap: false,
                     })],
                     ResolvedDuration::NoStatedDuration,
                 )],
