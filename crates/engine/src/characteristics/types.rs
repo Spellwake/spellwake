@@ -1462,12 +1462,10 @@ pub(super) fn validate_battlefield_types(
             values
         }
     };
-    if values.iter().any(|value| {
-        matches!(
-            value,
-            CardType::Instant | CardType::Sorcery | CardType::Planeswalker
-        )
-    }) {
+    if values
+        .iter()
+        .any(|value| matches!(value, CardType::Instant | CardType::Sorcery))
+    {
         return Err(CharacteristicDefinitionError::UnsupportedTypeOperation);
     }
     Ok(())

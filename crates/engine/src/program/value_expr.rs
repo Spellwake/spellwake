@@ -1037,29 +1037,37 @@ impl ValueExpr {
                 };
                 subj_ok && world_filter(filter)
             }
-            Self::EventValue(kind) => matches!(
-                kind,
+            Self::EventValue(kind) => match kind {
                 EventValueKind::CreaturesDiedThisTurn
-                    | EventValueKind::SourceAttackedThisTurn
-                    | EventValueKind::ManaSpentToCast
-                    | EventValueKind::ColorsSpentToCast
-                    | EventValueKind::ManaTypeSpentToCast(_)
-                    | EventValueKind::SnowManaSpentToCast
-                    | EventValueKind::TreasureManaSpentToCast
-                    | EventValueKind::CreatureManaSpentToCast
-                    | EventValueKind::CastFromOutsideHand
-                    | EventValueKind::CastFromExile
-                    | EventValueKind::CastFromGraveyard
-                    | EventValueKind::CastDuringOwnMain
-                    | EventValueKind::Bargained
-                    | EventValueKind::GiftPromised
-                    | EventValueKind::Cleaved
-                    | EventValueKind::EvidenceCollected
-                    | EventValueKind::PaidAlternative
-                    | EventValueKind::KickerCount(_)
-                    | EventValueKind::TriggeringSpellManaSpent
-                    | EventValueKind::AdditionalCostPaid
-            ),
+                | EventValueKind::SourceAttackedThisTurn
+                | EventValueKind::ManaSpentToCast
+                | EventValueKind::ColorsSpentToCast
+                | EventValueKind::ManaTypeSpentToCast(_)
+                | EventValueKind::SnowManaSpentToCast
+                | EventValueKind::TreasureManaSpentToCast
+                | EventValueKind::CreatureManaSpentToCast
+                | EventValueKind::CastFromOutsideHand
+                | EventValueKind::CastFromExile
+                | EventValueKind::CastFromGraveyard
+                | EventValueKind::CastDuringOwnMain
+                | EventValueKind::Bargained
+                | EventValueKind::GiftPromised
+                | EventValueKind::Cleaved
+                | EventValueKind::EvidenceCollected
+                | EventValueKind::PaidAlternative
+                | EventValueKind::KickerCount(_)
+                | EventValueKind::TriggeringSpellManaSpent
+                | EventValueKind::AdditionalCostPaid => true,
+                EventValueKind::SharesCardTypeWithLinkedExile(subject) => match subject {
+                    MatchObjectRef::AbilitySource
+                    | MatchObjectRef::AttachedHost
+                    | MatchObjectRef::TriggerSubject
+                    | MatchObjectRef::DyingCreature => true,
+                    MatchObjectRef::LibraryTop(p) => trig_player(*p),
+                    _ => false,
+                },
+                _ => false,
+            },
             Self::Scale { expr, .. } | Self::DivConst { expr, .. } => {
                 expr.is_trigger_world_evaluable()
             }
@@ -1415,6 +1423,12 @@ impl ValueExpr {
                 },
                 ResolvingPlayer::TargetSpellController => match target {
                     BodyTarget::SingleSpell(_) => Ok(Some(OperandFamily::Spell)),
+                    BodyTarget::SingleStackObject(_)
+                    | BodyTarget::SingleStackEntry
+                    | BodyTarget::ControlledAbility { .. }
+                    | BodyTarget::StackEntryTargetingControlledPermanent => {
+                        Ok(Some(OperandFamily::StackEntry))
+                    }
                     _ => Err(DefinitionError::OperandFamily),
                 },
                 _ => Ok(None),
@@ -1669,8 +1683,8 @@ impl ValueExpr {
             | Self::OpponentsCount
             | Self::Devotion(_)
             | Self::DistinctManaValuesInGraveyard(_) => Ok(()),
-            Self::SourceState(_) => {
-                if context.has_source() {
+            Self::SourceState(kind) => {
+                if context.has_source() || is_cast_time_unbound_safe(*kind) {
                     Ok(())
                 } else {
                     Err(DefinitionError::InvalidInstruction)
@@ -1725,9 +1739,12 @@ impl ValueExpr {
                 }
                 if *zone == ValueZone::Battlefield {
                     let (a, b) = filter.clauses();
+                    let allowed_any_types = CardTypeMask::PERMANENT
+                        .union(CardTypeMask::INSTANT)
+                        .union(CardTypeMask::SORCERY);
                     let invalid_non_perm = |c: super::ObjectClause| {
                         !c.any_types.is_empty()
-                            && (c.any_types.bits() & !CardTypeMask::PERMANENT.bits()) != 0
+                            && (c.any_types.bits() & !allowed_any_types.bits()) != 0
                     };
                     if invalid_non_perm(a) || b.is_some_and(invalid_non_perm) {
                         return Err(DefinitionError::InvalidInstruction);
@@ -1785,52 +1802,58 @@ impl ValueExpr {
                     }
                 },
                 ValueObjectRef::DyingSource => {
-                    if matches!(
-                        context,
-                        BodyContext::TriggerBound {
-                            condition: TriggerSpec {
-                                event: TriggerEvent::Dies { subject, mode: DiesTriggerMode::Creature },
-                                ..
-                            },
-                            grouping: TriggerGrouping::EachOccurrence,
-                        } if *subject == ObjectFilter::self_object()
-                    ) {
+                    if let BodyContext::TriggerBound {
+                        condition,
+                        grouping,
+                    } = context
+                        && is_single_event_grouping(grouping)
+                        && trigger_event_all(&condition.event, &|event| {
+                            matches!(
+                                event,
+                                TriggerEvent::Dies {
+                                    subject,
+                                    mode: DiesTriggerMode::Creature,
+                                } if *subject == ObjectFilter::self_object()
+                            )
+                        })
+                    {
                         Ok(())
                     } else {
                         Err(DefinitionError::InvalidInstruction)
                     }
                 }
                 ValueObjectRef::DyingCreature => {
-                    if matches!(
-                        context,
-                        BodyContext::TriggerBound {
-                            condition: TriggerSpec {
-                                event: TriggerEvent::Dies {
+                    if let BodyContext::TriggerBound {
+                        condition,
+                        grouping,
+                    } = context
+                        && is_single_event_grouping(grouping)
+                        && trigger_event_all(&condition.event, &|event| {
+                            matches!(
+                                event,
+                                TriggerEvent::Dies {
                                     mode: DiesTriggerMode::Creature
                                         | DiesTriggerMode::DamagedBySource,
                                     ..
-                                },
-                                ..
-                            },
-                            grouping: TriggerGrouping::EachOccurrence,
-                        }
-                    ) {
+                                }
+                            )
+                        })
+                    {
                         Ok(())
                     } else {
                         Err(DefinitionError::InvalidInstruction)
                     }
                 }
                 ValueObjectRef::EnteringPermanent => {
-                    if matches!(
-                        context,
-                        BodyContext::TriggerBound {
-                            condition: TriggerSpec {
-                                event: TriggerEvent::Enters { .. },
-                                ..
-                            },
-                            grouping: TriggerGrouping::EachOccurrence,
-                        }
-                    ) {
+                    if let BodyContext::TriggerBound {
+                        condition,
+                        grouping,
+                    } = context
+                        && is_single_event_grouping(grouping)
+                        && trigger_event_all(&condition.event, &|event| {
+                            matches!(event, TriggerEvent::Enters { .. })
+                        })
+                    {
                         Ok(())
                     } else {
                         Err(DefinitionError::InvalidInstruction)
@@ -1882,21 +1905,15 @@ impl ValueExpr {
                     }
                 }
                 ValueObjectRef::TriggeringSpell => {
-                    if matches!(
-                        context,
-                        BodyContext::TriggerBound {
-                            condition: TriggerSpec {
-                                event: TriggerEvent::SpellCast {
-                                    caster: TriggerPlayerScope::Relation(_),
-                                    include_copy: false,
-                                    min_mana_value: None,
-                                    ..
-                                },
-                                ..
-                            },
-                            grouping: TriggerGrouping::EachOccurrence,
-                        }
-                    ) {
+                    if let BodyContext::TriggerBound {
+                        condition,
+                        grouping,
+                    } = context
+                        && is_single_event_grouping(grouping)
+                        && trigger_event_all(&condition.event, &|event| {
+                            matches!(event, TriggerEvent::SpellCast { .. })
+                        })
+                    {
                         Ok(())
                     } else {
                         Err(DefinitionError::InvalidInstruction)
@@ -1947,16 +1964,21 @@ impl ValueExpr {
                     }
                 }
                 CounterSubjectRef::DyingSource => {
-                    if matches!(
-                        context,
-                        BodyContext::TriggerBound {
-                            condition: TriggerSpec {
-                                event: TriggerEvent::Dies { subject, mode: DiesTriggerMode::Creature },
-                                ..
-                            },
-                            grouping: TriggerGrouping::EachOccurrence,
-                        } if *subject == ObjectFilter::self_object()
-                    ) {
+                    if let BodyContext::TriggerBound {
+                        condition,
+                        grouping,
+                    } = context
+                        && is_single_event_grouping(grouping)
+                        && trigger_event_all(&condition.event, &|event| {
+                            matches!(
+                                event,
+                                TriggerEvent::Dies {
+                                    subject,
+                                    mode: DiesTriggerMode::Creature,
+                                } if *subject == ObjectFilter::self_object()
+                            )
+                        })
+                    {
                         Ok(())
                     } else {
                         Err(DefinitionError::InvalidInstruction)
@@ -1978,6 +2000,7 @@ impl ValueExpr {
                                 | ResolvingPlayer::TargetPlayer
                                 | ResolvingPlayer::TargetController
                                 | ResolvingPlayer::TargetOwner
+                                | ResolvingPlayer::TargetSpellController
                                 | ResolvingPlayer::UniqueRelatedPlayer
                                 | ResolvingPlayer::ActivePlayer
                                 | ResolvingPlayer::EnchantedPlayer
@@ -2121,6 +2144,7 @@ impl ValueExpr {
                             | ResolvingPlayer::TargetPlayer
                             | ResolvingPlayer::TargetController
                             | ResolvingPlayer::TargetOwner
+                            | ResolvingPlayer::TargetSpellController
                             | ResolvingPlayer::UniqueRelatedPlayer
                             | ResolvingPlayer::ActivePlayer
                             | ResolvingPlayer::EnchantedPlayer
@@ -2176,6 +2200,7 @@ impl ValueExpr {
                             | ResolvingPlayer::TargetPlayer
                             | ResolvingPlayer::TargetController
                             | ResolvingPlayer::TargetOwner
+                            | ResolvingPlayer::TargetSpellController
                             | ResolvingPlayer::UniqueRelatedPlayer
                             | ResolvingPlayer::ActivePlayer
                             | ResolvingPlayer::EnchantedPlayer
@@ -2254,16 +2279,15 @@ impl ValueExpr {
                     }
                 }
                 EventValueKind::TriggeringLifeChange => {
-                    if matches!(
-                        context,
-                        BodyContext::TriggerBound {
-                            condition: TriggerSpec {
-                                event: TriggerEvent::LifeChanged { .. },
-                                ..
-                            },
-                            grouping: TriggerGrouping::EachOccurrence,
-                        }
-                    ) {
+                    if let BodyContext::TriggerBound {
+                        condition,
+                        grouping,
+                    } = context
+                        && is_single_event_grouping(grouping)
+                        && trigger_event_all(&condition.event, &|event| {
+                            matches!(event, TriggerEvent::LifeChanged { .. })
+                        })
+                    {
                         Ok(())
                     } else {
                         Err(DefinitionError::InvalidInstruction)
@@ -2285,19 +2309,21 @@ impl ValueExpr {
                     }
                 }
                 EventValueKind::DeclaredSubtypeAttackers => {
-                    if matches!(
-                        context,
-                        BodyContext::TriggerBound {
-                            condition: TriggerSpec {
-                                event: TriggerEvent::Attacks {
+                    if let BodyContext::TriggerBound {
+                        condition,
+                        grouping,
+                    } = context
+                        && is_single_event_grouping(grouping)
+                        && trigger_event_all(&condition.event, &|event| {
+                            matches!(
+                                event,
+                                TriggerEvent::Attacks {
                                     mode: AttackTriggerMode::GroupSubtype(_),
                                     ..
-                                },
-                                ..
-                            },
-                            grouping: TriggerGrouping::EachOccurrence,
-                        }
-                    ) {
+                                }
+                            )
+                        })
+                    {
                         Ok(())
                     } else {
                         Err(DefinitionError::InvalidInstruction)
@@ -2337,16 +2363,15 @@ impl ValueExpr {
                     }
                 }
                 EventValueKind::CombatDamageToPlayer => {
-                    if matches!(
-                        context,
-                        BodyContext::TriggerBound {
-                            condition: TriggerSpec {
-                                event: TriggerEvent::DealsDamage { .. },
-                                ..
-                            },
-                            grouping: TriggerGrouping::EachOccurrence,
-                        }
-                    ) {
+                    if let BodyContext::TriggerBound {
+                        condition,
+                        grouping,
+                    } = context
+                        && is_single_event_grouping(grouping)
+                        && trigger_event_all(&condition.event, &|event| {
+                            matches!(event, TriggerEvent::DealsDamage { .. })
+                        })
+                    {
                         Ok(())
                     } else {
                         Err(DefinitionError::InvalidInstruction)
@@ -2431,8 +2456,8 @@ impl ValueExpr {
                     .map_err(|_| DefinitionError::InvalidInstruction),
                 _ => Ok(()),
             },
-            Self::SourceState(_) => {
-                if !matches!(context, BodyContext::Unbound) {
+            Self::SourceState(kind) => {
+                if !matches!(context, BodyContext::Unbound) || is_cast_time_unbound_safe(*kind) {
                     Ok(())
                 } else {
                     Err(DefinitionError::InvalidInstruction)
@@ -2469,19 +2494,22 @@ impl ValueExpr {
                         }
                     }
                     MatchObjectRef::DyingCreature => {
-                        if matches!(
-                            context,
-                            BodyContext::TriggerBound {
-                                condition: TriggerSpec {
-                                    event: TriggerEvent::Dies {
-                                        mode: DiesTriggerMode::Creature,
+                        if let BodyContext::TriggerBound {
+                            condition,
+                            grouping,
+                        } = context
+                            && is_single_event_grouping(grouping)
+                            && trigger_event_all(&condition.event, &|event| {
+                                matches!(
+                                    event,
+                                    TriggerEvent::Dies {
+                                        mode: DiesTriggerMode::Creature
+                                            | DiesTriggerMode::DamagedBySource,
                                         ..
-                                    },
-                                    ..
-                                },
-                                grouping: TriggerGrouping::EachOccurrence,
-                            }
-                        ) && vocab_ok
+                                    }
+                                )
+                            })
+                            && vocab_ok
                         {
                             Ok(())
                         } else {
@@ -2586,19 +2614,21 @@ impl ValueExpr {
                     }
                 }
                 EventValueKind::DeclaredAttackersAtController => {
-                    if matches!(
-                        context,
-                        BodyContext::TriggerBound {
-                            condition: TriggerSpec {
-                                event: TriggerEvent::Attacks {
+                    if let BodyContext::TriggerBound {
+                        condition,
+                        grouping,
+                    } = context
+                        && is_single_event_grouping(grouping)
+                        && trigger_event_all(&condition.event, &|event| {
+                            matches!(
+                                event,
+                                TriggerEvent::Attacks {
                                     mode: AttackTriggerMode::OpponentsAtController { minimum: 2 },
                                     ..
-                                },
-                                ..
-                            },
-                            grouping: TriggerGrouping::EachOccurrence,
-                        }
-                    ) {
+                                }
+                            )
+                        })
+                    {
                         Ok(())
                     } else {
                         Err(DefinitionError::UnboundTriggerCondition)
@@ -2682,4 +2712,36 @@ impl ValueExpr {
             }
         }
     }
+}
+
+fn trigger_event_all<F>(event: &TriggerEvent, predicate: &F) -> bool
+where
+    F: Fn(&TriggerEvent) -> bool,
+{
+    match event {
+        TriggerEvent::AnyOf(events) => {
+            !events.is_empty()
+                && events
+                    .iter()
+                    .all(|inner| trigger_event_all(inner, predicate))
+        }
+        other => predicate(other),
+    }
+}
+
+const fn is_single_event_grouping(grouping: TriggerGrouping) -> bool {
+    matches!(
+        grouping,
+        TriggerGrouping::EachOccurrence | TriggerGrouping::OneOrMoreOnceEachTurn
+    )
+}
+
+const fn is_cast_time_unbound_safe(kind: SourceStateExpr) -> bool {
+    matches!(
+        kind,
+        SourceStateExpr::CastFromGraveyard
+            | SourceStateExpr::CastFromExile
+            | SourceStateExpr::ManaSpentToCast
+            | SourceStateExpr::Bargained
+    )
 }

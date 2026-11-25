@@ -632,14 +632,8 @@ impl EffectWindow {
                 self.window
                     .entries()
                     .iter()
-                    .find(|candidate| {
-                        candidate.id() == target
-                            && matches!(
-                                candidate.kind(),
-                                StackKind::CardSpell(_) | StackKind::SpellCopy { .. }
-                            )
-                    })
-                    .map(|entry| entry.controller())
+                    .find(|candidate| candidate.id() == target)
+                    .map(crate::stack_window::StackEntry::controller)
                     .or_else(|| {
                         selection_cursor
                             .or_else(|| self.resolution_cursor())
@@ -1056,8 +1050,14 @@ impl EffectWindow {
             if !general {
                 return Err(EffectError::WrongPhase);
             }
-            let available =
-                self.optional_effect_available(self.optional_following_instruction(&work.cursor)?)?;
+            let is_sequence = matches!(
+                self.optional_instruction(&work.cursor)?,
+                Instruction::OptionalSequence { .. }
+            );
+            let available = self.optional_effect_available(
+                self.optional_following_instruction(&work.cursor)?,
+                is_sequence,
+            )?;
             let Some(PendingWork::OptionalEffect(work)) = &mut self.pending_work else {
                 return Err(EffectError::WrongOptionalEffectFrame);
             };
@@ -1096,8 +1096,20 @@ impl EffectWindow {
     }
 
     /// Availability is distinct from the driver's targeted-operation dispatch.
-    fn optional_effect_available(&self, instruction: &Instruction) -> Result<bool, EffectError> {
-        if !instruction.is_optional_primitive() {
+    fn optional_effect_available(
+        &self,
+        instruction: &Instruction,
+        is_sequence: bool,
+    ) -> Result<bool, EffectError> {
+        let allowed_sequence_head = is_sequence
+            && matches!(
+                instruction,
+                Instruction::OfferManaPayment { .. }
+                    | Instruction::OfferDynamicManaPayment { .. }
+                    | Instruction::BranchIfFalse { .. }
+                    | Instruction::Jump { .. }
+            );
+        if !instruction.is_optional_primitive() && !allowed_sequence_head {
             return Err(EffectError::InconsistentProgram);
         }
         match instruction {
@@ -1126,9 +1138,12 @@ impl EffectWindow {
                 }))
             }
 
-            Instruction::AffectPermanentTargets { .. } => {
-                Ok(!self.legal_permanent_targets()?.is_empty())
-            }
+            Instruction::AffectPermanentTargets { .. }
+            | Instruction::ModifyAnyNumberOfPermanents { .. }
+            | Instruction::DoubleCountersOnTargets
+            | Instruction::ReturnOneNonlandPerOpponent
+            | Instruction::ExileForSubtypeToken(_) => Ok(self.window.target_assessment().is_some()
+                && !self.legal_permanent_targets()?.is_empty()),
             Instruction::TransformSource => {
                 let entry = self
                     .window
@@ -1150,7 +1165,6 @@ impl EffectWindow {
                 )
             }
 
-            Instruction::ExileForSubtypeToken(_) => Ok(!self.legal_permanent_targets()?.is_empty()),
             Instruction::ReturnDelayedGraveyardToHand(_)
             | Instruction::LoseLifeAndScryForSubtype(_)
             | Instruction::ExileForBlackToken { .. }
@@ -1527,6 +1541,7 @@ impl EffectWindow {
             | Instruction::ReturnSourceToHand
             | Instruction::UntapAbilitySource
             | Instruction::TapAbilitySource
+            | Instruction::RegenerateSource
             | Instruction::PutChargeCounterOnSource
             | Instruction::PutBlessingCounterOnSource
             | Instruction::PutNamedCounterOnSource { .. }
@@ -1645,8 +1660,99 @@ impl EffectWindow {
                     && (!requested.is_positive()
                         || !self.window.cards().library(player).is_empty()))
             }
-            Instruction::ModifyAnyNumberOfPermanents { .. }
-            | Instruction::PutLibraryCohortIntoGraveyard(_)
+            Instruction::ExileFromZone {
+                players:
+                    crate::program::AffectedPlayers::EachPlayer
+                    | crate::program::AffectedPlayers::EachOpponent
+                    | crate::program::AffectedPlayers::EachOtherPlayer,
+                ..
+            }
+            | Instruction::TapOrUntapControlled {
+                players:
+                    crate::program::AffectedPlayers::EachPlayer
+                    | crate::program::AffectedPlayers::EachOpponent
+                    | crate::program::AffectedPlayers::EachOtherPlayer,
+                ..
+            }
+            | Instruction::TakeExtraTurn
+            | Instruction::CreateEmblem(_)
+            | Instruction::CreateOpponentEmblems(_)
+            | Instruction::UntapUpTo { .. }
+            | Instruction::DiscardUpTo { .. }
+            | Instruction::PreventDamageThisTurn(_)
+            | Instruction::ExileCapturedGraveyardCard
+            | Instruction::PutCounterOnRelatedPermanent
+            | Instruction::PutCountersOnControlledCreatures
+            | Instruction::PutCountersOnControlledSubtype(_)
+            | Instruction::PutCountersOnControlledCreaturesAndGrant(_)
+            | Instruction::PutCountersOnOtherCreatures
+            | Instruction::PutCreatureAndOtherPlaneswalkerCounters
+            | Instruction::ClearSourceCounters(_)
+            | Instruction::OpponentsLoseAndControllerGains(_)
+            | Instruction::AdjustEachOpponentLife { .. }
+            | Instruction::AdjustPlayersLife { .. }
+            | Instruction::ResolveKeywordTrigger(_)
+            | Instruction::PutHandPermanentsOntoBattlefield { .. }
+            | Instruction::ShuffleAbilitySourceIntoLibrary
+            | Instruction::IncreaseSpeed
+            | Instruction::BecomeMonarch(_)
+            | Instruction::TapEnchantedCreature
+            | Instruction::RequireCondition(_)
+            | Instruction::RequireAttackSourceNextTurn
+            | Instruction::ChooseAttackDirection
+            | Instruction::ReselectAttackDefender
+            | Instruction::SetBlockDeclarations(_)
+            | Instruction::AdditionalLoyaltyActivation
+            | Instruction::PhaseOut(
+                crate::program::PhasingSubject::Source
+                | crate::program::PhasingSubject::ControlledLands,
+            )
+            | Instruction::PhaseOutObjects(_)
+            | Instruction::ScheduleDelayedStepTrigger { .. }
+            | Instruction::EmitReflexiveTrigger { .. }
+            | Instruction::DamageOpponentsAmount(_)
+            | Instruction::DamageRelatedPlayerAmount(_)
+            | Instruction::DamageGroupAmount { .. }
+            | Instruction::DoublePowerToughness {
+                target_self: true, ..
+            }
+            | Instruction::Ninjutsu
+            | Instruction::Unearth
+            | Instruction::Cascade
+            | Instruction::CascadeBottom
+            | Instruction::Myriad
+            | Instruction::CopyForOtherCreatures
+            | Instruction::WatchNextSpellOrLoyaltyTwice
+            | Instruction::WatchNextLoyaltyCopy
+            | Instruction::ChoosePlaneswalkerTypeForCopies
+            | Instruction::CopyCapturedAbility
+            | Instruction::CopyOnCast(_)
+            | Instruction::MadnessCast
+            | Instruction::MiracleCast(_)
+            | Instruction::CastDefeatedSiege
+            | Instruction::CastTargetGraveyardInstant
+            | Instruction::ReboundCast(_)
+            | Instruction::EndStepCast { .. }
+            | Instruction::SacrificeDelayedObjects(_)
+            | Instruction::ScheduleArtifactReturn(_)
+            | Instruction::ScheduleGraveyardReturnAtEndStep(_)
+            | Instruction::ReturnSacrificedCardToBattlefield
+            | Instruction::ReturnDyingSourceTapped
+            | Instruction::ReturnDelayedPermanentToHand(_)
+            | Instruction::ReturnDelayedExileWithCounters(_)
+            | Instruction::ReturnDelayedExile(_)
+            | Instruction::ExileUnearthed(_)
+            | Instruction::DrainOpponents(_)
+            | Instruction::SacrificeStateTriggerSource
+            | Instruction::CounterWardSource
+            | Instruction::CounterTriggeringStackObject
+            | Instruction::BoostSourceByCastManaValue
+            | Instruction::BoostLoneAttacker => Ok(true),
+            Instruction::AdditionalCombat { .. }
+            | Instruction::AdditionalCombatAfterUntappingAttackers => Ok(self
+                .current_step
+                .is_some_and(|step| step.phase() == crate::turn::Phase::Combat)),
+            Instruction::PutLibraryCohortIntoGraveyard(_)
             | Instruction::ExileOnePerPlayerUntilSourceLeaves
             | Instruction::AttachControlledToSource { .. }
             | Instruction::AttachBattlefieldAurasToSource
@@ -1655,7 +1761,6 @@ impl EffectWindow {
             | Instruction::CopyDifferentlyNamedTokens
             | Instruction::CopyOtherControlledNontokensAsEntryHost
             | Instruction::CreateArmyIfAbsent { .. }
-            | Instruction::UntapUpTo { .. }
             | Instruction::ChooseVowedCreatures
             | Instruction::ChooseCreaturesToKeep
             | Instruction::DestroyOtherCreatures
@@ -1669,12 +1774,9 @@ impl EffectWindow {
             | Instruction::ChooseOtherControlledCreature { .. }
             | Instruction::Sacrifice { .. }
             | Instruction::SacrificeRandomUntilLand
-            | Instruction::DiscardUpTo { .. }
             | Instruction::SacrificeToContinue { .. }
             | Instruction::Discard { .. }
-            | Instruction::DiscardFiltered { .. }
-            | Instruction::ExileFromZone { .. }
-            | Instruction::TapOrUntapControlled { .. } => Err(EffectError::InconsistentProgram),
+            | Instruction::DiscardFiltered { .. } => Err(EffectError::InconsistentProgram),
             Instruction::SearchLibrary { filter } => {
                 if let Some(host) = filter.curse_host() {
                     Ok(self.searched_curse_host(host)?.is_some())
@@ -1827,34 +1929,20 @@ impl EffectWindow {
             | Instruction::ControllerLosesRememberedManaValue
             | Instruction::ExiledTargetControllerGainsPower
             | Instruction::GoadOtherPlayersCreatures
-            | Instruction::AdditionalCombat { .. }
-            | Instruction::AdditionalCombatAfterUntappingAttackers
-            | Instruction::TakeExtraTurn
             | Instruction::DisallowDamagePreventionThisTurn
             | Instruction::GrantNoMaxHandSizeRestOfGame
-            | Instruction::PreventDamageThisTurn(_)
             | Instruction::PutTargetInLibrary(_)
             | Instruction::PutOwnHandCardOnLibraryBottom
             | Instruction::PutGroupOnLibraryBottom(_)
             | Instruction::ExileGraveyardTarget
-            | Instruction::ExileCapturedGraveyardCard
             | Instruction::GrantGraveyardCastAndWatchAbilities
             | Instruction::GainCastCardAbilities { .. }
             | Instruction::ExileDefeatedSiege
             | Instruction::ExileSourceAndGainLife(_)
-            | Instruction::PutCounterOnRelatedPermanent
-            | Instruction::PutCountersOnControlledCreatures
-            | Instruction::PutCountersOnControlledSubtype(_)
-            | Instruction::PutCountersOnControlledCreaturesAndGrant(_)
-            | Instruction::PutCountersOnOtherCreatures
-            | Instruction::PutCreatureAndOtherPlaneswalkerCounters
             | Instruction::LinkedPlayerLosesDamageAmount
             | Instruction::RelatedPlayerLosesHalfLife
-            | Instruction::ClearSourceCounters(_)
-            | Instruction::RegenerateSource
             | Instruction::RegenerateControlledSubtype(_)
             | Instruction::RegenerateTarget
-            | Instruction::DoubleCountersOnTargets
             | Instruction::ExileCombatDamagedCreature
             | Instruction::DestroyCapturedDamageSource
             | Instruction::RemoveCreatureCounters { .. }
@@ -1867,13 +1955,9 @@ impl EffectWindow {
             | Instruction::DamagePlayersHalfLife
             | Instruction::DrawAndDamageOpponents { .. }
             | Instruction::RepeatOpponentLifeLoss
-            | Instruction::OpponentsLoseAndControllerGains(_)
-            | Instruction::AdjustEachOpponentLife { .. }
-            | Instruction::AdjustPlayersLife { .. }
             | Instruction::CreatePreventionShield { .. }
             | Instruction::CreateReflectingShield
             | Instruction::CreateDamageMultiplier { .. }
-            | Instruction::ResolveKeywordTrigger(_)
             | Instruction::ReturnChosenXGraveyardCreatures
             | Instruction::ReturnGraveyardTargetsTapped(_)
             | Instruction::ReturnCapturedDyingCreature
@@ -1895,7 +1979,6 @@ impl EffectWindow {
             | Instruction::PutTargetOwnedExiledLandsOntoBattlefield
             | Instruction::LookOpponentExileForCast { .. }
             | Instruction::ExileFromTargetLibrary
-            | Instruction::PutHandPermanentsOntoBattlefield { .. }
             | Instruction::RevealSharedTypeCreatureCastOrBottom
             | Instruction::RevealOddCastOrDraw
             | Instruction::MayTurnControlledCreatureFaceUp
@@ -1904,7 +1987,6 @@ impl EffectWindow {
             | Instruction::RevealTopHandLoseManaValue { .. }
             | Instruction::RevealUntilLandKind
             | Instruction::RevealOpponentChoosesCreature
-            | Instruction::ShuffleAbilitySourceIntoLibrary
             | Instruction::RevealToNameAfterSourceShuffle(_)
             | Instruction::WatchSmallCreatureCombatDraw(_)
             | Instruction::WatchTargetCombatDamageDraw
@@ -1925,21 +2007,10 @@ impl EffectWindow {
             | Instruction::LookTopLandBattlefieldTapped
             | Instruction::LookTopReveal { .. }
             | Instruction::LookTopTakeOne { .. }
-            | Instruction::IncreaseSpeed
-            | Instruction::BecomeMonarch(_)
-            | Instruction::TapEnchantedCreature
-            | Instruction::RequireCondition(_)
             | Instruction::PutEquipmentFromHandOrGraveyard
             | Instruction::EquipNewToken
             | Instruction::Encore
             | Instruction::GrantNewTokensHaste
-            | Instruction::RequireAttackSourceNextTurn
-            | Instruction::ChooseAttackDirection
-            | Instruction::ReselectAttackDefender
-            | Instruction::SetBlockDeclarations(_)
-            | Instruction::AdditionalLoyaltyActivation
-            | Instruction::CreateEmblem(_)
-            | Instruction::CreateOpponentEmblems(_)
             | Instruction::AbandonSourceScheme
             | Instruction::TabletopHonorAction { .. }
             | Instruction::CreateNonlegendaryLoyaltyCopy
@@ -1949,59 +2020,22 @@ impl EffectWindow {
             | Instruction::ExileMeldPair
             | Instruction::MeldExiledPair(_)
             | Instruction::PairWithCreature { .. }
-            | Instruction::PhaseOut(_)
-            | Instruction::PhaseOutObjects(_)
-            | Instruction::ReturnOneNonlandPerOpponent
+            | Instruction::PhaseOut(crate::program::PhasingSubject::Target)
             | Instruction::WeakenDelayedAttacker(_)
             | Instruction::DrawRevealRemoveLoyalty
             | Instruction::CreateReflexiveDiscardDamage
-            | Instruction::ScheduleDelayedStepTrigger { .. }
-            | Instruction::EmitReflexiveTrigger { .. }
             | Instruction::RemoveLoyaltyExileTopForPlay
             | Instruction::DamageDamagedPlayersCreatures
-            | Instruction::DamageOpponentsAmount(_)
-            | Instruction::DamageRelatedPlayerAmount(_)
-            | Instruction::DamageGroupAmount { .. }
-            | Instruction::DoublePowerToughness { .. }
-            | Instruction::Ninjutsu
-            | Instruction::Unearth
+            | Instruction::DoublePowerToughness {
+                target_self: false, ..
+            }
             | Instruction::FlipCoin { .. }
-            | Instruction::Cascade
-            | Instruction::CascadeBottom
-            | Instruction::Myriad
-            | Instruction::CopyForOtherCreatures
-            | Instruction::WatchNextSpellOrLoyaltyTwice
-            | Instruction::WatchNextLoyaltyCopy
-            | Instruction::ChoosePlaneswalkerTypeForCopies
-            | Instruction::CopyCapturedAbility
-            | Instruction::CopyOnCast(_)
-            | Instruction::MadnessCast
-            | Instruction::MiracleCast(_)
             | Instruction::CastFoundSpell(_)
-            | Instruction::CastDefeatedSiege
-            | Instruction::CastTargetGraveyardInstant
-            | Instruction::ReboundCast(_)
-            | Instruction::EndStepCast { .. }
-            | Instruction::SacrificeDelayedObjects(_)
-            | Instruction::ScheduleArtifactReturn(_)
-            | Instruction::ScheduleGraveyardReturnAtEndStep(_)
-            | Instruction::ReturnSacrificedCardToBattlefield
-            | Instruction::ReturnDyingSourceTapped
-            | Instruction::ReturnDelayedPermanentToHand(_)
-            | Instruction::ReturnDelayedExileWithCounters(_)
-            | Instruction::ReturnDelayedExile(_)
-            | Instruction::ExileUnearthed(_)
-            | Instruction::DrainOpponents(_)
             | Instruction::ExtortDrain
             | Instruction::ResolveGrowth(_)
             | Instruction::ResolveCounterKeyword(_)
             | Instruction::SacrificeEvoked
-            | Instruction::SacrificeStateTriggerSource
             | Instruction::SacrificeUpkeepSource(_)
-            | Instruction::CounterWardSource
-            | Instruction::CounterTriggeringStackObject
-            | Instruction::BoostSourceByCastManaValue
-            | Instruction::BoostLoneAttacker
             | Instruction::Attach(_)
             | Instruction::GoadTarget
             | Instruction::RequireTargetAttack
@@ -2085,9 +2119,14 @@ impl EffectWindow {
             | Instruction::OrderArtifactCreatureLandSacrifices
             | Instruction::OptionalSequence { .. }
             | Instruction::OptionalEffect { .. }
-            | Instruction::OfferSourceCounters { .. }
-            | Instruction::BranchIfFalse { .. }
-            | Instruction::Jump { .. } => Err(EffectError::InconsistentProgram),
+            | Instruction::OfferSourceCounters { .. } => Err(EffectError::InconsistentProgram),
+            Instruction::BranchIfFalse { .. } | Instruction::Jump { .. } => {
+                if is_sequence {
+                    Ok(true)
+                } else {
+                    Err(EffectError::InconsistentProgram)
+                }
+            }
         }
     }
 
@@ -2277,8 +2316,10 @@ impl EffectWindow {
                         }
 
                         let player = self.resolving_player_identity_at(*chooser, Some(&cursor))?;
+                        let is_sequence =
+                            matches!(instruction, Instruction::OptionalSequence { .. });
                         let operation = self.optional_following_instruction(&cursor)?;
-                        let available = self.optional_effect_available(operation)?;
+                        let available = self.optional_effect_available(operation, is_sequence)?;
                         (player, available, None)
                     }
                     Instruction::OfferSourceCounters { .. } => {
