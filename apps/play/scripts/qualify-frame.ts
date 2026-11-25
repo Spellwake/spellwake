@@ -129,6 +129,7 @@ type Case = {
     | "match-series"
     | "match-series-next"
     | "match-series-leave"
+    | "match-sideboard"
     /** Casting: waiting for a target, a player targeted, a paused payment, and a creature. */
     | "match-cast-target"
     | "match-cast-player"
@@ -513,6 +514,21 @@ const cases: Case[] = [
         ["/probe/table?end=lost&series=over", "match-series"],
         ["/probe/table?end=won&series=deciding", "match-series-next"],
         ["/probe/table?end=won&series=deciding", "match-series-leave"],
+        // Sideboarding between games: moving cards both ways, the main deck's
+        // floor, a deck still being read, and a list that is not taken.
+        ["/probe/table?end=lost&series=deciding", "match-sideboard"],
+        [
+          "/probe/table?end=lost&series=deciding&sideboard=slow",
+          "match-sideboard",
+        ],
+        [
+          "/probe/table?end=lost&series=deciding&sideboard=refused",
+          "match-sideboard",
+        ],
+        [
+          "/probe/table?end=lost&series=deciding&sideboard=none",
+          "match-sideboard",
+        ],
       ] as const
     ).map(([path, state]) => ({
       viewport,
@@ -1719,6 +1735,68 @@ async function run(browser: Browser, test: Case): Promise<Finding[]> {
     await chat.getByText("Chat is read-only.").waitFor();
     await expect(chat.getByRole("textbox")).toHaveCount(0);
     await page.waitForTimeout(500);
+  }
+  if (state === "match-sideboard") {
+    const kind = new URLSearchParams(test.path.split("?")[1]).get("sideboard");
+    const band = page.getByRole("dialog", { name: "You lost", exact: true });
+    await band.waitFor();
+    const open = band.getByRole("button", { name: "Sideboard" });
+    if (kind === "none") {
+      // A deck this table cannot read offers the next game only.
+      await expect(open).toHaveCount(0);
+      await band.getByRole("button", { name: "Next game" }).waitFor();
+    } else {
+      await open.click();
+      const dialog = page.getByRole("dialog", { name: "Sideboard" });
+      await dialog.waitFor();
+      const use = dialog.getByRole("button", { name: "Use this deck" });
+      if (kind === "slow") {
+        await dialog.getByText("Reading your deck…").waitFor();
+        await expect(use).toBeDisabled();
+      } else {
+        const main = dialog.getByRole("region", { name: "Main deck" });
+        const side = dialog.getByRole("region", { name: "Sideboard" });
+        await main.getByText("60", { exact: true }).waitFor();
+        await side.getByText("15", { exact: true }).waitFor();
+        // One out: the main deck falls below where it began, so it cannot be used.
+        await main
+          .getByRole("button", { name: "Move one Shock to the sideboard" })
+          .click();
+        await dialog
+          .getByText("Keep at least 60 cards in your main deck.")
+          .waitFor();
+        await expect(use).toBeDisabled();
+        // One in for it: a sideboarded deck of the same size.
+        await side
+          .getByRole("button", { name: "Move one Pyroclasm to the main deck" })
+          .click();
+        await expect(use).toBeEnabled();
+        await side.getByText("Shock", { exact: true }).waitFor();
+        await main.getByText("Pyroclasm", { exact: true }).waitFor();
+        // Reset puts every card back where it was.
+        await dialog.getByRole("button", { name: "Reset" }).click();
+        await expect(main.getByText("Pyroclasm", { exact: true })).toHaveCount(
+          0,
+        );
+        await main
+          .getByRole("button", { name: "Move one Shock to the sideboard" })
+          .click();
+        await side
+          .getByRole("button", { name: "Move one Pyroclasm to the main deck" })
+          .click();
+        await use.click();
+        if (kind === "refused") {
+          await dialog
+            .getByText("Couldn’t save your sideboard. Try again.")
+            .waitFor();
+        } else {
+          // Taken: the next game waits on the others.
+          await dialog.waitFor({ state: "detached" });
+          await page.getByText("Waiting for the next game…").waitFor();
+        }
+      }
+    }
+    await page.waitForTimeout(900);
   }
   if (
     state === "match-series" ||
