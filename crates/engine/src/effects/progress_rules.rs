@@ -2371,6 +2371,13 @@ impl EffectWindow {
         {
             use crate::program::{DamageAmountSpec, DamageRecipientsRef, DamageSourceRef};
             let current = self.evaluated_characteristics()?;
+            let legal_target = |t: &&crate::targets::BoundTarget| {
+                self.window.target_assessment().is_none_or(|assessment| {
+                    assessment
+                        .get(t.choice().id)
+                        .is_some_and(|row| row.legality == crate::targets::TargetLegality::Legal)
+                })
+            };
             let source_ids: Vec<ObjectId> = match *source {
                 DamageSourceRef::AbilitySource => match entry.kind() {
                     StackKind::ActivatedAbility { source }
@@ -2381,6 +2388,7 @@ impl EffectWindow {
                 DamageSourceRef::TargetObject => self
                     .instruction_target(entry)
                     .ok()
+                    .filter(legal_target)
                     .and_then(|t| match t.choice().target {
                         TargetRef::Object(id) => Some(id),
                         _ => None,
@@ -2426,13 +2434,18 @@ impl EffectWindow {
                     .map(|c| c.last_created_tokens.clone())
                     .unwrap_or_default(),
                 DamageSourceRef::AllPermanentTargets => {
-                    self.legal_permanent_targets()?.into_iter().collect()
+                    if entry.targets().targets().is_empty() {
+                        Vec::new()
+                    } else {
+                        self.legal_permanent_targets()?.into_iter().collect()
+                    }
                 }
             };
             let fixed_targets: Option<Vec<DamageRecipient>> = match recipients.as_ref() {
                 DamageRecipientsRef::Target => Some(
                     self.instruction_target(entry)
                         .ok()
+                        .filter(legal_target)
                         .and_then(|t| match t.choice().target {
                             TargetRef::Player(p) => Some(DamageRecipient::Player(p)),
                             TargetRef::Object(id) => {
@@ -2446,6 +2459,7 @@ impl EffectWindow {
                 DamageRecipientsRef::TargetController => Some(
                     self.instruction_target(entry)
                         .ok()
+                        .filter(legal_target)
                         .and_then(|t| match t.choice().target {
                             TargetRef::Object(id) => current
                                 .get(id)
@@ -2546,6 +2560,13 @@ impl EffectWindow {
                 | DamageRecipientsRef::EachOtherPlayer
                 | DamageRecipientsRef::EachOtherOpponent => None,
             };
+            if source_ids.is_empty() || fixed_targets.as_ref().is_some_and(Vec::is_empty) {
+                if let Some(cursor) = self.resolution_cursor_mut() {
+                    cursor.results.last_action_succeeded = false;
+                }
+                self.advance_instruction()?;
+                return Ok(StepOutcome::Continue);
+            }
             let fixed_amount = match amount.as_ref() {
                 DamageAmountSpec::Expr(expr) => {
                     Some(self.resolve_value_expr(entry.controller(), expr)?)
@@ -4275,7 +4296,11 @@ impl EffectWindow {
             return Ok(StepOutcome::Continue);
         }
         if instruction == Instruction::DoubleCountersOnTargets {
-            self.double_target_counters(ctx.append)?;
+            if entry.targets().targets().is_empty() {
+                self.advance_instruction()?;
+            } else {
+                self.double_target_counters(ctx.append)?;
+            }
             return Ok(StepOutcome::Continue);
         }
         if matches!(instruction, Instruction::RemoveCreatureCounters { .. }) {
@@ -8756,7 +8781,11 @@ impl EffectWindow {
             return Ok(StepOutcome::Continue);
         }
         if let Instruction::ModifyAnyNumberOfPermanents { parts, duration } = &instruction {
-            let selected = self.legal_permanent_targets()?;
+            let selected = if entry.targets().targets().is_empty() {
+                BTreeSet::new()
+            } else {
+                self.legal_permanent_targets()?
+            };
             if !selected.is_empty() {
                 // Target-owner-dependent control changes aren't admitted by this group operand.
                 let locals = self

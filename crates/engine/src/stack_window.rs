@@ -1603,7 +1603,19 @@ impl StackWindow {
             if card.zone() != ObjectZone::Battlefield {
                 return Err(ObjectIdentityError::NotPermanent.into());
             }
-            if card.controller() != Some(actor) {
+            if card.controller() != Some(actor)
+                && !matches!(
+                    cost,
+                    SourceCost::Counter {
+                        tap_source: false,
+                        sacrifice_source: false,
+                        ..
+                    } | SourceCost::Exile {
+                        tap_source: false,
+                        from_graveyard: false,
+                    }
+                )
+            {
                 return Err(StackWindowError::WrongController);
             }
         }
@@ -1762,7 +1774,8 @@ impl StackWindow {
             .cards
             .get(source)
             .ok_or(ObjectIdentityError::UnknownObject)?;
-        if !(card.zone() == ObjectZone::Battlefield && card.controller() == Some(actor)
+        if !(card.zone() == ObjectZone::Battlefield
+            && (card.controller() == Some(actor) || destination == ObjectDestination::Exile)
             || card.zone() == ObjectZone::Graveyard(actor))
         {
             return Err(StackWindowError::WrongController);

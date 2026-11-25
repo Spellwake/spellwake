@@ -508,17 +508,29 @@ impl EffectWindow {
             }
             let mut next = self.clone();
             next.revision = revision;
+            let shuffle_before = next.rules_snapshot(None)?;
             let (window, entropy, shuffle) = next
                 .window
                 .search_shuffle_to_top(actor, selected, entropy)?;
             next.window = window;
+            let mut journal = RulesJournal::default();
+            next.emit_from(
+                EventCause::Instruction {
+                    entry: bound.entry(),
+                    instruction: bound.instruction(),
+                },
+                &shuffle_before,
+                None,
+                &mut journal,
+                |_, _, _| Ok(vec![RulesOccurrence::Shuffled(shuffle.clone())]),
+            )?;
             next.advance_instruction()?;
             let progress = next.progress_rules(
                 DamageJournal::default(),
                 vec![],
                 vec![],
                 DrawJournal::default(),
-                RulesJournal::default(),
+                journal,
             )?;
             return Ok((progress, Some((entropy, shuffle))));
         }
@@ -626,10 +638,21 @@ impl EffectWindow {
                 },
             )?;
         }
+        let shuffle_before = next.rules_snapshot(None)?;
         let (window, entropy, shuffle) = next
             .window
             .search_shuffle(bound.search_exile_owner().unwrap_or(actor), entropy)?;
         next.window = window;
+        next.emit_from(
+            EventCause::Instruction {
+                entry: bound.entry(),
+                instruction: bound.instruction(),
+            },
+            &shuffle_before,
+            None,
+            &mut journal,
+            |_, _, _| Ok(vec![RulesOccurrence::Shuffled(shuffle.clone())]),
+        )?;
         next.advance_instruction()?;
         let progress = next.progress_rules(
             DamageJournal::default(),
@@ -1500,10 +1523,21 @@ impl EffectWindow {
                 },
             )?;
         }
+        let shuffle_before = self.rules_snapshot(None)?;
         let (window, entropy, shuffle) = self
             .window
             .search_shuffle(bound.search_exile_owner().unwrap_or(actor), entropy)?;
         self.window = window;
+        self.emit_from(
+            EventCause::Instruction {
+                entry: bound.entry(),
+                instruction: bound.instruction(),
+            },
+            &shuffle_before,
+            None,
+            journal,
+            |_, _, _| Ok(vec![RulesOccurrence::Shuffled(shuffle.clone())]),
+        )?;
         if let Some(object) = found {
             use crate::characteristics::{
                 AbilityChange, ResolvedDuration, ResolvedPart, ResolvedParts,

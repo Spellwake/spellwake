@@ -1,7 +1,7 @@
 //! Replacement-aware movement into a library followed by a private shuffle.
 use super::*;
 use crate::{
-    occurrence::{EventCause, ZoneReason},
+    occurrence::{EventCause, RulesOccurrence, ZoneReason},
     program::{ResolvingPlayer, ZoneActionKind},
     targets::TargetLegality,
 };
@@ -520,7 +520,7 @@ impl EffectWindow {
         let mut append = RulesJournal::default();
         if !movements.is_empty() {
             self.emit_from(
-                cause,
+                cause.clone(),
                 &before,
                 None,
                 &mut append,
@@ -534,11 +534,15 @@ impl EffectWindow {
                 },
             )?;
         }
+        let shuffle_before = self.rules_snapshot(None)?;
         let (window, entropy, shuffle) = self
             .window
             .search_shuffle(work.player, tape)
             .map_err(EffectError::from)?;
         self.window = window;
+        self.emit_from(cause, &shuffle_before, None, &mut append, |_, _, _| {
+            Ok(vec![RulesOccurrence::Shuffled(shuffle.clone())])
+        })?;
         if let Some((next_owner, next_objects)) = work.remaining_owner_batches.pop_front() {
             work.player = next_owner;
             work.objects = next_objects;
