@@ -10,6 +10,13 @@ use crate::{
     stack_window::DrawBatchProgress,
 };
 
+type EmitFromBuild<'a> = dyn FnMut(
+        &RulesView<'_>,
+        &RulesView<'_>,
+        &[ControllerChange],
+    ) -> Result<Vec<RulesOccurrence>, EffectError>
+    + 'a;
+
 /// Short-lived relevant state before an operation; never an accepted history/outbox.
 pub(super) struct RulesSnapshot {
     window: StackWindow,
@@ -1693,6 +1700,29 @@ impl EffectWindow {
             &RulesView<'_>,
             &[ControllerChange],
         ) -> Result<Vec<RulesOccurrence>, EffectError>,
+    ) -> Result<(), EffectError> {
+        let mut build = Some(build);
+        self.emit_from_inner(
+            cause,
+            before,
+            turn,
+            append,
+            &mut |before, current, controllers| {
+                let Some(build) = build.take() else {
+                    return Err(EffectError::InconsistentProgram);
+                };
+                build(before, current, controllers)
+            },
+        )
+    }
+
+    fn emit_from_inner(
+        &mut self,
+        cause: EventCause,
+        before: &RulesSnapshot,
+        turn: Option<&TurnScheduler>,
+        append: &mut RulesJournal,
+        build: &mut EmitFromBuild<'_>,
     ) -> Result<(), EffectError> {
         // If a revealed cost card leaves hand, its characteristics immediately before
         // that move supply the resolving spell’s last known information.
