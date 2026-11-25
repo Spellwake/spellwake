@@ -1488,6 +1488,7 @@ fn oracle_lowering_corpus_coverage_audit() {
                         BTreeSet::new(),
                         ProgramKind::Spell(SpellDefinition {
                             cost: ManaCost::free(),
+                            uncastable_mana_cost: false,
                             body: ExecutableBody::new(BodyTarget::None, Vec::new()),
                             modes: None,
                         }),

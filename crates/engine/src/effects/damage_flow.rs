@@ -1165,17 +1165,16 @@ impl EffectWindow {
                             )
                     })
         }) || self.temporary_rules.iter().any(|active| {
-            matches!(
-                &active.rule,
-                crate::program::TemporaryRuleKind::TemporaryStatic(ab)
-                    if matches!(
-                        ab.as_ref(),
+            self.active_temporary_static(active, &evaluated)
+                .is_some_and(|ab| {
+                    matches!(
+                        ab,
                         crate::characteristics::StaticContinuousAbility::DamageRule {
                             rule: crate::characteristics::StaticDamageRule::DamageCannotBePrevented,
                             ..
                         }
                     )
-            )
+                })
         });
         if self.damage_state.prevention_disallowed_this_turn || static_no_prevent {
             batch.disallow_all_prevention();
@@ -1932,10 +1931,11 @@ impl EffectWindow {
             };
             let mut highest_floor: Option<RulesInteger> = None;
             for active in &self.temporary_rules {
-                if active.consumed || active.controller != player {
+                if active.controller != player {
                     continue;
                 }
-                if let crate::program::TemporaryRuleKind::TemporaryStatic(ability) = &active.rule
+                if let Some(ability) =
+                    self.active_temporary_static(active, &before.view().evaluated)
                     && let crate::characteristics::StaticContinuousAbility::DamageRule {
                         rule:
                             crate::characteristics::StaticDamageRule::MinimumLifeTotal {
@@ -1943,7 +1943,7 @@ impl EffectWindow {
                                 require_creature,
                             },
                         ..
-                    } = ability.as_ref()
+                    } = ability
                 {
                     let creature_ok = !*require_creature
                         || before.view().evaluated.objects.values().any(|c| {

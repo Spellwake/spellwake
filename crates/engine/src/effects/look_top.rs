@@ -156,9 +156,7 @@ impl EffectWindow {
             }
         }
         for active in &self.temporary_rules {
-            if !active.consumed
-                && let crate::program::TemporaryRuleKind::TemporaryStatic(ab) = &active.rule
-            {
+            if let Some(ab) = self.active_temporary_static(active, &evaluated) {
                 check_rule(active.controller, ab);
             }
         }
@@ -850,6 +848,7 @@ impl EffectWindow {
                 origin: if frame.operation() == ResolutionSelectionKind::ExileToBattlefield {
                     LinkedReturnOrigin::ChosenExile {
                         controller: Some(actor),
+                        tapped: false,
                         entry: frame.entry(),
                         instruction: frame.instruction(),
                     }

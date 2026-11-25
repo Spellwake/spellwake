@@ -88,7 +88,10 @@ use spellwake_engine::{
         ZoneReplacementExtra, ZoneReplacementSubject,
     },
     targets::TargetRef,
-    token::{TokenCreation, TokenDefinition, TokenName, TokenRecipients, TokenSubtype},
+    token::{
+        AttackingDefenderScope, TokenCreation, TokenDefinition, TokenName, TokenRecipients,
+        TokenSubtype,
+    },
     turn::Step,
 };
 use std::{
@@ -1689,7 +1692,10 @@ fn look_top_choose_ext_library_top_and_rest_to_hand_and_reveal_until_match_ext()
                     chooser: ResolvingPlayer::Controller,
                     filter: Box::new(ObjectFilter::creature()),
                     count: ValueExpr::literal(1),
-                    match_dest: LookTopKeepDest::Battlefield { tapped: true },
+                    match_dest: LookTopKeepDest::Battlefield {
+                        tapped: true,
+                        attacking: false,
+                    },
                     rest_dest: LookTopRestDest::BottomRandom,
                 }],
             ),
@@ -1840,6 +1846,7 @@ fn create_token_copy_ext_applies_nonlegendary_pt_keywords_and_colors() {
                     extra_keywords: BTreeSet::from([KeywordAbility::Flying]),
                     override_pt: Some((1.into(), 1.into())),
                     extra_colors: BTreeSet::from([Color::Blue]),
+                    defender_scope: AttackingDefenderScope::AnyLegal,
                 }],
             ),
         ),
@@ -2487,6 +2494,7 @@ fn grant_spell_keyword_flash_and_first_spell_rule_discount() {
     flash_granter.continuous = Some(StaticContinuousAbility::CastPermission {
         id: StaticAbilityId(1),
         permission: CastPermissionRule::GrantSpellKeyword {
+            any_player: false,
             matching: SpellFilter::creature(),
             keyword: KeywordAbility::Flash,
         },
@@ -2499,6 +2507,7 @@ fn grant_spell_keyword_flash_and_first_spell_rule_discount() {
         modifier: SpellCostModifier::FirstSpellRule {
             filter: SpellFilter::any(),
             own_turn_only: true,
+            each_player: false,
             free: false,
             pay_life_mv: false,
             discount: 2,

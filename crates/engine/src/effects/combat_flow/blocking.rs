@@ -101,7 +101,7 @@ impl EffectWindow {
                 if !attacker
                     .controller
                     .is_some_and(|seat| barred_blocks.contains(&(blocker.object, seat)))
-                    && can_block(&evaluated, attacker, blocker)?
+                    && self.can_block(&evaluated, attacker, blocker)?
                 {
                     available.push(blocker.object);
                 }
@@ -149,14 +149,21 @@ impl EffectWindow {
         let mut must_block = self.must_block_this_turn.clone();
         let mut must_block_pairs: BTreeMap<(ObjectId, ObjectId), usize> = BTreeMap::new();
         for &attacker_id in &attackers {
-            if let Some(attacker) = evaluated.get(attacker_id) {
+            if let Some(attacker) = evaluated.get(attacker_id)
+                && let Some(attacker_ctrl) = attacker.controller
+            {
                 let excluded = BTreeSet::new();
                 for rule in &attacker.blocking_restrictions {
                     if let BlockingRestriction::MustBeBlockedByAllMatching(filter) = rule {
                         for blocker in &blockers {
-                            if filter.matches_static_characteristics(blocker, &excluded, || {
-                                Some(blocker.defined.mana_value.clone())
-                            }) {
+                            if self.matches_object_filter(
+                                *filter,
+                                blocker,
+                                attacker_ctrl,
+                                Some(attacker_id),
+                                &excluded,
+                                &evaluated,
+                            ) {
                                 *must_block_pairs
                                     .entry((blocker.object, attacker_id))
                                     .or_default() += 1;
@@ -257,214 +264,248 @@ fn landwalk_abilities(
     evasion
 }
 
-fn can_block(
-    evaluated: &EvaluatedCharacteristics,
-    attacker: &ObjectCharacteristics,
-    blocker: &ObjectCharacteristics,
-) -> Result<bool, CombatError> {
-    use KeywordAbility::*;
-    if blocker
-        .blocking_restrictions
-        .iter()
-        .any(|restriction| match restriction {
-            BlockingRestriction::CannotBlock | BlockingRestriction::CannotAttackOrBlock => true,
-            BlockingRestriction::CannotBlockObject(id) => attacker.object == *id,
-            BlockingRestriction::CanBlockOnlyFlying => !attacker.has_keyword(Flying),
-            BlockingRestriction::CannotBlockSubtype(kind) => {
-                attacker.current_creature_subtypes.contains(kind)
-            }
-            BlockingRestriction::CannotBlockMatching(filter) => {
-                let excluded = BTreeSet::new();
-                filter.matches_static_characteristics(attacker, &excluded, || {
-                    Some(attacker.defined.mana_value.clone())
-                })
-            }
-            BlockingRestriction::CanBlockOnlyMatching(filter) => {
-                let excluded = BTreeSet::new();
-                !filter.matches_static_characteristics(attacker, &excluded, || {
-                    Some(attacker.defined.mana_value.clone())
-                })
-            }
-            _ => false,
-        })
-    {
-        return Ok(false);
-    }
-    if attacker.granted_unblockable {
-        return Ok(false);
-    }
-    for restriction in &attacker.blocking_restrictions {
-        match restriction {
-            BlockingRestriction::CannotBeBlockedByObject(id) if blocker.object == *id => {
-                return Ok(false);
-            }
-            BlockingRestriction::CannotBeBlockedByToughnessAtLeast(minimum)
-                if blocker
-                    .power_toughness
-                    .as_ref()
-                    .ok_or(CombatError::InvalidContext)?
-                    .derived
-                    .toughness
-                    >= i64::from(*minimum).into() =>
-            {
-                return Ok(false);
-            }
-            BlockingRestriction::CannotBeBlockedByPowerAtMost(maximum)
-                if blocker
-                    .power_toughness
-                    .as_ref()
-                    .ok_or(CombatError::InvalidContext)?
-                    .derived
-                    .power
-                    <= i64::from(*maximum).into() =>
-            {
-                return Ok(false);
-            }
-            BlockingRestriction::CannotBeBlockedByPowerAtLeast(minimum)
-                if blocker
-                    .power_toughness
-                    .as_ref()
-                    .ok_or(CombatError::InvalidContext)?
-                    .derived
-                    .power
-                    >= i64::from(*minimum).into() =>
-            {
-                return Ok(false);
-            }
-            BlockingRestriction::CannotBeBlockedByColor(color)
-                if blocker.current_colors.contains(color) =>
-            {
-                return Ok(false);
-            }
-            BlockingRestriction::OnlyBlockedByColor(color)
-                if !blocker.current_colors.contains(color) =>
-            {
-                return Ok(false);
-            }
-            BlockingRestriction::OnlyBlockedByColorOrArtifact(color)
-                if !blocker.current_colors.contains(color)
-                    && !blocker.has_type(CardType::Artifact) =>
-            {
-                return Ok(false);
-            }
-            BlockingRestriction::CannotBeBlockedByTokens if blocker.is_token => {
-                return Ok(false);
-            }
-            BlockingRestriction::OnlyBlockedByArtifact if !blocker.has_type(CardType::Artifact) => {
-                return Ok(false);
-            }
-            BlockingRestriction::CannotBeBlockedByNonArtifact
-                if !blocker.has_type(CardType::Artifact) =>
-            {
-                return Ok(false);
-            }
-            BlockingRestriction::OnlyBlockedByFlyingOrReach
-                if !blocker.has_keyword(Flying) && !blocker.has_keyword(Reach) =>
-            {
-                return Ok(false);
-            }
-            BlockingRestriction::CannotBeBlockedBySubtype(kind)
-                if blocker.current_creature_subtypes.contains(kind) =>
-            {
-                return Ok(false);
-            }
-            BlockingRestriction::CannotBeBlockedByFlying if blocker.has_keyword(Flying) => {
-                return Ok(false);
-            }
-            BlockingRestriction::BlockerPowerAtLeastPowerOf(source) => {
-                if let Some(source_pt) = evaluated
-                    .get(*source)
-                    .and_then(|p| p.power_toughness.as_ref())
-                    && blocker
+impl EffectWindow {
+    fn can_block(
+        &self,
+        evaluated: &EvaluatedCharacteristics,
+        attacker: &ObjectCharacteristics,
+        blocker: &ObjectCharacteristics,
+    ) -> Result<bool, CombatError> {
+        use KeywordAbility::*;
+        if blocker
+            .blocking_restrictions
+            .iter()
+            .any(|restriction| match restriction {
+                BlockingRestriction::CannotBlock | BlockingRestriction::CannotAttackOrBlock => true,
+                BlockingRestriction::CannotBlockObject(id) => attacker.object == *id,
+                BlockingRestriction::CanBlockOnlyFlying => !attacker.has_keyword(Flying),
+                BlockingRestriction::CannotBlockSubtype(kind) => {
+                    attacker.current_creature_subtypes.contains(kind)
+                }
+                BlockingRestriction::CannotBlockMatching(filter) => {
+                    let excluded = BTreeSet::new();
+                    blocker.controller.is_some_and(|ctrl| {
+                        self.matches_object_filter(
+                            *filter,
+                            attacker,
+                            ctrl,
+                            Some(blocker.object),
+                            &excluded,
+                            evaluated,
+                        )
+                    })
+                }
+                BlockingRestriction::CanBlockOnlyMatching(filter) => {
+                    let excluded = BTreeSet::new();
+                    !blocker.controller.is_some_and(|ctrl| {
+                        self.matches_object_filter(
+                            *filter,
+                            attacker,
+                            ctrl,
+                            Some(blocker.object),
+                            &excluded,
+                            evaluated,
+                        )
+                    })
+                }
+                _ => false,
+            })
+        {
+            return Ok(false);
+        }
+        if attacker.granted_unblockable {
+            return Ok(false);
+        }
+        for restriction in &attacker.blocking_restrictions {
+            match restriction {
+                BlockingRestriction::CannotBeBlockedByObject(id) if blocker.object == *id => {
+                    return Ok(false);
+                }
+                BlockingRestriction::CannotBeBlockedByToughnessAtLeast(minimum)
+                    if blocker
+                        .power_toughness
+                        .as_ref()
+                        .ok_or(CombatError::InvalidContext)?
+                        .derived
+                        .toughness
+                        >= i64::from(*minimum).into() =>
+                {
+                    return Ok(false);
+                }
+                BlockingRestriction::CannotBeBlockedByPowerAtMost(maximum)
+                    if blocker
                         .power_toughness
                         .as_ref()
                         .ok_or(CombatError::InvalidContext)?
                         .derived
                         .power
-                        < source_pt.derived.power
+                        <= i64::from(*maximum).into() =>
                 {
                     return Ok(false);
                 }
-            }
-            BlockingRestriction::CannotBeBlocked => return Ok(false),
-            BlockingRestriction::OnlyBlockedBySubtype(kind)
-                if !blocker.current_creature_subtypes.contains(kind) =>
-            {
-                return Ok(false);
-            }
-            BlockingRestriction::CannotBeBlockedIfPowerOrToughnessAtMostOne => {
-                let pt = attacker
-                    .power_toughness
-                    .as_ref()
-                    .ok_or(CombatError::InvalidContext)?;
-                if pt.derived.power <= 1.into() || pt.derived.toughness <= 1.into() {
+                BlockingRestriction::CannotBeBlockedByPowerAtLeast(minimum)
+                    if blocker
+                        .power_toughness
+                        .as_ref()
+                        .ok_or(CombatError::InvalidContext)?
+                        .derived
+                        .power
+                        >= i64::from(*minimum).into() =>
+                {
                     return Ok(false);
                 }
-            }
-            BlockingRestriction::CannotBeBlockedByMatching(filter) => {
-                let excluded = BTreeSet::new();
-                if filter.matches_static_characteristics(blocker, &excluded, || {
-                    Some(blocker.defined.mana_value.clone())
-                }) {
+                BlockingRestriction::CannotBeBlockedByColor(color)
+                    if blocker.current_colors.contains(color) =>
+                {
                     return Ok(false);
                 }
-            }
-            BlockingRestriction::OnlyBlockedByMatching(filter) => {
-                let excluded = BTreeSet::new();
-                if !filter.matches_static_characteristics(blocker, &excluded, || {
-                    Some(blocker.defined.mana_value.clone())
-                }) {
+                BlockingRestriction::OnlyBlockedByColor(color)
+                    if !blocker.current_colors.contains(color) =>
+                {
                     return Ok(false);
                 }
-            }
-            BlockingRestriction::CannotBeBlockedByGreaterPower => {
-                let blocker_pt = blocker
-                    .power_toughness
-                    .as_ref()
-                    .ok_or(CombatError::InvalidContext)?;
-                let attacker_pt = attacker
-                    .power_toughness
-                    .as_ref()
-                    .ok_or(CombatError::InvalidContext)?;
-                if blocker_pt.derived.power > attacker_pt.derived.power {
+                BlockingRestriction::OnlyBlockedByColorOrArtifact(color)
+                    if !blocker.current_colors.contains(color)
+                        && !blocker.has_type(CardType::Artifact) =>
+                {
                     return Ok(false);
                 }
+                BlockingRestriction::CannotBeBlockedByTokens if blocker.is_token => {
+                    return Ok(false);
+                }
+                BlockingRestriction::OnlyBlockedByArtifact
+                    if !blocker.has_type(CardType::Artifact) =>
+                {
+                    return Ok(false);
+                }
+                BlockingRestriction::CannotBeBlockedByNonArtifact
+                    if !blocker.has_type(CardType::Artifact) =>
+                {
+                    return Ok(false);
+                }
+                BlockingRestriction::OnlyBlockedByFlyingOrReach
+                    if !blocker.has_keyword(Flying) && !blocker.has_keyword(Reach) =>
+                {
+                    return Ok(false);
+                }
+                BlockingRestriction::CannotBeBlockedBySubtype(kind)
+                    if blocker.current_creature_subtypes.contains(kind) =>
+                {
+                    return Ok(false);
+                }
+                BlockingRestriction::CannotBeBlockedByFlying if blocker.has_keyword(Flying) => {
+                    return Ok(false);
+                }
+                BlockingRestriction::BlockerPowerAtLeastPowerOf(source) => {
+                    if let Some(source_pt) = evaluated
+                        .get(*source)
+                        .and_then(|p| p.power_toughness.as_ref())
+                        && blocker
+                            .power_toughness
+                            .as_ref()
+                            .ok_or(CombatError::InvalidContext)?
+                            .derived
+                            .power
+                            < source_pt.derived.power
+                    {
+                        return Ok(false);
+                    }
+                }
+                BlockingRestriction::CannotBeBlocked => return Ok(false),
+                BlockingRestriction::OnlyBlockedBySubtype(kind)
+                    if !blocker.current_creature_subtypes.contains(kind) =>
+                {
+                    return Ok(false);
+                }
+                BlockingRestriction::CannotBeBlockedIfPowerOrToughnessAtMostOne => {
+                    let pt = attacker
+                        .power_toughness
+                        .as_ref()
+                        .ok_or(CombatError::InvalidContext)?;
+                    if pt.derived.power <= 1.into() || pt.derived.toughness <= 1.into() {
+                        return Ok(false);
+                    }
+                }
+                BlockingRestriction::CannotBeBlockedByMatching(filter) => {
+                    let excluded = BTreeSet::new();
+                    if attacker.controller.is_some_and(|ctrl| {
+                        self.matches_object_filter(
+                            *filter,
+                            blocker,
+                            ctrl,
+                            Some(attacker.object),
+                            &excluded,
+                            evaluated,
+                        )
+                    }) {
+                        return Ok(false);
+                    }
+                }
+                BlockingRestriction::OnlyBlockedByMatching(filter) => {
+                    let excluded = BTreeSet::new();
+                    if !attacker.controller.is_some_and(|ctrl| {
+                        self.matches_object_filter(
+                            *filter,
+                            blocker,
+                            ctrl,
+                            Some(attacker.object),
+                            &excluded,
+                            evaluated,
+                        )
+                    }) {
+                        return Ok(false);
+                    }
+                }
+                BlockingRestriction::CannotBeBlockedByGreaterPower => {
+                    let blocker_pt = blocker
+                        .power_toughness
+                        .as_ref()
+                        .ok_or(CombatError::InvalidContext)?;
+                    let attacker_pt = attacker
+                        .power_toughness
+                        .as_ref()
+                        .ok_or(CombatError::InvalidContext)?;
+                    if blocker_pt.derived.power > attacker_pt.derived.power {
+                        return Ok(false);
+                    }
+                }
+                _ => {}
             }
-            _ => {}
         }
+        if attacker.protected_from_source(
+            &blocker.current_colors,
+            &blocker.current_types,
+            &blocker.current_creature_subtypes,
+            blocker.is_creature(),
+            blocker.controller,
+        ) {
+            return Ok(false);
+        }
+        if attacker.has_keyword(Flying)
+            && !(blocker.has_keyword(Flying) || blocker.has_keyword(Reach))
+            || attacker.has_keyword(Shadow) != blocker.has_keyword(Shadow)
+            || attacker.has_keyword(Horsemanship) && !blocker.has_keyword(Horsemanship)
+        {
+            return Ok(false);
+        }
+        if !blocker.has_type(CardType::Artifact)
+            && (attacker.has_keyword(Fear) && !blocker.current_colors.contains(&Color::Black)
+                || attacker.has_keyword(Intimidate)
+                    && attacker.current_colors.is_disjoint(&blocker.current_colors))
+        {
+            return Ok(false);
+        }
+        if attacker.has_keyword(Skulk) {
+            let blocker_pt = blocker
+                .power_toughness
+                .as_ref()
+                .ok_or(CombatError::InvalidContext)?;
+            let attacker_pt = attacker
+                .power_toughness
+                .as_ref()
+                .ok_or(CombatError::InvalidContext)?;
+            return Ok(blocker_pt.derived.power <= attacker_pt.derived.power);
+        }
+        Ok(true)
     }
-    if attacker.protected_from_source(
-        &blocker.current_colors,
-        &blocker.current_types,
-        &blocker.current_creature_subtypes,
-        blocker.is_creature(),
-        blocker.controller,
-    ) {
-        return Ok(false);
-    }
-    if attacker.has_keyword(Flying) && !(blocker.has_keyword(Flying) || blocker.has_keyword(Reach))
-        || attacker.has_keyword(Shadow) != blocker.has_keyword(Shadow)
-        || attacker.has_keyword(Horsemanship) && !blocker.has_keyword(Horsemanship)
-    {
-        return Ok(false);
-    }
-    if !blocker.has_type(CardType::Artifact)
-        && (attacker.has_keyword(Fear) && !blocker.current_colors.contains(&Color::Black)
-            || attacker.has_keyword(Intimidate)
-                && attacker.current_colors.is_disjoint(&blocker.current_colors))
-    {
-        return Ok(false);
-    }
-    if attacker.has_keyword(Skulk) {
-        let blocker_pt = blocker
-            .power_toughness
-            .as_ref()
-            .ok_or(CombatError::InvalidContext)?;
-        let attacker_pt = attacker
-            .power_toughness
-            .as_ref()
-            .ok_or(CombatError::InvalidContext)?;
-        return Ok(blocker_pt.derived.power <= attacker_pt.derived.power);
-    }
-    Ok(true)
 }

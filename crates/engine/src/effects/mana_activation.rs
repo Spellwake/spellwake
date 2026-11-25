@@ -46,64 +46,44 @@ impl EffectWindow {
                 if active.consumed {
                     return false;
                 }
-                match &active.rule {
-                    crate::program::TemporaryRuleKind::CantActivateAbilities {
-                        nonmana_only: false,
-                        ..
-                    } => active.resolved_players.contains(&actor),
-                    crate::program::TemporaryRuleKind::TemporaryStatic(effect) => {
-                        if let crate::characteristics::StaticContinuousAbility::Restriction {
-                            rule:
-                                crate::characteristics::StaticRestriction::PreventMatchingActivations(
-                                    selector,
-                                ),
-                            ..
-                        } = effect.as_ref()
-                        {
-                            crate::characteristics::selector_matches_permanent(
-                                self.window.cards(),
-                                &evaluated,
-                                active.source_object.unwrap_or(ObjectId::SENTINEL),
-                                active.controller,
-                                selector,
-                                source,
-                                &self.name_rules,
-                            )
-                        } else {
-                            false
-                        }
-                    }
-                    _ => false,
+                if let crate::program::TemporaryRuleKind::CantActivateAbilities {
+                    nonmana_only: false,
+                    ..
+                } = &active.rule
+                {
+                    active.resolved_players.contains(&actor)
+                } else if let Some(crate::characteristics::StaticContinuousAbility::Restriction {
+                    rule:
+                        crate::characteristics::StaticRestriction::PreventMatchingActivations(
+                            selector,
+                        ),
+                    ..
+                }) = self.active_temporary_static(active, &evaluated)
+                {
+                    crate::characteristics::selector_matches_permanent(
+                        self.window.cards(),
+                        &evaluated,
+                        active.source_object.unwrap_or(ObjectId::SENTINEL),
+                        active.controller,
+                        selector,
+                        source,
+                        &self.name_rules,
+                    )
+                } else {
+                    false
                 }
             })
             || evaluated.objects.values().any(|permanent| {
-            if permanent.zone != ObjectZone::Battlefield {
-                return false;
-            }
-            let Some(perm_ctrl) = permanent.controller else {
-                return false;
-            };
-            permanent
-                .printed_text
-                .continuous
-                .iter()
-                .chain(&permanent.printed_text.additional_battlefield_abilities)
-                .any(|effect| {
-                    let active = permanent.abilities.continuous == Some(effect.id())
-                        || permanent
-                            .abilities
-                            .additional_battlefield_abilities
-                            .contains(&effect.id());
-                    if !active {
-                        return false;
-                    }
-                    if let crate::characteristics::StaticContinuousAbility::Restriction {
-                        rule:
-                            crate::characteristics::StaticRestriction::PreventMatchingActivations(
-                                selector,
-                            ),
-                        ..
-                    } = effect
+                if permanent.zone != ObjectZone::Battlefield {
+                    return false;
+                }
+                let Some(perm_ctrl) = permanent.controller else {
+                    return false;
+                };
+                Self::permanent_has_restriction(permanent, |rule| {
+                    if let crate::characteristics::StaticRestriction::PreventMatchingActivations(
+                        selector,
+                    ) = rule
                     {
                         crate::characteristics::selector_matches_permanent(
                             self.window.cards(),
@@ -118,7 +98,7 @@ impl EffectWindow {
                         false
                     }
                 })
-        }) {
+            }) {
             return Err(EffectError::ManaActivationConditionNotMet);
         }
         if current.abilities.mana.is_empty()

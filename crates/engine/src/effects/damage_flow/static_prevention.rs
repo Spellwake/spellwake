@@ -423,7 +423,10 @@ impl EffectWindow {
 }
 
 struct PreventFollowupContext {
+    batch: crate::damage::DamageBatchId,
     source_object: Option<ObjectId>,
+    source_damage: Option<crate::damage::DamageSource>,
+    source_entry: Option<StackEntryId>,
     ability_id: crate::characteristics::StaticAbilityId,
     rule_controller: SeatId,
     target_recipient: DamageRecipient,
@@ -465,6 +468,9 @@ impl EffectWindow {
     }
 
     fn queue_damage_prevent_followup(
+        cards: &GameObjects,
+        programs: &BTreeMap<CardId, Program>,
+        evaluated: &EvaluatedCharacteristics,
         followups: &mut VecDeque<DamageFollowup>,
         followup: crate::characteristics::DamagePreventFollowup,
         ctx: PreventFollowupContext,
@@ -518,6 +524,73 @@ impl EffectWindow {
                         },
                     ),
                     prevented: ctx.prevented,
+                });
+            }
+            crate::characteristics::DamagePreventFollowup::DealPreventedToSourceController => {
+                let damage_source = ctx.source_damage.or_else(|| {
+                    ctx.source_object.and_then(|id| {
+                        cards
+                            .get(id)
+                            .map(|card| crate::damage::DamageSource::Object {
+                                object: card.clone(),
+                                controller: ctx.rule_controller,
+                            })
+                    })
+                });
+                let Some(source) = damage_source else {
+                    return;
+                };
+                let obj_id = match &source {
+                    crate::damage::DamageSource::Object { object, .. } => Some(object.id()),
+                    _ => ctx.source_object,
+                };
+                let (colors, keywords, creature_types, card_types, is_creature) =
+                    if let Some(view) = obj_id.and_then(|id| evaluated.get(id)) {
+                        (
+                            view.current_colors.clone(),
+                            view.keywords.clone(),
+                            view.current_creature_subtypes.clone(),
+                            view.current_types.clone(),
+                            view.is_creature(),
+                        )
+                    } else if let Some(program) = obj_id
+                        .and_then(|id| cards.get(id))
+                        .and_then(GameObject::card_id)
+                        .and_then(|cid| programs.get(&cid))
+                    {
+                        let card_types = program.card_types.clone();
+                        (
+                            program.defined_colors(),
+                            program.printed_keywords.clone(),
+                            program.creature_subtypes.clone(),
+                            card_types.clone(),
+                            card_types.contains(&CardType::Creature),
+                        )
+                    } else {
+                        (
+                            BTreeSet::new(),
+                            BTreeSet::new(),
+                            BTreeSet::new(),
+                            BTreeSet::new(),
+                            false,
+                        )
+                    };
+                let reflection = crate::damage::DamageReflection {
+                    source,
+                    colors,
+                    keywords,
+                    creature_types,
+                    card_types,
+                    is_creature,
+                    target: TargetRef::Player(ctx.damage_source_controller),
+                };
+                followups.push_back(DamageFollowup::DealDamage {
+                    batch: ctx.batch,
+                    creator: ctx
+                        .source_entry
+                        .unwrap_or_else(StackEntryId::entry_replacement_creator),
+                    amount: ctx.prevented,
+                    reflection: Box::new(reflection),
                 });
             }
         }
@@ -857,6 +930,7 @@ impl EffectWindow {
                     crate::characteristics::StaticDamageOp::PreventUpToExpr(expr) => {
                         let ctx = crate::characteristics::WorldEvalCtx {
                             active_player: self.window.active_player(),
+                            step: self.current_step,
                             participants: self.window.participants(),
                             life: Some(&self.life),
                             combat: self.combat.as_ref(),
@@ -1057,9 +1131,13 @@ impl EffectWindow {
             let controller = active.controller;
             let excluded = BTreeSet::new();
             match &active.rule {
-                crate::program::TemporaryRuleKind::TemporaryStatic(ability) => {
+                crate::program::TemporaryRuleKind::TemporaryStatic(_)
+                | crate::program::TemporaryRuleKind::ConditionalTemporaryStatic { .. } => {
+                    let Some(ability) = self.active_temporary_static(active, evaluated) else {
+                        continue;
+                    };
                     let (condition, source_filter, source_controller, recipient, kind, op) =
-                        match ability.as_ref() {
+                        match ability {
                             crate::characteristics::StaticContinuousAbility::DamageRule {
                                 rule:
                                     crate::characteristics::StaticDamageRule::ModifyDamage {
@@ -1119,6 +1197,7 @@ impl EffectWindow {
                         crate::characteristics::StaticDamageOp::PreventUpToExpr(expr) => {
                             let ctx = crate::characteristics::WorldEvalCtx {
                                 active_player: self.window.active_player(),
+                                step: self.current_step,
                                 participants: self.window.participants(),
                                 life: Some(&self.life),
                                 combat: self.combat.as_ref(),
@@ -1350,7 +1429,9 @@ impl EffectWindow {
                 crate::program::TemporaryRuleKind::PreventNextTimeDamage {
                     source: source_filter,
                     source_chosen_color,
+                    source_chosen_type,
                     source_is_target,
+                    half_round_down,
                     recipient,
                     combat_only,
                 } => {
@@ -1388,6 +1469,17 @@ impl EffectWindow {
                     } else {
                         None
                     };
+                    let chosen_type = if *source_chosen_type {
+                        let Some(ct) = active
+                            .source_object
+                            .and_then(|src| self.entry_creature_type_choices.get(&src).copied())
+                        else {
+                            continue;
+                        };
+                        Some(ct)
+                    } else {
+                        None
+                    };
                     let opponents = self
                         .combat_rules
                         .opponents(self.window.participants(), controller)?;
@@ -1396,6 +1488,14 @@ impl EffectWindow {
                         .filter(|component| component.remaining().is_positive())
                     {
                         if !component.can_prevent_damage() {
+                            continue;
+                        }
+                        if *half_round_down
+                            && !component
+                                .remaining()
+                                .nonnegative_half_rounded_down()
+                                .is_positive()
+                        {
                             continue;
                         }
                         let attempt = component.attempt();
@@ -1419,6 +1519,19 @@ impl EffectWindow {
                                 _ => false,
                             };
                             if !color_ok {
+                                continue;
+                            }
+                        }
+                        if let Some(ct) = chosen_type {
+                            let type_ok = match &attempt.source {
+                                crate::damage::DamageSource::Object { object, .. } => {
+                                    evaluated.get(object.id()).is_some_and(|view| {
+                                        view.current_creature_subtypes.contains(&ct)
+                                    })
+                                }
+                                _ => false,
+                            };
+                            if !type_ok {
                                 continue;
                             }
                         }
@@ -1896,6 +2009,7 @@ impl EffectWindow {
                             .ok_or(DamageError::InapplicableEffect)?;
                         let ctx = crate::characteristics::WorldEvalCtx {
                             active_player: self.window.active_player(),
+                            step: self.current_step,
                             participants: self.window.participants(),
                             life: Some(&self.life),
                             combat: self.combat.as_ref(),
@@ -2025,6 +2139,7 @@ impl EffectWindow {
                             .ok_or(DamageError::InapplicableEffect)?;
                         let ctx = crate::characteristics::WorldEvalCtx {
                             active_player: self.window.active_player(),
+                            step: self.current_step,
                             participants: self.window.participants(),
                             life: Some(&self.life),
                             combat: self.combat.as_ref(),
@@ -2108,10 +2223,16 @@ impl EffectWindow {
                         let prevented = Self::allocations_total(&allocations);
                         prevented_total = prevented_total.plus(&prevented);
                         Self::queue_damage_prevent_followup(
+                            self.window.cards(),
+                            &self.programs,
+                            &view.evaluated,
                             &mut work.followups,
                             followup,
                             PreventFollowupContext {
+                                batch,
                                 source_object: Some(source),
+                                source_damage: None,
+                                source_entry: None,
                                 ability_id: rule_id,
                                 rule_controller: rule_ctrl,
                                 target_recipient,
@@ -2248,6 +2369,8 @@ impl EffectWindow {
                 enum TempDamageAction {
                     Modify(
                         Option<ObjectId>,
+                        Option<crate::damage::DamageSource>,
+                        Option<StackEntryId>,
                         SeatId,
                         crate::characteristics::StaticAbilityId,
                         crate::characteristics::StaticDamageOp,
@@ -2262,6 +2385,7 @@ impl EffectWindow {
                         one_shot: bool,
                     },
                 }
+                let before_eval = before.view().evaluated;
                 let action = self
                     .temporary_rules
                     .iter()
@@ -2270,7 +2394,11 @@ impl EffectWindow {
                             return None;
                         }
                         match &active.rule {
-                            crate::program::TemporaryRuleKind::TemporaryStatic(ability) => {
+                            crate::program::TemporaryRuleKind::TemporaryStatic(ability)
+                            | crate::program::TemporaryRuleKind::ConditionalTemporaryStatic {
+                                ability,
+                                ..
+                            } => {
                                 if let crate::characteristics::StaticContinuousAbility::DamageRule {
                                     id: ab_id,
                                     rule:
@@ -2286,6 +2414,8 @@ impl EffectWindow {
                                 {
                                     Some(TempDamageAction::Modify(
                                         active.source_object,
+                                        active.source_damage.clone(),
+                                        active.source_entry,
                                         active.controller,
                                         *ab_id,
                                         op.clone(),
@@ -2312,73 +2442,76 @@ impl EffectWindow {
                         }
                     })
                     .ok_or(DamageError::InapplicableEffect)?;
-                let (source_obj, rule_ctrl, ability_id, op) = match action {
-                    TempDamageAction::Redirect {
-                        controller: r_ctrl,
-                        source_object,
-                        target,
-                        second_target,
-                        to,
-                        amount,
-                        one_shot,
-                    } => {
-                        let view = before.view();
-                        let src_ctrl = work
-                            .batch
-                            .component(attempt)
-                            .ok_or(DamageError::InapplicableEffect)?
-                            .attempt()
-                            .source
-                            .controller();
-                        let new_target = Self::resolve_redirect_target(
-                            to,
-                            r_ctrl,
+                let (source_obj, source_damage, source_entry, rule_ctrl, ability_id, op) =
+                    match action {
+                        TempDamageAction::Redirect {
+                            controller: r_ctrl,
                             source_object,
                             target,
                             second_target,
-                            src_ctrl,
-                            &view.evaluated,
-                        )
-                        .ok_or(DamageError::InapplicableEffect)?;
-                        if let Some(rem) = amount {
-                            let split_id = self.damage_state.alloc_attempt_id()?;
-                            let moved = work.batch.redirect_partial_component(
-                                application,
-                                new_target,
-                                rem,
-                                split_id,
-                            )?;
-                            if let Some(active) =
-                                self.temporary_rules.iter_mut().find(|a| a.id == rule_id)
-                            {
-                                if let crate::program::TemporaryRuleKind::RedirectNextDamage {
-                                    amount: Some(cur),
-                                    ..
-                                } = &mut active.rule
+                            to,
+                            amount,
+                            one_shot,
+                        } => {
+                            let view = before.view();
+                            let src_ctrl = work
+                                .batch
+                                .component(attempt)
+                                .ok_or(DamageError::InapplicableEffect)?
+                                .attempt()
+                                .source
+                                .controller();
+                            let new_target = Self::resolve_redirect_target(
+                                to,
+                                r_ctrl,
+                                source_object,
+                                target,
+                                second_target,
+                                src_ctrl,
+                                &view.evaluated,
+                            )
+                            .ok_or(DamageError::InapplicableEffect)?;
+                            if let Some(rem) = amount {
+                                let split_id = self.damage_state.alloc_attempt_id()?;
+                                let moved = work.batch.redirect_partial_component(
+                                    application,
+                                    new_target,
+                                    rem,
+                                    split_id,
+                                )?;
+                                if let Some(active) =
+                                    self.temporary_rules.iter_mut().find(|a| a.id == rule_id)
                                 {
-                                    *cur = cur.minus(&moved);
-                                    if !cur.is_positive() {
+                                    if let crate::program::TemporaryRuleKind::RedirectNextDamage {
+                                        amount: Some(cur),
+                                        ..
+                                    } = &mut active.rule
+                                    {
+                                        *cur = cur.minus(&moved);
+                                        if !cur.is_positive() {
+                                            active.consumed = true;
+                                        }
+                                    }
+                                    if one_shot {
                                         active.consumed = true;
                                     }
                                 }
-                                if one_shot {
+                            } else {
+                                work.batch
+                                    .redirect_static_component(application, new_target)?;
+                                if one_shot
+                                    && let Some(active) =
+                                        self.temporary_rules.iter_mut().find(|a| a.id == rule_id)
+                                {
                                     active.consumed = true;
                                 }
                             }
-                        } else {
-                            work.batch
-                                .redirect_static_component(application, new_target)?;
-                            if one_shot
-                                && let Some(active) =
-                                    self.temporary_rules.iter_mut().find(|a| a.id == rule_id)
-                            {
-                                active.consumed = true;
-                            }
+                            return Ok(());
                         }
-                        return Ok(());
-                    }
-                    TempDamageAction::Modify(s, c, ab_id, op) => (s, c, ab_id, op),
-                };
+                        TempDamageAction::Modify(s, sd, se, c, ab_id, op) => {
+                            (s, sd, se, c, ab_id, op)
+                        }
+                    };
                 let target_recipient = work
                     .batch
                     .component(attempt)
@@ -2404,6 +2537,7 @@ impl EffectWindow {
                             let view = before.view();
                             let ctx = crate::characteristics::WorldEvalCtx {
                                 active_player: self.window.active_player(),
+                                step: self.current_step,
                                 participants: self.window.participants(),
                                 life: Some(&self.life),
                                 combat: self.combat.as_ref(),
@@ -2532,6 +2666,7 @@ impl EffectWindow {
                         let view = before.view();
                         let ctx = crate::characteristics::WorldEvalCtx {
                             active_player: self.window.active_player(),
+                            step: self.current_step,
                             participants: self.window.participants(),
                             life: Some(&self.life),
                             combat: self.combat.as_ref(),
@@ -2613,10 +2748,16 @@ impl EffectWindow {
                         let prevented = Self::allocations_total(&allocations);
                         prevented_total = prevented_total.plus(&prevented);
                         Self::queue_damage_prevent_followup(
+                            self.window.cards(),
+                            &self.programs,
+                            &before_eval,
                             &mut work.followups,
                             followup,
                             PreventFollowupContext {
+                                batch,
                                 source_object: source_obj,
+                                source_damage,
+                                source_entry,
                                 ability_id,
                                 rule_controller: rule_ctrl,
                                 target_recipient,
@@ -2738,7 +2879,7 @@ impl EffectWindow {
                     .ok_or(DamageError::InapplicableEffect)?
                     .remaining()
                     .clone();
-                let (source_obj, shield_amount) = self
+                let (source_obj, shield_amount, half_round_down) = self
                     .temporary_rules
                     .iter()
                     .find_map(|active| {
@@ -2749,17 +2890,19 @@ impl EffectWindow {
                             crate::program::TemporaryRuleKind::PreventNextDamage {
                                 amount, ..
                             } if amount.is_positive() => {
-                                Some((active.source_object, Some(amount.clone())))
+                                Some((active.source_object, Some(amount.clone()), false))
                             }
-                            crate::program::TemporaryRuleKind::PreventNextTimeDamage { .. } => {
-                                Some((active.source_object, None))
-                            }
+                            crate::program::TemporaryRuleKind::PreventNextTimeDamage {
+                                half_round_down,
+                                ..
+                            } => Some((active.source_object, None, *half_round_down)),
                             _ => None,
                         }
                     })
                     .ok_or(DamageError::InapplicableEffect)?;
                 let prevented = match shield_amount {
                     Some(cap) => rem.clone().min(cap),
+                    None if half_round_down => rem.nonnegative_half_rounded_down(),
                     None => rem.clone(),
                 };
                 let leave = rem.minus(&prevented);

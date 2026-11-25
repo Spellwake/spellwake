@@ -236,6 +236,7 @@ fn current_root_projection_retains_all_locals_and_chosen_occurrences_after_compl
                 generic: 0.into(),
                 required: Default::default(),
             },
+            uncastable_mana_cost: false,
             body: ExecutableBody::new(
                 BodyTarget::None,
                 vec![

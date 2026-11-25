@@ -350,6 +350,24 @@ impl SpellFilter {
                         return false;
                     }
                 }
+                SubtypeFilter::AnyLandMask(mask) => {
+                    if !spell
+                        .current_land_subtypes
+                        .iter()
+                        .any(|lt| (mask & lt.bit()) != 0)
+                    {
+                        return false;
+                    }
+                }
+                SubtypeFilter::NotLandMask(mask) => {
+                    if spell
+                        .current_land_subtypes
+                        .iter()
+                        .any(|lt| (mask & lt.bit()) != 0)
+                    {
+                        return false;
+                    }
+                }
                 _ => return false,
             }
             if !c.color.matches(&spell.current_colors) {
@@ -369,6 +387,22 @@ impl SpellFilter {
                     || spell
                         .current_enchantment_subtypes
                         .contains(&super::EnchantmentSubtype::Saga))
+            {
+                return false;
+            }
+            if c.flags.contains(ObjectFilterFlags::COMMANDER_ONLY)
+                && spell.commander_owner.is_none()
+            {
+                return false;
+            }
+            if c.flags.contains(ObjectFilterFlags::NOT_COMMANDER) && spell.commander_owner.is_some()
+            {
+                return false;
+            }
+            if c.flags
+                .contains(ObjectFilterFlags::MATCHES_SOURCE_ENTRY_TYPE)
+                && !source_entry_type
+                    .is_some_and(|kind| spell.current_creature_subtypes.contains(&kind))
             {
                 return false;
             }

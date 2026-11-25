@@ -1415,11 +1415,29 @@ impl EffectWindow {
                         .is_some_and(|(_, _, _, enters_tapped, ..)| *enters_tapped)
                     || matches!(
                         ext_keep_dest,
-                        Some(crate::program::LookTopKeepDest::Battlefield { tapped: true })
+                        Some(crate::program::LookTopKeepDest::Battlefield { tapped: true, .. })
                     )
             };
             if should_tap {
                 self.window.enter_tapped(id)?;
+            }
+            if !secondary_ids.contains(&movement.before.id())
+                && matches!(
+                    ext_keep_dest,
+                    Some(crate::program::LookTopKeepDest::Battlefield {
+                        attacking: true,
+                        ..
+                    })
+                )
+                && self.combat.is_some()
+                && self.window.cards().get(id).and_then(GameObject::controller)
+                    == Some(self.window.active_player())
+                && let Ok(current_eval) = self.evaluated_characteristics()
+                && let Ok(defenders) =
+                    self.attack_destinations(self.window.active_player(), &current_eval)
+                && let Some((&target, &seat)) = defenders.first_key_value()
+            {
+                let _ = self.put_attacking_at(id, seat, target);
             }
             if let Some(host) = self.resolution_aura_choices.remove(&movement.before.id()) {
                 self.characteristics.attach(id, host, true)?;

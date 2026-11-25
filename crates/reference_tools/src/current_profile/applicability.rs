@@ -157,7 +157,7 @@ fn historical_keywords(
     }
 }
 native!(AbilityChange, self, {
-    if self.granted_trigger.is_some()
+    if !self.granted_triggers.is_empty()
         || self.grants_unblockable
         || self.granted_toxic.is_some()
         || self.granted_exalted != 0
@@ -263,6 +263,7 @@ native!(StaticContinuousAbility, self, {
                     | StaticPart::GrantTrigger(_)
                     | StaticPart::GrantFixedColorMana(_)
                     | StaticPart::BlockingRestriction(_)
+                    | StaticPart::GrantRestriction(_)
             ) {
                 return Err(ApplicabilityError);
             }
@@ -744,7 +745,7 @@ native!(ExecutableBody, self, {
         | Instruction::OrderArtifactCreatureLandSacrifices
         | Instruction::ChooseCreatureTypeForPlayer { .. } => Err(ApplicabilityError),
         Instruction::CreateTokens { creations }
-        | Instruction::CreateAttackingTokens { creations } => creations
+        | Instruction::CreateAttackingTokens { creations, .. } => creations
             .iter()
             .try_for_each(|creation| creation.definition.program().check_current10()),
         Instruction::CreateContinuousEffect { parts, .. } => parts.0.iter().try_for_each(|part| {
@@ -852,7 +853,12 @@ native!(ExecutableBody, self, {
         | Instruction::MoveGraveyardGroupOwned { .. }
         | Instruction::LookTopChooseExt { .. }
         | Instruction::RevealUntilMatchExt { .. }
-        | Instruction::CreateTokenCopyExt { .. } => Ok(()),
+        | Instruction::CreateTokenCopyExt { .. }
+        | Instruction::MoveCounters { .. }
+        | Instruction::ExileSubjectUntilSourceLeaves { .. }
+        | Instruction::ReturnCardsExiledWithLinkExt { .. }
+        | Instruction::DrawGame
+        | Instruction::TurnFaceUpSubject { .. } => Ok(()),
     })
 });
 native!(TriggeredAbility, self, {
@@ -1255,6 +1261,7 @@ native!(ResolvedContinuousEffect, self, {
         | ResolvedPart::GrantMana(_)
         | ResolvedPart::TypeWithSubtypes { .. }
         | ResolvedPart::BlockingRestriction(_)
+        | ResolvedPart::GrantRestriction(_)
         | ResolvedPart::CompoundAbilities(_) => Err(ApplicabilityError),
         ResolvedPart::Abilities(change) => change.check_current10(),
         ResolvedPart::Control(_)
@@ -1263,6 +1270,7 @@ native!(ResolvedContinuousEffect, self, {
         | ResolvedPart::Type(_)
         | ResolvedPart::Color(_)
         | ResolvedPart::CannotBeTargetedByColors(_)
+        | ResolvedPart::CannotBeTargetedBySpellsOfColors(_)
         | ResolvedPart::SetPT(_)
         | ResolvedPart::SetToughness(_)
         | ResolvedPart::ModifyPT(_)
@@ -2005,6 +2013,7 @@ native!(RulesOccurrence, self, {
         | RulesOccurrence::Proliferated { .. }
         | RulesOccurrence::AgeCounterPlaced { .. }
         | RulesOccurrence::PermanentTargeted { .. }
+        | RulesOccurrence::PlayerTargeted { .. }
         | RulesOccurrence::CommanderTypeManaSpent { .. }
         | RulesOccurrence::ReflexiveDiscardDamage { .. }
         | RulesOccurrence::ManaAddedByEffect { .. }

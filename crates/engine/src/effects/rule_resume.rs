@@ -1353,10 +1353,41 @@ impl EffectWindow {
                 if actor != bound.chooser() {
                     return Err(EffectError::WrongChooser);
                 }
+                let move_to =
+                    if let Ok(Instruction::MoveCounters { to, .. }) = self.current_instruction() {
+                        let entry = self
+                            .window
+                            .resolving()
+                            .ok_or(EffectError::WrongResolutionFrame)?;
+                        self.resolve_pass_c_move_subject(entry, *to)?
+                    } else {
+                        None
+                    };
                 let mut next = self.clone();
                 next.revision = revision;
                 let mut append = RulesJournal::default();
                 next.remove_counters(bound, &selected, &mut append)?;
+                if let Some(dest) = move_to
+                    && dest != bound.object()
+                    && next
+                        .window
+                        .cards()
+                        .get(dest)
+                        .is_some_and(|c| c.zone() == ObjectZone::Battlefield)
+                {
+                    let moved: BTreeMap<CounterKind, RulesInteger> = selected
+                        .iter()
+                        .filter(|(_, count)| **count > 0)
+                        .map(|(&kind, &count)| (kind, RulesInteger::from(i64::from(count))))
+                        .collect();
+                    next.place_moved_counters(
+                        bound.entry(),
+                        bound.instruction(),
+                        dest,
+                        &moved,
+                        &mut append,
+                    )?;
+                }
                 next.advance_instruction()?;
                 next.progress_rules(
                     DamageJournal::default(),

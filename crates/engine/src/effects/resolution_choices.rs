@@ -1749,9 +1749,7 @@ impl EffectWindow {
             | Instruction::BoostSourceByCastManaValue
             | Instruction::BoostLoneAttacker => Ok(true),
             Instruction::AdditionalCombat { .. }
-            | Instruction::AdditionalCombatAfterUntappingAttackers => Ok(self
-                .current_step
-                .is_some_and(|step| step.phase() == crate::turn::Phase::Combat)),
+            | Instruction::AdditionalCombatAfterUntappingAttackers => Ok(true),
             Instruction::PutLibraryCohortIntoGraveyard(_)
             | Instruction::ExileOnePerPlayerUntilSourceLeaves
             | Instruction::AttachControlledToSource { .. }
@@ -1885,6 +1883,11 @@ impl EffectWindow {
             | Instruction::LookTopChooseExt { .. }
             | Instruction::RevealUntilMatchExt { .. }
             | Instruction::CreateTokenCopyExt { .. }
+            | Instruction::MoveCounters { .. }
+            | Instruction::ExileSubjectUntilSourceLeaves { .. }
+            | Instruction::ReturnCardsExiledWithLinkExt { .. }
+            | Instruction::DrawGame
+            | Instruction::TurnFaceUpSubject { .. }
             | Instruction::ExileResolvingSpell
             | Instruction::ReturnResolvingSpellToHand => Ok(true),
             Instruction::ChooseCreatureType { excluding, .. } => {
@@ -3040,7 +3043,12 @@ impl EffectWindow {
             | Instruction::MoveGraveyardGroupOwned { .. }
             | Instruction::LookTopChooseExt { .. }
             | Instruction::RevealUntilMatchExt { .. }
-            | Instruction::CreateTokenCopyExt { .. } => return Ok(false),
+            | Instruction::CreateTokenCopyExt { .. }
+            | Instruction::MoveCounters { .. }
+            | Instruction::ExileSubjectUntilSourceLeaves { .. }
+            | Instruction::ReturnCardsExiledWithLinkExt { .. }
+            | Instruction::DrawGame
+            | Instruction::TurnFaceUpSubject { .. } => return Ok(false),
         }
         Ok(true)
     }

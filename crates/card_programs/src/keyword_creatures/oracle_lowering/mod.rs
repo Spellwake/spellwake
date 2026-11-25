@@ -1418,18 +1418,21 @@ fn lower_face(
     }
 
     let (casting_cost, x_symbols, hybrid_symbols, snow_mana_count) = if is_land {
-        if face.mana_cost.as_deref().is_some_and(|s| !s.is_empty()) {
+        if face
+            .mana_cost
+            .as_deref()
+            .is_some_and(|s| !s.trim().is_empty())
+        {
             return Err("oracle:land-with-mana-cost");
         }
         (None, 0, Vec::new(), 0u8)
     } else {
-        let raw_cost = face.mana_cost.as_deref().unwrap_or("");
+        let _ = options.allow_empty_mana_cost;
+        let raw_cost = face.mana_cost.as_deref().unwrap_or("").trim();
         if raw_cost.is_empty() {
-            if options.allow_empty_mana_cost {
-                (None, 0, Vec::new(), 0u8)
-            } else {
-                return Err("oracle:missing-mana-cost");
-            }
+            // CR 118.6: Non-land faces with no printed mana cost are legal; permanents use
+            // `casting_cost: None` and spells set `uncastable_mana_cost: true`.
+            (None, 0, Vec::new(), 0u8)
         } else {
             let (stripped_cost, snow_count) =
                 strip_snow_mana_symbols(raw_cost).ok_or("oracle:unsupported-mana-cost")?;
@@ -1444,10 +1447,9 @@ fn lower_face(
 
     let mut ids = LoweringIds::default();
     let mut program = if is_spell {
-        let cost = if options.allow_empty_mana_cost {
-            casting_cost.unwrap_or_else(ManaCost::free)
-        } else {
-            casting_cost.ok_or("oracle:spell-without-cost")?
+        let (cost, uncastable_mana_cost) = match casting_cost {
+            Some(cost) => (cost, false),
+            None => (ManaCost::free(), true),
         };
         let mut cast_during_own_combat = false;
         let mut cannot_be_copied = false;
@@ -1633,7 +1635,12 @@ fn lower_face(
             types.card_types.clone(),
             types.creature_subtypes.clone(),
             BTreeSet::new(),
-            ProgramKind::Spell(SpellDefinition { cost, body, modes }),
+            ProgramKind::Spell(SpellDefinition {
+                cost,
+                uncastable_mana_cost,
+                body,
+                modes,
+            }),
         );
         p.spell_subtypes = types.spell_subtypes;
         p.supertypes = types.supertypes;
@@ -1857,12 +1864,16 @@ fn lower_face(
             if let [InstructionAst::Modal { choice, modes }] = ins.as_slice()
                 && modes.len() >= 2
             {
-                let entry_tap = match choice
+                let choice_clean = choice
                     .trim()
-                    .trim_end_matches('.')
-                    .to_ascii_lowercase()
-                    .as_str()
-                {
+                    .trim_end_matches(['.', ':', '\u{2014}', '\u{2013}'])
+                    .trim()
+                    .to_ascii_lowercase();
+                let choice_norm = choice_clean
+                    .strip_prefix("choose ")
+                    .unwrap_or(&choice_clean)
+                    .trim();
+                let entry_tap = match choice_norm {
                     "khans or dragons" => EntryTap::ChooseKhansOrDragons,
                     "dragons or khans" => EntryTap::ChooseOptions(&["Dragons", "Khans"]),
                     "odd or even" => EntryTap::ChooseOddOrEven,
@@ -1880,14 +1891,77 @@ fn lower_face(
                     "brotherhood or enclave" => {
                         EntryTap::ChooseOptions(&["Brotherhood", "Enclave"])
                     }
+                    "enclave or brotherhood" => {
+                        EntryTap::ChooseOptions(&["Enclave", "Brotherhood"])
+                    }
                     "mirran or phyrexian" => EntryTap::ChooseOptions(&["Mirran", "Phyrexian"]),
+                    "phyrexian or mirran" => EntryTap::ChooseOptions(&["Phyrexian", "Mirran"]),
                     "ncr or legion" => EntryTap::ChooseOptions(&["NCR", "Legion"]),
+                    "legion or ncr" => EntryTap::ChooseOptions(&["Legion", "NCR"]),
                     "flavorful or bland" => EntryTap::ChooseOptions(&["Flavorful", "Bland"]),
+                    "bland or flavorful" => EntryTap::ChooseOptions(&["Bland", "Flavorful"]),
                     "believe or doubt" => EntryTap::ChooseOptions(&["Believe", "Doubt"]),
+                    "doubt or believe" => EntryTap::ChooseOptions(&["Doubt", "Believe"]),
                     "anchors or sails" => EntryTap::ChooseOptions(&["Anchors", "Sails"]),
+                    "sails or anchors" => EntryTap::ChooseOptions(&["Sails", "Anchors"]),
                     "friends or foes" => EntryTap::ChooseOptions(&["Friends", "Foes"]),
+                    "foes or friends" => EntryTap::ChooseOptions(&["Foes", "Friends"]),
+                    "friend or foe" => EntryTap::ChooseOptions(&["Friend", "Foe"]),
+                    "foe or friend" => EntryTap::ChooseOptions(&["Foe", "Friend"]),
                     "left or right" => EntryTap::ChooseOptions(&["Left", "Right"]),
-                    _ => return Err("oracle:unsupported-replacement"),
+                    "right or left" => EntryTap::ChooseOptions(&["Right", "Left"]),
+                    "order or chaos" => EntryTap::ChooseOptions(&["Order", "Chaos"]),
+                    "chaos or order" => EntryTap::ChooseOptions(&["Chaos", "Order"]),
+                    "war or peace" => EntryTap::ChooseOptions(&["War", "Peace"]),
+                    "peace or war" => EntryTap::ChooseOptions(&["Peace", "War"]),
+                    "wild or tame" => EntryTap::ChooseOptions(&["Wild", "Tame"]),
+                    "tame or wild" => EntryTap::ChooseOptions(&["Tame", "Wild"]),
+                    "day or night" => EntryTap::ChooseOptions(&["Day", "Night"]),
+                    "night or day" => EntryTap::ChooseOptions(&["Night", "Day"]),
+                    "light or dark" => EntryTap::ChooseOptions(&["Light", "Dark"]),
+                    "dark or light" => EntryTap::ChooseOptions(&["Dark", "Light"]),
+                    "sun or moon" => EntryTap::ChooseOptions(&["Sun", "Moon"]),
+                    "moon or sun" => EntryTap::ChooseOptions(&["Moon", "Sun"]),
+                    "life or death" => EntryTap::ChooseOptions(&["Life", "Death"]),
+                    "death or life" => EntryTap::ChooseOptions(&["Death", "Life"]),
+                    "fire or ice" => EntryTap::ChooseOptions(&["Fire", "Ice"]),
+                    "ice or fire" => EntryTap::ChooseOptions(&["Ice", "Fire"]),
+                    "good or evil" => EntryTap::ChooseOptions(&["Good", "Evil"]),
+                    "evil or good" => EntryTap::ChooseOptions(&["Evil", "Good"]),
+                    "high or low" => EntryTap::ChooseOptions(&["High", "Low"]),
+                    "low or high" => EntryTap::ChooseOptions(&["Low", "High"]),
+                    "heads or tails" => EntryTap::ChooseOptions(&["Heads", "Tails"]),
+                    "tails or heads" => EntryTap::ChooseOptions(&["Tails", "Heads"]),
+                    "trick or treat" => EntryTap::ChooseOptions(&["Trick", "Treat"]),
+                    "treat or trick" => EntryTap::ChooseOptions(&["Treat", "Trick"]),
+                    "truth or dare" => EntryTap::ChooseOptions(&["Truth", "Dare"]),
+                    "dare or truth" => EntryTap::ChooseOptions(&["Dare", "Truth"]),
+                    "ally or enemy" => EntryTap::ChooseOptions(&["Ally", "Enemy"]),
+                    "enemy or ally" => EntryTap::ChooseOptions(&["Enemy", "Ally"]),
+                    "money or power" => EntryTap::ChooseOptions(&["Money", "Power"]),
+                    "power or money" => EntryTap::ChooseOptions(&["Power", "Money"]),
+                    other => {
+                        if modes.len() == 2
+                            && let Some((opt_a, opt_b)) = other.split_once(" or ")
+                            && !opt_a.trim().is_empty()
+                            && !opt_b.trim().is_empty()
+                            && !opt_b.contains(" or ")
+                            && !opt_a.contains(',')
+                            && !opt_b.contains(',')
+                            && modes[0]
+                                .label
+                                .as_deref()
+                                .is_some_and(|l| l.trim().eq_ignore_ascii_case(opt_a.trim()))
+                            && modes[1]
+                                .label
+                                .as_deref()
+                                .is_some_and(|l| l.trim().eq_ignore_ascii_case(opt_b.trim()))
+                        {
+                            EntryTap::ChooseOptions(&["Option 1", "Option 2"])
+                        } else {
+                            return Err("oracle:unsupported-replacement");
+                        }
+                    }
                 };
                 if entry_tap
                     .option_labels()
@@ -2177,7 +2251,7 @@ fn lower_face(
         }
     }
 
-    // Wire DieRollBand thresholds (`1—9 | ...`, `10—19 | ...`, `20 | ...`, `15+ | ...`) onto RollDie
+    // Wire DieRollBand thresholds (`1-9 | ...`, `10-19 | ...`, `20 | ...`, `15+ | ...`) onto RollDie
     if !die_roll_bands_raw.is_empty() {
         let compiler_vocab = cached_compiler_vocab(vocabulary);
         let mut parsed_bands = Vec::with_capacity(die_roll_bands_raw.len());
@@ -2298,7 +2372,7 @@ fn lower_face(
         )?;
     }
 
-    // Lower structured Case `Solved — ...` abilities (CR 719)
+    // Lower structured Case `Solved - ...` abilities (CR 719)
     if !face_ast.case_solved.is_empty() {
         lower_gated_section(
             face_ast,
@@ -3421,6 +3495,19 @@ fn parse_spell_cast_timing_restriction(
         .trim();
     let core = core.strip_prefix("only ").unwrap_or(core).trim();
 
+    if matches!(core, "during combat" | "duringcombat") {
+        return Some(R::DuringCombat);
+    }
+
+    if matches!(
+        core,
+        "during combat on an opponent's turn"
+            | "during an opponent's combat"
+            | "during an opponent's combat phase"
+    ) {
+        return Some(R::DuringCombatOnOpponentsTurn);
+    }
+
     if matches!(
         core,
         "xcantbezero"
@@ -3494,11 +3581,102 @@ fn parse_spell_cast_timing_restriction(
     parse_cast_timing_restriction(restriction, None, vocabulary)
 }
 
+pub(super) fn is_sorcery_timing_restriction(restriction: &str) -> bool {
+    let low = restriction
+        .trim()
+        .trim_end_matches('.')
+        .trim()
+        .to_ascii_lowercase();
+    matches!(
+        low.as_str(),
+        "sorcery"
+            | "as a sorcery"
+            | "only as a sorcery"
+            | "activate only as a sorcery"
+            | "any time you could cast a sorcery"
+            | "only any time you could cast a sorcery"
+            | "cast this spell only as a sorcery"
+            | "cast ~ only as a sorcery"
+    )
+}
+
+pub(super) fn is_exile_or_cast_perm_instr(ins: &InstructionAst) -> bool {
+    match ins {
+        InstructionAst::Exile { .. }
+        | InstructionAst::ExileUntilLeaves { .. }
+        | InstructionAst::ExileTopLibrary { .. }
+        | InstructionAst::ExileGraveyard { .. }
+        | InstructionAst::ExileWithCounters { .. }
+        | InstructionAst::ExileOrRevealTopUntil { .. }
+        | InstructionAst::ExileAllNamedFromZones { .. }
+        | InstructionAst::GrantCastPermission { .. }
+        | InstructionAst::GrantModifiedCastPermission { .. } => true,
+        InstructionAst::Optional(inner)
+        | InstructionAst::OptionalPlayer { body: inner, .. }
+        | InstructionAst::IfPreviousSucceeded(inner)
+        | InstructionAst::IfPreviousFailed(inner)
+        | InstructionAst::IfCondition {
+            then_body: inner, ..
+        }
+        | InstructionAst::Otherwise(inner)
+        | InstructionAst::ReplaceEffect(inner)
+        | InstructionAst::ReflexiveTrigger(inner)
+        | InstructionAst::Simultaneous(inner)
+        | InstructionAst::BindX { body: inner, .. }
+        | InstructionAst::BindXY { body: inner, .. }
+        | InstructionAst::ScopedDuration { body: inner, .. }
+        | InstructionAst::ForEachPlayer { body: inner, .. }
+        | InstructionAst::ForEachObject { body: inner, .. }
+        | InstructionAst::ForEachCount { body: inner, .. }
+        | InstructionAst::ForEachSubjectPlayer { body: inner, .. }
+        | InstructionAst::ForAsLongAs { body: inner, .. }
+        | InstructionAst::DelayedTrigger { body: inner, .. }
+        | InstructionAst::DelayedEventTrigger { body: inner, .. }
+        | InstructionAst::TemporaryTrigger { body: inner, .. }
+        | InstructionAst::ReflexiveEventTrigger { body: inner, .. }
+        | InstructionAst::WhenYouNext { body: inner, .. } => {
+            inner.iter().any(is_exile_or_cast_perm_instr)
+        }
+        InstructionAst::ReplaceEffectWith(rew) => rew.body.iter().any(is_exile_or_cast_perm_instr),
+        InstructionAst::OneShotReplacement {
+            instead_body: Some(inner),
+            ..
+        } => inner.iter().any(is_exile_or_cast_perm_instr),
+        InstructionAst::SearchLibrary { follow_up, .. } => {
+            follow_up.iter().any(is_exile_or_cast_perm_instr)
+        }
+        InstructionAst::Counter {
+            unless_action: Some(inner),
+            ..
+        } => inner.iter().any(is_exile_or_cast_perm_instr),
+        InstructionAst::Choice(branches) => branches
+            .iter()
+            .any(|br| br.iter().any(is_exile_or_cast_perm_instr)),
+        _ => false,
+    }
+}
+
 fn strip_spell_cast_restrictions(
     ins: &[InstructionAst],
     cast_during_own_combat: &mut bool,
     cast_timings: &mut Vec<CastTimingRestriction>,
     vocabulary: &CreatureTypeVocabulary,
+) -> Vec<InstructionAst> {
+    strip_spell_cast_restrictions_inner(
+        ins,
+        cast_during_own_combat,
+        cast_timings,
+        vocabulary,
+        false,
+    )
+}
+
+fn strip_spell_cast_restrictions_inner(
+    ins: &[InstructionAst],
+    cast_during_own_combat: &mut bool,
+    cast_timings: &mut Vec<CastTimingRestriction>,
+    vocabulary: &CreatureTypeVocabulary,
+    mut after_exile_or_cast_perm: bool,
 ) -> Vec<InstructionAst> {
     let mut filtered = Vec::with_capacity(ins.len());
     for item in ins {
@@ -3507,6 +3685,13 @@ fn strip_spell_cast_restrictions(
                 restriction,
                 condition,
             } => {
+                if after_exile_or_cast_perm
+                    && condition.is_none()
+                    && is_sorcery_timing_restriction(restriction)
+                {
+                    filtered.push(item.clone());
+                    continue;
+                }
                 let low = restriction
                     .trim()
                     .trim_end_matches('.')
@@ -3536,11 +3721,12 @@ fn strip_spell_cast_restrictions(
                 filtered.push(item.clone());
             }
             InstructionAst::BindX { x_expr, body } if !body.is_empty() => {
-                let inner = strip_spell_cast_restrictions(
+                let inner = strip_spell_cast_restrictions_inner(
                     body,
                     cast_during_own_combat,
                     cast_timings,
                     vocabulary,
+                    after_exile_or_cast_perm,
                 );
                 filtered.push(InstructionAst::BindX {
                     x_expr: x_expr.clone(),
@@ -3552,11 +3738,12 @@ fn strip_spell_cast_restrictions(
                 y_expr,
                 body,
             } if !body.is_empty() => {
-                let inner = strip_spell_cast_restrictions(
+                let inner = strip_spell_cast_restrictions_inner(
                     body,
                     cast_during_own_combat,
                     cast_timings,
                     vocabulary,
+                    after_exile_or_cast_perm,
                 );
                 filtered.push(InstructionAst::BindXY {
                     x_expr: x_expr.clone(),
@@ -3564,23 +3751,40 @@ fn strip_spell_cast_restrictions(
                     body: inner,
                 });
             }
+            InstructionAst::ScopedDuration { duration, body } => {
+                let inner_f = strip_spell_cast_restrictions_inner(
+                    body,
+                    cast_during_own_combat,
+                    cast_timings,
+                    vocabulary,
+                    after_exile_or_cast_perm,
+                );
+                if !(inner_f.is_empty() && !body.is_empty()) {
+                    filtered.push(InstructionAst::ScopedDuration {
+                        duration: duration.clone(),
+                        body: inner_f,
+                    });
+                }
+            }
             InstructionAst::Optional(inner) => {
-                let inner_f = strip_spell_cast_restrictions(
+                let inner_f = strip_spell_cast_restrictions_inner(
                     inner,
                     cast_during_own_combat,
                     cast_timings,
                     vocabulary,
+                    after_exile_or_cast_perm,
                 );
                 if !(inner_f.is_empty() && !inner.is_empty()) {
                     filtered.push(InstructionAst::Optional(inner_f));
                 }
             }
             InstructionAst::OptionalPlayer { player, body } => {
-                let inner_f = strip_spell_cast_restrictions(
+                let inner_f = strip_spell_cast_restrictions_inner(
                     body,
                     cast_during_own_combat,
                     cast_timings,
                     vocabulary,
+                    after_exile_or_cast_perm,
                 );
                 if !(inner_f.is_empty() && !body.is_empty()) {
                     filtered.push(InstructionAst::OptionalPlayer {
@@ -3590,22 +3794,24 @@ fn strip_spell_cast_restrictions(
                 }
             }
             InstructionAst::IfPreviousSucceeded(inner) => {
-                let inner_f = strip_spell_cast_restrictions(
+                let inner_f = strip_spell_cast_restrictions_inner(
                     inner,
                     cast_during_own_combat,
                     cast_timings,
                     vocabulary,
+                    after_exile_or_cast_perm,
                 );
                 if !(inner_f.is_empty() && !inner.is_empty()) {
                     filtered.push(InstructionAst::IfPreviousSucceeded(inner_f));
                 }
             }
             InstructionAst::IfPreviousFailed(inner) => {
-                let inner_f = strip_spell_cast_restrictions(
+                let inner_f = strip_spell_cast_restrictions_inner(
                     inner,
                     cast_during_own_combat,
                     cast_timings,
                     vocabulary,
+                    after_exile_or_cast_perm,
                 );
                 if !(inner_f.is_empty() && !inner.is_empty()) {
                     filtered.push(InstructionAst::IfPreviousFailed(inner_f));
@@ -3615,11 +3821,12 @@ fn strip_spell_cast_restrictions(
                 condition,
                 then_body,
             } => {
-                let inner_f = strip_spell_cast_restrictions(
+                let inner_f = strip_spell_cast_restrictions_inner(
                     then_body,
                     cast_during_own_combat,
                     cast_timings,
                     vocabulary,
+                    after_exile_or_cast_perm,
                 );
                 filtered.push(InstructionAst::IfCondition {
                     condition: condition.clone(),
@@ -3627,33 +3834,104 @@ fn strip_spell_cast_restrictions(
                 });
             }
             InstructionAst::Otherwise(inner) => {
-                let inner_f = strip_spell_cast_restrictions(
+                let inner_f = strip_spell_cast_restrictions_inner(
                     inner,
                     cast_during_own_combat,
                     cast_timings,
                     vocabulary,
+                    after_exile_or_cast_perm,
                 );
                 if !(inner_f.is_empty() && !inner.is_empty()) {
                     filtered.push(InstructionAst::Otherwise(inner_f));
                 }
             }
             InstructionAst::ReplaceEffect(inner) => {
-                let inner_f = strip_spell_cast_restrictions(
+                let inner_f = strip_spell_cast_restrictions_inner(
                     inner,
                     cast_during_own_combat,
                     cast_timings,
                     vocabulary,
+                    after_exile_or_cast_perm,
                 );
                 if !(inner_f.is_empty() && !inner.is_empty()) {
                     filtered.push(InstructionAst::ReplaceEffect(inner_f));
                 }
             }
+            InstructionAst::ReplaceEffectWith(rew) => {
+                let inner_f = strip_spell_cast_restrictions_inner(
+                    &rew.body,
+                    cast_during_own_combat,
+                    cast_timings,
+                    vocabulary,
+                    after_exile_or_cast_perm,
+                );
+                if !(inner_f.is_empty() && !rew.body.is_empty()) {
+                    let mut next = (**rew).clone();
+                    next.body = inner_f;
+                    filtered.push(InstructionAst::ReplaceEffectWith(Box::new(next)));
+                }
+            }
+            InstructionAst::OneShotReplacement {
+                subject,
+                event,
+                replace_with,
+                instead_body,
+            } => {
+                let new_body = instead_body.as_ref().map(|inner| {
+                    strip_spell_cast_restrictions_inner(
+                        inner,
+                        cast_during_own_combat,
+                        cast_timings,
+                        vocabulary,
+                        after_exile_or_cast_perm,
+                    )
+                });
+                filtered.push(InstructionAst::OneShotReplacement {
+                    subject: subject.clone(),
+                    event: event.clone(),
+                    replace_with: replace_with.clone(),
+                    instead_body: new_body,
+                });
+            }
+            InstructionAst::SearchLibrary { follow_up, .. } if !follow_up.is_empty() => {
+                let new_follow_up = strip_spell_cast_restrictions_inner(
+                    follow_up,
+                    cast_during_own_combat,
+                    cast_timings,
+                    vocabulary,
+                    after_exile_or_cast_perm,
+                );
+                let mut cloned = item.clone();
+                if let InstructionAst::SearchLibrary { follow_up: dst, .. } = &mut cloned {
+                    *dst = new_follow_up;
+                }
+                filtered.push(cloned);
+            }
+            InstructionAst::Counter {
+                target,
+                unless_pay,
+                unless_action: Some(act),
+            } => {
+                let new_act = strip_spell_cast_restrictions_inner(
+                    act,
+                    cast_during_own_combat,
+                    cast_timings,
+                    vocabulary,
+                    after_exile_or_cast_perm,
+                );
+                filtered.push(InstructionAst::Counter {
+                    target: target.clone(),
+                    unless_pay: unless_pay.clone(),
+                    unless_action: Some(new_act),
+                });
+            }
             InstructionAst::ReflexiveTrigger(inner) => {
-                let inner_f = strip_spell_cast_restrictions(
+                let inner_f = strip_spell_cast_restrictions_inner(
                     inner,
                     cast_during_own_combat,
                     cast_timings,
                     vocabulary,
+                    after_exile_or_cast_perm,
                 );
                 if !(inner_f.is_empty() && !inner.is_empty()) {
                     filtered.push(InstructionAst::ReflexiveTrigger(inner_f));
@@ -3663,22 +3941,24 @@ fn strip_spell_cast_restrictions(
                 let new_branches = branches
                     .iter()
                     .map(|br| {
-                        strip_spell_cast_restrictions(
+                        strip_spell_cast_restrictions_inner(
                             br,
                             cast_during_own_combat,
                             cast_timings,
                             vocabulary,
+                            after_exile_or_cast_perm,
                         )
                     })
                     .collect();
                 filtered.push(InstructionAst::Choice(new_branches));
             }
             InstructionAst::DelayedTrigger { step, scope, body } => {
-                let inner_f = strip_spell_cast_restrictions(
+                let inner_f = strip_spell_cast_restrictions_inner(
                     body,
                     cast_during_own_combat,
                     cast_timings,
                     vocabulary,
+                    after_exile_or_cast_perm,
                 );
                 filtered.push(InstructionAst::DelayedTrigger {
                     step: *step,
@@ -3687,11 +3967,12 @@ fn strip_spell_cast_restrictions(
                 });
             }
             InstructionAst::DelayedEventTrigger { trigger, body } => {
-                let inner_f = strip_spell_cast_restrictions(
+                let inner_f = strip_spell_cast_restrictions_inner(
                     body,
                     cast_during_own_combat,
                     cast_timings,
                     vocabulary,
+                    after_exile_or_cast_perm,
                 );
                 filtered.push(InstructionAst::DelayedEventTrigger {
                     trigger: trigger.clone(),
@@ -3703,11 +3984,12 @@ fn strip_spell_cast_restrictions(
                 body,
                 duration,
             } => {
-                let inner_f = strip_spell_cast_restrictions(
+                let inner_f = strip_spell_cast_restrictions_inner(
                     body,
                     cast_during_own_combat,
                     cast_timings,
                     vocabulary,
+                    after_exile_or_cast_perm,
                 );
                 filtered.push(InstructionAst::TemporaryTrigger {
                     trigger: trigger.clone(),
@@ -3716,11 +3998,12 @@ fn strip_spell_cast_restrictions(
                 });
             }
             InstructionAst::SpreeMode { cost, body } => {
-                let inner_f = strip_spell_cast_restrictions(
+                let inner_f = strip_spell_cast_restrictions_inner(
                     body,
                     cast_during_own_combat,
                     cast_timings,
                     vocabulary,
+                    after_exile_or_cast_perm,
                 );
                 filtered.push(InstructionAst::SpreeMode {
                     cost: cost.clone(),
@@ -3728,11 +4011,12 @@ fn strip_spell_cast_restrictions(
                 });
             }
             InstructionAst::ForEachPlayer { player, body } => {
-                let inner_f = strip_spell_cast_restrictions(
+                let inner_f = strip_spell_cast_restrictions_inner(
                     body,
                     cast_during_own_combat,
                     cast_timings,
                     vocabulary,
+                    after_exile_or_cast_perm,
                 );
                 filtered.push(InstructionAst::ForEachPlayer {
                     player: *player,
@@ -3740,11 +4024,12 @@ fn strip_spell_cast_restrictions(
                 });
             }
             InstructionAst::ForEachObject { filter, body } => {
-                let inner_f = strip_spell_cast_restrictions(
+                let inner_f = strip_spell_cast_restrictions_inner(
                     body,
                     cast_during_own_combat,
                     cast_timings,
                     vocabulary,
+                    after_exile_or_cast_perm,
                 );
                 filtered.push(InstructionAst::ForEachObject {
                     filter: filter.clone(),
@@ -3752,11 +4037,12 @@ fn strip_spell_cast_restrictions(
                 });
             }
             InstructionAst::ForEachCount { count, body } => {
-                let inner_f = strip_spell_cast_restrictions(
+                let inner_f = strip_spell_cast_restrictions_inner(
                     body,
                     cast_during_own_combat,
                     cast_timings,
                     vocabulary,
+                    after_exile_or_cast_perm,
                 );
                 filtered.push(InstructionAst::ForEachCount {
                     count: count.clone(),
@@ -3764,11 +4050,12 @@ fn strip_spell_cast_restrictions(
                 });
             }
             InstructionAst::ForEachSubjectPlayer { players, body } => {
-                let inner_f = strip_spell_cast_restrictions(
+                let inner_f = strip_spell_cast_restrictions_inner(
                     body,
                     cast_during_own_combat,
                     cast_timings,
                     vocabulary,
+                    after_exile_or_cast_perm,
                 );
                 filtered.push(InstructionAst::ForEachSubjectPlayer {
                     players: players.clone(),
@@ -3776,11 +4063,12 @@ fn strip_spell_cast_restrictions(
                 });
             }
             InstructionAst::ForAsLongAs { condition, body } => {
-                let inner_f = strip_spell_cast_restrictions(
+                let inner_f = strip_spell_cast_restrictions_inner(
                     body,
                     cast_during_own_combat,
                     cast_timings,
                     vocabulary,
+                    after_exile_or_cast_perm,
                 );
                 filtered.push(InstructionAst::ForAsLongAs {
                     condition: condition.clone(),
@@ -3792,11 +4080,12 @@ fn strip_spell_cast_restrictions(
                 body,
                 duration,
             } => {
-                let inner_f = strip_spell_cast_restrictions(
+                let inner_f = strip_spell_cast_restrictions_inner(
                     body,
                     cast_during_own_combat,
                     cast_timings,
                     vocabulary,
+                    after_exile_or_cast_perm,
                 );
                 filtered.push(InstructionAst::WhenYouNext {
                     event: event.clone(),
@@ -3805,11 +4094,12 @@ fn strip_spell_cast_restrictions(
                 });
             }
             InstructionAst::Simultaneous(inner) => {
-                let inner_f = strip_spell_cast_restrictions(
+                let inner_f = strip_spell_cast_restrictions_inner(
                     inner,
                     cast_during_own_combat,
                     cast_timings,
                     vocabulary,
+                    after_exile_or_cast_perm,
                 );
                 if !(inner_f.is_empty() && !inner.is_empty()) {
                     filtered.push(InstructionAst::Simultaneous(inner_f));
@@ -3822,18 +4112,20 @@ fn strip_spell_cast_restrictions(
                 unless_action,
                 unless_condition,
             } => {
-                let inner_f = strip_spell_cast_restrictions(
+                let inner_f = strip_spell_cast_restrictions_inner(
                     body,
                     cast_during_own_combat,
                     cast_timings,
                     vocabulary,
+                    after_exile_or_cast_perm,
                 );
                 let new_action = unless_action.as_ref().map(|act| {
-                    strip_spell_cast_restrictions(
+                    strip_spell_cast_restrictions_inner(
                         act,
                         cast_during_own_combat,
                         cast_timings,
                         vocabulary,
+                        after_exile_or_cast_perm,
                     )
                 });
                 filtered.push(InstructionAst::Unless {
@@ -3848,11 +4140,12 @@ fn strip_spell_cast_restrictions(
                 let new_modes = modes
                     .iter()
                     .map(|m| spellwake_oracle_compiler::ast::ModalModeAst {
-                        body: strip_spell_cast_restrictions(
+                        body: strip_spell_cast_restrictions_inner(
                             &m.body,
                             cast_during_own_combat,
                             cast_timings,
                             vocabulary,
+                            after_exile_or_cast_perm,
                         ),
                         label: m.label.clone(),
                         granted: m.granted.clone(),
@@ -3864,6 +4157,9 @@ fn strip_spell_cast_restrictions(
                 });
             }
             _ => filtered.push(item.clone()),
+        }
+        if is_exile_or_cast_perm_instr(item) {
+            after_exile_or_cast_perm = true;
         }
     }
     filtered
