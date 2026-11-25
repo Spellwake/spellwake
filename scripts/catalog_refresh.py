@@ -451,14 +451,14 @@ def run_catalog_refresh(
         badge_svg.write_badge(
             badges_dir,
             "card-support-ast",
-            "Stage 1 AST parsed",
+            "Stage 1 AST",
             f"{s1:,} / {req:,} ({s1_pct:.1f}%)",
             "blue",
         )
         badge_svg.write_badge(
             badges_dir,
             "card-support-engine",
-            "Stage 2 engine bound",
+            "Stage 2 Bound",
             f"{s2:,} / {req:,} ({s2_pct:.1f}%)",
             "blue",
         )
@@ -466,16 +466,16 @@ def run_catalog_refresh(
             badge_svg.write_badge(
                 badges_dir,
                 "card-support-qualified",
-                "Stage 3 game qualified",
-                f"{s3_verified:,} verified / {req:,}",
+                "Stage 3 Qualified",
+                f"{s3_verified:,} verified",
                 "green" if s3_verified > 0 else "lightgrey",
             )
         else:
             badge_svg.write_badge(
                 badges_dir,
                 "card-support-qualified",
-                "Stage 3 game qualified",
-                f"{s3_declared:,} declared (unverified run)",
+                "Stage 3 Qualified",
+                f"{s3_declared:,} declared (unverified)",
                 "lightgrey",
             )
         future_eligible = preview["eligibleByFormat"].get("future", 0)
@@ -483,8 +483,8 @@ def run_catalog_refresh(
         badge_svg.write_badge(
             badges_dir,
             "preview-formats",
-            "preview formats",
-            f"isolated (future: {future_eligible:,}, preview-only: {preview_only:,})",
+            "Future Standard",
+            f"{future_eligible:,} isolated ({preview_only:,} unreleased)",
             "green" if preview["isolatedFromOrdinaryLegality"] else "red",
         )
 
