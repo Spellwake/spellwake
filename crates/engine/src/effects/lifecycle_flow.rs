@@ -211,10 +211,28 @@ impl EffectWindow {
         true
     }
 
+    fn consume_skip_turn(&mut self, seat: SeatId) -> bool {
+        if let Some(remaining) = self.skip_turns_remaining.get_mut(&seat)
+            && *remaining > 0
+        {
+            *remaining -= 1;
+            if *remaining == 0 {
+                self.skip_turns_remaining.remove(&seat);
+            }
+            return true;
+        }
+        false
+    }
+
     /// Choose the next actual turn and remember departed seats passed along the way.
     /// Most recently created extra turns precede ordinary rotation (CR 500.7).
+    /// Skipped turns for living players (CR 614.10 / CR 614.10a) are consumed without
+    /// entering `skipped_turns`, so "until your next turn" effects and phasing do not trigger.
     pub(crate) fn take_next_active_player(&mut self) -> Result<SeatId, EffectError> {
-        let table = self.window.participants();
+        let table = self.window.participants().to_vec();
+        if table.is_empty() {
+            return Err(EffectError::WrongPhase);
+        }
         let current = self.window.active_player();
         let ordinary = match self.resume_turn_order_at {
             Some(resume) => resume,
@@ -226,20 +244,33 @@ impl EffectWindow {
         };
         self.skipped_turns.clear();
         while let Some(extra) = self.extra_turns.pop() {
-            if table.contains(&extra) {
-                self.resume_turn_order_at = Some(ordinary);
-                return Ok(extra);
+            if !table.contains(&extra) {
+                self.skipped_turns.insert(extra);
+                continue;
             }
-            self.skipped_turns.insert(extra);
+            if self.consume_skip_turn(extra) {
+                continue;
+            }
+            self.resume_turn_order_at = Some(ordinary);
+            return Ok(extra);
         }
         self.resume_turn_order_at = None;
-        for seat in self.window.original_turn_order_from(ordinary)? {
-            if table.contains(&seat) {
+        let cycle: Vec<SeatId> = self.window.original_turn_order_from(ordinary)?.collect();
+        if cycle.is_empty() {
+            return Err(EffectError::WrongPhase);
+        }
+        loop {
+            for &seat in &cycle {
+                if !table.contains(&seat) {
+                    self.skipped_turns.insert(seat);
+                    continue;
+                }
+                if self.consume_skip_turn(seat) {
+                    continue;
+                }
                 return Ok(seat);
             }
-            self.skipped_turns.insert(seat);
         }
-        Err(EffectError::WrongPhase)
     }
 
     /// Adopt one actual scheduler result. Publication does not add owner revisions.

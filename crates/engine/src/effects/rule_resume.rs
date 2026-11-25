@@ -330,11 +330,18 @@ impl EffectWindow {
                     .window
                     .resolving()
                     .ok_or(EffectError::WrongResolutionFrame)?;
+                let current = self.current_instruction()?;
+                let expected_chooser = match current {
+                    Instruction::AddManaForPlayer { player, .. } => {
+                        self.resolving_player_identity_at(*player, Some(cursor))?
+                    }
+                    _ => actual.controller(),
+                };
                 if bound.revision != self.revision
                     || bound.entry != cursor.entry
                     || bound.instruction != cursor.instruction
                     || bound.chooser != actor
-                    || actual.controller() != actor
+                    || expected_chooser != actor
                     || cursor.chosen_effect_color.is_some()
                     || cursor.chosen_mana_split.is_some()
                 {
@@ -345,12 +352,18 @@ impl EffectWindow {
                 let cursor = next
                     .resolution_cursor_mut()
                     .ok_or(EffectError::WrongResolutionFrame)?;
-                let current = self.current_instruction()?;
                 let effective_mana_yield = match current {
                     Instruction::AddMana(
                         crate::program::EffectManaYield::RetainedUntilCleanup(inner),
-                    ) => Some(inner.as_ref()),
-                    Instruction::AddMana(inner) => Some(inner),
+                    )
+                    | Instruction::AddManaForPlayer {
+                        yield_kind: crate::program::EffectManaYield::RetainedUntilCleanup(inner),
+                        ..
+                    } => Some(inner.as_ref()),
+                    Instruction::AddMana(inner)
+                    | Instruction::AddManaForPlayer {
+                        yield_kind: inner, ..
+                    } => Some(inner),
                     _ => None,
                 };
                 match (current, effective_mana_yield, reply) {
@@ -363,7 +376,7 @@ impl EffectWindow {
                         }),
                         DecisionReply::SplitMana(portion),
                     ) => {
-                        let total = self.resolve_value_expr(actor, amount)?;
+                        let total = self.resolve_value_expr(actual.controller(), amount)?;
                         if !total.is_positive()
                             || portion < 0.into()
                             || portion > total

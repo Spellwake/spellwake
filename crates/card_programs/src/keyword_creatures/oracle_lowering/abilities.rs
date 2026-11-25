@@ -33,11 +33,138 @@ fn modal_choice_requests_distinct(choice: &str) -> bool {
     low.contains("different player") || low.contains("different target")
 }
 
+fn subject_matches_enchanted_land(
+    subject: &SubjectRefAst,
+    attachment: Option<&AttachmentKind>,
+    vocabulary: &CreatureTypeVocabulary,
+) -> bool {
+    let Some(AttachmentKind::Aura(restriction)) = attachment else {
+        return false;
+    };
+    match subject {
+        SubjectRefAst::AttachedHost(desc) => {
+            let low = desc.trim().to_ascii_lowercase();
+            if low == "enchanted land" {
+                return true;
+            }
+            if let Some(kind_raw) = low.strip_prefix("enchanted ")
+                && let EnchantRestriction::Matching(aura_filter) = restriction
+                && let Ok(ast_f) = spellwake_oracle_compiler::filter::parse_object_filter(
+                    kind_raw.trim(),
+                    &cached_compiler_vocab(vocabulary),
+                )
+                && ast_f.zone.is_none()
+                && !ast_f.any_spell
+                && let Ok(subj_filter) = lower_object_filter(&ast_f, vocabulary)
+            {
+                return subj_filter == *aura_filter;
+            }
+            false
+        }
+        SubjectRefAst::Group(f) => {
+            if f.flags != AstFilterFlags::ENCHANTED
+                || !filter_only_has(
+                    f,
+                    FilterAllow {
+                        types: true,
+                        subtypes: true,
+                        flags: true,
+                        ..FilterAllow::NONE
+                    },
+                )
+            {
+                return false;
+            }
+            if f.any_types == AstCardTypeMask::LAND && f.subtypes.is_empty() {
+                return true;
+            }
+            if let EnchantRestriction::Matching(aura_filter) = restriction {
+                let mut stripped = f.as_ref().clone();
+                stripped.flags = AstFilterFlags::EMPTY;
+                if let Ok(subj_filter) = lower_object_filter(&stripped, vocabulary) {
+                    return subj_filter == *aura_filter;
+                }
+            }
+            false
+        }
+        _ => false,
+    }
+}
+
 fn try_lower_triggered_mana_ability(
     trigger: &TriggerSpecAst,
     body: &[InstructionAst],
     entry_tap: Option<&EntryTap>,
+    attachment: Option<&AttachmentKind>,
+    vocabulary: &CreatureTypeVocabulary,
 ) -> Option<Result<ManaOutput, &'static str>> {
+    if let [
+        TriggerEventAst::TapStateChanged {
+            subject,
+            tapped: true,
+            for_mana: true,
+        },
+    ] = trigger.events.as_slice()
+        && subject_matches_enchanted_land(subject, attachment, vocabulary)
+    {
+        if trigger.intervening_if.is_some() {
+            return Some(Err("oracle:unsupported-triggered-mana"));
+        }
+        let [
+            InstructionAst::AddMana {
+                player: PlayerRefAst::ItsController | PlayerRefAst::ThatPlayer | PlayerRefAst::You,
+                mana,
+            },
+        ] = body
+        else {
+            return Some(Err("oracle:unsupported-triggered-mana"));
+        };
+        let bonus = match mana {
+            ManaSpecAst::Fixed(raw) => {
+                let Some(pool) = parse_mana_bundle(raw) else {
+                    return Some(Err("oracle:unsupported-triggered-mana"));
+                };
+                EnchantedLandManaBonus::Fixed(pool)
+            }
+            ManaSpecAst::ChosenColor => {
+                if !matches!(
+                    entry_tap,
+                    Some(
+                        EntryTap::ChooseColor
+                            | EntryTap::ChooseColorExcept(_)
+                            | EntryTap::AlwaysChooseColorExcept(_)
+                    )
+                ) {
+                    return Some(Err("oracle:unsupported-triggered-mana"));
+                }
+                EnchantedLandManaBonus::ChosenColor
+            }
+            ManaSpecAst::AnyColor {
+                amount,
+                single_color,
+            } => {
+                let ValueExprAst::Const(n) = amount.as_ref() else {
+                    return Some(Err("oracle:unsupported-triggered-mana"));
+                };
+                if *n == 1 {
+                    EnchantedLandManaBonus::AnyColor { count: 1 }
+                } else if *n > 1 && !*single_color {
+                    let Ok(count) = u8::try_from(*n) else {
+                        return Some(Err("oracle:unsupported-triggered-mana"));
+                    };
+                    EnchantedLandManaBonus::AnyCombination { count }
+                } else {
+                    // Fail closed on N > 1 mana of any ONE color since triggered_mana_queue
+                    // resolves independent single-color choices per unit.
+                    return Some(Err("oracle:unsupported-triggered-mana"));
+                }
+            }
+            _ => return Some(Err("oracle:unsupported-triggered-mana")),
+        };
+        return Some(Ok(ManaOutput::Triggered(
+            TriggeredManaRule::EnchantedLandTapped { extra: bonus },
+        )));
+    }
     let [
         TriggerEventAst::LandTappedForManaColor {
             filter,
@@ -116,10 +243,20 @@ fn try_lower_triggered_mana_ability(
         return Some(Err("oracle:unsupported-triggered-mana"));
     }
     Some(Ok(ManaOutput::Triggered(
-        spellwake_engine::mana::TriggeredManaRule::LandTappedChosenColor {
+        TriggeredManaRule::LandTappedChosenColor {
             controller_only: *by_you,
         },
     )))
+}
+
+fn body_contains_graveyard_self_return_instruction(body: &ExecutableBody) -> bool {
+    body.instructions.iter().any(|op| {
+        matches!(
+            op,
+            Instruction::ReturnSourceGraveyardToBattlefield { .. }
+                | Instruction::ReturnSourceGraveyardToHand
+        )
+    })
 }
 
 pub(super) fn lower_ability(
@@ -130,14 +267,18 @@ pub(super) fn lower_ability(
 ) -> Result<(), &'static str> {
     match ab {
         AbilityAst::Activated {
-            ability_word: _,
+            ability_word,
             zone,
             cost,
             body,
         } => {
+            let is_boast = ability_word
+                .as_deref()
+                .is_some_and(|w| w.eq_ignore_ascii_case("boast"));
             // Try lowering as a ManaAbility first (battlefield, untargeted AddMana)
             let entry_tap = program.permanent().and_then(|p| p.entry_tap.as_ref());
             if zone.is_none()
+                && !is_boast
                 && let Some(mana_outs) = try_lower_mana_abilities(cost, body, entry_tap, vocabulary)
             {
                 for mana_out in mana_outs {
@@ -150,10 +291,16 @@ pub(super) fn lower_ability(
             }
             let (filtered_ins, mut restriction, mut cost_reduction) =
                 strip_activated_restrictions_ext(body, entry_tap, true, vocabulary)?;
+            if is_boast {
+                restriction = Some(combine_activation_restrictions(
+                    restriction,
+                    ActivationRestriction::Boast,
+                ));
+            }
             let effective_zone = zone.as_deref().or_else(|| {
                 body_returns_self_from_graveyard_ext(&filtered_ins).then_some("graveyard")
             });
-            let (mana_cost, source_cost, hybrids, extra_costs) =
+            let (mut mana_cost, mut source_cost, mut hybrids, mut extra_costs) =
                 lower_activation_cost_full(cost, effective_zone, vocabulary)?;
             let anaphora_ref = if extra_costs.is_empty() {
                 match source_cost {
@@ -326,6 +473,20 @@ pub(super) fn lower_ability(
             }
             let mut exec_body = lower_effect_body(&filtered_ins, vocabulary, ids, false, true)?;
             rewrite_body_anaphora_stats(&mut exec_body, anaphora_ref);
+            if effective_zone.is_none()
+                && !source_cost.is_from_graveyard()
+                && !extra_costs
+                    .iter()
+                    .any(ExtraActivationCost::is_from_graveyard)
+                && body_contains_graveyard_self_return_instruction(&exec_body)
+            {
+                let (gy_mc, gy_sc, gy_hybs, gy_extra) =
+                    lower_activation_cost_full(cost, Some("graveyard"), vocabulary)?;
+                mana_cost = gy_mc;
+                source_cost = gy_sc;
+                hybrids = gy_hybs;
+                extra_costs = gy_extra;
+            }
             let id = ids.activated();
             if !hybrids.is_empty() {
                 program.activation_hybrid_symbols.insert(id, hybrids);
@@ -353,7 +514,10 @@ pub(super) fn lower_ability(
             body,
         } => {
             let entry_tap = program.permanent().and_then(|p| p.entry_tap.as_ref());
-            if let Some(mana_res) = try_lower_triggered_mana_ability(trigger, body, entry_tap) {
+            let attachment = program.permanent().and_then(|p| p.attachment.as_ref());
+            if let Some(mana_res) =
+                try_lower_triggered_mana_ability(trigger, body, entry_tap, attachment, vocabulary)
+            {
                 let output = mana_res?;
                 program.mana.push(ManaAbility {
                     id: ids.mana(),
@@ -932,14 +1096,40 @@ pub(super) fn parse_mana_cost_with_snow(
     Some((mc, x, hybs, snow_count))
 }
 
+fn subject_contains_self(subject: &SubjectRefAst) -> bool {
+    match subject {
+        SubjectRefAst::SelfObject => true,
+        SubjectRefAst::Anaphora(raw) => matches!(
+            raw.trim().to_ascii_lowercase().as_str(),
+            "~" | "this card"
+                | "this creature"
+                | "this permanent"
+                | "this artifact"
+                | "this enchantment"
+                | "this land"
+                | "this aura"
+                | "this equipment"
+                | "this planeswalker"
+        ),
+        SubjectRefAst::InZone { subject: inner, .. } => subject_contains_self(inner),
+        SubjectRefAst::Compound(items) => items.iter().any(subject_contains_self),
+        SubjectRefAst::TargetOneOf { options, .. } => options.iter().any(subject_contains_self),
+        _ => false,
+    }
+}
+
 fn subject_is_self_in_graveyard(subject: &SubjectRefAst) -> bool {
-    matches!(
-        subject,
+    match subject {
         SubjectRefAst::InZone {
             subject: inner,
             zone: ZoneFilter::YourGraveyard | ZoneFilter::AnyGraveyard,
-        } if matches!(inner.as_ref(), SubjectRefAst::SelfObject)
-    )
+        } => subject_contains_self(inner),
+        SubjectRefAst::Compound(items) => items.iter().any(subject_is_self_in_graveyard),
+        SubjectRefAst::TargetOneOf { options, .. } => {
+            options.iter().any(subject_is_self_in_graveyard)
+        }
+        _ => false,
+    }
 }
 
 fn body_returns_self_from_graveyard_ext(body: &[InstructionAst]) -> bool {
@@ -950,7 +1140,7 @@ fn body_returns_self_from_graveyard_ext(body: &[InstructionAst]) -> bool {
         match ins {
             InstructionAst::ReturnZone {
                 subject, from_zone, ..
-            } if (matches!(subject.as_ref(), SubjectRefAst::SelfObject)
+            } if (subject_contains_self(subject)
                 && from_zone
                     .as_deref()
                     .is_some_and(|from| from.to_ascii_lowercase().contains("graveyard")))
@@ -971,7 +1161,10 @@ fn body_returns_self_from_graveyard_ext(body: &[InstructionAst]) -> bool {
             | InstructionAst::Otherwise(inner)
             | InstructionAst::ReplaceEffect(inner)
             | InstructionAst::ReflexiveTrigger(inner)
+            | InstructionAst::Simultaneous(inner)
+            | InstructionAst::ScopedDuration { body: inner, .. }
             | InstructionAst::BindX { body: inner, .. }
+            | InstructionAst::BindXY { body: inner, .. }
             | InstructionAst::IfCondition {
                 then_body: inner, ..
             }
@@ -2176,8 +2369,9 @@ fn try_lower_mana_abilities(
     {
         return None;
     }
-    // Extract AddMana + optional SpendRestriction / SpendEffect + optional Life/Damage side effect
+    // Extract AddMana (or qualified fixed-or-chosen-color mana choice) + optional SpendRestriction / SpendEffect + optional Life/Damage side effect
     let mut mana_spec: Option<&ManaSpecAst> = None;
+    let mut entry_chosen_fixed: Option<ManaType> = None;
     let mut restriction: Option<spellwake_engine::mana::ManaOutputRestriction> = None;
     let mut spend_effect: Option<spellwake_engine::mana::ManaSpendEffect> = None;
     let mut side_effect: Option<ManaSideEffect> = None;
@@ -2187,10 +2381,40 @@ fn try_lower_mana_abilities(
                 player: PlayerRefAst::You,
                 mana,
             } => {
-                if mana_spec.is_some() {
+                if mana_spec.is_some() || entry_chosen_fixed.is_some() {
                     return None;
                 }
                 mana_spec = Some(mana);
+            }
+            InstructionAst::AddQualifiedMana(qm)
+                if qm.player == PlayerRefAst::You
+                    && qm.kind.eq_ignore_ascii_case("mana_choice")
+                    && qm.amount.is_none()
+                    && qm.source.is_none() =>
+            {
+                if mana_spec.is_some() || entry_chosen_fixed.is_some() {
+                    return None;
+                }
+                let fixed_raw = match qm.choices.as_slice() {
+                    [ManaSpecAst::Fixed(raw), ManaSpecAst::ChosenColor]
+                    | [ManaSpecAst::ChosenColor, ManaSpecAst::Fixed(raw)] => raw,
+                    _ => return None,
+                };
+                let fixed = parse_single_mana_type(fixed_raw)?;
+                if fixed == ManaType::Colourless {
+                    return None;
+                }
+                let entry_color_ok = match entry_tap {
+                    Some(EntryTap::ChooseColor) => true,
+                    Some(EntryTap::AlwaysChooseColorExcept(c) | EntryTap::ChooseColorExcept(c)) => {
+                        *c == fixed
+                    }
+                    _ => false,
+                };
+                if !entry_color_ok {
+                    return None;
+                }
+                entry_chosen_fixed = Some(fixed);
             }
             InstructionAst::RetainManaUntilEndOfTurn => {
                 if spend_effect.is_some() {
@@ -2252,161 +2476,167 @@ fn try_lower_mana_abilities(
             _ => return None,
         }
     }
-    let spec = mana_spec?;
-    let base_outputs: Vec<ManaOutput> = match spec {
-        ManaSpecAst::Fixed(raw) => vec![ManaOutput::Fixed(parse_mana_bundle(raw)?)],
-        ManaSpecAst::Choice(opts) => {
-            if opts.is_empty() {
-                return None;
-            }
-            let mut single_colors = BTreeSet::new();
-            let mut extra_bundles: Vec<BTreeMap<ManaType, RulesInteger>> = Vec::new();
-            let mut extra_all_color_amounts: BTreeSet<RulesInteger> = BTreeSet::new();
-            let mut has_chosen_color = false;
-            for o in opts {
-                let o_low = o.trim().to_ascii_lowercase();
-                if matches!(
-                    o_low.as_str(),
-                    "one mana of any color" | "one mana of any one color"
-                ) {
-                    single_colors.extend(ManaOutput::all_colors());
-                } else if o_low == "two mana of any one color" {
-                    extra_all_color_amounts.insert(2.into());
-                } else if o_low == "three mana of any one color" {
-                    extra_all_color_amounts.insert(3.into());
-                } else if matches!(
-                    o_low.as_str(),
-                    "chosen_color" | "one mana of the chosen color" | "one mana of that color"
-                ) {
-                    has_chosen_color = true;
-                } else if let Some(mt) = parse_single_mana_type(o) {
-                    if mt == ManaType::Colourless {
-                        let bundle = BTreeMap::from([(ManaType::Colourless, 1.into())]);
+    let base_outputs: Vec<ManaOutput> = if let Some(fixed) = entry_chosen_fixed {
+        vec![ManaOutput::SpecialColor(
+            SpecialColorYield::EntryChosenColor { fixed },
+        )]
+    } else {
+        let spec = mana_spec?;
+        match spec {
+            ManaSpecAst::Fixed(raw) => vec![ManaOutput::Fixed(parse_mana_bundle(raw)?)],
+            ManaSpecAst::Choice(opts) => {
+                if opts.is_empty() {
+                    return None;
+                }
+                let mut single_colors = BTreeSet::new();
+                let mut extra_bundles: Vec<BTreeMap<ManaType, RulesInteger>> = Vec::new();
+                let mut extra_all_color_amounts: BTreeSet<RulesInteger> = BTreeSet::new();
+                let mut has_chosen_color = false;
+                for o in opts {
+                    let o_low = o.trim().to_ascii_lowercase();
+                    if matches!(
+                        o_low.as_str(),
+                        "one mana of any color" | "one mana of any one color"
+                    ) {
+                        single_colors.extend(ManaOutput::all_colors());
+                    } else if o_low == "two mana of any one color" {
+                        extra_all_color_amounts.insert(2.into());
+                    } else if o_low == "three mana of any one color" {
+                        extra_all_color_amounts.insert(3.into());
+                    } else if matches!(
+                        o_low.as_str(),
+                        "chosen_color" | "one mana of the chosen color" | "one mana of that color"
+                    ) {
+                        has_chosen_color = true;
+                    } else if let Some(mt) = parse_single_mana_type(o) {
+                        if mt == ManaType::Colourless {
+                            let bundle = BTreeMap::from([(ManaType::Colourless, 1.into())]);
+                            if !extra_bundles.contains(&bundle) {
+                                extra_bundles.push(bundle);
+                            }
+                        } else {
+                            single_colors.insert(mt);
+                        }
+                    } else {
+                        let bundle = parse_mana_bundle(o)?;
                         if !extra_bundles.contains(&bundle) {
                             extra_bundles.push(bundle);
                         }
-                    } else {
-                        single_colors.insert(mt);
                     }
+                }
+                if has_chosen_color {
+                    if !extra_bundles.is_empty()
+                        || !extra_all_color_amounts.is_empty()
+                        || single_colors.len() != 1
+                    {
+                        return None;
+                    }
+                    let fixed = *single_colors.iter().next()?;
+                    if !matches!(
+                        entry_tap,
+                        Some(EntryTap::AlwaysChooseColorExcept(c) | EntryTap::ChooseColorExcept(c))
+                            if *c == fixed
+                    ) {
+                        return None;
+                    }
+                    vec![ManaOutput::SpecialColor(
+                        SpecialColorYield::EntryChosenColor { fixed },
+                    )]
+                } else if extra_bundles.is_empty() && extra_all_color_amounts.is_empty() {
+                    if single_colors.is_empty() {
+                        return None;
+                    }
+                    vec![ManaOutput::ChooseColor {
+                        amount: 1.into(),
+                        colors: single_colors,
+                    }]
                 } else {
-                    let bundle = parse_mana_bundle(o)?;
-                    if !extra_bundles.contains(&bundle) {
-                        extra_bundles.push(bundle);
+                    let mut outs = Vec::new();
+                    let mut grouped_colored: BTreeMap<RulesInteger, BTreeSet<ManaType>> =
+                        BTreeMap::new();
+                    let mut fixed_bundles: Vec<BTreeMap<ManaType, RulesInteger>> = Vec::new();
+                    for bundle in extra_bundles {
+                        if bundle.len() == 1
+                            && let Some((&mt, qty)) = bundle.iter().next()
+                            && mt != ManaType::Colourless
+                        {
+                            grouped_colored.entry(qty.clone()).or_default().insert(mt);
+                        } else {
+                            fixed_bundles.push(bundle);
+                        }
                     }
+                    if !single_colors.is_empty() {
+                        grouped_colored
+                            .entry(1.into())
+                            .or_default()
+                            .extend(single_colors);
+                    }
+                    for amt in extra_all_color_amounts {
+                        grouped_colored
+                            .entry(amt)
+                            .or_default()
+                            .extend(ManaOutput::all_colors());
+                    }
+                    for bundle in fixed_bundles {
+                        outs.push(ManaOutput::Fixed(bundle));
+                    }
+                    for (amount, colors) in grouped_colored {
+                        if colors.len() == 1 {
+                            let c = *colors.iter().next()?;
+                            outs.push(ManaOutput::Fixed(BTreeMap::from([(c, amount)])));
+                        } else if !colors.is_empty() {
+                            outs.push(ManaOutput::ChooseColor { amount, colors });
+                        }
+                    }
+                    if outs.is_empty() {
+                        return None;
+                    }
+                    outs
                 }
             }
-            if has_chosen_color {
-                if !extra_bundles.is_empty()
-                    || !extra_all_color_amounts.is_empty()
-                    || single_colors.len() != 1
-                {
+            ManaSpecAst::AnyColor {
+                amount,
+                single_color,
+            } if *single_color || matches!(amount.as_ref(), ValueExprAst::Const(1)) => {
+                let ValueExprAst::Const(n) = amount.as_ref() else {
                     return None;
-                }
-                let fixed = *single_colors.iter().next()?;
-                if !matches!(
-                    entry_tap,
-                    Some(EntryTap::AlwaysChooseColorExcept(c) | EntryTap::ChooseColorExcept(c))
-                        if *c == fixed
-                ) {
-                    return None;
-                }
-                vec![ManaOutput::SpecialColor(
-                    SpecialColorYield::EntryChosenColor { fixed },
-                )]
-            } else if extra_bundles.is_empty() && extra_all_color_amounts.is_empty() {
-                if single_colors.is_empty() {
+                };
+                if *n <= 0 {
                     return None;
                 }
                 vec![ManaOutput::ChooseColor {
-                    amount: 1.into(),
-                    colors: single_colors,
+                    amount: i64::from(*n).into(),
+                    colors: ManaOutput::all_colors(),
                 }]
-            } else {
-                let mut outs = Vec::new();
-                let mut grouped_colored: BTreeMap<RulesInteger, BTreeSet<ManaType>> =
-                    BTreeMap::new();
-                let mut fixed_bundles: Vec<BTreeMap<ManaType, RulesInteger>> = Vec::new();
-                for bundle in extra_bundles {
-                    if bundle.len() == 1
-                        && let Some((&mt, qty)) = bundle.iter().next()
-                        && mt != ManaType::Colourless
-                    {
-                        grouped_colored.entry(qty.clone()).or_default().insert(mt);
-                    } else {
-                        fixed_bundles.push(bundle);
-                    }
-                }
-                if !single_colors.is_empty() {
-                    grouped_colored
-                        .entry(1.into())
-                        .or_default()
-                        .extend(single_colors);
-                }
-                for amt in extra_all_color_amounts {
-                    grouped_colored
-                        .entry(amt)
-                        .or_default()
-                        .extend(ManaOutput::all_colors());
-                }
-                for bundle in fixed_bundles {
-                    outs.push(ManaOutput::Fixed(bundle));
-                }
-                for (amount, colors) in grouped_colored {
-                    if colors.len() == 1 {
-                        let c = *colors.iter().next()?;
-                        outs.push(ManaOutput::Fixed(BTreeMap::from([(c, amount)])));
-                    } else if !colors.is_empty() {
-                        outs.push(ManaOutput::ChooseColor { amount, colors });
-                    }
-                }
-                if outs.is_empty() {
+            }
+            ManaSpecAst::DifferentColors { amount }
+                if matches!(amount.as_ref(), ValueExprAst::Const(2)) =>
+            {
+                vec![ManaOutput::TwoColors { distinct: true }]
+            }
+            ManaSpecAst::ScaledSymbol { symbol, amount } => {
+                let mt = parse_single_mana_type(symbol)?;
+                let ValueExprAst::Count(filter) = amount.as_ref() else {
                     return None;
-                }
-                outs
+                };
+                let permanents = lower_filter_to_permanent_selector(filter, vocabulary).ok()?;
+                vec![ManaOutput::Counted {
+                    mana_type: Some(mt),
+                    permanents,
+                }]
             }
-        }
-        ManaSpecAst::AnyColor {
-            amount,
-            single_color,
-        } if *single_color || matches!(amount.as_ref(), ValueExprAst::Const(1)) => {
-            let ValueExprAst::Const(n) = amount.as_ref() else {
-                return None;
-            };
-            if *n <= 0 {
-                return None;
+            ManaSpecAst::CommanderColorIdentity => {
+                vec![ManaOutput::SpecialColor(
+                    SpecialColorYield::CommanderColorIdentity,
+                )]
             }
-            vec![ManaOutput::ChooseColor {
-                amount: i64::from(*n).into(),
-                colors: ManaOutput::all_colors(),
-            }]
+            ManaSpecAst::AnyLandCouldProduce {
+                controller: ControllerRelation::Opponent | ControllerRelation::Opponents,
+            } => vec![ManaOutput::SpecialColor(
+                SpecialColorYield::OpponentsLandColors,
+            )],
+            _ => return None,
         }
-        ManaSpecAst::DifferentColors { amount }
-            if matches!(amount.as_ref(), ValueExprAst::Const(2)) =>
-        {
-            vec![ManaOutput::TwoColors { distinct: true }]
-        }
-        ManaSpecAst::ScaledSymbol { symbol, amount } => {
-            let mt = parse_single_mana_type(symbol)?;
-            let ValueExprAst::Count(filter) = amount.as_ref() else {
-                return None;
-            };
-            let permanents = lower_filter_to_permanent_selector(filter, vocabulary).ok()?;
-            vec![ManaOutput::Counted {
-                mana_type: Some(mt),
-                permanents,
-            }]
-        }
-        ManaSpecAst::CommanderColorIdentity => {
-            vec![ManaOutput::SpecialColor(
-                SpecialColorYield::CommanderColorIdentity,
-            )]
-        }
-        ManaSpecAst::AnyLandCouldProduce {
-            controller: ControllerRelation::Opponent | ControllerRelation::Opponents,
-        } => vec![ManaOutput::SpecialColor(
-            SpecialColorYield::OpponentsLandColors,
-        )],
-        _ => return None,
     };
 
     if base_outputs.len() > 1
@@ -3359,6 +3589,27 @@ pub(super) fn lower_extra_cost_atom(
     }
 }
 
+fn extra_cost_requires_battlefield(cost: &ExtraActivationCost) -> bool {
+    match cost {
+        ExtraActivationCost::TapSource
+        | ExtraActivationCost::UntapSource
+        | ExtraActivationCost::SacrificeSource
+        | ExtraActivationCost::ReturnSourceToHand
+        | ExtraActivationCost::SourceCounter { .. }
+        | ExtraActivationCost::ExertSource
+        | ExtraActivationCost::ExileSource {
+            from_graveyard: false,
+            from_hand: false,
+            ..
+        }
+        | ExtraActivationCost::Unattach { self_source: true } => true,
+        ExtraActivationCost::Either(a, b) => {
+            extra_cost_requires_battlefield(a) || extra_cost_requires_battlefield(b)
+        }
+        _ => false,
+    }
+}
+
 pub(super) fn lower_activation_cost_composite(
     cost: &[CostAtomAst],
     zone: Option<&str>,
@@ -3393,6 +3644,12 @@ pub(super) fn lower_activation_cost_composite(
     }
     if zone == Some("hand") && !extra.iter().any(ExtraActivationCost::is_from_hand) {
         return Err("oracle:unsupported-hand-activation");
+    }
+    if zone == Some("graveyard")
+        && (extra.iter().any(extra_cost_requires_battlefield)
+            || extra.iter().any(ExtraActivationCost::is_from_hand))
+    {
+        return Err("oracle:gy-tap-or-sac");
     }
     if zone == Some("graveyard")
         && x_symbols > 0
@@ -3780,7 +4037,7 @@ pub(super) fn lower_activation_cost_fast(
         return Err("oracle:unsupported-hand-activation");
     }
     if exile_self {
-        if sac_self || pay_life.is_some() || sac_selected.is_some() {
+        if sac_self || pay_life.is_some() || sac_selected.is_some() || (from_gy && tap_self) {
             return Err("oracle:compound-exile-self");
         }
         return Ok((
@@ -3867,7 +4124,7 @@ pub(super) fn lower_activation_cost_fast(
         ));
     }
     if let Some((filter, count)) = sac_selected {
-        if sac_self {
+        if sac_self || (from_gy && tap_self) {
             return Err("oracle:compound-sac");
         }
         return Ok((
@@ -6379,6 +6636,27 @@ pub(super) fn lower_trigger_event(
             })?,
             TriggerGrouping::EachOccurrence,
         )),
+        TriggerEventAst::PermanentRegenerates { subject, this_way } => {
+            if *this_way {
+                return Err("oracle:unsupported-trigger-event");
+            }
+            Ok((
+                lower_subject_trigger_event(subject, vocabulary, |subj| {
+                    TriggerEvent::StatusChanged {
+                        subject: subj,
+                        kind: StatusTriggerKind::Regenerated,
+                    }
+                })?,
+                TriggerGrouping::EachOccurrence,
+            ))
+        }
+        TriggerEventAst::PermanentFights { subject } => Ok((
+            lower_subject_trigger_event(subject, vocabulary, |subj| TriggerEvent::StatusChanged {
+                subject: subj,
+                kind: StatusTriggerKind::Fought,
+            })?,
+            TriggerGrouping::EachOccurrence,
+        )),
         TriggerEventAst::KeywordActionPerformed { player, action } => {
             let rel = lower_player_relation(*player)?;
             let low = action.trim().to_ascii_lowercase();
@@ -6552,6 +6830,15 @@ pub(super) fn lower_trigger_event(
                             from_zone: TriggerFromZone::NotGraveyardOrExile,
                             cast_origin: None,
                             attached_to_creature: false,
+                        },
+                        TriggerGrouping::EachOccurrence,
+                    ));
+                }
+                "you earthbend" | "earthbend" => {
+                    return Ok((
+                        TriggerEvent::PlayerAction {
+                            player: rel,
+                            action: PlayerTriggerAction::Earthbent,
                         },
                         TriggerGrouping::EachOccurrence,
                     ));
@@ -8528,6 +8815,9 @@ fn try_lower_specialized_trigger_condition(
                 "solved" => Some(TriggerCondition::SourceIsSolved),
                 "unsolved" => Some(TriggerCondition::SourceIsUnsolved),
                 "unrenowned" | "not renowned" => Some(TriggerCondition::UnrenownedSource),
+                "not_owned_by_you" | "not owned by you" | "not_owned_by_controller" => {
+                    Some(TriggerCondition::SourceNotOwnedByController)
+                }
                 other => {
                     if let Some(flt_raw) = other.strip_prefix("is:") {
                         let compiler_vocab = cached_compiler_vocab(vocabulary);
@@ -8911,11 +9201,54 @@ fn try_lower_specialized_trigger_condition(
             "drew_two_cards" | "you've drawn two or more cards this turn" => {
                 Some(TriggerCondition::ControllerDrewCardsThisTurn(2))
             }
+            "you don't own it"
+            | "you don't own ~"
+            | "you don't own this creature"
+            | "you don't own this permanent"
+            | "not_owned_by_controller" => Some(TriggerCondition::SourceNotOwnedByController),
             _ => None,
         },
         ConditionAst::MatchesFilter { subject, filter }
-            if matches!(subject.as_ref(), SubjectRefAst::SelfObject) =>
+            if matches!(subject.as_ref(), SubjectRefAst::SelfObject)
+                || matches!(
+                    subject.as_ref(),
+                    SubjectRefAst::Anaphora(a)
+                        if matches!(
+                            a.trim().to_ascii_lowercase().as_str(),
+                            "it" | "~" | "this creature" | "this permanent"
+                        )
+                ) =>
         {
+            let is_not_owned_only = (filter.owner == Some(ControllerRelation::OwnerOpponent)
+                || filter.controller == Some(ControllerRelation::OwnerOpponent)
+                || filter.predicates.as_slice()
+                    == [spellwake_oracle_compiler::ast::FilterPredicateAst::NotOwnedByController])
+                && filter.any_types.is_empty()
+                && filter.forbidden_types.is_empty()
+                && filter.required_supertypes.is_empty()
+                && filter.forbidden_supertypes.is_empty()
+                && filter.subtypes.is_empty()
+                && filter.forbidden_subtypes.is_empty()
+                && filter.any_colors.is_empty()
+                && filter.forbidden_colors.is_empty()
+                && filter.color_arity.is_none()
+                && filter.zone.is_none()
+                && filter.extra_zones.is_empty()
+                && filter.combat.is_none()
+                && filter.tapped.is_none()
+                && filter.token.is_none()
+                && filter.required_keywords.is_empty()
+                && filter.forbidden_keywords.is_empty()
+                && filter.stat_bounds.is_empty()
+                && filter.counter_kind.is_none()
+                && filter.named.is_none()
+                && filter.flags.is_empty();
+            if is_not_owned_only {
+                return Some(TriggerCondition::SourceNotOwnedByController);
+            }
+            if !matches!(subject.as_ref(), SubjectRefAst::SelfObject) {
+                return None;
+            }
             let obj = lower_object_filter(filter, vocabulary).ok()?;
             Some(TriggerCondition::SourceMatches(Box::new(obj)))
         }
@@ -9258,6 +9591,14 @@ fn try_lower_specialized_trigger_condition(
                         right: ValueExpr::literal(3),
                     })))
                 }
+                "you don't own it"
+                | "you don't own ~"
+                | "you don't own this creature"
+                | "you don't own this permanent"
+                | "it isn't owned by you"
+                | "it is not owned by you"
+                | "~ isn't owned by you"
+                | "~ is not owned by you" => Some(TriggerCondition::SourceNotOwnedByController),
                 _ => None,
             }
         }

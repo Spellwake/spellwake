@@ -289,6 +289,8 @@ pub enum PlayerTriggerAction {
     FinishedVoting,
     /// A spell cast by `player` is countered.
     OwnSpellCountered,
+    /// Player earthbends a land.
+    Earthbent,
 }
 
 /// Status or physical-transition trigger on a permanent.
@@ -311,6 +313,8 @@ pub enum StatusTriggerKind {
     BecomesMonstrous,
     /// Permanent becomes renowned (CR 702.112).
     BecomesRenowned,
+    /// Permanent fights another creature (CR 701.12).
+    Fought,
 }
 
 /// Keyword-owned trigger event with specialized rules semantics.
@@ -428,6 +432,8 @@ pub enum TriggerCondition {
     },
     /// Triggering activated ability is not a mana ability.
     TriggeringAbilityNotMana,
+    /// Trigger source permanent is not owned by its current controller.
+    SourceNotOwnedByController,
     /// General world-evaluable condition expression (also re-checked on resolution per CR 603.4).
     Eval(Box<super::ResolutionCondition>),
     Not(Box<TriggerCondition>),

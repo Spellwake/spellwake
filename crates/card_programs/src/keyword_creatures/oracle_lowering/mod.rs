@@ -42,9 +42,9 @@ use spellwake_engine::{
     land::{BasicLandType, EntryTap, LandType},
     life::{LifeAdjustment, LifeChangeKind},
     mana::{
-        HybridAlternative, HybridSymbol, ManaAbility, ManaAbilityId, ManaCost, ManaOutput,
-        ManaOutputModifier, ManaRestriction, ManaSacrificeCost, ManaSideEffect, ManaType,
-        SpecialColorYield,
+        EnchantedLandManaBonus, HybridAlternative, HybridSymbol, ManaAbility, ManaAbilityId,
+        ManaCost, ManaOutput, ManaOutputModifier, ManaRestriction, ManaSacrificeCost,
+        ManaSideEffect, ManaType, SpecialColorYield, TriggeredManaRule,
     },
     program::{
         AdditionalCastCost, AffectedPlayers, ArtifactSubtype, AttackRequirement, AttackTriggerMode,
@@ -1850,8 +1850,7 @@ fn lower_face(
         .unwrap_or("")
         .to_ascii_lowercase();
     for rep in &face_ast.replacements {
-        if replacement_contains_enters_as_copy(rep)
-            && (raw_oracle_low.contains("tapped") || raw_oracle_low.contains("until end of turn"))
+        if replacement_contains_enters_as_copy(rep) && raw_oracle_low.contains("until end of turn")
         {
             return Err("oracle:unsupported-enters-as-copy");
         }
@@ -2254,6 +2253,7 @@ fn lower_face(
     // Wire DieRollBand thresholds (`1-9 | ...`, `10-19 | ...`, `20 | ...`, `15+ | ...`) onto RollDie
     if !die_roll_bands_raw.is_empty() {
         let compiler_vocab = cached_compiler_vocab(vocabulary);
+        let (roll_in_trigger, roll_target) = find_die_roll_context(&program);
         let mut parsed_bands = Vec::with_capacity(die_roll_bands_raw.len());
         for (roll_raw, payload_raw) in die_roll_bands_raw {
             let (min, max) = parse_die_roll_range(roll_raw).ok_or("oracle:bad-die-roll-range")?;
@@ -2264,10 +2264,14 @@ fn lower_face(
             if !fails.is_empty() || ins.is_empty() {
                 return Err("oracle:die-roll-band-parse-failed");
             }
-            let band_body = lower_effect_body(&ins, vocabulary, &mut ids, false, !is_spell)?;
-            if band_body.target != BodyTarget::None {
-                return Err("oracle:die-roll-band-target");
-            }
+            let band_body = lower_die_roll_band_body(
+                &ins,
+                vocabulary,
+                &mut ids,
+                roll_in_trigger,
+                !is_spell,
+                roll_target,
+            )?;
             parsed_bands.push(spellwake_engine::program::DieRollBand {
                 min,
                 max,
@@ -2502,6 +2506,51 @@ fn strip_die_band_ability_word(raw: &str) -> &str {
     }
 }
 
+fn body_has_empty_die_roll(body: &ExecutableBody) -> bool {
+    body.instructions.iter().any(|op| {
+        matches!(
+            op,
+            Instruction::RollDie { bands, .. } if bands.is_empty()
+        )
+    })
+}
+
+fn find_die_roll_context(program: &Program) -> (bool, BodyTarget) {
+    if let ProgramKind::Spell(spell) = &program.kind {
+        if body_has_empty_die_roll(&spell.body) {
+            return (false, spell.body.target);
+        }
+        if let Some(modes) = &spell.modes {
+            if let Some(p) = &modes.prefix
+                && body_has_empty_die_roll(p)
+            {
+                return (false, p.target);
+            }
+            if let Some(s) = &modes.suffix
+                && body_has_empty_die_roll(s)
+            {
+                return (false, s.target);
+            }
+            for m in &modes.additional {
+                if body_has_empty_die_roll(m) {
+                    return (false, m.target);
+                }
+            }
+        }
+    }
+    for tr in &program.triggered {
+        if body_has_empty_die_roll(&tr.body) {
+            return (true, tr.body.target);
+        }
+    }
+    for act in &program.activated {
+        if body_has_empty_die_roll(&act.body) {
+            return (false, act.body.target);
+        }
+    }
+    (false, BodyTarget::None)
+}
+
 fn attach_die_roll_bands_in_body(
     body: &mut ExecutableBody,
     bands: &[spellwake_engine::program::DieRollBand],
@@ -2663,6 +2712,10 @@ fn lower_gated_section(
                 if scratch.activation_modes.contains_key(&ab.id)
                     || scratch.activation_hybrid_symbols.contains_key(&ab.id)
                     || scratch.extra_activation_costs.contains_key(&ab.id)
+                    || scratch.activation_cost_reductions.contains_key(&ab.id)
+                    || scratch
+                        .activation_target_cost_reductions
+                        .contains_key(&ab.id)
                     || scratch.loyalty_costs.contains_key(&ab.id)
                 {
                     return Err("oracle:leveler-complex-activated");
@@ -2772,6 +2825,12 @@ fn lower_gated_section(
                 }
                 if let Some(e) = scratch.extra_activation_costs.remove(&ab_id) {
                     program.extra_activation_costs.insert(ab_id, e);
+                }
+                if let Some(r) = scratch.activation_cost_reductions.remove(&ab_id) {
+                    program.activation_cost_reductions.insert(ab_id, r);
+                }
+                if let Some(tr) = scratch.activation_target_cost_reductions.remove(&ab_id) {
+                    program.activation_target_cost_reductions.insert(ab_id, tr);
                 }
                 let merged_res = combine_activation_restrictions(
                     scratch.activation_restrictions.remove(&ab_id),
@@ -3096,7 +3155,8 @@ fn strip_snow_mana_symbols(raw: &str) -> Option<(String, u8)> {
 
 fn replacement_contains_enters_as_copy(rep: &ReplacementEffectAst) -> bool {
     match rep {
-        ReplacementEffectAst::EntersAsCopy { .. } => true,
+        ReplacementEffectAst::EntersAsCopy { .. }
+        | ReplacementEffectAst::EntersAsCopyModified(_) => true,
         ReplacementEffectAst::Compound(items) => {
             items.iter().any(replacement_contains_enters_as_copy)
         }

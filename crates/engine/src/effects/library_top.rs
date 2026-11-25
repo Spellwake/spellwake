@@ -999,7 +999,17 @@ impl EffectWindow {
             | Instruction::ExileSubjectUntilSourceLeaves { .. }
             | Instruction::ReturnCardsExiledWithLinkExt { .. }
             | Instruction::DrawGame
-            | Instruction::TurnFaceUpSubject { .. } => return Ok(false),
+            | Instruction::TurnFaceUpSubject { .. }
+            | Instruction::DiscardUpToExt { .. }
+            | Instruction::Earthbend { .. }
+            | Instruction::ReturnEarthbentCard
+            | Instruction::RegenerateSubject { .. }
+            | Instruction::AddManaForPlayer { .. }
+            | Instruction::SkipNextTurns { .. }
+            | Instruction::SelectExtremeLifePlayer { .. }
+            | Instruction::AttachFixedTargets
+            | Instruction::AttachPermanentToPlayer { .. }
+            | Instruction::AttachChoosingPermanent { .. } => return Ok(false),
         };
         let controller = self
             .window

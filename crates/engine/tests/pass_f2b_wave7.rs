@@ -3464,6 +3464,9 @@ fn entry_copy_matching_ext_keeps_name_grants_keywords_and_conditional_counters()
         override_pt: None,
         extra_colors: BTreeSet::new(),
         keep_name: true,
+        optional: true,
+        enters_tapped: false,
+        extra_mana: vec![],
     })));
     let clone = validated(clone, &vocab);
 

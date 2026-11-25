@@ -4577,6 +4577,9 @@ pub fn occurrence(value: &RulesOccurrence) -> Value {
         RulesOccurrence::BecameMonstrous { object, count } => {
             json!({"tag":"BecameMonstrous","object":opaque(object),"count":count})
         }
+        RulesOccurrence::PermanentFought { object, opponent } => {
+            json!({"tag":"PermanentFought","object":opaque(object),"opponent":opaque(opponent)})
+        }
     }
 }
 /// Common exact placement fields for journals and pending executor snapshots.

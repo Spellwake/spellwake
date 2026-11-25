@@ -600,7 +600,7 @@ pub enum CombatFilter {
 
 /// Compact bitflags for less-frequent object predicates.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub struct ObjectFilterFlags(u32);
+pub struct ObjectFilterFlags(u64);
 
 impl ObjectFilterFlags {
     pub const EMPTY: Self = Self(0);
@@ -638,6 +638,34 @@ impl ObjectFilterFlags {
     pub const MATCHES_CHOSEN_NAME: Self = Self(1 << 21);
     /// Creature that did not attack this turn.
     pub const DID_NOT_ATTACK_THIS_TURN: Self = Self(1 << 22);
+    /// Put into a graveyard from anywhere this turn.
+    pub const PUT_INTO_GY_THIS_TURN: Self = Self(1 << 23);
+    /// Put into a graveyard from a library this turn.
+    pub const PUT_INTO_GY_FROM_LIBRARY_THIS_TURN: Self = Self(1 << 24);
+    /// Spell or permanent that was kicked (CR 702.33).
+    pub const KICKED: Self = Self(1 << 25);
+    /// Creature that is renowned (CR 702.112).
+    pub const RENOWNED: Self = Self(1 << 26);
+    /// Mount that is saddled this turn (CR 702.171).
+    pub const SADDLED: Self = Self(1 << 27);
+    /// Creature that is monstrous (CR 701.31).
+    pub const MONSTROUS: Self = Self(1 << 28);
+    /// Creature that is suspected (CR 701.58).
+    pub const SUSPECTED: Self = Self(1 << 29);
+    /// Creature that is goaded (CR 701.38).
+    pub const GOADED: Self = Self(1 << 30);
+    /// Case enchantment that is solved (CR 719.3).
+    pub const SOLVED: Self = Self(1 << 31);
+    /// Permanent that is prepared.
+    pub const PREPARED: Self = Self(1 << 32);
+    /// Permanent that was exerted this turn (CR 701.39).
+    pub const EXERTED: Self = Self(1 << 33);
+    /// Non-historic object (neither artifact, legendary, nor Saga; CR 700.6).
+    pub const NON_HISTORIC: Self = Self(1 << 34);
+    /// Permanent with at least one -1/-1 counter on it.
+    pub const WITH_MINUS_ONE_COUNTER: Self = Self(1 << 35);
+    /// Object that has an Adventure alternative face (CR 715).
+    pub const HAS_ADVENTURE: Self = Self(1 << 36);
 
     #[must_use]
     pub const fn union(self, other: Self) -> Self {
@@ -1204,13 +1232,27 @@ impl ObjectClause {
         {
             return false;
         }
-        if self.flags.contains(ObjectFilterFlags::HISTORIC)
-            && !p.current_types.contains(&CardType::Artifact)
-            && !p.current_supertypes.contains(&Supertype::Legendary)
-            && !p
-                .current_enchantment_subtypes
-                .contains(&EnchantmentSubtype::Saga)
+        let is_historic = p.current_types.contains(&CardType::Artifact)
+            || p.current_supertypes.contains(&Supertype::Legendary)
+            || p.current_enchantment_subtypes
+                .contains(&EnchantmentSubtype::Saga);
+        if self.flags.contains(ObjectFilterFlags::HISTORIC) && !is_historic {
+            return false;
+        }
+        if self.flags.contains(ObjectFilterFlags::NON_HISTORIC) && is_historic {
+            return false;
+        }
+        if self
+            .flags
+            .contains(ObjectFilterFlags::WITH_MINUS_ONE_COUNTER)
+            && !p.has_minus_one_counter
         {
+            return false;
+        }
+        if self.flags.contains(ObjectFilterFlags::SADDLED) && !p.saddled {
+            return false;
+        }
+        if self.flags.contains(ObjectFilterFlags::HAS_ADVENTURE) && !p.defined.has_adventure {
             return false;
         }
         if self.flags.contains(ObjectFilterFlags::COMMANDER_ONLY) && p.commander_owner.is_none() {
@@ -2567,6 +2609,8 @@ impl ObjectFilter {
                 || !c.required_supertypes.is_empty()
                 || !c.forbidden_supertypes.is_empty()
                 || c.flags.contains(ObjectFilterFlags::HISTORIC)
+                || c.flags.contains(ObjectFilterFlags::NON_HISTORIC)
+                || c.flags.contains(ObjectFilterFlags::HAS_ADVENTURE)
             {
                 return false;
             }
@@ -2597,13 +2641,53 @@ impl ObjectFilter {
             {
                 return false;
             }
-            if c.flags.contains(ObjectFilterFlags::HISTORIC)
-                && !spell.types.contains(&CardType::Artifact)
-                && !spell.current_supertypes.contains(&Supertype::Legendary)
-                && !spell
+            let is_historic = spell.types.contains(&CardType::Artifact)
+                || spell.current_supertypes.contains(&Supertype::Legendary)
+                || spell
                     .enchantment_subtypes
-                    .contains(&EnchantmentSubtype::Saga)
+                    .contains(&EnchantmentSubtype::Saga);
+            if c.flags.contains(ObjectFilterFlags::HISTORIC) && !is_historic {
+                return false;
+            }
+            if c.flags.contains(ObjectFilterFlags::NON_HISTORIC) && is_historic {
+                return false;
+            }
+            if c.flags.contains(ObjectFilterFlags::WITH_MINUS_ONE_COUNTER)
+                && !spell
+                    .battlefield_counters
+                    .as_ref()
+                    .is_some_and(|counters| counters.minus_one.is_positive())
             {
+                return false;
+            }
+            if c.flags.contains(ObjectFilterFlags::KICKED) && spell.kicker_choices.is_empty() {
+                return false;
+            }
+            if c.flags.contains(ObjectFilterFlags::RENOWNED) && !spell.renowned {
+                return false;
+            }
+            if c.flags.contains(ObjectFilterFlags::SADDLED) && !spell.saddled {
+                return false;
+            }
+            if c.flags.contains(ObjectFilterFlags::MONSTROUS) && !spell.monstrous {
+                return false;
+            }
+            if c.flags.contains(ObjectFilterFlags::SUSPECTED) && !spell.suspected {
+                return false;
+            }
+            if c.flags.contains(ObjectFilterFlags::GOADED) && !spell.goaded {
+                return false;
+            }
+            if c.flags.contains(ObjectFilterFlags::SOLVED) && !spell.solved {
+                return false;
+            }
+            if c.flags.contains(ObjectFilterFlags::PREPARED) && !spell.prepared {
+                return false;
+            }
+            if c.flags.contains(ObjectFilterFlags::EXERTED) && !spell.exerted {
+                return false;
+            }
+            if c.flags.contains(ObjectFilterFlags::HAS_ADVENTURE) && !spell.has_adventure {
                 return false;
             }
             if c.flags.contains(ObjectFilterFlags::COMMANDER_ONLY)
@@ -2757,13 +2841,15 @@ impl ObjectFilter {
             {
                 return false;
             }
-            if c.flags.contains(ObjectFilterFlags::HISTORIC)
-                && !object.types.contains(&CardType::Artifact)
-                && !object.current_supertypes.contains(&Supertype::Legendary)
-                && !object
+            let is_historic = object.types.contains(&CardType::Artifact)
+                || object.current_supertypes.contains(&Supertype::Legendary)
+                || object
                     .enchantment_subtypes
-                    .contains(&EnchantmentSubtype::Saga)
-            {
+                    .contains(&EnchantmentSubtype::Saga);
+            if c.flags.contains(ObjectFilterFlags::HISTORIC) && !is_historic {
+                return false;
+            }
+            if c.flags.contains(ObjectFilterFlags::NON_HISTORIC) && is_historic {
                 return false;
             }
             if c.flags.contains(ObjectFilterFlags::COMMANDER_ONLY)
@@ -2784,6 +2870,14 @@ impl ObjectFilter {
             {
                 return false;
             }
+            if c.flags.contains(ObjectFilterFlags::WITH_MINUS_ONE_COUNTER)
+                && !object
+                    .battlefield_counters
+                    .as_ref()
+                    .is_some_and(|counters| counters.minus_one.is_positive())
+            {
+                return false;
+            }
             if c.flags.contains(ObjectFilterFlags::WITH_ANY_COUNTER)
                 && !object
                     .battlefield_total_counters
@@ -2798,6 +2892,36 @@ impl ObjectFilter {
                     .as_ref()
                     .is_some_and(spellwake_contracts::RulesInteger::is_positive)
             {
+                return false;
+            }
+            if c.flags.contains(ObjectFilterFlags::KICKED) && object.kicker_choices.is_empty() {
+                return false;
+            }
+            if c.flags.contains(ObjectFilterFlags::RENOWNED) && !object.renowned {
+                return false;
+            }
+            if c.flags.contains(ObjectFilterFlags::SADDLED) && !object.saddled {
+                return false;
+            }
+            if c.flags.contains(ObjectFilterFlags::MONSTROUS) && !object.monstrous {
+                return false;
+            }
+            if c.flags.contains(ObjectFilterFlags::SUSPECTED) && !object.suspected {
+                return false;
+            }
+            if c.flags.contains(ObjectFilterFlags::GOADED) && !object.goaded {
+                return false;
+            }
+            if c.flags.contains(ObjectFilterFlags::SOLVED) && !object.solved {
+                return false;
+            }
+            if c.flags.contains(ObjectFilterFlags::PREPARED) && !object.prepared {
+                return false;
+            }
+            if c.flags.contains(ObjectFilterFlags::EXERTED) && !object.exerted {
+                return false;
+            }
+            if c.flags.contains(ObjectFilterFlags::HAS_ADVENTURE) && !object.has_adventure {
                 return false;
             }
             if !c.color.matches(&object.colors) {
@@ -2925,6 +3049,10 @@ pub enum EffectSubject {
     Matching(ObjectFilter),
     /// The targeted permanent plus every other battlefield permanent matching this filter with the same name as the target.
     TargetAndSameNameMatching(ObjectFilter),
+    /// Every battlefield permanent matching this filter other than the targeted permanent.
+    MatchingOtherThanTarget(ObjectFilter),
+    /// The targeted permanent plus every other battlefield permanent matching this filter sharing a color with the target.
+    TargetAndSharingColorMatching(ObjectFilter),
 }
 
 impl EffectSubject {
@@ -2932,16 +3060,21 @@ impl EffectSubject {
     #[must_use]
     pub const fn chosen_type_slot(self) -> Option<CreatureTypeSlot> {
         match self {
-            Self::Matching(filter) | Self::TargetAndSameNameMatching(filter) => {
-                filter.chosen_type_slot()
-            }
+            Self::Matching(filter)
+            | Self::TargetAndSameNameMatching(filter)
+            | Self::MatchingOtherThanTarget(filter)
+            | Self::TargetAndSharingColorMatching(filter) => filter.chosen_type_slot(),
             _ => None,
         }
     }
 
     /// Rewrite printed creature-type words when a text-changing effect applies.
     pub(crate) fn rewrite_creature_type(&mut self, from: CreatureTypeId, to: CreatureTypeId) {
-        if let Self::Matching(filter) | Self::TargetAndSameNameMatching(filter) = self {
+        if let Self::Matching(filter)
+        | Self::TargetAndSameNameMatching(filter)
+        | Self::MatchingOtherThanTarget(filter)
+        | Self::TargetAndSharingColorMatching(filter) = self
+        {
             filter.rewrite_creature_type(from, to);
         }
     }
@@ -2952,9 +3085,10 @@ impl EffectSubject {
         vocabulary: &CreatureTypeVocabulary,
     ) -> Result<(), DefinitionError> {
         match self {
-            Self::Matching(filter) | Self::TargetAndSameNameMatching(filter) => {
-                filter.validate_vocabulary(vocabulary)
-            }
+            Self::Matching(filter)
+            | Self::TargetAndSameNameMatching(filter)
+            | Self::MatchingOtherThanTarget(filter)
+            | Self::TargetAndSharingColorMatching(filter) => filter.validate_vocabulary(vocabulary),
             _ => Ok(()),
         }
     }

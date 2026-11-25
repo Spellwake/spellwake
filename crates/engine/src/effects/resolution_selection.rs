@@ -939,7 +939,13 @@ impl ResolutionGraveyardOrderFrame {
     }
 }
 impl ResolutionSelectionWork {
-    fn frame(&self, revision: u64, up_to_tap_select: bool) -> Option<EffectDecision> {
+    fn frame(
+        &self,
+        revision: u64,
+        up_to_tap_select: bool,
+        discard_up_to_ext: bool,
+        attach_choosing_optional: Option<bool>,
+    ) -> Option<EffectDecision> {
         match &self.stage {
             ResolutionSelectionStage::Choosing {
                 requirements,
@@ -956,11 +962,29 @@ impl ResolutionSelectionWork {
                             ResolutionSelectionOperation::RevealedHand { chooser, .. } => chooser,
                             _ => requirement.player,
                         },
-                        operation: self.operation.kind(),
+                        operation: match &self.operation {
+                            ResolutionSelectionOperation::DiscardFiltered { .. }
+                                if discard_up_to_ext =>
+                            {
+                                ResolutionSelectionKind::DiscardUpTo
+                            }
+                            ResolutionSelectionOperation::AttachToSource { .. }
+                                if attach_choosing_optional.is_some() =>
+                            {
+                                ResolutionSelectionKind::AttachChosenAurasAndEquipment
+                            }
+                            _ => self.operation.kind(),
+                        },
                         domain: requirement.domain.clone(),
                         required: requirement.required,
                         custom_minimum: match &self.operation {
                             ResolutionSelectionOperation::SelectZoneCards { min, .. } => Some(*min),
+                            ResolutionSelectionOperation::AttachToSource { .. }
+                                if attach_choosing_optional.is_some() =>
+                            {
+                                attach_choosing_optional
+                                    .map(|optional| if optional { 0 } else { requirement.required })
+                            }
                             ResolutionSelectionOperation::TapOrUntapControlled { .. }
                                 if up_to_tap_select =>
                             {
@@ -1031,6 +1055,15 @@ impl EffectWindow {
     ) -> Result<BTreeSet<ObjectId>, EffectError> {
         let evaluated = self.evaluated_characteristics()?;
         let excluded = BTreeSet::new();
+        let ability_source =
+            self.window
+                .resolving()
+                .and_then(|entry| match entry.kind() {
+                    StackKind::ActivatedAbility { source }
+                    | StackKind::TriggeredAbility { source } => Some(source.id()),
+                    StackKind::CardSpell(id) => Some(*id),
+                    _ => None,
+                });
         let owners: Vec<SeatId> = if all_graveyards {
             self.window.participants().to_vec()
         } else {
@@ -1040,9 +1073,14 @@ impl EffectWindow {
         for owner in owners {
             for &id in self.window.cards().graveyard(owner) {
                 if evaluated.get(id).is_some_and(|card| {
-                    filter.matches_static_characteristics(card, &excluded, || {
-                        self.copiable_program(id).map(Program::mana_value)
-                    })
+                    self.matches_object_filter(
+                        *filter,
+                        card,
+                        controller,
+                        ability_source,
+                        &excluded,
+                        &evaluated,
+                    )
                 }) {
                     out.insert(id);
                 }
@@ -1204,12 +1242,51 @@ impl EffectWindow {
         )
     }
 
+    fn is_discard_up_to_ext(&self, cursor: &ResolutionCursor) -> bool {
+        matches!(
+            self.payloads
+                .get(&cursor.entry)
+                .and_then(StackPayload::instructions)
+                .and_then(|ops| ops.get(cursor.instruction)),
+            Some(Instruction::DiscardUpToExt { .. })
+        )
+    }
+
+    fn attach_choosing_permanent_flags(&self, cursor: &ResolutionCursor) -> Option<(bool, bool)> {
+        match self
+            .payloads
+            .get(&cursor.entry)
+            .and_then(StackPayload::instructions)
+            .and_then(|ops| ops.get(cursor.instruction))
+        {
+            Some(Instruction::AttachChoosingPermanent {
+                attachment: crate::program::AttachSlot::Fixed(_),
+                optional,
+                ..
+            }) => Some((true, *optional)),
+            Some(Instruction::AttachChoosingPermanent {
+                host: crate::program::AttachSlot::Fixed(_),
+                optional,
+                ..
+            }) => Some((false, *optional)),
+            _ => None,
+        }
+    }
+
+    fn work_selection_frame(&self, work: &ResolutionSelectionWork) -> Option<EffectDecision> {
+        work.frame(
+            self.revision,
+            self.is_up_to_tap_select(work),
+            self.is_discard_up_to_ext(&work.cursor),
+            self.attach_choosing_permanent_flags(&work.cursor)
+                .map(|(_, optional)| optional),
+        )
+    }
+
     /// Derive only the positive current request from the sole owned stage.
     pub(super) fn selection_frame(&self) -> Option<EffectDecision> {
         match self.pending_work.as_ref() {
-            Some(PendingWork::ResolutionSelection(work)) => {
-                work.frame(self.revision, self.is_up_to_tap_select(work))
-            }
+            Some(PendingWork::ResolutionSelection(work)) => self.work_selection_frame(work),
             None
             | Some(
                 PendingWork::LibraryTop(_)
@@ -1282,6 +1359,15 @@ impl EffectWindow {
         } else {
             None
         };
+        let ability_source =
+            self.window
+                .resolving()
+                .and_then(|entry| match entry.kind() {
+                    StackKind::ActivatedAbility { source }
+                    | StackKind::TriggeredAbility { source } => Some(source.id()),
+                    StackKind::CardSpell(id) => Some(*id),
+                    _ => None,
+                });
         let empty_excluded = BTreeSet::new();
         for (player, domain) in &check_rows {
             let hand = self
@@ -1293,9 +1379,14 @@ impl EffectWindow {
                         && object.zone() == ObjectZone::Hand(*player)
                         && match (&filter_clone, &evaluated) {
                             (Some(filter), Some(eval)) => eval.get(object.id()).is_some_and(|v| {
-                                filter.matches_static_characteristics(v, &empty_excluded, || {
-                                    self.copiable_program(object.id()).map(Program::mana_value)
-                                })
+                                self.matches_object_filter(
+                                    **filter,
+                                    v,
+                                    *player,
+                                    ability_source,
+                                    &empty_excluded,
+                                    eval,
+                                )
                             }),
                             _ => true,
                         }
@@ -2614,6 +2705,165 @@ impl EffectWindow {
             Instruction::Discard { players, amount } => {
                 (*players, amount, ResolutionSelectionOperation::Discard)
             }
+            Instruction::DiscardUpToExt {
+                players,
+                max_count,
+                filter,
+                any_number,
+            } => {
+                let amount_ref = if *any_number {
+                    all = ValueExpr::Literal(RulesInteger::from_usize(
+                        self.window.cards().iter().count(),
+                    ));
+                    &all
+                } else {
+                    max_count
+                };
+                let operation = match filter {
+                    Some(filter) => ResolutionSelectionOperation::DiscardFiltered {
+                        filter: filter.clone(),
+                    },
+                    None => ResolutionSelectionOperation::DiscardUpTo,
+                };
+                (*players, amount_ref, operation)
+            }
+            Instruction::AttachChoosingPermanent {
+                chooser,
+                attachment,
+                host,
+                optional,
+                all: choose_all,
+            } => {
+                use crate::program::AttachSlot;
+                let entry = self
+                    .window
+                    .resolving()
+                    .ok_or(EffectError::WrongResolutionFrame)?;
+                let ability_source = match entry.kind() {
+                    StackKind::ActivatedAbility { source }
+                    | StackKind::TriggeredAbility { source } => Some(source.id()),
+                    StackKind::CardSpell(id) => Some(*id),
+                    _ => None,
+                };
+                let evaluated = self.evaluated_characteristics()?;
+                match (attachment, host) {
+                    (
+                        AttachSlot::Fixed(att_ref),
+                        AttachSlot::ChooseMatching {
+                            filter,
+                            exclude_current_host,
+                        },
+                    ) => {
+                        let att_id_opt = self
+                            .resolve_move_subject_objects(entry, *att_ref)?
+                            .into_iter()
+                            .next();
+                        let eligible = if let Some(att_id) = att_id_opt
+                            && let Some(att_view) = evaluated.get(att_id)
+                            && att_view.zone == ObjectZone::Battlefield
+                        {
+                            let current_host = self.attached_to(att_id);
+                            evaluated
+                                .objects
+                                .values()
+                                .filter(|view| {
+                                    view.zone == ObjectZone::Battlefield
+                                        && !(*exclude_current_host
+                                            && current_host == Some(TargetRef::Object(view.object)))
+                                        && self.matches_object_filter(
+                                            **filter,
+                                            view,
+                                            entry.controller(),
+                                            ability_source,
+                                            &BTreeSet::new(),
+                                            &evaluated,
+                                        )
+                                        && self.attachment_permitted(
+                                            att_view,
+                                            Some(TargetRef::Object(view.object)),
+                                            &evaluated,
+                                        )
+                                })
+                                .map(|view| view.object)
+                                .collect::<BTreeSet<_>>()
+                        } else {
+                            BTreeSet::new()
+                        };
+                        all = ValueExpr::Literal(RulesInteger::from_usize(usize::from(
+                            !eligible.is_empty(),
+                        )));
+                        (
+                            AffectedPlayers::One(*chooser),
+                            &all,
+                            ResolutionSelectionOperation::AttachToSource {
+                                source: att_id_opt.unwrap_or(ObjectId::SENTINEL),
+                                eligible,
+                                optional: *optional,
+                            },
+                        )
+                    }
+                    (
+                        AttachSlot::ChooseMatching {
+                            filter,
+                            exclude_current_host,
+                        },
+                        AttachSlot::Fixed(host_ref),
+                    ) => {
+                        let host_id_opt = self
+                            .resolve_move_subject_objects(entry, *host_ref)?
+                            .into_iter()
+                            .next();
+                        let eligible = if let Some(host_id) = host_id_opt
+                            && evaluated
+                                .get(host_id)
+                                .is_some_and(|view| view.zone == ObjectZone::Battlefield)
+                        {
+                            let host_target = TargetRef::Object(host_id);
+                            evaluated
+                                .objects
+                                .values()
+                                .filter(|view| {
+                                    view.zone == ObjectZone::Battlefield
+                                        && !(*exclude_current_host
+                                            && self.attached_to(view.object) == Some(host_target))
+                                        && self.matches_object_filter(
+                                            **filter,
+                                            view,
+                                            entry.controller(),
+                                            ability_source,
+                                            &BTreeSet::new(),
+                                            &evaluated,
+                                        )
+                                        && self.attachment_permitted(
+                                            view,
+                                            Some(host_target),
+                                            &evaluated,
+                                        )
+                                })
+                                .map(|view| view.object)
+                                .collect::<BTreeSet<_>>()
+                        } else {
+                            BTreeSet::new()
+                        };
+                        let max_pick = if *choose_all {
+                            eligible.len()
+                        } else {
+                            usize::from(!eligible.is_empty())
+                        };
+                        all = ValueExpr::Literal(RulesInteger::from_usize(max_pick));
+                        (
+                            AffectedPlayers::One(*chooser),
+                            &all,
+                            ResolutionSelectionOperation::AttachToSource {
+                                source: host_id_opt.unwrap_or(ObjectId::SENTINEL),
+                                eligible,
+                                optional: *optional,
+                            },
+                        )
+                    }
+                    _ => return Err(EffectError::InconsistentProgram),
+                }
+            }
             Instruction::DiscardFiltered {
                 players,
                 amount,
@@ -3178,7 +3428,15 @@ impl EffectWindow {
             | Instruction::ExileSubjectUntilSourceLeaves { .. }
             | Instruction::ReturnCardsExiledWithLinkExt { .. }
             | Instruction::DrawGame
-            | Instruction::TurnFaceUpSubject { .. } => return Ok(false),
+            | Instruction::TurnFaceUpSubject { .. }
+            | Instruction::Earthbend { .. }
+            | Instruction::ReturnEarthbentCard
+            | Instruction::RegenerateSubject { .. }
+            | Instruction::AddManaForPlayer { .. }
+            | Instruction::SkipNextTurns { .. }
+            | Instruction::SelectExtremeLifePlayer { .. }
+            | Instruction::AttachFixedTargets
+            | Instruction::AttachPermanentToPlayer { .. } => return Ok(false),
         };
         let entry = self
             .window
@@ -3253,22 +3511,13 @@ impl EffectWindow {
                     .iter()
                     .filter(|_| !protected)
                     .filter(|object| {
-                        selection_eligible(
+                        self.selection_eligible(
                             &operation,
                             player,
                             object,
+                            ability_source,
                             &evaluated,
                             &excluded,
-                            || {
-                                if matches!(
-                                    operation,
-                                    ResolutionSelectionOperation::RevealedHand { .. }
-                                ) {
-                                    self.copiable_program(object.id()).map(Program::mana_value)
-                                } else {
-                                    self.permanent_mana_value(object.id())
-                                }
-                            },
                         )
                     })
                     .map(GameObject::id)
@@ -3775,10 +4024,14 @@ impl EffectWindow {
                             ResolutionSelectionOperation::ExileChosenGraveyardCards { .. }
                         ) && requirement.required
                             == requirement.domain.len();
+                        let attach_choosing = self.attach_choosing_permanent_flags(&cursor);
+                        let forced_attach = matches!(attach_choosing, Some((_, false)))
+                            && requirement.required == requirement.domain.len();
                         if discard_entire_hand
                             || forced_army
                             || forced_select_all
                             || forced_graveyard_cards
+                            || forced_attach
                             || matches!(
                                 operation,
                                 ResolutionSelectionOperation::RandomDiscard { .. }
@@ -3829,9 +4082,8 @@ impl EffectWindow {
                                 accepted,
                             },
                         };
-                        let up_to_tap = self.is_up_to_tap_select(&work);
-                        let frame = work
-                            .frame(self.revision, up_to_tap)
+                        let frame = self
+                            .work_selection_frame(&work)
                             .ok_or(EffectError::InconsistentSelectionWork)?;
                         self.pending_work = Some(PendingWork::ResolutionSelection(Box::new(work)));
                         return Ok(Some(frame));
@@ -3917,19 +4169,29 @@ impl EffectWindow {
                         let [selection] = accepted.as_slice() else {
                             return Err(EffectError::InconsistentSelectionWork);
                         };
+                        let attach_as_host = matches!(
+                            self.attach_choosing_permanent_flags(&cursor),
+                            Some((true, _))
+                        );
                         let before = self.rules_snapshot(None)?;
                         let current = before.view().evaluated;
                         let mut changed = Vec::new();
                         for id in &selection.objects {
+                            let (att_id, host_id) = if attach_as_host {
+                                (source, *id)
+                            } else {
+                                (*id, source)
+                            };
                             if let Some(event) = self.attach_at_cut(
                                 cursor.entry,
-                                *id,
-                                TargetRef::Object(source),
+                                att_id,
+                                TargetRef::Object(host_id),
                                 &current,
                             )? {
                                 changed.push(event);
                             }
                         }
+                        let changed_count = changed.len();
                         if !changed.is_empty() {
                             self.emit_from(
                                 EventCause::Instruction {
@@ -3942,6 +4204,9 @@ impl EffectWindow {
                                 |_, _, _| Ok(changed),
                             )?;
                         }
+                        cursor.results.last_action_succeeded = changed_count > 0;
+                        cursor.results.last_action_count =
+                            Some(RulesInteger::from_usize(changed_count));
                         self.pending_work = Some(PendingWork::Resolution(cursor));
                         self.advance_instruction()?;
                         return Ok(None);
@@ -4379,9 +4644,8 @@ impl EffectWindow {
                                 orders,
                             },
                         };
-                        let up_to_tap = self.is_up_to_tap_select(&work);
-                        let frame = work
-                            .frame(self.revision, up_to_tap)
+                        let frame = self
+                            .work_selection_frame(&work)
                             .ok_or(EffectError::InconsistentSelectionWork)?;
                         self.pending_work = Some(PendingWork::ResolutionSelection(Box::new(work)));
                         return Ok(Some(frame));
@@ -4619,6 +4883,7 @@ impl EffectWindow {
                         .and_then(|ops| ops.get(work.cursor.instruction)),
                     Some(Instruction::UntapOrTapSelect { up_to: true, .. })
                 );
+                let discard_up_to_ext = self.is_discard_up_to_ext(&work.cursor);
                 match &work.operation {
                     ResolutionSelectionOperation::CollectEvidence { minimum } => {
                         let chosen_mv = objects.iter().fold(RulesInteger::from(0), |acc, id| {
@@ -4635,6 +4900,7 @@ impl EffectWindow {
                     }
                     ResolutionSelectionOperation::TapOrUntapControlled { .. }
                         if up_to_tap_select => {}
+                    ResolutionSelectionOperation::DiscardFiltered { .. } if discard_up_to_ext => {}
                     ResolutionSelectionOperation::PayLifeToSaveCreatures { .. }
                     | ResolutionSelectionOperation::OtherControlledCreature {
                         or_exile_source: true,
@@ -5463,6 +5729,14 @@ impl EffectWindow {
             (ResolutionSelectionOperation::DiscardUpTo, Instruction::DiscardUpTo { .. }) => {
                 AffectedPlayers::One(ResolvingPlayer::Controller)
             }
+            (
+                ResolutionSelectionOperation::DiscardUpTo,
+                Instruction::DiscardUpToExt {
+                    players,
+                    filter: None,
+                    ..
+                },
+            ) => *players,
             (ResolutionSelectionOperation::Discard, Instruction::Discard { players, .. }) => {
                 *players
             }
@@ -5483,6 +5757,14 @@ impl EffectWindow {
                     ..
                 },
             ) if filter == expected => *players,
+            (
+                ResolutionSelectionOperation::DiscardFiltered { filter },
+                Instruction::DiscardUpToExt {
+                    players,
+                    filter: Some(expected),
+                    ..
+                },
+            ) if filter == expected => *players,
             _ => return Err(EffectError::InconsistentSelectionWork),
         };
         let players: BTreeSet<_> = match players {
@@ -5496,6 +5778,13 @@ impl EffectWindow {
         };
         let evaluated = self.evaluated_characteristics()?;
         let excluded = operation.excluded_types(cursor)?;
+        let ability_source = match entry.kind() {
+            StackKind::ActivatedAbility { source } | StackKind::TriggeredAbility { source } => {
+                Some(source.id())
+            }
+            StackKind::CardSpell(id) => Some(*id),
+            _ => None,
+        };
         let mut unique = BTreeSet::new();
         for selected in &batch.logical {
             let object = self
@@ -5511,19 +5800,13 @@ impl EffectWindow {
                         selected.player,
                         entry.controller(),
                     )?)
-                || !selection_eligible(
+                || !self.selection_eligible(
                     operation,
                     selected.player,
                     object,
+                    ability_source,
                     &evaluated,
                     &excluded,
-                    || {
-                        if matches!(operation, ResolutionSelectionOperation::RevealedHand { .. }) {
-                            self.copiable_program(object.id()).map(Program::mana_value)
-                        } else {
-                            self.permanent_mana_value(object.id())
-                        }
-                    },
                 )
             {
                 return Err(EffectError::InconsistentSelectionWork);
@@ -5612,6 +5895,7 @@ impl EffectWindow {
                 operation,
                 ResolutionSelectionOperation::Discard
                     | ResolutionSelectionOperation::DiscardUpTo
+                    | ResolutionSelectionOperation::DiscardFiltered { .. }
                     | ResolutionSelectionOperation::RandomDiscard { .. }
             ) && !batch.token_departures.is_empty()
         {
@@ -6048,339 +6332,369 @@ impl EffectWindow {
         }
         Ok(())
     }
-}
-
-fn selection_eligible(
-    operation: &ResolutionSelectionOperation,
-    player: SeatId,
-    object: &GameObject,
-    evaluated: &EvaluatedCharacteristics,
-    excluded: &BTreeSet<CreatureTypeId>,
-    mana_value: impl FnOnce() -> Option<RulesInteger>,
-) -> bool {
-    if operation.is_sacrifice() && evaluated.sacrifice_prohibited(object.id()) {
-        return false;
-    }
-    match operation {
-        ResolutionSelectionOperation::ExileFromHand { allow_battlefield } => {
-            (object.zone() == ObjectZone::Hand(player) && object.card_id().is_some())
-                || (*allow_battlefield
+    fn selection_eligible(
+        &self,
+        operation: &ResolutionSelectionOperation,
+        player: SeatId,
+        object: &GameObject,
+        ability_source: Option<ObjectId>,
+        evaluated: &EvaluatedCharacteristics,
+        excluded: &BTreeSet<CreatureTypeId>,
+    ) -> bool {
+        let mana_value = || {
+            if matches!(operation, ResolutionSelectionOperation::RevealedHand { .. }) {
+                self.copiable_program(object.id()).map(Program::mana_value)
+            } else {
+                self.permanent_mana_value(object.id())
+            }
+        };
+        if operation.is_sacrifice() && evaluated.sacrifice_prohibited(object.id()) {
+            return false;
+        }
+        match operation {
+            ResolutionSelectionOperation::ExileFromHand { allow_battlefield } => {
+                (object.zone() == ObjectZone::Hand(player) && object.card_id().is_some())
+                    || (*allow_battlefield
+                        && object.zone() == ObjectZone::Battlefield
+                        && evaluated
+                            .get(object.id())
+                            .is_some_and(|view| view.controller == Some(player)))
+            }
+            ResolutionSelectionOperation::PutHandCardOnBottom => {
+                object.card_id().is_some() && object.zone() == ObjectZone::Hand(player)
+            }
+            ResolutionSelectionOperation::PutInLibrary { objects, .. } => {
+                objects.contains(&object.id())
+                    && ((object.zone() == ObjectZone::Battlefield
+                        && object.controller() == Some(player))
+                        || (object.card_id().is_some()
+                            && object.zone() == ObjectZone::Graveyard(player))
+                        || (matches!(object.zone(), ObjectZone::Exile | ObjectZone::Stack)
+                            && object.owner() == player))
+            }
+            ResolutionSelectionOperation::ExileChosenGraveyardCards {
+                player: owner,
+                domain,
+            } => {
+                *owner == player
+                    && domain.contains(&object.id())
+                    && object.zone() == ObjectZone::Graveyard(player)
+                    && object.card_id().is_some()
+            }
+            ResolutionSelectionOperation::ExileGraveyardTargets { objects } => {
+                objects.contains(&object.id())
+                    && object.card_id().is_some()
+                    && object.zone() == ObjectZone::Graveyard(player)
+            }
+            ResolutionSelectionOperation::OwnedCommandersToHand => {
+                object.owner() == player
+                    && (object.zone() == ObjectZone::Command
+                        || object.zone() == ObjectZone::Graveyard(player))
+                    && evaluated
+                        .get(object.id())
+                        .is_some_and(|current| current.commander_owner == Some(player))
+            }
+            ResolutionSelectionOperation::ReturnGraveyardCardsToHand { objects } => {
+                objects.contains(&object.id()) && object.zone() == ObjectZone::Graveyard(player)
+            }
+            ResolutionSelectionOperation::RevealedHand {
+                minimum_mana_value,
+                nonland_only,
+                filter,
+                ..
+            } => {
+                if object.zone() != ObjectZone::Hand(player) || object.card_id().is_none() {
+                    false
+                } else {
+                    let mv = mana_value();
+                    (!nonland_only
+                        || evaluated
+                            .get(object.id())
+                            .is_some_and(|card| !card.has_type(CardType::Land)))
+                        && filter.as_deref().is_none_or(|f| {
+                            evaluated.get(object.id()).is_some_and(|card| {
+                                f.matches_static_characteristics(card, &BTreeSet::new(), || {
+                                    mv.clone()
+                                })
+                            })
+                        })
+                        && mv.is_some_and(|value| {
+                            value >= RulesInteger::from_usize(usize::from(*minimum_mana_value))
+                        })
+                }
+            }
+            ResolutionSelectionOperation::GraveyardCreatureToHand => {
+                object.card_id().is_some()
+                    && object.zone() == ObjectZone::Graveyard(player)
+                    && evaluated.get(object.id()).is_some_and(|p| p.is_creature())
+            }
+            ResolutionSelectionOperation::LibraryCohortToGraveyard {
+                player: owner,
+                cards,
+            } => {
+                *owner == player
+                    && object.zone() == ObjectZone::Library(player)
+                    && cards.contains(&object.id())
+            }
+            ResolutionSelectionOperation::MillEachPlayer { segments, .. } => {
+                object.zone() == ObjectZone::Library(player)
+                    && segments
+                        .get(&player)
+                        .is_some_and(|cards| cards.contains(&object.id()))
+            }
+            ResolutionSelectionOperation::DestroyAnnouncedTargets { objects } => {
+                objects.contains(&object.id())
+                    && object.zone() == ObjectZone::Battlefield
+                    && evaluated.get(object.id()).is_some_and(|p| {
+                        p.controller == Some(player)
+                            && !p.has_keyword(KeywordAbility::Indestructible)
+                    })
+            }
+            ResolutionSelectionOperation::ExileLibrarySegment {
+                player: seat,
+                cards,
+            } => {
+                *seat == player
+                    && object.zone() == ObjectZone::Library(player)
+                    && cards.contains(&object.id())
+            }
+            ResolutionSelectionOperation::ShuffleAnnouncedTargets { objects }
+            | ResolutionSelectionOperation::ExileAnnouncedTargets { objects }
+            | ResolutionSelectionOperation::ExileLinkedTargets { objects, .. }
+            | ResolutionSelectionOperation::ReturnAnnouncedTargets { objects } => {
+                objects.contains(&object.id())
                     && object.zone() == ObjectZone::Battlefield
                     && evaluated
                         .get(object.id())
-                        .is_some_and(|view| view.controller == Some(player)))
-        }
-        ResolutionSelectionOperation::PutHandCardOnBottom => {
-            object.card_id().is_some() && object.zone() == ObjectZone::Hand(player)
-        }
-        ResolutionSelectionOperation::PutInLibrary { objects, .. } => {
-            objects.contains(&object.id())
-                && ((object.zone() == ObjectZone::Battlefield
-                    && object.controller() == Some(player))
-                    || (object.card_id().is_some()
-                        && object.zone() == ObjectZone::Graveyard(player))
-                    || (matches!(object.zone(), ObjectZone::Exile | ObjectZone::Stack)
-                        && object.owner() == player))
-        }
-        ResolutionSelectionOperation::ExileChosenGraveyardCards {
-            player: owner,
-            domain,
-        } => {
-            *owner == player
-                && domain.contains(&object.id())
-                && object.zone() == ObjectZone::Graveyard(player)
-                && object.card_id().is_some()
-        }
-        ResolutionSelectionOperation::ExileGraveyardTargets { objects } => {
-            objects.contains(&object.id())
-                && object.card_id().is_some()
-                && object.zone() == ObjectZone::Graveyard(player)
-        }
-        ResolutionSelectionOperation::OwnedCommandersToHand => {
-            object.owner() == player
-                && (object.zone() == ObjectZone::Command
-                    || object.zone() == ObjectZone::Graveyard(player))
-                && evaluated
-                    .get(object.id())
-                    .is_some_and(|current| current.commander_owner == Some(player))
-        }
-        ResolutionSelectionOperation::ReturnGraveyardCardsToHand { objects } => {
-            objects.contains(&object.id()) && object.zone() == ObjectZone::Graveyard(player)
-        }
-        ResolutionSelectionOperation::RevealedHand {
-            minimum_mana_value,
-            nonland_only,
-            filter,
-            ..
-        } => {
-            if object.zone() != ObjectZone::Hand(player) || object.card_id().is_none() {
-                false
-            } else {
-                let mv = mana_value();
-                (!nonland_only
-                    || evaluated
-                        .get(object.id())
-                        .is_some_and(|card| !card.has_type(CardType::Land)))
-                    && filter.as_deref().is_none_or(|f| {
-                        evaluated.get(object.id()).is_some_and(|card| {
-                            f.matches_static_characteristics(card, &BTreeSet::new(), || mv.clone())
-                        })
-                    })
-                    && mv.is_some_and(|value| {
-                        value >= RulesInteger::from_usize(usize::from(*minimum_mana_value))
+                        .is_some_and(|p| p.controller == Some(player))
+            }
+            ResolutionSelectionOperation::ReturnSingle { object: bound } => {
+                object.id() == *bound
+                    && object.zone() == ObjectZone::Battlefield
+                    && evaluated
+                        .get(*bound)
+                        .is_some_and(|p| p.controller == Some(player))
+            }
+            ResolutionSelectionOperation::DestroySingle { object: bound } => {
+                object.id() == *bound
+                    && object.zone() == ObjectZone::Battlefield
+                    && evaluated.get(*bound).is_some_and(|p| {
+                        p.controller == Some(player)
+                            && !p.has_keyword(KeywordAbility::Indestructible)
                     })
             }
-        }
-        ResolutionSelectionOperation::GraveyardCreatureToHand => {
-            object.card_id().is_some()
-                && object.zone() == ObjectZone::Graveyard(player)
-                && evaluated.get(object.id()).is_some_and(|p| p.is_creature())
-        }
-        ResolutionSelectionOperation::LibraryCohortToGraveyard {
-            player: owner,
-            cards,
-        } => {
-            *owner == player
-                && object.zone() == ObjectZone::Library(player)
-                && cards.contains(&object.id())
-        }
-        ResolutionSelectionOperation::MillEachPlayer { segments, .. } => {
-            object.zone() == ObjectZone::Library(player)
-                && segments
-                    .get(&player)
-                    .is_some_and(|cards| cards.contains(&object.id()))
-        }
-        ResolutionSelectionOperation::DestroyAnnouncedTargets { objects } => {
-            objects.contains(&object.id())
-                && object.zone() == ObjectZone::Battlefield
-                && evaluated.get(object.id()).is_some_and(|p| {
-                    p.controller == Some(player) && !p.has_keyword(KeywordAbility::Indestructible)
-                })
-        }
-        ResolutionSelectionOperation::ExileLibrarySegment {
-            player: seat,
-            cards,
-        } => {
-            *seat == player
-                && object.zone() == ObjectZone::Library(player)
-                && cards.contains(&object.id())
-        }
-        ResolutionSelectionOperation::ShuffleAnnouncedTargets { objects }
-        | ResolutionSelectionOperation::ExileAnnouncedTargets { objects }
-        | ResolutionSelectionOperation::ExileLinkedTargets { objects, .. }
-        | ResolutionSelectionOperation::ReturnAnnouncedTargets { objects } => {
-            objects.contains(&object.id())
-                && object.zone() == ObjectZone::Battlefield
-                && evaluated
-                    .get(object.id())
-                    .is_some_and(|p| p.controller == Some(player))
-        }
-        ResolutionSelectionOperation::ReturnSingle { object: bound } => {
-            object.id() == *bound
-                && object.zone() == ObjectZone::Battlefield
-                && evaluated
-                    .get(*bound)
-                    .is_some_and(|p| p.controller == Some(player))
-        }
-        ResolutionSelectionOperation::DestroySingle { object: bound } => {
-            object.id() == *bound
-                && object.zone() == ObjectZone::Battlefield
-                && evaluated.get(*bound).is_some_and(|p| {
-                    p.controller == Some(player) && !p.has_keyword(KeywordAbility::Indestructible)
-                })
-        }
-        ResolutionSelectionOperation::ExileSingle { object: bound, .. } => {
-            object.id() == *bound
-                && object.zone() == ObjectZone::Battlefield
-                && evaluated
-                    .get(*bound)
-                    .is_some_and(|p| p.controller == Some(player))
-        }
-        ResolutionSelectionOperation::WholeGroup { group, destination } => {
-            object.zone() == ObjectZone::Battlefield
-                && object.controller() == Some(player)
-                && evaluated.get(object.id()).is_some_and(|permanent| {
-                    (*destination != PublicZoneDestination::Graveyard
-                        || !permanent.has_keyword(KeywordAbility::Indestructible))
-                        && group.matches_static_characteristics(permanent, excluded, mana_value)
-                })
-        }
-        ResolutionSelectionOperation::AttachToSource { eligible, .. }
-        | ResolutionSelectionOperation::EnterAurasAttachedToSource { eligible, .. } => {
-            eligible.contains(&object.id())
-        }
-        ResolutionSelectionOperation::CopyDifferentlyNamedTokens => {
-            object.zone() == ObjectZone::Battlefield
-                && object.is_token()
-                && evaluated.get(object.id()).is_some_and(|view| {
-                    view.controller == Some(player)
-                        && !view.current_names.is_empty()
-                        && (view.has_type(CardType::Artifact) || view.is_creature())
-                })
-        }
-        ResolutionSelectionOperation::Bolster { eligible, .. }
-        | ResolutionSelectionOperation::Amass { eligible, .. } => eligible.contains(&object.id()),
-        ResolutionSelectionOperation::Untap { kind } => {
-            object.zone() == ObjectZone::Battlefield
-                && evaluated
-                    .get(object.id())
-                    .is_some_and(|p| p.has_type(*kind))
-        }
-        ResolutionSelectionOperation::SacrificeContributor { eligible } => {
-            eligible.contains(&object.id())
-                && object.zone() == ObjectZone::Battlefield
-                && evaluated.get(object.id()).and_then(|card| card.controller) == Some(player)
-        }
-        ResolutionSelectionOperation::PayLifeToSaveCreatures { .. }
-        | ResolutionSelectionOperation::ChooseVow
-        | ResolutionSelectionOperation::ChooseCreaturesToKeep
-        | ResolutionSelectionOperation::SacrificeExceptVowed { .. } => {
-            object.zone() == ObjectZone::Battlefield
-                && evaluated
-                    .get(object.id())
-                    .is_some_and(|card| card.controller == Some(player) && card.is_creature())
-                && !matches!(operation, ResolutionSelectionOperation::SacrificeExceptVowed {kept} if kept.contains(&object.id()))
-        }
-        ResolutionSelectionOperation::Blight { .. } => {
-            object.zone() == ObjectZone::Battlefield
-                && evaluated
-                    .get(object.id())
-                    .is_some_and(|card| card.controller == Some(player) && card.is_creature())
-        }
-        ResolutionSelectionOperation::CollectEvidence { .. } => {
-            object.card_id().is_some() && object.zone() == ObjectZone::Graveyard(player)
-        }
-        ResolutionSelectionOperation::SelectZoneCards {
-            source_zone,
-            filter,
-            last_moved,
-            ..
-        } => {
-            let zone_ok = match source_zone {
-                crate::program::SourceZoneFilter::Hand => {
-                    object.card_id().is_some() && object.zone() == ObjectZone::Hand(player)
-                }
-                crate::program::SourceZoneFilter::Graveyard => {
-                    object.card_id().is_some() && object.zone() == ObjectZone::Graveyard(player)
-                }
-                crate::program::SourceZoneFilter::HandOrGraveyard => {
-                    object.card_id().is_some()
-                        && matches!(
-                            object.zone(),
-                            ObjectZone::Hand(owner) | ObjectZone::Graveyard(owner) if owner == player
+            ResolutionSelectionOperation::ExileSingle { object: bound, .. } => {
+                object.id() == *bound
+                    && object.zone() == ObjectZone::Battlefield
+                    && evaluated
+                        .get(*bound)
+                        .is_some_and(|p| p.controller == Some(player))
+            }
+            ResolutionSelectionOperation::WholeGroup { group, destination } => {
+                object.zone() == ObjectZone::Battlefield
+                    && object.controller() == Some(player)
+                    && evaluated.get(object.id()).is_some_and(|permanent| {
+                        (*destination != PublicZoneDestination::Graveyard
+                            || !permanent.has_keyword(KeywordAbility::Indestructible))
+                            && group.matches_static_characteristics(permanent, excluded, mana_value)
+                    })
+            }
+            ResolutionSelectionOperation::AttachToSource { eligible, .. }
+            | ResolutionSelectionOperation::EnterAurasAttachedToSource { eligible, .. } => {
+                eligible.contains(&object.id())
+            }
+            ResolutionSelectionOperation::CopyDifferentlyNamedTokens => {
+                object.zone() == ObjectZone::Battlefield
+                    && object.is_token()
+                    && evaluated.get(object.id()).is_some_and(|view| {
+                        view.controller == Some(player)
+                            && !view.current_names.is_empty()
+                            && (view.has_type(CardType::Artifact) || view.is_creature())
+                    })
+            }
+            ResolutionSelectionOperation::Bolster { eligible, .. }
+            | ResolutionSelectionOperation::Amass { eligible, .. } => {
+                eligible.contains(&object.id())
+            }
+            ResolutionSelectionOperation::Untap { kind } => {
+                object.zone() == ObjectZone::Battlefield
+                    && evaluated
+                        .get(object.id())
+                        .is_some_and(|p| p.has_type(*kind))
+            }
+            ResolutionSelectionOperation::SacrificeContributor { eligible } => {
+                eligible.contains(&object.id())
+                    && object.zone() == ObjectZone::Battlefield
+                    && evaluated.get(object.id()).and_then(|card| card.controller) == Some(player)
+            }
+            ResolutionSelectionOperation::PayLifeToSaveCreatures { .. }
+            | ResolutionSelectionOperation::ChooseVow
+            | ResolutionSelectionOperation::ChooseCreaturesToKeep
+            | ResolutionSelectionOperation::SacrificeExceptVowed { .. } => {
+                object.zone() == ObjectZone::Battlefield
+                    && evaluated
+                        .get(object.id())
+                        .is_some_and(|card| card.controller == Some(player) && card.is_creature())
+                    && !matches!(operation, ResolutionSelectionOperation::SacrificeExceptVowed {kept} if kept.contains(&object.id()))
+            }
+            ResolutionSelectionOperation::Blight { .. } => {
+                object.zone() == ObjectZone::Battlefield
+                    && evaluated
+                        .get(object.id())
+                        .is_some_and(|card| card.controller == Some(player) && card.is_creature())
+            }
+            ResolutionSelectionOperation::CollectEvidence { .. } => {
+                object.card_id().is_some() && object.zone() == ObjectZone::Graveyard(player)
+            }
+            ResolutionSelectionOperation::SelectZoneCards {
+                source_zone,
+                filter,
+                last_moved,
+                ..
+            } => {
+                let zone_ok = match source_zone {
+                    crate::program::SourceZoneFilter::Hand => {
+                        object.card_id().is_some() && object.zone() == ObjectZone::Hand(player)
+                    }
+                    crate::program::SourceZoneFilter::Graveyard => {
+                        object.card_id().is_some() && object.zone() == ObjectZone::Graveyard(player)
+                    }
+                    crate::program::SourceZoneFilter::HandOrGraveyard => {
+                        object.card_id().is_some()
+                            && matches!(
+                                object.zone(),
+                                ObjectZone::Hand(owner) | ObjectZone::Graveyard(owner) if owner == player
+                            )
+                    }
+                    crate::program::SourceZoneFilter::Battlefield => {
+                        object.zone() == ObjectZone::Battlefield
+                            && evaluated
+                                .get(object.id())
+                                .is_some_and(|card| card.controller == Some(player))
+                    }
+                    crate::program::SourceZoneFilter::Exile => {
+                        object.card_id().is_some() && object.zone() == ObjectZone::Exile
+                    }
+                    crate::program::SourceZoneFilter::OpponentGraveyard => {
+                        object.card_id().is_some()
+                            && matches!(object.zone(), ObjectZone::Graveyard(owner) if owner != player)
+                    }
+                    crate::program::SourceZoneFilter::AnyGraveyard => {
+                        object.card_id().is_some()
+                            && matches!(object.zone(), ObjectZone::Graveyard(_))
+                    }
+                    crate::program::SourceZoneFilter::YourLibrary => {
+                        object.card_id().is_some() && object.zone() == ObjectZone::Library(player)
+                    }
+                    crate::program::SourceZoneFilter::OpponentExile => {
+                        object.card_id().is_some()
+                            && object.zone() == ObjectZone::Exile
+                            && object.owner() != player
+                    }
+                    crate::program::SourceZoneFilter::LinkedExile => {
+                        object.card_id().is_some() && object.zone() == ObjectZone::Exile
+                    }
+                    crate::program::SourceZoneFilter::LastMoved => {
+                        last_moved.contains(&object.id())
+                    }
+                };
+                zone_ok
+                    && evaluated.get(object.id()).is_some_and(|card| {
+                        self.matches_object_filter(
+                            **filter,
+                            card,
+                            player,
+                            ability_source,
+                            excluded,
+                            evaluated,
                         )
-                }
-                crate::program::SourceZoneFilter::Battlefield => {
-                    object.zone() == ObjectZone::Battlefield
-                        && evaluated
-                            .get(object.id())
-                            .is_some_and(|card| card.controller == Some(player))
-                }
-                crate::program::SourceZoneFilter::Exile => {
-                    object.card_id().is_some() && object.zone() == ObjectZone::Exile
-                }
-                crate::program::SourceZoneFilter::OpponentGraveyard => {
-                    object.card_id().is_some()
-                        && matches!(object.zone(), ObjectZone::Graveyard(owner) if owner != player)
-                }
-                crate::program::SourceZoneFilter::AnyGraveyard => {
-                    object.card_id().is_some() && matches!(object.zone(), ObjectZone::Graveyard(_))
-                }
-                crate::program::SourceZoneFilter::YourLibrary => {
-                    object.card_id().is_some() && object.zone() == ObjectZone::Library(player)
-                }
-                crate::program::SourceZoneFilter::OpponentExile => {
-                    object.card_id().is_some()
-                        && object.zone() == ObjectZone::Exile
-                        && object.owner() != player
-                }
-                crate::program::SourceZoneFilter::LinkedExile => {
-                    object.card_id().is_some() && object.zone() == ObjectZone::Exile
-                }
-                crate::program::SourceZoneFilter::LastMoved => last_moved.contains(&object.id()),
-            };
-            zone_ok
-                && evaluated.get(object.id()).is_some_and(|card| {
-                    filter.matches_static_characteristics(card, excluded, mana_value)
-                })
-        }
-        ResolutionSelectionOperation::SacrificeColored => {
-            object.zone() == ObjectZone::Battlefield
-                && evaluated
-                    .get(object.id())
-                    .is_some_and(|v| v.controller == Some(player) && !v.current_colors.is_empty())
-        }
-        ResolutionSelectionOperation::OtherControlledCreature { source, .. } => {
-            object.id() != *source
-                && object.zone() == ObjectZone::Battlefield
-                && evaluated
-                    .get(object.id())
-                    .is_some_and(|value| value.controller == Some(player) && value.is_creature())
-        }
-        ResolutionSelectionOperation::SacrificeMatching { filter, source } => {
-            object.zone() == ObjectZone::Battlefield
-                && evaluated.get(object.id()).is_some_and(|value| {
-                    value.controller == Some(player) && filter.matches(value, *source)
-                })
-        }
-        ResolutionSelectionOperation::ExileChosen { filter }
-        | ResolutionSelectionOperation::ReturnToHand { filter }
-        | ResolutionSelectionOperation::Sacrifice { filter } => {
-            object.zone() == ObjectZone::Battlefield
-                && evaluated.get(object.id()).is_some_and(|value| {
-                    value.controller == Some(player)
-                        && filter.matches_view(value, excluded, mana_value)
-                })
-        }
-        ResolutionSelectionOperation::ExileFromZone { zone, filter } => {
-            let in_zone = match zone {
-                crate::activated::CostExileZone::Hand => {
-                    object.card_id().is_some() && object.zone() == ObjectZone::Hand(player)
-                }
-                crate::activated::CostExileZone::Graveyard => {
-                    object.card_id().is_some() && object.zone() == ObjectZone::Graveyard(player)
-                }
-                crate::activated::CostExileZone::Battlefield => {
-                    object.zone() == ObjectZone::Battlefield
-                        && evaluated
-                            .get(object.id())
-                            .is_some_and(|v| v.controller == Some(player))
-                }
-            };
-            in_zone
-                && evaluated.get(object.id()).is_some_and(|view| {
-                    filter.matches_static_characteristics(view, excluded, mana_value)
-                })
-        }
-        ResolutionSelectionOperation::TapOrUntapControlled { tap, filter } => {
-            object.zone() == ObjectZone::Battlefield
-                && object.tapped() == Some(!*tap)
-                && evaluated.get(object.id()).is_some_and(|view| {
-                    view.controller == Some(player)
-                        && filter.matches_static_characteristics(view, excluded, mana_value)
-                })
-        }
-        ResolutionSelectionOperation::RandomDiscard { object: chosen } => {
-            object.id() == *chosen
-                && object.zone() == ObjectZone::Hand(player)
-                && object.card_id().is_some()
-        }
-        ResolutionSelectionOperation::RandomSacrifice { object: chosen } => {
-            object.id() == *chosen
-                && object.zone() == ObjectZone::Battlefield
-                && evaluated
-                    .get(object.id())
-                    .is_some_and(|sheet| sheet.controller == Some(player))
-        }
-        ResolutionSelectionOperation::DiscardUpTo | ResolutionSelectionOperation::Discard => {
-            object.card_id().is_some() && object.zone() == ObjectZone::Hand(player)
-        }
-        ResolutionSelectionOperation::DiscardFiltered { filter } => {
-            object.card_id().is_some()
-                && object.zone() == ObjectZone::Hand(player)
-                && evaluated.get(object.id()).is_some_and(|view| {
-                    filter.matches_static_characteristics(view, excluded, mana_value)
-                })
+                    })
+            }
+            ResolutionSelectionOperation::SacrificeColored => {
+                object.zone() == ObjectZone::Battlefield
+                    && evaluated.get(object.id()).is_some_and(|v| {
+                        v.controller == Some(player) && !v.current_colors.is_empty()
+                    })
+            }
+            ResolutionSelectionOperation::OtherControlledCreature { source, .. } => {
+                object.id() != *source
+                    && object.zone() == ObjectZone::Battlefield
+                    && evaluated.get(object.id()).is_some_and(|value| {
+                        value.controller == Some(player) && value.is_creature()
+                    })
+            }
+            ResolutionSelectionOperation::SacrificeMatching { filter, source } => {
+                object.zone() == ObjectZone::Battlefield
+                    && evaluated.get(object.id()).is_some_and(|value| {
+                        value.controller == Some(player) && filter.matches(value, *source)
+                    })
+            }
+            ResolutionSelectionOperation::ExileChosen { filter }
+            | ResolutionSelectionOperation::ReturnToHand { filter }
+            | ResolutionSelectionOperation::Sacrifice { filter } => {
+                object.zone() == ObjectZone::Battlefield
+                    && evaluated.get(object.id()).is_some_and(|value| {
+                        value.controller == Some(player)
+                            && filter.matches_view(value, excluded, mana_value)
+                    })
+            }
+            ResolutionSelectionOperation::ExileFromZone { zone, filter } => {
+                let in_zone = match zone {
+                    crate::activated::CostExileZone::Hand => {
+                        object.card_id().is_some() && object.zone() == ObjectZone::Hand(player)
+                    }
+                    crate::activated::CostExileZone::Graveyard => {
+                        object.card_id().is_some() && object.zone() == ObjectZone::Graveyard(player)
+                    }
+                    crate::activated::CostExileZone::Battlefield => {
+                        object.zone() == ObjectZone::Battlefield
+                            && evaluated
+                                .get(object.id())
+                                .is_some_and(|v| v.controller == Some(player))
+                    }
+                };
+                in_zone
+                    && evaluated.get(object.id()).is_some_and(|view| {
+                        filter.matches_static_characteristics(view, excluded, mana_value)
+                    })
+            }
+            ResolutionSelectionOperation::TapOrUntapControlled { tap, filter } => {
+                object.zone() == ObjectZone::Battlefield
+                    && object.tapped() == Some(!*tap)
+                    && evaluated.get(object.id()).is_some_and(|view| {
+                        view.controller == Some(player)
+                            && filter.matches_static_characteristics(view, excluded, mana_value)
+                    })
+            }
+            ResolutionSelectionOperation::RandomDiscard { object: chosen } => {
+                object.id() == *chosen
+                    && object.zone() == ObjectZone::Hand(player)
+                    && object.card_id().is_some()
+            }
+            ResolutionSelectionOperation::RandomSacrifice { object: chosen } => {
+                object.id() == *chosen
+                    && object.zone() == ObjectZone::Battlefield
+                    && evaluated
+                        .get(object.id())
+                        .is_some_and(|sheet| sheet.controller == Some(player))
+            }
+            ResolutionSelectionOperation::DiscardUpTo | ResolutionSelectionOperation::Discard => {
+                object.card_id().is_some() && object.zone() == ObjectZone::Hand(player)
+            }
+            ResolutionSelectionOperation::DiscardFiltered { filter } => {
+                object.card_id().is_some()
+                    && object.zone() == ObjectZone::Hand(player)
+                    && evaluated.get(object.id()).is_some_and(|view| {
+                        self.matches_object_filter(
+                            **filter,
+                            view,
+                            player,
+                            ability_source,
+                            excluded,
+                            evaluated,
+                        )
+                    })
+            }
         }
     }
 }
