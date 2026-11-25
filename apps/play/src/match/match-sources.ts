@@ -5,6 +5,7 @@ import type {
 import type { SourceGap } from "../decks/deck-sources";
 import type { CastOffer } from "./cast-draft";
 import type { PrintedModes } from "./printed-modes";
+import type { SideboardCard } from "./sideboard";
 
 export type MatchActionCommand = PlayerCommand["action"];
 
@@ -56,11 +57,29 @@ export type MatchSeries = {
         readyPending: boolean;
         /** Set when the answer was not taken; the time still runs. */
         readyFailed: boolean;
+        /** Changing the deck for the next game. Null where this table cannot read the deck. */
+        sideboard: Sideboard | null;
       }
     | {
         /** This player has answered; the next game waits on the others or is being dealt. */
         kind: "waiting";
       };
+};
+
+/**
+ * Sideboarding between games: moving cards between the main deck and the
+ * sideboard. The cards stay the same; only where each copy sits changes.
+ */
+export type Sideboard = {
+  /** The deck as the next game would use it; null while it is read. */
+  cards: readonly SideboardCard[] | null;
+  /** The fewest cards the main deck may hold: as many as it began the match with. */
+  minimumMain: number;
+  /** Saves the list and starts the next game with it. */
+  use: (cards: readonly SideboardCard[]) => void;
+  pending: boolean;
+  /** Why the last attempt did not go through. */
+  failure: string | null;
 };
 
 export type MatchSource =

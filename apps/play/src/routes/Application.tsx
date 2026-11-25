@@ -13,6 +13,7 @@ import { CardsRoute, PacksRoute } from "../collection/CollectionRoutes";
 import { DeckBuilderRoute, DeckShelfRoute } from "../decks/DeckRoutes";
 import {
   HistoryRoute,
+  ReplayRoute,
   SeasonRoute,
   StandingsRoute,
 } from "../league/LeagueRoutes";
@@ -153,6 +154,11 @@ const router = createBrowserRouter(
         { path: "league/season", element: gated(<SeasonRoute />) },
         { path: "league/standings", element: gated(<StandingsRoute />) },
         { path: "league/history", element: gated(<HistoryRoute />) },
+        {
+          path: "league/history/:matchId",
+          handle: immersive,
+          element: gated(<ReplayRoute />),
+        },
         {
           path: "decks/import",
           element: <Navigate to="/collection/decks?import=true" replace />,
